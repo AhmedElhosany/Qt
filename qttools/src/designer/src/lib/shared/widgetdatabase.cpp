@@ -47,7 +47,6 @@
 #include <QtCore/qdebug.h>
 #include <QtCore/QMetaProperty>
 #include <QtCore/QTextStream>
-#include <QtCore/QRegExp>
 #include <QtCore/QCoreApplication>
 
 QT_BEGIN_NAMESPACE
@@ -648,7 +647,6 @@ QString WidgetDataBase::formTemplate(const QDesignerFormEditorInterface *core, c
 // Set a fixed size on a XML template
 QString WidgetDataBase::scaleFormTemplate(const QString &xml, const QSize &size, bool fixed)
 {
-    typedef QList<DomProperty*> PropertyList;
     DomUI *domUI = QDesignerWidgetBox::xmlToUi(QStringLiteral("Form"), xml, false);
     if (!domUI)
         return QString();
@@ -663,18 +661,17 @@ QString WidgetDataBase::scaleFormTemplate(const QString &xml, const QSize &size,
     DomProperty *minimumSizeProperty = 0;
     DomProperty *maximumSizeProperty = 0;
 
-    PropertyList properties = domWidget->elementProperty();
-    const PropertyList::const_iterator cend = properties.constEnd();
-    for (PropertyList::const_iterator it = properties.constBegin(); it != cend; ++it) {
-        const QString name = (*it)->attributeName();
+    auto properties = domWidget->elementProperty();
+    for (DomProperty *p : properties) {
+        const QString name = p->attributeName();
         if (name == geometryPropertyName) {
-            geomProperty = *it;
+            geomProperty = p;
         } else {
             if (name == minimumSizePropertyName) {
-                minimumSizeProperty = *it;
+                minimumSizeProperty = p;
             } else {
                 if (name == maximumSizePropertyName)
-                    maximumSizeProperty = *it;
+                    maximumSizeProperty = p;
             }
         }
     }

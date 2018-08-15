@@ -124,14 +124,14 @@ base::ScopedFD TakeOrDupFile(internal::PlatformFileAttachment* attachment) {
 
 MojoResult WrapAttachmentImpl(MessageAttachment* attachment,
                               mojom::SerializedHandlePtr* serialized) {
-  if (attachment->GetType() == MessageAttachment::TYPE_MOJO_HANDLE) {
+  if (attachment->GetType() == MessageAttachment::Type::MOJO_HANDLE) {
     *serialized = CreateSerializedHandle(
         static_cast<internal::MojoHandleAttachment&>(*attachment).TakeHandle(),
         mojom::SerializedHandle::Type::MOJO_HANDLE);
     return MOJO_RESULT_OK;
   }
 #if defined(OS_POSIX)
-  if (attachment->GetType() == MessageAttachment::TYPE_PLATFORM_FILE) {
+  if (attachment->GetType() == MessageAttachment::Type::PLATFORM_FILE) {
     // We dup() the handles in IPC::Message to transmit.
     // IPC::MessageAttachmentSet has intricate lifecycle semantics
     // of FDs, so just to dup()-and-own them is the safest option.
@@ -148,10 +148,7 @@ MojoResult WrapAttachmentImpl(MessageAttachment* attachment,
   }
 #endif
 #if defined(OS_MACOSX)
-  DCHECK_EQ(attachment->GetType(),
-            MessageAttachment::TYPE_BROKERABLE_ATTACHMENT);
-  DCHECK_EQ(static_cast<BrokerableAttachment&>(*attachment).GetBrokerableType(),
-            BrokerableAttachment::MACH_PORT);
+  DCHECK_EQ(attachment->GetType(), MessageAttachment::Type::MACH_PORT);
   internal::MachPortAttachmentMac& mach_port_attachment =
       static_cast<internal::MachPortAttachmentMac&>(*attachment);
   MojoResult result = WrapMachPort(mach_port_attachment.get_mach_port(),
@@ -159,10 +156,7 @@ MojoResult WrapAttachmentImpl(MessageAttachment* attachment,
   mach_port_attachment.reset_mach_port_ownership();
   return result;
 #elif defined(OS_WIN)
-  DCHECK_EQ(attachment->GetType(),
-            MessageAttachment::TYPE_BROKERABLE_ATTACHMENT);
-  DCHECK_EQ(static_cast<BrokerableAttachment&>(*attachment).GetBrokerableType(),
-            BrokerableAttachment::WIN_HANDLE);
+  DCHECK_EQ(attachment->GetType(), MessageAttachment::Type::WIN_HANDLE);
   internal::HandleAttachmentWin& handle_attachment =
       static_cast<internal::HandleAttachmentWin&>(*attachment);
   MojoResult result = WrapPlatformHandle(
@@ -280,25 +274,49 @@ ChannelMojo::ChannelMojo(
     Mode mode,
     Listener* listener,
     const scoped_refptr<base::SingleThreadTaskRunner>& ipc_task_runner)
-    : pipe_(handle.get()), listener_(listener), weak_factory_(this) {
-  // Create MojoBootstrap after all members are set as it touches
-  // ChannelMojo from a different thread.
-  bootstrap_ =
-      MojoBootstrap::Create(std::move(handle), mode, this, ipc_task_runner);
+    : task_runner_(ipc_task_runner),
+      pipe_(handle.get()),
+      listener_(listener),
+      weak_factory_(this) {
+  bootstrap_ = MojoBootstrap::Create(std::move(handle), mode, ipc_task_runner);
+}
+
+void ChannelMojo::ForwardMessageFromThreadSafePtr(mojo::Message message) {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  if (!message_reader_ || !message_reader_->sender().is_bound())
+    return;
+  message_reader_->sender().internal_state()->ForwardMessage(
+      std::move(message));
+}
+
+void ChannelMojo::ForwardMessageWithResponderFromThreadSafePtr(
+    mojo::Message message,
+    std::unique_ptr<mojo::MessageReceiver> responder) {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  if (!message_reader_ || !message_reader_->sender().is_bound())
+    return;
+  message_reader_->sender().internal_state()->ForwardMessageWithResponder(
+      std::move(message), std::move(responder));
 }
 
 ChannelMojo::~ChannelMojo() {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
   Close();
 }
 
 bool ChannelMojo::Connect() {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
   WillConnect();
 
-  DCHECK(!task_runner_);
-  task_runner_ = base::ThreadTaskRunnerHandle::Get();
-  DCHECK(!message_reader_);
+  mojom::ChannelAssociatedPtr sender;
+  mojom::ChannelAssociatedRequest receiver;
+  bootstrap_->Connect(&sender, &receiver);
 
-  bootstrap_->Connect();
+  DCHECK(!message_reader_);
+  sender->SetPeerPid(GetSelfPID());
+  message_reader_.reset(new internal::MessagePipeReader(
+      pipe_, std::move(sender), std::move(receiver), this));
   return true;
 }
 
@@ -327,17 +345,9 @@ void ChannelMojo::Close() {
   associated_interfaces_.clear();
 }
 
-// MojoBootstrap::Delegate implementation
-void ChannelMojo::OnPipesAvailable(mojom::ChannelAssociatedPtr sender,
-                                   mojom::ChannelAssociatedRequest receiver) {
-  sender->SetPeerPid(GetSelfPID());
-  message_reader_.reset(new internal::MessagePipeReader(
-      pipe_, std::move(sender), std::move(receiver), this));
-}
-
 void ChannelMojo::OnPipeError() {
   DCHECK(task_runner_);
-  if (task_runner_->RunsTasksOnCurrentThread()) {
+  if (task_runner_->RunsTasksInCurrentSequence()) {
     listener_->OnChannelError();
   } else {
     task_runner_->PostTask(
@@ -383,6 +393,16 @@ bool ChannelMojo::Send(Message* message) {
 Channel::AssociatedInterfaceSupport*
 ChannelMojo::GetAssociatedInterfaceSupport() { return this; }
 
+std::unique_ptr<mojo::ThreadSafeForwarder<mojom::Channel>>
+ChannelMojo::CreateThreadSafeChannel() {
+  return base::MakeUnique<mojo::ThreadSafeForwarder<mojom::Channel>>(
+      task_runner_, base::Bind(&ChannelMojo::ForwardMessageFromThreadSafePtr,
+                               weak_factory_.GetWeakPtr()),
+      base::Bind(&ChannelMojo::ForwardMessageWithResponderFromThreadSafePtr,
+                 weak_factory_.GetWeakPtr()),
+      *bootstrap_->GetAssociatedGroup());
+}
+
 void ChannelMojo::OnPeerPidReceived(int32_t peer_pid) {
   listener_->OnChannelConnected(peer_pid);
 }
@@ -409,18 +429,9 @@ MojoResult ChannelMojo::ReadFromMessageAttachmentSet(
   std::vector<mojom::SerializedHandlePtr> output_handles;
   MessageAttachmentSet* set = message->attachment_set();
 
-  for (unsigned i = 0;
-       result == MOJO_RESULT_OK && i < set->num_non_brokerable_attachments();
-       ++i) {
-    result = WrapAttachment(set->GetNonBrokerableAttachmentAt(i).get(),
-                            &output_handles);
+  for (unsigned i = 0; result == MOJO_RESULT_OK && i < set->size(); ++i) {
+    result = WrapAttachment(set->GetAttachmentAt(i).get(), &output_handles);
   }
-  for (unsigned i = 0;
-       result == MOJO_RESULT_OK && i < set->num_brokerable_attachments(); ++i) {
-    result = WrapAttachment(set->GetBrokerableAttachmentAt(i).get(),
-                            &output_handles);
-  }
-
   set->CommitAllDescriptors();
 
   if (!output_handles.empty())
@@ -457,11 +468,6 @@ MojoResult ChannelMojo::WriteToMessageAttachmentSet(
   return MOJO_RESULT_OK;
 }
 
-mojo::AssociatedGroup* ChannelMojo::GetAssociatedGroup() {
-  DCHECK(bootstrap_);
-  return bootstrap_->GetAssociatedGroup();
-}
-
 void ChannelMojo::AddGenericAssociatedInterface(
     const std::string& name,
     const GenericAssociatedInterfaceFactory& factory) {
@@ -473,8 +479,14 @@ void ChannelMojo::AddGenericAssociatedInterface(
 void ChannelMojo::GetGenericRemoteAssociatedInterface(
     const std::string& name,
     mojo::ScopedInterfaceEndpointHandle handle) {
-  if (message_reader_)
+  if (message_reader_) {
     message_reader_->GetRemoteInterface(name, std::move(handle));
+  } else {
+    // Attach the associated interface to a disconnected pipe, so that the
+    // associated interface pointer can be used to make calls (which are
+    // dropped).
+    mojo::GetIsolatedInterface(std::move(handle));
+  }
 }
 
 }  // namespace IPC

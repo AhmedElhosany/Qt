@@ -6,10 +6,12 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "net/base/directory_listing.h"
@@ -26,20 +28,9 @@ namespace net {
 URLRequestFileDirJob::URLRequestFileDirJob(URLRequest* request,
                                            NetworkDelegate* network_delegate,
                                            const base::FilePath& dir_path)
-    : URLRequestFileDirJob(request,
-                           network_delegate,
-                           dir_path,
-                           base::WorkerPool::GetTaskRunner(true)) {}
-
-URLRequestFileDirJob::URLRequestFileDirJob(
-    URLRequest* request,
-    NetworkDelegate* network_delegate,
-    const base::FilePath& dir_path,
-    const scoped_refptr<base::TaskRunner>& dir_task_runner)
     : URLRequestJob(request, network_delegate),
       lister_(dir_path, this),
       dir_path_(dir_path),
-      dir_task_runner_(dir_task_runner),
       canceled_(false),
       list_complete_(false),
       wrote_header_(false),
@@ -48,9 +39,12 @@ URLRequestFileDirJob::URLRequestFileDirJob(
       weak_factory_(this) {}
 
 void URLRequestFileDirJob::StartAsync() {
-  lister_.Start(dir_task_runner_.get());
-
-  NotifyHeadersComplete();
+  base::PostTaskWithTraitsAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+      base::Bind(&base::MakeAbsoluteFilePath, dir_path_),
+      base::Bind(&URLRequestFileDirJob::DidMakeAbsolutePath,
+                 weak_factory_.GetWeakPtr()));
 }
 
 void URLRequestFileDirJob::Start() {
@@ -147,6 +141,18 @@ void URLRequestFileDirJob::OnListDone(int error) {
 }
 
 URLRequestFileDirJob::~URLRequestFileDirJob() {}
+
+void URLRequestFileDirJob::DidMakeAbsolutePath(
+    const base::FilePath& absolute_path) {
+  if (network_delegate() && !network_delegate()->CanAccessFile(
+                                *request(), dir_path_, absolute_path)) {
+    NotifyStartError(URLRequestStatus::FromError(ERR_ACCESS_DENIED));
+    return;
+  }
+
+  lister_.Start();
+  NotifyHeadersComplete();
+}
 
 void URLRequestFileDirJob::CompleteRead(Error error) {
   DCHECK_LE(error, OK);

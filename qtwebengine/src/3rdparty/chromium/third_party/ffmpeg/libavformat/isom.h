@@ -24,6 +24,12 @@
 #ifndef AVFORMAT_ISOM_H
 #define AVFORMAT_ISOM_H
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include "libavutil/spherical.h"
+#include "libavutil/stereo3d.h"
+
 #include "avio.h"
 #include "internal.h"
 #include "dv.h"
@@ -105,6 +111,7 @@ typedef struct MOVSbgp {
 typedef struct MOVFragmentIndexItem {
     int64_t moof_offset;
     int64_t time;
+    int headers_read;
 } MOVFragmentIndexItem;
 
 typedef struct MOVFragmentIndex {
@@ -113,6 +120,11 @@ typedef struct MOVFragmentIndex {
     unsigned current_item;
     MOVFragmentIndexItem *items;
 } MOVFragmentIndex;
+
+typedef struct MOVIndexRange {
+    int64_t start;
+    int64_t end;
+} MOVIndexRange;
 
 typedef struct MOVStreamContext {
     AVIOContext *pb;
@@ -124,6 +136,7 @@ typedef struct MOVStreamContext {
     unsigned int stts_count;
     MOVStts *stts_data;
     unsigned int ctts_count;
+    unsigned int ctts_allocated_size;
     MOVStts *ctts_data;
     unsigned int stsc_count;
     MOVStsc *stsc_data;
@@ -145,6 +158,9 @@ typedef struct MOVStreamContext {
     int time_scale;
     int64_t time_offset;  ///< time offset of the edit list entries
     int current_sample;
+    int64_t current_index;
+    MOVIndexRange* index_ranges;
+    MOVIndexRange* current_index_range;
     unsigned int bytes_per_frame;
     unsigned int samples_per_frame;
     int dv_audio_container;
@@ -176,8 +192,13 @@ typedef struct MOVStreamContext {
     int stsd_count;
 
     int32_t *display_matrix;
+    AVStereo3D *stereo3d;
+    AVSphericalMapping *spherical;
+    size_t spherical_size;
+
     uint32_t format;
 
+    int has_sidx;  // If there is an sidx entry for this stream.
     struct {
         int use_subsamples;
         uint8_t* auxiliary_info;
@@ -186,6 +207,7 @@ typedef struct MOVStreamContext {
         uint8_t auxiliary_info_default_size;
         uint8_t* auxiliary_info_sizes;
         size_t auxiliary_info_sizes_count;
+        int64_t auxiliary_info_index;
         struct AVAESCTR* aes_ctr;
     } cenc;
 } MOVStreamContext;
@@ -213,6 +235,7 @@ typedef struct MOVContext {
     unsigned int nb_chapter_tracks;
     int use_absolute_path;
     int ignore_editlist;
+    int advanced_editlist;
     int ignore_chapters;
     int seek_individually;
     int64_t next_root_atom; ///< offset of the next root atom
@@ -225,6 +248,7 @@ typedef struct MOVContext {
     int has_looked_for_mfra;
     MOVFragmentIndex** fragment_index_data;
     unsigned fragment_index_count;
+    int fragment_index_complete;
     int atom_depth;
     unsigned int aax_mode;  ///< 'aax' file has been detected
     uint8_t file_key[20];
@@ -237,6 +261,7 @@ typedef struct MOVContext {
     uint8_t *decryption_key;
     int decryption_key_len;
     int enable_drefs;
+    int32_t movie_display_matrix[3][3]; ///< display matrix from mvhd
 } MOVContext;
 
 int ff_mp4_read_descr_len(AVIOContext *pb);

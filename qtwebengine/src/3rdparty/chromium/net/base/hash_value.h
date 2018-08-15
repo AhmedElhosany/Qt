@@ -43,16 +43,14 @@ inline bool operator!=(const SHA256HashValue& lhs, const SHA256HashValue& rhs) {
 }
 
 enum HashValueTag {
-  HASH_VALUE_SHA1,
   HASH_VALUE_SHA256,
 };
 
 class NET_EXPORT HashValue {
  public:
-  explicit HashValue(const SHA1HashValue& hash);
   explicit HashValue(const SHA256HashValue& hash);
   explicit HashValue(HashValueTag tag) : tag(tag) {}
-  HashValue() : tag(HASH_VALUE_SHA1) {}
+  HashValue() : tag(HASH_VALUE_SHA256) {}
 
   // Serializes/Deserializes hashes in the form of
   // <hash-name>"/"<base64-hash-value>
@@ -99,6 +97,7 @@ typedef std::vector<HashValue> HashValueVector;
 
 class SHA1HashValueLessThan {
  public:
+  SHA1HashValueLessThan() { }
   bool operator()(const SHA1HashValue& lhs,
                   const SHA1HashValue& rhs) const {
     return memcmp(lhs.data, rhs.data, sizeof(lhs.data)) < 0;
@@ -107,6 +106,7 @@ class SHA1HashValueLessThan {
 
 class SHA256HashValueLessThan {
  public:
+  SHA256HashValueLessThan() { }
   bool operator()(const SHA256HashValue& lhs,
                   const SHA256HashValue& rhs) const {
     return memcmp(lhs.data, rhs.data, sizeof(lhs.data)) < 0;

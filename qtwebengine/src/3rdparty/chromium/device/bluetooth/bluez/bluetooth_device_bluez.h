@@ -49,6 +49,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceBlueZ
   using GetServiceRecordsErrorCallback =
       base::Callback<void(BluetoothServiceRecordBlueZ::ErrorCode)>;
 
+  ~BluetoothDeviceBlueZ() override;
+
   // BluetoothDevice override
   uint32_t GetBluetoothClass() const override;
   device::BluetoothTransport GetType() const override;
@@ -71,6 +73,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceBlueZ
   bool ExpectingPasskey() const override;
   bool ExpectingConfirmation() const override;
   void GetConnectionInfo(const ConnectionInfoCallback& callback) override;
+  void SetConnectionLatency(ConnectionLatency connection_latency,
+                            const base::Closure& callback,
+                            const ErrorCallback& error_callback) override;
   void Connect(device::BluetoothDevice::PairingDelegate* pairing_delegate,
                const base::Closure& callback,
                const ConnectErrorCallback& error_callback) override;
@@ -164,7 +169,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceBlueZ
       const dbus::ObjectPath& object_path,
       scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
       scoped_refptr<device::BluetoothSocketThread> socket_thread);
-  ~BluetoothDeviceBlueZ() override;
 
   // bluez::BluetoothGattServiceClient::Observer overrides
   void GattServiceAdded(const dbus::ObjectPath& object_path) override;
@@ -185,6 +189,13 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceBlueZ
   void OnGetConnInfoError(const ConnectionInfoCallback& callback,
                           const std::string& error_name,
                           const std::string& error_message);
+
+  // Called by dbus:: on completion of the D-Bus method call to set the
+  // connection parameters of the device.
+  void OnSetLEConnectionParameters(const base::Closure& callback);
+  void OnSetLEConnectionParametersError(const ErrorCallback& callback,
+                                        const std::string& error_name,
+                                        const std::string& error_message);
 
   // Called by dbus:: in case of an error during the GetServiceRecords API call.
   void OnGetServiceRecordsError(

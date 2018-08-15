@@ -85,6 +85,10 @@ class Setup {
   Builder& builder() { return builder_; }
   LoaderImpl* loader() { return loader_.get(); }
 
+  const InputFile* dotfile_input_file() const {
+    return dotfile_input_file_.get();
+  }
+
   // Name of the file in the root build directory that contains the build
   // arguements.
   static const char kBuildArgFileName[];
@@ -119,7 +123,7 @@ class Setup {
 
   // Fills the python path portion of the command line. On failure, sets
   // it to just "python".
-  void FillPythonPath(const base::CommandLine& cmdline);
+  bool FillPythonPath(const base::CommandLine& cmdline);
 
   // Run config file.
   bool RunConfigFile();
@@ -149,6 +153,10 @@ class Setup {
   std::unique_ptr<InputFile> dotfile_input_file_;
   std::vector<Token> dotfile_tokens_;
   std::unique_ptr<ParseNode> dotfile_root_;
+
+  // Default overrides, specified in the dotfile.
+  // Owned by the Value (if it exists) in the dotfile_scope_.
+  const Scope* default_args_;
 
   // Set to true when we should populate the build arguments from the command
   // line or build argument file. See setter above.

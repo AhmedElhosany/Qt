@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Next MinVersion: 16
+// Next MinVersion: 17
 
 module arc.mojom;
 
@@ -84,7 +84,7 @@ struct UrlWithMimeType {
 
 // Handles intents from ARC in Chrome.
 // Deprecated method ID: 4
-// Next method ID: 6
+// Next method ID: 7
 interface IntentHelperHost {
   // Called when icons associated with the package are no longer up to date.
   [MinVersion=3] OnIconInvalidated@1(string package_name);
@@ -105,6 +105,9 @@ interface IntentHelperHost {
   // Sets an image as the wallpaper.
   // |jpeg_data| is a JPEG encoded wallpaper image.
   [MinVersion=8] SetWallpaperDeprecated@4(array<uint8> jpeg_data);
+
+  // Opens the volume control.
+  [MinVersion=16] OpenVolumeControl@6();
 };
 
 // Sends intents to ARC on behalf of Chrome.
@@ -116,8 +119,8 @@ interface IntentHelperInstance {
   // When multiple packages are set as preferred, the most recent setting wins.
   [MinVersion=7] AddPreferredPackage@8(string package_name);
 
-  // Asks the ContentResolver for the size of the file specified by the URL.
-  [MinVersion=15] GetFileSize@11(string url) => (int64 size);
+  // DEPRECATED. Use FileSystemInstance.GetFileSize() instead.
+  [MinVersion=15] GetFileSizeDeprecated@11(string url) => (int64 size);
 
   // Passes an intent to an activity.
   [MinVersion=12] HandleIntent@10(IntentInfo intent, ActivityName activity);
@@ -134,9 +137,8 @@ interface IntentHelperInstance {
   // Establishes full-duplex communication with the host.
   Init@0(IntentHelperHost host_ptr);
 
-  // Asks the ContentResolver to get an FD to read the file specified by the
-  // URL.
-  [MinVersion=15] OpenFileToRead@12(string url) => (handle? fd);
+  // DEPRECATED. Use FileSystemInstance.OpenFileToRead() instead.
+  [MinVersion=15] OpenFileToReadDeprecated@12(string url) => (handle? fd);
 
   // Requests 48dp * 48dp icons of the |activities| suitable for the
   // |scale_factor|. An array of icon data will be returned.

@@ -45,28 +45,30 @@ const char* GetTraceString<DemuxerStream::AUDIO>() {
 template <DemuxerStream::Type StreamType>
 DecoderStream<StreamType>::DecoderStream(
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
-    ScopedVector<Decoder> decoders,
-    const scoped_refptr<MediaLog>& media_log)
+    CreateDecodersCB create_decoders_cb,
+    MediaLog* media_log)
     : traits_(media_log),
       task_runner_(task_runner),
+      create_decoders_cb_(std::move(create_decoders_cb)),
       media_log_(media_log),
       state_(STATE_UNINITIALIZED),
       stream_(NULL),
-      decoder_selector_(new DecoderSelector<StreamType>(task_runner,
-                                                        std::move(decoders),
-                                                        media_log)),
-      decoded_frames_since_fallback_(0),
+      cdm_context_(nullptr),
+      decoder_produced_a_frame_(false),
+      has_fallen_back_once_on_decode_error_(false),
       decoding_eos_(false),
       pending_decode_requests_(0),
       duration_tracker_(8),
       received_config_change_during_reinit_(false),
       pending_demuxer_read_(false),
       weak_factory_(this),
-      fallback_weak_factory_(this) {}
+      fallback_weak_factory_(this) {
+  FUNCTION_DVLOG(1);
+}
 
 template <DemuxerStream::Type StreamType>
 DecoderStream<StreamType>::~DecoderStream() {
-  FUNCTION_DVLOG(2);
+  FUNCTION_DVLOG(1);
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   decoder_selector_.reset();
@@ -99,26 +101,27 @@ void DecoderStream<StreamType>::Initialize(
     CdmContext* cdm_context,
     const StatisticsCB& statistics_cb,
     const base::Closure& waiting_for_decryption_key_cb) {
-  FUNCTION_DVLOG(2);
+  FUNCTION_DVLOG(1);
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_UNINITIALIZED);
   DCHECK(init_cb_.is_null());
   DCHECK(!init_cb.is_null());
 
-  statistics_cb_ = statistics_cb;
-  init_cb_ = init_cb;
-  waiting_for_decryption_key_cb_ = waiting_for_decryption_key_cb;
   stream_ = stream;
+  init_cb_ = init_cb;
+  cdm_context_ = cdm_context;
+  statistics_cb_ = statistics_cb;
+  waiting_for_decryption_key_cb_ = waiting_for_decryption_key_cb;
 
   traits_.OnStreamReset(stream_);
 
   state_ = STATE_INITIALIZING;
-  SelectDecoder(cdm_context);
+  SelectDecoder();
 }
 
 template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::Read(const ReadCB& read_cb) {
-  FUNCTION_DVLOG(2);
+  FUNCTION_DVLOG(3);
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(state_ != STATE_UNINITIALIZED && state_ != STATE_INITIALIZING)
       << state_;
@@ -246,9 +249,19 @@ base::TimeDelta DecoderStream<StreamType>::AverageDuration() const {
 }
 
 template <DemuxerStream::Type StreamType>
-void DecoderStream<StreamType>::SelectDecoder(CdmContext* cdm_context) {
+void DecoderStream<StreamType>::SelectDecoder() {
+  // If we are already using DecryptingDemuxerStream (DDS), e.g. during
+  // fallback, the |stream_| will always be clear. In this case, no need pass in
+  // the |cdm_context_|. This will also help prevent creating a new DDS on top
+  // of the current DDS.
+  CdmContext* cdm_context = decrypting_demuxer_stream_ ? nullptr : cdm_context_;
+  std::string blacklisted_decoder = decoder_ ? decoder_->GetDisplayName() : "";
+
+  decoder_selector_.reset(new DecoderSelector<StreamType>(
+      task_runner_, create_decoders_cb_, media_log_));
+
   decoder_selector_->SelectDecoder(
-      &traits_, stream_, cdm_context,
+      &traits_, stream_, cdm_context, blacklisted_decoder,
       base::Bind(&DecoderStream<StreamType>::OnDecoderSelected,
                  weak_factory_.GetWeakPtr()),
       base::Bind(&DecoderStream<StreamType>::OnDecodeOutputReady,
@@ -260,12 +273,15 @@ template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::OnDecoderSelected(
     std::unique_ptr<Decoder> selected_decoder,
     std::unique_ptr<DecryptingDemuxerStream> decrypting_demuxer_stream) {
-  FUNCTION_DVLOG(2) << ": "
+  FUNCTION_DVLOG(1) << ": "
                     << (selected_decoder ? selected_decoder->GetDisplayName()
                                          : "No decoder selected.");
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(state_ == STATE_INITIALIZING || state_ == STATE_REINITIALIZING_DECODER)
       << state_;
+
+  decoder_selector_.reset();
+
   if (state_ == STATE_INITIALIZING) {
     DCHECK(!init_cb_.is_null());
     DCHECK(read_cb_.is_null());
@@ -274,13 +290,13 @@ void DecoderStream<StreamType>::OnDecoderSelected(
     DCHECK(decoder_);
   }
 
-  previous_decoder_ = std::move(decoder_);
-  decoded_frames_since_fallback_ = 0;
   decoder_ = std::move(selected_decoder);
   if (decrypting_demuxer_stream) {
     decrypting_demuxer_stream_ = std::move(decrypting_demuxer_stream);
     stream_ = decrypting_demuxer_stream_.get();
   }
+  if (decoder_change_observer_cb_)
+    decoder_change_observer_cb_.Run(decoder_.get());
 
   // TODO(tguilbert): crbug.com/603713 support config changes on decoder reinit.
   if (received_config_change_during_reinit_) {
@@ -332,11 +348,11 @@ void DecoderStream<StreamType>::SatisfyRead(
 template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::Decode(
     const scoped_refptr<DecoderBuffer>& buffer) {
-  FUNCTION_DVLOG(2);
+  FUNCTION_DVLOG(3);
 
   // We don't know if the decoder will error out on first decode yet. Save the
   // buffer to feed it to the fallback decoder later if needed.
-  if (!decoded_frames_since_fallback_)
+  if (!decoder_produced_a_frame_)
     pending_buffers_.push_back(buffer);
 
   // It's possible for a buffer to arrive from the demuxer right after the
@@ -357,7 +373,7 @@ void DecoderStream<StreamType>::Decode(
 template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::DecodeInternal(
     const scoped_refptr<DecoderBuffer>& buffer) {
-  FUNCTION_DVLOG(2);
+  FUNCTION_DVLOG(3);
   DCHECK(state_ == STATE_NORMAL || state_ == STATE_FLUSHING_DECODER) << state_;
   DCHECK_LT(pending_decode_requests_, GetMaxDecodeRequests());
   DCHECK(reset_cb_.is_null());
@@ -394,7 +410,7 @@ template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::OnDecodeDone(int buffer_size,
                                              bool end_of_stream,
                                              DecodeStatus status) {
-  FUNCTION_DVLOG(2) << ": " << status;
+  FUNCTION_DVLOG(3) << ": " << status;
   DCHECK(state_ == STATE_NORMAL || state_ == STATE_FLUSHING_DECODER ||
          state_ == STATE_ERROR)
       << state_;
@@ -421,23 +437,25 @@ void DecoderStream<StreamType>::OnDecodeDone(int buffer_size,
 
   switch (status) {
     case DecodeStatus::DECODE_ERROR:
-      if (!decoded_frames_since_fallback_) {
+      // Only fall back to a new decoder after failing to decode the first
+      // buffer, and if we have not fallen back before.
+      if (!decoder_produced_a_frame_ &&
+          !has_fallen_back_once_on_decode_error_) {
+        has_fallen_back_once_on_decode_error_ = true;
         pending_decode_requests_ = 0;
 
-        // Prevent all pending decode requests and outputs form those requests
+        // Prevent all pending decode requests and outputs from those requests
         // from being called back.
         fallback_weak_factory_.InvalidateWeakPtrs();
 
+        FUNCTION_DVLOG(1)
+            << ": Falling back to new decoder after initial decode error.";
         state_ = STATE_REINITIALIZING_DECODER;
-        decoder_selector_->SelectDecoder(
-            &traits_, stream_, nullptr,
-            base::Bind(&DecoderStream<StreamType>::OnDecoderSelected,
-                       weak_factory_.GetWeakPtr()),
-            base::Bind(&DecoderStream<StreamType>::OnDecodeOutputReady,
-                       fallback_weak_factory_.GetWeakPtr()),
-            waiting_for_decryption_key_cb_);
+        SelectDecoder();
         return;
       }
+
+      FUNCTION_DVLOG(1) << ": Decode error!";
       state_ = STATE_ERROR;
       MEDIA_LOG(ERROR, media_log_) << GetStreamTypeString() << " decode error";
       ready_outputs_.clear();
@@ -453,7 +471,7 @@ void DecoderStream<StreamType>::OnDecodeDone(int buffer_size,
     case DecodeStatus::OK:
       // Any successful decode counts!
       if (buffer_size > 0)
-        StreamTraits::ReportStatistics(statistics_cb_, buffer_size);
+        traits_.ReportStatistics(statistics_cb_, buffer_size);
 
       if (state_ == STATE_NORMAL) {
         if (end_of_stream) {
@@ -477,7 +495,7 @@ void DecoderStream<StreamType>::OnDecodeDone(int buffer_size,
 template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::OnDecodeOutputReady(
     const scoped_refptr<Output>& output) {
-  FUNCTION_DVLOG(2) << ": " << output->timestamp().InMilliseconds() << " ms";
+  FUNCTION_DVLOG(3) << ": " << output->timestamp().InMilliseconds() << " ms";
   DCHECK(output.get());
   DCHECK(state_ == STATE_NORMAL || state_ == STATE_FLUSHING_DECODER ||
          state_ == STATE_ERROR)
@@ -493,11 +511,10 @@ void DecoderStream<StreamType>::OnDecodeOutputReady(
   if (!reset_cb_.is_null())
     return;
 
+  decoder_produced_a_frame_ = true;
   traits_.OnDecodeDone(output);
 
-  ++decoded_frames_since_fallback_;
-
-  // |decoder_| sucessfully decoded a frame. No need to keep buffers for a
+  // |decoder_| successfully decoded a frame. No need to keep buffers for a
   // fallback decoder.
   // Note: |fallback_buffers_| might still have buffers, and we will keep
   // reading from there before requesting new buffers from |stream_|.
@@ -513,18 +530,11 @@ void DecoderStream<StreamType>::OnDecodeOutputReady(
 
   // Store decoded output.
   ready_outputs_.push_back(output);
-
-  // Destruct any previous decoder once we've decoded enough frames to ensure
-  // that it's no longer in use.
-  if (previous_decoder_ &&
-      decoded_frames_since_fallback_ > limits::kMaxVideoFrames) {
-    previous_decoder_.reset();
-  }
 }
 
 template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::ReadFromDemuxerStream() {
-  FUNCTION_DVLOG(2);
+  FUNCTION_DVLOG(3);
   DCHECK_EQ(state_, STATE_NORMAL);
   DCHECK(CanDecodeMore());
   DCHECK(reset_cb_.is_null());
@@ -551,15 +561,13 @@ template <DemuxerStream::Type StreamType>
 void DecoderStream<StreamType>::OnBufferReady(
     DemuxerStream::Status status,
     const scoped_refptr<DecoderBuffer>& buffer) {
-  FUNCTION_DVLOG(2) << ": " << status << ", "
+  FUNCTION_DVLOG(3) << ": " << status << ", "
                     << (buffer.get() ? buffer->AsHumanReadableString()
                                      : "NULL");
 
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(pending_demuxer_read_);
-  if (decoded_frames_since_fallback_) {
-    DCHECK(pending_demuxer_read_ || state_ == STATE_ERROR) << state_;
-  } else {
+  if (!decoder_produced_a_frame_) {
     DCHECK(state_ == STATE_ERROR || state_ == STATE_REINITIALIZING_DECODER ||
            state_ == STATE_NORMAL)
         << state_;
@@ -570,8 +578,7 @@ void DecoderStream<StreamType>::OnBufferReady(
   // If parallel decode requests are supported, multiple read requests might
   // have been sent to the demuxer. The buffers might arrive while the decoder
   // is reinitializing after falling back on first decode error.
-  if (state_ == STATE_REINITIALIZING_DECODER &&
-      !decoded_frames_since_fallback_) {
+  if (state_ == STATE_REINITIALIZING_DECODER && !decoder_produced_a_frame_) {
     switch (status) {
       case DemuxerStream::kOk:
         // Save valid buffers to be consumed by the new decoder.
@@ -636,7 +643,7 @@ void DecoderStream<StreamType>::OnBufferReady(
     pending_buffers_.clear();
 
     if (!config_change_observer_cb_.is_null())
-      config_change_observer_cb_.Run();
+      config_change_observer_cb_.Run(StreamTraits::GetDecoderConfig(stream_));
 
     state_ = STATE_FLUSHING_DECODER;
     if (!reset_cb_.is_null()) {
@@ -683,7 +690,8 @@ void DecoderStream<StreamType>::ReinitializeDecoder() {
   state_ = STATE_REINITIALIZING_DECODER;
   // Decoders should not need a new CDM during reinitialization.
   traits_.InitializeDecoder(
-      decoder_.get(), stream_, nullptr,
+      decoder_.get(), StreamTraits::GetDecoderConfig(stream_),
+      stream_->liveness() == DemuxerStream::LIVENESS_LIVE, cdm_context_,
       base::Bind(&DecoderStream<StreamType>::OnDecoderReinitialized,
                  weak_factory_.GetWeakPtr()),
       base::Bind(&DecoderStream<StreamType>::OnDecodeOutputReady,
@@ -706,9 +714,7 @@ void DecoderStream<StreamType>::OnDecoderReinitialized(bool success) {
     // Reinitialization failed. Try to fall back to one of the remaining
     // decoders. This will consume at least one decoder so doing it more than
     // once is safe.
-    // For simplicity, don't attempt to fall back to a decrypting decoder.
-    // Calling this with a null CdmContext ensures that one won't be selected.
-    SelectDecoder(nullptr);
+    SelectDecoder();
   } else {
     CompleteDecoderReinitialization(true);
   }
@@ -769,7 +775,9 @@ void DecoderStream<StreamType>::OnDecoderReset() {
 
   if (state_ != STATE_FLUSHING_DECODER) {
     state_ = STATE_NORMAL;
-    base::ResetAndReturn(&reset_cb_).Run();
+    // Pending read, on failure, could have fired the reset callback already.
+    if (!reset_cb_.is_null())
+      base::ResetAndReturn(&reset_cb_).Run();
     return;
   }
 

@@ -53,8 +53,26 @@ HunspellInputMethod::~HunspellInputMethod()
 
 QList<InputEngine::InputMode> HunspellInputMethod::inputModes(const QString &locale)
 {
-    Q_UNUSED(locale)
-    return QList<InputEngine::InputMode>() << InputEngine::Latin << InputEngine::Numeric;
+    QList<InputEngine::InputMode> result;
+    switch (QLocale(locale).script()) {
+    case QLocale::GreekScript:
+        result.append(InputEngine::Greek);
+        break;
+    case QLocale::CyrillicScript:
+        result.append(InputEngine::Cyrillic);
+        break;
+    case QLocale::ArabicScript:
+        result.append(InputEngine::Arabic);
+        break;
+    case QLocale::HebrewScript:
+        result.append(InputEngine::Hebrew);
+        break;
+    default:
+        break;
+    }
+    result.append(InputEngine::Latin);
+    result.append(InputEngine::Numeric);
+    return result;
 }
 
 bool HunspellInputMethod::setInputMode(const QString &locale, InputEngine::InputMode inputMode)
@@ -163,7 +181,7 @@ QList<SelectionListModel::Type> HunspellInputMethod::selectionLists()
 {
     Q_D(const HunspellInputMethod);
     Qt::InputMethodHints inputMethodHints = inputContext()->inputMethodHints();
-    if (d->dictionaryState != HunspellInputMethodPrivate::DictionaryReady || inputMethodHints.testFlag(Qt::ImhNoPredictiveText) || inputMethodHints.testFlag(Qt::ImhHiddenText))
+    if (d->dictionaryState == HunspellInputMethodPrivate::DictionaryNotLoaded || inputMethodHints.testFlag(Qt::ImhNoPredictiveText) || inputMethodHints.testFlag(Qt::ImhHiddenText))
         return QList<SelectionListModel::Type>();
     return QList<SelectionListModel::Type>() << SelectionListModel::WordCandidateList;
 }

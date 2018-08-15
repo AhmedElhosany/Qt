@@ -5,6 +5,7 @@
 #include "public/platform/scheduler/child/single_thread_idle_task_runner.h"
 
 #include "base/location.h"
+#include "base/single_thread_task_runner.h"
 #include "base/trace_event/blame_context.h"
 #include "base/trace_event/trace_event.h"
 
@@ -13,15 +14,13 @@ namespace scheduler {
 
 SingleThreadIdleTaskRunner::SingleThreadIdleTaskRunner(
     scoped_refptr<base::SingleThreadTaskRunner> idle_priority_task_runner,
-    Delegate* delegate,
-    const char* tracing_category)
+    Delegate* delegate)
     : idle_priority_task_runner_(idle_priority_task_runner),
       delegate_(delegate),
-      tracing_category_(tracing_category),
       blame_context_(nullptr),
       weak_factory_(this) {
   DCHECK(!idle_priority_task_runner_ ||
-         idle_priority_task_runner_->RunsTasksOnCurrentThread());
+         idle_priority_task_runner_->RunsTasksInCurrentSequence());
   weak_scheduler_ptr_ = weak_factory_.GetWeakPtr();
 }
 
@@ -31,8 +30,8 @@ SingleThreadIdleTaskRunner::Delegate::Delegate() {}
 
 SingleThreadIdleTaskRunner::Delegate::~Delegate() {}
 
-bool SingleThreadIdleTaskRunner::RunsTasksOnCurrentThread() const {
-  return idle_priority_task_runner_->RunsTasksOnCurrentThread();
+bool SingleThreadIdleTaskRunner::RunsTasksInCurrentSequence() const {
+  return idle_priority_task_runner_->RunsTasksInCurrentSequence();
 }
 
 void SingleThreadIdleTaskRunner::PostIdleTask(
@@ -44,6 +43,17 @@ void SingleThreadIdleTaskRunner::PostIdleTask(
                             weak_scheduler_ptr_, idle_task));
 }
 
+void SingleThreadIdleTaskRunner::PostDelayedIdleTask(
+    const tracked_objects::Location& from_here,
+    const base::TimeDelta delay,
+    const IdleTask& idle_task) {
+  base::TimeTicks first_run_time = delegate_->NowTicks() + delay;
+  delayed_idle_tasks_.insert(std::make_pair(
+      first_run_time,
+      std::make_pair(from_here, base::Bind(&SingleThreadIdleTaskRunner::RunTask,
+                                           weak_scheduler_ptr_, idle_task))));
+}
+
 void SingleThreadIdleTaskRunner::PostNonNestableIdleTask(
     const tracked_objects::Location& from_here,
     const IdleTask& idle_task) {
@@ -53,9 +63,23 @@ void SingleThreadIdleTaskRunner::PostNonNestableIdleTask(
                             weak_scheduler_ptr_, idle_task));
 }
 
+void SingleThreadIdleTaskRunner::EnqueueReadyDelayedIdleTasks() {
+  if (delayed_idle_tasks_.empty())
+    return;
+
+  base::TimeTicks now = delegate_->NowTicks();
+  while (!delayed_idle_tasks_.empty() &&
+         delayed_idle_tasks_.begin()->first <= now) {
+    idle_priority_task_runner_->PostTask(
+        delayed_idle_tasks_.begin()->second.first,
+        std::move(delayed_idle_tasks_.begin()->second.second));
+    delayed_idle_tasks_.erase(delayed_idle_tasks_.begin());
+  }
+}
+
 void SingleThreadIdleTaskRunner::RunTask(IdleTask idle_task) {
   base::TimeTicks deadline = delegate_->WillProcessIdleTask();
-  TRACE_EVENT1(tracing_category_, "SingleThreadIdleTaskRunner::RunTask",
+  TRACE_EVENT1("renderer.scheduler", "SingleThreadIdleTaskRunner::RunTask",
                "allotted_time_ms",
                (deadline - base::TimeTicks::Now()).InMillisecondsF());
   if (blame_context_)

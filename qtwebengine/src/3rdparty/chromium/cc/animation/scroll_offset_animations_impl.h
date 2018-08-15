@@ -24,16 +24,21 @@ class AnimationTimeline;
 // We have just one player for impl-only scroll offset animations. I.e. only
 // one element can have an impl-only scroll offset animation at any given time.
 // Note that this class only exists on the compositor thread.
-class CC_EXPORT ScrollOffsetAnimationsImpl : public AnimationDelegate {
+class CC_ANIMATION_EXPORT ScrollOffsetAnimationsImpl
+    : public AnimationDelegate {
  public:
   explicit ScrollOffsetAnimationsImpl(AnimationHost* animation_host);
 
   ~ScrollOffsetAnimationsImpl() override;
 
+  // |delayed_by| shrinks the duration of the
+  // animation. |animation_start_offset| causes us to start the animation
+  // partway through.
   void ScrollAnimationCreate(ElementId element_id,
                              const gfx::ScrollOffset& target_offset,
                              const gfx::ScrollOffset& current_offset,
-                             base::TimeDelta delayed_by);
+                             base::TimeDelta delayed_by,
+                             base::TimeDelta animation_start_offset);
 
   bool ScrollAnimationUpdateTarget(ElementId element_id,
                                    const gfx::Vector2dF& scroll_delta,

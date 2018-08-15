@@ -36,9 +36,11 @@ class BidirectionalStreamTest : public ::testing::TestWithParam<bool> {
  protected:
   void SetUp() override {
     StartQuicTestServer();
+    StartTestStreamEngine(GetQuicTestServerPort());
   }
 
   void TearDown() override {
+    ShutdownTestStreamEngine();
     ShutdownQuicTestServer();
   }
 
@@ -555,7 +557,8 @@ TEST_P(BidirectionalStreamTest, StreamFailBeforeReadIsExecutedOnNetworkThread) {
                              "POST", &kTestHeadersArray, false);
   test.BlockForDone();
   ASSERT_EQ(TestBidirectionalStreamCallback::ON_FAILED, test.response_step);
-  ASSERT_EQ(net::ERR_QUIC_PROTOCOL_ERROR, test.net_error);
+  ASSERT_TRUE(test.net_error == net::ERR_QUIC_PROTOCOL_ERROR ||
+              test.net_error == net::ERR_CONNECTION_REFUSED);
   bidirectional_stream_destroy(test.stream);
 }
 

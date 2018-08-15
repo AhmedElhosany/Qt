@@ -27,33 +27,31 @@
 
 class GURL;
 
-namespace base {
-class FilePath;
-class Time;
-class TaskRunner;
-}
-
 namespace content {
 class BlobDispatcherHost;
 class BlobDispatcherHostTest;
+class BlobStorageBrowserTest;
+class ChromeBlobStorageContext;
 }
 
 namespace storage {
 class BlobDataBuilder;
 class BlobDataHandle;
-class BlobDataItem;
 class BlobDataSnapshot;
 class ShareableBlobDataItem;
 
 // This class handles the logistics of blob storage within the browser process.
-// We are single threaded and should only be used on the IO thread. In Chromium
-// there is one instance per profile.
+// This class is not threadsafe, access on IO thread. In Chromium there is one
+// instance per profile.
 class STORAGE_EXPORT BlobStorageContext {
  public:
   using TransportAllowedCallback = BlobEntry::TransportAllowedCallback;
 
   // Initializes the context without disk support.
   BlobStorageContext();
+  // Disk support is enabled if |file_runner| isn't null.
+  BlobStorageContext(base::FilePath storage_directory,
+                     scoped_refptr<base::TaskRunner> file_runner);
   ~BlobStorageContext();
 
   std::unique_ptr<BlobDataHandle> GetBlobDataFromUUID(const std::string& uuid);
@@ -102,6 +100,25 @@ class STORAGE_EXPORT BlobStorageContext {
       const BlobDataBuilder& input_builder,
       const TransportAllowedCallback& transport_allowed_callback);
 
+  // Similar to BuildBlob, but this merely registers a blob that will be built
+  // in the future. The caller must later call either BuildPreregisteredBlob
+  // (to actually start building the blob), or CancelBuildingBlob (if an error
+  // occured).
+  // The returned BlobDataHandle (as well as any handles returned by
+  // GetBlobDataFromUUID before BuildPreregisteredBlob is called) will always
+  // have kUnknownSize for its size. A BlobDataHandle with the correct size is
+  // later returned by BuildPreregisteredBlob.
+  std::unique_ptr<BlobDataHandle> AddFutureBlob(
+      const std::string& uuid,
+      const std::string& content_type,
+      const std::string& content_disposition);
+
+  // Same as BuildBlob, but for a blob that was previously registered by calling
+  // AddFutureBlob.
+  std::unique_ptr<BlobDataHandle> BuildPreregisteredBlob(
+      const BlobDataBuilder& input_builder,
+      const TransportAllowedCallback& transport_allowed_callback);
+
   // This breaks a blob that is currently being built by using the BuildBlob
   // method above. Any callbacks waiting on this blob, including the
   // |transport_allowed_callback| callback given to BuildBlob, will be called
@@ -125,13 +142,18 @@ class STORAGE_EXPORT BlobStorageContext {
  protected:
   friend class content::BlobDispatcherHost;
   friend class content::BlobDispatcherHostTest;
+  friend class content::BlobStorageBrowserTest;
+  friend class content::ChromeBlobStorageContext;
   friend class BlobTransportHost;
   friend class BlobTransportHostTest;
   friend class BlobDataHandle;
   friend class BlobDataHandle::BlobDataHandleShared;
   friend class BlobFlattenerTest;
+  friend class BlobRegistryImplTest;
   friend class BlobSliceTest;
   friend class BlobStorageContextTest;
+
+  enum class TransportQuotaType { MEMORY, FILE };
 
   // Transforms a BlobDataBuilder into a BlobEntry with no blob references.
   // BlobSlice is used to flatten out these references. Records the total size
@@ -152,6 +174,8 @@ class STORAGE_EXPORT BlobStorageContext {
     //   reference ourself.
     BlobStatus status = BlobStatus::ERR_INVALID_CONSTRUCTION_ARGUMENTS;
 
+    bool contains_unpopulated_transport_items = false;
+
     // This is the total size of the blob, including all memory, files, etc.
     uint64_t total_size = 0;
     // Total memory size of the blob (not including files, etc).
@@ -159,14 +183,19 @@ class STORAGE_EXPORT BlobStorageContext {
 
     std::vector<std::pair<std::string, BlobEntry*>> dependent_blobs;
 
-    uint64_t memory_quota_needed = 0;
-    std::vector<scoped_refptr<ShareableBlobDataItem>> pending_memory_items;
-
+    TransportQuotaType transport_quota_type = TransportQuotaType::MEMORY;
+    uint64_t transport_quota_needed = 0;
+    std::vector<scoped_refptr<ShareableBlobDataItem>> pending_transport_items;
+    // Hold a separate vector of pointers to declare them as populated.
     std::vector<ShareableBlobDataItem*> transport_items;
 
+    // Copy quota is always memory quota.
+    uint64_t copy_quota_needed = 0;
+    std::vector<scoped_refptr<ShareableBlobDataItem>> pending_copy_items;
+
     // These record all future copies we'll need to do from referenced blobs.
-    // This
-    // happens when we do a partial slice from a pending data or file item.
+    // This happens when we do a partial slice from a pending data or file
+    // item.
     std::vector<BlobEntry::ItemCopyEntry> copies;
 
    private:
@@ -215,6 +244,11 @@ class STORAGE_EXPORT BlobStorageContext {
   void RunOnConstructionComplete(const std::string& uuid,
                                  const BlobStatusCallback& done_callback);
 
+  // Runs |done| when construction begins (when the blob is no longer
+  // PENDING_CONSTRUCTION) with the new status of the blob.
+  void RunOnConstructionBegin(const std::string& uuid,
+                              const BlobStatusCallback& done_callback);
+
   BlobStorageRegistry* mutable_registry() { return &registry_; }
 
   BlobMemoryController* mutable_memory_controller() {
@@ -222,6 +256,11 @@ class STORAGE_EXPORT BlobStorageContext {
   }
 
  private:
+  std::unique_ptr<BlobDataHandle> BuildBlobInternal(
+      BlobEntry* entry,
+      const BlobDataBuilder& input_builder,
+      const TransportAllowedCallback& transport_allowed_callback);
+
   std::unique_ptr<BlobDataHandle> CreateHandle(const std::string& uuid,
                                                BlobEntry* entry);
 
@@ -235,7 +274,13 @@ class STORAGE_EXPORT BlobStorageContext {
       BlobEntry* entry,
       std::vector<BlobMemoryController::FileCreationInfo> files);
 
-  void OnEnoughSizeForMemory(const std::string& uuid, bool can_fit);
+  // The files array is empty for memory quota request responses.
+  void OnEnoughSpaceForTransport(
+      const std::string& uuid,
+      std::vector<BlobMemoryController::FileCreationInfo> files,
+      bool can_fit);
+
+  void OnEnoughSpaceForCopies(const std::string& uuid, bool can_fit);
 
   void OnDependentBlobFinished(const std::string& owning_blob_uuid,
                                BlobStatus reason);

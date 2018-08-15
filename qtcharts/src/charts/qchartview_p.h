@@ -40,6 +40,7 @@
 #define QCHARTVIEW_P_H
 
 #include <QtCharts/QChartView>
+#include <QtCharts/private/qchartglobal_p.h>
 
 QT_BEGIN_NAMESPACE
 class QGraphicsScene;
@@ -51,7 +52,7 @@ class QChart;
 class ChartPresenter;
 class QChartView;
 
-class QChartViewPrivate
+class QT_CHARTS_PRIVATE_EXPORT QChartViewPrivate
 {
 public:
     explicit QChartViewPrivate(QChartView *q, QChart *chart = 0);

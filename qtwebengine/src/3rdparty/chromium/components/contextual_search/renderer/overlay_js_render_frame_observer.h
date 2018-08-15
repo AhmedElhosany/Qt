@@ -25,7 +25,7 @@ class OverlayJsRenderFrameObserver : public content::RenderFrameObserver {
   ~OverlayJsRenderFrameObserver() override;
 
   // RenderFrameObserver implementation.
-  void DidStartProvisionalLoad() override;
+  void DidStartProvisionalLoad(blink::WebDataSource* data_source) override;
   void DidClearWindowObject() override;
   void DidFinishLoad() override;
 
@@ -42,7 +42,7 @@ class OverlayJsRenderFrameObserver : public content::RenderFrameObserver {
   // Creates the OverlayPageNotifierService connecting the browser to this
   // observer.
   void CreateOverlayPageNotifierService(
-      mojo::InterfaceRequest<mojom::OverlayPageNotifierService> request);
+      mojom::OverlayPageNotifierServiceRequest request);
   // Destroys the OverlayPageNotifierService.
   void DestroyOverlayPageNotifierService();
 

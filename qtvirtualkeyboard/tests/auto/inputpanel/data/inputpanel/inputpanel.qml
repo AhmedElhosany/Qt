@@ -29,7 +29,7 @@
 
 import QtTest 1.0
 import QtQuick 2.0
-import QtQuick.VirtualKeyboard 2.2
+import QtQuick.VirtualKeyboard 2.3
 import QtQuick.VirtualKeyboard.Settings 2.2
 import "handwriting.js" as Handwriting
 import "utils.js" as Utils
@@ -263,6 +263,20 @@ InputPanel {
             return InputEngine.Katakana
         else if (inputModeName === "FullwidthLatin")
             return InputEngine.FullwidthLatin
+        else if (inputModeName === "Greek")
+            return InputEngine.Greek
+        else if (inputModeName === "Cyrillic")
+            return InputEngine.Cyrillic
+        else if (inputModeName === "Arabic")
+            return InputEngine.Arabic
+        else if (inputModeName === "Hebrew")
+            return InputEngine.Hebrew
+        else if (inputModeName === "ChineseHandwriting")
+            return InputEngine.ChineseHandwriting
+        else if (inputModeName === "JapaneseHandwriting")
+            return InputEngine.JapaneseHandwriting
+        else if (inputModeName === "KoreanHandwriting")
+            return InputEngine.KoreanHandwriting
         else
             return -1
     }
@@ -283,14 +297,21 @@ InputPanel {
         return Utils.findChild(keyboardLayoutLoader, key, function(obj, param) {
             if (!obj.hasOwnProperty("key") || !obj.hasOwnProperty("text"))
                 return false
-            return (typeof param == "number") ? obj.key === param :  obj.text === param
+            return (typeof param == "number") ? obj.key === param : obj.text.toUpperCase() === param.toUpperCase()
         })
     }
 
     function findVirtualKeyAlternative(key) {
         if (typeof key != "string")
             return null
-        return Utils.findChildByProperty(keyboardLayoutLoader, "effectiveAlternativeKeys", key, function(propertyValue, key) { return propertyValue.indexOf(key) !== -1 })
+        return Utils.findChildByProperty(keyboardLayoutLoader, "effectiveAlternativeKeys", key.toUpperCase(),
+                 function(propertyValue, key) {
+                     if (typeof propertyValue == "string")
+                         return propertyValue.toUpperCase().indexOf(key) !== -1
+                     return propertyValue.filter(function(value) {
+                         return key === value.toUpperCase()
+                     }).length > 0
+                 })
     }
 
     function findObjectByName(objectName) {
@@ -342,12 +363,14 @@ InputPanel {
                         testcase.waitForRendering(inputPanel)
                         success = keyActionOnCurrentLayoutCb(key)
                     }
-                } else {
+                } else if (typeof key != "number" || key !== Qt.Key_Shift) {
                     // Some layouts (such as Arabic, Hindi) may have a second layout
-                    InputContext.shiftHandler.toggleShift()
+                    virtualKeyPress(Qt.Key_Shift)
+                    InputContext.shiftHandler.clearToggleShiftTimer()
                     testcase.waitForRendering(inputPanel)
                     success = keyActionOnCurrentLayoutCb(key)
-                    InputContext.shiftHandler.toggleShift()
+                    virtualKeyPress(Qt.Key_Shift)
+                    InputContext.shiftHandler.clearToggleShiftTimer()
                 }
                 if (success)
                     break
@@ -368,6 +391,8 @@ InputPanel {
     }
 
     function virtualKeyPress(key) {
+        if (!key)
+            return false
         return multiLayoutKeyActionHelper(key, virtualKeyPressOnCurrentLayout)
     }
 
@@ -547,7 +572,7 @@ InputPanel {
     function setHandwritingMode(enabled) {
         if (inputPanel.keyboard.handwritingMode !== enabled) {
             if (!enabled || inputPanel.keyboard.isHandwritingAvailable())
-                inputPanel.keyboard.handwritingMode = enabled
+                inputPanel.keyboard.setHandwritingMode(enabled, true)
         }
         return inputPanel.keyboard.handwritingMode === enabled
     }

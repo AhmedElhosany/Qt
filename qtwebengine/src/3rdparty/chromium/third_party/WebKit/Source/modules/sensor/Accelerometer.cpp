@@ -4,52 +4,43 @@
 
 #include "modules/sensor/Accelerometer.h"
 
-#include "bindings/core/v8/ScriptPromise.h"
-#include "bindings/core/v8/ScriptPromiseResolver.h"
-#include "modules/sensor/AccelerometerReading.h"
-
 using device::mojom::blink::SensorType;
 
 namespace blink {
 
-Accelerometer* Accelerometer::create(ScriptState* scriptState,
-                                     const AccelerometerOptions& options,
-                                     ExceptionState& exceptionState) {
-  return new Accelerometer(scriptState, options, exceptionState);
+Accelerometer* Accelerometer::Create(ExecutionContext* execution_context,
+                                     const SensorOptions& options,
+                                     ExceptionState& exception_state) {
+  return new Accelerometer(execution_context, options, exception_state,
+                           SensorType::ACCELEROMETER);
 }
 
 // static
-Accelerometer* Accelerometer::create(ScriptState* scriptState,
-                                     ExceptionState& exceptionState) {
-  return create(scriptState, AccelerometerOptions(), exceptionState);
+Accelerometer* Accelerometer::Create(ExecutionContext* execution_context,
+                                     ExceptionState& exception_state) {
+  return Create(execution_context, SensorOptions(), exception_state);
 }
 
-Accelerometer::Accelerometer(ScriptState* scriptState,
-                             const AccelerometerOptions& options,
-                             ExceptionState& exceptionState)
-    : Sensor(scriptState,
-             options,
-             exceptionState,
-             options.includeGravity() ? SensorType::ACCELEROMETER
-                                      : SensorType::LINEAR_ACCELERATION),
-      m_accelerometerOptions(options) {}
+Accelerometer::Accelerometer(ExecutionContext* execution_context,
+                             const SensorOptions& options,
+                             ExceptionState& exception_state,
+                             SensorType sensor_type)
+    : Sensor(execution_context, options, exception_state, sensor_type) {}
 
-AccelerometerReading* Accelerometer::reading() const {
-  return static_cast<AccelerometerReading*>(Sensor::reading());
+double Accelerometer::x(bool& is_null) const {
+  return ReadingValue(0, is_null);
 }
 
-bool Accelerometer::includesGravity() const {
-  return m_accelerometerOptions.includeGravity();
+double Accelerometer::y(bool& is_null) const {
+  return ReadingValue(1, is_null);
 }
 
-std::unique_ptr<SensorReadingFactory>
-Accelerometer::createSensorReadingFactory() {
-  return std::unique_ptr<SensorReadingFactory>(
-      new SensorReadingFactoryImpl<AccelerometerReading>());
+double Accelerometer::z(bool& is_null) const {
+  return ReadingValue(2, is_null);
 }
 
 DEFINE_TRACE(Accelerometer) {
-  Sensor::trace(visitor);
+  Sensor::Trace(visitor);
 }
 
 }  // namespace blink

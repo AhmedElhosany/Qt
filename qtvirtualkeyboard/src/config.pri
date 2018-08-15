@@ -4,6 +4,11 @@ handwriting:!lipi-toolkit:!t9write {
     equals(T9WRITE_FOUND, 1): CONFIG += t9write
     else: CONFIG += lipi-toolkit
 }
+t9write {
+    !handwriting: include(virtualkeyboard/3rdparty/t9write/t9write-build.pri)
+    equals(T9WRITE_CJK_FOUND, 1): CONFIG += t9write-cjk
+    equals(T9WRITE_ALPHABETIC_FOUND, 1): CONFIG += t9write-alphabetic
+}
 
 # Disable built-in layouts
 disable-layouts {
@@ -27,22 +32,31 @@ disable-layouts {
     # Flag for activating all languages
     lang-all: CONFIG += \
         lang-ar_AR \
+        lang-bg_BG \
+        lang-cs_CZ \
         lang-da_DK \
         lang-de_DE \
+        lang-el_GR \
         lang-en_GB \
         lang-es_ES \
+        lang-et_EE \
         lang-fa_FA \
         lang-fi_FI \
         lang-fr_FR \
+        lang-he_IL \
         lang-hi_IN \
+        lang-hr_HR \
+        lang-hu_HU \
         lang-it_IT \
         lang-ja_JP \
         lang-ko_KR \
         lang-nb_NO \
+        lang-nl_NL \
         lang-pl_PL \
         lang-pt_PT \
         lang-ro_RO \
         lang-ru_RU \
+        lang-sr_SP \
         lang-sv_SE \
         lang-zh_CN \
         lang-zh_TW

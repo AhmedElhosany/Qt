@@ -53,7 +53,6 @@
 
 #include "ui_service.h"
 
-#include <qbluetoothglobal.h>
 #include <QDialog>
 
 QT_FORWARD_DECLARE_CLASS(QBluetoothAddress)

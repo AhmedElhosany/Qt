@@ -8,6 +8,7 @@
 
 #include "base/command_line.h"
 #include "components/guest_view/browser/guest_view_manager.h"
+#include "components/network_session_configurator/common/network_switches.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
 #include "extensions/browser/extension_protocols.h"
@@ -54,9 +55,7 @@ net::URLRequestContextGetter* ShellBrowserContext::CreateRequestContext(
       content::ProtocolHandlerMap* protocol_handlers,
       content::URLRequestInterceptorScopedVector request_interceptors) {
   DCHECK(!url_request_context_getter());
-  // Handle only chrome-extension:// requests. app_shell does not support
-  // chrome-extension-resource:// requests (it does not store shared extension
-  // data in its installation directory).
+  // Handle only chrome-extension:// requests.
   InfoMap* extension_info_map =
       browser_main_parts_->extension_system()->info_map();
   (*protocol_handlers)[kExtensionScheme] =
@@ -69,8 +68,6 @@ net::URLRequestContextGetter* ShellBrowserContext::CreateRequestContext(
       this, IgnoreCertificateErrors(), GetPath(),
       content::BrowserThread::GetTaskRunnerForThread(
           content::BrowserThread::IO),
-      content::BrowserThread::GetTaskRunnerForThread(
-          content::BrowserThread::FILE),
       protocol_handlers, std::move(request_interceptors), nullptr /* net_log */,
       extension_info_map));
   resource_context_->set_url_request_context_getter(

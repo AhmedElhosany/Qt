@@ -43,12 +43,14 @@ like tile_memory, in that they are shared with cc/resource_memory.
 Note that depending on the path being used, CC memory may be either shared
 memory or GPU memory:
 
+```
 Path         | Tile Memory Type     | Staging Memory Type
 -------------|-------------------------------------------
 Bitmap       | Shared Memory        | N/A
 One Copy     | GPU Memory           | Shared Memory
 Zero Copy    | GPU or Shared Memory | N/A
 GPU          | GPU Memory           | N/A
+```
 
 Note that these values can be determined from a memory-infra dump. For a given
 resource, hover over the small green arrow next to it's "size". This will show
@@ -122,4 +124,4 @@ The following areas have insufficient memory instrumentation.
 
 1.  DisplayLists - DisplayLists can be quite large and are currently
     un-instrumented. These use malloc memory and currently contribute to
-    malloc/allocated_objects/<unspecified>. [BUG](http://crbug.com/567465)
+    malloc/allocated_objects/<unspecified>. [BUG](https://crbug.com/567465)

@@ -38,7 +38,7 @@ Resources.DatabaseTableView = class extends UI.SimpleView {
     this._visibleColumnsSetting = Common.settings.createSetting('databaseTableViewVisibleColumns', {});
 
     this.refreshButton = new UI.ToolbarButton(Common.UIString('Refresh'), 'largeicon-refresh');
-    this.refreshButton.addEventListener('click', this._refreshButtonClicked, this);
+    this.refreshButton.addEventListener(UI.ToolbarButton.Events.Click, this._refreshButtonClicked, this);
     this._visibleColumnsInput = new UI.ToolbarInput(Common.UIString('Visible columns'), 1);
     this._visibleColumnsInput.addEventListener(UI.ToolbarInput.Event.TextChanged, this._onVisibleColumnsChanged, this);
   }
@@ -76,13 +76,14 @@ Resources.DatabaseTableView = class extends UI.SimpleView {
     this.detachChildWidgets();
     this.element.removeChildren();
 
-    this._dataGrid = UI.SortableDataGrid.create(columnNames, values);
+    this._dataGrid = DataGrid.SortableDataGrid.create(columnNames, values);
     this._visibleColumnsInput.setVisible(!!this._dataGrid);
     if (!this._dataGrid) {
       this._emptyWidget = new UI.EmptyWidget(Common.UIString('The “%s”\ntable is empty.', this.tableName));
       this._emptyWidget.show(this.element);
       return;
     }
+    this._dataGrid.setStriped(true);
     this._dataGrid.asWidget().show(this.element);
     this._dataGrid.autoSizeColumns(5);
 
@@ -134,6 +135,9 @@ Resources.DatabaseTableView = class extends UI.SimpleView {
     this.element.appendChild(errorMsgElement);
   }
 
+  /**
+   * @param {!Common.Event} event
+   */
   _refreshButtonClicked(event) {
     this.update();
   }

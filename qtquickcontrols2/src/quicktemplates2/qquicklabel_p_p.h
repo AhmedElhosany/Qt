@@ -48,6 +48,7 @@
 // We mean it.
 //
 
+#include <QtQml/private/qlazilyallocated_p.h>
 #include <QtQuick/private/qquicktext_p_p.h>
 #include <QtQuickTemplates2/private/qquickdeferredpointer_p_p.h>
 
@@ -56,8 +57,6 @@
 #endif
 
 QT_BEGIN_NAMESPACE
-
-class QQuickAccessibleAttached;
 
 class QQuickLabelPrivate : public QQuickTextPrivate
 #if QT_CONFIG(accessibility)
@@ -75,10 +74,23 @@ public:
         return static_cast<QQuickLabelPrivate *>(QObjectPrivate::get(item));
     }
 
-    void resizeBackground();
-
     void resolveFont();
-    void inheritFont(const QFont &f);
+    void inheritFont(const QFont &font);
+    void updateFont(const QFont &font);
+    inline void setFont_helper(const QFont &font) {
+        if (sourceFont.resolve() == font.resolve() && sourceFont == font)
+            return;
+        updateFont(font);
+    }
+
+    void resolvePalette();
+    void inheritPalette(const QPalette &palette);
+    void updatePalette(const QPalette &palette);
+    inline void setPalette_helper(const QPalette &palette) {
+        if (resolvedPalette.resolve() == palette.resolve() && resolvedPalette == palette)
+            return;
+        updatePalette(palette);
+    }
 
     void textChanged(const QString &text);
 
@@ -90,9 +102,14 @@ public:
     void cancelBackground();
     void executeBackground(bool complete = false);
 
-    QFont font;
+    struct ExtraData {
+        QFont requestedFont;
+        QPalette requestedPalette;
+    };
+    QLazilyAllocated<ExtraData> extra;
+
+    QPalette resolvedPalette;
     QQuickDeferredPointer<QQuickItem> background;
-    QQuickAccessibleAttached *accessibleAttached;
 };
 
 QT_END_NAMESPACE

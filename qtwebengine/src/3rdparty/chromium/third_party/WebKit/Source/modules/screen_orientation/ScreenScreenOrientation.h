@@ -5,6 +5,7 @@
 #ifndef ScreenScreenOrientation_h
 #define ScreenScreenOrientation_h
 
+#include "core/frame/Screen.h"
 #include "platform/Supplementable.h"
 #include "platform/heap/Handle.h"
 
@@ -20,16 +21,16 @@ class ScreenScreenOrientation final
   USING_GARBAGE_COLLECTED_MIXIN(ScreenScreenOrientation);
 
  public:
-  static ScreenScreenOrientation& from(Screen&);
+  static ScreenScreenOrientation& From(Screen&);
 
   static ScreenOrientation* orientation(ScriptState*, Screen&);
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
-  static const char* supplementName();
+  static const char* SupplementName();
 
-  Member<ScreenOrientation> m_orientation;
+  Member<ScreenOrientation> orientation_;
 };
 
 }  // namespace blink

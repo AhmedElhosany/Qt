@@ -32,6 +32,7 @@
 ##
 #############################################################################
 
+param([Int32]$archVer=32)
 . "$PSScriptRoot\helpers.ps1"
 
 # This script installs Python $version.
@@ -42,31 +43,28 @@ $package = "C:\Windows\temp\python-$version.exe"
 $install_path = "C:\Python36"
 
 # check bit version
-if (Is64BitWinHost) {
-    Write-Host "Running in 64 bit system"
+if ( $archVer -eq 64 ) {
+    echo "Running in 64 bit system"
     $externalUrl = "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
     $internalUrl = "http://ci-files01-hki.intra.qt.io/input/windows/python-$version-amd64.exe"
     $sha1 = "bf54252c4065b20f4a111cc39cf5215fb1edccff"
-} else {
+}
+else {
     $externalUrl = "https://www.python.org/ftp/python/$version/python-$version.exe"
     $internalUrl = "http://ci-files01-hki.intra.qt.io/input/windows/python-$version.exe"
     $sha1 = "76c50b747237a0974126dd8b32ea036dd77b2ad1"
 }
 
-Write-Host "Fetching from URL..."
+echo "Fetching from URL..."
 Download $externalUrl $internalUrl $package
 Verify-Checksum $package $sha1
-Write-Host "Installing $package..."
-Run-Executable "$package" "/q TargetDir=$install_path"
-Write-Host "Remove $package..."
-Remove-Item -Path $package
+echo "Installing $package..."
+cmd /c "$package /q TargetDir=$install_path"
+echo "Remove $package..."
+del $package
 
-Set-EnvironmentVariable "PYTHON3_PATH" "$install_path"
-Set-EnvironmentVariable "PIP3_PATH" "$install_path\Scripts"
+[Environment]::SetEnvironmentVariable("PYTHON3_PATH", "$install_path", [EnvironmentVariableTarget]::Machine)
+[Environment]::SetEnvironmentVariable("PIP3_PATH", "$install_path\Scripts", [EnvironmentVariableTarget]::Machine)
 
 # Install python virtual env
-#if ( isProxyEnabled ) {
-#    Write-Host "Using proxy with pip"
-#    $pip_args = "--proxy=" + (getProxy)
-#}
-Run-Executable "$install_path\Scripts\pip3.exe" "install virtualenv"
+cmd /c "$install_path\Scripts\pip3.exe install virtualenv"

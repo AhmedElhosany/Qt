@@ -15,7 +15,6 @@
 #include "ui/events/platform/platform_event_dispatcher.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/x/x11_atom_cache.h"
 
 // X forward decls to avoid including Xlib.h in a header file.
 typedef struct _XDisplay XDisplay;
@@ -43,13 +42,14 @@ class AURA_EXPORT WindowTreeHostX11 : public WindowTreeHost,
   gfx::AcceleratedWidget GetAcceleratedWidget() override;
   void ShowImpl() override;
   void HideImpl() override;
-  gfx::Rect GetBounds() const override;
-  void SetBounds(const gfx::Rect& bounds) override;
-  gfx::Point GetLocationOnNativeScreen() const override;
+  gfx::Rect GetBoundsInPixels() const override;
+  void SetBoundsInPixels(const gfx::Rect& bounds) override;
+  gfx::Point GetLocationOnScreenInPixels() const override;
   void SetCapture() override;
   void ReleaseCapture() override;
   void SetCursorNative(gfx::NativeCursor cursor_type) override;
-  void MoveCursorToNative(const gfx::Point& location) override;
+  void MoveCursorToScreenLocationInPixels(
+      const gfx::Point& location_in_pixels) override;
   void OnCursorVisibilityChangedNative(bool show) override;
 
   // Deselects mouse and keyboard events on |xwindow_|.
@@ -66,7 +66,6 @@ class AURA_EXPORT WindowTreeHostX11 : public WindowTreeHost,
   ::Window x_root_window() { return x_root_window_; }
   XDisplay* xdisplay() { return xdisplay_; }
   const gfx::Rect& bounds() const { return bounds_; }
-  ui::X11AtomCache* atom_cache() { return &atom_cache_; }
 
  private:
   // Dispatches XI2 events. Note that some events targetted for the X root
@@ -97,18 +96,9 @@ class AURA_EXPORT WindowTreeHostX11 : public WindowTreeHost,
   // The bounds of |xwindow_|.
   gfx::Rect bounds_;
 
-  ui::X11AtomCache atom_cache_;
-
   DISALLOW_COPY_AND_ASSIGN(WindowTreeHostX11);
 };
 
-namespace test {
-
-// Set the default value of the override redirect flag used to
-// create a X window for WindowTreeHostX11.
-AURA_EXPORT void SetUseOverrideRedirectWindowByDefault(bool override_redirect);
-
-}  // namespace test
 }  // namespace aura
 
 #endif  // UI_AURA_WINDOW_TREE_HOST_X11_H_

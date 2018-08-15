@@ -8,6 +8,9 @@
 #include "base/json/json_reader.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/sequenced_task_runner.h"
+#include "base/task_scheduler/post_task.h"
+#include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "chrome/browser/apps/app_browsertest_util.h"
@@ -18,6 +21,7 @@
 #include "chrome/browser/sync_file_system/sync_file_system_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service_factory.h"
 #include "components/drive/service/fake_drive_service.h"
+#include "content/public/browser/storage_partition.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "storage/browser/quota/quota_manager.h"
@@ -61,29 +65,13 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
       : remote_service_(NULL) {
   }
 
-  void SetUpInProcessBrowserTestFixture() override {
-    ExtensionApiTest::SetUpInProcessBrowserTestFixture();
-    real_minimum_preserved_space_ =
-        storage::QuotaManager::kMinimumPreserveForSystem;
-    storage::QuotaManager::kMinimumPreserveForSystem = 0;
-  }
-
-  void TearDownInProcessBrowserTestFixture() override {
-    storage::QuotaManager::kMinimumPreserveForSystem =
-        real_minimum_preserved_space_;
-    ExtensionApiTest::TearDownInProcessBrowserTestFixture();
-  }
-
   scoped_refptr<base::SequencedTaskRunner> MakeSequencedTaskRunner() {
-    scoped_refptr<base::SequencedWorkerPool> worker_pool =
-        content::BrowserThread::GetBlockingPool();
-
-    return worker_pool->GetSequencedTaskRunnerWithShutdownBehavior(
-        worker_pool->GetSequenceToken(),
-        base::SequencedWorkerPool::SKIP_ON_SHUTDOWN);
+    return base::CreateSequencedTaskRunnerWithTraits(
+        {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
   }
 
   void SetUpOnMainThread() override {
+    extensions::PlatformAppBrowserTest::SetUpOnMainThread();
     ASSERT_TRUE(base_dir_.CreateUniqueTempDir());
 
     SyncFileSystemServiceFactory* factory =
@@ -102,7 +90,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
     remote_service_ = new drive_backend::SyncEngine(
         base::ThreadTaskRunnerHandle::Get(),  // ui_task_runner
         MakeSequencedTaskRunner(), MakeSequencedTaskRunner(),
-        content::BrowserThread::GetBlockingPool(), base_dir_.GetPath(),
+        base_dir_.GetPath(),
         NULL,  // task_logger
         NULL,  // notification_manager
         extension_service,
@@ -135,7 +123,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
 
   void SignIn() {
     fake_signin_manager_->SetAuthenticatedAccountInfo("12345", "tester");
-    sync_engine()->GoogleSigninSucceeded("12345", "tester", "password");
+    sync_engine()->GoogleSigninSucceeded("12345", "tester");
   }
 
   void SetSyncEnabled(bool enabled) {
@@ -155,8 +143,6 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
   std::unique_ptr<FakeSigninManagerForTesting> fake_signin_manager_;
 
   drive_backend::SyncEngine* remote_service_;
-
-  int64_t real_minimum_preserved_space_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncFileSystemTest);
 };
@@ -201,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(SyncFileSystemTest, AuthorizationTest) {
   EXPECT_EQ(REMOTE_SERVICE_AUTHENTICATION_REQUIRED,
             sync_engine()->GetCurrentState());
 
-  sync_engine()->GoogleSigninSucceeded("test_account", "tester", "testing");
+  sync_engine()->GoogleSigninSucceeded("test_account", "tester");
   WaitUntilIdle();
 
   bar_created.Reply("resume");

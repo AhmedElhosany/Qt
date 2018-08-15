@@ -388,43 +388,28 @@ void QNodePrivate::propertyChanged(int propertyIndex)
     if (m_blockNotifications)
         return;
 
-    const auto toBackendValue = [this](const QVariant &data) -> QVariant
-    {
-        if (data.canConvert<QNode*>()) {
-            QNode *node = data.value<QNode*>();
-
-            // Ensure the node has issued a node creation change. We can end
-            // up here if a newly created node with a parent is immediately set
-            // as a property on another node. In this case the deferred call to
-            // _q_postConstructorInit() will not have happened yet as the event
-            // loop will still be blocked. So force it here and we catch this
-            // eventuality in the _q_postConstructorInit() function so that we
-            // do not repeat the creation and new child scene change events.
-            if (node)
-                QNodePrivate::get(node)->_q_postConstructorInit();
-
-            const QNodeId id = node ? node->id() : QNodeId();
-            return QVariant::fromValue(id);
-        }
-
-        return data;
-    };
-
     Q_Q(QNode);
 
     const QMetaProperty property = q->metaObject()->property(propertyIndex);
 
     const QVariant data = property.read(q);
+    if (data.canConvert<QNode*>()) {
+        QNode *node = data.value<QNode*>();
 
-    if (data.type() == QVariant::List) {
-        QSequentialIterable iterable = data.value<QSequentialIterable>();
-        QVariantList variants;
-        variants.reserve(iterable.size());
-        for (const auto &v : iterable)
-            variants.append(toBackendValue(v));
-        notifyPropertyChange(property.name(), variants);
+        // Ensure the node has issued a node creation change. We can end
+        // up here if a newly created node with a parent is immediately set
+        // as a property on another node. In this case the deferred call to
+        // _q_postConstructorInit() will not have happened yet as the event
+        // loop will still be blocked. So force it here and we catch this
+        // eventuality in the _q_postConstructorInit() function so that we
+        // do not repeat the creation and new child scene change events.
+        if (node)
+            QNodePrivate::get(node)->_q_postConstructorInit();
+
+        const QNodeId id = node ? node->id() : QNodeId();
+        notifyPropertyChange(property.name(), QVariant::fromValue(id));
     } else {
-        notifyPropertyChange(property.name(), toBackendValue(data));
+        notifyPropertyChange(property.name(), data);
     }
 }
 
@@ -952,6 +937,51 @@ QNodeCreatedChangeBasePtr QNode::createNodeCreationChange() const
     // qDebug() << Q_FUNC_INFO << mo->className();
     return QNodeCreatedChangeBasePtr::create(this);
 }
+
+/*!
+ * \brief Sends a command messages to the backend node
+ *
+ * Creates a QNodeCommand message and dispatches it to the backend node. The
+ * command is given and a \a name and some \a data which can be used in the
+ * backend node to performe various operations.
+ * This returns a CommandId which can be used to identify the initial command
+ * when receiving a message in reply. If the command message is to be sent in
+ * reply to another command, \a replyTo contains the id of that command.
+ *
+ * \sa QNodeCommand, QNode::sendReply
+ */
+QNodeCommand::CommandId QNode::sendCommand(const QString &name,
+                                           const QVariant &data,
+                                           QNodeCommand::CommandId replyTo)
+{
+    Q_D(QNode);
+
+    // Bail out early if we can to avoid operator new
+    if (d->m_blockNotifications)
+        return QNodeCommand::CommandId(0);
+
+    auto e = QNodeCommandPtr::create(d->m_id);
+    e->setName(name);
+    e->setData(data);
+    e->setReplyToCommandId(replyTo);
+    d->notifyObservers(e);
+    return e->commandId();
+}
+
+/*!
+ * \brief Send a command back to the backend node
+ *
+ * Assumes the command is to be to sent back in reply to itself to the backend node
+ *
+ * \sa QNodeCommand, QNode::sendCommand
+ */
+void QNode::sendReply(const QNodeCommandPtr &command)
+{
+    Q_D(QNode);
+    command->setDeliveryFlags(QSceneChange::BackendNodes);
+    d->notifyObservers(command);
+}
+
 
 namespace {
 

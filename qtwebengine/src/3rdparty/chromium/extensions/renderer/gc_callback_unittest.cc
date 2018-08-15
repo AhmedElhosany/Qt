@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/renderer/gc_callback.h"
+
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_task_environment.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/features/feature.h"
-#include "extensions/renderer/gc_callback.h"
 #include "extensions/renderer/scoped_web_frame.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
+#include "extensions/renderer/test_extensions_renderer_client.h"
 #include "gin/function_template.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/public/web/WebFrame.h"
@@ -33,8 +35,6 @@ class GCCallbackTest : public testing::Test {
   GCCallbackTest() : script_context_set_(&active_extensions_) {}
 
  protected:
-  base::MessageLoop& message_loop() { return message_loop_; }
-
   ScriptContextSet& script_context_set() { return script_context_set_; }
 
   v8::Local<v8::Context> v8_context() {
@@ -42,11 +42,10 @@ class GCCallbackTest : public testing::Test {
   }
 
   ScriptContext* RegisterScriptContext() {
-    // No extension group or world ID.
+    // No world ID.
     return script_context_set_.Register(
         web_frame_.frame(),
-        v8::Local<v8::Context>::New(v8::Isolate::GetCurrent(), v8_context_), 0,
-        0);
+        v8::Local<v8::Context>::New(v8::Isolate::GetCurrent(), v8_context_), 0);
   }
 
   void RequestGarbageCollection() {
@@ -61,7 +60,7 @@ class GCCallbackTest : public testing::Test {
     // We need a context that has been initialized by blink; grab the main world
     // context from the web frame.
     v8::Local<v8::Context> local_v8_context =
-        web_frame_.frame()->mainWorldScriptContext();
+        web_frame_.frame()->MainWorldScriptContext();
     DCHECK(!local_v8_context.IsEmpty());
     v8_context_.Reset(isolate, local_v8_context);
   }
@@ -71,8 +70,11 @@ class GCCallbackTest : public testing::Test {
     RequestGarbageCollection();
   }
 
-  base::MessageLoop message_loop_;
+  base::test::ScopedTaskEnvironment scoped_task_environment_;
+
   ScopedWebFrame web_frame_;  // (this will construct the v8::Isolate)
+  // ExtensionsRendererClient is a dependency of ScriptContextSet.
+  TestExtensionsRendererClient extensions_renderer_client_;
   ExtensionIdSet active_extensions_;
   ScriptContextSet script_context_set_;
   v8::Global<v8::Context> v8_context_;

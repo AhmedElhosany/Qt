@@ -7,37 +7,39 @@
 
 #include "core/timing/PerformanceEntry.h"
 #include "platform/heap/Handle.h"
-#include "wtf/Forward.h"
-#include "wtf/text/WTFString.h"
+#include "platform/wtf/Forward.h"
+#include "platform/wtf/text/WTFString.h"
 
 namespace blink {
 
-class DOMWindow;
+class TaskAttributionTiming;
+using TaskAttributionVector = HeapVector<Member<TaskAttributionTiming>>;
 
 class PerformanceLongTaskTiming final : public PerformanceEntry {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static PerformanceLongTaskTiming* create(double startTime,
-                                           double endTime,
+  static PerformanceLongTaskTiming* Create(double start_time,
+                                           double end_time,
                                            String name,
-                                           DOMWindow* culpritWindow) {
-    return new PerformanceLongTaskTiming(startTime, endTime, name,
-                                         culpritWindow);
-  }
+                                           String frame_src,
+                                           String frame_id,
+                                           String frame_name);
 
-  DOMWindow* culpritWindow() const;
+  TaskAttributionVector attribution() const;
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
-  PerformanceLongTaskTiming(double startTime,
-                            double endTime,
+  PerformanceLongTaskTiming(double start_time,
+                            double end_time,
                             String name,
-                            DOMWindow* culpritWindow);
+                            String frame_src,
+                            String frame_id,
+                            String frame_name);
   ~PerformanceLongTaskTiming() override;
 
-  Member<DOMWindow> m_culpritWindow;
+  TaskAttributionVector attribution_;
 };
 
 }  // namespace blink

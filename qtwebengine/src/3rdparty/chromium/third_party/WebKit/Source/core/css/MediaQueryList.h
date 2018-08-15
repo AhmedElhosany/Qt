@@ -20,13 +20,13 @@
 #ifndef MediaQueryList_h
 #define MediaQueryList_h
 
-#include "bindings/core/v8/ActiveScriptWrappable.h"
-#include "bindings/core/v8/ScriptWrappable.h"
 #include "core/CoreExport.h"
-#include "core/dom/ActiveDOMObject.h"
+#include "core/dom/ContextLifecycleObserver.h"
 #include "core/events/EventTarget.h"
+#include "platform/bindings/ActiveScriptWrappable.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Handle.h"
-#include "wtf/Forward.h"
+#include "platform/wtf/Forward.h"
 
 namespace blink {
 
@@ -41,17 +41,18 @@ class MediaQuerySet;
 // to retrieve the current value of the given media query and to add/remove
 // listeners that will be called whenever the value of the query changes.
 
-class CORE_EXPORT MediaQueryList final : public EventTargetWithInlineData,
-                                         public ActiveScriptWrappable,
-                                         public ActiveDOMObject {
+class CORE_EXPORT MediaQueryList final
+    : public EventTargetWithInlineData,
+      public ActiveScriptWrappable<MediaQueryList>,
+      public ContextLifecycleObserver {
   DEFINE_WRAPPERTYPEINFO();
   USING_GARBAGE_COLLECTED_MIXIN(MediaQueryList);
   WTF_MAKE_NONCOPYABLE(MediaQueryList);
 
  public:
-  static MediaQueryList* create(ExecutionContext*,
+  static MediaQueryList* Create(ExecutionContext*,
                                 MediaQueryMatcher*,
-                                MediaQuerySet*);
+                                RefPtr<MediaQuerySet>);
   ~MediaQueryList() override;
 
   String media() const;
@@ -66,35 +67,35 @@ class CORE_EXPORT MediaQueryList final : public EventTargetWithInlineData,
 
   // C++ code can use these functions to listen to changes instead of having to
   // use DOM event listeners.
-  void addListener(MediaQueryListListener*);
-  void removeListener(MediaQueryListListener*);
+  void AddListener(MediaQueryListListener*);
+  void RemoveListener(MediaQueryListListener*);
 
   // Will return true if a DOM event should be scheduled.
-  bool mediaFeaturesChanged(
-      HeapVector<Member<MediaQueryListListener>>* listenersToNotify);
+  bool MediaFeaturesChanged(
+      HeapVector<Member<MediaQueryListListener>>* listeners_to_notify);
 
   DECLARE_VIRTUAL_TRACE();
 
   // From ScriptWrappable
-  bool hasPendingActivity() const final;
+  bool HasPendingActivity() const final;
 
-  // From ActiveDOMObject
-  void contextDestroyed() override;
+  // From ContextLifecycleObserver
+  void ContextDestroyed(ExecutionContext*) override;
 
-  const AtomicString& interfaceName() const override;
-  ExecutionContext* getExecutionContext() const override;
+  const AtomicString& InterfaceName() const override;
+  ExecutionContext* GetExecutionContext() const override;
 
  private:
-  MediaQueryList(ExecutionContext*, MediaQueryMatcher*, MediaQuerySet*);
+  MediaQueryList(ExecutionContext*, MediaQueryMatcher*, RefPtr<MediaQuerySet>);
 
-  bool updateMatches();
+  bool UpdateMatches();
 
-  Member<MediaQueryMatcher> m_matcher;
-  Member<MediaQuerySet> m_media;
+  Member<MediaQueryMatcher> matcher_;
+  RefPtr<MediaQuerySet> media_;
   using ListenerList = HeapListHashSet<Member<MediaQueryListListener>>;
-  ListenerList m_listeners;
-  bool m_matchesDirty;
-  bool m_matches;
+  ListenerList listeners_;
+  bool matches_dirty_;
+  bool matches_;
 };
 
 }  // namespace blink

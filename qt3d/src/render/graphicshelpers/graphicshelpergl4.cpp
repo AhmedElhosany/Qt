@@ -341,6 +341,65 @@ void GraphicsHelperGL4::vertexAttribDivisor(GLuint index, GLuint divisor)
     m_funcs->glVertexAttribDivisor(index, divisor);
 }
 
+void GraphicsHelperGL4::vertexAttributePointer(GLenum shaderDataType,
+                                               GLuint index,
+                                               GLint size,
+                                               GLenum type,
+                                               GLboolean normalized,
+                                               GLsizei stride,
+                                               const GLvoid *pointer)
+{
+    switch (shaderDataType) {
+    case GL_FLOAT:
+    case GL_FLOAT_VEC2:
+    case GL_FLOAT_VEC3:
+    case GL_FLOAT_VEC4:
+    case GL_FLOAT_MAT2:
+    case GL_FLOAT_MAT2x3:
+    case GL_FLOAT_MAT2x4:
+    case GL_FLOAT_MAT3:
+    case GL_FLOAT_MAT3x2:
+    case GL_FLOAT_MAT3x4:
+    case GL_FLOAT_MAT4x2:
+    case GL_FLOAT_MAT4x3:
+    case GL_FLOAT_MAT4:
+        m_funcs->glVertexAttribPointer(index, size, type, normalized, stride, pointer);
+        break;
+
+    case GL_INT:
+    case GL_INT_VEC2:
+    case GL_INT_VEC3:
+    case GL_INT_VEC4:
+    case GL_UNSIGNED_INT:
+    case GL_UNSIGNED_INT_VEC2:
+    case GL_UNSIGNED_INT_VEC3:
+    case GL_UNSIGNED_INT_VEC4:
+        m_funcs->glVertexAttribIPointer(index, size, type, stride, pointer);
+        break;
+
+    case GL_DOUBLE:
+    case GL_DOUBLE_VEC2:
+    case GL_DOUBLE_VEC3:
+    case GL_DOUBLE_VEC4:
+        m_funcs->glVertexAttribLPointer(index, size, type, stride, pointer);
+        break;
+
+    default:
+        qCWarning(Render::Rendering) << "vertexAttribPointer: Unhandled type";
+        Q_UNREACHABLE();
+    }
+}
+
+void GraphicsHelperGL4::readBuffer(GLenum mode)
+{
+    m_funcs->glReadBuffer(mode);
+}
+
+void GraphicsHelperGL4::drawBuffer(GLenum mode)
+{
+    m_funcs->glDrawBuffer(mode);
+}
+
 void GraphicsHelperGL4::glUniform1fv(GLint location, GLsizei count, const GLfloat *values)
 {
     m_funcs->glUniform1fv(location, count, values);
@@ -634,6 +693,12 @@ bool GraphicsHelperGL4::checkFrameBufferComplete()
     return (m_funcs->glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
 }
 
+bool GraphicsHelperGL4::frameBufferNeedsRenderBuffer(const Attachment &attachment)
+{
+    Q_UNUSED(attachment);
+    return false;
+}
+
 void GraphicsHelperGL4::bindFrameBufferAttachment(QOpenGLTexture *texture, const Attachment &attachment)
 {
     GLenum attr = GL_DEPTH_STENCIL_ATTACHMENT;
@@ -657,6 +722,13 @@ void GraphicsHelperGL4::bindFrameBufferAttachment(QOpenGLTexture *texture, const
     else
         m_funcs->glFramebufferTexture(GL_DRAW_FRAMEBUFFER, attr, texture->textureId(), attachment.m_mipLevel);
     texture->release();
+}
+
+void GraphicsHelperGL4::bindFrameBufferAttachment(RenderBuffer *renderBuffer, const Attachment &attachment)
+{
+    Q_UNUSED(renderBuffer);
+    Q_UNUSED(attachment);
+    Q_UNREACHABLE();
 }
 
 bool GraphicsHelperGL4::supportsFeature(GraphicsHelperInterface::Feature feature) const
@@ -1072,6 +1144,11 @@ void GraphicsHelperGL4::enablePrimitiveRestart(int primitiveRestartIndex)
     m_funcs->glEnable(GL_PRIMITIVE_RESTART);
 }
 
+void GraphicsHelperGL4::enableVertexAttributeArray(int location)
+{
+    m_funcs->glEnableVertexAttribArray(location);
+}
+
 void GraphicsHelperGL4::disablePrimitiveRestart()
 {
     m_funcs->glDisable(GL_PRIMITIVE_RESTART);
@@ -1142,9 +1219,9 @@ void GraphicsHelperGL4::dispatchCompute(GLuint wx, GLuint wy, GLuint wz)
     m_funcs->glDispatchCompute(wx, wy, wz);
 }
 
-char *GraphicsHelperGL4::mapBuffer(GLenum target)
+char *GraphicsHelperGL4::mapBuffer(GLenum target, GLsizeiptr size)
 {
-    return static_cast<char*>(m_funcs->glMapBuffer(target, GL_READ_WRITE));
+    return static_cast<char*>(m_funcs->glMapBufferRange(target, 0, size, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT));
 }
 
 GLboolean GraphicsHelperGL4::unmapBuffer(GLenum target)

@@ -31,18 +31,23 @@ HeadlessDevToolsClientImpl* HeadlessDevToolsClientImpl::From(
 
 HeadlessDevToolsClientImpl::HeadlessDevToolsClientImpl()
     : agent_host_(nullptr),
+      raw_protocol_listener_(nullptr),
       next_message_id_(0),
+      next_raw_message_id_(1),
+      renderer_crashed_(false),
       accessibility_domain_(this),
       animation_domain_(this),
       application_cache_domain_(this),
+      browser_domain_(this),
       cache_storage_domain_(this),
       console_domain_(this),
       css_domain_(this),
       database_domain_(this),
       debugger_domain_(this),
       device_orientation_domain_(this),
-      dom_debugger_domain_(this),
       dom_domain_(this),
+      dom_debugger_domain_(this),
+      dom_snapshot_domain_(this),
       dom_storage_domain_(this),
       emulation_domain_(this),
       heap_profiler_domain_(this),
@@ -56,7 +61,6 @@ HeadlessDevToolsClientImpl::HeadlessDevToolsClientImpl()
       network_domain_(this),
       page_domain_(this),
       profiler_domain_(this),
-      rendering_domain_(this),
       runtime_domain_(this),
       security_domain_(this),
       service_worker_domain_(this),
@@ -68,25 +72,73 @@ HeadlessDevToolsClientImpl::HeadlessDevToolsClientImpl()
 
 HeadlessDevToolsClientImpl::~HeadlessDevToolsClientImpl() {}
 
-void HeadlessDevToolsClientImpl::AttachToHost(
+bool HeadlessDevToolsClientImpl::AttachToHost(
+    content::DevToolsAgentHost* agent_host) {
+  DCHECK(!agent_host_);
+  if (agent_host->AttachClient(this)) {
+    agent_host_ = agent_host;
+    return true;
+  }
+  return false;
+}
+
+void HeadlessDevToolsClientImpl::ForceAttachToHost(
     content::DevToolsAgentHost* agent_host) {
   DCHECK(!agent_host_);
   agent_host_ = agent_host;
-  agent_host_->AttachClient(this);
+  agent_host_->ForceAttachClient(this);
 }
 
 void HeadlessDevToolsClientImpl::DetachFromHost(
     content::DevToolsAgentHost* agent_host) {
   DCHECK_EQ(agent_host_, agent_host);
-  agent_host_->DetachClient(this);
+  if (!renderer_crashed_)
+    agent_host_->DetachClient(this);
   agent_host_ = nullptr;
   pending_messages_.clear();
+}
+
+void HeadlessDevToolsClientImpl::SetRawProtocolListener(
+    RawProtocolListener* raw_protocol_listener) {
+  raw_protocol_listener_ = raw_protocol_listener;
+}
+
+int HeadlessDevToolsClientImpl::GetNextRawDevToolsMessageId() {
+  int id = next_raw_message_id_;
+  next_raw_message_id_ += 2;
+  return id;
+}
+
+void HeadlessDevToolsClientImpl::SendRawDevToolsMessage(
+    const std::string& json_message) {
+#ifndef NDEBUG
+  std::unique_ptr<base::Value> message =
+      base::JSONReader::Read(json_message, base::JSON_PARSE_RFC);
+  const base::DictionaryValue* message_dict;
+  int id = 0;
+  if (!message || !message->GetAsDictionary(&message_dict) ||
+      !message_dict->GetInteger("id", &id)) {
+    NOTREACHED() << "Badly formed message";
+    return;
+  }
+  DCHECK_EQ((id % 2), 1) << "Raw devtools messages must have an odd ID.";
+#endif
+
+  agent_host_->DispatchProtocolMessage(this, json_message);
+}
+
+void HeadlessDevToolsClientImpl::SendRawDevToolsMessage(
+    const base::DictionaryValue& message) {
+  std::string json_message;
+  base::JSONWriter::Write(message, &json_message);
+  SendRawDevToolsMessage(json_message);
 }
 
 void HeadlessDevToolsClientImpl::DispatchProtocolMessage(
     content::DevToolsAgentHost* agent_host,
     const std::string& json_message) {
   DCHECK_EQ(agent_host_, agent_host);
+
   std::unique_ptr<base::Value> message =
       base::JSONReader::Read(json_message, base::JSON_PARSE_RFC);
   const base::DictionaryValue* message_dict;
@@ -94,6 +146,13 @@ void HeadlessDevToolsClientImpl::DispatchProtocolMessage(
     NOTREACHED() << "Badly formed reply";
     return;
   }
+
+  if (raw_protocol_listener_ &&
+      raw_protocol_listener_->OnProtocolMessage(agent_host->GetId(),
+                                                json_message, *message_dict)) {
+    return;
+  }
+
   if (!DispatchMessageReply(*message_dict) &&
       !DispatchEvent(std::move(message), *message_dict)) {
     DLOG(ERROR) << "Unhandled protocol message: " << json_message;
@@ -114,11 +173,16 @@ bool HeadlessDevToolsClientImpl::DispatchMessageReply(
   pending_messages_.erase(it);
   if (!callback.callback_with_result.is_null()) {
     const base::DictionaryValue* result_dict;
-    if (!message_dict.GetDictionary("result", &result_dict)) {
-      NOTREACHED() << "Badly formed reply result";
+    if (message_dict.GetDictionary("result", &result_dict)) {
+      callback.callback_with_result.Run(*result_dict);
+    } else if (message_dict.GetDictionary("error", &result_dict)) {
+      auto null_value = base::MakeUnique<base::Value>();
+      DLOG(ERROR) << "Error in method call result: " << *result_dict;
+      callback.callback_with_result.Run(*null_value);
+    } else {
+      NOTREACHED() << "Reply has neither result nor error";
       return false;
     }
-    callback.callback_with_result.Run(*result_dict);
   } else if (!callback.callback.is_null()) {
     callback.callback.Run();
   }
@@ -131,6 +195,8 @@ bool HeadlessDevToolsClientImpl::DispatchEvent(
   std::string method;
   if (!message_dict.GetString("method", &method))
     return false;
+  if (method == "Inspector.targetCrashed")
+    renderer_crashed_ = true;
   EventHandlerMap::const_iterator it = event_handlers_.find(method);
   if (it == event_handlers_.end()) {
     NOTREACHED() << "Unknown event: " << method;
@@ -180,6 +246,10 @@ application_cache::Domain* HeadlessDevToolsClientImpl::GetApplicationCache() {
   return &application_cache_domain_;
 }
 
+browser::Domain* HeadlessDevToolsClientImpl::GetBrowser() {
+  return &browser_domain_;
+}
+
 cache_storage::Domain* HeadlessDevToolsClientImpl::GetCacheStorage() {
   return &cache_storage_domain_;
 }
@@ -204,12 +274,16 @@ device_orientation::Domain* HeadlessDevToolsClientImpl::GetDeviceOrientation() {
   return &device_orientation_domain_;
 }
 
+dom::Domain* HeadlessDevToolsClientImpl::GetDOM() {
+  return &dom_domain_;
+}
+
 dom_debugger::Domain* HeadlessDevToolsClientImpl::GetDOMDebugger() {
   return &dom_debugger_domain_;
 }
 
-dom::Domain* HeadlessDevToolsClientImpl::GetDOM() {
-  return &dom_domain_;
+dom_snapshot::Domain* HeadlessDevToolsClientImpl::GetDOMSnapshot() {
+  return &dom_snapshot_domain_;
 }
 
 dom_storage::Domain* HeadlessDevToolsClientImpl::GetDOMStorage() {
@@ -264,10 +338,6 @@ profiler::Domain* HeadlessDevToolsClientImpl::GetProfiler() {
   return &profiler_domain_;
 }
 
-rendering::Domain* HeadlessDevToolsClientImpl::GetRendering() {
-  return &rendering_domain_;
-}
-
 runtime::Domain* HeadlessDevToolsClientImpl::GetRuntime() {
   return &runtime_domain_;
 }
@@ -292,8 +362,11 @@ template <typename CallbackType>
 void HeadlessDevToolsClientImpl::FinalizeAndSendMessage(
     base::DictionaryValue* message,
     CallbackType callback) {
+  if (renderer_crashed_)
+    return;
   DCHECK(agent_host_);
-  int id = next_message_id_++;
+  int id = next_message_id_;
+  next_message_id_ += 2;  // We only send even numbered messages.
   message->SetInteger("id", id);
   std::string json_message;
   base::JSONWriter::Write(*message, &json_message);
@@ -312,15 +385,6 @@ void HeadlessDevToolsClientImpl::SendMessageWithParams(
   FinalizeAndSendMessage(&message, std::move(callback));
 }
 
-template <typename CallbackType>
-void HeadlessDevToolsClientImpl::SendMessageWithoutParams(
-    const char* method,
-    CallbackType callback) {
-  base::DictionaryValue message;
-  message.SetString("method", method);
-  FinalizeAndSendMessage(&message, std::move(callback));
-}
-
 void HeadlessDevToolsClientImpl::SendMessage(
     const char* method,
     std::unique_ptr<base::Value> params,
@@ -331,19 +395,8 @@ void HeadlessDevToolsClientImpl::SendMessage(
 void HeadlessDevToolsClientImpl::SendMessage(
     const char* method,
     std::unique_ptr<base::Value> params,
-    base::Callback<void()> callback) {
+    base::Closure callback) {
   SendMessageWithParams(method, std::move(params), std::move(callback));
-}
-
-void HeadlessDevToolsClientImpl::SendMessage(
-    const char* method,
-    base::Callback<void(const base::Value&)> callback) {
-  SendMessageWithoutParams(method, std::move(callback));
-}
-
-void HeadlessDevToolsClientImpl::SendMessage(const char* method,
-                                             base::Callback<void()> callback) {
-  SendMessageWithoutParams(method, std::move(callback));
 }
 
 void HeadlessDevToolsClientImpl::RegisterEventHandler(
@@ -357,7 +410,7 @@ HeadlessDevToolsClientImpl::Callback::Callback() {}
 
 HeadlessDevToolsClientImpl::Callback::Callback(Callback&& other) = default;
 
-HeadlessDevToolsClientImpl::Callback::Callback(base::Callback<void()> callback)
+HeadlessDevToolsClientImpl::Callback::Callback(base::Closure callback)
     : callback(callback) {}
 
 HeadlessDevToolsClientImpl::Callback::Callback(

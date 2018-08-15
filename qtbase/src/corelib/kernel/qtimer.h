@@ -122,14 +122,14 @@ public:
                                           !std::is_same<const char*, Func1>::value, void>::type
             singleShot(Duration interval, Func1 slot)
     {
-        singleShot(interval, defaultTypeFor(interval), nullptr, slot);
+        singleShot(interval, defaultTypeFor(interval), nullptr, std::move(slot));
     }
     template <typename Duration, typename Func1>
     static inline typename std::enable_if<!QtPrivate::FunctionPointer<Func1>::IsPointerToMemberFunction &&
                                           !std::is_same<const char*, Func1>::value, void>::type
             singleShot(Duration interval, Qt::TimerType timerType, Func1 slot)
     {
-        singleShot(interval, timerType, nullptr, slot);
+        singleShot(interval, timerType, nullptr, std::move(slot));
     }
     // singleShot to a functor or function pointer (with context)
     template <typename Duration, typename Func1>
@@ -137,7 +137,7 @@ public:
                                           !std::is_same<const char*, Func1>::value, void>::type
             singleShot(Duration interval, QObject *context, Func1 slot)
     {
-        singleShot(interval, defaultTypeFor(interval), context, slot);
+        singleShot(interval, defaultTypeFor(interval), context, std::move(slot));
     }
     template <typename Duration, typename Func1>
     static inline typename std::enable_if<!QtPrivate::FunctionPointer<Func1>::IsPointerToMemberFunction &&
@@ -150,7 +150,7 @@ public:
 
         singleShotImpl(interval, timerType, context,
                        new QtPrivate::QFunctorSlotObject<Func1, 0,
-                            typename QtPrivate::List_Left<void, 0>::Value, void>(slot));
+                            typename QtPrivate::List_Left<void, 0>::Value, void>(std::move(slot)));
     }
 #endif
 
@@ -165,37 +165,31 @@ Q_SIGNALS:
 
 public:
 #if QT_HAS_INCLUDE(<chrono>) || defined(Q_QDOC)
-    Q_ALWAYS_INLINE
     void setInterval(std::chrono::milliseconds value)
     {
         setInterval(int(value.count()));
     }
 
-    Q_ALWAYS_INLINE
     std::chrono::milliseconds intervalAsDuration() const
     {
         return std::chrono::milliseconds(interval());
     }
 
-    Q_ALWAYS_INLINE
     std::chrono::milliseconds remainingTimeAsDuration() const
     {
         return std::chrono::milliseconds(remainingTime());
     }
 
-    Q_ALWAYS_INLINE
     static void singleShot(std::chrono::milliseconds value, const QObject *receiver, const char *member)
     {
         singleShot(int(value.count()), receiver, member);
     }
 
-    Q_ALWAYS_INLINE
     static void singleShot(std::chrono::milliseconds value, Qt::TimerType timerType, const QObject *receiver, const char *member)
     {
         singleShot(int(value.count()), timerType, receiver, member);
     }
 
-    Q_ALWAYS_INLINE
     void start(std::chrono::milliseconds value)
     {
         start(int(value.count()));

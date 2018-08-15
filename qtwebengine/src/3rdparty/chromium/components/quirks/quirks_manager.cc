@@ -11,6 +11,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
+#include "base/task_runner.h"
 #include "base/task_runner_util.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -55,12 +56,12 @@ std::string IdToFileName(int64_t product_id) {
 
 QuirksManager::QuirksManager(
     std::unique_ptr<Delegate> delegate,
-    scoped_refptr<base::SequencedWorkerPool> blocking_pool,
+    scoped_refptr<base::TaskRunner> task_runner,
     PrefService* local_state,
     scoped_refptr<net::URLRequestContextGetter> url_context_getter)
     : waiting_for_login_(true),
       delegate_(std::move(delegate)),
-      blocking_pool_(blocking_pool),
+      task_runner_(task_runner),
       local_state_(local_state),
       url_context_getter_(url_context_getter),
       weak_ptr_factory_(this) {}
@@ -73,10 +74,10 @@ QuirksManager::~QuirksManager() {
 // static
 void QuirksManager::Initialize(
     std::unique_ptr<Delegate> delegate,
-    scoped_refptr<base::SequencedWorkerPool> blocking_pool,
+    scoped_refptr<base::TaskRunner> task_runner,
     PrefService* local_state,
     scoped_refptr<net::URLRequestContextGetter> url_context_getter) {
-  manager_ = new QuirksManager(std::move(delegate), blocking_pool, local_state,
+  manager_ = new QuirksManager(std::move(delegate), task_runner, local_state,
                                url_context_getter);
 }
 
@@ -113,6 +114,7 @@ void QuirksManager::OnLoginCompleted() {
 
 void QuirksManager::RequestIccProfilePath(
     int64_t product_id,
+    const std::string& display_name,
     const RequestFinishedCallback& on_request_finished) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
@@ -130,11 +132,11 @@ void QuirksManager::RequestIccProfilePath(
 
   std::string name = IdToFileName(product_id);
   base::PostTaskAndReplyWithResult(
-      blocking_pool_.get(), FROM_HERE,
+      task_runner_.get(), FROM_HERE,
       base::Bind(&CheckForIccFile,
                  delegate_->GetDisplayProfileDirectory().Append(name)),
       base::Bind(&QuirksManager::OnIccFilePathRequestCompleted,
-                 weak_ptr_factory_.GetWeakPtr(), product_id,
+                 weak_ptr_factory_.GetWeakPtr(), product_id, display_name,
                  on_request_finished));
 }
 
@@ -160,6 +162,7 @@ std::unique_ptr<net::URLFetcher> QuirksManager::CreateURLFetcher(
 
 void QuirksManager::OnIccFilePathRequestCompleted(
     int64_t product_id,
+    const std::string& display_name,
     const RequestFinishedCallback& on_request_finished,
     base::FilePath path) {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -190,7 +193,7 @@ void QuirksManager::OnIccFilePathRequestCompleted(
 
   // Create and start a client to download file.
   QuirksClient* client =
-      new QuirksClient(product_id, on_request_finished, this);
+      new QuirksClient(product_id, display_name, on_request_finished, this);
   clients_.insert(base::WrapUnique(client));
   if (!waiting_for_login_)
     client->StartDownload();

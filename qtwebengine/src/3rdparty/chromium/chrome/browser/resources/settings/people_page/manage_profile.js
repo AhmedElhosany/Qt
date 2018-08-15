@@ -14,9 +14,15 @@ Polymer({
 
   properties: {
     /**
-     * The currently selected profile icon URL. May be a data URL.
+     * The newly selected avatar. Populated only if the user manually changes
+     * the avatar selection. The observer ensures that the changes are
+     * propagated to the C++.
+     * @private
      */
-    profileIconUrl: String,
+    profileAvatar_: {
+      type: Object,
+      observer: 'profileAvatarChanged_',
+    },
 
     /**
      * The current profile name.
@@ -34,7 +40,9 @@ Polymer({
      */
     availableIcons: {
       type: Array,
-      value: function() { return []; },
+      value: function() {
+        return [];
+      },
     },
 
     /**
@@ -44,26 +52,17 @@ Polymer({
     syncStatus: Object,
 
     /**
-     * @private {!settings.ManageProfileBrowserProxy}
-     */
-    browserProxy_: {
-      type: Object,
-      value: function() {
-        return settings.ManageProfileBrowserProxyImpl.getInstance();
-      },
-    },
-
-    /**
      * True if the profile shortcuts feature is enabled.
-     * @private
      */
-    isProfileShortcutsEnabled_: {
-      type: Boolean,
-      value: function() {
-        return loadTimeData.getBoolean('profileShortcutsEnabled');
-      },
-      readOnly: true,
-    },
+    isProfileShortcutSettingVisible_: Boolean,
+  },
+
+  /** @private {?settings.ManageProfileBrowserProxy} */
+  browserProxy_: null,
+
+  /** @override */
+  created: function() {
+    this.browserProxy_ = settings.ManageProfileBrowserProxyImpl.getInstance();
   },
 
   /** @override */
@@ -78,39 +77,57 @@ Polymer({
 
   /** @protected */
   currentRouteChanged: function() {
-    if (settings.getCurrentRoute() == settings.Route.MANAGE_PROFILE) {
+    if (settings.getCurrentRoute() == settings.routes.MANAGE_PROFILE) {
       this.$.name.value = this.profileName;
 
-      if (this.isProfileShortcutsEnabled_) {
-        var setHasProfileShortcut = function(hasProfileShortcut) {
-          this.hasProfileShortcut_ = hasProfileShortcut;
-        }.bind(this);
-        this.browserProxy_.getHasProfileShortcut().then(setHasProfileShortcut);
+      if (loadTimeData.getBoolean('profileShortcutsEnabled')) {
+        this.browserProxy_.getProfileShortcutStatus().then(function(status) {
+          if (status == ProfileShortcutStatus.PROFILE_SHORTCUT_SETTING_HIDDEN) {
+            this.isProfileShortcutSettingVisible_ = false;
+            return;
+          }
+
+          this.isProfileShortcutSettingVisible_ = true;
+          this.hasProfileShortcut_ =
+              status == ProfileShortcutStatus.PROFILE_SHORTCUT_FOUND;
+        }.bind(this));
       }
     }
   },
 
   /**
    * Handler for when the profile name field is changed, then blurred.
-   * @private
    * @param {!Event} event
+   * @private
    */
   onProfileNameChanged_: function(event) {
     if (event.target.invalid)
       return;
 
-    this.browserProxy_.setProfileIconAndName(this.profileIconUrl,
-                                             event.target.value);
+    this.browserProxy_.setProfileName(event.target.value);
   },
 
   /**
-   * Handler for when an avatar is activated.
+   * Handler for profile name keydowns.
    * @param {!Event} event
    * @private
    */
-  onIconActivate_: function(event) {
-    this.browserProxy_.setProfileIconAndName(event.detail.selected,
-                                             this.profileName);
+  onProfileNameKeydown_: function(event) {
+    if (event.key == 'Escape') {
+      event.target.value = this.profileName;
+      event.target.blur();
+    }
+  },
+
+  /**
+   * Handler for when the profile avatar is changed by the user.
+   * @private
+   */
+  profileAvatarChanged_: function() {
+    if (this.profileAvatar_.isGaiaAvatar)
+      this.browserProxy_.setProfileIconToGaiaAvatar();
+    else
+      this.browserProxy_.setProfileIconToDefaultAvatar(this.profileAvatar_.url);
   },
 
   /**

@@ -28,17 +28,21 @@
 
 """Wrapper object for the file system / source tree."""
 
-import stat
 import codecs
 import errno
 import exceptions
 import glob
 import hashlib
+import logging
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import time
+
+
+_log = logging.getLogger(__name__)
 
 
 class FileSystem(object):
@@ -79,7 +83,7 @@ class FileSystem(object):
     def exists(self, path):
         return os.path.exists(path)
 
-    def files_under(self, path, dirs_to_skip=[], file_filter=None):
+    def files_under(self, path, dirs_to_skip=None, file_filter=None):
         """Return the list of all files under the given path in topdown order.
 
         Args:
@@ -90,6 +94,8 @@ class FileSystem(object):
                 each file found. The file is included in the result if the
                 callback returns True.
         """
+        dirs_to_skip = dirs_to_skip or []
+
         def filter_all(fs, dirpath, basename):
             return True
 
@@ -134,8 +140,8 @@ class FileSystem(object):
     def listdir(self, path):
         return os.listdir(path)
 
-    def walk(self, top):
-        return os.walk(top)
+    def walk(self, top, topdown=True, onerror=None, followlinks=False):
+        return os.walk(top, topdown=topdown, onerror=onerror, followlinks=followlinks)
 
     def mkdtemp(self, **kwargs):
         """Create and return a uniquely named directory.
@@ -174,8 +180,8 @@ class FileSystem(object):
         """Create the specified directory if it doesn't already exist."""
         try:
             os.makedirs(self.join(*path))
-        except OSError as e:
-            if e.errno != errno.EEXIST:
+        except OSError as error:
+            if error.errno != errno.EEXIST:
                 raise
 
     def move(self, source, destination):
@@ -195,6 +201,9 @@ class FileSystem(object):
 
     def open_binary_file_for_reading(self, path):
         return codecs.open(path, 'rb')
+
+    def open_binary_file_for_writing(self, path):
+        return file(path, 'wb')
 
     def read_binary_file(self, path):
         """Return the contents of the file at the given path as a byte string."""
@@ -241,7 +250,7 @@ class FileSystem(object):
     class _WindowsError(exceptions.OSError):
         """Fake exception for Linux and Mac."""
 
-    def remove(self, path, osremove=os.remove):
+    def remove(self, path, osremove=os.remove, retry=True):
         """On Windows, if a process was recently killed and it held on to a
         file, the OS will hold on to the file for a short while.  This makes
         attempts to delete the file fail.  To work around that, this method
@@ -258,15 +267,25 @@ class FileSystem(object):
             try:
                 osremove(path)
                 return True
-            except exceptions.WindowsError as e:
+            except exceptions.WindowsError:
                 time.sleep(sleep_interval)
                 retry_timeout_sec -= sleep_interval
-                if retry_timeout_sec < 0:
-                    raise e
+                if retry_timeout_sec < 0 and not retry:
+                    raise
 
-    def rmtree(self, path):
+    def rmtree(self, path, ignore_errors=True, onerror=None):
         """Delete the directory rooted at path, whether empty or not."""
-        shutil.rmtree(path, ignore_errors=True)
+        shutil.rmtree(path, ignore_errors=ignore_errors, onerror=onerror)
+
+    def remove_contents(self, dirname):
+        """Attempt to remove the contents of a directory tree.
+        Args:
+            dirname (string): Directory to remove the contents of.
+
+        Returns:
+            bool: True if the directory is now empty.
+        """
+        return _remove_contents(self, dirname)
 
     def copytree(self, source, destination):
         shutil.copytree(source, destination)
@@ -281,3 +300,66 @@ class FileSystem(object):
 
     def make_executable(self, file_path):
         os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP)
+
+
+# _remove_contents is implemented in terms of other FileSystem functions. To
+# allow it to be reused on the MockFileSystem object, we define it here and
+# then call it in both FileSystem and MockFileSystem classes.
+def _remove_contents(fs, dirname, sleep=time.sleep):
+    # We try multiple times, because on Windows a process which is
+    # currently closing could still have a file open in the directory.
+    _log.info('Removing contents of %s', dirname)
+    errors = []
+
+    def onerror(func, path, exc_info):
+        errors.append(path)
+        _log.exception('Failed at %s %s: %r', func, path, exc_info)
+
+    attempts = 0
+    while attempts < 5:
+        del errors[:]
+
+        for name in fs.listdir(dirname):
+            fullname = fs.join(dirname, name)
+
+            isdir = True
+            try:
+                isdir = fs.isdir(fullname)
+            except os.error:
+                onerror(fs.isdir, fullname, sys.exc_info())
+                continue
+
+            if isdir:
+                try:
+                    _log.debug('Removing directory %s', fullname)
+                    fs.rmtree(fullname, ignore_errors=False, onerror=onerror)
+                except os.error:
+                    onerror(fs.rmtree, fullname, sys.exc_info())
+                    continue
+            else:
+                try:
+                    _log.debug('Removing file %s', fullname)
+                    fs.remove(fullname, retry=False)
+                except os.error:
+                    onerror(fs.remove, fullname, sys.exc_info())
+                    continue
+
+        if not errors:
+            break
+
+        _log.warning('Contents removal failed, retrying in 1 second.')
+        attempts += 1
+        sleep(1)
+
+    # Check the path is gone.
+    if not fs.listdir(dirname):
+        return True
+
+    _log.warning('Unable to remove %s', dirname)
+    for dirpath, dirnames, filenames in fs.walk(dirname, onerror=onerror, topdown=False):
+        for fname in filenames:
+            _log.warning('File %s still in output dir.', fs.join(dirpath, fname))
+        for dname in dirnames:
+            _log.warning('Dir %s still in output dir.', fs.join(dirpath, dname))
+
+    return False

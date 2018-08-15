@@ -7,11 +7,11 @@
 
 #include <stdint.h>
 
+#include <unordered_map>
 #include <vector>
 
 #include "base/callback.h"
-#include "base/containers/scoped_ptr_hash_map.h"
-#include "content/browser/service_worker/service_worker_context_observer.h"
+#include "content/browser/service_worker/service_worker_context_core_observer.h"
 #include "content/browser/service_worker/service_worker_info.h"
 
 namespace content {
@@ -22,7 +22,7 @@ enum class EmbeddedWorkerStatus;
 // Used to monitor the status change of the ServiceWorker registrations and
 // versions in the ServiceWorkerContext from UI thread.
 class ServiceWorkerContextWatcher
-    : public ServiceWorkerContextObserver,
+    : public ServiceWorkerContextCoreObserver,
       public base::RefCountedThreadSafe<ServiceWorkerContextWatcher> {
  public:
   typedef base::Callback<void(
@@ -54,8 +54,8 @@ class ServiceWorkerContextWatcher
 
   void StoreRegistrationInfo(
       const ServiceWorkerRegistrationInfo& registration,
-      base::ScopedPtrHashMap<int64_t,
-                             std::unique_ptr<ServiceWorkerRegistrationInfo>>*
+      std::unordered_map<int64_t,
+                         std::unique_ptr<ServiceWorkerRegistrationInfo>>*
           info_map);
   void StoreVersionInfo(const ServiceWorkerVersionInfo& version);
 
@@ -65,7 +65,7 @@ class ServiceWorkerContextWatcher
       ServiceWorkerRegistrationInfo::DeleteFlag delete_flag);
   void SendVersionInfo(const ServiceWorkerVersionInfo& version);
 
-  // ServiceWorkerContextObserver implements
+  // ServiceWorkerContextCoreObserver implements
   void OnNewLiveRegistration(int64_t registration_id,
                              const GURL& pattern) override;
   void OnNewLiveVersion(const ServiceWorkerVersionInfo& version_info) override;
@@ -90,11 +90,13 @@ class ServiceWorkerContextWatcher
                               int process_id,
                               int thread_id,
                               const ConsoleMessage& message) override;
-  void OnControlleeAdded(int64_t version_id,
-                         const std::string& uuid,
-                         int process_id,
-                         int route_id,
-                         ServiceWorkerProviderType type) override;
+  void OnControlleeAdded(
+      int64_t version_id,
+      const std::string& uuid,
+      int process_id,
+      int route_id,
+      const base::Callback<WebContents*(void)>& web_contents_getter,
+      ServiceWorkerProviderType type) override;
   void OnControlleeRemoved(int64_t version_id,
                            const std::string& uuid) override;
   void OnRegistrationStored(int64_t registration_id,
@@ -102,7 +104,7 @@ class ServiceWorkerContextWatcher
   void OnRegistrationDeleted(int64_t registration_id,
                              const GURL& pattern) override;
 
-  base::ScopedPtrHashMap<int64_t, std::unique_ptr<ServiceWorkerVersionInfo>>
+  std::unordered_map<int64_t, std::unique_ptr<ServiceWorkerVersionInfo>>
       version_info_map_;
   scoped_refptr<ServiceWorkerContextWrapper> context_;
   WorkerRegistrationUpdatedCallback registration_callback_;

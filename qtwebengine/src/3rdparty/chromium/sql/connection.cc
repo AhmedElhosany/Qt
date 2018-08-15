@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/debug/alias.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -30,9 +31,11 @@
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
+#include "build/build_config.h"
 #include "sql/connection_memory_dump_provider.h"
 #include "sql/meta_table.h"
 #include "sql/statement.h"
+#include "sql/vfs_wrapper.h"
 #include "third_party/sqlite/sqlite3.h"
 
 #if defined(OS_IOS) && defined(USE_SYSTEM_SQLITE)
@@ -1110,6 +1113,15 @@ bool Connection::Raze() {
   // page_size" can be used to query such a database.
   ScopedWritableSchema writable_schema(db_);
 
+#if defined(OS_WIN)
+  // On Windows, truncate silently fails when applied to memory-mapped files.
+  // Disable memory-mapping so that the truncate succeeds.  Note that other
+  // connections may have memory-mapped the file, so this may not entirely
+  // prevent the problem.
+  // [Source: <https://sqlite.org/mmap.html> plus experiments.]
+  ignore_result(Execute("PRAGMA mmap_size = 0"));
+#endif
+
   const char* kMain = "main";
   int rc = BackupDatabase(null_db.db_, db_, kMain);
   UMA_HISTOGRAM_SPARSE_SLOWLY("Sqlite.RazeDatabase",rc);
@@ -1690,7 +1702,12 @@ bool Connection::OpenInternal(const std::string& file_name,
   DLOG_IF(FATAL, poisoned_) << "sql::Connection is already open.";
   poisoned_ = false;
 
-  int err = sqlite3_open(file_name.c_str(), &db_);
+  // Custom memory-mapping VFS which reads pages using regular I/O on first hit.
+  sqlite3_vfs* vfs = VFSWrapper();
+  const char* vfs_name = (vfs ? vfs->zName : nullptr);
+  int err = sqlite3_open_v2(file_name.c_str(), &db_,
+                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                            vfs_name);
   if (err != SQLITE_OK) {
     // Extended error codes cannot be enabled until a handle is
     // available, fetch manually.
@@ -1710,7 +1727,7 @@ bool Connection::OpenInternal(const std::string& file_name,
   }
 
   // TODO(shess): OS_WIN support?
-#if defined(OS_POSIX)
+#if defined(OS_POSIX) && !defined(OS_FUCHSIA)
   if (restrict_to_user_) {
     DCHECK_NE(file_name, std::string(":memory"));
     base::FilePath file_path(file_name);
@@ -1731,7 +1748,7 @@ bool Connection::OpenInternal(const std::string& file_name,
       base::SetPosixFilePermissions(wal_path, mode);
     }
   }
-#endif  // defined(OS_POSIX)
+#endif  // defined(OS_POSIX) && !defined(OS_FUCHSIA)
 
   // SQLite uses a lookaside buffer to improve performance of small mallocs.
   // Chromium already depends on small mallocs being efficient, so we disable
@@ -2042,6 +2059,12 @@ bool Connection::IntegrityCheckHelper(
   ignore_result(Execute(kNoWritableSchema));
 
   return ret;
+}
+
+bool Connection::ReportMemoryUsage(base::trace_event::ProcessMemoryDump* pmd,
+                                   const std::string& dump_name) {
+  return memory_dump_provider_ &&
+         memory_dump_provider_->ReportMemoryUsage(pmd, dump_name);
 }
 
 base::TimeTicks TimeSource::Now() {

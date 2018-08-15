@@ -84,6 +84,7 @@ class QOpenGLInformationService;
 class QSystemInformationService;
 class QServiceLocatorPrivate;
 class QEventFilterService;
+class QDownloadHelperService;
 
 class QT3DCORESHARED_EXPORT QServiceLocator
 {
@@ -97,6 +98,7 @@ public:
         CollisionService,
         FrameAdvanceService,
         EventFilterService,
+        DownloadHelperService,
 #if !defined(Q_QDOC)
         DefaultServiceCount, // Add additional default services before here
 #endif
@@ -120,6 +122,7 @@ public:
     QOpenGLInformationService *openGLInformation();
     QAbstractFrameAdvanceService *frameAdvanceService();
     QEventFilterService *eventFilterService();
+    QDownloadHelperService *downloadHelperService();
 
 private:
     Q_DISABLE_COPY(QServiceLocator)

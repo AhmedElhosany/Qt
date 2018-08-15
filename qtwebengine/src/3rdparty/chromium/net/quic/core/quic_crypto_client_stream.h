@@ -2,37 +2,37 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_QUIC_CRYPTO_CLIENT_STREAM_H_
-#define NET_QUIC_QUIC_CRYPTO_CLIENT_STREAM_H_
+#ifndef NET_QUIC_CORE_QUIC_CRYPTO_CLIENT_STREAM_H_
+#define NET_QUIC_CORE_QUIC_CRYPTO_CLIENT_STREAM_H_
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
 #include "base/macros.h"
-#include "net/base/net_export.h"
 #include "net/quic/core/crypto/channel_id.h"
 #include "net/quic/core/crypto/proof_verifier.h"
 #include "net/quic/core/crypto/quic_crypto_client_config.h"
 #include "net/quic/core/quic_config.h"
 #include "net/quic/core/quic_crypto_stream.h"
 #include "net/quic/core/quic_server_id.h"
+#include "net/quic/platform/api/quic_export.h"
 
 namespace net {
 
 namespace test {
-class CryptoTestUtils;
 class QuicChromiumClientSessionPeer;
 }  // namespace test
 
-class NET_EXPORT_PRIVATE QuicCryptoClientStreamBase : public QuicCryptoStream {
+class QUIC_EXPORT_PRIVATE QuicCryptoClientStreamBase : public QuicCryptoStream {
  public:
   explicit QuicCryptoClientStreamBase(QuicSession* session);
 
-  ~QuicCryptoClientStreamBase() override{};
+  ~QuicCryptoClientStreamBase() override {}
 
-  // Performs a crypto handshake with the server.
-  virtual void CryptoConnect() = 0;
+  // Performs a crypto handshake with the server. Returns true if the connection
+  // is still connected.
+  virtual bool CryptoConnect() = 0;
 
   // num_sent_client_hellos returns the number of client hello messages that
   // have been sent. If the handshake has completed then this is one greater
@@ -45,7 +45,7 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStreamBase : public QuicCryptoStream {
   virtual int num_scup_messages_received() const = 0;
 };
 
-class NET_EXPORT_PRIVATE QuicCryptoClientStream
+class QUIC_EXPORT_PRIVATE QuicCryptoClientStream
     : public QuicCryptoClientStreamBase {
  public:
   // kMaxClientHellos is the maximum number of times that we'll send a client
@@ -56,9 +56,61 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
   //     token.
   static const int kMaxClientHellos = 3;
 
+  // QuicCryptoClientStream creates a HandshakerDelegate at construction time
+  // based on the QuicVersion of the connection. Different HandshakerDelegates
+  // provide implementations of different crypto handshake protocols. Currently
+  // QUIC crypto is the only protocol implemented; a future HandshakerDelegate
+  // will use TLS as the handshake protocol. QuicCryptoClientStream delegates
+  // all of its public methods to its HandshakerDelegate.
+  //
+  // This setup of the crypto stream delegating its implementation to the
+  // handshaker results in the handshaker reading and writing bytes on the
+  // crypto stream, instead of the handshaker passing the stream bytes to send.
+  class QUIC_EXPORT_PRIVATE HandshakerDelegate {
+   public:
+    virtual ~HandshakerDelegate() {}
+
+    // Performs a crypto handshake with the server. Returns true if the
+    // connection is still connected.
+    virtual bool CryptoConnect() = 0;
+
+    // num_sent_client_hellos returns the number of client hello messages that
+    // have been sent. If the handshake has completed then this is one greater
+    // than the number of round-trips needed for the handshake.
+    virtual int num_sent_client_hellos() const = 0;
+
+    // The number of server config update messages received by the
+    // client.  Does not count update messages that were received prior
+    // to handshake confirmation.
+    virtual int num_scup_messages_received() const = 0;
+
+    // Returns true if a channel ID was sent on this connection.
+    virtual bool WasChannelIDSent() const = 0;
+
+    // Returns true if our ChannelIDSourceCallback was run, which implies the
+    // ChannelIDSource operated asynchronously. Intended for testing.
+    virtual bool WasChannelIDSourceCallbackRun() const = 0;
+
+    virtual std::string chlo_hash() const = 0;
+
+    // Returns true once any encrypter (initial/0RTT or final/1RTT) has been set
+    // for the connection.
+    virtual bool encryption_established() const = 0;
+
+    // Returns true once the crypto handshake has completed.
+    virtual bool handshake_confirmed() const = 0;
+
+    // Returns the parameters negotiated in the crypto handshake.
+    virtual const QuicCryptoNegotiatedParameters& crypto_negotiated_params()
+        const = 0;
+
+    // Used by QuicCryptoStream to parse data received on this stream.
+    virtual CryptoMessageParser* crypto_message_parser() = 0;
+  };
+
   // ProofHandler is an interface that handles callbacks from the crypto
   // stream when the client has proof verification details of the server.
-  class NET_EXPORT_PRIVATE ProofHandler {
+  class QUIC_EXPORT_PRIVATE ProofHandler {
    public:
     virtual ~ProofHandler() {}
 
@@ -84,13 +136,17 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
   ~QuicCryptoClientStream() override;
 
   // From QuicCryptoClientStreamBase
-  void CryptoConnect() override;
+  bool CryptoConnect() override;
   int num_sent_client_hellos() const override;
 
   int num_scup_messages_received() const override;
 
-  // CryptoFramerVisitorInterface implementation
-  void OnHandshakeMessage(const CryptoHandshakeMessage& message) override;
+  // From QuicCryptoStream
+  bool encryption_established() const override;
+  bool handshake_confirmed() const override;
+  const QuicCryptoNegotiatedParameters& crypto_negotiated_params()
+      const override;
+  CryptoMessageParser* crypto_message_parser() override;
 
   // Returns true if a channel ID was sent on this connection.
   bool WasChannelIDSent() const;
@@ -99,13 +155,53 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
   // ChannelIDSource operated asynchronously. Intended for testing.
   bool WasChannelIDSourceCallbackRun() const;
 
+  std::string chlo_hash() const;
+
+ private:
+  std::unique_ptr<HandshakerDelegate> handshaker_;
+
+  DISALLOW_COPY_AND_ASSIGN(QuicCryptoClientStream);
+};
+
+// An implementation of QuicCryptoClientStream::HandshakerDelegate which uses
+// QUIC crypto as the crypto handshake protocol.
+class QUIC_EXPORT_PRIVATE QuicCryptoClientHandshaker
+    : public QuicCryptoClientStream::HandshakerDelegate,
+      public QuicCryptoHandshaker {
+ public:
+  QuicCryptoClientHandshaker(
+      const QuicServerId& server_id,
+      QuicCryptoClientStream* stream,
+      QuicSession* session,
+      ProofVerifyContext* verify_context,
+      QuicCryptoClientConfig* crypto_config,
+      QuicCryptoClientStream::ProofHandler* proof_handler);
+
+  ~QuicCryptoClientHandshaker() override;
+
+  // From QuicCryptoClientStream::HandshakerDelegate
+  bool CryptoConnect() override;
+  int num_sent_client_hellos() const override;
+  int num_scup_messages_received() const override;
+  bool WasChannelIDSent() const override;
+  bool WasChannelIDSourceCallbackRun() const override;
+  std::string chlo_hash() const override;
+  bool encryption_established() const override;
+  bool handshake_confirmed() const override;
+  const QuicCryptoNegotiatedParameters& crypto_negotiated_params()
+      const override;
+  CryptoMessageParser* crypto_message_parser() override;
+
+  // From QuicCryptoHandshaker
+  void OnHandshakeMessage(const CryptoHandshakeMessage& message) override;
+
  private:
   // ChannelIDSourceCallbackImpl is passed as the callback method to
   // GetChannelIDKey. The ChannelIDSource calls this class with the result of
   // channel ID lookup when lookup is performed asynchronously.
   class ChannelIDSourceCallbackImpl : public ChannelIDSourceCallback {
    public:
-    explicit ChannelIDSourceCallbackImpl(QuicCryptoClientStream* stream);
+    explicit ChannelIDSourceCallbackImpl(QuicCryptoClientHandshaker* parent);
     ~ChannelIDSourceCallbackImpl() override;
 
     // ChannelIDSourceCallback interface.
@@ -116,7 +212,7 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
     void Cancel();
 
    private:
-    QuicCryptoClientStream* stream_;
+    QuicCryptoClientHandshaker* parent_;
   };
 
   // ProofVerifierCallbackImpl is passed as the callback method to VerifyProof.
@@ -124,7 +220,7 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
   // when verification is performed asynchronously.
   class ProofVerifierCallbackImpl : public ProofVerifierCallback {
    public:
-    explicit ProofVerifierCallbackImpl(QuicCryptoClientStream* stream);
+    explicit ProofVerifierCallbackImpl(QuicCryptoClientHandshaker* parent);
     ~ProofVerifierCallbackImpl() override;
 
     // ProofVerifierCallback interface.
@@ -137,10 +233,9 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
     void Cancel();
 
    private:
-    QuicCryptoClientStream* stream_;
+    QuicCryptoClientHandshaker* parent_;
   };
 
-  friend class test::CryptoTestUtils;
   friend class test::QuicChromiumClientSessionPeer;
 
   enum State {
@@ -210,6 +305,13 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
   // and the client config settings also allow sending a ChannelID.
   bool RequiresChannelID(QuicCryptoClientConfig::CachedState* cached);
 
+  // Returns the QuicSession that this stream belongs to.
+  QuicSession* session() const { return session_; }
+
+  QuicCryptoClientStream* stream_;
+
+  QuicSession* session_;
+
   State next_state_;
   // num_client_hellos_ contains the number of client hello messages that this
   // connection has sent.
@@ -251,7 +353,7 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
   ProofVerifierCallbackImpl* proof_verify_callback_;
   // proof_handler_ contains the callback object used by a quic client
   // for proof verification. It is not owned by this class.
-  ProofHandler* proof_handler_;
+  QuicCryptoClientStream::ProofHandler* proof_handler_;
 
   // These members are used to store the result of an asynchronous proof
   // verification. These members must not be used after
@@ -265,13 +367,19 @@ class NET_EXPORT_PRIVATE QuicCryptoClientStream
   // STATE_VERIFY_PROOF*, and subsequent STATE_SEND_CHLO state.
   bool stateless_reject_received_;
 
+  // Only used in chromium, not internally.
   base::TimeTicks proof_verify_start_time_;
 
   int num_scup_messages_received_;
 
-  DISALLOW_COPY_AND_ASSIGN(QuicCryptoClientStream);
+  bool encryption_established_;
+  bool handshake_confirmed_;
+  QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters>
+      crypto_negotiated_params_;
+
+  DISALLOW_COPY_AND_ASSIGN(QuicCryptoClientHandshaker);
 };
 
 }  // namespace net
 
-#endif  // NET_QUIC_QUIC_CRYPTO_CLIENT_STREAM_H_
+#endif  // NET_QUIC_CORE_QUIC_CRYPTO_CLIENT_STREAM_H_

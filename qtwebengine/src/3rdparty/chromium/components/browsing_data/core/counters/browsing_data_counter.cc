@@ -13,21 +13,39 @@
 
 namespace browsing_data {
 
-BrowsingDataCounter::BrowsingDataCounter() {}
+namespace {
+static const int kDelayUntilShowCalculatingMs = 140;
+static const int kDelayUntilReadyToShowResultMs = 1000;
+}
+
+BrowsingDataCounter::BrowsingDataCounter()
+    : initialized_(false), use_delay_(true), state_(State::IDLE) {}
 
 BrowsingDataCounter::~BrowsingDataCounter() {}
 
 void BrowsingDataCounter::Init(PrefService* pref_service,
+                               ClearBrowsingDataTab clear_browsing_data_tab,
                                const Callback& callback) {
   DCHECK(!initialized_);
   callback_ = callback;
-  pref_service_ = pref_service;
-  pref_.Init(GetPrefName(), pref_service_,
+  clear_browsing_data_tab_ = clear_browsing_data_tab;
+  pref_.Init(GetPrefName(), pref_service,
              base::Bind(&BrowsingDataCounter::Restart, base::Unretained(this)));
   period_.Init(
-      browsing_data::prefs::kDeleteTimePeriod, pref_service_,
+      GetTimePeriodPreferenceName(GetTab()), pref_service,
       base::Bind(&BrowsingDataCounter::Restart, base::Unretained(this)));
 
+  initialized_ = true;
+  OnInitialized();
+}
+
+void BrowsingDataCounter::InitWithoutPref(base::Time begin_time,
+                                          const Callback& callback) {
+  DCHECK(!initialized_);
+  use_delay_ = false;
+  callback_ = callback;
+  clear_browsing_data_tab_ = ClearBrowsingDataTab::ADVANCED;
+  begin_time_ = begin_time;
   initialized_ = true;
   OnInitialized();
 }
@@ -35,39 +53,112 @@ void BrowsingDataCounter::Init(PrefService* pref_service,
 void BrowsingDataCounter::OnInitialized() {}
 
 base::Time BrowsingDataCounter::GetPeriodStart() {
+  if (period_.GetPrefName().empty())
+    return begin_time_;
   return CalculateBeginDeleteTime(static_cast<TimePeriod>(*period_));
 }
 
 void BrowsingDataCounter::Restart() {
   DCHECK(initialized_);
+  if (state_ == State::IDLE) {
+    DCHECK(!timer_.IsRunning());
+    DCHECK(!staged_result_);
+  } else {
+    timer_.Stop();
+    staged_result_.reset();
+  }
+  state_ = State::RESTARTED;
+  state_transitions_.clear();
+  state_transitions_.push_back(state_);
 
-  // If this data type was unchecked for deletion, we do not need to count it.
-  if (!pref_service_->GetBoolean(GetPrefName()))
-    return;
-
-  callback_.Run(base::MakeUnique<Result>(this));
-
+  if (use_delay_) {
+    timer_.Start(
+        FROM_HERE,
+        base::TimeDelta::FromMilliseconds(kDelayUntilShowCalculatingMs), this,
+        &BrowsingDataCounter::TransitionToShowCalculating);
+  } else {
+    state_ = State::READY_TO_REPORT_RESULT;
+  }
   Count();
 }
 
 void BrowsingDataCounter::ReportResult(ResultInt value) {
-  DCHECK(initialized_);
-  callback_.Run(base::MakeUnique<FinishedResult>(this, value));
+  ReportResult(base::MakeUnique<FinishedResult>(this, value));
 }
 
 void BrowsingDataCounter::ReportResult(std::unique_ptr<Result> result) {
   DCHECK(initialized_);
+  DCHECK(result->Finished());
+
+  switch (state_) {
+    case State::RESTARTED:
+    case State::READY_TO_REPORT_RESULT:
+      DoReportResult(std::move(result));
+      return;
+    case State::SHOW_CALCULATING:
+      staged_result_ = std::move(result);
+      return;
+    case State::IDLE:
+    case State::REPORT_STAGED_RESULT:
+      NOTREACHED();
+  }
+}
+
+void BrowsingDataCounter::DoReportResult(std::unique_ptr<Result> result) {
+  DCHECK(initialized_);
+  DCHECK(state_ == State::RESTARTED ||
+         state_ == State::REPORT_STAGED_RESULT ||
+         state_ == State::READY_TO_REPORT_RESULT);
+  state_ = State::IDLE;
+  state_transitions_.push_back(state_);
+
+  timer_.Stop();
+  staged_result_.reset();
   callback_.Run(std::move(result));
 }
 
-PrefService* BrowsingDataCounter::GetPrefs() const {
-  return pref_service_;
+const std::vector<BrowsingDataCounter::State>&
+BrowsingDataCounter::GetStateTransitionsForTesting() {
+  return state_transitions_;
+}
+
+ClearBrowsingDataTab BrowsingDataCounter::GetTab() const {
+  return clear_browsing_data_tab_;
+}
+
+void BrowsingDataCounter::TransitionToShowCalculating() {
+  DCHECK(initialized_);
+  DCHECK_EQ(State::RESTARTED, state_);
+  state_ = State::SHOW_CALCULATING;
+  state_transitions_.push_back(state_);
+
+  callback_.Run(base::MakeUnique<Result>(this));
+  timer_.Start(
+      FROM_HERE,
+      base::TimeDelta::FromMilliseconds(kDelayUntilReadyToShowResultMs),
+      this, &BrowsingDataCounter::TransitionToReadyToReportResult);
+}
+
+void BrowsingDataCounter::TransitionToReadyToReportResult() {
+  DCHECK(initialized_);
+  DCHECK_EQ(State::SHOW_CALCULATING, state_);
+
+  if (staged_result_) {
+    state_ = State::REPORT_STAGED_RESULT;
+    state_transitions_.push_back(state_);
+    DoReportResult(std::move(staged_result_));
+  } else {
+    state_ = State::READY_TO_REPORT_RESULT;
+    state_transitions_.push_back(state_);
+  }
 }
 
 // BrowsingDataCounter::Result -------------------------------------------------
 
 BrowsingDataCounter::Result::Result(const BrowsingDataCounter* source)
-    : source_(source) {}
+    : source_(source) {
+  DCHECK(source);
+}
 
 BrowsingDataCounter::Result::~Result() {}
 
@@ -92,5 +183,14 @@ BrowsingDataCounter::ResultInt BrowsingDataCounter::FinishedResult::Value()
     const {
   return value_;
 }
+
+// BrowsingDataCounter::SyncResult -----------------------------------------
+
+BrowsingDataCounter::SyncResult::SyncResult(const BrowsingDataCounter* source,
+                                            ResultInt value,
+                                            bool sync_enabled)
+    : FinishedResult(source, value), sync_enabled_(sync_enabled) {}
+
+BrowsingDataCounter::SyncResult::~SyncResult() {}
 
 }  // namespace browsing_data

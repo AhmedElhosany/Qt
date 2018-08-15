@@ -33,9 +33,10 @@ bool SSLClientAuthCache::Lookup(const HostPortPair& server,
 }
 
 void SSLClientAuthCache::Add(const HostPortPair& server,
-                             X509Certificate* certificate,
-                             SSLPrivateKey* private_key) {
-  cache_[server] = std::make_pair(certificate, private_key);
+                             scoped_refptr<X509Certificate> certificate,
+                             scoped_refptr<SSLPrivateKey> private_key) {
+  cache_[server] =
+      std::make_pair(std::move(certificate), std::move(private_key));
 
   // TODO(wtc): enforce a maximum number of entries.
 }
@@ -44,7 +45,7 @@ void SSLClientAuthCache::Remove(const HostPortPair& server) {
   cache_.erase(server);
 }
 
-void SSLClientAuthCache::OnCertDBChanged(const X509Certificate* cert) {
+void SSLClientAuthCache::OnCertDBChanged() {
   cache_.clear();
 }
 

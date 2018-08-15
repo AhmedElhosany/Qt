@@ -13,8 +13,6 @@
 #include "extensions/renderer/request_sender.h"
 #include "extensions/renderer/script_context.h"
 
-using content::V8ValueConverter;
-
 namespace extensions {
 
 SendRequestNatives::SendRequestNatives(RequestSender* request_sender,
@@ -42,18 +40,22 @@ void SendRequestNatives::StartRequest(
   int request_id = request_sender_->GetNextRequestId();
   args.GetReturnValue().Set(static_cast<int32_t>(request_id));
 
-  std::unique_ptr<V8ValueConverter> converter(V8ValueConverter::create());
+  std::unique_ptr<content::V8ValueConverter> converter =
+      content::V8ValueConverter::Create();
 
   // See http://crbug.com/149880. The context menus APIs relies on this, but
   // we shouldn't really be doing it (e.g. for the sake of the storage API).
   converter->SetFunctionAllowed(true);
+
+  // See http://crbug.com/694248.
+  converter->SetConvertNegativeZeroToInt(true);
 
   if (!preserve_null_in_objects)
     converter->SetStripNullFromObjects(true);
 
   std::unique_ptr<base::Value> value_args(
       converter->FromV8Value(args[1], context()->v8_context()));
-  if (!value_args.get() || !value_args->IsType(base::Value::TYPE_LIST)) {
+  if (!value_args.get() || !value_args->IsType(base::Value::Type::LIST)) {
     NOTREACHED() << "Unable to convert args passed to StartRequest";
     return;
   }

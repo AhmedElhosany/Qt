@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/mac/availability.h"
 #import "base/mac/scoped_nsobject.h"
 #import "base/mac/sdk_forward_declarations.h"
 #include "base/strings/sys_string_conversions.h"
@@ -48,7 +49,8 @@ NSString* const kTouchBarCancelId = @"com.google.chrome-CANCEL";
 // NSTouchBarDelegate protocol implementation.
 
 - (NSTouchBarItem*)touchBar:(NSTouchBar*)touchBar
-      makeItemForIdentifier:(NSTouchBarItemIdentifier)identifier {
+      makeItemForIdentifier:(NSTouchBarItemIdentifier)identifier
+    API_AVAILABLE(macos(10.12.2)) {
   if (!hostedView_)
     return nil;
 
@@ -61,7 +63,9 @@ NSString* const kTouchBarCancelId = @"com.google.chrome-CANCEL";
     }
     if ([items count] == 0)
       return nil;
-    return [NSGroupTouchBarItem groupItemWithIdentifier:identifier items:items];
+    return [NSClassFromString(@"NSGroupTouchBarItem")
+        groupItemWithIdentifier:identifier
+                          items:items];
   }
 
   ui::DialogButton type = ui::DIALOG_BUTTON_NONE;

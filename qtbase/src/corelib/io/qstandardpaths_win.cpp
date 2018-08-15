@@ -227,7 +227,15 @@ QStringList QStandardPaths::standardLocations(StandardLocation type)
         QString applicationDirPath = qApp ? QCoreApplication::applicationDirPath()
             : QFileInfo(qAppFileName()).path();
         dirs.append(applicationDirPath);
-        dirs.append(applicationDirPath + QLatin1String("/data"));
+        const QString dataDir = applicationDirPath + QLatin1String("/data");
+        dirs.append(dataDir);
+
+        if (!isGenericConfigLocation(type)) {
+            QString appDataDir = dataDir;
+            appendOrganizationAndApp(appDataDir);
+            if (appDataDir != dataDir)
+                dirs.append(appDataDir);
+        }
 #endif // !QT_BOOTSTRAPPED
     } // isConfigLocation()
 

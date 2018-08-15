@@ -45,22 +45,23 @@ class DocumentStyleSheetCollection final
   WTF_MAKE_NONCOPYABLE(DocumentStyleSheetCollection);
 
  public:
-  static DocumentStyleSheetCollection* create(TreeScope& treeScope) {
-    return new DocumentStyleSheetCollection(treeScope);
+  static DocumentStyleSheetCollection* Create(TreeScope& tree_scope) {
+    return new DocumentStyleSheetCollection(tree_scope);
   }
 
-  void updateActiveStyleSheets(StyleEngine&, StyleResolverUpdateMode);
-  void collectStyleSheets(StyleEngine&, DocumentStyleSheetCollector&);
-  void collectViewportRules(ViewportStyleResolver&);
+  void UpdateActiveStyleSheets(StyleEngine& master_engine);
+  void CollectStyleSheets(StyleEngine& master_engine,
+                          DocumentStyleSheetCollector&);
+  void CollectViewportRules(ViewportStyleResolver&);
 
   DEFINE_INLINE_VIRTUAL_TRACE() {
-    TreeScopeStyleSheetCollection::trace(visitor);
+    TreeScopeStyleSheetCollection::Trace(visitor);
   }
 
  private:
   explicit DocumentStyleSheetCollection(TreeScope&);
 
-  void collectStyleSheetsFromCandidates(StyleEngine&,
+  void CollectStyleSheetsFromCandidates(StyleEngine& master_engine,
                                         DocumentStyleSheetCollector&);
 };
 

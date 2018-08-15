@@ -198,8 +198,8 @@ bool ParseHostsFile(const base::FilePath& path, DnsHosts* dns_hosts) {
   if (!base::GetFileSize(path, &size))
     return false;
 
-  UMA_HISTOGRAM_COUNTS("AsyncDNS.HostsSize",
-                       static_cast<base::HistogramBase::Sample>(size));
+  UMA_HISTOGRAM_COUNTS_1M("AsyncDNS.HostsSize",
+                          static_cast<base::HistogramBase::Sample>(size));
 
   // Reject HOSTS files larger than |kMaxHostsSize| bytes.
   const int64_t kMaxHostsSize = 1 << 25;  // 32MB
@@ -215,4 +215,3 @@ bool ParseHostsFile(const base::FilePath& path, DnsHosts* dns_hosts) {
 }
 
 }  // namespace net
-

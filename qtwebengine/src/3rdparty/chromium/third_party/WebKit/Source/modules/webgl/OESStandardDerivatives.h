@@ -34,12 +34,11 @@ class OESStandardDerivatives final : public WebGLExtension {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static OESStandardDerivatives* create(WebGLRenderingContextBase*);
-  static bool supported(WebGLRenderingContextBase*);
-  static const char* extensionName();
+  static OESStandardDerivatives* Create(WebGLRenderingContextBase*);
+  static bool Supported(WebGLRenderingContextBase*);
+  static const char* ExtensionName();
 
-  ~OESStandardDerivatives() override;
-  WebGLExtensionName name() const override;
+  WebGLExtensionName GetName() const override;
 
  private:
   explicit OESStandardDerivatives(WebGLRenderingContextBase*);

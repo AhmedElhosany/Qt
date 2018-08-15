@@ -192,35 +192,20 @@ SDK.CSSMatchedStyles = class {
     /**
      * @param {!SDK.DOMNode} node
      * @param {string} selectorText
-     * @return {!Promise}
      * @this {SDK.CSSMatchedStyles}
      */
-    function querySelector(node, selectorText) {
+    async function querySelector(node, selectorText) {
       var ownerDocument = node.ownerDocument || null;
       // We assume that "matching" property does not ever change during the
       // MatchedStyleResult's lifetime.
       var map = this._matchingSelectors.get(node.id);
       if ((map && map.has(selectorText)) || !ownerDocument)
-        return Promise.resolve();
+        return;
 
-      var resolve;
-      var promise = new Promise(fulfill => resolve = fulfill);
-      this._node.domModel().querySelectorAll(
-          ownerDocument.id, selectorText, onQueryComplete.bind(this, node, selectorText, resolve));
-      return promise;
-    }
+      var matchingNodeIds = await this._node.domModel().querySelectorAll(ownerDocument.id, selectorText);
 
-    /**
-     * @param {!SDK.DOMNode} node
-     * @param {string} selectorText
-     * @param {function()} callback
-     * @param {!Array.<!Protocol.DOM.NodeId>=} matchingNodeIds
-     * @this {SDK.CSSMatchedStyles}
-     */
-    function onQueryComplete(node, selectorText, callback, matchingNodeIds) {
       if (matchingNodeIds)
         this._setSelectorMatches(node, selectorText, matchingNodeIds.indexOf(node.id) !== -1);
-      callback();
     }
   }
 
@@ -287,7 +272,7 @@ SDK.CSSMatchedStyles = class {
    * @return {boolean}
    */
   _containsInherited(style) {
-    var properties = style.allProperties;
+    var properties = style.allProperties();
     for (var i = 0; i < properties.length; ++i) {
       var property = properties[i];
       // Does this style contain non-overridden inherited property?
@@ -303,6 +288,20 @@ SDK.CSSMatchedStyles = class {
    */
   nodeForStyle(style) {
     return this._nodeForStyle.get(style) || null;
+  }
+
+  /**
+   * @return {!Array<string>}
+   */
+  cssVariables() {
+    var cssVariables = [];
+    for (var style of this.nodeStyles()) {
+      for (var property of style.allProperties()) {
+        if (property.name.startsWith('--'))
+          cssVariables.push(property.name);
+      }
+    }
+    return cssVariables;
   }
 
   /**
@@ -355,7 +354,7 @@ SDK.CSSMatchedStyles = class {
 
       /** @type {!Map<string, !SDK.CSSProperty>} */
       var styleActiveProperties = new Map();
-      var allProperties = style.allProperties;
+      var allProperties = style.allProperties();
       for (var j = 0; j < allProperties.length; ++j) {
         var property = allProperties[j];
 

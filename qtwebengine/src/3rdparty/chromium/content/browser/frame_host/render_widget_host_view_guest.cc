@@ -13,9 +13,8 @@
 #include "base/message_loop/message_loop.h"
 #include "build/build_config.h"
 #include "cc/surfaces/surface.h"
-#include "cc/surfaces/surface_factory.h"
 #include "cc/surfaces/surface_manager.h"
-#include "cc/surfaces/surface_sequence.h"
+#include "components/viz/common/surfaces/surface_sequence.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/renderer_host/input/input_router.h"
@@ -31,6 +30,7 @@
 #include "content/public/common/content_switches.h"
 #include "gpu/ipc/common/gpu_messages.h"
 #include "skia/ext/platform_canvas.h"
+#include "ui/events/base_event_utils.h"
 
 #if defined(OS_MACOSX)
 #import "content/browser/renderer_host/render_widget_host_view_mac_dictionary_helper.h"
@@ -83,7 +83,8 @@ RenderWidgetHostViewGuest::RenderWidgetHostViewGuest(
     : RenderWidgetHostViewChildFrame(widget_host),
       // |guest| is NULL during test.
       guest_(guest ? guest->AsWeakPtr() : base::WeakPtr<BrowserPluginGuest>()),
-      platform_view_(platform_view) {
+      platform_view_(platform_view),
+      should_forward_text_selection_(false) {
   gfx::NativeView view = GetNativeView();
   if (view)
     UpdateScreenInfo(view);
@@ -123,16 +124,8 @@ void RenderWidgetHostViewGuest::Show() {
     // Since we were last shown, our renderer may have had a different surface
     // set (e.g. showing an interstitial), so we resend our current surface to
     // the renderer.
-    if (local_frame_id_.is_valid()) {
-      cc::SurfaceSequence sequence =
-          cc::SurfaceSequence(frame_sink_id_, next_surface_sequence_++);
-      cc::SurfaceId surface_id(frame_sink_id_, local_frame_id_);
-      GetSurfaceManager()
-          ->GetSurfaceForId(surface_id)
-          ->AddDestructionDependency(sequence);
-      guest_->SetChildFrameSurface(surface_id, current_surface_size_,
-                                   current_surface_scale_factor_, sequence);
-    }
+    if (local_surface_id_.is_valid())
+      SendSurfaceInfoToEmbedder();
   }
   host_->WasShown(ui::LatencyInfo());
 }
@@ -158,7 +151,7 @@ void RenderWidgetHostViewGuest::Focus() {
   // InterstitialPages are not WebContents, and so BrowserPluginGuest does not
   // have direct access to the interstitial page's RenderWidgetHost.
   if (guest_)
-    guest_->SetFocus(host_, true, blink::WebFocusTypeNone);
+    guest_->SetFocus(host_, true, blink::kWebFocusTypeNone);
 }
 
 bool RenderWidgetHostViewGuest::HasFocus() const {
@@ -179,7 +172,7 @@ void RenderWidgetHostViewGuest::ProcessAckedTouchEvent(
 void RenderWidgetHostViewGuest::ProcessMouseEvent(
     const blink::WebMouseEvent& event,
     const ui::LatencyInfo& latency) {
-  if (event.type == blink::WebInputEvent::MouseDown) {
+  if (event.GetType() == blink::WebInputEvent::kMouseDown) {
     DCHECK(guest_->GetOwnerRenderWidgetHostView());
     RenderWidgetHost* embedder =
         guest_->GetOwnerRenderWidgetHostView()->GetRenderWidgetHost();
@@ -190,9 +183,8 @@ void RenderWidgetHostViewGuest::ProcessMouseEvent(
     // click. Sends a synthetic event for the focusing side effect.
     // TODO(wjmaclean): When we remove BrowserPlugin, delete this code.
     // http://crbug.com/533069
-    MaybeSendSyntheticTapGesture(
-        blink::WebFloatPoint(event.x, event.y),
-        blink::WebFloatPoint(event.globalX, event.globalY));
+    MaybeSendSyntheticTapGesture(event.PositionInWidget(),
+                                 event.PositionInScreen());
   }
   host_->ForwardMouseEventWithLatencyInfo(event, latency);
 }
@@ -200,7 +192,7 @@ void RenderWidgetHostViewGuest::ProcessMouseEvent(
 void RenderWidgetHostViewGuest::ProcessTouchEvent(
     const blink::WebTouchEvent& event,
     const ui::LatencyInfo& latency) {
-  if (event.type == blink::WebInputEvent::TouchStart) {
+  if (event.GetType() == blink::WebInputEvent::kTouchStart) {
     DCHECK(guest_->GetOwnerRenderWidgetHostView());
     RenderWidgetHost* embedder =
         guest_->GetOwnerRenderWidgetHostView()->GetRenderWidgetHost();
@@ -211,8 +203,8 @@ void RenderWidgetHostViewGuest::ProcessTouchEvent(
     // touch. Sends a synthetic event for the focusing side effect.
     // TODO(wjmaclean): When we remove BrowserPlugin, delete this code.
     // http://crbug.com/533069
-    MaybeSendSyntheticTapGesture(event.touches[0].position,
-                                 event.touches[0].screenPosition);
+    MaybeSendSyntheticTapGesture(event.touches[0].PositionInWidget(),
+                                 event.touches[0].PositionInScreen());
   }
 
   host_->ForwardTouchEventWithLatencyInfo(event, latency);
@@ -246,10 +238,11 @@ void RenderWidgetHostViewGuest::RenderProcessGone(
 }
 
 void RenderWidgetHostViewGuest::Destroy() {
-  RenderWidgetHostViewChildFrame::Destroy();
-
   if (platform_view_)  // The platform view might have been destroyed already.
     platform_view_->Destroy();
+
+  // RenderWidgetHostViewChildFrame::Destroy destroys this object.
+  RenderWidgetHostViewChildFrame::Destroy();
 }
 
 gfx::Size RenderWidgetHostViewGuest::GetPhysicalBackingSize() const {
@@ -272,72 +265,36 @@ void RenderWidgetHostViewGuest::SetNeedsBeginFrames(
    platform_view_->SetNeedsBeginFrames(needs_begin_frames);
 }
 
+TouchSelectionControllerClientManager*
+RenderWidgetHostViewGuest::GetTouchSelectionControllerClientManager() {
+  RenderWidgetHostView* root_view = GetOwnerRenderWidgetHostView();
+  if (!root_view)
+    return nullptr;
+
+  // There is only ever one manager, and it's owned by the root view.
+  return root_view->GetTouchSelectionControllerClientManager();
+}
+
 void RenderWidgetHostViewGuest::SetTooltipText(
     const base::string16& tooltip_text) {
   if (guest_)
     guest_->SetTooltipText(tooltip_text);
 }
 
-void RenderWidgetHostViewGuest::OnSwapCompositorFrame(
-    uint32_t compositor_frame_sink_id,
+void RenderWidgetHostViewGuest::SendSurfaceInfoToEmbedderImpl(
+    const viz::SurfaceInfo& surface_info,
+    const viz::SurfaceSequence& sequence) {
+  if (guest_ && !guest_->is_in_destruction())
+    guest_->SetChildFrameSurface(surface_info, sequence);
+}
+
+void RenderWidgetHostViewGuest::SubmitCompositorFrame(
+    const viz::LocalSurfaceId& local_surface_id,
     cc::CompositorFrame frame) {
   TRACE_EVENT0("content", "RenderWidgetHostViewGuest::OnSwapCompositorFrame");
 
   last_scroll_offset_ = frame.metadata.root_scroll_offset;
-
-  cc::RenderPass* root_pass =
-      frame.delegated_frame_data->render_pass_list.back().get();
-
-  gfx::Size frame_size = root_pass->output_rect.size();
-  float scale_factor = frame.metadata.device_scale_factor;
-
-  // Check whether we need to recreate the cc::Surface, which means the child
-  // frame renderer has changed its output surface, or size, or scale factor.
-  if (compositor_frame_sink_id != last_compositor_frame_sink_id_ ||
-      frame_size != current_surface_size_ ||
-      scale_factor != current_surface_scale_factor_ ||
-      (guest_ && guest_->has_attached_since_surface_set())) {
-    ClearCompositorSurfaceIfNecessary();
-    // If the renderer changed its frame sink, reset the surface factory to
-    // avoid returning stale resources.
-    if (compositor_frame_sink_id != last_compositor_frame_sink_id_)
-      surface_factory_->Reset();
-    last_compositor_frame_sink_id_ = compositor_frame_sink_id;
-    current_surface_size_ = frame_size;
-    current_surface_scale_factor_ = scale_factor;
-  }
-
-  if (!local_frame_id_.is_valid()) {
-    local_frame_id_ = id_allocator_->GenerateId();
-    surface_factory_->Create(local_frame_id_);
-
-    cc::SurfaceSequence sequence =
-        cc::SurfaceSequence(frame_sink_id_, next_surface_sequence_++);
-    // The renderer process will satisfy this dependency when it creates a
-    // SurfaceLayer.
-    cc::SurfaceManager* manager = GetSurfaceManager();
-    cc::SurfaceId surface_id(frame_sink_id_, local_frame_id_);
-    manager->GetSurfaceForId(surface_id)->AddDestructionDependency(sequence);
-    // TODO(wjmaclean): I'm not sure what it means to create a surface id
-    // without setting it on the child, though since we will in this case be
-    // guaranteed to call ClearCompositorSurfaceIfNecessary() below, I suspect
-    // skipping SetChildFrameSurface() here is irrelevant.
-    if (guest_ && !guest_->is_in_destruction()) {
-      guest_->SetChildFrameSurface(surface_id, frame_size, scale_factor,
-                                   sequence);
-    }
-  }
-
-  cc::SurfaceFactory::DrawCallback ack_callback = base::Bind(
-      &RenderWidgetHostViewChildFrame::SurfaceDrawn,
-      RenderWidgetHostViewChildFrame::AsWeakPtr(), compositor_frame_sink_id);
-  ack_pending_count_++;
-  // If this value grows very large, something is going wrong.
-  DCHECK(ack_pending_count_ < 1000);
-  surface_factory_->SubmitCompositorFrame(local_frame_id_, std::move(frame),
-                                          ack_callback);
-
-  ProcessFrameSwappedCallbacks();
+  ProcessCompositorFrame(local_surface_id, std::move(frame));
 
   // If after detaching we are sent a frame, we should finish processing it, and
   // then we should clear the surface so that we are not holding resources we
@@ -424,6 +381,9 @@ void RenderWidgetHostViewGuest::TextInputStateChanged(
     return;
   // Forward the information to embedding RWHV.
   rwhv->TextInputStateChanged(params);
+
+  should_forward_text_selection_ =
+      (params.type != ui::TEXT_INPUT_TYPE_NONE) && guest_ && guest_->focused();
 }
 
 void RenderWidgetHostViewGuest::ImeCancelComposition() {
@@ -460,8 +420,13 @@ void RenderWidgetHostViewGuest::ImeCompositionRangeChanged(
 
 void RenderWidgetHostViewGuest::SelectionChanged(const base::string16& text,
                                                  size_t offset,
-                                                 const gfx::Range& range) {
-  platform_view_->SelectionChanged(text, offset, range);
+                                                 const gfx::Range& range,
+                                                 bool user_initiated) {
+  RenderWidgetHostViewBase* view = should_forward_text_selection_
+                                       ? GetOwnerRenderWidgetHostView()
+                                       : platform_view_.get();
+  if (view)
+    view->SelectionChanged(text, offset, range, user_initiated);
 }
 
 void RenderWidgetHostViewGuest::SelectionBoundsChanged(
@@ -486,6 +451,14 @@ bool RenderWidgetHostViewGuest::LockMouse() {
 
 void RenderWidgetHostViewGuest::UnlockMouse() {
   return platform_view_->UnlockMouse();
+}
+
+void RenderWidgetHostViewGuest::DidCreateNewRendererCompositorFrameSink(
+    cc::mojom::CompositorFrameSinkClient* renderer_compositor_frame_sink) {
+  RenderWidgetHostViewChildFrame::DidCreateNewRendererCompositorFrameSink(
+      renderer_compositor_frame_sink);
+  platform_view_->DidCreateNewRendererCompositorFrameSink(
+      renderer_compositor_frame_sink);
 }
 
 #if defined(OS_MACOSX)
@@ -533,18 +506,11 @@ void RenderWidgetHostViewGuest::StopSpeaking() {
 }
 #endif  // defined(OS_MACOSX)
 
-void RenderWidgetHostViewGuest::LockCompositingSurface() {
-  NOTIMPLEMENTED();
-}
-
-void RenderWidgetHostViewGuest::UnlockCompositingSurface() {
-  NOTIMPLEMENTED();
-}
-
 RenderWidgetHostViewBase*
 RenderWidgetHostViewGuest::GetOwnerRenderWidgetHostView() const {
-  return static_cast<RenderWidgetHostViewBase*>(
-      guest_->GetOwnerRenderWidgetHostView());
+  return guest_ ? static_cast<RenderWidgetHostViewBase*>(
+                      guest_->GetOwnerRenderWidgetHostView())
+                : nullptr;
 }
 
 // TODO(wjmaclean): When we remove BrowserPlugin, delete this code.
@@ -561,16 +527,19 @@ void RenderWidgetHostViewGuest::MaybeSendSyntheticTapGesture(
     gfx::Vector2d offset =
         GetViewBounds().origin() -
         GetOwnerRenderWidgetHostView()->GetBoundsInRootWindow().origin();
-    blink::WebGestureEvent gesture_tap_event;
-    gesture_tap_event.sourceDevice = blink::WebGestureDeviceTouchscreen;
-    gesture_tap_event.type = blink::WebGestureEvent::GestureTapDown;
+    blink::WebGestureEvent gesture_tap_event(
+        blink::WebGestureEvent::kGestureTapDown,
+        blink::WebInputEvent::kNoModifiers,
+        ui::EventTimeStampToSeconds(ui::EventTimeForNow()));
+    gesture_tap_event.source_device = blink::kWebGestureDeviceTouchscreen;
     gesture_tap_event.x = position.x + offset.x();
     gesture_tap_event.y = position.y + offset.y();
-    gesture_tap_event.globalX = screenPosition.x;
-    gesture_tap_event.globalY = screenPosition.y;
+    gesture_tap_event.global_x = screenPosition.x;
+    gesture_tap_event.global_y = screenPosition.y;
     GetOwnerRenderWidgetHostView()->ProcessGestureEvent(
         gesture_tap_event, ui::LatencyInfo(ui::SourceEventType::TOUCH));
-    gesture_tap_event.type = blink::WebGestureEvent::GestureTapCancel;
+
+    gesture_tap_event.SetType(blink::WebGestureEvent::kGestureTapCancel);
     GetOwnerRenderWidgetHostView()->ProcessGestureEvent(
         gesture_tap_event, ui::LatencyInfo(ui::SourceEventType::TOUCH));
   }
@@ -592,8 +561,38 @@ void RenderWidgetHostViewGuest::GestureEventAck(
                       ack_result == INPUT_EVENT_ACK_STATE_NO_CONSUMER_EXISTS;
   // GestureScrollBegin/End are always consumed by the guest, so we only
   // forward GestureScrollUpdate.
-  if (event.type == blink::WebInputEvent::GestureScrollUpdate && not_consumed)
+  // Consumed GestureScrollUpdates and GestureScrollBegins must still be
+  // forwarded to the owner RWHV so it may update its state.
+  if (event.GetType() == blink::WebInputEvent::kGestureScrollUpdate &&
+      not_consumed) {
     guest_->ResendEventToEmbedder(event);
+  } else if (event.GetType() == blink::WebInputEvent::kGestureScrollUpdate ||
+             event.GetType() == blink::WebInputEvent::kGestureScrollBegin) {
+    GetOwnerRenderWidgetHostView()->GestureEventAck(event, ack_result);
+  }
+}
+
+InputEventAckState RenderWidgetHostViewGuest::FilterInputEvent(
+    const blink::WebInputEvent& input_event) {
+  InputEventAckState ack_state =
+      RenderWidgetHostViewChildFrame::FilterInputEvent(input_event);
+  if (ack_state != INPUT_EVENT_ACK_STATE_NOT_CONSUMED)
+    return ack_state;
+
+  // The owner RWHV may want to consume the guest's GestureScrollUpdates.
+  // Also, we don't resend GestureFlingStarts, GestureScrollBegins, or
+  // GestureScrollEnds, so we let the owner RWHV know about them here.
+  if (input_event.GetType() == blink::WebInputEvent::kGestureScrollUpdate ||
+      input_event.GetType() == blink::WebInputEvent::kGestureFlingStart ||
+      input_event.GetType() == blink::WebInputEvent::kGestureScrollBegin ||
+      input_event.GetType() == blink::WebInputEvent::kGestureScrollEnd) {
+    const blink::WebGestureEvent& gesture_event =
+        static_cast<const blink::WebGestureEvent&>(input_event);
+    return GetOwnerRenderWidgetHostView()->FilterChildGestureEvent(
+        gesture_event);
+  }
+
+  return INPUT_EVENT_ACK_STATE_NOT_CONSUMED;
 }
 
 bool RenderWidgetHostViewGuest::IsRenderWidgetHostViewGuest() {
@@ -609,22 +608,23 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
   // explicitly remove the additional device scale factor from the coordinates
   // before allowing the event to be queued.
   if (IsUseZoomForDSFEnabled() &&
-      event->type == blink::WebInputEvent::MouseWheel) {
+      event->GetType() == blink::WebInputEvent::kMouseWheel) {
     blink::WebMouseWheelEvent rescaled_event =
         *static_cast<const blink::WebMouseWheelEvent*>(event);
-    rescaled_event.x /= current_device_scale_factor();
-    rescaled_event.y /= current_device_scale_factor();
-    rescaled_event.deltaX /= current_device_scale_factor();
-    rescaled_event.deltaY /= current_device_scale_factor();
-    rescaled_event.wheelTicksX /= current_device_scale_factor();
-    rescaled_event.wheelTicksY /= current_device_scale_factor();
+    rescaled_event.SetPositionInWidget(
+        rescaled_event.PositionInWidget().x / current_device_scale_factor(),
+        rescaled_event.PositionInWidget().y / current_device_scale_factor());
+    rescaled_event.delta_x /= current_device_scale_factor();
+    rescaled_event.delta_y /= current_device_scale_factor();
+    rescaled_event.wheel_ticks_x /= current_device_scale_factor();
+    rescaled_event.wheel_ticks_y /= current_device_scale_factor();
     ui::LatencyInfo latency_info(ui::SourceEventType::WHEEL);
     host_->ForwardWheelEventWithLatencyInfo(rescaled_event, latency_info);
     return;
   }
 
   ScopedInputScaleDisabler disable(host_, current_device_scale_factor());
-  if (blink::WebInputEvent::isMouseEventType(event->type)) {
+  if (blink::WebInputEvent::IsMouseEventType(event->GetType())) {
     // The mouse events for BrowserPlugin are modified by all
     // the CSS transforms applied on the <object> and embedder. As a result of
     // this, the coordinates passed on to the guest renderer are potentially
@@ -637,23 +637,23 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
     const blink::WebMouseEvent& mouse_event =
         static_cast<const blink::WebMouseEvent&>(*event);
     // A MouseDown on the ButtonRight could suggest a ContextMenu.
-    if (guest_ && mouse_event.type == blink::WebInputEvent::MouseDown &&
-        mouse_event.button == blink::WebPointerProperties::Button::Right)
+    if (guest_ && mouse_event.GetType() == blink::WebInputEvent::kMouseDown &&
+        mouse_event.button == blink::WebPointerProperties::Button::kRight)
       guest_->SetContextMenuPosition(
-          gfx::Point(mouse_event.globalX - GetViewBounds().x(),
-                     mouse_event.globalY - GetViewBounds().y()));
+          gfx::Point(mouse_event.PositionInScreen().x - GetViewBounds().x(),
+                     mouse_event.PositionInScreen().y - GetViewBounds().y()));
     host_->ForwardMouseEvent(mouse_event);
     return;
   }
 
-  if (event->type == blink::WebInputEvent::MouseWheel) {
+  if (event->GetType() == blink::WebInputEvent::kMouseWheel) {
     ui::LatencyInfo latency_info(ui::SourceEventType::WHEEL);
     host_->ForwardWheelEventWithLatencyInfo(
         *static_cast<const blink::WebMouseWheelEvent*>(event), latency_info);
     return;
   }
 
-  if (blink::WebInputEvent::isKeyboardEventType(event->type)) {
+  if (blink::WebInputEvent::IsKeyboardEventType(event->GetType())) {
     if (!embedder->GetLastKeyboardEvent())
       return;
     NativeWebKeyboardEvent keyboard_event(*embedder->GetLastKeyboardEvent());
@@ -661,8 +661,8 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
     return;
   }
 
-  if (blink::WebInputEvent::isTouchEventType(event->type)) {
-    if (event->type == blink::WebInputEvent::TouchStart &&
+  if (blink::WebInputEvent::IsTouchEventType(event->GetType())) {
+    if (event->GetType() == blink::WebInputEvent::kTouchStart &&
         !embedder->GetView()->HasFocus()) {
       embedder->GetView()->Focus();
     }
@@ -672,7 +672,7 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
     return;
   }
 
-  if (blink::WebInputEvent::isGestureEventType(event->type)) {
+  if (blink::WebInputEvent::IsGestureEventType(event->GetType())) {
     const blink::WebGestureEvent& gesture_event =
         *static_cast<const blink::WebGestureEvent*>(event);
 
@@ -684,14 +684,18 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
     // handleInputEvent() on a GestureFlingStart, and we could use this as
     // a signal to let the guest handle the fling, though we'd need to be
     // sure other plugins would behave appropriately (i.e. return 'false').
-    if (gesture_event.type == blink::WebInputEvent::GestureScrollUpdate &&
-        gesture_event.data.scrollUpdate.inertialPhase ==
-            blink::WebGestureEvent::MomentumPhase) {
+    if (gesture_event.GetType() == blink::WebInputEvent::kGestureScrollUpdate &&
+        gesture_event.data.scroll_update.inertial_phase ==
+            blink::WebGestureEvent::kMomentumPhase) {
       return;
     }
     host_->ForwardGestureEvent(gesture_event);
     return;
   }
+}
+
+bool RenderWidgetHostViewGuest::HasEmbedderChanged() {
+  return guest_ && guest_->has_attached_since_surface_set();
 }
 
 }  // namespace content

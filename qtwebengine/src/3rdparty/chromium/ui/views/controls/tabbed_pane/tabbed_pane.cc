@@ -6,8 +6,9 @@
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "third_party/skia/include/core/SkPaint.h"
+#include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/default_style.h"
 #include "ui/base/material_design/material_design_controller.h"
@@ -18,6 +19,7 @@
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
@@ -26,6 +28,8 @@
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/layout_manager.h"
 #include "ui/views/widget/widget.h"
+
+namespace views {
 
 namespace {
 
@@ -42,9 +46,25 @@ const gfx::Font::Weight kInactiveWeight = gfx::Font::Weight::NORMAL;
 
 const int kHarmonyTabStripTabHeight = 40;
 
-}  // namespace
+// The View containing the text for each tab in the tab strip.
+class TabLabel : public Label {
+ public:
+  explicit TabLabel(const base::string16& tab_title)
+      : Label(tab_title, style::CONTEXT_LABEL, style::STYLE_TAB_ACTIVE) {}
 
-namespace views {
+  // Label:
+  void GetAccessibleNodeData(ui::AXNodeData* data) override {
+    // views::Tab shouldn't expose any of its children in the a11y tree.
+    // Instead, it should provide the a11y information itself. Normally,
+    // non-keyboard-focusable children of keyboard-focusable parents are
+    // ignored, but Tabs only mark the currently selected tab as
+    // keyboard-focusable. This means all unselected Tabs expose their children
+    // to the a11y tree. To fix, manually ignore the children.
+    data->role = ui::AX_ROLE_IGNORED;
+  }
+};
+
+}  // namespace
 
 // static
 const char TabbedPane::kViewClassName[] = "TabbedPane";
@@ -59,39 +79,12 @@ class MdTab : public Tab {
   void OnStateChanged() override;
 
   // Overridden from View:
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   void OnFocus() override;
   void OnBlur() override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MdTab);
-};
-
-// The tab strip shown above the tab contents.
-class TabStrip : public View {
- public:
-  // Internal class name.
-  static const char kViewClassName[];
-
-  TabStrip();
-  ~TabStrip() override;
-
-  // Called by TabStrip when the selected tab changes. This function is only
-  // called if |from_tab| is not null, i.e., there was a previously selected
-  // tab.
-  virtual void OnSelectedTabChanged(Tab* from_tab, Tab* to_tab);
-
-  // Overridden from View:
-  const char* GetClassName() const override;
-  void OnPaintBorder(gfx::Canvas* canvas) override;
-
-  Tab* GetSelectedTab() const;
-  Tab* GetTabAtDeltaFromSelected(int delta) const;
-  Tab* GetTabAtIndex(int index) const;
-  int GetSelectedTabIndex() const;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TabStrip);
 };
 
 // A subclass of TabStrip that implements the Harmony visual styling. This
@@ -132,12 +125,7 @@ const char Tab::kViewClassName[] = "Tab";
 
 Tab::Tab(TabbedPane* tabbed_pane, const base::string16& title, View* contents)
     : tabbed_pane_(tabbed_pane),
-      title_(new Label(
-          title,
-          ui::ResourceBundle::GetSharedInstance().GetFontListWithDelta(
-              ui::kLabelFontSizeDelta,
-              gfx::Font::NORMAL,
-              kActiveWeight))),
+      title_(new TabLabel(title)),
       tab_state_(TAB_ACTIVE),
       contents_(contents) {
   // Calculate this now while the font list is guaranteed to be bold.
@@ -220,7 +208,7 @@ void Tab::OnGestureEvent(ui::GestureEvent* event) {
   event->SetHandled();
 }
 
-gfx::Size Tab::GetPreferredSize() const {
+gfx::Size Tab::CalculatePreferredSize() const {
   gfx::Size size(preferred_title_size_);
   size.Enlarge(GetInsets().width(), GetInsets().height());
   return size;
@@ -236,6 +224,24 @@ void Tab::SetState(TabState tab_state) {
   tab_state_ = tab_state;
   OnStateChanged();
   SchedulePaint();
+}
+
+void Tab::GetAccessibleNodeData(ui::AXNodeData* data) {
+  data->role = ui::AX_ROLE_TAB;
+  data->SetName(title()->text());
+  data->AddState(ui::AX_STATE_SELECTABLE);
+  if (selected())
+    data->AddState(ui::AX_STATE_SELECTED);
+}
+
+bool Tab::HandleAccessibleAction(const ui::AXActionData& action_data) {
+  if (action_data.action != ui::AX_ACTION_SET_SELECTION || !enabled())
+    return false;
+
+  // It's not clear what should happen if a tab is 'deselected', so the
+  // AX_ACTION_SET_SELECTION action will always select the tab.
+  tabbed_pane_->SelectTab(this);
+  return true;
 }
 
 void Tab::OnFocus() {
@@ -291,8 +297,9 @@ void MdTab::OnStateChanged() {
                                                gfx::Font::NORMAL, font_weight));
 }
 
-gfx::Size MdTab::GetPreferredSize() const {
-  return gfx::Size(Tab::GetPreferredSize().width(), kHarmonyTabStripTabHeight);
+gfx::Size MdTab::CalculatePreferredSize() const {
+  return gfx::Size(Tab::CalculatePreferredSize().width(),
+                   kHarmonyTabStripTabHeight);
 }
 
 void MdTab::OnFocus() {
@@ -314,8 +321,8 @@ const char TabStrip::kViewClassName[] = "TabStrip";
 
 TabStrip::TabStrip() {
   const int kTabStripLeadingEdgePadding = 9;
-  BoxLayout* layout =
-      new BoxLayout(BoxLayout::kHorizontal, kTabStripLeadingEdgePadding, 0, 0);
+  BoxLayout* layout = new BoxLayout(
+      BoxLayout::kHorizontal, gfx::Insets(0, kTabStripLeadingEdgePadding));
   layout->set_main_axis_alignment(BoxLayout::MAIN_AXIS_ALIGNMENT_START);
   layout->set_cross_axis_alignment(BoxLayout::CROSS_AXIS_ALIGNMENT_END);
   layout->SetDefaultFlex(0);
@@ -331,9 +338,9 @@ const char* TabStrip::GetClassName() const {
 }
 
 void TabStrip::OnPaintBorder(gfx::Canvas* canvas) {
-  SkPaint paint;
-  paint.setColor(kTabBorderColor);
-  paint.setStrokeWidth(kTabBorderThickness);
+  cc::PaintFlags fill_flags;
+  fill_flags.setColor(kTabBorderColor);
+  fill_flags.setStrokeWidth(kTabBorderThickness);
   SkScalar line_y = SkIntToScalar(height()) - (kTabBorderThickness / 2);
   SkScalar line_end = SkIntToScalar(width());
   int selected_tab_index = GetSelectedTabIndex();
@@ -352,13 +359,13 @@ void TabStrip::OnPaintBorder(gfx::Canvas* canvas) {
     path.rLineTo(0, tab_height);
     path.lineTo(line_end, line_y);
 
-    SkPaint paint;
-    paint.setStyle(SkPaint::kStroke_Style);
-    paint.setColor(kTabBorderColor);
-    paint.setStrokeWidth(kTabBorderThickness);
-    canvas->DrawPath(path, paint);
+    cc::PaintFlags fill_flags;
+    fill_flags.setStyle(cc::PaintFlags::kStroke_Style);
+    fill_flags.setColor(kTabBorderColor);
+    fill_flags.setStrokeWidth(kTabBorderThickness);
+    canvas->DrawPath(path, fill_flags);
   } else {
-    canvas->sk_canvas()->drawLine(0, line_y, line_end, line_y, paint);
+    canvas->sk_canvas()->drawLine(0, line_y, line_end, line_y, fill_flags);
   }
 }
 
@@ -386,7 +393,7 @@ Tab* TabStrip::GetTabAtDeltaFromSelected(int delta) const {
 }
 
 MdTabStrip::MdTabStrip() {
-  BoxLayout* layout = new BoxLayout(BoxLayout::kHorizontal, 0, 0, 0);
+  BoxLayout* layout = new BoxLayout(BoxLayout::kHorizontal);
   layout->set_main_axis_alignment(BoxLayout::MAIN_AXIS_ALIGNMENT_CENTER);
   layout->set_cross_axis_alignment(BoxLayout::CROSS_AXIS_ALIGNMENT_STRETCH);
   layout->SetDefaultFlex(1);
@@ -395,13 +402,11 @@ MdTabStrip::MdTabStrip() {
   // These durations are taken from the Paper Tabs source:
   // https://github.com/PolymerElements/paper-tabs/blob/master/paper-tabs.html
   // See |selectionBar.expand| and |selectionBar.contract|.
-  const int kExpandAnimationDurationMs = 150;
   expand_animation_.reset(new gfx::LinearAnimation(this));
-  expand_animation_->SetDuration(kExpandAnimationDurationMs);
+  expand_animation_->SetDuration(base::TimeDelta::FromMilliseconds(150));
 
-  const int kContractAnimationDurationMs = 180;
   contract_animation_.reset(new gfx::LinearAnimation(this));
-  contract_animation_->SetDuration(kContractAnimationDurationMs);
+  contract_animation_->SetDuration(base::TimeDelta::FromMilliseconds(180));
 }
 
 MdTabStrip::~MdTabStrip() {}
@@ -569,7 +574,7 @@ void TabbedPane::SelectTabAt(int index) {
     SelectTab(tab);
 }
 
-gfx::Size TabbedPane::GetPreferredSize() const {
+gfx::Size TabbedPane::CalculatePreferredSize() const {
   gfx::Size size;
   for (int i = 0; i < contents_->child_count(); ++i)
     size.SetToMax(contents_->child_at(i)->GetPreferredSize());

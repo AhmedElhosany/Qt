@@ -10,14 +10,13 @@
 
 #include "base/memory/ref_counted.h"
 #include "build/build_config.h"
-#include "cc/surfaces/surface_id_allocator.h"
 #include "content/common/content_export.h"
 #include "gpu/ipc/common/surface_handle.h"
-#include "ui/events/latency_info.h"
 #include "ui/gfx/native_widget_types.h"
+#include "ui/latency/latency_info.h"
 
-namespace cc {
-class SurfaceManager;
+namespace base {
+class SingleThreadTaskRunner;
 }
 
 namespace gfx {
@@ -27,9 +26,10 @@ enum class SwapResult;
 namespace ui {
 class Compositor;
 class ContextFactory;
+class ContextFactoryPrivate;
 }
 
-namespace display_compositor {
+namespace viz {
 class GLHelper;
 }
 
@@ -48,7 +48,8 @@ class CONTENT_EXPORT ImageTransportFactory {
   virtual ~ImageTransportFactory() {}
 
   // Initializes the global transport factory.
-  static void Initialize();
+  static void Initialize(
+      scoped_refptr<base::SingleThreadTaskRunner> resize_task_runner);
 
   // Initializes the global transport factory for unit tests using the provided
   // context factory.
@@ -64,12 +65,15 @@ class CONTENT_EXPORT ImageTransportFactory {
   // Gets the image transport factory as a context factory for the compositor.
   virtual ui::ContextFactory* GetContextFactory() = 0;
 
-  virtual cc::SurfaceManager* GetSurfaceManager() = 0;
+  // Gets the image transport factory as the privileged context factory for the
+  // compositor. TODO(fsamuel): This interface should eventually go away once
+  // Mus subsumes this functionality.
+  virtual ui::ContextFactoryPrivate* GetContextFactoryPrivate() = 0;
 
   // Gets a GLHelper instance, associated with the shared context. This
   // GLHelper will get destroyed whenever the shared context is lost
   // (ImageTransportFactoryObserver::OnLostResources is called).
-  virtual display_compositor::GLHelper* GetGLHelper() = 0;
+  virtual viz::GLHelper* GetGLHelper() = 0;
 
   virtual void SetGpuChannelEstablishFactory(
       gpu::GpuChannelEstablishFactory* factory) = 0;

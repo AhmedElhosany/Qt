@@ -10,6 +10,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/values.h"
 #include "components/update_client/update_client_errors.h"
 #include "content/public/browser/browser_thread.h"
@@ -32,8 +33,9 @@ void UpdateInstallShim::OnUpdateError(int error) {
   VLOG(1) << "OnUpdateError (" << extension_id_ << ") " << error;
 }
 
-Result UpdateInstallShim::Install(const base::DictionaryValue& manifest,
-                                  const base::FilePath& unpack_path) {
+Result UpdateInstallShim::Install(
+    std::unique_ptr<base::DictionaryValue> manifest,
+    const base::FilePath& unpack_path) {
   base::ScopedTempDir temp_dir;
   if (!temp_dir.CreateUniqueTempDir())
     return Result(InstallError::GENERIC_ERROR);
@@ -78,9 +80,10 @@ UpdateInstallShim::~UpdateInstallShim() {}
 
 void UpdateInstallShim::RunCallbackOnUIThread(const base::FilePath& temp_dir) {
   if (callback_.is_null()) {
-    content::BrowserThread::PostBlockingPoolTask(
-        FROM_HERE, base::Bind(base::IgnoreResult(&base::DeleteFile), temp_dir,
-                              true /*recursive */));
+    base::PostTaskWithTraits(FROM_HERE,
+                             {base::MayBlock(), base::TaskPriority::BACKGROUND},
+                             base::Bind(base::IgnoreResult(&base::DeleteFile),
+                                        temp_dir, true /*recursive */));
     return;
   }
   callback_.Run(extension_id_, temp_dir);

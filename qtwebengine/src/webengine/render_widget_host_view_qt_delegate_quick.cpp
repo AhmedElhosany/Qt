@@ -48,18 +48,13 @@
 #include <QVariant>
 #include <QWindow>
 #include <private/qquickwindow_p.h>
-#include <private/qsgcontext_p.h>
-
-#if (QT_VERSION < QT_VERSION_CHECK(5, 8, 0))
-#include <QSGSimpleRectNode>
-#include <QSGSimpleTextureNode>
-#endif
 
 namespace QtWebEngineCore {
 
 RenderWidgetHostViewQtDelegateQuick::RenderWidgetHostViewQtDelegateQuick(RenderWidgetHostViewQtDelegateClient *client, bool isPopup)
     : m_client(client)
     , m_isPopup(isPopup)
+    , m_isPasswordInput(false)
     , m_initialized(false)
 {
     setFlag(ItemHasContents);
@@ -185,30 +180,17 @@ QSGLayer *RenderWidgetHostViewQtDelegateQuick::createLayer()
 QSGInternalImageNode *RenderWidgetHostViewQtDelegateQuick::createImageNode()
 {
     QSGRenderContext *renderContext = QQuickWindowPrivate::get(QQuickItem::window())->context;
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 8, 0))
     return renderContext->sceneGraphContext()->createInternalImageNode();
-#else
-    return renderContext->sceneGraphContext()->createImageNode();
-#endif
 }
 
 QSGTextureNode *RenderWidgetHostViewQtDelegateQuick::createTextureNode()
 {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 8, 0))
     return QQuickItem::window()->createImageNode();
-#else
-    return new QSGSimpleTextureNode();
-#endif
 }
 
 QSGRectangleNode *RenderWidgetHostViewQtDelegateQuick::createRectangleNode()
 {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 8, 0))
     return QQuickItem::window()->createRectangleNode();
-#else
-    QSGRenderContext *renderContext = QQuickWindowPrivate::get(QQuickItem::window())->context;
-    return renderContext->sceneGraphContext()->createRectangleNode();
-#endif
 }
 
 void RenderWidgetHostViewQtDelegateQuick::update()
@@ -226,22 +208,24 @@ void RenderWidgetHostViewQtDelegateQuick::resize(int width, int height)
     setSize(QSizeF(width, height));
 }
 
-void RenderWidgetHostViewQtDelegateQuick::inputMethodStateChanged(bool editorVisible)
+void RenderWidgetHostViewQtDelegateQuick::inputMethodStateChanged(bool editorVisible, bool passwordInput)
 {
-    if (qApp->inputMethod()->isVisible() == editorVisible)
-        return;
+    setFlag(QQuickItem::ItemAcceptsInputMethod, editorVisible && !passwordInput);
 
-    if (parentItem() && parentItem()->flags() & QQuickItem::ItemAcceptsInputMethod) {
+    if (parentItem())
+        parentItem()->setFlag(QQuickItem::ItemAcceptsInputMethod, editorVisible && !passwordInput);
+
+    if (qApp->inputMethod()->isVisible() != editorVisible || m_isPasswordInput != passwordInput) {
         qApp->inputMethod()->update(Qt::ImQueryInput | Qt::ImEnabled | Qt::ImHints);
         qApp->inputMethod()->setVisible(editorVisible);
+        m_isPasswordInput = passwordInput;
     }
-
 }
 
 bool RenderWidgetHostViewQtDelegateQuick::event(QEvent *event)
 {
     if (event->type() == QEvent::ShortcutOverride)
-        return m_client->handleShortcutOverrideEvent(static_cast<QKeyEvent *>(event));
+        return m_client->forwardEvent(event);
 
 #ifndef QT_NO_GESTURES
     if (event->type() == QEvent::NativeGesture)

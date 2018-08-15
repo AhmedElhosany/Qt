@@ -12,6 +12,7 @@
 #include "SkDevice.h"
 #include "SkRasterClip.h"
 #include "SkWriter32.h"
+#include "SkClipOpPriv.h"
 
 /*
  * WARNING: The structs below are part of a stable ABI and as such we explicitly
@@ -105,11 +106,7 @@ public:
         layers = nullptr;
         mcState.clipRectCount = 0;
         mcState.clipRects = nullptr;
-#ifdef SK_SUPPORT_LEGACY_CANVAS_IS_REFCNT
-        originalCanvas = SkRef(canvas);
-#else
         originalCanvas = canvas;
-#endif
     }
 
     ~SkCanvasState_v1() {
@@ -120,10 +117,6 @@ public:
 
         sk_free(mcState.clipRects);
         sk_free(layers);
-
-#ifdef SK_SUPPORT_LEGACY_CANVAS_IS_REFCNT
-        originalCanvas->unref();
-#endif
     }
 
     SkMCState mcState;
@@ -136,28 +129,6 @@ private:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-
-class ClipValidator : public SkCanvas::ClipVisitor {
-public:
-    ClipValidator() : fFailed(false) {}
-    bool failed() { return fFailed; }
-
-    // ClipVisitor
-    void clipRect(const SkRect& rect, SkCanvas::ClipOp op, bool antialias) override {
-        fFailed |= antialias;
-    }
-
-    void clipRRect(const SkRRect& rrect, SkCanvas::ClipOp op, bool antialias) override {
-        fFailed |= antialias;
-    }
-
-    void clipPath(const SkPath&, SkCanvas::ClipOp, bool antialias) override {
-        fFailed |= antialias;
-    }
-
-private:
-    bool fFailed;
-};
 
 static void setup_MC_state(SkMCState* state, const SkMatrix& matrix, const SkRegion& clip) {
     // initialize the struct
@@ -200,17 +171,18 @@ SkCanvasState* SkCanvasStateUtils::CaptureCanvasState(SkCanvas* canvas) {
     SkASSERT(canvas);
 
     // Check the clip can be decomposed into rectangles (i.e. no soft clips).
-    ClipValidator validator;
-    canvas->replayClips(&validator);
-    if (validator.failed()) {
+    if (canvas->androidFramework_isClipAA()) {
         return nullptr;
     }
 
     std::unique_ptr<SkCanvasState_v1> canvasState(new SkCanvasState_v1(canvas));
 
     // decompose the total matrix and clip
-    setup_MC_state(&canvasState->mcState, canvas->getTotalMatrix(),
-                   canvas->internal_private_getTotalClip());
+    {
+        SkRegion rgn;
+        canvas->temporary_internal_getRgnClip(&rgn);
+        setup_MC_state(&canvasState->mcState, canvas->getTotalMatrix(), rgn);
+    }
 
     /*
      * decompose the layers
@@ -250,7 +222,9 @@ SkCanvasState* SkCanvasStateUtils::CaptureCanvasState(SkCanvas* canvas) {
         layerState->raster.rowBytes = pmap.rowBytes();
         layerState->raster.pixels = pmap.writable_addr();
 
-        setup_MC_state(&layerState->mcState, layer.matrix(), layer.clip().bwRgn());
+        SkRegion rgn;
+        layer.clip(&rgn);
+        setup_MC_state(&layerState->mcState, layer.matrix(), rgn);
         layerCount++;
     }
 
@@ -283,7 +257,7 @@ static void setup_canvas_from_MC_state(const SkMCState& state, SkCanvas* canvas)
     }
 
     canvas->setMatrix(matrix);
-    canvas->clipRegion(clip, SkCanvas::kReplace_Op);
+    canvas->clipRegion(clip, kReplace_SkClipOp);
 }
 
 static std::unique_ptr<SkCanvas>

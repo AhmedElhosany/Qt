@@ -49,6 +49,8 @@ def _ListTombstones(device):
                datetime.datetime.fromtimestamp(entry['st_mtime']))
   except device_errors.CommandFailedError:
     logging.exception('Could not retrieve tombstones.')
+  except device_errors.DeviceUnreachableError:
+    logging.exception('Device unreachable retrieving tombstones.')
   except device_errors.CommandTimeoutError:
     logging.exception('Timed out retrieving tombstones.')
 
@@ -102,6 +104,7 @@ def _DeviceAbiToArch(device_abi):
     if arch in device_abi:
       return arch
   raise RuntimeError('Unknown device ABI: %s' % device_abi)
+
 
 def _ResolveSymbols(tombstone_data, include_stack, device_abi):
   """Run the stack tool for given tombstone input.
@@ -170,6 +173,7 @@ def _ResolveTombstones(jobs, tombstones):
     resolved_tombstones.extend(tombstone)
   return resolved_tombstones
 
+
 def _GetTombstonesForDevice(device, resolve_all_tombstones,
                             include_stack_symbols,
                             wipe_tombstones):
@@ -216,6 +220,7 @@ def _GetTombstonesForDevice(device, resolve_all_tombstones,
 
   return ret
 
+
 def ClearAllTombstones(device):
   """Clear all tombstones in the device.
 
@@ -229,6 +234,7 @@ def ClearAllTombstones(device):
   for tombstone_file, _ in all_tombstones:
     _EraseTombstone(device, tombstone_file)
 
+
 def ResolveTombstones(device, resolve_all_tombstones, include_stack_symbols,
                       wipe_tombstones, jobs=4):
   """Resolve tombstones in the device.
@@ -239,12 +245,16 @@ def ResolveTombstones(device, resolve_all_tombstones, include_stack_symbols,
     include_stack_symbols: Whether to include symbols for stack data.
     wipe_tombstones: Whether to wipe tombstones.
     jobs: Number of jobs to use when processing multiple crash stacks.
+
+  Returns:
+    A list of resolved tombstones.
   """
   return _ResolveTombstones(jobs,
                             _GetTombstonesForDevice(device,
                                                     resolve_all_tombstones,
                                                     include_stack_symbols,
                                                     wipe_tombstones))
+
 
 def main():
   custom_handler = logging.StreamHandler(sys.stdout)
@@ -299,6 +309,7 @@ def main():
         args.stack, args.wipe_tombstones, args.jobs)
     for line in resolved_tombstones:
       logging.info(line)
+
 
 if __name__ == '__main__':
   sys.exit(main())

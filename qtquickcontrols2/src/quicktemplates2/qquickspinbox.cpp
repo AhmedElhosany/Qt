@@ -109,6 +109,7 @@ class QQuickSpinBoxPrivate : public QQuickControlPrivate
 public:
     QQuickSpinBoxPrivate()
         : editable(false),
+          wrap(false),
           from(0),
           to(99),
           value(0),
@@ -122,9 +123,10 @@ public:
     {
     }
 
-    int boundValue(int value) const;
+    int boundValue(int value, bool wrap) const;
     void updateValue();
-    bool setValue(int value, bool modified);
+    bool setValue(int value, bool wrap, bool modified);
+    bool stepBy(int steps, bool modified);
     void increase(bool modified);
     void decrease(bool modified);
 
@@ -146,6 +148,7 @@ public:
     void handleUngrab() override;
 
     bool editable;
+    bool wrap;
     int from;
     int to;
     int value;
@@ -185,9 +188,20 @@ public:
     QQuickDeferredPointer<QQuickItem> indicator;
 };
 
-int QQuickSpinBoxPrivate::boundValue(int value) const
+int QQuickSpinBoxPrivate::boundValue(int value, bool wrap) const
 {
-    return from > to ? qBound(to, value, from) : qBound(from, value, to);
+    bool inverted = from > to;
+    if (!wrap)
+        return inverted ? qBound(to, value, from) : qBound(from, value, to);
+
+    int f = inverted ? to : from;
+    int t = inverted ? from : to;
+    if (value < f)
+        value = t;
+    else if (value > t)
+        value = f;
+
+    return value;
 }
 
 void QQuickSpinBoxPrivate::updateValue()
@@ -201,17 +215,17 @@ void QQuickSpinBoxPrivate::updateValue()
                 QV4::ExecutionEngine *v4 = QQmlEnginePrivate::getV4Engine(engine);
                 QJSValue loc(v4, QQmlLocale::wrap(v4, locale));
                 QJSValue val = q->valueFromText().call(QJSValueList() << text.toString() << loc);
-                setValue(val.toInt(), true);
+                setValue(val.toInt(), /* allowWrap = */ false, /* modified = */ true);
             }
         }
     }
 }
 
-bool QQuickSpinBoxPrivate::setValue(int newValue, bool modified)
+bool QQuickSpinBoxPrivate::setValue(int newValue, bool allowWrap, bool modified)
 {
     Q_Q(QQuickSpinBox);
     if (q->isComponentComplete())
-        newValue = boundValue(newValue);
+        newValue = boundValue(newValue, allowWrap);
 
     if (value == newValue)
         return false;
@@ -227,14 +241,19 @@ bool QQuickSpinBoxPrivate::setValue(int newValue, bool modified)
     return true;
 }
 
+bool QQuickSpinBoxPrivate::stepBy(int steps, bool modified)
+{
+    return setValue(value + steps, wrap, modified);
+}
+
 void QQuickSpinBoxPrivate::increase(bool modified)
 {
-    setValue(value + effectiveStepSize(), modified);
+    setValue(value + effectiveStepSize(), wrap, modified);
 }
 
 void QQuickSpinBoxPrivate::decrease(bool modified)
 {
-    setValue(value - effectiveStepSize(), modified);
+    setValue(value - effectiveStepSize(), wrap, modified);
 }
 
 int QQuickSpinBoxPrivate::effectiveStepSize() const
@@ -254,7 +273,7 @@ void QQuickSpinBoxPrivate::updateUpEnabled()
     if (!upIndicator)
         return;
 
-    upIndicator->setEnabled(from < to ? value < to : value > to);
+    upIndicator->setEnabled(wrap || (from < to ? value < to : value > to));
 }
 
 bool QQuickSpinBoxPrivate::downEnabled() const
@@ -269,7 +288,7 @@ void QQuickSpinBoxPrivate::updateDownEnabled()
     if (!downIndicator)
         return;
 
-    downIndicator->setEnabled(from < to ? value > from : value < from);
+    downIndicator->setEnabled(wrap || (from < to ? value > from : value < from));
 }
 
 void QQuickSpinBoxPrivate::updateHover(const QPointF &pos)
@@ -410,7 +429,7 @@ void QQuickSpinBox::setFrom(int from)
     d->from = from;
     emit fromChanged();
     if (isComponentComplete()) {
-        if (!d->setValue(d->value, false)) {
+        if (!d->setValue(d->value, /* allowWrap = */ false, /* modified = */ false)) {
             d->updateUpEnabled();
             d->updateDownEnabled();
         }
@@ -439,7 +458,7 @@ void QQuickSpinBox::setTo(int to)
     d->to = to;
     emit toChanged();
     if (isComponentComplete()) {
-        if (!d->setValue(d->value, false)) {
+        if (!d->setValue(d->value, /* allowWrap = */false, /* modified = */ false)) {
             d->updateUpEnabled();
             d->updateDownEnabled();
         }
@@ -460,7 +479,7 @@ int QQuickSpinBox::value() const
 void QQuickSpinBox::setValue(int value)
 {
     Q_D(QQuickSpinBox);
-    d->setValue(value, false);
+    d->setValue(value, /* allowWrap = */ false, /* modified = */ false);
 }
 
 /*!
@@ -732,6 +751,34 @@ bool QQuickSpinBox::isInputMethodComposing() const
 }
 
 /*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty bool QtQuick.Controls::SpinBox::wrap
+
+    This property holds whether the spinbox wraps. The default value is \c false.
+
+    If wrap is \c true, stepping past \l to changes the value to \l from and vice versa.
+*/
+bool QQuickSpinBox::wrap() const
+{
+    Q_D(const QQuickSpinBox);
+    return d->wrap;
+}
+
+void QQuickSpinBox::setWrap(bool wrap)
+{
+    Q_D(QQuickSpinBox);
+    if (d->wrap == wrap)
+        return;
+
+    d->wrap = wrap;
+    if (d->value == d->from || d->value == d->to) {
+        d->updateUpEnabled();
+        d->updateDownEnabled();
+    }
+    emit wrapChanged();
+}
+
+/*!
     \qmlmethod void QtQuick.Controls::SpinBox::increase()
 
     Increases the value by \l stepSize, or \c 1 if stepSize is not defined.
@@ -853,8 +900,8 @@ void QQuickSpinBox::wheelEvent(QWheelEvent *event)
     if (d->wheelEnabled) {
         const QPointF angle = event->angleDelta();
         const qreal delta = (qFuzzyIsNull(angle.y()) ? angle.x() : angle.y()) / QWheelEvent::DefaultDeltasPerStep;
-        if (!d->setValue(d->value + qRound(d->effectiveStepSize() * delta), true))
-           event->ignore();
+        if (!d->stepBy(qRound(d->effectiveStepSize() * delta), true))
+            event->ignore();
     }
 }
 #endif
@@ -878,7 +925,7 @@ void QQuickSpinBox::componentComplete()
     QQuickSpinButtonPrivate::get(d->down)->executeIndicator(true);
 
     QQuickControl::componentComplete();
-    if (!d->setValue(d->value, false)) {
+    if (!d->setValue(d->value, /* allowWrap = */ false, /* modified = */ false)) {
         d->updateUpEnabled();
         d->updateDownEnabled();
     }
@@ -915,6 +962,11 @@ void QQuickSpinBox::contentItemChange(QQuickItem *newItem, QQuickItem *oldItem)
 QFont QQuickSpinBox::defaultFont() const
 {
     return QQuickControlPrivate::themeFont(QPlatformTheme::EditorFont);
+}
+
+QPalette QQuickSpinBox::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::TextLineEditPalette);
 }
 
 #if QT_CONFIG(accessibility)

@@ -7,15 +7,16 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "base/supports_user_data.h"
 #include "base/time/time.h"
 #include "content/browser/service_worker/service_worker_url_request_job.h"
 #include "content/common/content_export.h"
 #include "content/common/service_worker/service_worker_status_code.h"
-#include "content/common/service_worker/service_worker_types.h"
 #include "content/public/common/request_context_frame_type.h"
 #include "content/public/common/request_context_type.h"
 #include "content/public/common/resource_type.h"
+#include "content/public/common/service_worker_modes.h"
 #include "net/url_request/url_request_job_factory.h"
 
 namespace net {
@@ -31,7 +32,7 @@ class BlobStorageContext;
 namespace content {
 
 class ResourceContext;
-class ResourceRequestBodyImpl;
+class ResourceRequestBody;
 class ServiceWorkerContextWrapper;
 class ServiceWorkerRegistration;
 
@@ -57,14 +58,15 @@ class CONTENT_EXPORT ForeignFetchRequestHandler
       storage::BlobStorageContext* blob_storage_context,
       int process_id,
       int provider_id,
-      SkipServiceWorker skip_service_worker,
+      ServiceWorkerMode service_worker_mode,
       FetchRequestMode request_mode,
       FetchCredentialsMode credentials_mode,
       FetchRedirectMode redirect_mode,
+      const std::string& integrity,
       ResourceType resource_type,
       RequestContextType request_context_type,
       RequestContextFrameType frame_type,
-      scoped_refptr<ResourceRequestBodyImpl> body,
+      scoped_refptr<ResourceRequestBody> body,
       bool initiated_in_secure_context);
 
   // Returns the handler attached to |request|. This may return null
@@ -91,10 +93,12 @@ class CONTENT_EXPORT ForeignFetchRequestHandler
       FetchRequestMode request_mode,
       FetchCredentialsMode credentials_mode,
       FetchRedirectMode redirect_mode,
+      const std::string& integrity,
       ResourceType resource_type,
       RequestContextType request_context_type,
       RequestContextFrameType frame_type,
-      scoped_refptr<ResourceRequestBodyImpl> body);
+      scoped_refptr<ResourceRequestBody> body,
+      const base::Optional<base::TimeDelta>& timeout);
 
   // Called when a ServiceWorkerRegistration has (or hasn't) been found for the
   // request being handled.
@@ -124,10 +128,12 @@ class CONTENT_EXPORT ForeignFetchRequestHandler
   FetchRequestMode request_mode_;
   FetchCredentialsMode credentials_mode_;
   FetchRedirectMode redirect_mode_;
+  std::string integrity_;
   RequestContextType request_context_type_;
   RequestContextFrameType frame_type_;
-  scoped_refptr<ResourceRequestBodyImpl> body_;
+  scoped_refptr<ResourceRequestBody> body_;
   ResourceContext* resource_context_;
+  base::Optional<base::TimeDelta> timeout_;
 
   base::WeakPtr<ServiceWorkerURLRequestJob> job_;
   scoped_refptr<ServiceWorkerVersion> target_worker_;

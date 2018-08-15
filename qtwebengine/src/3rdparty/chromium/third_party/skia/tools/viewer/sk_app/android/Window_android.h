@@ -22,25 +22,19 @@ public:
     void initDisplay(ANativeWindow* window);
     void onDisplayDestroyed();
 
-    const DisplayParams& getDisplayParams() override;
     void setTitle(const char*) override;
     void show() override {}
 
-    bool attach(BackendType attachType, const DisplayParams& params) override;
+    bool attach(BackendType) override;
     void onInval() override;
     void setUIState(const Json::Value& state) override;
 
     void paintIfNeeded();
 
     bool scaleContentToFit() const override { return true; }
-    bool supportsContentRect() const override { return true; }
-    SkRect getContentRect() override { return fContentRect; }
-    void setContentRect(int l, int t, int r, int b) { fContentRect.set(l,t,r,b); }
 
 private:
     SkiaAndroidApp* fSkiaAndroidApp = nullptr;
-    SkRect fContentRect;
-    DisplayParams fDisplayParams;
     BackendType fBackendType;
 };
 

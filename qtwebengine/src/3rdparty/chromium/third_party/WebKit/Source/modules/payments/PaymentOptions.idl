@@ -11,9 +11,9 @@ enum PaymentShippingType {
 };
 
 dictionary PaymentOptions {
-    [RuntimeEnabled=PaymentRequestPayerName] boolean requestPayerName = false;
+    boolean requestPayerName = false;
     boolean requestPayerEmail = false;
     boolean requestPayerPhone = false;
     boolean requestShipping = false;
-    DOMString shippingType = "shipping";
+    PaymentShippingType shippingType = "shipping";
 };

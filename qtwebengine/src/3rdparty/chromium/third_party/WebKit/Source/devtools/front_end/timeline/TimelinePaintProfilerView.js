@@ -1,9 +1,7 @@
 // Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-/**
- * @unrestricted
- */
+
 Timeline.TimelinePaintProfilerView = class extends UI.SplitWidget {
   /**
    * @param {!TimelineModel.TimelineFrameModel} frameModel
@@ -28,6 +26,16 @@ Timeline.TimelinePaintProfilerView = class extends UI.SplitWidget {
 
     this._logTreeView = new LayerViewer.PaintProfilerCommandLogView();
     this._logAndImageSplitWidget.setSidebarWidget(this._logTreeView);
+
+    this._needsUpdateWhenVisible = false;
+    /** @type {?SDK.PaintProfilerSnapshot} */
+    this._pendingSnapshot = null;
+    /** @type {?SDK.TracingModel.Event} */
+    this._event = null;
+    /** @type {?SDK.PaintProfilerModel} */
+    this._paintProfilerModel = null;
+    /** @type {?SDK.PaintProfilerSnapshot} */
+    this._lastLoadedSnapshot = null;
   }
 
   /**
@@ -51,13 +59,13 @@ Timeline.TimelinePaintProfilerView = class extends UI.SplitWidget {
   }
 
   /**
-   * @param {!SDK.Target} target
+   * @param {!SDK.PaintProfilerModel} paintProfilerModel
    * @param {!SDK.TracingModel.Event} event
    * @return {boolean}
    */
-  setEvent(target, event) {
+  setEvent(paintProfilerModel, event) {
     this._releaseSnapshot();
-    this._target = target;
+    this._paintProfilerModel = paintProfilerModel;
     this._pendingSnapshot = null;
     this._event = event;
 
@@ -77,7 +85,7 @@ Timeline.TimelinePaintProfilerView = class extends UI.SplitWidget {
   }
 
   _update() {
-    this._logTreeView.setCommandLog(null, []);
+    this._logTreeView.setCommandLog([]);
     this._paintProfilerView.setSnapshotAndLog(null, [], null);
 
     var snapshotPromise;
@@ -86,7 +94,7 @@ Timeline.TimelinePaintProfilerView = class extends UI.SplitWidget {
     } else if (this._event.name === TimelineModel.TimelineModel.RecordType.Paint) {
       var picture = TimelineModel.TimelineData.forEvent(this._event).picture;
       snapshotPromise = picture.objectPromise()
-                            .then(data => SDK.PaintProfilerSnapshot.load(this._target, data['skp64']))
+                            .then(data => this._paintProfilerModel.loadSnapshot(data['skp64']))
                             .then(snapshot => snapshot && {rect: null, snapshot: snapshot});
     } else if (this._event.name === TimelineModel.TimelineModel.RecordType.RasterTask) {
       snapshotPromise = this._frameModel.rasterTilePromise(this._event);
@@ -113,7 +121,7 @@ Timeline.TimelinePaintProfilerView = class extends UI.SplitWidget {
      * @this {Timeline.TimelinePaintProfilerView}
      */
     function onCommandLogDone(snapshot, clipRect, log) {
-      this._logTreeView.setCommandLog(snapshot.target(), log || []);
+      this._logTreeView.setCommandLog(log || []);
       this._paintProfilerView.setSnapshotAndLog(snapshot, log || [], clipRect);
     }
   }
@@ -184,7 +192,7 @@ Timeline.TimelinePaintImageView = class extends UI.Widget {
                      .translate(clientWidth / 2, clientHeight / 2)
                      .scale(scale, scale)
                      .translate(-width / 2, -height / 2);
-    var bounds = Common.Geometry.boundsForTransformedPoints(matrix, [0, 0, 0, width, height, 0]);
+    var bounds = UI.Geometry.boundsForTransformedPoints(matrix, [0, 0, 0, width, height, 0]);
     this._transformController.clampOffsets(
         paddingX - bounds.maxX, clientWidth - paddingX - bounds.minX, paddingY - bounds.maxY,
         clientHeight - paddingY - bounds.minY);

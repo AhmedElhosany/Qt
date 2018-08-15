@@ -20,7 +20,14 @@ settings.EDIT_STARTUP_URL_EVENT = 'edit-startup-url';
 Polymer({
   is: 'settings-startup-url-entry',
 
+  behaviors: [FocusRowBehavior],
+
   properties: {
+    editable: {
+      type: Boolean,
+      reflectToAttribute: true,
+    },
+
     /** @type {!StartupPageInfo} */
     model: Object,
   },
@@ -41,16 +48,23 @@ Polymer({
         this.model.modelIndex);
   },
 
-  /** @private */
-  onEditTap_: function() {
+  /**
+   * @param {!Event} e
+   * @private
+   */
+  onEditTap_: function(e) {
+    e.preventDefault();
     this.$$('dialog[is=cr-action-menu]').close();
-    this.fire(settings.EDIT_STARTUP_URL_EVENT, this.model);
+    this.fire(settings.EDIT_STARTUP_URL_EVENT, {
+      model: this.model,
+      anchor: this.$$('#dots'),
+    });
   },
 
   /** @private */
   onDotsTap_: function() {
-    var actionMenu = /** @type {!CrActionMenuElement} */(
-        this.$.menu.get());
-    actionMenu.showAt(assert(this.$.dots));
+    var actionMenu =
+        /** @type {!CrActionMenuElement} */ (this.$$('#menu').get());
+    actionMenu.showAt(assert(this.$$('#dots')));
   },
 });

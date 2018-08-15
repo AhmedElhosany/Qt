@@ -8,6 +8,7 @@
 #include "Benchmark.h"
 #include "OverwriteLine.h"
 #include "SkGraphics.h"
+#include "SkSurface.h"
 #include "SkTaskGroup.h"
 #include <algorithm>
 #include <chrono>
@@ -48,7 +49,8 @@ int main(int argc, char** argv) {
 
         std::string name = bench->getName();
         if (std::regex_search(name, pattern) &&
-                bench->isSuitableFor(Benchmark::kNonRendering_Backend)) {
+                (bench->isSuitableFor(Benchmark::kNonRendering_Backend) ||
+                 bench->isSuitableFor(Benchmark::      kRaster_Backend))) {
             bench->delayedSetup();
             benches.emplace_back(Bench{std::move(bench), name,
                                        ns{std::numeric_limits<double>::infinity()}});
@@ -94,13 +96,24 @@ int main(int argc, char** argv) {
 
     int samples = 0;
     while (samples < limit) {
+        std::random_shuffle(benches.begin(), benches.end());
         for (auto& bench : benches) {
+            sk_sp<SkSurface> dst;
+            SkCanvas* canvas = nullptr;
+            if (!bench.b->isSuitableFor(Benchmark::kNonRendering_Backend)) {
+                dst = SkSurface::MakeRaster(SkImageInfo::MakeS32(bench.b->getSize().x(),
+                                                                 bench.b->getSize().y(),
+                                                                 kPremul_SkAlphaType));
+                canvas = dst->getCanvas();
+                bench.b->perCanvasPreDraw(canvas);
+            }
             for (int loops = 1; loops < 1000000000;) {
-                bench.b->preDraw(nullptr);
+
+                bench.b->preDraw(canvas);
                 auto start = clock::now();
-                    bench.b->draw(loops, nullptr);
+                    bench.b->draw(loops, canvas);
                 ns elapsed = clock::now() - start;
-                bench.b->postDraw(nullptr);
+                bench.b->postDraw(canvas);
 
                 if (elapsed < std::chrono::milliseconds{10}) {
                     loops *= 2;
@@ -110,18 +123,28 @@ int main(int argc, char** argv) {
                 bench.best = std::min(bench.best, elapsed / loops);
                 samples++;
 
-                std::sort(benches.begin(), benches.end(), [](const Bench& a, const Bench& b) {
+                struct Result { const char* name; ns best; };
+                std::vector<Result> sorted(benches.size());
+                for (size_t i = 0; i < benches.size(); i++) {
+                    sorted[i].name = benches[i].name.c_str();
+                    sorted[i].best = benches[i].best;
+                }
+                std::sort(sorted.begin(), sorted.end(), [](const Result& a, const Result& b) {
                     return a.best < b.best;
                 });
+
                 SkDebugf("%s%d", kSkOverwriteLine, samples);
-                for (auto& bench : benches) {
-                    if (benches.size() == 1) {
-                        SkDebugf("  %s %gns" , bench.name.c_str(), bench.best.count());
+                for (auto& result : sorted) {
+                    if (sorted.size() == 1) {
+                        SkDebugf("  %s %gns" , result.name, result.best.count());
                     } else {
-                        SkDebugf("  %s %.3gx", bench.name.c_str(), bench.best / benches[0].best);
+                        SkDebugf("  %s %.3gx", result.name, result.best / sorted[0].best);
                     }
                 }
                 break;
+            }
+            if (canvas) {
+                bench.b->perCanvasPostDraw(canvas);
             }
         }
     }

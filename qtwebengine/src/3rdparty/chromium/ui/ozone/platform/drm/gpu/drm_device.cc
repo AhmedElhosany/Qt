@@ -19,14 +19,12 @@
 #include "base/task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
+#include "base/trace_event/trace_event_argument.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/display/types/gamma_ramp_rgb_entry.h"
 #include "ui/ozone/platform/drm/common/drm_util.h"
-#include "ui/ozone/platform/drm/gpu/hardware_display_plane_manager_legacy.h"
-
-#if defined(USE_DRM_ATOMIC)
 #include "ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.h"
-#endif
+#include "ui/ozone/platform/drm/gpu/hardware_display_plane_manager_legacy.h"
 
 namespace ui {
 
@@ -91,6 +89,14 @@ bool ProcessDrmEvent(int fd, const DrmEventHandler& callback) {
         DCHECK_LE(static_cast<int>(sizeof(drm_event_vblank)), len - idx);
         drm_event_vblank vblank;
         memcpy(&vblank, &buffer[idx], sizeof(vblank));
+        std::unique_ptr<base::trace_event::TracedValue> drm_data(
+            new base::trace_event::TracedValue());
+        drm_data->SetInteger("frame_count", 1);
+        drm_data->SetInteger("vblank.tv_sec", vblank.tv_sec);
+        drm_data->SetInteger("vblank.tv_usec", vblank.tv_usec);
+        TRACE_EVENT_INSTANT1("benchmark,drm", "DrmEventFlipComplete",
+                             TRACE_EVENT_SCOPE_THREAD, "data",
+                             std::move(drm_data));
         callback.Run(vblank.sequence, vblank.tv_sec, vblank.tv_usec,
                      vblank.user_data);
       } break;
@@ -183,7 +189,7 @@ using ScopedDrmColorLutPtr = std::unique_ptr<DrmColorLut, base::FreeDeleter>;
 using ScopedDrmColorCtmPtr = std::unique_ptr<DrmColorCtm, base::FreeDeleter>;
 
 ScopedDrmColorLutPtr CreateLutBlob(
-    const std::vector<GammaRampRGBEntry>& source) {
+    const std::vector<display::GammaRampRGBEntry>& source) {
   TRACE_EVENT0("drm", "CreateLutBlob");
   if (source.empty())
     return nullptr;
@@ -251,17 +257,17 @@ bool SetBlobProperty(int fd,
   return success;
 }
 
-std::vector<GammaRampRGBEntry> ResampleLut(
-    const std::vector<GammaRampRGBEntry>& lut_in,
+std::vector<display::GammaRampRGBEntry> ResampleLut(
+    const std::vector<display::GammaRampRGBEntry>& lut_in,
     size_t desired_size) {
   TRACE_EVENT1("drm", "ResampleLut", "desired_size", desired_size);
   if (lut_in.empty())
-    return std::vector<GammaRampRGBEntry>();
+    return std::vector<display::GammaRampRGBEntry>();
 
   if (lut_in.size() == desired_size)
     return lut_in;
 
-  std::vector<GammaRampRGBEntry> result;
+  std::vector<display::GammaRampRGBEntry> result;
   result.resize(desired_size);
 
   for (size_t i = 0; i < desired_size; ++i) {
@@ -345,7 +351,7 @@ class DrmDevice::PageFlipManager {
 class DrmDevice::IOWatcher : public base::MessagePumpLibevent::Watcher {
  public:
   IOWatcher(int fd, DrmDevice::PageFlipManager* page_flip_manager)
-      : page_flip_manager_(page_flip_manager), fd_(fd) {
+      : page_flip_manager_(page_flip_manager), controller_(FROM_HERE), fd_(fd) {
     Register();
   }
 
@@ -402,12 +408,13 @@ bool DrmDevice::Initialize(bool use_atomic) {
     return false;
   }
 
-#if defined(USE_DRM_ATOMIC)
   // Use atomic only if the build, kernel & flags all allow it.
   if (use_atomic && SetCapability(DRM_CLIENT_CAP_ATOMIC, 1))
     plane_manager_.reset(new HardwareDisplayPlaneManagerAtomic());
-#endif  // defined(USE_DRM_ATOMIC)
 
+  LOG_IF(WARNING, use_atomic && !plane_manager_)
+      << "Drm atomic requested but capabilities don't allow it. Falling back "
+         "to legacy page flip.";
   if (!plane_manager_)
     plane_manager_.reset(new HardwareDisplayPlaneManagerLegacy());
   if (!plane_manager_->Initialize(this)) {
@@ -652,7 +659,6 @@ bool DrmDevice::CommitProperties(drmModeAtomicReq* properties,
                                  uint32_t flags,
                                  uint32_t crtc_count,
                                  const PageFlipCallback& callback) {
-#if defined(USE_DRM_ATOMIC)
   uint64_t id = 0;
   bool page_flip_event_requested = flags & DRM_MODE_PAGE_FLIP_EVENT;
 
@@ -666,24 +672,11 @@ bool DrmDevice::CommitProperties(drmModeAtomicReq* properties,
 
     return true;
   }
-#endif  // defined(USE_DRM_ATOMIC)
   return false;
 }
 
 bool DrmDevice::SetCapability(uint64_t capability, uint64_t value) {
   DCHECK(file_.IsValid());
-
-#ifndef DRM_IOCTL_SET_CLIENT_CAP
-// drmSetClientCap was introduced in a later version of libdrm than the wheezy
-// sysroot supplies.
-// TODO(thomasanderson): Remove this when support for the wheezy sysroot is
-// dropped in favor of jessie.
-#define DRM_IOCTL_SET_CLIENT_CAP DRM_IOW(0x0d, struct drm_set_client_cap)
-  struct drm_set_client_cap {
-    __u64 capability;
-    __u64 value;
-  };
-#endif
 
   struct drm_set_client_cap cap = {capability, value};
   return !drmIoctl(file_.GetPlatformFile(), DRM_IOCTL_SET_CLIENT_CAP, &cap);
@@ -701,8 +694,9 @@ bool DrmDevice::DropMaster() {
   return (drmDropMaster(file_.GetPlatformFile()) == 0);
 }
 
-bool DrmDevice::SetGammaRamp(uint32_t crtc_id,
-                             const std::vector<GammaRampRGBEntry>& lut) {
+bool DrmDevice::SetGammaRamp(
+    uint32_t crtc_id,
+    const std::vector<display::GammaRampRGBEntry>& lut) {
   ScopedDrmCrtcPtr crtc = GetCrtc(crtc_id);
   size_t gamma_size = static_cast<size_t>(crtc->gamma_size);
 
@@ -751,8 +745,8 @@ bool DrmDevice::SetGammaRamp(uint32_t crtc_id,
 
 bool DrmDevice::SetColorCorrection(
     uint32_t crtc_id,
-    const std::vector<GammaRampRGBEntry>& degamma_lut,
-    const std::vector<GammaRampRGBEntry>& gamma_lut,
+    const std::vector<display::GammaRampRGBEntry>& degamma_lut,
+    const std::vector<display::GammaRampRGBEntry>& gamma_lut,
     const std::vector<float>& correction_matrix) {
   ScopedDrmObjectPropertyPtr crtc_props(drmModeObjectGetProperties(
       file_.GetPlatformFile(), crtc_id, DRM_MODE_OBJECT_CRTC));

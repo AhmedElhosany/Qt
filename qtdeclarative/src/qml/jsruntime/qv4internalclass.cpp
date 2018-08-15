@@ -134,20 +134,19 @@ InternalClass::InternalClass(const QV4::InternalClass &other)
 static void insertHoleIntoPropertyData(Object *object, int idx)
 {
     Heap::Object *o = object->d();
+    ExecutionEngine *v4 = o->internalClass->engine;
     int size = o->internalClass->size;
     for (int i = size - 1; i > idx; --i)
-        *object->propertyData(i) = *o->propertyData(i - 1);
+        o->setProperty(v4, i, *o->propertyData(i - 1));
 }
 
 static void removeFromPropertyData(Object *object, int idx, bool accessor = false)
 {
     Heap::Object *o = object->d();
+    ExecutionEngine *v4 = o->internalClass->engine;
     int size = o->internalClass->size;
     for (int i = idx; i < size; ++i)
-        *object->propertyData(i) = *o->propertyData(i + (accessor ? 2 : 1));
-    *object->propertyData(size) = Primitive::undefinedValue();
-    if (accessor)
-        *object->propertyData(size + 1) = Primitive::undefinedValue();
+        o->setProperty(v4, i, *o->propertyData(i + (accessor ? 2 : 1)));
 }
 
 void InternalClass::changeMember(Object *object, String *string, PropertyAttributes data, uint *index)
@@ -161,7 +160,7 @@ void InternalClass::changeMember(Object *object, String *string, PropertyAttribu
     object->setInternalClass(newClass);
     if (newClass->size > oldClass->size) {
         Q_ASSERT(newClass->size == oldClass->size + 1);
-        insertHoleIntoPropertyData(object, idx + 1);
+        insertHoleIntoPropertyData(object, idx);
     } else if (newClass->size < oldClass->size) {
         Q_ASSERT(newClass->size == oldClass->size - 1);
         removeFromPropertyData(object, idx + 1);
@@ -479,9 +478,9 @@ void InternalClass::destroy()
     }
 }
 
-void InternalClassPool::markObjects(ExecutionEngine *engine)
+void InternalClassPool::markObjects(MarkStack *markStack)
 {
-    InternalClass *ic = engine->internalClasses[EngineBase::Class_Empty];
+    InternalClass *ic = markStack->engine->internalClasses[EngineBase::Class_Empty];
     Q_ASSERT(!ic->prototype);
 
     // only need to go two levels into the IC hierarchy, as prototype changes
@@ -492,10 +491,10 @@ void InternalClassPool::markObjects(ExecutionEngine *engine)
             InternalClass *ic2 = t.lookup;
             for (auto &t2 : ic2->transitions) {
                 if (t2.flags == InternalClassTransition::PrototypeChange)
-                    t2.lookup->prototype->mark(engine);
+                    t2.lookup->prototype->mark(markStack);
             }
         } else if (t.flags == InternalClassTransition::PrototypeChange) {
-            t.lookup->prototype->mark(engine);
+            t.lookup->prototype->mark(markStack);
         }
     }
 }

@@ -16,13 +16,21 @@ namespace aura {
 namespace client {
 class DragDropClient;
 class FocusClient;
+}
+}
+
+namespace ui {
+class InputMethod;
+}  // namespace ui
+
+namespace wm {
 class ScopedTooltipDisabler;
-}
-}
+}  // namespace wm
 
 namespace views {
 class DesktopDragDropClientWin;
 class HWNDMessageHandler;
+class NonClientFrameView;
 
 namespace corewm {
 class TooltipWin;
@@ -30,7 +38,7 @@ class TooltipWin;
 
 class VIEWS_EXPORT DesktopWindowTreeHostWin
     : public DesktopWindowTreeHost,
-      public aura::client::AnimationHost,
+      public wm::AnimationHost,
       public aura::WindowTreeHost,
       public HWNDMessageHandlerDelegate {
  public:
@@ -47,6 +55,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
   void Init(aura::Window* content_window,
             const Widget::InitParams& params) override;
   void OnNativeWidgetCreated(const Widget::InitParams& params) override;
+  void OnNativeWidgetActivationChanged(bool active) override;
+  void OnWidgetInitDone() override;
   std::unique_ptr<corewm::Tooltip> CreateTooltip() override;
   std::unique_ptr<aura::client::DragDropClient> CreateDragDropClient(
       DesktopNativeCursorManager* cursor_manager) override;
@@ -89,6 +99,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
       Widget::MoveLoopEscapeBehavior escape_behavior) override;
   void EndMoveLoop() override;
   void SetVisibilityChangedAnimationsEnabled(bool value) override;
+  NonClientFrameView* CreateNonClientFrameView() override;
   bool ShouldUseNativeFrame() const override;
   bool ShouldWindowContentsBeTransparent() const override;
   void FrameTypeChanged() override;
@@ -99,24 +110,27 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
                       const gfx::ImageSkia& app_icon) override;
   void InitModalType(ui::ModalType modal_type) override;
   void FlashFrame(bool flash_frame) override;
-  void OnRootViewLayout() override;
   bool IsAnimatingClosed() const override;
   bool IsTranslucentWindowOpacitySupported() const override;
   void SizeConstraintsChanged() override;
+  bool ShouldUpdateWindowTransparency() const override;
+  bool ShouldUseDesktopNativeCursorManager() const override;
+  bool ShouldCreateVisibilityController() const override;
 
   // Overridden from aura::WindowTreeHost:
   ui::EventSource* GetEventSource() override;
   gfx::AcceleratedWidget GetAcceleratedWidget() override;
   void ShowImpl() override;
   void HideImpl() override;
-  gfx::Rect GetBounds() const override;
-  void SetBounds(const gfx::Rect& bounds) override;
-  gfx::Point GetLocationOnNativeScreen() const override;
+  gfx::Rect GetBoundsInPixels() const override;
+  void SetBoundsInPixels(const gfx::Rect& bounds) override;
+  gfx::Point GetLocationOnScreenInPixels() const override;
   void SetCapture() override;
   void ReleaseCapture() override;
   void SetCursorNative(gfx::NativeCursor cursor) override;
   void OnCursorVisibilityChangedNative(bool show) override;
-  void MoveCursorToNative(const gfx::Point& location) override;
+  void MoveCursorToScreenLocationInPixels(
+      const gfx::Point& location_in_pixels) override;
 
   // Overridden from aura::client::AnimationHost
   void SetHostTransitionOffsets(
@@ -125,6 +139,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
   void OnWindowHidingAnimationCompleted() override;
 
   // Overridden from HWNDMessageHandlerDelegate:
+  ui::InputMethod* GetHWNDMessageDelegateInputMethod() override;
   bool HasNonClientView() const override;
   FrameMode GetFrameMode() const override;
   bool HasFrame() const override;
@@ -259,7 +274,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
   // whenever the cursor visibility state changes.
   static bool is_cursor_visible_;
 
-  std::unique_ptr<aura::client::ScopedTooltipDisabler> tooltip_disabler_;
+  std::unique_ptr<wm::ScopedTooltipDisabler> tooltip_disabler_;
 
   // Indicates if current window will receive mouse events when should not
   // become activated.

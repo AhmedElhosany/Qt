@@ -134,6 +134,7 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     , regExpAllocator(new QV4::ExecutableAllocator)
     , bumperPointerAllocator(new WTF::BumpPointerAllocator)
     , jsStack(new WTF::PageAllocation)
+    , gcStack(new WTF::PageAllocation)
     , globalCode(0)
     , v8Engine(0)
     , argumentsAccessors(0)
@@ -182,17 +183,21 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     iselFactory.reset(factory);
 
     // reserve space for the JS stack
-    // we allow it to grow to 2 times JSStackLimit, as we can overshoot due to garbage collection
-    // and ScopedValues allocated outside of JIT'ed methods.
-    *jsStack = WTF::PageAllocation::allocate(2 * JSStackLimit, WTF::OSAllocator::JSVMStackPages,
+    // we allow it to grow to a bit more than JSStackLimit, as we can overshoot due to ScopedValues
+    // allocated outside of JIT'ed methods.
+    *jsStack = WTF::PageAllocation::allocate(JSStackLimit + 256*1024, WTF::OSAllocator::JSVMStackPages,
                                              /* writable */ true, /* executable */ false,
                                              /* includesGuardPages */ true);
     jsStackBase = (Value *)jsStack->base();
 #ifdef V4_USE_VALGRIND
-    VALGRIND_MAKE_MEM_UNDEFINED(jsStackBase, 2*JSStackLimit);
+    VALGRIND_MAKE_MEM_UNDEFINED(jsStackBase, JSStackLimit + 256*1024);
 #endif
 
     jsStackTop = jsStackBase;
+
+    *gcStack = WTF::PageAllocation::allocate(GCStackLimit, WTF::OSAllocator::JSVMStackPages,
+                                             /* writable */ true, /* executable */ false,
+                                             /* includesGuardPages */ true);
 
     exceptionValue = jsAlloca(1);
     globalObject = static_cast<Object *>(jsAlloca(1));
@@ -215,7 +220,7 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     internalClasses[Class_SparseArrayData] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::SparseArrayData::staticVTable());
     internalClasses[Class_ExecutionContext] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::ExecutionContext::staticVTable());
     internalClasses[EngineBase::Class_QmlContext] = internalClasses[EngineBase::Class_ExecutionContext]->changeVTable(QV4::QmlContext::staticVTable());
-    internalClasses[Class_CallContext] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::CallContext::staticVTable());
+    internalClasses[Class_SimpleCallContext] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::CallContext::staticVTable());
 
     jsStrings[String_Empty] = newIdentifier(QString());
     jsStrings[String_undefined] = newIdentifier(QStringLiteral("undefined"));
@@ -257,7 +262,7 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     InternalClass *ic = internalClasses[Class_Empty]->changeVTable(QV4::Object::staticVTable());
     jsObjects[ObjectProto] = memoryManager->allocObject<ObjectPrototype>(ic);
     internalClasses[Class_Object] = ic->changePrototype(objectPrototype()->d());
-    internalClasses[EngineBase::Class_QmlContextWrapper] = internalClasses[Class_Object]->changeVTable(QV4::QmlContextWrapper::staticVTable());
+    internalClasses[EngineBase::Class_QmlContextWrapper] = internalClasses[Class_Object]->changeVTable(QV4::QQmlContextWrapper::staticVTable());
 
     ic = newInternalClass(ArrayPrototype::staticVTable(), objectPrototype());
     Q_ASSERT(ic->prototype);
@@ -422,13 +427,14 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     //
     // set up the global object
     //
-    rootContext()->d()->global = globalObject->d();
+    rootContext()->d()->global.set(scope.engine, globalObject->d());
     rootContext()->d()->callData->thisObject = globalObject;
     Q_ASSERT(globalObject->d()->vtable());
 
     globalObject->defineDefaultProperty(QStringLiteral("Object"), *objectCtor());
     globalObject->defineDefaultProperty(QStringLiteral("String"), *stringCtor());
-    globalObject->defineDefaultProperty(QStringLiteral("Number"), *numberCtor());
+    FunctionObject *numberObject = numberCtor();
+    globalObject->defineDefaultProperty(QStringLiteral("Number"), *numberObject);
     globalObject->defineDefaultProperty(QStringLiteral("Boolean"), *booleanCtor());
     globalObject->defineDefaultProperty(QStringLiteral("Array"), *arrayCtor());
     globalObject->defineDefaultProperty(QStringLiteral("Function"), *functionCtor());
@@ -458,8 +464,26 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     jsObjects[Eval_Function] = memoryManager->allocObject<EvalFunction>(global);
     globalObject->defineDefaultProperty(QStringLiteral("eval"), *evalFunction());
 
-    globalObject->defineDefaultProperty(QStringLiteral("parseInt"), GlobalFunctions::method_parseInt, 2);
-    globalObject->defineDefaultProperty(QStringLiteral("parseFloat"), GlobalFunctions::method_parseFloat, 1);
+    // ES6: 20.1.2.12 &  20.1.2.13:
+    // parseInt and parseFloat must be the same FunctionObject on the global &
+    // Number object.
+    {
+        QString piString(QStringLiteral("parseInt"));
+        QString pfString(QStringLiteral("parseFloat"));
+        Scope scope(this);
+        ScopedString pi(scope, newIdentifier(piString));
+        ScopedString pf(scope, newIdentifier(pfString));
+        ExecutionContext *global = rootContext();
+        ScopedFunctionObject parseIntFn(scope, BuiltinFunction::create(global, pi, GlobalFunctions::method_parseInt));
+        ScopedFunctionObject parseFloatFn(scope, BuiltinFunction::create(global, pf, GlobalFunctions::method_parseFloat));
+        parseIntFn->defineReadonlyConfigurableProperty(id_length(), Primitive::fromInt32(2));
+        parseFloatFn->defineReadonlyConfigurableProperty(id_length(), Primitive::fromInt32(1));
+        globalObject->defineDefaultProperty(piString, parseIntFn);
+        globalObject->defineDefaultProperty(pfString, parseFloatFn);
+        numberObject->defineDefaultProperty(piString, parseIntFn);
+        numberObject->defineDefaultProperty(pfString, parseFloatFn);
+    }
+
     globalObject->defineDefaultProperty(QStringLiteral("isNaN"), GlobalFunctions::method_isNaN, 1);
     globalObject->defineDefaultProperty(QStringLiteral("isFinite"), GlobalFunctions::method_isFinite, 1);
     globalObject->defineDefaultProperty(QStringLiteral("decodeURI"), GlobalFunctions::method_decodeURI, 1);
@@ -491,6 +515,8 @@ ExecutionEngine::~ExecutionEngine()
     delete executableAllocator;
     jsStack->deallocate();
     delete jsStack;
+    gcStack->deallocate();
+    delete gcStack;
     delete [] argumentsAccessors;
 }
 
@@ -602,12 +628,14 @@ Heap::ArrayObject *ExecutionEngine::newArrayObject(const Value *values, int leng
         size_t size = sizeof(Heap::ArrayData) + (length-1)*sizeof(Value);
         Heap::SimpleArrayData *d = scope.engine->memoryManager->allocManaged<SimpleArrayData>(size);
         d->init();
-        d->alloc = length;
         d->type = Heap::ArrayData::Simple;
         d->offset = 0;
-        d->len = length;
-        memcpy(&d->arrayData, values, length*sizeof(Value));
-        a->d()->arrayData = d;
+        d->values.alloc = length;
+        d->values.size = length;
+        // this doesn't require a write barrier, things will be ok, when the new array data gets inserted into
+        // the parent object
+        memcpy(&d->values.values, values, length*sizeof(Value));
+        a->d()->arrayData.set(this, d);
         a->setArrayLengthUnchecked(length);
     }
     return a->d();
@@ -884,7 +912,7 @@ QUrl ExecutionEngine::resolvedUrl(const QString &file)
     QUrl base;
     ExecutionContext *c = currentContext;
     while (c) {
-        CallContext *callCtx = c->asCallContext();
+        SimpleCallContext *callCtx = c->asSimpleCallContext();
         if (callCtx && callCtx->d()->v4Function) {
             base = callCtx->d()->v4Function->finalUrl();
             break;
@@ -927,35 +955,24 @@ void ExecutionEngine::requireArgumentsAccessors(int n)
     }
 }
 
-static void drainMarkStack(ExecutionEngine *engine, QV4::Value *markBase)
+void ExecutionEngine::markObjects(MarkStack *markStack)
 {
-    while (engine->jsStackTop > markBase) {
-        Heap::Base *h = engine->popForGC();
-        Q_ASSERT (h->vtable()->markObjects);
-        h->vtable()->markObjects(h, engine);
-    }
-}
-
-void ExecutionEngine::markObjects()
-{
-    Value *markBase = jsStackTop;
-    identifierTable->mark(this);
+    identifierTable->mark(markStack);
 
     for (int i = 0; i < nArgumentsAccessors; ++i) {
         const Property &pd = argumentsAccessors[i];
         if (Heap::FunctionObject *getter = pd.getter())
-            getter->mark(this);
+            getter->mark(markStack);
         if (Heap::FunctionObject *setter = pd.setter())
-            setter->mark(this);
+            setter->mark(markStack);
     }
 
-    classPool->markObjects(this);
-
-    drainMarkStack(this, markBase);
+    classPool->markObjects(markStack);
+    markStack->drain();
 
     for (auto compilationUnit: compilationUnits) {
-        compilationUnit->markObjects(this);
-        drainMarkStack(this, markBase);
+        compilationUnit->markObjects(markStack);
+        markStack->drain();
     }
 }
 
@@ -1150,9 +1167,9 @@ static QVariant toVariant(QV4::ExecutionEngine *e, const QV4::Value &value, int 
             return QVariant::fromValue(QV4::JsonObject::toJsonObject(object));
         } else if (QV4::QObjectWrapper *wrapper = object->as<QV4::QObjectWrapper>()) {
             return qVariantFromValue<QObject *>(wrapper->object());
-        } else if (object->as<QV4::QmlContextWrapper>()) {
+        } else if (object->as<QV4::QQmlContextWrapper>()) {
             return QVariant();
-        } else if (QV4::QmlTypeWrapper *w = object->as<QV4::QmlTypeWrapper>()) {
+        } else if (QV4::QQmlTypeWrapper *w = object->as<QV4::QQmlTypeWrapper>()) {
             return w->toVariant();
         } else if (QV4::QQmlValueTypeWrapper *v = object->as<QV4::QQmlValueTypeWrapper>()) {
             return v->toVariant();
@@ -1572,12 +1589,6 @@ QV4::ReturnedValue ExecutionEngine::metaTypeToJS(int type, const void *data)
     }
     Q_UNREACHABLE();
     return 0;
-}
-
-void ExecutionEngine::assertObjectBelongsToEngine(const Heap::Base &baseObject)
-{
-    Q_ASSERT(!baseObject.vtable()->isObject || static_cast<const Heap::Object&>(baseObject).internalClass->engine == this);
-    Q_UNUSED(baseObject);
 }
 
 void ExecutionEngine::failStackLimitCheck(Scope &scope)

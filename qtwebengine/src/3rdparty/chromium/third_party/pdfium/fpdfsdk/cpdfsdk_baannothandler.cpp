@@ -96,28 +96,28 @@ void CPDFSDK_BAAnnotHandler::OnMouseExit(CPDFSDK_PageView* pPageView,
 bool CPDFSDK_BAAnnotHandler::OnLButtonDown(CPDFSDK_PageView* pPageView,
                                            CPDFSDK_Annot::ObservedPtr* pAnnot,
                                            uint32_t nFlags,
-                                           const CFX_FloatPoint& point) {
+                                           const CFX_PointF& point) {
   return false;
 }
 
 bool CPDFSDK_BAAnnotHandler::OnLButtonUp(CPDFSDK_PageView* pPageView,
                                          CPDFSDK_Annot::ObservedPtr* pAnnot,
                                          uint32_t nFlags,
-                                         const CFX_FloatPoint& point) {
+                                         const CFX_PointF& point) {
   return false;
 }
 
 bool CPDFSDK_BAAnnotHandler::OnLButtonDblClk(CPDFSDK_PageView* pPageView,
                                              CPDFSDK_Annot::ObservedPtr* pAnnot,
                                              uint32_t nFlags,
-                                             const CFX_FloatPoint& point) {
+                                             const CFX_PointF& point) {
   return false;
 }
 
 bool CPDFSDK_BAAnnotHandler::OnMouseMove(CPDFSDK_PageView* pPageView,
                                          CPDFSDK_Annot::ObservedPtr* pAnnot,
                                          uint32_t nFlags,
-                                         const CFX_FloatPoint& point) {
+                                         const CFX_PointF& point) {
   return false;
 }
 
@@ -125,28 +125,28 @@ bool CPDFSDK_BAAnnotHandler::OnMouseWheel(CPDFSDK_PageView* pPageView,
                                           CPDFSDK_Annot::ObservedPtr* pAnnot,
                                           uint32_t nFlags,
                                           short zDelta,
-                                          const CFX_FloatPoint& point) {
+                                          const CFX_PointF& point) {
   return false;
 }
 
 bool CPDFSDK_BAAnnotHandler::OnRButtonDown(CPDFSDK_PageView* pPageView,
                                            CPDFSDK_Annot::ObservedPtr* pAnnot,
                                            uint32_t nFlags,
-                                           const CFX_FloatPoint& point) {
+                                           const CFX_PointF& point) {
   return false;
 }
 
 bool CPDFSDK_BAAnnotHandler::OnRButtonUp(CPDFSDK_PageView* pPageView,
                                          CPDFSDK_Annot::ObservedPtr* pAnnot,
                                          uint32_t nFlags,
-                                         const CFX_FloatPoint& point) {
+                                         const CFX_PointF& point) {
   return false;
 }
 
 bool CPDFSDK_BAAnnotHandler::OnRButtonDblClk(CPDFSDK_PageView* pPageView,
                                              CPDFSDK_Annot::ObservedPtr* pAnnot,
                                              uint32_t nFlags,
-                                             const CFX_FloatPoint& point) {
+                                             const CFX_PointF& point) {
   return false;
 }
 
@@ -193,12 +193,14 @@ CFX_FloatRect CPDFSDK_BAAnnotHandler::GetViewBBox(CPDFSDK_PageView* pPageView,
   return pAnnot->GetRect();
 }
 
+CFX_WideString CPDFSDK_BAAnnotHandler::GetSelectedText(CPDFSDK_Annot* pAnnot) {
+  return CFX_WideString();
+}
+
 bool CPDFSDK_BAAnnotHandler::HitTest(CPDFSDK_PageView* pPageView,
                                      CPDFSDK_Annot* pAnnot,
-                                     const CFX_FloatPoint& point) {
+                                     const CFX_PointF& point) {
   ASSERT(pPageView);
   ASSERT(pAnnot);
-
-  CFX_FloatRect rect = GetViewBBox(pPageView, pAnnot);
-  return rect.Contains(point.x, point.y);
+  return GetViewBBox(pPageView, pAnnot).Contains(point);
 }

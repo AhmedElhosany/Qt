@@ -21,8 +21,8 @@
 #include "components/autofill/core/common/autofill_switches.h"
 #include "components/autofill/core/common/form_data_predictions.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
@@ -52,8 +52,7 @@ class FakeAutofillAgent : public mojom::AutofillAgent {
   ~FakeAutofillAgent() override {}
 
   void BindRequest(mojo::ScopedMessagePipeHandle handle) {
-    bindings_.AddBinding(
-        this, mojo::MakeRequest<mojom::AutofillAgent>(std::move(handle)));
+    bindings_.AddBinding(this, mojom::AutofillAgentRequest(std::move(handle)));
   }
 
   void SetQuitLoopClosure(base::Closure closure) { quit_closure_ = closure; }
@@ -137,6 +136,9 @@ class FakeAutofillAgent : public mojom::AutofillAgent {
     return true;
   }
 
+  // Mocked mojom::AutofillAgent methods:
+  MOCK_METHOD0(FirstUserGestureObservedInTab, void());
+
  private:
   void CallDone() {
     if (!quit_closure_.is_null()) {
@@ -145,9 +147,7 @@ class FakeAutofillAgent : public mojom::AutofillAgent {
     }
   }
 
-  // mojom::AutofillAgent methods:
-  void FirstUserGestureObservedInTab() override {}
-
+  // mojom::AutofillAgent:
   void FillForm(int32_t id, const FormData& form) override {
     fill_form_id_ = id;
     fill_form_form_ = form;
@@ -201,6 +201,10 @@ class FakeAutofillAgent : public mojom::AutofillAgent {
       int32_t key,
       const PasswordFormFillData& form_data) override {}
 
+  void SetUserGestureRequired(bool required) override {}
+
+  void SetSecureContextRequired(bool required) override {}
+
   mojo::BindingSet<mojom::AutofillAgent> bindings_;
 
   base::Closure quit_closure_;
@@ -236,11 +240,20 @@ class MockAutofillManager : public AutofillManager {
   MOCK_METHOD0(Reset, void());
 };
 
+class MockAutofillClient : public TestAutofillClient {
+ public:
+  MOCK_METHOD0(OnFirstUserGestureObserved, void());
+};
+
 class TestContentAutofillDriver : public ContentAutofillDriver {
  public:
   TestContentAutofillDriver(content::RenderFrameHost* rfh,
                             AutofillClient* client)
-      : ContentAutofillDriver(rfh, client, kAppLocale, kDownloadState) {
+      : ContentAutofillDriver(rfh,
+                              client,
+                              kAppLocale,
+                              kDownloadState,
+                              nullptr) {
     std::unique_ptr<AutofillManager> autofill_manager(
         new MockAutofillManager(this, client));
     SetAutofillManager(std::move(autofill_manager));
@@ -258,8 +271,11 @@ class ContentAutofillDriverTest : public content::RenderViewHostTestHarness {
  public:
   void SetUp() override {
     content::RenderViewHostTestHarness::SetUp();
+    // This needed to keep the WebContentsObserverSanityChecker checks happy for
+    // when AppendChild is called.
+    NavigateAndCommit(GURL("about:blank"));
 
-    test_autofill_client_.reset(new TestAutofillClient());
+    test_autofill_client_.reset(new MockAutofillClient());
     driver_.reset(new TestContentAutofillDriver(web_contents()->GetMainFrame(),
                                                 test_autofill_client_.get()));
 
@@ -278,8 +294,20 @@ class ContentAutofillDriverTest : public content::RenderViewHostTestHarness {
     content::RenderViewHostTestHarness::TearDown();
   }
 
+  void Navigate(bool main_frame) {
+    content::RenderFrameHost* rfh = main_rfh();
+    content::RenderFrameHostTester* rfh_tester =
+        content::RenderFrameHostTester::For(rfh);
+    if (!main_frame)
+      rfh = rfh_tester->AppendChild("subframe");
+    std::unique_ptr<content::NavigationHandle> navigation_handle =
+        content::NavigationHandle::CreateNavigationHandleForTesting(
+            GURL(), rfh, true);
+   driver_->DidNavigateFrame(navigation_handle.get());
+  }
+
  protected:
-  std::unique_ptr<TestAutofillClient> test_autofill_client_;
+  std::unique_ptr<MockAutofillClient> test_autofill_client_;
   std::unique_ptr<TestContentAutofillDriver> driver_;
 
   FakeAutofillAgent fake_agent_;
@@ -296,21 +324,12 @@ TEST_F(ContentAutofillDriverTest, GetURLRequestContext) {
 
 TEST_F(ContentAutofillDriverTest, NavigatedToDifferentPage) {
   EXPECT_CALL(*driver_->mock_autofill_manager(), Reset());
-  content::LoadCommittedDetails details = content::LoadCommittedDetails();
-  details.is_main_frame = true;
-  details.is_in_page = false;
-  ASSERT_TRUE(details.is_navigation_to_different_page());
-  content::FrameNavigateParams params = content::FrameNavigateParams();
-  driver_->DidNavigateFrame(details, params);
+  Navigate(true);
 }
 
 TEST_F(ContentAutofillDriverTest, NavigatedWithinSamePage) {
   EXPECT_CALL(*driver_->mock_autofill_manager(), Reset()).Times(0);
-  content::LoadCommittedDetails details = content::LoadCommittedDetails();
-  details.is_main_frame = false;
-  ASSERT_TRUE(!details.is_navigation_to_different_page());
-  content::FrameNavigateParams params = content::FrameNavigateParams();
-  driver_->DidNavigateFrame(details, params);
+  Navigate(false);
 }
 
 TEST_F(ContentAutofillDriverTest, FormDataSentToRenderer_FillForm) {

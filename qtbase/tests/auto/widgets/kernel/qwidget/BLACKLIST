@@ -74,10 +74,12 @@ osx
 [setClearAndResizeMask]
 osx
 [setToolTip]
-osx-10.9
+osx
 [moveInResizeEvent]
 ubuntu-14.04
 [moveChild:right]
 osx
 [activateWindow]
 osx-10.12 ci
+[multipleToplevelFocusCheck]
+linux

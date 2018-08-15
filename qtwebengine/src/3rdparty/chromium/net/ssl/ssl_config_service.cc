@@ -4,6 +4,8 @@
 
 #include "net/ssl/ssl_config_service.h"
 
+#include <tuple>
+
 #include "base/lazy_instance.h"
 #include "base/synchronization/lock.h"
 #include "net/ssl/ssl_config_service_defaults.h"
@@ -15,9 +17,8 @@ SSLConfigService::SSLConfigService()
 }
 
 // GlobalSSLObject holds a reference to a global SSL object, such as the
-// CRLSet or the EVCertsWhitelist. It simply wraps a lock  around a
-// scoped_refptr so that getting a reference doesn't race with
-// updating the global object.
+// CRLSet. It simply wraps a lock  around a scoped_refptr so that getting a
+// reference doesn't race with updating the global object.
 template <class T>
 class GlobalSSLObject {
  public:
@@ -37,11 +38,8 @@ class GlobalSSLObject {
 };
 
 typedef GlobalSSLObject<CRLSet> GlobalCRLSet;
-typedef GlobalSSLObject<ct::EVCertsWhitelist> GlobalEVCertsWhitelist;
 
 base::LazyInstance<GlobalCRLSet>::Leaky g_crl_set = LAZY_INSTANCE_INITIALIZER;
-base::LazyInstance<GlobalEVCertsWhitelist>::Leaky g_ev_whitelist =
-    LAZY_INSTANCE_INITIALIZER;
 
 // static
 void SSLConfigService::SetCRLSet(scoped_refptr<CRLSet> crl_set) {
@@ -52,17 +50,6 @@ void SSLConfigService::SetCRLSet(scoped_refptr<CRLSet> crl_set) {
 // static
 scoped_refptr<CRLSet> SSLConfigService::GetCRLSet() {
   return g_crl_set.Get().Get();
-}
-
-// static
-void SSLConfigService::SetEVCertsWhitelist(
-    scoped_refptr<ct::EVCertsWhitelist> ev_whitelist) {
-  g_ev_whitelist.Get().Set(ev_whitelist);
-}
-
-// static
-scoped_refptr<ct::EVCertsWhitelist> SSLConfigService::GetEVCertsWhitelist() {
-  return g_ev_whitelist.Get().Get();
 }
 
 void SSLConfigService::AddObserver(Observer* observer) {
@@ -81,19 +68,23 @@ void SSLConfigService::NotifySSLConfigChange() {
 SSLConfigService::~SSLConfigService() {
 }
 
-void SSLConfigService::ProcessConfigUpdate(const SSLConfig& orig_config,
+void SSLConfigService::ProcessConfigUpdate(const SSLConfig& old_config,
                                            const SSLConfig& new_config) {
   bool config_changed =
-      (orig_config.rev_checking_enabled != new_config.rev_checking_enabled) ||
-      (orig_config.rev_checking_required_local_anchors !=
-       new_config.rev_checking_required_local_anchors) ||
-      (orig_config.version_min != new_config.version_min) ||
-      (orig_config.version_max != new_config.version_max) ||
-      (orig_config.disabled_cipher_suites !=
-       new_config.disabled_cipher_suites) ||
-      (orig_config.channel_id_enabled != new_config.channel_id_enabled) ||
-      (orig_config.false_start_enabled != new_config.false_start_enabled) ||
-      (orig_config.require_ecdhe != new_config.require_ecdhe);
+      std::tie(old_config.rev_checking_enabled,
+               old_config.rev_checking_required_local_anchors,
+               old_config.sha1_local_anchors_enabled,
+               old_config.common_name_fallback_local_anchors_enabled,
+               old_config.version_min, old_config.version_max,
+               old_config.disabled_cipher_suites, old_config.channel_id_enabled,
+               old_config.false_start_enabled, old_config.require_ecdhe) !=
+      std::tie(new_config.rev_checking_enabled,
+               new_config.rev_checking_required_local_anchors,
+               new_config.sha1_local_anchors_enabled,
+               new_config.common_name_fallback_local_anchors_enabled,
+               new_config.version_min, new_config.version_max,
+               new_config.disabled_cipher_suites, new_config.channel_id_enabled,
+               new_config.false_start_enabled, new_config.require_ecdhe);
 
   if (config_changed)
     NotifySSLConfigChange();

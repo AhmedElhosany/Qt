@@ -9,6 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/lazy_instance.h"
+#include "base/memory/ptr_util.h"
 #include "base/optional.h"
 #include "base/stl_util.h"
 #include "content/browser/android/synchronous_compositor_host.h"
@@ -45,7 +46,8 @@ void SynchronousCompositorBrowserFilter::SyncStateAfterVSync(
   if (window_android_in_vsync_)
     return;
   window_android_in_vsync_ = window_android;
-  window_android_in_vsync_->AddObserver(this);
+  window_android_in_vsync_->AddVSyncCompleteCallback(
+      base::Bind(&SynchronousCompositorBrowserFilter::VSyncComplete, this));
 }
 
 bool SynchronousCompositorBrowserFilter::OnMessageReceived(
@@ -83,7 +85,7 @@ bool SynchronousCompositorBrowserFilter::ReceiveFrame(
   }
 
   auto frame_ptr = base::MakeUnique<SynchronousCompositor::Frame>();
-  frame_ptr->compositor_frame_sink_id = std::get<0>(param);
+  frame_ptr->layer_tree_frame_sink_id = std::get<0>(param);
   base::Optional<cc::CompositorFrame>& compositor_frame = std::get<1>(param);
   if (compositor_frame) {
     BrowserThread::PostTask(
@@ -177,49 +179,32 @@ void SynchronousCompositorBrowserFilter::SignalAllFutures() {
   filter_ready_ = false;
 }
 
-void SynchronousCompositorBrowserFilter::OnCompositingDidCommit() {
-  NOTREACHED();
-}
-
-void SynchronousCompositorBrowserFilter::OnRootWindowVisibilityChanged(
-    bool visible) {
-  NOTREACHED();
-}
-
-void SynchronousCompositorBrowserFilter::OnAttachCompositor() {
-  NOTREACHED();
-}
-
-void SynchronousCompositorBrowserFilter::OnDetachCompositor() {
-  NOTREACHED();
-}
-
-void SynchronousCompositorBrowserFilter::OnVSync(base::TimeTicks frame_time,
-                                                 base::TimeDelta vsync_period) {
-  // This is called after DidSendBeginFrame for SynchronousCompositorHosts
-  // belonging to this WindowAndroid, since this is added as an Observer after
-  // the observer iteration has started.
+void SynchronousCompositorBrowserFilter::VSyncComplete() {
   DCHECK(window_android_in_vsync_);
-  window_android_in_vsync_->RemoveObserver(this);
   window_android_in_vsync_ = nullptr;
 
   std::vector<int> routing_ids;
   routing_ids.reserve(compositor_host_pending_renderer_state_.size());
-  for (const auto host : compositor_host_pending_renderer_state_)
+  for (const auto* host : compositor_host_pending_renderer_state_)
     routing_ids.push_back(host->routing_id());
 
   std::vector<SyncCompositorCommonRendererParams> params;
   params.reserve(compositor_host_pending_renderer_state_.size());
 
-  if (!render_process_host_->Send(
-          new SyncCompositorMsg_SynchronizeRendererState(routing_ids,
-                                                         &params))) {
-    return;
+  {
+    base::ThreadRestrictions::ScopedAllowWait wait;
+    if (!render_process_host_->Send(
+            new SyncCompositorMsg_SynchronizeRendererState(routing_ids,
+                                                           &params))) {
+      compositor_host_pending_renderer_state_.clear();
+      return;
+    }
   }
 
   if (compositor_host_pending_renderer_state_.size() != params.size()) {
     bad_message::ReceivedBadMessage(render_process_host_,
                                     bad_message::SCO_INVALID_ARGUMENT);
+    compositor_host_pending_renderer_state_.clear();
     return;
   }
 
@@ -227,14 +212,6 @@ void SynchronousCompositorBrowserFilter::OnVSync(base::TimeTicks frame_time,
     compositor_host_pending_renderer_state_[i]->ProcessCommonParams(params[i]);
   }
   compositor_host_pending_renderer_state_.clear();
-}
-
-void SynchronousCompositorBrowserFilter::OnActivityStopped() {
-  NOTREACHED();
-}
-
-void SynchronousCompositorBrowserFilter::OnActivityStarted() {
-  NOTREACHED();
 }
 
 }  // namespace content

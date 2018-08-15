@@ -5,13 +5,10 @@
 #include "net/quic/core/congestion_control/rtt_stats.h"
 
 #include <cmath>
-#include <vector>
 
-#include "base/logging.h"
 #include "base/test/mock_log.h"
-#include "net/quic/core/quic_flags.h"
+#include "net/quic/platform/api/quic_test.h"
 #include "net/quic/test_tools/rtt_stats_peer.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 using logging::LOG_WARNING;
 using testing::HasSubstr;
@@ -21,7 +18,7 @@ using testing::_;
 namespace net {
 namespace test {
 
-class RttStatsTest : public ::testing::Test {
+class RttStatsTest : public QuicTest {
  protected:
   RttStats rtt_stats_;
 };
@@ -156,7 +153,9 @@ TEST_F(RttStatsTest, UpdateRttWithBadSendDeltas) {
   for (QuicTime::Delta bad_send_delta : bad_send_deltas) {
     SCOPED_TRACE(Message() << "bad_send_delta = "
                            << bad_send_delta.ToMicroseconds());
+#ifndef NDEBUG
     EXPECT_CALL(log, Log(LOG_WARNING, _, _, _, HasSubstr("Ignoring")));
+#endif
     rtt_stats_.UpdateRtt(bad_send_delta, QuicTime::Delta::Zero(),
                          QuicTime::Zero());
     EXPECT_EQ(initial_rtt, rtt_stats_.min_rtt());

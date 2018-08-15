@@ -10,9 +10,8 @@
 
 #ifndef WEBRTC_EXAMPLES_PEERCONNECTION_CLIENT_FLAGDEFS_H_
 #define WEBRTC_EXAMPLES_PEERCONNECTION_CLIENT_FLAGDEFS_H_
-#pragma once
 
-#include "webrtc/base/flags.h"
+#include "webrtc/rtc_base/flags.h"
 
 extern const uint16_t kDefaultServerPort;  // From defaults.[h|cc]
 

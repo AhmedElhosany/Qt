@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 /**
- * @typedef {{about: boolean, basic: boolean, advanced: boolean}}
+ * @typedef {{about: boolean, settings: boolean}}
  */
 var MainPageVisibility;
 
@@ -28,15 +28,7 @@ Polymer({
     advancedToggleExpanded: {
       type: Boolean,
       notify: true,
-      observer: 'updatePagesShown_',
     },
-
-    /**
-     * True if a section is fully expanded to hide other sections beneath it.
-     * Not true otherwise (even while animating a section open/closed).
-     * @private
-     */
-    hasExpandedSection_: Boolean,
 
     /** @private */
     overscroll_: {
@@ -46,13 +38,13 @@ Polymer({
 
     /**
      * Controls which main pages are displayed via dom-ifs, based on the current
-     * route and the Advanced toggle state.
+     * route.
      * @private {!MainPageVisibility}
      */
     showPages_: {
       type: Object,
       value: function() {
-        return {about: false, basic: false, advanced: false};
+        return {about: false, settings: false};
       },
     },
 
@@ -82,17 +74,25 @@ Polymer({
      * Dictionary defining page visibility.
      * @type {!GuestModePageVisibility}
      */
-    pageVisibility: {
-      type: Object,
-      value: function() { return {}; },
-    },
+    pageVisibility: Object,
+
+    showAndroidApps: Boolean,
+
+    showMultidevice: Boolean,
+
+    havePlayStoreApp: Boolean,
   },
 
   /** @override */
   attached: function() {
     this.listen(this, 'freeze-scroll', 'onFreezeScroll_');
-    var currentRoute = settings.getCurrentRoute();
-    this.hasExpandedSection_ = currentRoute && currentRoute.isSubpage();
+    this.listen(this, 'lazy-loaded', 'onLazyLoaded_');
+  },
+
+  /** @private */
+  onLazyLoaded_: function() {
+    Polymer.dom.flush();
+    this.updateOverscrollForPage_();
   },
 
   /** @override */
@@ -130,9 +130,10 @@ Polymer({
     var visibleBottom = scroller.scrollTop + scroller.clientHeight;
     var overscrollBottom = overscroll.offsetTop + overscroll.scrollHeight;
     // How much of the overscroll is visible (may be negative).
-    var visibleOverscroll = overscroll.scrollHeight -
-                            (overscrollBottom - visibleBottom);
-    this.overscroll_ = Math.max(opt_minHeight || 0, visibleOverscroll);
+    var visibleOverscroll =
+        overscroll.scrollHeight - (overscrollBottom - visibleBottom);
+    this.overscroll_ =
+        Math.max(opt_minHeight || 0, Math.ceil(visibleOverscroll));
   },
 
   /**
@@ -160,84 +161,24 @@ Polymer({
     }
   },
 
-  /**
-   * @param {boolean} opened Whether the menu is expanded.
-   * @return {string} Which icon to use.
-   * @private
-   */
-  arrowState_: function(opened) {
-    return opened ? 'settings:arrow-drop-up' : 'cr:arrow-drop-down';
-  },
-
-  /**
-   * @return {boolean}
-   * @private
-   */
-  showAdvancedToggle_: function() {
-    return !this.inSearchMode_ && this.showPages_.basic &&
-        !this.hasExpandedSection_;
-  },
-
-  /**
-   * @return {boolean} Whether to show the basic page, taking into account both
-   *     routing and search state.
-   * @private
-   */
-  showBasicPage_: function() {
-    return this.showPages_.basic || (
-        this.inSearchMode_ && !this.hasExpandedSection_);
-  },
-
-  /**
-   * @return {boolean} Whether to show the advanced page, taking into account
-   *     both routing and search state.
-   * @private
-   */
-  showAdvancedPage_: function() {
-    return this.showPages_.advanced || (
-        this.inSearchMode_ && !this.hasExpandedSection_);
-  },
-
   /** @param {!settings.Route} newRoute */
   currentRouteChanged: function(newRoute) {
-    // When the route changes from a sub-page to the main page, immediately
-    // update hasExpandedSection_ to unhide the other sections.
-    if (!newRoute.isSubpage())
-      this.hasExpandedSection_ = false;
-
-    if (settings.Route.ADVANCED.contains(newRoute))
-      this.advancedToggleExpanded = true;
-
     this.updatePagesShown_();
   },
 
   /** @private */
   onSubpageExpand_: function() {
-    // The subpage finished expanding fully. Hide pages other than the current
-    // section's parent page.
-    this.hasExpandedSection_ = true;
     this.updatePagesShown_();
   },
 
   /**
-   * Updates the hidden state of the about, basic and advanced pages, based on
-   * the current route and the Advanced toggle state.
+   * Updates the hidden state of the about and settings pages based on the
+   * current route.
    * @private
    */
   updatePagesShown_: function() {
-    var currentRoute = settings.getCurrentRoute();
-    if (settings.Route.ABOUT.contains(currentRoute)) {
-      this.showPages_ = {about: true, basic: false, advanced: false};
-    } else {
-      this.showPages_ = {
-        about: false,
-        basic: settings.Route.BASIC.contains(currentRoute) ||
-            !this.hasExpandedSection_,
-        advanced: this.hasExpandedSection_ ?
-            settings.Route.ADVANCED.contains(currentRoute) :
-            this.advancedToggleExpanded,
-      };
-    }
+    var inAbout = settings.routes.ABOUT.contains(settings.getCurrentRoute());
+    this.showPages_ = {about: inAbout, settings: !inAbout};
 
     // Calculate and set the overflow padding.
     this.updateOverscrollForPage_();
@@ -256,7 +197,7 @@ Polymer({
    * @private
    */
   updateOverscrollForPage_: function() {
-    if (this.showPages_.about) {
+    if (this.showPages_.about || this.inSearchMode_) {
       // Set overscroll directly to remove any existing overscroll that
       // setOverscroll_ would otherwise preserve.
       this.overscroll_ = 0;
@@ -290,28 +231,20 @@ Polymer({
     return Math.max(0, this.offsetParent.clientHeight - distance);
   },
 
-  /** @private */
-  toggleAdvancedPage_: function() {
-    this.advancedToggleExpanded = !this.advancedToggleExpanded;
-  },
-
   /**
    * Returns the root page (if it exists) for a route.
    * @param {!settings.Route} route
-   * @return {(?SettingsAboutPageElement|?SettingsAdvancedPageElement|
-   *           ?SettingsBasicPageElement)}
+   * @return {(?SettingsAboutPageElement|?SettingsBasicPageElement)}
    */
   getPage_: function(route) {
-    if (settings.Route.ABOUT.contains(route)) {
-      return /** @type {?SettingsAboutPageElement} */(
+    if (settings.routes.ABOUT.contains(route)) {
+      return /** @type {?SettingsAboutPageElement} */ (
           this.$$('settings-about-page'));
     }
-    if (settings.Route.ADVANCED.contains(route)) {
-      return /** @type {?SettingsAdvancedPageElement} */(
-          this.$$('settings-advanced-page'));
-    }
-    if (settings.Route.BASIC.contains(route)) {
-      return /** @type {?SettingsBasicPageElement} */(
+    if (settings.routes.BASIC.contains(route) ||
+        (settings.routes.ADVANCED &&
+         settings.routes.ADVANCED.contains(route))) {
+      return /** @type {?SettingsBasicPageElement} */ (
           this.$$('settings-basic-page'));
     }
     assertNotReached();
@@ -328,38 +261,32 @@ Polymer({
 
     return new Promise(function(resolve, reject) {
       setTimeout(function() {
-        var whenSearchDone = settings.getSearchManager().search(
-            query, assert(this.getPage_(settings.Route.BASIC)));
-
-        if (this.pageVisibility.advancedSettings !== false) {
-          assert(whenSearchDone === settings.getSearchManager().search(
-              query, assert(this.getPage_(settings.Route.ADVANCED))));
-        }
-
-        whenSearchDone.then(function(request) {
+        var whenSearchDone =
+            assert(this.getPage_(settings.routes.BASIC)).searchContents(query);
+        whenSearchDone.then(function(result) {
           resolve();
-          if (!request.finished) {
+          if (result.canceled) {
             // Nothing to do here. A previous search request was canceled
-            // because a new search request was issued before the first one
-            // completed.
+            // because a new search request was issued with a different query
+            // before the previous completed.
             return;
           }
 
           this.toolbarSpinnerActive = false;
-          this.inSearchMode_ = !request.isSame('');
+          this.inSearchMode_ = !result.wasClearSearch;
           this.showNoResultsFound_ =
-              this.inSearchMode_ && !request.didFindMatches();
+              this.inSearchMode_ && !result.didFindMatches;
+
+          if (this.inSearchMode_) {
+            Polymer.IronA11yAnnouncer.requestAvailability();
+            this.fire('iron-announce', {
+              text: this.showNoResultsFound_ ?
+                  loadTimeData.getString('searchNoResults') :
+                  loadTimeData.getStringF('searchResults', query)
+            });
+          }
         }.bind(this));
       }.bind(this), 0);
     }.bind(this));
-  },
-
-  /**
-   * @param {(boolean|undefined)} visibility
-   * @return {boolean} True unless visibility is false.
-   * @private
-   */
-  showAdvancedSettings_: function(visibility) {
-    return visibility !== false;
   },
 });

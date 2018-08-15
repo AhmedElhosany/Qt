@@ -15,7 +15,7 @@
 
 #include "webrtc/modules/audio_processing/test/audio_processing_simulator.h"
 
-#include "webrtc/base/constructormagic.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 namespace test {
@@ -40,7 +40,9 @@ class WavBasedSimulator final : public AudioProcessingSimulator {
   bool HandleProcessReverseStreamCall();
   void PrepareProcessStreamCall();
   void PrepareReverseProcessStreamCall();
-  std::vector<SimulationEventType> GetDefaultEventChain() const;
+  static std::vector<SimulationEventType> GetDefaultEventChain();
+  static std::vector<SimulationEventType> GetCustomEventChain(
+      const std::string& filename);
 
   std::vector<SimulationEventType> call_chain_;
   int last_specified_microphone_level_ = 100;

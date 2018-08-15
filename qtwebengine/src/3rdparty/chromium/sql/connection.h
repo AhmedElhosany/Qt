@@ -7,7 +7,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -15,6 +14,7 @@
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -28,6 +28,9 @@ struct sqlite3_stmt;
 namespace base {
 class FilePath;
 class HistogramBase;
+namespace trace_event {
+class ProcessMemoryDump;
+}
 }
 
 namespace sql {
@@ -250,6 +253,10 @@ class SQL_EXPORT Connection {
   // Meant to be called from a client error callback so that it's able to
   // get diagnostic information about the database.
   std::string GetDiagnosticInfo(int extended_error, Statement* statement);
+
+  // Reports memory usage into provided memory dump with the given name.
+  bool ReportMemoryUsage(base::trace_event::ProcessMemoryDump* pmd,
+                         const std::string& dump_name);
 
   // Initialization ------------------------------------------------------------
 
@@ -520,6 +527,7 @@ class SQL_EXPORT Connection {
   FRIEND_TEST_ALL_PREFIXES(SQLConnectionTest, GetAppropriateMmapSizeAltStatus);
   FRIEND_TEST_ALL_PREFIXES(SQLConnectionTest, OnMemoryDump);
   FRIEND_TEST_ALL_PREFIXES(SQLConnectionTest, RegisterIntentToUpload);
+  FRIEND_TEST_ALL_PREFIXES(SQLiteFeaturesTest, WALNoClose);
 
   // Internal initialize function used by both Init and InitInMemory. The file
   // name is always 8 bits since we want to use the 8-bit version of
@@ -748,8 +756,9 @@ class SQL_EXPORT Connection {
   bool restrict_to_user_;
 
   // All cached statements. Keeping a reference to these statements means that
-  // they'll remain active.
-  typedef std::map<StatementID, scoped_refptr<StatementRef> >
+  // they'll remain active. Using flat_map here because number of cached
+  // statements is expected to be small, see //base/containers/README.md.
+  typedef base::flat_map<StatementID, scoped_refptr<StatementRef>>
       CachedStatementMap;
   CachedStatementMap statement_cache_;
 

@@ -61,6 +61,7 @@
 #include <qendian.h>
 #include <qnumeric.h>
 
+#include "private/qendian_p.h"
 #include "private/qsimd_p.h"
 
 #include <limits.h>
@@ -131,42 +132,7 @@ class Value;
 class Entry;
 
 template<typename T>
-class q_littleendian
-{
-public:
-    T val;
-
-    q_littleendian &operator =(T i) { val = qToLittleEndian(i); return *this; }
-    operator T() const { return qFromLittleEndian(val); }
-
-    bool operator ==(T i) { return qFromLittleEndian(val) == i; }
-    bool operator !=(T i) { return qFromLittleEndian(val) != i; }
-    bool operator ==(q_littleendian<T> i) { return val == i.val; }
-    bool operator !=(q_littleendian<T> i) { return val != i.val; }
-    bool operator <(T i) { return qFromLittleEndian(val) < i; }
-    bool operator >(T i) { return qFromLittleEndian(val) > i; }
-    bool operator <=(T i) { return qFromLittleEndian(val) <= i; }
-    bool operator >=(T i) { return qFromLittleEndian(val) >= i; }
-    q_littleendian &operator +=(T i) {
-        val = qToLittleEndian(qFromLittleEndian(val) + i);
-        return *this;
-    }
-    q_littleendian &operator |=(T i) {
-        val = qToLittleEndian(qFromLittleEndian(val) | i);
-        return *this;
-    }
-    q_littleendian &operator &=(T i) {
-        val = qToLittleEndian(qFromLittleEndian(val) & i);
-        return *this;
-    }
-};
-} // namespace QJsonPrivate
-
-template <typename T>
-class QTypeInfo<QJsonPrivate::q_littleendian<T> >
-    : public QTypeInfoMerger<QJsonPrivate::q_littleendian<T>, T> {};
-
-namespace QJsonPrivate {
+using q_littleendian = QLEInteger<T>;
 
 typedef q_littleendian<short> qle_short;
 typedef q_littleendian<unsigned short> qle_ushort;
@@ -174,97 +140,10 @@ typedef q_littleendian<int> qle_int;
 typedef q_littleendian<unsigned int> qle_uint;
 
 template<int pos, int width>
-class qle_bitfield
-{
-public:
-    uint val;
-
-    enum {
-        mask = ((1u << width) - 1) << pos
-    };
-
-    void operator =(uint t) {
-        uint i = qFromLittleEndian(val);
-        i &= ~mask;
-        i |= t << pos;
-        val = qToLittleEndian(i);
-    }
-    operator uint() const {
-        uint t = qFromLittleEndian(val);
-        t &= mask;
-        t >>= pos;
-        return t;
-    }
-    bool operator !() const {
-        return !operator uint();
-    }
-
-    bool operator ==(uint t) { return uint(*this) == t; }
-    bool operator !=(uint t) { return uint(*this) != t; }
-    bool operator <(uint t) { return uint(*this) < t; }
-    bool operator >(uint t) { return uint(*this) > t; }
-    bool operator <=(uint t) { return uint(*this) <= t; }
-    bool operator >=(uint t) { return uint(*this) >= t; }
-    qle_bitfield &operator +=(uint i) {
-        *this = (uint(*this) + i);
-        return *this;
-    }
-    qle_bitfield &operator -=(uint i) {
-        *this = (uint(*this) - i);
-        return *this;
-    }
-    qle_bitfield &operator |=(uint i) {
-        *this = (uint(*this) | i);
-        return *this;
-    }
-    qle_bitfield &operator &=(uint i) {
-        *this = (uint(*this) & i);
-        return *this;
-    }
-};
+using qle_bitfield = QLEIntegerBitfield<uint, pos, width>;
 
 template<int pos, int width>
-class qle_signedbitfield
-{
-public:
-    uint val;
-
-    enum {
-        mask = ((1u << width) - 1) << pos
-    };
-
-    void operator =(int t) {
-        uint i = qFromLittleEndian(val);
-        i &= ~mask;
-        i |= t << pos;
-        val = qToLittleEndian(i);
-    }
-    operator int() const {
-        uint i = qFromLittleEndian(val);
-        i <<= 32 - width - pos;
-        int t = (int) i;
-        t >>= 32 - width;
-        return t;
-    }
-    bool operator !() const {
-        return !operator int();
-    }
-
-    bool operator ==(int t) { return int(*this) == t; }
-    bool operator !=(int t) { return int(*this) != t; }
-    bool operator <(int t) { return int(*this) < t; }
-    bool operator >(int t) { return int(*this) > t; }
-    bool operator <=(int t) { return int(*this) <= t; }
-    bool operator >=(int t) { return int(*this) >= t; }
-    qle_signedbitfield &operator +=(int i) {
-        *this = (int(*this) + i);
-        return *this;
-    }
-    qle_signedbitfield &operator -=(int i) {
-        *this = (int(*this) - i);
-        return *this;
-    }
-};
+using qle_signedbitfield = QLEIntegerBitfield<int, pos, width>;
 
 typedef qle_uint offset;
 
@@ -578,7 +457,7 @@ static inline void copyString(char *dest, const QString &str, bool compress)
 
 
 /*
- Base is the base class for both Object and Array. Both classes work more or less the same way.
+ Base is the base class for both Object and Array. Both classe work more or less the same way.
  The class starts with a header (defined by the struct below), then followed by data (the data for
  values in the Array case and Entry's (see below) for objects.
 

@@ -52,7 +52,7 @@ Settings.SettingsScreen = class extends UI.VBox {
     tabbedPane.setShrinkableTabs(false);
     tabbedPane.setVerticalTabLayout(true);
     var shortcutsView = new UI.SimpleView(Common.UIString('Shortcuts'));
-    Components.shortcutsScreen.createShortcutsTabView().show(shortcutsView.element);
+    UI.shortcutsScreen.createShortcutsTabView().show(shortcutsView.element);
     this._tabbedLocation.appendView(shortcutsView);
     tabbedPane.show(this.contentElement);
 
@@ -71,7 +71,7 @@ Settings.SettingsScreen = class extends UI.VBox {
       return;
     var dialog = new UI.Dialog();
     dialog.addCloseButton();
-    settingsScreen.show(dialog.element);
+    settingsScreen.show(dialog.contentElement);
     dialog.show();
     settingsScreen._selectTab(name || 'preferences');
   }
@@ -132,29 +132,6 @@ Settings.SettingsTab = class extends UI.VBox {
       block.createChild('div', 'help-section-title').textContent = name;
     return block;
   }
-
-  _createSelectSetting(name, options, setting) {
-    var p = createElement('p');
-    p.createChild('label').textContent = name;
-
-    var select = p.createChild('select', 'chrome-select');
-    var settingValue = setting.get();
-
-    for (var i = 0; i < options.length; ++i) {
-      var option = options[i];
-      select.add(new Option(option[0], option[1]));
-      if (settingValue === option[1])
-        select.selectedIndex = i;
-    }
-
-    function changeListener(e) {
-      // Don't use e.target.value to avoid conversion of the value to string.
-      setting.set(options[select.selectedIndex][1]);
-    }
-
-    select.addEventListener('change', changeListener, false);
-    return p;
-  }
 };
 
 /**
@@ -166,18 +143,16 @@ Settings.GenericSettingsTab = class extends Settings.SettingsTab {
 
     /** @const */
     var explicitSectionOrder =
-        ['', 'Appearance', 'Elements', 'Sources', 'Network', 'Profiler', 'Console', 'Extensions'];
+        ['', 'Appearance', 'Sources', 'Elements', 'Network', 'Performance', 'Console', 'Extensions'];
     /** @type {!Map<string, !Element>} */
     this._nameToSection = new Map();
-    /** @type {!Map<string, !Element>} */
-    this._nameToSettingElement = new Map();
     for (var sectionName of explicitSectionOrder)
       this._sectionElement(sectionName);
     self.runtime.extensions('setting').forEach(this._addSetting.bind(this));
     self.runtime.extensions(UI.SettingUI).forEach(this._addSettingUI.bind(this));
 
     this._appendSection().appendChild(
-        createTextButton(Common.UIString('Restore defaults and reload'), restoreAndReload));
+        UI.createTextButton(Common.UIString('Restore defaults and reload'), restoreAndReload));
 
     function restoreAndReload() {
       Common.settings.clearAll();
@@ -204,36 +179,11 @@ Settings.GenericSettingsTab = class extends Settings.SettingsTab {
   _addSetting(extension) {
     if (!Settings.GenericSettingsTab.isSettingVisible(extension))
       return;
-    var descriptor = extension.descriptor();
-    var sectionName = descriptor['category'];
-    var settingName = descriptor['settingName'];
-    var setting = Common.moduleSetting(settingName);
-    var uiTitle = Common.UIString(extension.title());
-
-    var sectionElement = this._sectionElement(sectionName);
-    var settingControl;
-
-    switch (descriptor['settingType']) {
-      case 'boolean':
-        settingControl = UI.SettingsUI.createSettingCheckbox(uiTitle, setting);
-        break;
-      case 'enum':
-        var descriptorOptions = descriptor['options'];
-        var options = new Array(descriptorOptions.length);
-        for (var i = 0; i < options.length; ++i) {
-          // The "raw" flag indicates text is non-i18n-izable.
-          var optionName = descriptorOptions[i]['raw'] ? descriptorOptions[i]['text'] :
-                                                         Common.UIString(descriptorOptions[i]['text']);
-          options[i] = [optionName, descriptorOptions[i]['value']];
-        }
-        settingControl = this._createSelectSetting(uiTitle, options, setting);
-        break;
-      default:
-        console.error('Invalid setting type: ' + descriptor['settingType']);
-        return;
-    }
-    this._nameToSettingElement.set(settingName, settingControl);
-    sectionElement.appendChild(/** @type {!Element} */ (settingControl));
+    var sectionElement = this._sectionElement(extension.descriptor()['category']);
+    var setting = Common.moduleSetting(extension.descriptor()['settingName']);
+    var settingControl = UI.SettingsUI.createControlForSetting(setting);
+    if (settingControl)
+      sectionElement.appendChild(settingControl);
   }
 
   /**
@@ -271,143 +221,6 @@ Settings.GenericSettingsTab = class extends Settings.SettingsTab {
   }
 };
 
-
-/**
- * @unrestricted
- */
-Settings.WorkspaceSettingsTab = class extends Settings.SettingsTab {
-  constructor() {
-    super(Common.UIString('Workspace'), 'workspace-tab-content');
-    Workspace.isolatedFileSystemManager.addEventListener(
-        Workspace.IsolatedFileSystemManager.Events.FileSystemAdded, this._fileSystemAdded, this);
-    Workspace.isolatedFileSystemManager.addEventListener(
-        Workspace.IsolatedFileSystemManager.Events.FileSystemRemoved, this._fileSystemRemoved, this);
-
-    var folderExcludePatternInput = this._createFolderExcludePatternInput();
-    folderExcludePatternInput.classList.add('folder-exclude-pattern');
-    this.containerElement.appendChild(folderExcludePatternInput);
-
-    this._fileSystemsListContainer = this.containerElement.createChild('div', '');
-
-    this.containerElement.appendChild(
-        createTextButton(Common.UIString('Add folder\u2026'), this._addFileSystemClicked.bind(this)));
-
-    /** @type {!Map<string, !Element>} */
-    this._elementByPath = new Map();
-
-    /** @type {!Map<string, !Settings.EditFileSystemView>} */
-    this._mappingViewByPath = new Map();
-
-    var fileSystems = Workspace.isolatedFileSystemManager.fileSystems();
-    for (var i = 0; i < fileSystems.length; ++i)
-      this._addItem(fileSystems[i]);
-  }
-
-  /**
-   * @return {!Element}
-   */
-  _createFolderExcludePatternInput() {
-    var p = createElement('p');
-    var labelElement = p.createChild('label');
-    labelElement.textContent = Common.UIString('Folder exclude pattern');
-    var inputElement = p.createChild('input');
-    inputElement.type = 'text';
-    inputElement.style.width = '270px';
-    var folderExcludeSetting = Workspace.isolatedFileSystemManager.workspaceFolderExcludePatternSetting();
-    var setValue =
-        UI.bindInput(inputElement, folderExcludeSetting.set.bind(folderExcludeSetting), regexValidator, false);
-    folderExcludeSetting.addChangeListener(() => setValue.call(null, folderExcludeSetting.get()));
-    setValue(folderExcludeSetting.get());
-    return p;
-
-    /**
-     * @param {string} value
-     * @return {boolean}
-     */
-    function regexValidator(value) {
-      var regex;
-      try {
-        regex = new RegExp(value);
-      } catch (e) {
-      }
-      return !!regex;
-    }
-  }
-
-  /**
-   * @param {!Workspace.IsolatedFileSystem} fileSystem
-   */
-  _addItem(fileSystem) {
-    var element = this._renderFileSystem(fileSystem);
-    this._elementByPath.set(fileSystem.path(), element);
-
-    this._fileSystemsListContainer.appendChild(element);
-
-    var mappingView = new Settings.EditFileSystemView(fileSystem.path());
-    this._mappingViewByPath.set(fileSystem.path(), mappingView);
-    mappingView.element.classList.add('file-system-mapping-view');
-    mappingView.show(element);
-  }
-
-  /**
-   * @param {!Workspace.IsolatedFileSystem} fileSystem
-   * @return {!Element}
-   */
-  _renderFileSystem(fileSystem) {
-    var fileSystemPath = fileSystem.path();
-    var lastIndexOfSlash = fileSystemPath.lastIndexOf(Host.isWin() ? '\\' : '/');
-    var folderName = fileSystemPath.substr(lastIndexOfSlash + 1);
-
-    var element = createElementWithClass('div', 'file-system-container');
-    var header = element.createChild('div', 'file-system-header');
-
-    header.createChild('div', 'file-system-name').textContent = folderName;
-    var path = header.createChild('div', 'file-system-path');
-    path.textContent = fileSystemPath;
-    path.title = fileSystemPath;
-
-    var toolbar = new UI.Toolbar('');
-    var button = new UI.ToolbarButton(Common.UIString('Remove'), 'largeicon-delete');
-    button.addEventListener('click', this._removeFileSystemClicked.bind(this, fileSystem));
-    toolbar.appendToolbarItem(button);
-    header.appendChild(toolbar.element);
-
-    return element;
-  }
-
-  /**
-   * @param {!Workspace.IsolatedFileSystem} fileSystem
-   */
-  _removeFileSystemClicked(fileSystem) {
-    Workspace.isolatedFileSystemManager.removeFileSystem(fileSystem);
-  }
-
-  _addFileSystemClicked() {
-    Workspace.isolatedFileSystemManager.addFileSystem();
-  }
-
-  _fileSystemAdded(event) {
-    var fileSystem = /** @type {!Workspace.IsolatedFileSystem} */ (event.data);
-    this._addItem(fileSystem);
-  }
-
-  _fileSystemRemoved(event) {
-    var fileSystem = /** @type {!Workspace.IsolatedFileSystem} */ (event.data);
-
-    var mappingView = this._mappingViewByPath.get(fileSystem.path());
-    if (mappingView) {
-      mappingView.dispose();
-      this._mappingViewByPath.delete(fileSystem.path());
-    }
-
-    var element = this._elementByPath.get(fileSystem.path());
-    if (element) {
-      this._elementByPath.delete(fileSystem.path());
-      element.remove();
-    }
-  }
-};
-
 /**
  * @unrestricted
  */
@@ -438,7 +251,7 @@ Settings.ExperimentsSettingsTab = class extends Settings.SettingsTab {
   }
 
   _createExperimentCheckbox(experiment) {
-    var label = createCheckboxLabel(Common.UIString(experiment.title), experiment.isEnabled());
+    var label = UI.CheckboxLabel.create(Common.UIString(experiment.title), experiment.isEnabled());
     var input = label.checkboxElement;
     input.name = experiment.name;
     function listener() {
@@ -469,7 +282,7 @@ Settings.SettingsScreen.ActionDelegate = class {
       case 'settings.show':
         Settings.SettingsScreen._showSettingsScreen();
         return true;
-      case 'settings.help':
+      case 'settings.documentation':
         InspectorFrontendHost.openInNewTab('https://developers.google.com/web/tools/chrome-devtools/');
         return true;
       case 'settings.shortcuts':

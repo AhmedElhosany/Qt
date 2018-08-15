@@ -20,7 +20,7 @@
 
 namespace gpu {
 
-struct GpuPreferences;
+class GpuProcessActivityFlags;
 
 namespace gles2 {
 
@@ -28,7 +28,9 @@ namespace gles2 {
 class GPU_EXPORT MemoryProgramCache : public ProgramCache {
  public:
   MemoryProgramCache(size_t max_cache_size_bytes,
-                     bool disable_gpu_shader_disk_cache);
+                     bool disable_gpu_shader_disk_cache,
+                     bool disable_program_caching_for_transform_feedback,
+                     GpuProcessActivityFlags* activity_flags);
   ~MemoryProgramCache() override;
 
   ProgramLoadResult LoadLinkedProgram(
@@ -38,7 +40,7 @@ class GPU_EXPORT MemoryProgramCache : public ProgramCache {
       const LocationMap* bind_attrib_location_map,
       const std::vector<std::string>& transform_feedback_varyings,
       GLenum transform_feedback_buffer_mode,
-      const ShaderCacheCallback& shader_callback) override;
+      GLES2DecoderClient* client) override;
   void SaveLinkedProgram(
       GLuint program,
       const Shader* shader_a,
@@ -46,9 +48,11 @@ class GPU_EXPORT MemoryProgramCache : public ProgramCache {
       const LocationMap* bind_attrib_location_map,
       const std::vector<std::string>& transform_feedback_varyings,
       GLenum transform_feedback_buffer_mode,
-      const ShaderCacheCallback& shader_callback) override;
+      GLES2DecoderClient* client) override;
 
-  void LoadProgram(const std::string& program) override;
+  void LoadProgram(const std::string& key, const std::string& program) override;
+
+  size_t Trim(size_t limit) override;
 
  private:
   void ClearBackend() override;
@@ -166,8 +170,10 @@ class GPU_EXPORT MemoryProgramCache : public ProgramCache {
 
   const size_t max_size_bytes_;
   const bool disable_gpu_shader_disk_cache_;
+  const bool disable_program_caching_for_transform_feedback_;
   size_t curr_size_bytes_;
   ProgramMRUCache store_;
+  GpuProcessActivityFlags* activity_flags_;
 
   DISALLOW_COPY_AND_ASSIGN(MemoryProgramCache);
 };

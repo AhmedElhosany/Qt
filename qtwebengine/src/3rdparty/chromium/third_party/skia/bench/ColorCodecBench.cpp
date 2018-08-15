@@ -67,7 +67,7 @@ void ColorCodecBench::onDelayedSetup() {
 
     fDstSpace = nullptr;
     if (FLAGS_srgb) {
-        fDstSpace = SkColorSpace::MakeNamed(SkColorSpace::kSRGB_Named);
+        fDstSpace = SkColorSpace::MakeSRGB();
     } else if (FLAGS_nonstd) {
         SkColorSpaceTransferFn gamma;
         gamma.fA = 1.0f;
@@ -95,7 +95,7 @@ void ColorCodecBench::onDelayedSetup() {
 
     if (FLAGS_xform_only) {
         fSrc.reset(fSrcInfo.getSafeSize(fSrcInfo.minRowBytes()));
-        fSrcSpace = sk_ref_sp(codec->getInfo().colorSpace());
+        fSrcSpace = codec->getInfo().refColorSpace();
         codec->getPixels(fSrcInfo, fSrc.get(), fSrcInfo.minRowBytes());
     }
 }

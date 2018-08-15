@@ -7,14 +7,33 @@
         },
         {
             "type": "@UI.ContextMenu.Provider",
-            "contextTypes": ["Workspace.UISourceCode", "SDK.Resource", "SDK.NetworkRequest", "Node"],
-            "className": "Components.HandlerRegistry.ContextMenuProvider"
+            "contextTypes": [
+                "Workspace.UISourceCode",
+                "SDK.Resource",
+                "SDK.NetworkRequest"
+            ],
+            "className": "Components.Linkifier.ContentProviderContextMenuProvider"
+        },
+        {
+            "type": "@UI.ContextMenu.Provider",
+            "contextTypes": [
+                "Node"
+            ],
+            "className": "UI.ExternaLinkContextMenuProvider"
+        },
+        {
+            "type": "@UI.ContextMenu.Provider",
+            "contextTypes": [
+                "Node"
+            ],
+            "className": "Components.Linkifier.LinkContextMenuProvider"
         },
         {
             "type": "@UI.ActionDelegate",
             "category": "Navigation",
             "actionId": "main.reload",
             "className": "Main.Main.ReloadActionDelegate",
+            "iconClass": "largeicon-refresh",
             "title": "Reload page",
             "bindings": [
                 {
@@ -185,6 +204,13 @@
         },
         {
             "type": "@UI.ToolbarItem.Provider",
+            "className": "Main.Main.NodeIndicator",
+            "order": 2,
+            "location": "main-toolbar-left",
+            "condition": "!nodeFrontend"
+        },
+        {
+            "type": "@UI.ToolbarItem.Provider",
             "className": "Main.Main.WarningErrorCounter",
             "order": 1,
             "location": "main-toolbar-right"
@@ -216,21 +242,14 @@
             "order": 0,
             "defaultValue": false,
             "options": [
-                { "value": true, "title": "Disable cache (while DevTools is open)" },
-                { "value": false, "title": "Enable cache" }
-            ]
-        },
-        {
-            "type": "setting",
-            "category": "Debugger",
-            "title": "Disable JavaScript",
-            "settingName": "javaScriptDisabled",
-            "settingType": "boolean",
-            "order": 1,
-            "defaultValue": false,
-            "options": [
-                { "value": true, "title": "Disable JavaScript" },
-                { "value": false, "title": "Enable JavaScript" }
+                {
+                    "value": true,
+                    "title": "Disable cache (while DevTools is open)"
+                },
+                {
+                    "value": false,
+                    "title": "Enable cache"
+                }
             ]
         },
         {
@@ -242,8 +261,14 @@
             "order": 2,
             "defaultValue": false,
             "options": [
-                { "value": true, "title": "Auto-open DevTools for popups" },
-                { "value": false, "title": "Do not auto-open DevTools for popups" }
+                {
+                    "value": true,
+                    "title": "Auto-open DevTools for popups"
+                },
+                {
+                    "value": false,
+                    "title": "Do not auto-open DevTools for popups"
+                }
             ]
         },
         {
@@ -254,9 +279,18 @@
             "settingType": "enum",
             "defaultValue": "default",
             "options": [
-                { "title": "Switch to default theme", "text": "Default", "value": "default" },
-                { "title": "Switch to dark theme", "text": "Dark", "value": "dark" }
-            ]
+                {
+                    "title": "Switch to light theme",
+                    "text": "Light",
+                    "value": "default"
+                },
+                {
+                    "title": "Switch to dark theme",
+                    "text": "Dark",
+                    "value": "dark"
+                }
+            ],
+            "tags": "dark, light"
         },
         {
             "type": "setting",
@@ -266,9 +300,21 @@
             "settingType": "enum",
             "defaultValue": "auto",
             "options": [
-                { "title": "Use horizontal panel layout", "text": "horizontal", "value": "bottom" },
-                { "title": "Use vertical panel layout", "text": "vertical", "value": "right" },
-                { "title": "Use automatic panel layout", "text": "auto", "value": "auto" }
+                {
+                    "title": "Use horizontal panel layout",
+                    "text": "horizontal",
+                    "value": "bottom"
+                },
+                {
+                    "title": "Use vertical panel layout",
+                    "text": "vertical",
+                    "value": "right"
+                },
+                {
+                    "title": "Use automatic panel layout",
+                    "text": "auto",
+                    "value": "auto"
+                }
             ]
         },
         {
@@ -299,7 +345,7 @@
         {
             "type": "@UI.SettingUI",
             "category": "Extensions",
-            "className": "Components.HandlerRegistry.OpenAnchorLocationSettingUI"
+            "className": "Components.Linkifier.LinkHandlerSettingUI"
         },
         {
             "type": "@UI.SettingUI",
@@ -315,12 +361,20 @@
             "order": 80
         },
         {
+            "type": "context-menu-item",
+            "location": "mainMenu/footer",
+            "title": "Help",
+            "subMenuId": "mainMenuHelp",
+            "order": 30
+        },
+        {
             "type": "view",
             "location": "drawer-view",
             "id": "rendering",
             "title": "Rendering",
             "persistence": "closeable",
             "order": 50,
+            "condition": "!v8only",
             "className": "Main.RenderingOptionsView"
         },
         {
@@ -330,15 +384,48 @@
             "settingType": "enum",
             "defaultValue": "right",
             "options": [
-                { "value": "right", "title": "Dock to right" },
-                { "value": "bottom", "title": "Dock to bottom" },
-                { "value": "undocked", "title": "Undock into separate window" }
+                {
+                    "value": "right",
+                    "text": "Right",
+                    "title": "Dock to right"
+                },
+                {
+                    "value": "bottom",
+                    "text": "Bottom",
+                    "title": "Dock to bottom"
+                },
+                {
+                    "value": "undocked",
+                    "text": "Undocked",
+                    "title": "Undock into separate window"
+                }
             ]
         },
         {
             "type": "@UI.ViewLocationResolver",
             "name": "drawer-view",
+            "category": "Drawer",
             "className": "UI.InspectorView"
+        },
+        {
+            "type": "@UI.ViewLocationResolver",
+            "name": "panel",
+            "category": "Panel",
+            "className": "UI.InspectorView"
+        },
+        {
+            "type": "@UI.ActionDelegate",
+            "actionId": "components.collect-garbage",
+            "title": "Collect garbage",
+            "iconClass": "largeicon-trash-bin",
+            "className": "Main.GCActionDelegate"
+        },
+        {
+            "type": "@UI.ActionDelegate",
+            "category": "Mobile",
+            "actionId": "components.request-app-banner",
+            "className": "Main.RequestAppBannerActionDelegate",
+            "title": "Add to homescreen"
         }
     ],
     "dependencies": [
@@ -346,16 +433,22 @@
         "host",
         "platform",
         "sdk",
-        "persistence"
+        "persistence",
+        "help",
+        "console_model",
+        "network_log"
     ],
     "scripts": [
         "RenderingOptions.js",
         "SimpleApp.js",
-        "OverlayController.js",
+        "GCActionDelegate.js",
+        "RequestAppBannerActionDelegate.js",
+        "ExecutionContextSelector.js",
         "Main.js"
     ],
     "resources": [
         "errorWarningCounter.css",
+        "nodeIcon.css",
         "remoteDebuggingTerminatedScreen.css",
         "renderingOptions.css",
         "targetCrashedScreen.css"

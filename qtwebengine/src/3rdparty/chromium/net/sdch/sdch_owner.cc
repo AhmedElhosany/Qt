@@ -125,8 +125,7 @@ base::DictionaryValue* GetPersistentStoreDictionaryMap(
 void InitializePrefStore(SdchOwner::PrefStorage* store) {
   std::unique_ptr<base::DictionaryValue> empty_store(new base::DictionaryValue);
   empty_store->SetInteger(kVersionKey, kVersion);
-  empty_store->Set(kDictionariesKey,
-                   base::WrapUnique(new base::DictionaryValue));
+  empty_store->Set(kDictionariesKey, base::MakeUnique<base::DictionaryValue>());
   store->SetValue(std::move(empty_store));
 }
 
@@ -394,7 +393,7 @@ void SdchOwner::OnDictionaryFetched(base::Time last_used,
   };
 
   if (!was_from_cache)
-    UMA_HISTOGRAM_COUNTS("Sdch3.NetworkBytesSpent", dictionary_text.size());
+    UMA_HISTOGRAM_COUNTS_1M("Sdch3.NetworkBytesSpent", dictionary_text.size());
 
   // Figure out if there is space for the incoming dictionary; evict
   // stale dictionaries if needed to make space.
@@ -680,22 +679,8 @@ void SdchOwner::OnMemoryPressure(
   ClearData();
 }
 
-void SdchOwner::OnMemoryStateChange(base::MemoryState state) {
-  // TODO(hajimehoshi): When the state changes, adjust the sizes of the caches
-  // to reduce the limits. SdchOwner doesn't have the ability to limit at
-  // present.
-  switch (state) {
-    case base::MemoryState::NORMAL:
-      break;
-    case base::MemoryState::THROTTLED:
-      ClearData();
-      break;
-    case base::MemoryState::SUSPENDED:
-    // Note: Not supported at present. Fall through.
-    case base::MemoryState::UNKNOWN:
-      NOTREACHED();
-      break;
-  }
+void SdchOwner::OnPurgeMemory() {
+  ClearData();
 }
 
 void SdchOwner::ClearData() {

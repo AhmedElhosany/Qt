@@ -16,7 +16,9 @@ enum class BinaryOperationHint : uint8_t {
   kNone,
   kSignedSmall,
   kSigned32,
+  kNumber,
   kNumberOrOddball,
+  kNonEmptyString,
   kString,
   kAny
 };
@@ -33,6 +35,10 @@ enum class CompareOperationHint : uint8_t {
   kSignedSmall,
   kNumber,
   kNumberOrOddball,
+  kInternalizedString,
+  kString,
+  kSymbol,
+  kReceiver,
   kAny
 };
 
@@ -53,18 +59,19 @@ enum class ToBooleanHint : uint16_t {
   kString = 1u << 5,
   kSymbol = 1u << 6,
   kHeapNumber = 1u << 7,
-  kSimdValue = 1u << 8,
   kAny = kUndefined | kBoolean | kNull | kSmallInteger | kReceiver | kString |
-         kSymbol | kHeapNumber | kSimdValue,
-  kNeedsMap = kReceiver | kString | kSymbol | kHeapNumber | kSimdValue,
+         kSymbol | kHeapNumber,
+  kNeedsMap = kReceiver | kString | kSymbol | kHeapNumber,
   kCanBeUndetectable = kReceiver,
 };
 
 std::ostream& operator<<(std::ostream&, ToBooleanHint);
+std::string ToString(ToBooleanHint);
 
 typedef base::Flags<ToBooleanHint, uint16_t> ToBooleanHints;
 
 std::ostream& operator<<(std::ostream&, ToBooleanHints);
+std::string ToString(ToBooleanHints);
 
 DEFINE_OPERATORS_FOR_FLAGS(ToBooleanHints)
 

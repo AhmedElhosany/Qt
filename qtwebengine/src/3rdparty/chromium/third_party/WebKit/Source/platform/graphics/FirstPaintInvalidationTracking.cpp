@@ -4,24 +4,8 @@
 
 #include "platform/graphics/FirstPaintInvalidationTracking.h"
 
-#include "platform/tracing/TraceEvent.h"
-
 namespace blink {
 
-static bool showPaintRectsEnabled = false;
-
-bool firstPaintInvalidationTrackingEnabled() {
-  if (showPaintRectsEnabled)
-    return true;
-
-  bool isTracingEnabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED(
-      TRACE_DISABLED_BY_DEFAULT("blink.invalidation"), &isTracingEnabled);
-  return isTracingEnabled;
-}
-
-void setFirstPaintInvalidationTrackingEnabledForShowPaintRects(bool b) {
-  showPaintRectsEnabled = b;
-}
+bool FirstPaintInvalidationTracking::enabled_for_show_paint_rects_ = false;
 
 }  // namespace blink

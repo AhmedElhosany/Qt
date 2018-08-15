@@ -19,6 +19,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/sequenced_task_runner.h"
 #include "base/sha1.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
@@ -28,6 +29,7 @@
 #include "content/browser/cache_storage/cache_storage.pb.h"
 #include "content/browser/cache_storage/cache_storage_cache.h"
 #include "content/browser/cache_storage/cache_storage_cache_handle.h"
+#include "content/browser/cache_storage/cache_storage_index.h"
 #include "content/browser/cache_storage/cache_storage_scheduler.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/directory_lister.h"
@@ -47,24 +49,18 @@ std::string HexedHash(const std::string& value) {
   return valued_hexed_hash;
 }
 
-void SizeRetrievedFromCache(
-    std::unique_ptr<CacheStorageCacheHandle> cache_handle,
-    const base::Closure& closure,
-    int64_t* accumulator,
-    int64_t size) {
-  *accumulator += size;
-  closure.Run();
+void SizeRetrievedFromAllCaches(std::unique_ptr<int64_t> accumulator,
+                                CacheStorage::SizeCallback callback) {
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), *accumulator));
 }
 
-void SizeRetrievedFromAllCaches(std::unique_ptr<int64_t> accumulator,
-                                const CacheStorage::SizeCallback& callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(callback, *accumulator));
-}
+void DoNothingWithBool(bool success) {}
 
 }  // namespace
 
 const char CacheStorage::kIndexFileName[] = "index.txt";
+constexpr int64_t CacheStorage::kSizeUnknown;
 
 struct CacheStorage::CacheMatchResponse {
   CacheMatchResponse() = default;
@@ -78,11 +74,11 @@ struct CacheStorage::CacheMatchResponse {
 // Handles the loading and clean up of CacheStorageCache objects.
 class CacheStorage::CacheLoader {
  public:
-  typedef base::Callback<void(std::unique_ptr<CacheStorageCache>)>
-      CacheCallback;
-  typedef base::Callback<void(bool)> BoolCallback;
-  typedef base::Callback<void(std::unique_ptr<std::vector<std::string>>)>
-      StringVectorCallback;
+  using CacheCallback =
+      base::OnceCallback<void(std::unique_ptr<CacheStorageCache>)>;
+  using BoolCallback = base::OnceCallback<void(bool)>;
+  using CacheStorageIndexLoadCallback =
+      base::OnceCallback<void(std::unique_ptr<CacheStorageIndex>)>;
 
   CacheLoader(
       base::SequencedTaskRunner* cache_task_runner,
@@ -105,23 +101,23 @@ class CacheStorage::CacheLoader {
   // Creates a CacheStorageCache with the given name. It does not attempt to
   // load the backend, that happens lazily when the cache is used.
   virtual std::unique_ptr<CacheStorageCache> CreateCache(
-      const std::string& cache_name) = 0;
+      const std::string& cache_name,
+      int64_t cache_size) = 0;
 
   // Deletes any pre-existing cache of the same name and then loads it.
   virtual void PrepareNewCacheDestination(const std::string& cache_name,
-                                          const CacheCallback& callback) = 0;
+                                          CacheCallback callback) = 0;
 
   // After the backend has been deleted, do any extra house keeping such as
   // removing the cache's directory.
   virtual void CleanUpDeletedCache(CacheStorageCache* cache) = 0;
 
-  // Writes the cache names (and sizes) to disk if applicable.
-  virtual void WriteIndex(const StringVector& cache_names,
-                          const BoolCallback& callback) = 0;
+  // Writes the cache index to disk if applicable.
+  virtual void WriteIndex(const CacheStorageIndex& index,
+                          BoolCallback callback) = 0;
 
-  // Loads the cache names from disk if applicable.
-  virtual void LoadIndex(std::unique_ptr<std::vector<std::string>> cache_names,
-                         const StringVectorCallback& callback) = 0;
+  // Loads the cache index from disk if applicable.
+  virtual void LoadIndex(CacheStorageIndexLoadCallback callback) = 0;
 
   // Called when CacheStorage has created a cache. Used to hold onto a handle to
   // the cache if necessary.
@@ -168,29 +164,29 @@ class CacheStorage::MemoryLoader : public CacheStorage::CacheLoader {
                     cache_storage,
                     origin) {}
 
-  std::unique_ptr<CacheStorageCache> CreateCache(
-      const std::string& cache_name) override {
+  std::unique_ptr<CacheStorageCache> CreateCache(const std::string& cache_name,
+                                                 int64_t cache_size) override {
     return CacheStorageCache::CreateMemoryCache(
         origin_, cache_name, cache_storage_, request_context_getter_,
         quota_manager_proxy_, blob_context_);
   }
 
   void PrepareNewCacheDestination(const std::string& cache_name,
-                                  const CacheCallback& callback) override {
-    std::unique_ptr<CacheStorageCache> cache = CreateCache(cache_name);
-    callback.Run(std::move(cache));
+                                  CacheCallback callback) override {
+    std::unique_ptr<CacheStorageCache> cache =
+        CreateCache(cache_name, 0 /*cache_size*/);
+    std::move(callback).Run(std::move(cache));
   }
 
   void CleanUpDeletedCache(CacheStorageCache* cache) override {}
 
-  void WriteIndex(const StringVector& cache_names,
-                  const BoolCallback& callback) override {
-    callback.Run(true);
+  void WriteIndex(const CacheStorageIndex& index,
+                  BoolCallback callback) override {
+    std::move(callback).Run(true);
   }
 
-  void LoadIndex(std::unique_ptr<std::vector<std::string>> cache_names,
-                 const StringVectorCallback& callback) override {
-    callback.Run(std::move(cache_names));
+  void LoadIndex(CacheStorageIndexLoadCallback callback) override {
+    std::move(callback).Run(base::MakeUnique<CacheStorageIndex>());
   }
 
   void NotifyCacheCreated(
@@ -236,8 +232,8 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
         origin_path_(origin_path),
         weak_ptr_factory_(this) {}
 
-  std::unique_ptr<CacheStorageCache> CreateCache(
-      const std::string& cache_name) override {
+  std::unique_ptr<CacheStorageCache> CreateCache(const std::string& cache_name,
+                                                 int64_t cache_size) override {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
     DCHECK(base::ContainsKey(cache_name_to_cache_dir_, cache_name));
 
@@ -245,19 +241,21 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
     base::FilePath cache_path = origin_path_.AppendASCII(cache_dir);
     return CacheStorageCache::CreatePersistentCache(
         origin_, cache_name, cache_storage_, cache_path,
-        request_context_getter_, quota_manager_proxy_, blob_context_);
+        request_context_getter_, quota_manager_proxy_, blob_context_,
+        cache_size);
   }
 
   void PrepareNewCacheDestination(const std::string& cache_name,
-                                  const CacheCallback& callback) override {
+                                  CacheCallback callback) override {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
     PostTaskAndReplyWithResult(
         cache_task_runner_.get(), FROM_HERE,
-        base::Bind(&SimpleCacheLoader::PrepareNewCacheDirectoryInPool,
-                   origin_path_),
-        base::Bind(&SimpleCacheLoader::PrepareNewCacheCreateCache,
-                   weak_ptr_factory_.GetWeakPtr(), cache_name, callback));
+        base::BindOnce(&SimpleCacheLoader::PrepareNewCacheDirectoryInPool,
+                       origin_path_),
+        base::BindOnce(&SimpleCacheLoader::PrepareNewCacheCreateCache,
+                       weak_ptr_factory_.GetWeakPtr(), cache_name,
+                       std::move(callback)));
   }
 
   // Runs on the cache_task_runner_.
@@ -274,15 +272,16 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
   }
 
   void PrepareNewCacheCreateCache(const std::string& cache_name,
-                                  const CacheCallback& callback,
+                                  CacheCallback callback,
                                   const std::string& cache_dir) {
     if (cache_dir.empty()) {
-      callback.Run(std::unique_ptr<CacheStorageCache>());
+      std::move(callback).Run(std::unique_ptr<CacheStorageCache>());
       return;
     }
 
     cache_name_to_cache_dir_[cache_name] = cache_dir;
-    callback.Run(CreateCache(cache_name));
+    std::move(callback).Run(
+        CreateCache(cache_name, CacheStorage::kSizeUnknown));
   }
 
   void CleanUpDeletedCache(CacheStorageCache* cache) override {
@@ -294,34 +293,39 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
     doomed_cache_to_path_.erase(cache);
 
     cache_task_runner_->PostTask(
-        FROM_HERE, base::Bind(&SimpleCacheLoader::CleanUpDeleteCacheDirInPool,
-                              cache_path));
+        FROM_HERE,
+        base::BindOnce(&SimpleCacheLoader::CleanUpDeleteCacheDirInPool,
+                       cache_path));
   }
 
   static void CleanUpDeleteCacheDirInPool(const base::FilePath& cache_path) {
     base::DeleteFile(cache_path, true /* recursive */);
   }
 
-  void WriteIndex(const StringVector& cache_names,
-                  const BoolCallback& callback) override {
+  void WriteIndex(const CacheStorageIndex& index,
+                  BoolCallback callback) override {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
     // 1. Create the index file as a string. (WriteIndex)
     // 2. Write the file to disk. (WriteIndexWriteToFileInPool)
 
-    proto::CacheStorageIndex index;
-    index.set_origin(origin_.spec());
+    proto::CacheStorageIndex protobuf_index;
+    protobuf_index.set_origin(origin_.spec());
 
-    for (size_t i = 0u, max = cache_names.size(); i < max; ++i) {
-      DCHECK(base::ContainsKey(cache_name_to_cache_dir_, cache_names[i]));
+    for (const auto& cache_metadata : index.ordered_cache_metadata()) {
+      DCHECK(base::ContainsKey(cache_name_to_cache_dir_, cache_metadata.name));
 
-      proto::CacheStorageIndex::Cache* index_cache = index.add_cache();
-      index_cache->set_name(cache_names[i]);
-      index_cache->set_cache_dir(cache_name_to_cache_dir_[cache_names[i]]);
+      proto::CacheStorageIndex::Cache* index_cache = protobuf_index.add_cache();
+      index_cache->set_name(cache_metadata.name);
+      index_cache->set_cache_dir(cache_name_to_cache_dir_[cache_metadata.name]);
+      if (cache_metadata.size == CacheStorage::kSizeUnknown)
+        index_cache->clear_size();
+      else
+        index_cache->set_size(cache_metadata.size);
     }
 
     std::string serialized;
-    bool success = index.SerializeToString(&serialized);
+    bool success = protobuf_index.SerializeToString(&serialized);
     DCHECK(success);
 
     base::FilePath tmp_path = origin_path_.AppendASCII("index.txt.tmp");
@@ -330,9 +334,9 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
 
     PostTaskAndReplyWithResult(
         cache_task_runner_.get(), FROM_HERE,
-        base::Bind(&SimpleCacheLoader::WriteIndexWriteToFileInPool, tmp_path,
-                   index_path, serialized),
-        callback);
+        base::BindOnce(&SimpleCacheLoader::WriteIndexWriteToFileInPool,
+                       tmp_path, index_path, serialized),
+        std::move(callback));
   }
 
   static bool WriteIndexWriteToFileInPool(const base::FilePath& tmp_path,
@@ -348,47 +352,39 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
     return base::ReplaceFile(tmp_path, index_path, NULL);
   }
 
-  void LoadIndex(std::unique_ptr<std::vector<std::string>> names,
-                 const StringVectorCallback& callback) override {
+  void LoadIndex(CacheStorageIndexLoadCallback callback) override {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-    // 1. Read the file from disk. (LoadIndexReadFileInPool)
-    // 2. Parse file and return the names of the caches (LoadIndexDidReadFile)
-
-    base::FilePath index_path =
-        origin_path_.AppendASCII(CacheStorage::kIndexFileName);
 
     PostTaskAndReplyWithResult(
         cache_task_runner_.get(), FROM_HERE,
-        base::Bind(&SimpleCacheLoader::ReadAndMigrateIndexInPool, index_path),
-        base::Bind(&SimpleCacheLoader::LoadIndexDidReadFile,
-                   weak_ptr_factory_.GetWeakPtr(), base::Passed(&names),
-                   callback));
+        base::BindOnce(&SimpleCacheLoader::ReadAndMigrateIndexInPool,
+                       origin_path_),
+        base::BindOnce(&SimpleCacheLoader::LoadIndexDidReadIndex,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
 
-  void LoadIndexDidReadFile(std::unique_ptr<std::vector<std::string>> names,
-                            const StringVectorCallback& callback,
-                            const std::string& serialized) {
+  void LoadIndexDidReadIndex(CacheStorageIndexLoadCallback callback,
+                             proto::CacheStorageIndex protobuf_index) {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
     std::unique_ptr<std::set<std::string>> cache_dirs(
         new std::set<std::string>);
 
-    proto::CacheStorageIndex index;
-    if (index.ParseFromString(serialized)) {
-      for (int i = 0, max = index.cache_size(); i < max; ++i) {
-        const proto::CacheStorageIndex::Cache& cache = index.cache(i);
-        DCHECK(cache.has_cache_dir());
-        names->push_back(cache.name());
-        cache_name_to_cache_dir_[cache.name()] = cache.cache_dir();
-        cache_dirs->insert(cache.cache_dir());
-      }
+    auto index = base::MakeUnique<CacheStorageIndex>();
+    for (int i = 0, max = protobuf_index.cache_size(); i < max; ++i) {
+      const proto::CacheStorageIndex::Cache& cache = protobuf_index.cache(i);
+      DCHECK(cache.has_cache_dir());
+      int64_t cache_size =
+          cache.has_size() ? cache.size() : CacheStorage::kSizeUnknown;
+      index->Insert(CacheStorageIndex::CacheMetadata(cache.name(), cache_size));
+      cache_name_to_cache_dir_[cache.name()] = cache.cache_dir();
+      cache_dirs->insert(cache.cache_dir());
     }
 
     cache_task_runner_->PostTask(
-        FROM_HERE, base::Bind(&DeleteUnreferencedCachesInPool, origin_path_,
-                              base::Passed(&cache_dirs)));
-    callback.Run(std::move(names));
+        FROM_HERE, base::BindOnce(&DeleteUnreferencedCachesInPool, origin_path_,
+                                  base::Passed(&cache_dirs)));
+    std::move(callback).Run(std::move(index));
   }
 
   void NotifyCacheDoomed(
@@ -424,22 +420,41 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
   }
 
   // Runs on cache_task_runner_
-  static std::string MigrateCachesIfNecessaryInPool(
-      const std::string& body,
-      const base::FilePath& index_path) {
-    proto::CacheStorageIndex index;
-    if (!index.ParseFromString(body))
-      return body;
+  static proto::CacheStorageIndex ReadAndMigrateIndexInPool(
+      const base::FilePath& origin_path) {
+    const base::FilePath index_path =
+        origin_path.AppendASCII(CacheStorage::kIndexFileName);
 
-    base::FilePath origin_path = index_path.DirName();
-    bool index_is_dirty = false;
-    const std::string kBadIndexState("");
+    proto::CacheStorageIndex index;
+    std::string body;
+    if (!base::ReadFileToString(index_path, &body) ||
+        !index.ParseFromString(body))
+      return proto::CacheStorageIndex();
+    body.clear();
+
+    base::File::Info file_info;
+    base::Time index_last_modified;
+    if (GetFileInfo(index_path, &file_info))
+      index_last_modified = file_info.last_modified;
+    bool index_modified = false;
 
     // Look for caches that have no cache_dir. Give any such caches a directory
     // with a random name and move them there. Then, rewrite the index file.
+    // Additionally invalidate the size of any index entries where the cache was
+    // modified after the index (making it out-of-date).
     for (int i = 0, max = index.cache_size(); i < max; ++i) {
       const proto::CacheStorageIndex::Cache& cache = index.cache(i);
-      if (!cache.has_cache_dir()) {
+      if (cache.has_cache_dir()) {
+        if (cache.has_size()) {
+          base::FilePath cache_dir = origin_path.AppendASCII(cache.cache_dir());
+          if (!GetFileInfo(cache_dir, &file_info) ||
+              index_last_modified <= file_info.last_modified) {
+            // Index is older than this cache, so invalidate index entries that
+            // may change as a result of cache operations.
+            index.mutable_cache(i)->clear_size();
+          }
+        }
+      } else {
         // Find a new home for the cache.
         base::FilePath legacy_cache_path =
             origin_path.AppendASCII(HexedHash(cache.name()));
@@ -454,34 +469,24 @@ class CacheStorage::SimpleCacheLoader : public CacheStorage::CacheLoader {
           // If the move fails then the cache is in a bad state. Return an empty
           // index so that the CacheStorage can start fresh. The unreferenced
           // caches will be discarded later in initialization.
-          return kBadIndexState;
+          return proto::CacheStorageIndex();
         }
 
         index.mutable_cache(i)->set_cache_dir(cache_dir);
-        index_is_dirty = true;
+        index.mutable_cache(i)->clear_size();
+        index_modified = true;
       }
     }
 
-    if (index_is_dirty) {
-      std::string new_body;
-      if (!index.SerializeToString(&new_body))
-        return kBadIndexState;
-      if (base::WriteFile(index_path, new_body.c_str(), new_body.size()) !=
-          base::checked_cast<int>(new_body.size()))
-        return kBadIndexState;
-      return new_body;
+    if (index_modified) {
+      base::FilePath tmp_path = origin_path.AppendASCII("index.txt.tmp");
+      if (!index.SerializeToString(&body) ||
+          !WriteIndexWriteToFileInPool(tmp_path, index_path, body)) {
+        return proto::CacheStorageIndex();
+      }
     }
 
-    return body;
-  }
-
-  // Runs on cache_task_runner_
-  static std::string ReadAndMigrateIndexInPool(
-      const base::FilePath& index_path) {
-    std::string body;
-    base::ReadFileToString(index_path, &body);
-
-    return MigrateCachesIfNecessaryInPool(body, index_path);
+    return index;
   }
 
   const base::FilePath origin_path_;
@@ -523,7 +528,7 @@ CacheStorage::~CacheStorage() {
 }
 
 void CacheStorage::OpenCache(const std::string& cache_name,
-                             const CacheAndErrorCallback& callback) {
+                             CacheAndErrorCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
@@ -533,13 +538,13 @@ void CacheStorage::OpenCache(const std::string& cache_name,
       storage::QuotaClient::kServiceWorkerCache, origin_,
       storage::kStorageTypeTemporary);
 
-  scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::OpenCacheImpl, weak_factory_.GetWeakPtr(),
-                 cache_name, scheduler_->WrapCallbackToRunNext(callback)));
+  scheduler_->ScheduleOperation(base::BindOnce(
+      &CacheStorage::OpenCacheImpl, weak_factory_.GetWeakPtr(), cache_name,
+      scheduler_->WrapCallbackToRunNext(std::move(callback))));
 }
 
 void CacheStorage::HasCache(const std::string& cache_name,
-                            const BoolAndErrorCallback& callback) {
+                            BoolAndErrorCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
@@ -549,13 +554,13 @@ void CacheStorage::HasCache(const std::string& cache_name,
       storage::QuotaClient::kServiceWorkerCache, origin_,
       storage::kStorageTypeTemporary);
 
-  scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::HasCacheImpl, weak_factory_.GetWeakPtr(),
-                 cache_name, scheduler_->WrapCallbackToRunNext(callback)));
+  scheduler_->ScheduleOperation(base::BindOnce(
+      &CacheStorage::HasCacheImpl, weak_factory_.GetWeakPtr(), cache_name,
+      scheduler_->WrapCallbackToRunNext(std::move(callback))));
 }
 
 void CacheStorage::DeleteCache(const std::string& cache_name,
-                               const BoolAndErrorCallback& callback) {
+                               BoolAndErrorCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
@@ -565,12 +570,12 @@ void CacheStorage::DeleteCache(const std::string& cache_name,
       storage::QuotaClient::kServiceWorkerCache, origin_,
       storage::kStorageTypeTemporary);
 
-  scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::DeleteCacheImpl, weak_factory_.GetWeakPtr(),
-                 cache_name, scheduler_->WrapCallbackToRunNext(callback)));
+  scheduler_->ScheduleOperation(base::BindOnce(
+      &CacheStorage::DeleteCacheImpl, weak_factory_.GetWeakPtr(), cache_name,
+      scheduler_->WrapCallbackToRunNext(std::move(callback))));
 }
 
-void CacheStorage::EnumerateCaches(const StringsCallback& callback) {
+void CacheStorage::EnumerateCaches(IndexCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
@@ -580,16 +585,16 @@ void CacheStorage::EnumerateCaches(const StringsCallback& callback) {
       storage::QuotaClient::kServiceWorkerCache, origin_,
       storage::kStorageTypeTemporary);
 
-  scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::EnumerateCachesImpl, weak_factory_.GetWeakPtr(),
-                 scheduler_->WrapCallbackToRunNext(callback)));
+  scheduler_->ScheduleOperation(base::BindOnce(
+      &CacheStorage::EnumerateCachesImpl, weak_factory_.GetWeakPtr(),
+      scheduler_->WrapCallbackToRunNext(std::move(callback))));
 }
 
 void CacheStorage::MatchCache(
     const std::string& cache_name,
     std::unique_ptr<ServiceWorkerFetchRequest> request,
     const CacheStorageCacheQueryParams& match_params,
-    const CacheStorageCache::ResponseCallback& callback) {
+    CacheStorageCache::ResponseCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
@@ -600,15 +605,15 @@ void CacheStorage::MatchCache(
       storage::kStorageTypeTemporary);
 
   scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::MatchCacheImpl, weak_factory_.GetWeakPtr(),
-                 cache_name, base::Passed(std::move(request)), match_params,
-                 scheduler_->WrapCallbackToRunNext(callback)));
+      base::BindOnce(&CacheStorage::MatchCacheImpl, weak_factory_.GetWeakPtr(),
+                     cache_name, base::Passed(std::move(request)), match_params,
+                     scheduler_->WrapCallbackToRunNext(std::move(callback))));
 }
 
 void CacheStorage::MatchAllCaches(
     std::unique_ptr<ServiceWorkerFetchRequest> request,
     const CacheStorageCacheQueryParams& match_params,
-    const CacheStorageCache::ResponseCallback& callback) {
+    CacheStorageCache::ResponseCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
@@ -618,36 +623,80 @@ void CacheStorage::MatchAllCaches(
       storage::QuotaClient::kServiceWorkerCache, origin_,
       storage::kStorageTypeTemporary);
 
-  scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::MatchAllCachesImpl, weak_factory_.GetWeakPtr(),
-                 base::Passed(std::move(request)), match_params,
-                 scheduler_->WrapCallbackToRunNext(callback)));
+  scheduler_->ScheduleOperation(base::BindOnce(
+      &CacheStorage::MatchAllCachesImpl, weak_factory_.GetWeakPtr(),
+      base::Passed(std::move(request)), match_params,
+      scheduler_->WrapCallbackToRunNext(std::move(callback))));
 }
 
-void CacheStorage::GetSizeThenCloseAllCaches(const SizeCallback& callback) {
+void CacheStorage::GetSizeThenCloseAllCaches(SizeCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
     LazyInit();
 
-  scheduler_->ScheduleOperation(base::Bind(
+  scheduler_->ScheduleOperation(base::BindOnce(
       &CacheStorage::GetSizeThenCloseAllCachesImpl, weak_factory_.GetWeakPtr(),
-      scheduler_->WrapCallbackToRunNext(callback)));
+      scheduler_->WrapCallbackToRunNext(std::move(callback))));
 }
 
-void CacheStorage::Size(const CacheStorage::SizeCallback& callback) {
+void CacheStorage::Size(CacheStorage::SizeCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!initialized_)
     LazyInit();
 
   scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::SizeImpl, weak_factory_.GetWeakPtr(),
-                 scheduler_->WrapCallbackToRunNext(callback)));
+      base::BindOnce(&CacheStorage::SizeImpl, weak_factory_.GetWeakPtr(),
+                     scheduler_->WrapCallbackToRunNext(std::move(callback))));
+}
+
+void CacheStorage::ScheduleWriteIndex() {
+  static const int64_t kWriteIndexDelaySecs = 5;
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  index_write_task_.Reset(base::Bind(&CacheStorage::WriteIndex,
+                                     weak_factory_.GetWeakPtr(),
+                                     base::Bind(&DoNothingWithBool)));
+  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+      FROM_HERE, index_write_task_.callback(),
+      base::TimeDelta::FromSeconds(kWriteIndexDelaySecs));
+}
+
+void CacheStorage::WriteIndex(base::OnceCallback<void(bool)> callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  scheduler_->ScheduleOperation(
+      base::BindOnce(&CacheStorage::WriteIndexImpl, weak_factory_.GetWeakPtr(),
+                     scheduler_->WrapCallbackToRunNext(std::move(callback))));
+}
+
+void CacheStorage::WriteIndexImpl(base::OnceCallback<void(bool)> callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  cache_loader_->WriteIndex(*cache_index_, std::move(callback));
+}
+
+bool CacheStorage::InitiateScheduledIndexWriteForTest(
+    base::OnceCallback<void(bool)> callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  if (index_write_pending()) {
+    index_write_task_.Cancel();
+    WriteIndex(std::move(callback));
+    return true;
+  }
+  std::move(callback).Run(true /* success */);
+  return false;
+}
+
+void CacheStorage::CacheSizeUpdated(const CacheStorageCache* cache,
+                                    int64_t size) {
+  // Should not be called for doomed caches.
+  DCHECK(!base::ContainsKey(doomed_caches_,
+                            const_cast<CacheStorageCache*>(cache)));
+  cache_index_->SetCacheSize(cache->cache_name(), size);
+  ScheduleWriteIndex();
 }
 
 void CacheStorage::StartAsyncOperationForTesting() {
-  scheduler_->ScheduleOperation(base::Bind(&base::DoNothing));
+  scheduler_->ScheduleOperation(base::BindOnce(&base::DoNothing));
 }
 
 void CacheStorage::CompleteAsyncOperationForTesting() {
@@ -666,7 +715,7 @@ void CacheStorage::LazyInit() {
 
   initializing_ = true;
   scheduler_->ScheduleOperation(
-      base::Bind(&CacheStorage::LazyInitImpl, weak_factory_.GetWeakPtr()));
+      base::BindOnce(&CacheStorage::LazyInitImpl, weak_factory_.GetWeakPtr()));
 }
 
 void CacheStorage::LazyInitImpl() {
@@ -674,28 +723,27 @@ void CacheStorage::LazyInitImpl() {
   DCHECK(!initialized_);
   DCHECK(initializing_);
 
-  // 1. Get the list of cache names (async call)
+  // 1. Get the cache index (async call)
   // 2. For each cache name, load the cache (async call)
   // 3. Once each load is complete, update the map variables.
   // 4. Call the list of waiting callbacks.
 
-  std::unique_ptr<std::vector<std::string>> indexed_cache_names(
-      new std::vector<std::string>());
-
-  cache_loader_->LoadIndex(std::move(indexed_cache_names),
-                           base::Bind(&CacheStorage::LazyInitDidLoadIndex,
-                                      weak_factory_.GetWeakPtr()));
+  cache_loader_->LoadIndex(base::BindOnce(&CacheStorage::LazyInitDidLoadIndex,
+                                          weak_factory_.GetWeakPtr()));
 }
 
 void CacheStorage::LazyInitDidLoadIndex(
-    std::unique_ptr<std::vector<std::string>> indexed_cache_names) {
+    std::unique_ptr<CacheStorageIndex> index) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK(cache_map_.empty());
 
-  for (size_t i = 0u, max = indexed_cache_names->size(); i < max; ++i) {
-    cache_map_.insert(std::make_pair(indexed_cache_names->at(i),
+  for (const auto& cache_metadata : index->ordered_cache_metadata()) {
+    cache_map_.insert(std::make_pair(cache_metadata.name,
                                      std::unique_ptr<CacheStorageCache>()));
-    ordered_cache_names_.push_back(indexed_cache_names->at(i));
   }
+
+  DCHECK(!cache_index_);
+  cache_index_ = std::move(index);
 
   initializing_ = false;
   initialized_ = true;
@@ -704,22 +752,23 @@ void CacheStorage::LazyInitDidLoadIndex(
 }
 
 void CacheStorage::OpenCacheImpl(const std::string& cache_name,
-                                 const CacheAndErrorCallback& callback) {
+                                 CacheAndErrorCallback callback) {
   std::unique_ptr<CacheStorageCacheHandle> cache_handle =
       GetLoadedCache(cache_name);
   if (cache_handle) {
-    callback.Run(std::move(cache_handle), CACHE_STORAGE_OK);
+    std::move(callback).Run(std::move(cache_handle), CACHE_STORAGE_OK);
     return;
   }
 
   cache_loader_->PrepareNewCacheDestination(
-      cache_name, base::Bind(&CacheStorage::CreateCacheDidCreateCache,
-                             weak_factory_.GetWeakPtr(), cache_name, callback));
+      cache_name, base::BindOnce(&CacheStorage::CreateCacheDidCreateCache,
+                                 weak_factory_.GetWeakPtr(), cache_name,
+                                 std::move(callback)));
 }
 
 void CacheStorage::CreateCacheDidCreateCache(
     const std::string& cache_name,
-    const CacheAndErrorCallback& callback,
+    CacheAndErrorCallback callback,
     std::unique_ptr<CacheStorageCache> cache) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
@@ -727,27 +776,28 @@ void CacheStorage::CreateCacheDidCreateCache(
                         static_cast<bool>(cache));
 
   if (!cache) {
-    callback.Run(std::unique_ptr<CacheStorageCacheHandle>(),
-                 CACHE_STORAGE_ERROR_STORAGE);
+    std::move(callback).Run(std::unique_ptr<CacheStorageCacheHandle>(),
+                            CACHE_STORAGE_ERROR_STORAGE);
     return;
   }
 
   CacheStorageCache* cache_ptr = cache.get();
 
   cache_map_.insert(std::make_pair(cache_name, std::move(cache)));
-  ordered_cache_names_.push_back(cache_name);
+  cache_index_->Insert(
+      CacheStorageIndex::CacheMetadata(cache_name, cache_ptr->cache_size()));
 
   cache_loader_->WriteIndex(
-      ordered_cache_names_,
-      base::Bind(&CacheStorage::CreateCacheDidWriteIndex,
-                 weak_factory_.GetWeakPtr(), callback,
-                 base::Passed(CreateCacheHandle(cache_ptr))));
+      *cache_index_,
+      base::BindOnce(&CacheStorage::CreateCacheDidWriteIndex,
+                     weak_factory_.GetWeakPtr(), std::move(callback),
+                     base::Passed(CreateCacheHandle(cache_ptr))));
 
   cache_loader_->NotifyCacheCreated(cache_name, CreateCacheHandle(cache_ptr));
 }
 
 void CacheStorage::CreateCacheDidWriteIndex(
-    const CacheAndErrorCallback& callback,
+    CacheAndErrorCallback callback,
     std::unique_ptr<CacheStorageCacheHandle> cache_handle,
     bool success) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
@@ -755,155 +805,157 @@ void CacheStorage::CreateCacheDidWriteIndex(
 
   // TODO(jkarlin): Handle !success.
 
-  callback.Run(std::move(cache_handle), CACHE_STORAGE_OK);
+  std::move(callback).Run(std::move(cache_handle), CACHE_STORAGE_OK);
 }
 
 void CacheStorage::HasCacheImpl(const std::string& cache_name,
-                                const BoolAndErrorCallback& callback) {
+                                BoolAndErrorCallback callback) {
   bool has_cache = base::ContainsKey(cache_map_, cache_name);
-  callback.Run(has_cache, CACHE_STORAGE_OK);
+  std::move(callback).Run(has_cache, CACHE_STORAGE_OK);
 }
 
 void CacheStorage::DeleteCacheImpl(const std::string& cache_name,
-                                   const BoolAndErrorCallback& callback) {
-  if (!GetLoadedCache(cache_name)) {
+                                   BoolAndErrorCallback callback) {
+  std::unique_ptr<CacheStorageCacheHandle> cache_handle =
+      GetLoadedCache(cache_name);
+  if (!cache_handle) {
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::Bind(callback, false, CACHE_STORAGE_ERROR_NOT_FOUND));
+        FROM_HERE, base::BindOnce(std::move(callback), false,
+                                  CACHE_STORAGE_ERROR_NOT_FOUND));
     return;
   }
 
-  // Delete the name from ordered_cache_names_.
-  StringVector original_ordered_cache_names = ordered_cache_names_;
-  StringVector::iterator iter = std::find(
-      ordered_cache_names_.begin(), ordered_cache_names_.end(), cache_name);
-  DCHECK(iter != ordered_cache_names_.end());
-  ordered_cache_names_.erase(iter);
-
-  cache_loader_->WriteIndex(ordered_cache_names_,
-                            base::Bind(&CacheStorage::DeleteCacheDidWriteIndex,
-                                       weak_factory_.GetWeakPtr(), cache_name,
-                                       original_ordered_cache_names, callback));
+  cache_handle->value()->SetObserver(nullptr);
+  cache_index_->DoomCache(cache_name);
+  cache_loader_->WriteIndex(
+      *cache_index_, base::BindOnce(&CacheStorage::DeleteCacheDidWriteIndex,
+                                    weak_factory_.GetWeakPtr(),
+                                    base::Passed(std::move(cache_handle)),
+                                    std::move(callback)));
 }
 
 void CacheStorage::DeleteCacheDidWriteIndex(
-    const std::string& cache_name,
-    const StringVector& original_ordered_cache_names,
-    const BoolAndErrorCallback& callback,
+    std::unique_ptr<CacheStorageCacheHandle> cache_handle,
+    BoolAndErrorCallback callback,
     bool success) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!success) {
-    // Undo any changes if the change couldn't be written to disk.
-    ordered_cache_names_ = original_ordered_cache_names;
-    callback.Run(false, CACHE_STORAGE_ERROR_STORAGE);
+    // Undo any changes if the index couldn't be written to disk.
+    cache_index_->RestoreDoomedCache();
+    cache_handle->value()->SetObserver(this);
+    std::move(callback).Run(false, CACHE_STORAGE_ERROR_STORAGE);
     return;
   }
 
-  // Make sure that a cache handle exists for the doomed cache to ensure that
-  // DeleteCacheFinalize is called.
-  std::unique_ptr<CacheStorageCacheHandle> cache_handle =
-      GetLoadedCache(cache_name);
+  cache_index_->FinalizeDoomedCache();
 
-  CacheMap::iterator map_iter = cache_map_.find(cache_name);
+  CacheMap::iterator map_iter =
+      cache_map_.find(cache_handle->value()->cache_name());
+  DCHECK(map_iter != cache_map_.end());
+
   doomed_caches_.insert(
       std::make_pair(map_iter->second.get(), std::move(map_iter->second)));
   cache_map_.erase(map_iter);
 
   cache_loader_->NotifyCacheDoomed(std::move(cache_handle));
 
-  callback.Run(true, CACHE_STORAGE_OK);
+  std::move(callback).Run(true, CACHE_STORAGE_OK);
 }
 
 // Call this once the last handle to a doomed cache is gone. It's okay if this
 // doesn't get to complete before shutdown, the cache will be removed from disk
 // on next startup in that case.
-void CacheStorage::DeleteCacheFinalize(
-    std::unique_ptr<CacheStorageCache> doomed_cache) {
-  CacheStorageCache* cache = doomed_cache.get();
-  cache->Size(base::Bind(&CacheStorage::DeleteCacheDidGetSize,
-                         weak_factory_.GetWeakPtr(),
-                         base::Passed(std::move(doomed_cache))));
+void CacheStorage::DeleteCacheFinalize(CacheStorageCache* doomed_cache) {
+  doomed_cache->Size(base::BindOnce(&CacheStorage::DeleteCacheDidGetSize,
+                                    weak_factory_.GetWeakPtr(), doomed_cache));
 }
 
-void CacheStorage::DeleteCacheDidGetSize(
-    std::unique_ptr<CacheStorageCache> cache,
-    int64_t cache_size) {
+void CacheStorage::DeleteCacheDidGetSize(CacheStorageCache* doomed_cache,
+                                         int64_t cache_size) {
   quota_manager_proxy_->NotifyStorageModified(
       storage::QuotaClient::kServiceWorkerCache, origin_,
       storage::kStorageTypeTemporary, -1 * cache_size);
 
-  cache_loader_->CleanUpDeletedCache(cache.get());
+  cache_loader_->CleanUpDeletedCache(doomed_cache);
+  auto doomed_caches_iter = doomed_caches_.find(doomed_cache);
+  DCHECK(doomed_caches_iter != doomed_caches_.end());
+  doomed_caches_.erase(doomed_caches_iter);
 }
 
-void CacheStorage::EnumerateCachesImpl(const StringsCallback& callback) {
-  callback.Run(ordered_cache_names_);
+void CacheStorage::EnumerateCachesImpl(IndexCallback callback) {
+  std::move(callback).Run(*cache_index_);
 }
 
 void CacheStorage::MatchCacheImpl(
     const std::string& cache_name,
     std::unique_ptr<ServiceWorkerFetchRequest> request,
     const CacheStorageCacheQueryParams& match_params,
-    const CacheStorageCache::ResponseCallback& callback) {
+    CacheStorageCache::ResponseCallback callback) {
   std::unique_ptr<CacheStorageCacheHandle> cache_handle =
       GetLoadedCache(cache_name);
 
   if (!cache_handle) {
-    callback.Run(CACHE_STORAGE_ERROR_CACHE_NAME_NOT_FOUND,
-                 std::unique_ptr<ServiceWorkerResponse>(),
-                 std::unique_ptr<storage::BlobDataHandle>());
+    std::move(callback).Run(CACHE_STORAGE_ERROR_CACHE_NAME_NOT_FOUND,
+                            std::unique_ptr<ServiceWorkerResponse>(),
+                            std::unique_ptr<storage::BlobDataHandle>());
     return;
   }
 
   // Pass the cache handle along to the callback to keep the cache open until
   // match is done.
   CacheStorageCache* cache_ptr = cache_handle->value();
-  cache_ptr->Match(
-      std::move(request), match_params,
-      base::Bind(&CacheStorage::MatchCacheDidMatch, weak_factory_.GetWeakPtr(),
-                 base::Passed(std::move(cache_handle)), callback));
+  cache_ptr->Match(std::move(request), match_params,
+                   base::BindOnce(&CacheStorage::MatchCacheDidMatch,
+                                  weak_factory_.GetWeakPtr(),
+                                  base::Passed(std::move(cache_handle)),
+                                  std::move(callback)));
 }
 
 void CacheStorage::MatchCacheDidMatch(
     std::unique_ptr<CacheStorageCacheHandle> cache_handle,
-    const CacheStorageCache::ResponseCallback& callback,
+    CacheStorageCache::ResponseCallback callback,
     CacheStorageError error,
     std::unique_ptr<ServiceWorkerResponse> response,
     std::unique_ptr<storage::BlobDataHandle> handle) {
-  callback.Run(error, std::move(response), std::move(handle));
+  std::move(callback).Run(error, std::move(response), std::move(handle));
 }
 
 void CacheStorage::MatchAllCachesImpl(
     std::unique_ptr<ServiceWorkerFetchRequest> request,
     const CacheStorageCacheQueryParams& match_params,
-    const CacheStorageCache::ResponseCallback& callback) {
+    CacheStorageCache::ResponseCallback callback) {
   std::vector<CacheMatchResponse>* match_responses =
-      new std::vector<CacheMatchResponse>(ordered_cache_names_.size());
+      new std::vector<CacheMatchResponse>(cache_index_->num_entries());
 
-  base::Closure barrier_closure = base::BarrierClosure(
-      ordered_cache_names_.size(),
-      base::Bind(&CacheStorage::MatchAllCachesDidMatchAll,
-                 weak_factory_.GetWeakPtr(),
-                 base::Passed(base::WrapUnique(match_responses)), callback));
+  base::RepeatingClosure barrier_closure = base::BarrierClosure(
+      cache_index_->num_entries(),
+      base::BindOnce(&CacheStorage::MatchAllCachesDidMatchAll,
+                     weak_factory_.GetWeakPtr(),
+                     base::Passed(base::WrapUnique(match_responses)),
+                     std::move(callback)));
 
-  for (size_t i = 0, max = ordered_cache_names_.size(); i < max; ++i) {
+  size_t idx = 0;
+  for (const auto& cache_metadata : cache_index_->ordered_cache_metadata()) {
     std::unique_ptr<CacheStorageCacheHandle> cache_handle =
-        GetLoadedCache(ordered_cache_names_[i]);
+        GetLoadedCache(cache_metadata.name);
     DCHECK(cache_handle);
 
     CacheStorageCache* cache_ptr = cache_handle->value();
-    cache_ptr->Match(base::MakeUnique<ServiceWorkerFetchRequest>(*request),
-                     match_params,
-                     base::Bind(&CacheStorage::MatchAllCachesDidMatch,
-                                weak_factory_.GetWeakPtr(),
-                                base::Passed(std::move(cache_handle)),
-                                &match_responses->at(i), barrier_closure));
+    cache_ptr->Match(
+        base::MakeUnique<ServiceWorkerFetchRequest>(*request), match_params,
+        base::BindOnce(&CacheStorage::MatchAllCachesDidMatch,
+                       weak_factory_.GetWeakPtr(),
+                       base::Passed(std::move(cache_handle)),
+                       &match_responses->at(idx), barrier_closure));
+    idx++;
   }
 }
 
 void CacheStorage::MatchAllCachesDidMatch(
     std::unique_ptr<CacheStorageCacheHandle> cache_handle,
     CacheMatchResponse* out_match_response,
-    const base::Closure& barrier_closure,
+    const base::RepeatingClosure& barrier_closure,
     CacheStorageError error,
     std::unique_ptr<ServiceWorkerResponse> service_worker_response,
     std::unique_ptr<storage::BlobDataHandle> handle) {
@@ -916,18 +968,18 @@ void CacheStorage::MatchAllCachesDidMatch(
 
 void CacheStorage::MatchAllCachesDidMatchAll(
     std::unique_ptr<std::vector<CacheMatchResponse>> match_responses,
-    const CacheStorageCache::ResponseCallback& callback) {
+    CacheStorageCache::ResponseCallback callback) {
   for (CacheMatchResponse& match_response : *match_responses) {
     if (match_response.error == CACHE_STORAGE_ERROR_NOT_FOUND)
       continue;
-    callback.Run(match_response.error,
-                 std::move(match_response.service_worker_response),
-                 std::move(match_response.blob_data_handle));
+    std::move(callback).Run(match_response.error,
+                            std::move(match_response.service_worker_response),
+                            std::move(match_response.blob_data_handle));
     return;
   }
-  callback.Run(CACHE_STORAGE_ERROR_NOT_FOUND,
-               std::unique_ptr<ServiceWorkerResponse>(),
-               std::unique_ptr<storage::BlobDataHandle>());
+  std::move(callback).Run(CACHE_STORAGE_ERROR_NOT_FOUND,
+                          std::unique_ptr<ServiceWorkerResponse>(),
+                          std::unique_ptr<storage::BlobDataHandle>());
 }
 
 void CacheStorage::AddCacheHandleRef(CacheStorageCache* cache) {
@@ -953,8 +1005,7 @@ void CacheStorage::DropCacheHandleRef(CacheStorageCache* cache) {
     auto doomed_caches_iter = doomed_caches_.find(cache);
     if (doomed_caches_iter != doomed_caches_.end()) {
       // The last reference to a doomed cache is gone, perform clean up.
-      DeleteCacheFinalize(std::move(doomed_caches_iter->second));
-      doomed_caches_.erase(doomed_caches_iter);
+      DeleteCacheFinalize(cache);
       return;
     }
 
@@ -984,8 +1035,8 @@ std::unique_ptr<CacheStorageCacheHandle> CacheStorage::GetLoadedCache(
   CacheStorageCache* cache = map_iter->second.get();
 
   if (!cache) {
-    std::unique_ptr<CacheStorageCache> new_cache =
-        cache_loader_->CreateCache(cache_name);
+    std::unique_ptr<CacheStorageCache> new_cache = cache_loader_->CreateCache(
+        cache_name, cache_index_->GetCacheSize(cache_name));
     CacheStorageCache* cache_ptr = new_cache.get();
     map_iter->second = std::move(new_cache);
 
@@ -995,47 +1046,72 @@ std::unique_ptr<CacheStorageCacheHandle> CacheStorage::GetLoadedCache(
   return CreateCacheHandle(cache);
 }
 
-void CacheStorage::GetSizeThenCloseAllCachesImpl(const SizeCallback& callback) {
+void CacheStorage::SizeRetrievedFromCache(
+    std::unique_ptr<CacheStorageCacheHandle> cache_handle,
+    base::OnceClosure closure,
+    int64_t* accumulator,
+    int64_t size) {
+  cache_index_->SetCacheSize(cache_handle->value()->cache_name(), size);
+  *accumulator += size;
+  std::move(closure).Run();
+}
+
+void CacheStorage::GetSizeThenCloseAllCachesImpl(SizeCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(initialized_);
 
   std::unique_ptr<int64_t> accumulator(new int64_t(0));
   int64_t* accumulator_ptr = accumulator.get();
 
-  base::Closure barrier_closure = base::BarrierClosure(
-      ordered_cache_names_.size(),
-      base::Bind(&SizeRetrievedFromAllCaches,
-                 base::Passed(std::move(accumulator)), callback));
+  base::RepeatingClosure barrier_closure =
+      base::BarrierClosure(cache_index_->num_entries(),
+                           base::BindOnce(&SizeRetrievedFromAllCaches,
+                                          base::Passed(std::move(accumulator)),
+                                          std::move(callback)));
 
-  for (const std::string& cache_name : ordered_cache_names_) {
-    std::unique_ptr<CacheStorageCacheHandle> cache_handle =
-        GetLoadedCache(cache_name);
+  for (const auto& cache_metadata : cache_index_->ordered_cache_metadata()) {
+    auto cache_handle = GetLoadedCache(cache_metadata.name);
     CacheStorageCache* cache = cache_handle->value();
-    cache->GetSizeThenClose(base::Bind(&SizeRetrievedFromCache,
-                                       base::Passed(std::move(cache_handle)),
-                                       barrier_closure, accumulator_ptr));
+    cache->GetSizeThenClose(base::BindOnce(
+        &CacheStorage::SizeRetrievedFromCache, weak_factory_.GetWeakPtr(),
+        base::Passed(std::move(cache_handle)), barrier_closure,
+        accumulator_ptr));
   }
 }
 
-void CacheStorage::SizeImpl(const SizeCallback& callback) {
+void CacheStorage::SizeImpl(SizeCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(initialized_);
+
+  if (cache_index_->GetStorageSize() != kSizeUnknown) {
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), cache_index_->GetStorageSize()));
+    return;
+  }
 
   std::unique_ptr<int64_t> accumulator(new int64_t(0));
   int64_t* accumulator_ptr = accumulator.get();
 
-  base::Closure barrier_closure = base::BarrierClosure(
-      ordered_cache_names_.size(),
-      base::Bind(&SizeRetrievedFromAllCaches,
-                 base::Passed(std::move(accumulator)), callback));
+  base::RepeatingClosure barrier_closure =
+      base::BarrierClosure(cache_index_->num_entries(),
+                           base::BindOnce(&SizeRetrievedFromAllCaches,
+                                          base::Passed(std::move(accumulator)),
+                                          std::move(callback)));
 
-  for (const std::string& cache_name : ordered_cache_names_) {
+  for (const auto& cache_metadata : cache_index_->ordered_cache_metadata()) {
+    if (cache_metadata.size != CacheStorage::kSizeUnknown) {
+      *accumulator_ptr += cache_metadata.size;
+      barrier_closure.Run();
+      continue;
+    }
     std::unique_ptr<CacheStorageCacheHandle> cache_handle =
-        GetLoadedCache(cache_name);
+        GetLoadedCache(cache_metadata.name);
     CacheStorageCache* cache = cache_handle->value();
-    cache->Size(base::Bind(&SizeRetrievedFromCache,
-                           base::Passed(std::move(cache_handle)),
-                           barrier_closure, accumulator_ptr));
+    cache->Size(base::BindOnce(&CacheStorage::SizeRetrievedFromCache,
+                               weak_factory_.GetWeakPtr(),
+                               base::Passed(std::move(cache_handle)),
+                               barrier_closure, accumulator_ptr));
   }
 }
 

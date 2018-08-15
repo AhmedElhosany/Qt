@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.ToolButton {
     id: control
@@ -49,22 +49,28 @@ T.ToolButton {
     baselineOffset: contentItem.y + contentItem.baselineOffset
 
     padding: 6
+    spacing: 6
 
-    contentItem: Text {
+    icon.width: 24
+    icon.height: 24
+    icon.color: visualFocus ? control.palette.highlight : control.palette.buttonText
+
+    contentItem: IconLabel {
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+
+        icon: control.icon
         text: control.text
         font: control.font
-        color: control.enabled ? (control.visualFocus ? Default.focusColor : Default.textDarkColor) : Default.textDisabledLightColor
-        elide: Text.ElideRight
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
+        color: control.visualFocus ? control.palette.highlight : control.palette.buttonText
     }
 
     background: Rectangle {
         implicitWidth: 40
         implicitHeight: 40
 
-        color: Qt.darker(Default.toolButtonColor, control.enabled && (control.checked || control.highlighted) ? 1.5 : 1.0)
-        opacity: control.down ? 1.0 : control.enabled && (control.checked || control.highlighted) ? 0.5 : 0
-        visible: control.down || (control.enabled && (control.checked || control.highlighted))
+        opacity: control.down ? 1.0 : 0.5
+        color: control.down || control.checked || control.highlighted ? control.palette.mid : control.palette.button
     }
 }

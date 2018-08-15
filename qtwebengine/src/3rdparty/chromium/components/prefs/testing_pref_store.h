@@ -25,6 +25,7 @@ class TestingPrefStore : public PersistentPrefStore {
   // Overriden from PrefStore.
   bool GetValue(const std::string& key,
                 const base::Value** result) const override;
+  std::unique_ptr<base::DictionaryValue> GetValues() const override;
   void AddObserver(PrefStore::Observer* observer) override;
   void RemoveObserver(PrefStore::Observer* observer) override;
   bool HasObservers() const override;
@@ -44,7 +45,7 @@ class TestingPrefStore : public PersistentPrefStore {
   PrefReadError GetReadError() const override;
   PersistentPrefStore::PrefReadError ReadPrefs() override;
   void ReadPrefsAsync(ReadErrorDelegate* error_delegate) override;
-  void CommitPendingWrite() override;
+  void CommitPendingWrite(base::OnceClosure done_callback) override;
   void SchedulePendingLossyWrites() override;
 
   // Marks the store as having completed initialization.
@@ -82,6 +83,9 @@ class TestingPrefStore : public PersistentPrefStore {
   ~TestingPrefStore() override;
 
  private:
+  void CheckPrefIsSerializable(const std::string& key,
+                               const base::Value& value);
+
   // Stores the preference values.
   PrefValueMap prefs_;
 

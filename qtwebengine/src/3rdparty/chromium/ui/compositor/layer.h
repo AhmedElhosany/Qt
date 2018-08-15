@@ -21,8 +21,8 @@
 #include "cc/layers/layer_client.h"
 #include "cc/layers/surface_layer.h"
 #include "cc/layers/texture_layer_client.h"
-#include "cc/resources/texture_mailbox.h"
-#include "cc/surfaces/surface_id.h"
+#include "components/viz/common/quads/texture_mailbox.h"
+#include "components/viz/common/surfaces/sequence_surface_reference_factory.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/compositor/compositor.h"
@@ -40,8 +40,6 @@ class NinePatchLayer;
 class SolidColorLayer;
 class SurfaceLayer;
 class TextureLayer;
-struct ReturnedResource;
-typedef std::vector<ReturnedResource> ReturnedResourceArray;
 }
 
 namespace ui {
@@ -186,10 +184,23 @@ class COMPOSITOR_EXPORT Layer
   // the combined opacity of the parent.
   float GetCombinedOpacity() const;
 
-  // Blur pixels by this amount in anything below the layer and visible through
-  // the layer.
-  int background_blur() const { return background_blur_radius_; }
-  void SetBackgroundBlur(int blur_radius);
+  // The layer temperature value between 0.0f and 1.0f, where a value of 0.0f
+  // is least warm (which is the default), and a value of 1.0f is most warm.
+  float layer_temperature() const { return layer_temperature_; }
+  void SetLayerTemperature(float value);
+
+  // Returns the target color temperature if animator is running, or the current
+  // temperature otherwise.
+  float GetTargetTemperature() const;
+
+  // Blur pixels by 3 * this amount in anything below the layer and visible
+  // through the layer.
+  float background_blur() const { return background_blur_sigma_; }
+  void SetBackgroundBlur(float blur_sigma);
+
+  // Blur pixels of this layer by 3 * this amount.
+  float layer_blur() const { return layer_blur_sigma_; }
+  void SetLayerBlur(float blur_sigma);
 
   // Saturate all pixels of this layer by this amount.
   // This effect will get "combined" with the inverted,
@@ -271,7 +282,9 @@ class COMPOSITOR_EXPORT Layer
   bool GetTargetTransformRelativeTo(const Layer* ancestor,
                                     gfx::Transform* transform) const;
 
-  // See description in View for details
+  // Note: Setting a layer non-opaque has significant performance impact,
+  // especially on low-end Chrome OS devices. Please ensure you are not
+  // adding unnecessary overdraw. When in doubt, talk to the graphics team.
   void SetFillsBoundsOpaquely(bool fills_bounds_opaquely);
   bool fills_bounds_opaquely() const { return fills_bounds_opaquely_; }
 
@@ -285,20 +298,24 @@ class COMPOSITOR_EXPORT Layer
   // Set new TextureMailbox for this layer. Note that |mailbox| may hold a
   // shared memory resource or an actual mailbox for a texture.
   void SetTextureMailbox(
-      const cc::TextureMailbox& mailbox,
+      const viz::TextureMailbox& mailbox,
       std::unique_ptr<cc::SingleReleaseCallback> release_callback,
       gfx::Size texture_size_in_dip);
   void SetTextureSize(gfx::Size texture_size_in_dip);
   void SetTextureFlipped(bool flipped);
   bool TextureFlipped() const;
 
-  // Begins showing content from a surface with a particular id.
-  void SetShowSurface(const cc::SurfaceId& surface_id,
-                      const cc::SurfaceLayer::SatisfyCallback& satisfy_callback,
-                      const cc::SurfaceLayer::RequireCallback& require_callback,
-                      gfx::Size surface_size,
-                      float scale,
-                      gfx::Size frame_size_in_dip);
+  // Begins showing content from a surface with a particular ID.
+  void SetShowPrimarySurface(
+      const viz::SurfaceInfo& surface_info,
+      scoped_refptr<viz::SurfaceReferenceFactory> surface_ref);
+
+  // In the event that the primary surface is not yet available in the
+  // display compositor, the fallback surface will be used.
+  void SetFallbackSurface(const viz::SurfaceInfo& surface_info);
+
+  // Returns the fallback SurfaceInfo set by SetFallbackSurface.
+  const viz::SurfaceInfo* GetFallbackSurfaceInfo() const;
 
   bool has_external_content() {
     return texture_layer_.get() || surface_layer_.get();
@@ -351,9 +368,15 @@ class COMPOSITOR_EXPORT Layer
   // Requets a copy of the layer's output as a texture or bitmap.
   void RequestCopyOfOutput(std::unique_ptr<cc::CopyOutputRequest> request);
 
-  // Makes this Layer scrollable, clipping to |parent_clip_layer|. |on_scroll|
-  // is invoked when scrolling performed by the cc::InputHandler is committed.
-  void SetScrollable(Layer* parent_clip_layer, const base::Closure& on_scroll);
+  // Invoked when scrolling performed by the cc::InputHandler is committed. This
+  // will only occur if the Layer has set scroll container bounds.
+  void SetDidScrollCallback(
+      base::Callback<void(const gfx::ScrollOffset&)> callback);
+
+  // Marks this layer as scrollable inside the provided bounds. This size only
+  // affects scrolling so if clipping is desired, a separate clipping layer
+  // needs to be created.
+  void SetScrollable(const gfx::Size& container_bounds);
 
   // Gets and sets the current scroll offset of the layer.
   gfx::ScrollOffset CurrentScrollOffset() const;
@@ -370,7 +393,7 @@ class COMPOSITOR_EXPORT Layer
 
   // TextureLayerClient
   bool PrepareTextureMailbox(
-      cc::TextureMailbox* mailbox,
+      viz::TextureMailbox* mailbox,
       std::unique_ptr<cc::SingleReleaseCallback>* release_callback) override;
 
   float device_scale_factor() const { return device_scale_factor_; }
@@ -387,6 +410,16 @@ class COMPOSITOR_EXPORT Layer
   const cc::Region& damaged_region_for_testing() const {
     return damaged_region_;
   }
+
+  const gfx::Size& frame_size_in_dip_for_testing() const {
+    return frame_size_in_dip_;
+  }
+
+  // Force use of and cache render surface. Note that this also disables
+  // occlusion culling in favor of efficient caching. This should
+  // only be used when paying the cost of creating a render
+  // surface even if layer is invisible is not a problem.
+  void SetCacheRenderSurface(bool cache_render_surface);
 
  private:
   friend class LayerOwner;
@@ -409,6 +442,7 @@ class COMPOSITOR_EXPORT Layer
   void SetBrightnessFromAnimation(float brightness) override;
   void SetGrayscaleFromAnimation(float grayscale) override;
   void SetColorFromAnimation(SkColor color) override;
+  void SetTemperatureFromAnimation(float temperature) override;
   void ScheduleDrawForAnimation() override;
   const gfx::Rect& GetBoundsForAnimation() const override;
   gfx::Transform GetTransformForAnimation() const override;
@@ -417,10 +451,13 @@ class COMPOSITOR_EXPORT Layer
   float GetBrightnessForAnimation() const override;
   float GetGrayscaleForAnimation() const override;
   SkColor GetColorForAnimation() const override;
+  float GetTemperatureFromAnimation() const override;
   float GetDeviceScaleFactor() const override;
   cc::Layer* GetCcLayer() const override;
   LayerThreadedAnimationDelegate* GetThreadedAnimationDelegate() override;
   LayerAnimatorCollection* GetLayerAnimatorCollection() override;
+  int GetFrameNumber() const override;
+  float GetRefreshRate() const override;
 
   // Creates a corresponding composited layer for |type_|.
   void CreateCcLayer();
@@ -463,7 +500,9 @@ class COMPOSITOR_EXPORT Layer
   // Visibility of this layer. See SetVisible/IsDrawn for more details.
   bool visible_;
 
+  // See SetFillsBoundsOpaquely(). Defaults to true.
   bool fills_bounds_opaquely_;
+
   bool fills_bounds_completely_;
 
   // Union of damaged rects, in layer space, that SetNeedsDisplayRect should
@@ -474,7 +513,7 @@ class COMPOSITOR_EXPORT Layer
   // to paint the content.
   cc::Region paint_region_;
 
-  int background_blur_radius_;
+  float background_blur_sigma_;
 
   // Several variables which will change the visible representation of
   // the layer.
@@ -482,6 +521,15 @@ class COMPOSITOR_EXPORT Layer
   float layer_brightness_;
   float layer_grayscale_;
   bool layer_inverted_;
+  float layer_blur_sigma_;
+
+  // The global color temperature value (0.0f ~ 1.0f). Used to calculate the
+  // layer blue and green colors scales. 0.0f is least warm (default), and 1.0f
+  // is most warm.
+  float layer_temperature_;
+  // The calculated layer blue and green color scales (0.0f ~ 1.0f).
+  float layer_blue_scale_;
+  float layer_green_scale_;
 
   // The associated mask layer with this layer.
   Layer* layer_mask_;
@@ -528,7 +576,7 @@ class COMPOSITOR_EXPORT Layer
   gfx::Rect nine_patch_layer_aperture_;
 
   // The mailbox used by texture_layer_.
-  cc::TextureMailbox mailbox_;
+  viz::TextureMailbox mailbox_;
 
   // The callback to release the mailbox. This is only set after
   // SetTextureMailbox is called, before we give it to the TextureLayer.

@@ -68,6 +68,7 @@
 #endif
 
 #include "qstring.h"
+#include "qscopedpointer.h"
 
 #if defined( __OBJC__) && defined(QT_NAMESPACE)
 #define QT_NAMESPACE_ALIAS_OBJC_CLASS(__KLASS__) @compatibility_alias __KLASS__ QT_MANGLE_NAMESPACE(__KLASS__)
@@ -76,6 +77,37 @@
 #endif
 
 QT_BEGIN_NAMESPACE
+template <typename T, typename U, U (*RetainFunction)(U), void (*ReleaseFunction)(U)>
+class QAppleRefCounted
+{
+public:
+    QAppleRefCounted(const T &t = T()) : value(t) {}
+    QAppleRefCounted(QAppleRefCounted &&other) : value(other.value) { other.value = T(); }
+    QAppleRefCounted(const QAppleRefCounted &other) : value(other.value) { if (value) RetainFunction(value); }
+    ~QAppleRefCounted() { if (value) ReleaseFunction(value); }
+    operator T() { return value; }
+    void swap(QAppleRefCounted &other) Q_DECL_NOEXCEPT_EXPR(noexcept(qSwap(value, other.value)))
+    { qSwap(value, other.value); }
+    QAppleRefCounted &operator=(const QAppleRefCounted &other)
+    { QAppleRefCounted copy(other); swap(copy); return *this; }
+    QAppleRefCounted &operator=(QAppleRefCounted &&other)
+    { QAppleRefCounted moved(std::move(other)); swap(moved); return *this; }
+    T *operator&() { return &value; }
+protected:
+    T value;
+};
+
+
+#ifdef Q_OS_MACOS
+class QMacRootLevelAutoReleasePool
+{
+public:
+    QMacRootLevelAutoReleasePool();
+    ~QMacRootLevelAutoReleasePool();
+private:
+    QScopedPointer<QMacAutoReleasePool> pool;
+};
+#endif
 
 /*
     Helper class that automates refernce counting for CFtypes.
@@ -90,33 +122,17 @@ QT_BEGIN_NAMESPACE
     HIThemeGet*Shape functions, which in reality are "Copy" functions.
 */
 template <typename T>
-class Q_CORE_EXPORT QCFType
+class QCFType : public QAppleRefCounted<T, CFTypeRef, CFRetain, CFRelease>
 {
 public:
-    inline QCFType(const T &t = 0) : type(t) {}
-    inline QCFType(const QCFType &helper) : type(helper.type) { if (type) CFRetain(type); }
-    inline ~QCFType() { if (type) CFRelease(type); }
-    inline operator T() { return type; }
-    inline QCFType operator =(const QCFType &helper)
-    {
-        if (helper.type)
-            CFRetain(helper.type);
-        CFTypeRef type2 = type;
-        type = helper.type;
-        if (type2)
-            CFRelease(type2);
-        return *this;
-    }
-    inline T *operator&() { return &type; }
-    template <typename X> X as() const { return reinterpret_cast<X>(type); }
+    using QAppleRefCounted<T, CFTypeRef, CFRetain, CFRelease>::QAppleRefCounted;
+    template <typename X> X as() const { return reinterpret_cast<X>(this->value); }
     static QCFType constructFromGet(const T &t)
     {
         if (t)
             CFRetain(t);
         return QCFType<T>(t);
     }
-protected:
-    T type;
 };
 
 class Q_CORE_EXPORT QCFString : public QCFType<CFStringRef>
@@ -136,6 +152,12 @@ private:
 Q_CORE_EXPORT QChar qt_mac_qtKey2CocoaKey(Qt::Key key);
 Q_CORE_EXPORT Qt::Key qt_mac_cocoaKey2QtKey(QChar keyCode);
 #endif
+
+#ifndef QT_NO_DEBUG_STREAM
+QDebug operator<<(QDebug debug, const QMacAutoReleasePool *pool);
+#endif
+
+Q_CORE_EXPORT void qt_apple_check_os_version();
 
 QT_END_NAMESPACE
 

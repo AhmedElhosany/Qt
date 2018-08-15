@@ -13,8 +13,8 @@
 #include "content/public/browser/render_frame_host.h"
 #include "media/base/android/media_player_bridge.h"
 #include "media/base/android/media_player_manager.h"
-#include "media/base/demuxer_stream_provider.h"
 #include "media/base/media_log.h"
+#include "media/base/media_resource.h"
 #include "media/base/renderer.h"
 #include "media/base/renderer_client.h"
 #include "url/gurl.h"
@@ -42,12 +42,12 @@ class CONTENT_EXPORT MediaPlayerRenderer : public media::Renderer,
   static void RegisterMediaUrlInterceptor(
       media::MediaUrlInterceptor* media_url_interceptor);
 
-  explicit MediaPlayerRenderer(content::RenderFrameHost* render_frame_host);
+  MediaPlayerRenderer(int process_id, int routing_id);
 
   ~MediaPlayerRenderer() override;
 
   // media::Renderer implementation
-  void Initialize(media::DemuxerStreamProvider* demuxer_stream_provider,
+  void Initialize(media::MediaResource* media_resource,
                   media::RendererClient* client,
                   const media::PipelineStatusCB& init_cb) override;
   void SetCdm(media::CdmContext* cdm_context,
@@ -62,8 +62,6 @@ class CONTENT_EXPORT MediaPlayerRenderer : public media::Renderer,
   void SetPlaybackRate(double playback_rate) override;
   void SetVolume(float volume) override;
   base::TimeDelta GetMediaTime() override;
-  bool HasAudio() override;
-  bool HasVideo() override;
 
   // media::MediaPlayerManager implementation
   media::MediaResourceGetter* GetMediaResourceGetter() override;
@@ -110,7 +108,12 @@ class CONTENT_EXPORT MediaPlayerRenderer : public media::Renderer,
   // it exists. No-ops otherwise.
   void CancelScopedSurfaceRequest();
 
-  RenderFrameHost* render_frame_host_;
+  // Identifiers to find the RenderFrameHost that created |this|.
+  // NOTE: We store these IDs rather than a RenderFrameHost* because we do not
+  // know when the RenderFrameHost is destroyed.
+  int render_process_id_;
+  int routing_id_;
+
   media::RendererClient* renderer_client_;
 
   std::unique_ptr<media::MediaPlayerBridge> media_player_;

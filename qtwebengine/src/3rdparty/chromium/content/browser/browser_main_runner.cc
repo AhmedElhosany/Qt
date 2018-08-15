@@ -10,17 +10,18 @@
 #include "base/debug/leak_annotations.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/profiler/scoped_profile.h"
 #include "base/profiler/scoped_tracker.h"
+#include "base/run_loop.h"
 #include "base/time/time.h"
 #include "base/trace_event/heap_profiler_allocation_context_tracker.h"
 #include "base/trace_event/trace_event.h"
 #include "base/tracked_objects.h"
 #include "build/build_config.h"
-#include "components/tracing/browser/trace_config_file.h"
+#include "components/tracing/common/trace_config_file.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/browser_shutdown_profile_dumper.h"
@@ -45,7 +46,7 @@ namespace content {
 
 namespace {
 
-bool g_exited_main_message_loop = false;
+base::LazyInstance<base::AtomicFlag>::Leaky g_exited_main_message_loop;
 const char kMainThreadName[] = "CrBrowserMain";
 
 }  // namespace
@@ -147,6 +148,7 @@ class BrowserMainRunnerImpl : public BrowserMainRunner {
   void Shutdown() override {
     DCHECK(initialization_started_);
     DCHECK(!is_shutdown_);
+
 #ifdef LEAK_SANITIZER
     // Invoke leak detection now, to avoid dealing with shutdown-only leaks.
     // Normally this will have already happened in
@@ -155,6 +157,9 @@ class BrowserMainRunnerImpl : public BrowserMainRunner {
     // If leaks are found, the process will exit here.
     __lsan_do_leak_check();
 #endif
+
+    main_loop_->PreShutdown();
+
     // If startup tracing has not been finished yet, replace it's dumper
     // with special version, which would save trace file on exit (i.e.
     // startup tracing becomes a version of shutdown tracing).
@@ -194,7 +199,7 @@ class BrowserMainRunnerImpl : public BrowserMainRunner {
     {
       // The trace event has to stay between profiler creation and destruction.
       TRACE_EVENT0("shutdown", "BrowserMainRunner");
-      g_exited_main_message_loop = true;
+      g_exited_main_message_loop.Get().Set();
 
       main_loop_->ShutdownThreadsAndCleanUp();
 
@@ -206,7 +211,7 @@ class BrowserMainRunnerImpl : public BrowserMainRunner {
       // Forcefully terminates the RunLoop inside MessagePumpForUI, ensuring
       // proper shutdown for content_browsertests. Shutdown() is not used by
       // the actual browser.
-      if (base::MessageLoop::current()->is_running())
+      if (base::RunLoop::IsRunningOnCurrentThread())
         base::MessageLoop::current()->QuitNow();
   #endif
       main_loop_.reset(NULL);
@@ -241,7 +246,8 @@ BrowserMainRunner* BrowserMainRunner::Create() {
 
 // static
 bool BrowserMainRunner::ExitedMainMessageLoop() {
-  return g_exited_main_message_loop;
+  return !(g_exited_main_message_loop == nullptr) &&
+         g_exited_main_message_loop.Get().IsSet();
 }
 
 }  // namespace content

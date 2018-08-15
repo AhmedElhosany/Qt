@@ -63,11 +63,12 @@
 #include "qhttpnetworkrequest_p.h"
 #include "qhttpnetworkconnection_p.h"
 #include <QSharedPointer>
-#include "qsslconfiguration.h"
+#include <QScopedPointer>
 #include "private/qnoncontiguousbytedevice_p.h"
 #include "qnetworkaccessauthenticationmanager_p.h"
+#include <QtNetwork/private/http2protocol_p.h>
 
-QT_REQUIRE_CONFIG(http);
+#ifndef QT_NO_HTTP
 
 QT_BEGIN_NAMESPACE
 
@@ -88,7 +89,7 @@ public:
     // incoming
     bool ssl;
 #ifndef QT_NO_SSL
-    QSslConfiguration incomingSslConfiguration;
+    QScopedPointer<QSslConfiguration> incomingSslConfiguration;
 #endif
     QHttpNetworkRequest httpRequest;
     qint64 downloadBufferMaximumSize;
@@ -115,6 +116,7 @@ public:
     qint64 removedContentLength;
     QNetworkReply::NetworkError incomingErrorCode;
     QString incomingErrorDetail;
+    Http2::ProtocolParameters http2Parameters;
 #ifndef QT_NO_BEARERMANAGEMENT
     QSharedPointer<QNetworkSession> networkSession;
 #endif
@@ -324,5 +326,7 @@ signals:
 };
 
 QT_END_NAMESPACE
+
+#endif // QT_NO_HTTP
 
 #endif // QHTTPTHREADDELEGATE_H

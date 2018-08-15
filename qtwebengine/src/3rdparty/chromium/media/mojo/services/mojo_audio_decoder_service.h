@@ -17,7 +17,7 @@
 
 namespace media {
 
-class MediaKeys;
+class ContentDecryptionModule;
 class MojoCdmServiceContext;
 class MojoDecoderBufferReader;
 
@@ -31,33 +31,30 @@ class MEDIA_MOJO_EXPORT MojoAudioDecoderService
   ~MojoAudioDecoderService() final;
 
   // mojom::AudioDecoder implementation
-  void Initialize(mojom::AudioDecoderClientAssociatedPtrInfo client,
-                  mojom::AudioDecoderConfigPtr config,
+  void Construct(mojom::AudioDecoderClientAssociatedPtrInfo client) final;
+  void Initialize(const AudioDecoderConfig& config,
                   int32_t cdm_id,
-                  const InitializeCallback& callback) final;
+                  InitializeCallback callback) final;
 
   void SetDataSource(mojo::ScopedDataPipeConsumerHandle receive_pipe) final;
 
-  void Decode(mojom::DecoderBufferPtr buffer,
-              const DecodeCallback& callback) final;
+  void Decode(mojom::DecoderBufferPtr buffer, DecodeCallback callback) final;
 
-  void Reset(const ResetCallback& callback) final;
+  void Reset(ResetCallback callback) final;
 
  private:
   // Called by |decoder_| upon finishing initialization.
-  void OnInitialized(const InitializeCallback& callback,
-                     scoped_refptr<MediaKeys> cdm,
+  void OnInitialized(InitializeCallback callback,
+                     scoped_refptr<ContentDecryptionModule> cdm,
                      bool success);
 
-  void OnReadDone(const DecodeCallback& callback,
-                  scoped_refptr<DecoderBuffer> buffer);
+  void OnReadDone(DecodeCallback callback, scoped_refptr<DecoderBuffer> buffer);
 
   // Called by |decoder_| when DecoderBuffer is accepted or rejected.
-  void OnDecodeStatus(const DecodeCallback& callback,
-                      media::DecodeStatus status);
+  void OnDecodeStatus(DecodeCallback callback, media::DecodeStatus status);
 
   // Called by |decoder_| when reset sequence is finished.
-  void OnResetDone(const ResetCallback& callback);
+  void OnResetDone(ResetCallback callback);
 
   // Called by |decoder_| for each decoded buffer.
   void OnAudioBufferReady(const scoped_refptr<AudioBuffer>& audio_buffer);
@@ -72,7 +69,7 @@ class MEDIA_MOJO_EXPORT MojoAudioDecoderService
 
   // Hold a reference to the CDM to keep it alive for the lifetime of the
   // |decoder_|. The |cdm_| owns the CdmContext which is passed to |decoder_|.
-  scoped_refptr<MediaKeys> cdm_;
+  scoped_refptr<ContentDecryptionModule> cdm_;
 
   // The AudioDecoder that does actual decoding work.
   // This MUST be declared after |cdm_| to maintain correct destruction order.

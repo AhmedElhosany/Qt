@@ -29,13 +29,20 @@ namespace automationInternal {
 
   // All possible actions that can be performed on automation nodes.
   enum ActionType {
-    focus,
+    customAction,
     doDefault,
+    focus,
+    getImageData,
+    hitTest,
     makeVisible,
+    resumeMedia,
     setAccessibilityFocus,
     setSequentialFocusNavigationStartingPoint,
     setSelection,
-    showContextMenu
+    showContextMenu,
+    startDuckingMedia,
+    stopDuckingMedia,
+    suspendMedia
   };
 
   // Arguments required for all actions supplied to performAction.
@@ -43,6 +50,12 @@ namespace automationInternal {
     long treeID;
     long automationNodeID;
     ActionType actionType;
+  };
+
+  // Arguments for the customAction action. Those args are passed to
+  // performAction as opt_args.
+  dictionary PerformCustomActionParams {
+    long customActionID;
   };
 
   // Arguments for the setSelection action supplied to performAction.
@@ -65,6 +78,19 @@ namespace automationInternal {
   dictionary EnableTabParams {
     long routingID;
     long? tabID;
+  };
+
+  // Arguments for the getImageData action.
+  dictionary GetImageDataParams {
+    long maxWidth;
+    long maxHeight;
+  };
+
+  // Arguments for the hitTest action.
+  dictionary HitTestParams {
+    long x;
+    long y;
+    DOMString eventToFire;
   };
 
   // Returns the accessibility tree id of the web contents who's accessibility

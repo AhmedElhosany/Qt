@@ -820,6 +820,8 @@ void QQuickRangeSlider::setSnapMode(SnapMode mode)
     Possible values:
     \value Qt.Horizontal Horizontal (default)
     \value Qt.Vertical Vertical
+
+    \sa horizontal, vertical
 */
 Qt::Orientation QQuickRangeSlider::orientation() const
 {
@@ -919,6 +921,36 @@ void QQuickRangeSlider::setLive(bool live)
 
     d->live = live;
     emit liveChanged();
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty bool QtQuick.Controls::RangeSlider::horizontal
+    \readonly
+
+    This property holds whether the slider is horizontal.
+
+    \sa orientation
+*/
+bool QQuickRangeSlider::isHorizontal() const
+{
+    Q_D(const QQuickRangeSlider);
+    return d->orientation == Qt::Horizontal;
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty bool QtQuick.Controls::RangeSlider::vertical
+    \readonly
+
+    This property holds whether the slider is vertical.
+
+    \sa orientation
+*/
+bool QQuickRangeSlider::isVertical() const
+{
+    Q_D(const QQuickRangeSlider);
+    return d->orientation == Qt::Vertical;
 }
 
 void QQuickRangeSlider::focusInEvent(QFocusEvent *event)

@@ -2,18 +2,25 @@ cmake_minimum_required(VERSION 2.8)
 
 project(SwiftShader C CXX)
 
-set(CMAKE_BUILD_TYPE "Release" CACHE STRING "The type of build: Debug Release RelWithDebInfo." )
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "The type of build: Debug Release MinSizeRel RelWithDebInfo." FORCE)
+endif()
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release MinSizeRel RelWithDebInfo)
 
 option(BUILD_EGL "Build the EGL library" 1)
 if(WIN32)
-    option(BUILD_GL32 "Build the OpenGL 32 library" 1)
+    option(BUILD_GL32 "Build the OpenGL32 library" 1)
 endif()
 option(BUILD_GLESv2 "Build the OpenGL ES 2 library" 1)
 option(BUILD_GLES_CM "Build the OpenGL ES 1.1 library" 1)
 
-option(USE_GROUP_SOURCES "Group the source files in a folder tree for visual studio" 1)
+option(USE_GROUP_SOURCES "Group the source files in a folder tree for Visual Studio" 1)
 
-option(BUILD_EXTRA_PROGRAMS "Build extra programs" 1)
+option(BUILD_SAMPLES "Build sample programs" 1)
+option(BUILD_TESTS "Build test programs" 1)
+
+set(REACTOR_BACKEND "LLVM" CACHE STRING "JIT compiler back-end used by Reactor")
+set_property(CACHE REACTOR_BACKEND PROPERTY STRINGS LLVM Subzero)
 
 # LLVM disallows calling cmake . from the main LLVM dir, the reason is that
 # it builds header files that could overwrite the orignal ones. Here we
@@ -42,11 +49,21 @@ else()
     message(FATAL_ERROR "Platform is not supported")
 endif()
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(ARCH "x86_64")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(ARCH "aarch64")
+    else()
+        set(ARCH "arm")
+    endif()
 else()
-    set(ARCH "x86")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(ARCH "x86_64")
+    else()
+        set(ARCH "x86")
+    endif()
 endif()
+
+set(CMAKE_MACOSX_RPATH ON)
 
 ###########################################################
 # Convenience macros
@@ -99,6 +116,8 @@ set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/src)
 set(OPENGL_DIR ${SOURCE_DIR}/OpenGL)
 set(OPENGL_COMPILER_DIR ${OPENGL_DIR}/compiler)
 set(LLVM_DIR ${CMAKE_SOURCE_DIR}/third_party/LLVM)
+set(SUBZERO_DIR ${CMAKE_SOURCE_DIR}/third_party/subzero)
+set(SUBZERO_LLVM_DIR ${CMAKE_SOURCE_DIR}/third_party/llvm-subzero)
 set(TESTS_DIR ${CMAKE_SOURCE_DIR}/tests)
 set(HELLO2_DIR ${CMAKE_SOURCE_DIR}/third_party/PowerVR_SDK/Examples/Beginner/01_HelloAPI/OGLES2)
 
@@ -120,7 +139,7 @@ if(MSVC)
 else()
     set_cpp_flag("--std=c++11")
     set_cpp_flag("-Wall")
-    set_cpp_flag("-fexceptions")
+    set_cpp_flag("-fno-exceptions")
 
     # Don't allow symbols to be overridden by another module.
     # This enables libGLES_CM and libGLESv2 to statically link LLVM.
@@ -150,9 +169,8 @@ else()
     set_cpp_flag("-s" RELEASE)
 
     # For distribution it is more important to be slim than super optimized
-    # so even in Release we use only -O2
-    set_cpp_flag("-O2 -Os" RELEASE)
-    set_cpp_flag("-O2 -Os" RELWITHDEBINFO)
+    set_cpp_flag("-Os" RELEASE)
+    set_cpp_flag("-Os" RELWITHDEBINFO)
 
     set_cpp_flag("-DNDEBUG" RELEASE)
     set_cpp_flag("-DNDEBUG" RELWITHDEBINFO)
@@ -420,12 +438,6 @@ set(LLVM_LIST
     ${LLVM_DIR}/lib/Support/raw_os_ostream.cpp
     ${LLVM_DIR}/lib/Support/raw_ostream.cpp
     ${LLVM_DIR}/lib/Support/system_error.cpp
-    ${LLVM_DIR}/lib/TableGen/Error.cpp
-    ${LLVM_DIR}/lib/TableGen/Main.cpp
-    ${LLVM_DIR}/lib/TableGen/Record.cpp
-    ${LLVM_DIR}/lib/TableGen/TGLexer.cpp
-    ${LLVM_DIR}/lib/TableGen/TGParser.cpp
-    ${LLVM_DIR}/lib/TableGen/TableGenBackend.cpp
     ${LLVM_DIR}/lib/Target/Mangler.cpp
     ${LLVM_DIR}/lib/Target/TargetData.cpp
     ${LLVM_DIR}/lib/Target/TargetELFWriterInfo.cpp
@@ -533,7 +545,9 @@ set(LLVM_LIST
     ${LLVM_DIR}/lib/VMCore/Verifier.cpp
 )
 
-if(LINUX)
+if(WIN32)
+    set(LLVM_INCLUDE_DIR ${LLVM_DIR}/include)
+elseif(LINUX)
     set(LLVM_INCLUDE_DIR ${LLVM_DIR}/include-linux)
 elseif(APPLE)
     set(LLVM_INCLUDE_DIR ${LLVM_DIR}/include-osx)
@@ -547,9 +561,115 @@ add_library(llvm STATIC ${LLVM_LIST})
 set_target_properties(llvm PROPERTIES
     POSITION_INDEPENDENT_CODE 1
     INCLUDE_DIRECTORIES "${LLVM_INCLUDE_DIR}"
-    COMPILE_DEFINITIONS "__STDC_CONSTANT_MACROS;__STDC_LIMIT_MACROS"
+    COMPILE_DEFINITIONS "__STDC_CONSTANT_MACROS; __STDC_LIMIT_MACROS;"
     FOLDER "LLVM"
 )
+
+###########################################################
+# Subzero
+###########################################################
+
+if(${REACTOR_BACKEND} STREQUAL "Subzero")
+    set(SUBZERO_LIST
+        ${SUBZERO_DIR}/src/IceAssembler.cpp
+        ${SUBZERO_DIR}/src/IceCfg.cpp
+        ${SUBZERO_DIR}/src/IceCfgNode.cpp
+        ${SUBZERO_DIR}/src/IceClFlags.cpp
+        ${SUBZERO_DIR}/src/IceELFObjectWriter.cpp
+        ${SUBZERO_DIR}/src/IceELFSection.cpp
+        ${SUBZERO_DIR}/src/IceFixups.cpp
+        ${SUBZERO_DIR}/src/IceGlobalContext.cpp
+        ${SUBZERO_DIR}/src/IceGlobalInits.cpp
+        ${SUBZERO_DIR}/src/IceInst.cpp
+        ${SUBZERO_DIR}/src/IceInstrumentation.cpp
+        ${SUBZERO_DIR}/src/IceIntrinsics.cpp
+        ${SUBZERO_DIR}/src/IceLiveness.cpp
+        ${SUBZERO_DIR}/src/IceLoopAnalyzer.cpp
+        ${SUBZERO_DIR}/src/IceMangling.cpp
+        ${SUBZERO_DIR}/src/IceMemory.cpp
+        ${SUBZERO_DIR}/src/IceOperand.cpp
+        ${SUBZERO_DIR}/src/IceRangeSpec.cpp
+        ${SUBZERO_DIR}/src/IceRegAlloc.cpp
+        ${SUBZERO_DIR}/src/IceRevision.cpp
+        ${SUBZERO_DIR}/src/IceRNG.cpp
+        ${SUBZERO_DIR}/src/IceSwitchLowering.cpp
+        ${SUBZERO_DIR}/src/IceTargetLowering.cpp
+        ${SUBZERO_DIR}/src/IceThreading.cpp
+        ${SUBZERO_DIR}/src/IceTimerTree.cpp
+        ${SUBZERO_DIR}/src/IceTypes.cpp
+        ${SUBZERO_DIR}/src/IceVariableSplitting.cpp
+    )
+
+    if(ARCH STREQUAL "x86_64")
+        list(APPEND SUBZERO_LIST
+            ${SUBZERO_DIR}/src/IceTargetLoweringX86.cpp
+            ${SUBZERO_DIR}/src/IceInstX8664.cpp
+            ${SUBZERO_DIR}/src/IceTargetLoweringX8664.cpp
+        )
+        set(SUBZERO_TARGET X8664)
+    elseif(ARCH STREQUAL "x86")
+        list(APPEND SUBZERO_LIST
+            ${SUBZERO_DIR}/src/IceTargetLoweringX86.cpp
+            ${SUBZERO_DIR}/src/IceInstX8632.cpp
+            ${SUBZERO_DIR}/src/IceTargetLoweringX8632.cpp
+        )
+        set(SUBZERO_TARGET X8632)
+    elseif(ARCH STREQUAL "arm")
+        list(APPEND SUBZERO_LIST
+            ${SUBZERO_DIR}/src/IceAssemblerARM32.cpp
+            ${SUBZERO_DIR}/src/IceInstARM32.cpp
+            ${SUBZERO_DIR}/src/IceTargetLoweringARM32.cpp
+        )
+        set(SUBZERO_TARGET ARM32)
+    else()
+        message(FATAL_ERROR "Architecture '${ARCH}' not supported by Subzero")
+    endif()
+
+    file(GLOB_RECURSE SUBZERO_DEPENDENCIES_LIST
+        ${SUBZERO_LLVM_DIR}/*.cpp
+        ${SUBZERO_LLVM_DIR}/*.c
+        ${SUBZERO_LLVM_DIR}/*.h
+    )
+
+    set(SUBZERO_REACTOR_LIST
+        ${SOURCE_DIR}/Reactor/SubzeroReactor.cpp
+        ${SOURCE_DIR}/Reactor/Routine.cpp
+        ${SOURCE_DIR}/Reactor/Optimizer.cpp
+        ${SOURCE_DIR}/Reactor/Nucleus.hpp
+        ${SOURCE_DIR}/Reactor/Routine.hpp
+    )
+
+    set(SUBZERO_INCLUDE_DIR
+        ${SUBZERO_DIR}/
+        ${SUBZERO_LLVM_DIR}/include/
+        ${SUBZERO_DIR}/pnacl-llvm/include/
+     )
+
+    if(WIN32)
+        list(APPEND SUBZERO_INCLUDE_DIR ${SUBZERO_LLVM_DIR}/build/Windows/include/)
+    elseif(LINUX)
+        list(APPEND SUBZERO_INCLUDE_DIR ${SUBZERO_LLVM_DIR}/build/Linux/include/)
+    elseif(APPLE)
+        list(APPEND SUBZERO_INCLUDE_DIR ${SUBZERO_LLVM_DIR}/build/MacOS/include/)
+    endif()
+
+    add_library(ReactorSubzero STATIC
+        ${SUBZERO_LIST}
+        ${SUBZERO_DEPENDENCIES_LIST}
+        ${SUBZERO_REACTOR_LIST}
+    )
+
+    set_target_properties(ReactorSubzero PROPERTIES
+        POSITION_INDEPENDENT_CODE 1
+        INCLUDE_DIRECTORIES "${SUBZERO_INCLUDE_DIR}"
+        COMPILE_DEFINITIONS "SZTARGET=${SUBZERO_TARGET}; ALLOW_DUMP=0; ALLOW_TIMERS=0; ALLOW_LLVM_CL=0; ALLOW_LLVM_IR=0; ALLOW_LLVM_IR_AS_INPUT=0; ALLOW_MINIMAL_BUILD=0; ALLOW_WASM=0; ICE_THREAD_LOCAL_HACK=0;"
+        FOLDER "Subzero"
+    )
+
+    if(WIN32)
+        target_compile_definitions(ReactorSubzero PRIVATE SUBZERO_USE_MICROSOFT_ABI)
+    endif()
+endif()
 
 ###########################################################
 # Include Directories
@@ -600,7 +720,7 @@ list(REMOVE_ITEM SWIFTSHADER_LIST
     ${SOURCE_DIR}/Common/GrallocAndroid.hpp
 )
 
-set(REACTOR_LIST
+set(REACTOR_LLVM_LIST
     ${SOURCE_DIR}/Reactor/LLVMReactor.cpp
     ${SOURCE_DIR}/Reactor/Nucleus.hpp
     ${SOURCE_DIR}/Reactor/Routine.cpp
@@ -737,13 +857,21 @@ set_target_properties(SwiftShader PROPERTIES
 )
 target_link_libraries(SwiftShader ${OS_LIBS})
 
-add_library(Reactor STATIC ${REACTOR_LIST})
-set_target_properties(Reactor PROPERTIES
+add_library(ReactorLLVM STATIC ${REACTOR_LLVM_LIST})
+set_target_properties(ReactorLLVM PROPERTIES
     INCLUDE_DIRECTORIES "${COMMON_INCLUDE_DIR}"
     POSITION_INDEPENDENT_CODE 1
     FOLDER "Core"
 )
-target_link_libraries(Reactor llvm ${OS_LIBS})
+target_link_libraries(ReactorLLVM llvm ${OS_LIBS})
+
+if(${REACTOR_BACKEND} STREQUAL "LLVM")
+    set(Reactor ReactorLLVM)
+elseif(${REACTOR_BACKEND} STREQUAL "Subzero")
+    set(Reactor ReactorSubzero)
+else()
+    message(FATAL_ERROR "REACTOR_BACKEND must be 'LLVM' or 'Subzero'")
+endif()
 
 add_library(GLCompiler STATIC ${OPENGL_COMPILER_LIST})
 set_target_properties(GLCompiler PROPERTIES
@@ -764,7 +892,7 @@ if(BUILD_EGL)
     set_target_properties(libEGL PROPERTIES
         INCLUDE_DIRECTORIES "${OPENGL_INCLUDE_DIR}"
         FOLDER "OpenGL"
-        COMPILE_DEFINITIONS "EGL_EGLEXT_PROTOTYPES"
+        COMPILE_DEFINITIONS "EGL_EGLEXT_PROTOTYPES; EGLAPI=;"
         PREFIX ""
     )
     set_target_export_map(libEGL ${SOURCE_DIR}/OpenGL/libEGL)
@@ -786,7 +914,7 @@ if(BUILD_GL32)
         PREFIX ""
     )
     set_target_export_map(libGL ${SOURCE_DIR}/OpenGL/libGL)
-    target_link_libraries(libGL SwiftShader Reactor GLCompiler ${OS_LIBS})
+    target_link_libraries(libGL SwiftShader ${Reactor} GLCompiler ${OS_LIBS})
 endif()
 
 if(BUILD_GLESv2)
@@ -794,11 +922,11 @@ if(BUILD_GLESv2)
     set_target_properties(libGLESv2 PROPERTIES
         INCLUDE_DIRECTORIES "${OPENGL_INCLUDE_DIR}"
         FOLDER "OpenGL"
-        COMPILE_DEFINITIONS "GL_GLEXT_PROTOTYPES"
+        COMPILE_DEFINITIONS "GL_GLEXT_PROTOTYPES; GL_API=; GL_APICALL=;"
         PREFIX ""
     )
     set_target_export_map(libGLESv2 ${SOURCE_DIR}/OpenGL/libGLESv2)
-    target_link_libraries(libGLESv2 SwiftShader Reactor GLCompiler ${OS_LIBS})
+    target_link_libraries(libGLESv2 SwiftShader ${Reactor} GLCompiler ${OS_LIBS})
     add_custom_command(
         TARGET libGLESv2
         POST_BUILD
@@ -812,11 +940,11 @@ if(BUILD_GLES_CM)
     set_target_properties(libGLES_CM PROPERTIES
         INCLUDE_DIRECTORIES "${OPENGL_INCLUDE_DIR}"
         FOLDER "OpenGL"
-        COMPILE_DEFINITIONS "GL_GLEXT_PROTOTYPES"
+        COMPILE_DEFINITIONS "GL_GLEXT_PROTOTYPES; EGLAPI=; GL_API=; GL_APICALL=;"
         PREFIX ""
     )
     set_target_export_map(libGLES_CM ${SOURCE_DIR}/OpenGL/libGLES_CM)
-    target_link_libraries(libGLES_CM SwiftShader Reactor GLCompiler ${OS_LIBS})
+    target_link_libraries(libGLES_CM SwiftShader ${Reactor} GLCompiler ${OS_LIBS})
     add_custom_command(
         TARGET libGLES_CM
         POST_BUILD
@@ -826,13 +954,27 @@ if(BUILD_GLES_CM)
 endif()
 
 ###########################################################
-# Extra programs
+# Sample programs
 ###########################################################
 
-if(BUILD_EXTRA_PROGRAMS)
-    if(LINUX)
+if(BUILD_SAMPLES)
+    if(WIN32)
+        add_executable(OGLES2HelloAPI ${HELLO2_DIR}/OGLES2HelloAPI_Windows.cpp)
+        set_target_properties(OGLES2HelloAPI PROPERTIES
+            INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include"
+            COMPILE_DEFINITIONS "GL_GLEXT_PROTOTYPES"
+            FOLDER "Samples"
+        )
+        target_link_libraries(OGLES2HelloAPI libEGL libGLESv2)
+        set_property(TARGET OGLES2HelloAPI APPEND_STRING PROPERTY LINK_FLAGS "/SUBSYSTEM:WINDOWS")
+        set(CMAKE_DEFAULT_STARTUP_PROJECT OGLES2HelloAPI)
+    elseif(LINUX)
         add_executable(OGLES2HelloAPI ${HELLO2_DIR}/OGLES2HelloAPI_LinuxX11.cpp)
-        target_link_libraries(OGLES2HelloAPI dl X11 EGL GLESv2)
+        set_target_properties(OGLES2HelloAPI PROPERTIES
+            INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include"
+            COMPILE_DEFINITIONS "GL_GLEXT_PROTOTYPES"
+        )
+        target_link_libraries(OGLES2HelloAPI dl X11 libEGL libGLESv2)   # Explicitly link our "lib*" targets, not the platform provided "EGL" and "GLESv2"
     elseif(APPLE)
         add_executable(OGLES2HelloAPI MACOSX_BUNDLE
             ${HELLO2_DIR}/OGLES2HelloAPI_OSX.mm
@@ -847,5 +989,28 @@ if(BUILD_EXTRA_PROGRAMS)
         set_source_files_properties(${HELLO2_DIR}/Build/OSX/en.lproj/MainMenu.xib PROPERTIES
             MACOSX_PACKAGE_LOCATION "Resources"
         )
+    endif()
+endif()
+
+if(BUILD_TESTS AND ${REACTOR_BACKEND} STREQUAL "Subzero")
+    set(SUBZERO_TEST_LIST
+        ${SOURCE_DIR}/Reactor/Main.cpp
+        ${CMAKE_SOURCE_DIR}/third_party/googletest/googletest/src/gtest-all.cc
+    )
+
+    set(SUBZERO_TEST_INCLUDE_DIR
+        ${CMAKE_SOURCE_DIR}/third_party/googletest/googletest/include
+        ${CMAKE_SOURCE_DIR}/third_party/googletest/googletest/
+    )
+
+    add_executable(SubzeroTest ${SUBZERO_TEST_LIST})
+    set_target_properties(SubzeroTest PROPERTIES
+        INCLUDE_DIRECTORIES "${SUBZERO_TEST_INCLUDE_DIR}"
+        FOLDER "Tests"
+    )
+    if(WIN32)
+        target_link_libraries(SubzeroTest ReactorSubzero)
+    else()
+        target_link_libraries(SubzeroTest ReactorSubzero pthread dl)
     endif()
 endif()

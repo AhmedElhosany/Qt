@@ -1313,8 +1313,7 @@ struct Function {
     uint hasTry: 1;
     uint hasWith: 1;
     uint isQmlBinding: 1;
-    uint returnsClosure: 1;
-    uint unused : 23;
+    uint unused : 24;
 
     // Location of declaration in source code (0 if not specified)
     uint line;
@@ -1369,6 +1368,31 @@ struct Function {
 
     int getNewStatementId() { return _statementCount++; }
     int statementCount() const { return _statementCount; }
+
+    bool canUseSimpleCall() const {
+        return nestedFunctions.isEmpty() &&
+               locals.isEmpty() && formals.size() <= QV4::Global::ReservedArgumentCount &&
+               !hasTry && !hasWith && !isNamedExpression && !usesArgumentsObject && !hasDirectEval;
+    }
+
+    bool argLocalRequiresWriteBarrier(ArgLocal *al) const {
+        uint scope = al->scope;
+        const IR::Function *f = this;
+        while (scope) {
+            f = f->outer;
+            --scope;
+        }
+        return !f->canUseSimpleCall();
+    }
+    int localsCountForScope(ArgLocal *al) const {
+        uint scope = al->scope;
+        const IR::Function *f = this;
+        while (scope) {
+            f = f->outer;
+            --scope;
+        }
+        return f->locals.size();
+    }
 
 private:
     BasicBlock *getOrCreateBasicBlock(int index);
@@ -1438,6 +1462,7 @@ public:
         ArgLocal *newArgLocal = f->New<ArgLocal>();
         newArgLocal->init(argLocal->kind, argLocal->index, argLocal->scope);
         newArgLocal->type = argLocal->type;
+        newArgLocal->isArgumentsOrEval = argLocal->isArgumentsOrEval;
         return newArgLocal;
     }
 

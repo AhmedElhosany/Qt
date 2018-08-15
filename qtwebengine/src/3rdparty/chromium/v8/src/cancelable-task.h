@@ -45,6 +45,17 @@ class V8_EXPORT_PRIVATE CancelableTaskManager {
   // already running. This disallows subsequent Register calls.
   void CancelAndWait();
 
+  // Tries to cancel all remaining registered tasks. The return value indicates
+  // whether
+  //
+  // 1) No tasks were registered (kTaskRemoved), or
+  //
+  // 2) There is at least one remaining task that couldn't be cancelled
+  // (kTaskRunning), or
+  //
+  // 3) All registered tasks were cancelled (kTaskAborted).
+  TryAbortResult TryAbortAll();
+
  private:
   // Only called by {Cancelable} destructor. The task is done with executing,
   // but needs to be removed.
@@ -123,9 +134,11 @@ class V8_EXPORT_PRIVATE Cancelable {
 
 
 // Multiple inheritance can be used because Task is a pure interface.
-class CancelableTask : public Cancelable, public Task {
+class V8_EXPORT_PRIVATE CancelableTask : public Cancelable,
+                                         NON_EXPORTED_BASE(public Task) {
  public:
   explicit CancelableTask(Isolate* isolate);
+  explicit CancelableTask(CancelableTaskManager* manager);
 
   // Task overrides.
   void Run() final {
@@ -136,10 +149,7 @@ class CancelableTask : public Cancelable, public Task {
 
   virtual void RunInternal() = 0;
 
-  Isolate* isolate() { return isolate_; }
-
  private:
-  Isolate* isolate_;
   DISALLOW_COPY_AND_ASSIGN(CancelableTask);
 };
 
@@ -148,6 +158,7 @@ class CancelableTask : public Cancelable, public Task {
 class CancelableIdleTask : public Cancelable, public IdleTask {
  public:
   explicit CancelableIdleTask(Isolate* isolate);
+  explicit CancelableIdleTask(CancelableTaskManager* manager);
 
   // IdleTask overrides.
   void Run(double deadline_in_seconds) final {
@@ -158,10 +169,7 @@ class CancelableIdleTask : public Cancelable, public IdleTask {
 
   virtual void RunInternal(double deadline_in_seconds) = 0;
 
-  Isolate* isolate() { return isolate_; }
-
  private:
-  Isolate* isolate_;
   DISALLOW_COPY_AND_ASSIGN(CancelableIdleTask);
 };
 

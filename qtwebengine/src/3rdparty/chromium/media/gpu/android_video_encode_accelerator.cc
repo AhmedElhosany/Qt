@@ -11,7 +11,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
@@ -47,9 +47,9 @@ enum PixelFormat {
   do {                                                         \
     if (!(result)) {                                           \
       DLOG(ERROR) << log;                                      \
-      if (client_ptr_factory_->GetWeakPtr()) {                 \
+      if (!error_occurred_) {                                  \
         client_ptr_factory_->GetWeakPtr()->NotifyError(error); \
-        client_ptr_factory_.reset();                           \
+        error_occurred_ = true;                                \
       }                                                        \
       return;                                                  \
     }                                                          \
@@ -94,7 +94,7 @@ static bool GetSupportedColorFormatForMime(const std::string& mime,
 }
 
 AndroidVideoEncodeAccelerator::AndroidVideoEncodeAccelerator()
-    : num_buffers_at_codec_(0), last_set_bitrate_(0) {}
+    : num_buffers_at_codec_(0), last_set_bitrate_(0), error_occurred_(false) {}
 
 AndroidVideoEncodeAccelerator::~AndroidVideoEncodeAccelerator() {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -121,8 +121,8 @@ AndroidVideoEncodeAccelerator::GetSupportedProfiles() {
       continue;
     }
 
-    if (VideoCodecBridge::IsKnownUnaccelerated(supported_codec.codec,
-                                               MEDIA_CODEC_ENCODER)) {
+    if (MediaCodecUtil::IsKnownUnaccelerated(supported_codec.codec,
+                                             MediaCodecDirection::ENCODER)) {
       continue;
     }
 
@@ -150,12 +150,14 @@ bool AndroidVideoEncodeAccelerator::Initialize(
            << ", initial_bitrate: " << initial_bitrate;
   DCHECK(!media_codec_);
   DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK(client);
 
   client_ptr_factory_.reset(new base::WeakPtrFactory<Client>(client));
 
   if (!(MediaCodecUtil::SupportsSetParameters() &&
         format == PIXEL_FORMAT_I420)) {
-    DLOG(ERROR) << "Unexpected combo: " << format << ", " << output_profile;
+    DLOG(ERROR) << "Unexpected combo: " << format << ", "
+                << GetProfileName(output_profile);
     return false;
   }
 
@@ -185,7 +187,8 @@ bool AndroidVideoEncodeAccelerator::Initialize(
   last_set_bitrate_ = initial_bitrate;
 
   // Only consider using MediaCodec if it's likely backed by hardware.
-  if (VideoCodecBridge::IsKnownUnaccelerated(codec, MEDIA_CODEC_ENCODER)) {
+  if (MediaCodecUtil::IsKnownUnaccelerated(codec,
+                                           MediaCodecDirection::ENCODER)) {
     DLOG(ERROR) << "No HW support";
     return false;
   }
@@ -195,9 +198,9 @@ bool AndroidVideoEncodeAccelerator::Initialize(
     DLOG(ERROR) << "No color format support.";
     return false;
   }
-  media_codec_.reset(VideoCodecBridge::CreateEncoder(
+  media_codec_ = MediaCodecBridgeImpl::CreateVideoEncoder(
       codec, input_visible_size, initial_bitrate, INITIAL_FRAMERATE,
-      i_frame_interval, pixel_format));
+      i_frame_interval, pixel_format);
 
   if (!media_codec_) {
     DLOG(ERROR) << "Failed to create/start the codec: "
@@ -301,14 +304,14 @@ void AndroidVideoEncodeAccelerator::DoIOTask() {
 }
 
 void AndroidVideoEncodeAccelerator::QueueInput() {
-  if (!client_ptr_factory_->GetWeakPtr() || pending_frames_.empty())
+  if (error_occurred_ || pending_frames_.empty())
     return;
 
   int input_buf_index = 0;
   MediaCodecStatus status =
       media_codec_->DequeueInputBuffer(NoWaitTimeOut(), &input_buf_index);
   if (status != MEDIA_CODEC_OK) {
-    DCHECK(status == MEDIA_CODEC_DEQUEUE_INPUT_AGAIN_LATER ||
+    DCHECK(status == MEDIA_CODEC_TRY_AGAIN_LATER ||
            status == MEDIA_CODEC_ERROR);
     RETURN_ON_FAILURE(status != MEDIA_CODEC_ERROR, "MediaCodec error",
                       kPlatformFailureError);
@@ -368,8 +371,8 @@ void AndroidVideoEncodeAccelerator::QueueInput() {
 }
 
 void AndroidVideoEncodeAccelerator::DequeueOutput() {
-  if (!client_ptr_factory_->GetWeakPtr() ||
-      available_bitstream_buffers_.empty() || num_buffers_at_codec_ == 0) {
+  if (error_occurred_ || available_bitstream_buffers_.empty() ||
+      num_buffers_at_codec_ == 0) {
     return;
   }
 
@@ -382,7 +385,7 @@ void AndroidVideoEncodeAccelerator::DequeueOutput() {
       media_codec_->DequeueOutputBuffer(NoWaitTimeOut(), &buf_index, &offset,
                                         &size, nullptr, nullptr, &key_frame);
   switch (status) {
-    case MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER:
+    case MEDIA_CODEC_TRY_AGAIN_LATER:
       return;
 
     case MEDIA_CODEC_ERROR:
@@ -425,7 +428,7 @@ void AndroidVideoEncodeAccelerator::DequeueOutput() {
       FROM_HERE,
       base::Bind(&VideoEncodeAccelerator::Client::BitstreamBufferReady,
                  client_ptr_factory_->GetWeakPtr(), bitstream_buffer.id(), size,
-                 key_frame, base::Time::Now() - base::Time()));
+                 key_frame, base::TimeDelta()));
 }
 
 }  // namespace media

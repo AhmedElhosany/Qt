@@ -4,6 +4,7 @@
 
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 
+#include "base/memory/ptr_util.h"
 #ifndef TOOLKIT_QT
 #include "chrome/browser/profiles/incognito_helpers.h"
 #endif
@@ -73,7 +74,7 @@ KeyedService* SpellcheckServiceFactory::BuildServiceInstanceFor(
 void SpellcheckServiceFactory::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* user_prefs) {
   user_prefs->RegisterListPref(spellcheck::prefs::kSpellCheckDictionaries,
-                               new base::ListValue);
+                               base::MakeUnique<base::ListValue>());
   // Continue registering kSpellCheckDictionary for preference migration.
   // TODO(estade): IDS_SPELLCHECK_DICTIONARY should be an ASCII string.
 #ifndef TOOLKIT_QT
@@ -83,7 +84,7 @@ void SpellcheckServiceFactory::RegisterProfilePrefs(
 #endif
   user_prefs->RegisterBooleanPref(
       spellcheck::prefs::kSpellCheckUseSpellingService, false);
-#if defined(OS_IOS) || defined(OS_ANDROID)
+#if defined(OS_ANDROID)
   uint32_t flags = PrefRegistry::NO_REGISTRATION_FLAGS;
 #else
   uint32_t flags = user_prefs::PrefRegistrySyncable::SYNCABLE_PREF;

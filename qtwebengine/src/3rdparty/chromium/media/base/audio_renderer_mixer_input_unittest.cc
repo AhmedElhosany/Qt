@@ -9,6 +9,7 @@
 #include "base/bind_helpers.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_task_environment.h"
 #include "media/base/audio_latency.h"
 #include "media/base/audio_renderer_mixer.h"
 #include "media/base/audio_renderer_mixer_input.h"
@@ -43,7 +44,7 @@ class AudioRendererMixerInputTest : public testing::Test,
         kBitsPerChannel, kBufferSize);
 
     CreateMixerInput(kDefaultDeviceId);
-    fake_callback_.reset(new FakeAudioRenderCallback(0));
+    fake_callback_.reset(new FakeAudioRenderCallback(0, kSampleRate));
     audio_bus_ = AudioBus::Create(audio_parameters_);
   }
 
@@ -124,6 +125,7 @@ class AudioRendererMixerInputTest : public testing::Test,
  protected:
   virtual ~AudioRendererMixerInputTest() {}
 
+  base::test::ScopedTaskEnvironment scoped_task_environment_;
   AudioParameters audio_parameters_;
   scoped_refptr<MockAudioRendererSink> sinks_[2];
   std::unique_ptr<AudioRendererMixer> mixers_[2];

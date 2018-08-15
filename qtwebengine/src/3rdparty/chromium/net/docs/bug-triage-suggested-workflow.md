@@ -6,12 +6,12 @@
 
 * Look at new unconfirmed bugs since noon PST on the last triager's rotation.
   [Use this issue tracker
-  query](https://code.google.com/p/chromium/issues/list?can=2&q=status%3Aunconfirmed&sort=-id&num=1000).
+  query](https://bugs.chromium.org/p/chromium/issues/list?q=status%3Aunconfirmed&sort=-id&num=1000).
 
 * Read the title of the bug.
 
-* If a bug looks like it might be network/download/safe-browsing related,
-  middle click (or command-click on OSX) to open it in a new tab.
+* If a bug looks like it might be network related, middle click (or
+  command-click on OSX) to open it in a new tab.
 
 * If a user provides a crash ID for a crasher for a bug that could be
   net-related, look at the crash stack at
@@ -48,6 +48,9 @@ For each alert that fires, determine if it's a real alert and file a bug if so.
     * DiskCache on Android.
 
 ## Investigating component=Internals>Network bugs
+
+* Note that you may want to investigate Needs-Feedback bugs first, as
+  that may result in some bugs being added to this list.  
 
 * It's recommended that while on triage duty, you subscribe to the
   Internals>Network component (but not its subcomponents). To do this, go
@@ -90,7 +93,7 @@ For each alert that fires, determine if it's a real alert and file a bug if so.
   job is done, though you should still ask for a net-internals dump if it seems
   likely to be useful.
 
-* Note that ChromeOS-specific network-related code (Captive portal detection,
+* Note that Chrome-OS-specific network-related code (Captive portal detection,
   connectivity detection, login, etc) may not all have appropriate more
   specific subcomponents, but are not in areas handled by the network stack
   team. Just make sure those have the OS-Chrome label, and any more specific
@@ -177,6 +180,20 @@ For each alert that fires, determine if it's a real alert and file a bug if so.
                bug.  Make sure to indicate if there is a defined point in the
                past before which the signature is not present.
 
+As an alternative to the above, you can use [Eric Roman's new crash
+tool](https://ericroman.users.x20web.corp.google.com/www/net-crash-triage/index.html)
+(internal link).  Note that it isn't a perfect fit with the triage
+responsibilities, specifically:
+  
+* It's only showing Windows releases; Android, iOS, and WebView are
+  usually different, and Mac is sometimes different.
+* The instructions are to look at the latest canary which has a days
+  worth of data.  If canaries are being pushed fast, that may be more
+  than one canary into the past, and hence not visible on the tool.
+* Eric's tool filters based on files in "src/net" rather than looking
+  for magic signature's including the string "net::" ("src/net" is
+  probably the better filter).    
+
 ## Investigating crashers
 
 * Only investigate crashers that are still occurring, as identified by above
@@ -184,8 +201,8 @@ For each alert that fires, determine if it's a real alert and file a bug if so.
   mark it as WontFix.
 
 * On Windows, you may want to look for weird dlls associated with the crashes.
-    This generally needs crashes from a fair number of different users to reach
-    any conclusions.
+  This generally needs crashes from a fair number of different users to reach
+  any conclusions.
     * To get a list of loaded modules in related crash dumps, select
       modules->3rd party in the left pane.  It can be difficult to distinguish
       between safe dlls and those likely to cause problems, but even if you're

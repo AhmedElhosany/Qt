@@ -8,17 +8,10 @@ gn_args += \
     use_gio=false \
     use_gnome_keyring=false \
     use_kerberos=false \
-    linux_use_bundled_binutils=false
+    linux_use_bundled_binutils=false \
+    use_nss_certs=true \
+    use_openssl_certs=false
 
-use?(nss) {
-    gn_args += \
-        use_nss_certs=true \
-        use_openssl_certs=false
-} else {
-    gn_args += \
-        use_nss_certs=false \
-        use_openssl_certs=true
-}
 gcc:!clang: greaterThan(QT_GCC_MAJOR_VERSION, 5): gn_args += no_delete_null_pointer_checks=true
 
 clang {
@@ -119,19 +112,33 @@ host_build {
         # Strip '>2 /dev/null' from $$pkgConfigExecutable()
         PKGCONFIG = $$first($$list($$pkgConfigExecutable()))
         gn_args += pkg_config=\"$$PKGCONFIG\"
+        PKG_CONFIG_HOST = $$(GN_PKG_CONFIG_HOST)
+        pkgConfigLibDir = $$(PKG_CONFIG_LIBDIR)
+        pkgConfigSysrootDir = $$(PKG_CONFIG_SYSROOT_DIR)
+        isEmpty(PKG_CONFIG_HOST): cross_compile {
+            !isEmpty(pkgConfigLibDir)|!isEmpty(pkgConfigSysrootDir) {
+                PKG_CONFIG_HOST = $$pkgConfigHostExecutable()
+            }
+        }
+        isEmpty(PKG_CONFIG_HOST): PKG_CONFIG_HOST = $$QMAKE_PKG_CONFIG_HOST
+        gn_args += host_pkg_config=\"$$PKG_CONFIG_HOST\"
     }
 
-    qtConfig(system-zlib): use?(system_minizip): gn_args += use_system_zlib=true use_system_minizip=true
-    qtConfig(system-png): gn_args += use_system_libpng=true
+    qtConfig(webengine-system-zlib): qtConfig(webengine-system-minizip) {
+        gn_args += use_system_zlib=true use_system_minizip=true
+        qtConfig(webengine-printing-and-pdf): gn_args += pdfium_use_system_zlib=true
+    }
+    qtConfig(webengine-system-png): gn_args += use_system_libpng=true
     qtConfig(system-jpeg): gn_args += use_system_libjpeg=true
-    use?(system_harfbuzz): gn_args += use_system_harfbuzz=true
-    !use?(glib): gn_args += use_glib=false
-    qtConfig(pulseaudio) {
+    qtConfig(system-freetype): gn_args += use_system_freetype=true
+    qtConfig(webengine-system-harfbuzz): gn_args += use_system_harfbuzz=true
+    qtConfig(webengine-system-glib): gn_args += use_glib=false
+    qtConfig(webengine-pulseaudio) {
         gn_args += use_pulseaudio=true
     } else {
         gn_args += use_pulseaudio=false
     }
-    qtConfig(alsa) {
+    qtConfig(webengine-alsa) {
         gn_args += use_alsa=true
     } else {
         gn_args += use_alsa=false
@@ -141,15 +148,19 @@ host_build {
     !packagesExist(libpci): gn_args += use_libpci=false
     !packagesExist(xscrnsaver): gn_args += use_xscrnsaver=false
 
-    use?(system_libevent): gn_args += use_system_libevent=true
-    use?(system_libwebp):  gn_args += use_system_libwebp=true
-    use?(system_libxslt):  gn_args += use_system_libxml=true use_system_libxslt=true
-    #use?(system_jsoncpp):  gn_args += use_system_jsoncpp=true
-    use?(system_opus):     gn_args += use_system_opus=true
-    use?(system_snappy):   gn_args += use_system_snappy=true
-    use?(system_vpx):      gn_args += use_system_libvpx=true
-    use?(system_icu):      gn_args += use_system_icu=true icu_use_data_file=false
-    use?(system_ffmpeg):   gn_args += use_system_ffmpeg=true
-    use?(system_re2):      gn_args += use_system_re2=true
-    #use?(system_protobuf): gn_args += use_system_protobuf=true
+    qtConfig(webengine-system-libevent): gn_args += use_system_libevent=true
+    qtConfig(webengine-system-libwebp):  gn_args += use_system_libwebp=true
+    qtConfig(webengine-system-libxml2):  gn_args += use_system_libxml=true use_system_libxslt=true
+    qtConfig(webengine-system-opus):     gn_args += use_system_opus=true
+    qtConfig(webengine-system-snappy):   gn_args += use_system_snappy=true
+    qtConfig(webengine-system-libvpx):   gn_args += use_system_libvpx=true
+    qtConfig(webengine-system-icu):      gn_args += use_system_icu=true icu_use_data_file=false
+    qtConfig(webengine-system-ffmpeg):   gn_args += use_system_ffmpeg=true
+    qtConfig(webengine-system-re2):      gn_args += use_system_re2=true
+    qtConfig(webengine-system-lcms2):    gn_args += use_system_lcms2=true
+
+    # FIXME:
+    #qtConfig(webengine-system-protobuf): gn_args += use_system_protobuf=true
+    #qtConfig(webengine-system-jsoncpp): gn_args += use_system_jsoncpp=true
+    #qtConfig(webengine-system-libsrtp: gn_args += use_system_libsrtp=true
 }

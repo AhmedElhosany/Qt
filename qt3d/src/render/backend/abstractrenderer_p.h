@@ -95,20 +95,21 @@ public:
 
     // Changes made to backend nodes are reported to the Renderer
     enum BackendNodeDirtyFlag {
-        TransformDirty = 1 << 0,
-        MaterialDirty = 1 << 1,
-        GeometryDirty = 1 << 2,
-        ComputeDirty = 1 << 3,
-        ParameterDirty = 1 << 4,
-        FrameGraphDirty = 1 << 5,
-        EntityEnabledDirty = 1 << 6,
-        BuffersDirty = 1 << 7,
-        TexturesDirty = 1 << 8,
-        ShadersDirty = 1 << 9,
-        SkeletonDataDirty = 1 << 10,
-        JointDirty = 1 << 11,
-        LayersDirty = 1 << 12,
-        AllDirty = 0xffffff
+        TransformDirty      = 1 << 0,
+        MaterialDirty       = 1 << 1,
+        GeometryDirty       = 1 << 2,
+        ComputeDirty        = 1 << 3,
+        ParameterDirty      = 1 << 4,
+        FrameGraphDirty     = 1 << 5,
+        EntityEnabledDirty  = 1 << 6,
+        BuffersDirty        = 1 << 7,
+        TexturesDirty       = 1 << 8,
+        ShadersDirty        = 1 << 9,
+        SkeletonDataDirty   = 1 << 10,
+        JointDirty          = 1 << 11,
+        LayersDirty         = 1 << 12,
+        TechniquesDirty     = 1 << 13,
+        AllDirty            = 0xffffff
     };
     Q_DECLARE_FLAGS(BackendNodeDirtySet, BackendNodeDirtyFlag)
 
@@ -141,13 +142,16 @@ public:
 
     virtual void markDirty(BackendNodeDirtySet changes, BackendNode *node) = 0;
     virtual BackendNodeDirtySet dirtyBits() = 0;
+#if defined(QT_BUILD_INTERNAL)
     virtual void clearDirtyBits(BackendNodeDirtySet changes) = 0;
+#endif
     virtual bool shouldRender() = 0;
     virtual void skipNextFrame() = 0;
 
     virtual QVector<Qt3DCore::QAspectJobPtr> renderBinJobs() = 0;
     virtual Qt3DCore::QAspectJobPtr pickBoundingVolumeJob() = 0;
     virtual Qt3DCore::QAspectJobPtr syncTextureLoadingJob() = 0;
+    virtual Qt3DCore::QAspectJobPtr expandBoundingVolumeJob() = 0;
 
     virtual void setSceneRoot(Qt3DCore::QBackendNodeFactory *factory, Entity *root) = 0;
 

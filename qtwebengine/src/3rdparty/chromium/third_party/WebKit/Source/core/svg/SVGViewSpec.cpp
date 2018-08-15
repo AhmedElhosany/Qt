@@ -19,110 +19,107 @@
 
 #include "core/svg/SVGViewSpec.h"
 
-#include "bindings/core/v8/ExceptionMessages.h"
-#include "bindings/core/v8/ExceptionState.h"
-#include "core/SVGNames.h"
-#include "core/dom/ExceptionCode.h"
-#include "core/svg/SVGAnimatedTransformList.h"
 #include "core/svg/SVGParserUtilities.h"
-#include "wtf/text/ParsingUtilities.h"
+#include "core/svg/SVGPreserveAspectRatio.h"
+#include "core/svg/SVGRect.h"
+#include "core/svg/SVGSVGElement.h"
+#include "core/svg/SVGTransformList.h"
+#include "platform/wtf/text/ParsingUtilities.h"
 
 namespace blink {
 
-SVGViewSpec::SVGViewSpec(SVGSVGElement* contextElement)
-    // Note: addToPropertyMap is not needed, as SVGViewSpec do not correspond to
-    // an element.  We make tear-offs' contextElement the target element of
-    // SVGViewSpec.  This contextElement will be only used for keeping this
-    // alive from the tearoff.  SVGSVGElement holds a strong-ref to this
-    // SVGViewSpec, so this is kept alive as:
-    // AnimatedProperty tearoff -(contextElement)-> SVGSVGElement -(RefPtr)->
-    //    SVGViewSpec.
-    : SVGFitToViewBox(contextElement, PropertyMapPolicySkip),
-      m_contextElement(contextElement),
-      m_transform(SVGAnimatedTransformList::create(contextElement,
-                                                   SVGNames::transformAttr)) {
-  ASSERT(m_contextElement);
-
-  viewBox()->setReadOnly();
-  preserveAspectRatio()->setReadOnly();
-  m_transform->setReadOnly();
-  // Note: addToPropertyMap is not needed, as SVGViewSpec do not correspond to
-  // an element.
-}
+SVGViewSpec::SVGViewSpec()
+    : view_box_(SVGRect::CreateInvalid()),
+      preserve_aspect_ratio_(SVGPreserveAspectRatio::Create()),
+      transform_(SVGTransformList::Create()) {}
 
 DEFINE_TRACE(SVGViewSpec) {
-  visitor->trace(m_contextElement);
-  visitor->trace(m_transform);
-  SVGFitToViewBox::trace(visitor);
+  visitor->Trace(view_box_);
+  visitor->Trace(preserve_aspect_ratio_);
+  visitor->Trace(transform_);
 }
 
-bool SVGViewSpec::parseViewSpec(const String& spec) {
-  if (spec.isEmpty() || !m_contextElement)
+SVGViewSpec* SVGViewSpec::CreateForElement(SVGSVGElement& root_element) {
+  SVGViewSpec* view_spec = root_element.ViewSpec();
+  if (!view_spec)
+    view_spec = new SVGViewSpec();
+  else
+    view_spec->Reset();
+  view_spec->InheritViewAttributesFromElement(root_element);
+  return view_spec;
+}
+
+bool SVGViewSpec::ParseViewSpec(const String& spec) {
+  if (spec.IsEmpty())
     return false;
-  if (spec.is8Bit()) {
-    const LChar* ptr = spec.characters8();
+  if (spec.Is8Bit()) {
+    const LChar* ptr = spec.Characters8();
     const LChar* end = ptr + spec.length();
-    return parseViewSpecInternal(ptr, end);
+    return ParseViewSpecInternal(ptr, end);
   }
-  const UChar* ptr = spec.characters16();
+  const UChar* ptr = spec.Characters16();
   const UChar* end = ptr + spec.length();
-  return parseViewSpecInternal(ptr, end);
+  return ParseViewSpecInternal(ptr, end);
 }
 
-void SVGViewSpec::reset() {
-  resetZoomAndPan();
-  m_transform->baseValue()->clear();
-  updateViewBox(FloatRect());
-  ASSERT(preserveAspectRatio());
-  preserveAspectRatio()->baseValue()->setAlign(
-      SVGPreserveAspectRatio::kSvgPreserveaspectratioXmidymid);
-  preserveAspectRatio()->baseValue()->setMeetOrSlice(
-      SVGPreserveAspectRatio::kSvgMeetorsliceMeet);
-  m_viewTargetString = emptyString();
+void SVGViewSpec::SetViewBox(const FloatRect& rect) {
+  ViewBox()->SetValue(rect);
+}
+
+void SVGViewSpec::SetPreserveAspectRatio(const SVGPreserveAspectRatio& other) {
+  PreserveAspectRatio()->SetAlign(other.Align());
+  PreserveAspectRatio()->SetMeetOrSlice(other.MeetOrSlice());
+}
+
+void SVGViewSpec::Reset() {
+  ResetZoomAndPan();
+  transform_->Clear();
+  SetViewBox(FloatRect());
+  PreserveAspectRatio()->SetDefault();
 }
 
 namespace {
 
 enum ViewSpecFunctionType {
-  Unknown,
-  PreserveAspectRatio,
-  Transform,
-  ViewBox,
-  ViewTarget,
-  ZoomAndPan,
+  kUnknown,
+  kPreserveAspectRatio,
+  kTransform,
+  kViewBox,
+  kViewTarget,
+  kZoomAndPan,
 };
 
 template <typename CharType>
-static ViewSpecFunctionType scanViewSpecFunction(const CharType*& ptr,
+static ViewSpecFunctionType ScanViewSpecFunction(const CharType*& ptr,
                                                  const CharType* end) {
   DCHECK_LT(ptr, end);
   switch (*ptr) {
     case 'v':
       if (skipToken(ptr, end, "viewBox"))
-        return ViewBox;
+        return kViewBox;
       if (skipToken(ptr, end, "viewTarget"))
-        return ViewTarget;
+        return kViewTarget;
       break;
     case 'z':
       if (skipToken(ptr, end, "zoomAndPan"))
-        return ZoomAndPan;
+        return kZoomAndPan;
       break;
     case 'p':
       if (skipToken(ptr, end, "preserveAspectRatio"))
-        return PreserveAspectRatio;
+        return kPreserveAspectRatio;
       break;
     case 't':
       if (skipToken(ptr, end, "transform"))
-        return Transform;
+        return kTransform;
       break;
   }
-  return Unknown;
+  return kUnknown;
 }
 
 }  // namespace
 
 template <typename CharType>
-bool SVGViewSpec::parseViewSpecInternal(const CharType* ptr,
+bool SVGViewSpec::ParseViewSpecInternal(const CharType* ptr,
                                         const CharType* end) {
   if (!skipToken(ptr, end, "svgView"))
     return false;
@@ -131,44 +128,41 @@ bool SVGViewSpec::parseViewSpecInternal(const CharType* ptr,
     return false;
 
   while (ptr < end && *ptr != ')') {
-    ViewSpecFunctionType functionType = scanViewSpecFunction(ptr, end);
-    if (functionType == Unknown)
+    ViewSpecFunctionType function_type = ScanViewSpecFunction(ptr, end);
+    if (function_type == kUnknown)
       return false;
 
     if (!skipExactly<CharType>(ptr, end, '('))
       return false;
 
-    switch (functionType) {
-      case ViewBox: {
+    switch (function_type) {
+      case kViewBox: {
         float x = 0.0f;
         float y = 0.0f;
         float width = 0.0f;
         float height = 0.0f;
-        if (!(parseNumber(ptr, end, x) && parseNumber(ptr, end, y) &&
-              parseNumber(ptr, end, width) &&
-              parseNumber(ptr, end, height, DisallowWhitespace)))
+        if (!(ParseNumber(ptr, end, x) && ParseNumber(ptr, end, y) &&
+              ParseNumber(ptr, end, width) &&
+              ParseNumber(ptr, end, height, kDisallowWhitespace)))
           return false;
-        updateViewBox(FloatRect(x, y, width, height));
+        SetViewBox(FloatRect(x, y, width, height));
         break;
       }
-      case ViewTarget: {
-        const CharType* viewTargetStart = ptr;
+      case kViewTarget: {
+        // Ignore arguments.
         skipUntil<CharType>(ptr, end, ')');
-        if (ptr == viewTargetStart)
-          return false;
-        m_viewTargetString = String(viewTargetStart, ptr - viewTargetStart);
         break;
       }
-      case ZoomAndPan:
-        if (!parseZoomAndPan(ptr, end))
+      case kZoomAndPan:
+        if (!ParseZoomAndPan(ptr, end))
           return false;
         break;
-      case PreserveAspectRatio:
-        if (!preserveAspectRatio()->baseValue()->parse(ptr, end, false))
+      case kPreserveAspectRatio:
+        if (!PreserveAspectRatio()->Parse(ptr, end, false))
           return false;
         break;
-      case Transform:
-        m_transform->baseValue()->parse(ptr, end);
+      case kTransform:
+        transform_->Parse(ptr, end);
         break;
       default:
         NOTREACHED();

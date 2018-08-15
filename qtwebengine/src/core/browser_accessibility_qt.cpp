@@ -127,7 +127,7 @@ void *BrowserAccessibilityQt::interface_cast(QAccessible::InterfaceType type)
 
 QAccessibleInterface *BrowserAccessibilityQt::parent() const
 {
-    BrowserAccessibility *p = GetParent();
+    BrowserAccessibility *p = PlatformGetParent();
     if (p)
         return static_cast<BrowserAccessibilityQt*>(p);
     return static_cast<BrowserAccessibilityManagerQt*>(manager())->rootParentAccessible();
@@ -160,7 +160,7 @@ QString BrowserAccessibilityQt::text(QAccessible::Text t) const
     case QAccessible::Value:
         return toQt(GetStringAttribute(ui::AX_ATTR_VALUE));
     case QAccessible::Accelerator:
-        return toQt(GetStringAttribute(ui::AX_ATTR_SHORTCUT));
+        return toQt(GetStringAttribute(ui::AX_ATTR_KEY_SHORTCUTS));
     default:
         break;
     }
@@ -182,38 +182,50 @@ QRect BrowserAccessibilityQt::rect() const
 QAccessible::Role BrowserAccessibilityQt::role() const
 {
     switch (GetRole()) {
+    case ui::AX_ROLE_NONE:
     case ui::AX_ROLE_UNKNOWN:
         return QAccessible::NoRole;
 
     // Used by Chromium to distinguish between the root of the tree
     // for this page, and a web area for a frame within this page.
     case ui::AX_ROLE_WEB_AREA:
+    case ui::AX_ROLE_WEB_VIEW:
     case ui::AX_ROLE_ROOT_WEB_AREA: // not sure if we need to make a diff here, but this seems common
         return QAccessible::WebDocument;
 
     // These roles all directly correspond to blink accessibility roles,
     // keep these alphabetical.
+    case ui::AX_ROLE_ABBR:
+        return QAccessible::StaticText;
     case ui::AX_ROLE_ALERT:
     case ui::AX_ROLE_ALERT_DIALOG:
         return QAccessible::AlertMessage;
+    case ui::AX_ROLE_ANCHOR:
+        return QAccessible::Link;
     case ui::AX_ROLE_ANNOTATION:
         return QAccessible::StaticText;
     case ui::AX_ROLE_APPLICATION:
         return QAccessible::Document; // returning Application here makes Qt return the top level app object
     case ui::AX_ROLE_ARTICLE:
         return QAccessible::Section;
+    case ui::AX_ROLE_AUDIO:
+        return QAccessible::Sound;
     case ui::AX_ROLE_BANNER:
         return QAccessible::Section;
     case ui::AX_ROLE_BLOCKQUOTE:
         return QAccessible::Section;
     case ui::AX_ROLE_BUSY_INDICATOR:
-        return QAccessible::Animation; // FIXME
+        return QAccessible::NoRole; // This is unused and planned to be removed.
     case ui::AX_ROLE_BUTTON:
         return QAccessible::Button;
     case ui::AX_ROLE_BUTTON_DROP_DOWN:
-        return QAccessible::Button;
+        return QAccessible::ButtonDropDown;
     case ui::AX_ROLE_CANVAS:
         return QAccessible::Canvas;
+    case ui::AX_ROLE_CAPTION:
+        return QAccessible::Heading;
+    case ui::AX_ROLE_CARET:
+        return QAccessible::NoRole; // FIXME: https://codereview.chromium.org/2781613003
     case ui::AX_ROLE_CELL:
         return QAccessible::Cell;
     case ui::AX_ROLE_CHECK_BOX:
@@ -232,10 +244,17 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::ComplementaryContent;
     case ui::AX_ROLE_CONTENT_INFO:
         return QAccessible::Section;
+    case ui::AX_ROLE_DATE:
+    case ui::AX_ROLE_DATE_TIME:
+        return QAccessible::Clock;
     case ui::AX_ROLE_DEFINITION:
         return QAccessible::Paragraph;
+    case ui::AX_ROLE_DESCRIPTION_LIST:
+        return QAccessible::List;
     case ui::AX_ROLE_DESCRIPTION_LIST_DETAIL:
         return QAccessible::Paragraph;
+    case ui::AX_ROLE_DETAILS:
+        return QAccessible::Grouping;
     case ui::AX_ROLE_DESCRIPTION_LIST_TERM:
         return QAccessible::ListItem;
     case ui::AX_ROLE_DESKTOP:
@@ -246,12 +265,18 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::NoRole; // FIXME
     case ui::AX_ROLE_DISCLOSURE_TRIANGLE:
         return QAccessible::NoRole; // FIXME
-    case ui::AX_ROLE_DIV:
+    case ui::AX_ROLE_GENERIC_CONTAINER:
         return QAccessible::Section;
     case ui::AX_ROLE_DOCUMENT:
         return QAccessible::Document;
     case ui::AX_ROLE_EMBEDDED_OBJECT:
         return QAccessible::Grouping; // FIXME
+    case ui::AX_ROLE_FEED:
+        return QAccessible::Section;
+    case ui::AX_ROLE_FIGCAPTION:
+        return QAccessible::Heading;
+    case ui::AX_ROLE_FIGURE:
+        return QAccessible::Section;
     case ui::AX_ROLE_FOOTER:
         return QAccessible::Footer;
     case ui::AX_ROLE_FORM:
@@ -264,6 +289,8 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::Heading;
     case ui::AX_ROLE_IFRAME:
         return QAccessible::Grouping;
+    case ui::AX_ROLE_IFRAME_PRESENTATIONAL:
+        return QAccessible::NoRole; // FIXME
     case ui::AX_ROLE_IGNORED:
         return QAccessible::NoRole;
     case ui::AX_ROLE_IMAGE:
@@ -274,16 +301,20 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::Link;
     case ui::AX_ROLE_INLINE_TEXT_BOX:
         return QAccessible::EditableText;
+    case ui::AX_ROLE_INPUT_TIME:
+        return QAccessible::SpinBox;
     case ui::AX_ROLE_LABEL_TEXT:
         return QAccessible::StaticText;
     case ui::AX_ROLE_LEGEND:
-        return QAccessible::NoRole; // FIXME
+        return QAccessible::StaticText;
+    case ui::AX_ROLE_LINE_BREAK:
+        return QAccessible::Separator;
     case ui::AX_ROLE_LINK:
         return QAccessible::Link;
     case ui::AX_ROLE_LIST:
         return QAccessible::List;
     case ui::AX_ROLE_LIST_BOX:
-        return QAccessible::List;
+        return QAccessible::ComboBox;
     case ui::AX_ROLE_LIST_BOX_OPTION:
         return QAccessible::ListItem;
     case ui::AX_ROLE_LIST_ITEM:
@@ -293,11 +324,13 @@ QAccessible::Role BrowserAccessibilityQt::role() const
     case ui::AX_ROLE_LOCATION_BAR:
         return QAccessible::NoRole; // FIXME
     case ui::AX_ROLE_LOG:
-        return QAccessible::NoRole; // FIXME
+        return QAccessible::Section;
     case ui::AX_ROLE_MAIN:
-        return QAccessible::NoRole; // FIXME
+        return QAccessible::Grouping;
+    case ui::AX_ROLE_MARK:
+        return QAccessible::StaticText;
     case ui::AX_ROLE_MARQUEE:
-        return QAccessible::NoRole; // FIXME
+        return QAccessible::Section;
     case ui::AX_ROLE_MATH:
         return QAccessible::Equation;
     case ui::AX_ROLE_MENU:
@@ -306,12 +339,18 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::MenuBar;
     case ui::AX_ROLE_MENU_ITEM:
         return QAccessible::MenuItem;
+    case ui::AX_ROLE_MENU_ITEM_CHECK_BOX:
+        return QAccessible::CheckBox;
+    case ui::AX_ROLE_MENU_ITEM_RADIO:
+        return QAccessible::RadioButton;
     case ui::AX_ROLE_MENU_BUTTON:
         return QAccessible::MenuItem;
     case ui::AX_ROLE_MENU_LIST_OPTION:
         return QAccessible::MenuItem;
     case ui::AX_ROLE_MENU_LIST_POPUP:
         return QAccessible::PopupMenu;
+    case ui::AX_ROLE_METER:
+        return QAccessible::Chart;
     case ui::AX_ROLE_NAVIGATION:
         return QAccessible::Section;
     case ui::AX_ROLE_NOTE:
@@ -340,6 +379,8 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::Row;
     case ui::AX_ROLE_ROW_HEADER:
         return QAccessible::RowHeader;
+    case ui::AX_ROLE_RUBY:
+        return QAccessible::StaticText;
     case ui::AX_ROLE_RULER:
         return QAccessible::NoRole; // FIXME
     case ui::AX_ROLE_SCROLL_AREA:
@@ -350,6 +391,8 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::NoRole; // FIXME
     case ui::AX_ROLE_SEARCH:
         return QAccessible::Section;
+    case ui::AX_ROLE_SEARCH_BOX:
+        return QAccessible::EditableText;
     case ui::AX_ROLE_SLIDER:
         return QAccessible::Slider;
     case ui::AX_ROLE_SLIDER_THUMB:
@@ -363,9 +406,11 @@ QAccessible::Role BrowserAccessibilityQt::role() const
     case ui::AX_ROLE_STATIC_TEXT:
         return QAccessible::StaticText;
     case ui::AX_ROLE_STATUS:
-        return QAccessible::StatusBar;
+        return QAccessible::Indicator;
     case ui::AX_ROLE_SVG_ROOT:
         return QAccessible::Graphic;
+    case ui::AX_ROLE_SWITCH:
+        return QAccessible::Button;
     case ui::AX_ROLE_TABLE:
         return QAccessible::Table;
     case ui::AX_ROLE_TABLE_HEADER_CONTAINER:
@@ -378,8 +423,11 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::PageTabList;
     case ui::AX_ROLE_TAB_PANEL:
         return QAccessible::PageTab;
+    case ui::AX_ROLE_TERM:
+        return QAccessible::StaticText;
     case ui::AX_ROLE_TEXT_FIELD:
         return QAccessible::EditableText;
+    case ui::AX_ROLE_TIME:
     case ui::AX_ROLE_TIMER:
         return QAccessible::Clock;
     case ui::AX_ROLE_TITLE_BAR:
@@ -396,6 +444,8 @@ QAccessible::Role BrowserAccessibilityQt::role() const
         return QAccessible::Tree;
     case ui::AX_ROLE_TREE_ITEM:
         return QAccessible::TreeItem;
+    case ui::AX_ROLE_VIDEO:
+        return QAccessible::Animation;
     case ui::AX_ROLE_WINDOW:
         return QAccessible::Window;
     }
@@ -408,18 +458,16 @@ QAccessible::State BrowserAccessibilityQt::state() const
     int32_t s = GetState();
     if (s & (1 << ui::AX_STATE_BUSY))
         state.busy = true;
-    if (s & (1 << ui::AX_STATE_CHECKED))
-        state.checked = true;
     if (s & (1 << ui::AX_STATE_COLLAPSED))
         state.collapsed = true;
-    if (s & (1 << ui::AX_STATE_DISABLED))
-        state.disabled = true;
+    if (s & (1 << ui::AX_STATE_DEFAULT))
+        state.defaultButton = true;
+    if (s & (1 << ui::AX_STATE_EDITABLE))
+        state.editable = true;
     if (s & (1 << ui::AX_STATE_EXPANDED))
         state.expanded = true;
     if (s & (1 << ui::AX_STATE_FOCUSABLE))
         state.focusable = true;
-    if (manager()->GetFocus() == this)
-        state.focused = true;
     if (s & (1 << ui::AX_STATE_HASPOPUP))
         state.hasPopup = true;
     if (s & (1 << ui::AX_STATE_HOVERED))
@@ -432,13 +480,11 @@ QAccessible::State BrowserAccessibilityQt::state() const
         state.multiSelectable = true;
     if (s & (1 << ui::AX_STATE_OFFSCREEN))
         state.offscreen = true;
-    if (s & (1 << ui::AX_STATE_PRESSED))
-        state.pressed = true;
     if (s & (1 << ui::AX_STATE_PROTECTED))
     {} // FIXME
-    if (s & (1 << ui::AX_STATE_READ_ONLY))
-        state.readOnly = true;
     if (s & (1 << ui::AX_STATE_REQUIRED))
+    {} // FIXME
+    if (s & (1 << ui::AX_STATE_RICHLY_EDITABLE))
     {} // FIXME
     if (s & (1 << ui::AX_STATE_SELECTABLE))
         state.selectable = true;
@@ -448,8 +494,40 @@ QAccessible::State BrowserAccessibilityQt::state() const
     {} // FIXME
     if (s & (1 << ui::AX_STATE_VISITED))
     {} // FIXME
-    if (HasState(ui::AX_STATE_EDITABLE))
-        state.editable = true;
+
+    if (manager()->GetFocus() == this)
+        state.focused = true;
+    if (HasIntAttribute(ui::AX_ATTR_CHECKED_STATE)) {
+        ui::AXCheckedState checkedState = (ui::AXCheckedState)GetIntAttribute(ui::AX_ATTR_CHECKED_STATE);
+        switch (checkedState) {
+        case ui::AX_CHECKED_STATE_TRUE:
+            if (GetRole() == ui::AX_ROLE_TOGGLE_BUTTON)
+                state.pressed = true;
+            else
+                state.checked = true;
+            break;
+        case ui::AX_CHECKED_STATE_MIXED:
+            state.checkStateMixed = true;
+            break;
+        case ui::AX_CHECKED_STATE_FALSE:
+        case ui::AX_CHECKED_STATE_NONE:
+            break;
+        }
+    }
+    if (HasIntAttribute(ui::AX_ATTR_RESTRICTION)) {
+        ui::AXRestriction restriction = (ui::AXRestriction)GetIntAttribute(ui::AX_ATTR_RESTRICTION);
+        switch (restriction) {
+        case ui::AX_RESTRICTION_READ_ONLY:
+            state.readOnly = true;
+            break;
+        case ui::AX_RESTRICTION_DISABLED:
+            state.disabled = true;
+            break;
+        case ui::AX_RESTRICTION_NONE:
+            break;
+        }
+    }
+
     return state;
 }
 
@@ -491,7 +569,7 @@ QStringList BrowserAccessibilityQt::keyBindingsForAction(const QString &actionNa
 
 void BrowserAccessibilityQt::addSelection(int startOffset, int endOffset)
 {
-    manager()->SetTextSelection(*this, startOffset, endOffset);
+    manager()->SetSelection(AXPlatformRange(CreatePositionAt(startOffset), CreatePositionAt(endOffset)));
 }
 
 QString BrowserAccessibilityQt::attributes(int offset, int *startOffset, int *endOffset) const
@@ -549,19 +627,19 @@ QString BrowserAccessibilityQt::text(int startOffset, int endOffset) const
 
 void BrowserAccessibilityQt::removeSelection(int selectionIndex)
 {
-    manager()->SetTextSelection(*this, 0, 0);
+    manager()->SetSelection(AXPlatformRange(CreatePositionAt(0), CreatePositionAt(0)));
 }
 
 void BrowserAccessibilityQt::setCursorPosition(int position)
 {
-    manager()->SetTextSelection(*this, position, position);
+    manager()->SetSelection(AXPlatformRange(CreatePositionAt(position), CreatePositionAt(position)));
 }
 
 void BrowserAccessibilityQt::setSelection(int selectionIndex, int startOffset, int endOffset)
 {
     if (selectionIndex != 0)
         return;
-    manager()->SetTextSelection(*this, startOffset, endOffset);
+    manager()->SetSelection(AXPlatformRange(CreatePositionAt(startOffset), CreatePositionAt(endOffset)));
 }
 
 int BrowserAccessibilityQt::characterCount() const
@@ -784,9 +862,9 @@ bool BrowserAccessibilityQt::isSelected() const
 
 QAccessibleInterface *BrowserAccessibilityQt::table() const
 {
-    BrowserAccessibility* find_table = GetParent();
+    BrowserAccessibility* find_table = PlatformGetParent();
     while (find_table && find_table->GetRole() != ui::AX_ROLE_TABLE)
-        find_table = find_table->GetParent();
+        find_table = find_table->PlatformGetParent();
     if (!find_table)
         return 0;
     return static_cast<BrowserAccessibilityQt*>(find_table);

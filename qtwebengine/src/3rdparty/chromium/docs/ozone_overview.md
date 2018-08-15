@@ -118,7 +118,7 @@ through creating a new ozone platform called `foo`.
 
 ## Building with Ozone
 
-### ChromeOS - ([waterfall](http://build.chromium.org/p/chromium.chromiumos/waterfall?builder=Linux+ChromiumOS+Ozone+Builder&builder=Linux+ChromiumOS+Ozone+Tests+%281%29&builder=Linux+ChromiumOS+Ozone+Tests+%282%29&reload=none))
+### Chrome OS - ([waterfall](https://build.chromium.org/p/chromium.chromiumos/waterfall?builder=Linux+ChromiumOS+Ozone+Builder&builder=Linux+ChromiumOS+Ozone+Tests+%281%29&builder=Linux+ChromiumOS+Ozone+Tests+%282%29&reload=none))
 
 To build `chrome`, do this from the `src` directory:
 
@@ -135,15 +135,8 @@ Then to run for example the X11 platform:
 
 ### Embedded
 
-The following targets are currently working for embedded builds:
-
-* `content_shell`
-* various unit tests
-
-The following targets are currently NOT supported:
-
-* `ash_shell_with_content`
-* `chrome`
+**Warning: Only some targets such as `content_shell` or unit tests are
+currently working for embedded builds.**
 
 To build `content_shell`, do this from the `src` directory:
 
@@ -160,12 +153,12 @@ Then to run for example the headless platform:
 ```
 
 ### Linux Desktop - ([waterfall](https://build.chromium.org/p/chromium.fyi/builders/Ozone%20Linux/))
-Support for Linux Desktop is currently [in-progress](http://crbug.com/295089).
 
-The following targets are currently working:
-
-* various unit tests
-* `chrome`
+**Warning: Experimental support for Linux Desktop is available since m57 but
+  upstream support has always been a bit fragile. For now, development
+  continues on the
+  [ozone-wayland-dev](https://github.com/Igalia/chromium/tree/ozone-wayland-dev)
+  branch.**
 
 To build `chrome`, do this from the `src` directory:
 
@@ -176,11 +169,8 @@ ninja -C out/OzoneLinuxDesktop chrome
 Then to run for example the X11 platform:
 
 ``` shell
-./out/OzoneLinuxDesktop/chrome --ozone-platform=x11 \
-                               --mash
+./out/OzoneLinuxDesktop/chrome --ozone-platform=x11 --mus
 ```
-
-Note: You may need to apply [this patch](https://codereview.chromium.org/2485673002/) to avoid missing ash resources during chrome execution.
 
 ### GN Configuration notes
 
@@ -234,9 +224,9 @@ content_shell --ozone-platform=headless \
 
 This is Linux direct rending with acceleration via mesa GBM & linux DRM/KMS
 (EGL/GLES2 accelerated rendering & modesetting in GPU process) and is in
-production use on [ChromeOS](http://www.chromium.org/chromium-os).
+production use on [Chrome OS](https://www.chromium.org/chromium-os).
 
-Note that all ChromeOS builds of Chrome will compile and attempt to use this.
+Note that all Chrome OS builds of Chrome will compile and attempt to use this.
 See [Building Chromium for Chromium OS](https://www.chromium.org/chromium-os/how-tos-and-troubleshooting/building-chromium-browser) for build instructions.
 
 ### Cast
@@ -255,19 +245,19 @@ This platform provides support for the
 initially developed by Intel as
 [a fork of chromium](https://github.com/01org/ozone-wayland)
 and then partially upstreamed.
-It is still actively being developed in the chromium tree, feel free to discuss
+It is still actively being developed on the
+[ozone-wayland-dev](https://github.com/Igalia/chromium/tree/ozone-wayland-dev)
+branch, feel free to discuss
 with us on freenode.net, `#ozone-wayland` channel or on `ozone-dev`.
 
 Below are some quick build & run instructions. It is assumed that you are
-launching `chrome` from a Wayland environment such as `weston`. Apply
-[this patch](https://codereview.chromium.org/2485673002/) and execute the
+launching `chrome` from a Wayland environment such as `weston`. Execute the
 following commands:
 
 ``` shell
 gn args out/OzoneWayland --args="use_ozone=true enable_package_mash_services=true"
 ninja -C out/OzoneWayland chrome
-./out/OzoneWayland/chrome --ozone-platform=wayland \
-                          --mash
+./out/OzoneWayland/chrome --ozone-platform=wayland --mus
 ```
 
 ### Caca

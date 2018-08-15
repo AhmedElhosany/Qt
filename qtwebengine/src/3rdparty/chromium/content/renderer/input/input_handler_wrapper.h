@@ -27,7 +27,7 @@ class InputHandlerWrapper : public ui::InputHandlerProxyClient {
       int routing_id,
       const scoped_refptr<base::SingleThreadTaskRunner>& main_task_runner,
       const base::WeakPtr<cc::InputHandler>& input_handler,
-      const base::WeakPtr<RenderViewImpl>& render_view_impl,
+      const base::WeakPtr<RenderWidget>& render_widget,
       bool enable_smooth_scrolling);
   ~InputHandlerWrapper() override;
 
@@ -43,9 +43,9 @@ class InputHandlerWrapper : public ui::InputHandlerProxyClient {
   void TransferActiveWheelFlingAnimation(
       const blink::WebActiveWheelFlingParameters& params) override;
   void DispatchNonBlockingEventToMainThread(
-      ui::ScopedWebInputEvent event,
+      ui::WebScopedInputEvent event,
       const ui::LatencyInfo& latency_info) override;
-  blink::WebGestureCurve* CreateFlingAnimationCurve(
+  std::unique_ptr<blink::WebGestureCurve> CreateFlingAnimationCurve(
       blink::WebGestureDevice deviceSource,
       const blink::WebFloatPoint& velocity,
       const blink::WebSize& cumulativeScroll) override;
@@ -55,6 +55,9 @@ class InputHandlerWrapper : public ui::InputHandlerProxyClient {
                      const gfx::PointF& causal_event_viewport_point) override;
   void DidStopFlinging() override;
   void DidAnimateForInput() override;
+  void GenerateScrollBeginAndSendToMainThread(
+      const blink::WebGestureEvent& update_event) override;
+  void SetWhiteListedTouchAction(cc::TouchAction touch_action) override;
 
  private:
   InputHandlerManager* input_handler_manager_;
@@ -63,7 +66,7 @@ class InputHandlerWrapper : public ui::InputHandlerProxyClient {
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
 
   // Can only be accessed on the main thread.
-  base::WeakPtr<RenderViewImpl> render_view_impl_;
+  base::WeakPtr<RenderWidget> render_widget_;
 
   DISALLOW_COPY_AND_ASSIGN(InputHandlerWrapper);
 };

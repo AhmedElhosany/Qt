@@ -6,8 +6,8 @@
 #define COMPONENTS_NTP_SNIPPETS_OFFLINE_PAGES_OFFLINE_PAGES_TEST_UTILS_H_
 
 #include "components/ntp_snippets/content_suggestion.h"
-#include "components/offline_pages/offline_page_item.h"
-#include "components/offline_pages/stub_offline_page_model.h"
+#include "components/offline_pages/core/offline_page_item.h"
+#include "components/offline_pages/core/stub_offline_page_model.h"
 
 namespace ntp_snippets {
 namespace test {
@@ -36,6 +36,10 @@ class FakeOfflinePageModel : public offline_pages::StubOfflinePageModel {
 
   DISALLOW_COPY_AND_ASSIGN(FakeOfflinePageModel);
 };
+
+offline_pages::OfflinePageItem CreateDummyOfflinePageItem(
+    int id,
+    const offline_pages::ClientId& client_id);
 
 offline_pages::OfflinePageItem CreateDummyOfflinePageItem(
     int id,

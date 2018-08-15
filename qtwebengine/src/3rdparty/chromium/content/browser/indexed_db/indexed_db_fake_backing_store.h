@@ -33,7 +33,7 @@ class IndexedDBFakeBackingStore : public IndexedDBBackingStore {
   leveldb::Status CreateIDBDatabaseMetaData(const base::string16& name,
                                             int64_t version,
                                             int64_t* row_id) override;
-  bool UpdateIDBDatabaseIntVersion(Transaction*,
+  void UpdateIDBDatabaseIntVersion(Transaction*,
                                    int64_t row_id,
                                    int64_t version) override;
   leveldb::Status DeleteDatabase(const base::string16& name) override;
@@ -147,6 +147,7 @@ class IndexedDBFakeBackingStore : public IndexedDBBackingStore {
     void Begin() override;
     leveldb::Status CommitPhaseOne(scoped_refptr<BlobWriteCallback>) override;
     leveldb::Status CommitPhaseTwo() override;
+    uint64_t GetTransactionSize() override;
     void Rollback() override;
 
    private:

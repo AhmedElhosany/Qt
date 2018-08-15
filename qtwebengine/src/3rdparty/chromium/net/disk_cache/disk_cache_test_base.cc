@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/files/file_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
@@ -31,8 +32,6 @@ using net::test::IsOk;
 DiskCacheTest::DiskCacheTest() {
   CHECK(temp_dir_.CreateUniqueTempDir());
   cache_path_ = temp_dir_.GetPath();
-  if (!base::MessageLoop::current())
-    message_loop_.reset(new base::MessageLoopForIO());
 }
 
 DiskCacheTest::~DiskCacheTest() {
@@ -176,6 +175,15 @@ int DiskCacheTestWithCache::DoomEntriesSince(const base::Time initial_time) {
 int DiskCacheTestWithCache::CalculateSizeOfAllEntries() {
   net::TestCompletionCallback cb;
   int rv = cache_->CalculateSizeOfAllEntries(cb.callback());
+  return cb.GetResult(rv);
+}
+
+int DiskCacheTestWithCache::CalculateSizeOfEntriesBetween(
+    const base::Time initial_time,
+    const base::Time end_time) {
+  net::TestCompletionCallback cb;
+  int rv = cache_->CalculateSizeOfEntriesBetween(initial_time, end_time,
+                                                 cb.callback());
   return cb.GetResult(rv);
 }
 

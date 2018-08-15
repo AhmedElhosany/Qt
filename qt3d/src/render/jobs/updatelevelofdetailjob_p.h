@@ -51,9 +51,9 @@
 // We mean it.
 //
 
-#include <Qt3DCore/qaspectjob.h>
+#include <Qt3DCore/QAspectJob>
+#include <Qt3DCore/QNodeId>
 #include <Qt3DRender/private/qt3drender_global_p.h>
-#include <Qt3DRender/private/pickboundingvolumeutils_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -64,6 +64,7 @@ namespace Render {
 class Entity;
 class NodeManagers;
 class LevelOfDetail;
+class FrameGraphNode;
 
 class QT3DRENDERSHARED_PRIVATE_EXPORT UpdateLevelOfDetailJob : public Qt3DCore::QAspectJob
 {
@@ -83,7 +84,6 @@ private:
     void updateEntityLod(Entity *entity);
     void updateEntityLodByDistance(Entity *entity, LevelOfDetail *lod);
     void updateEntityLodByScreenArea(Entity *entity, LevelOfDetail *lod);
-    bool viewMatrixForCamera(const Qt3DCore::QNodeId &cameraId, QMatrix4x4 &viewMatrix, QMatrix4x4 &projectionMatrix) const;
     QRect windowViewport(const QSize &area, const QRectF &relativeViewport) const;
 
     NodeManagers *m_manager;

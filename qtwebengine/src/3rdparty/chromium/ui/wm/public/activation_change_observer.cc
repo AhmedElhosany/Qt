@@ -5,25 +5,22 @@
 #include "ui/wm/public/activation_change_observer.h"
 
 #include "ui/aura/window.h"
-#include "ui/aura/window_property.h"
+#include "ui/base/class_property.h"
 
-DECLARE_WINDOW_PROPERTY_TYPE(aura::client::ActivationChangeObserver*)
+DECLARE_UI_CLASS_PROPERTY_TYPE(wm::ActivationChangeObserver*)
 
-namespace aura {
-namespace client {
+namespace wm {
 
-DEFINE_LOCAL_WINDOW_PROPERTY_KEY(
+DEFINE_LOCAL_UI_CLASS_PROPERTY_KEY(
     ActivationChangeObserver*, kActivationChangeObserverKey, NULL);
 
-void SetActivationChangeObserver(
-    Window* window,
-    ActivationChangeObserver* observer) {
+void SetActivationChangeObserver(aura::Window* window,
+                                 ActivationChangeObserver* observer) {
   window->SetProperty(kActivationChangeObserverKey, observer);
 }
 
-ActivationChangeObserver* GetActivationChangeObserver(Window* window) {
+ActivationChangeObserver* GetActivationChangeObserver(aura::Window* window) {
   return window ? window->GetProperty(kActivationChangeObserverKey) : NULL;
 }
 
-}  // namespace client
-}  // namespace aura
+}  // namespace wm

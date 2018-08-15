@@ -49,7 +49,6 @@
 #include "qiosmenu.h"
 #endif
 
-#include <QtCore/qoperatingsystemversion.h>
 #include <QtGui/private/qguiapplication_p.h>
 #include <QtGui/private/qwindow_p.h>
 #include <qpa/qwindowsysteminterface_p.h>
@@ -83,10 +82,11 @@
 
 - (id)initWithQIOSWindow:(QT_PREPEND_NAMESPACE(QIOSWindow) *)window
 {
-    if (self = [self initWithFrame:window->geometry().toCGRect()])
+    if (self = [self initWithFrame:window->geometry().toCGRect()]) {
         m_qioswindow = window;
+        m_accessibleElements = [[NSMutableArray alloc] init];
+    }
 
-    m_accessibleElements = [[NSMutableArray alloc] init];
     return self;
 }
 
@@ -107,7 +107,7 @@
         self.multipleTouchEnabled = YES;
 #endif
 
-        if (QIOSIntegration::instance()->debugWindowManagement()) {
+        if (qEnvironmentVariableIntValue("QT_IOS_DEBUG_WINDOW_MANAGEMENT")) {
             static CGFloat hue = 0.0;
             CGFloat lastHue = hue;
             for (CGFloat diff = 0; diff < 0.1 || diff > 0.9; diff = fabs(hue - lastHue))
@@ -116,7 +116,6 @@
             #define colorWithBrightness(br) \
                 [UIColor colorWithHue:hue saturation:0.5 brightness:br alpha:1.0].CGColor
 
-            self.layer.backgroundColor = colorWithBrightness(0.5);
             self.layer.borderColor = colorWithBrightness(1.0);
             self.layer.borderWidth = 1.0;
         }
@@ -139,6 +138,13 @@
     }
 
     return self;
+}
+
+- (void)dealloc
+{
+    [m_accessibleElements release];
+
+    [super dealloc];
 }
 
 - (void)willMoveToWindow:(UIWindow *)newWindow
@@ -188,24 +194,13 @@
         qWarning() << m_qioswindow->window()
             << "is backed by a UIView that has a transform set. This is not supported.";
 
-    // The original geometry requested by setGeometry() might be different
-    // from what we end up with after applying window constraints.
-    QRect requestedGeometry = m_qioswindow->geometry();
-
-    QRect actualGeometry = QRectF::fromCGRect(self.frame).toRect();
-
-    // Persist the actual/new geometry so that QWindow::geometry() can
-    // be queried on the resize event.
-    m_qioswindow->QPlatformWindow::setGeometry(actualGeometry);
-
-    QRect previousGeometry = requestedGeometry != actualGeometry ?
-            requestedGeometry : qt_window_private(m_qioswindow->window())->geometry;
-
     QWindow *window = m_qioswindow->window();
-    qCDebug(lcQpaWindow) << m_qioswindow->window() << "new geometry is" << actualGeometry;
-    QWindowSystemInterface::handleGeometryChange(window, actualGeometry, previousGeometry);
+    QRect lastReportedGeometry = qt_window_private(window)->geometry;
+    QRect currentGeometry = QRectF::fromCGRect(self.frame).toRect();
+    qCDebug(lcQpaWindow) << m_qioswindow->window() << "new geometry is" << currentGeometry;
+    QWindowSystemInterface::handleGeometryChange(window, currentGeometry);
 
-    if (actualGeometry.size() != previousGeometry.size()) {
+    if (currentGeometry.size() != lastReportedGeometry.size()) {
         // Trigger expose event on resize
         [self setNeedsDisplay];
 
@@ -341,7 +336,7 @@
     QTouchDevice *touchDevice = QIOSIntegration::instance()->touchDevice();
     QTouchDevice::Capabilities touchCapabilities = touchDevice->capabilities();
 
-    if (QOperatingSystemVersion::current() >= QOperatingSystemVersion(QOperatingSystemVersion::IOS, 9)) {
+    if (__builtin_available(iOS 9, *)) {
         if (self.traitCollection.forceTouchCapability == UIForceTouchCapabilityAvailable)
             touchCapabilities |= QTouchDevice::Pressure;
         else

@@ -56,8 +56,8 @@ QT_BEGIN_NAMESPACE
     in various views and controls, such as \l ListView and \l ComboBox.
 
     ItemDelegate inherits its API from AbstractButton. For instance, you can set
-    \l {AbstractButton::text}{text}, and react to \l {AbstractButton::clicked}{clicks}
-    using the AbstractButton API.
+    \l {AbstractButton::text}{text}, display an \l {Icons in Qt Quick Controls 2}{icon},
+    and react to \l {AbstractButton::clicked}{clicks} using the AbstractButton API.
 
     \snippet qtquickcontrols2-itemdelegate.qml 1
 
@@ -123,6 +123,11 @@ void QQuickItemDelegate::setHighlighted(bool highlighted)
 QFont QQuickItemDelegate::defaultFont() const
 {
     return QQuickControlPrivate::themeFont(QPlatformTheme::ItemViewFont);
+}
+
+QPalette QQuickItemDelegate::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::ItemViewPalette);
 }
 
 #if QT_CONFIG(accessibility)

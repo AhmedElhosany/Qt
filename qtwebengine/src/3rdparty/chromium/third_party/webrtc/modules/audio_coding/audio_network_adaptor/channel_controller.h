@@ -11,8 +11,8 @@
 #ifndef WEBRTC_MODULES_AUDIO_CODING_AUDIO_NETWORK_ADAPTOR_CHANNEL_CONTROLLER_H_
 #define WEBRTC_MODULES_AUDIO_CODING_AUDIO_NETWORK_ADAPTOR_CHANNEL_CONTROLLER_H_
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/modules/audio_coding/audio_network_adaptor/controller.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 
@@ -35,12 +35,16 @@ class ChannelController final : public Controller {
 
   explicit ChannelController(const Config& config);
 
-  void MakeDecision(const NetworkMetrics& metrics,
-                    AudioNetworkAdaptor::EncoderRuntimeConfig* config) override;
+  ~ChannelController() override;
+
+  void UpdateNetworkMetrics(const NetworkMetrics& network_metrics) override;
+
+  void MakeDecision(AudioEncoderRuntimeConfig* config) override;
 
  private:
   const Config config_;
   size_t channels_to_encode_;
+  rtc::Optional<int> uplink_bandwidth_bps_;
   RTC_DISALLOW_COPY_AND_ASSIGN(ChannelController);
 };
 

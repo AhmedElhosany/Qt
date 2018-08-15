@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef DEVICE_USB_USB_SERVICE_IMPL_H_
+#define DEVICE_USB_USB_SERVICE_IMPL_H_
+
 #include "device/usb/usb_service.h"
 
 #include <stddef.h>
@@ -25,15 +28,12 @@
 struct libusb_device;
 struct libusb_context;
 
-namespace base {
-class SequencedTaskRunner;
-class SingleThreadTaskRunner;
-}
-
 namespace device {
 
 typedef struct libusb_device* PlatformUsbDevice;
 typedef struct libusb_context* PlatformUsbContext;
+
+class UsbDeviceImpl;
 
 class UsbServiceImpl :
 #if defined(OS_WIN)
@@ -41,8 +41,7 @@ class UsbServiceImpl :
 #endif  // OS_WIN
     public UsbService {
  public:
-  explicit UsbServiceImpl(
-      scoped_refptr<base::SequencedTaskRunner> blocking_task_runner);
+  UsbServiceImpl();
   ~UsbServiceImpl() override;
 
  private:
@@ -56,6 +55,8 @@ class UsbServiceImpl :
   void OnDeviceRemoved(const GUID& class_guid,
                        const std::string& device_path) override;
 #endif  // OS_WIN
+
+  void OnUsbContext(scoped_refptr<UsbContext> context);
 
   // Enumerate USB devices from OS and update devices_ map.
   void RefreshDevices();
@@ -85,6 +86,7 @@ class UsbServiceImpl :
                          const base::Closure& refresh_complete);
 
   scoped_refptr<UsbContext> context_;
+  bool usb_unavailable_ = false;
 
   // When available the device list will be updated when new devices are
   // connected instead of only when a full enumeration is requested.
@@ -121,3 +123,5 @@ class UsbServiceImpl :
 };
 
 }  // namespace device
+
+#endif  // DEVICE_USB_USB_SERVICE_IMPL_H_

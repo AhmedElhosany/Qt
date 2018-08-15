@@ -383,6 +383,12 @@ static void qt_quickitems_defineModule(const char *uri, int major, int minor)
 
     qmlRegisterType<QQuickFlickable, 9>(uri, 2, 9, "Flickable");
     qmlRegisterType<QQuickMouseArea, 9>(uri, 2, 9, "MouseArea");
+
+#if QT_CONFIG(quick_path)
+    qmlRegisterType<QQuickPathArc, 2>(uri, 2, 9, "PathArc");
+    qmlRegisterType<QQuickPathMove>(uri, 2, 9, "PathMove");
+#endif
+
     qmlRegisterType<QQuickText, 9>(uri, 2, 9, "Text");
     qmlRegisterType<QQuickTextInput, 9>(uri, 2, 9, "TextInput");
     qmlRegisterType<QQuickTouchPoint>(uri, 2, 9, "TouchPoint");
@@ -392,6 +398,14 @@ static void qt_quickitems_defineModule(const char *uri, int major, int minor)
     qmlRegisterUncreatableType<QQuickBasePositioner, 9>(uri, 2, 9, "Positioner",
                                                   QStringLiteral("Positioner is an abstract type that is only available as an attached property."));
 #endif
+
+#if QT_CONFIG(quick_shadereffect)
+    qmlRegisterType<QQuickShaderEffectSource, 2>(uri, 2, 9, "ShaderEffectSource");
+#endif
+
+    qmlRegisterType<QQuickFlickable, 10>(uri, 2, 10, "Flickable");
+    qmlRegisterType<QQuickTextEdit, 10>(uri, 2, 10, "TextEdit");
+    qmlRegisterType<QQuickText, 10>(uri, 2, 10, "Text");
 }
 
 static void initResources()

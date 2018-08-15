@@ -311,8 +311,7 @@ bool QQuickWebEngineSettings::touchIconsEnabled() const
   Focus is given to the view whenever a navigation operation occurs
   (load, stop, reload, reload and bypass cache, forward, backward, set content, and so on).
 
-  Enabled by default. See \l{WebEngine Recipe Browser} for an example where
-  this property is disabled.
+  Disabled by default.
 */
 bool QQuickWebEngineSettings::focusOnNavigationEnabled() const
 {
@@ -360,6 +359,26 @@ bool QQuickWebEngineSettings::allowRunningInsecureContent() const
 bool QQuickWebEngineSettings::allowGeolocationOnInsecureOrigins() const
 {
     return d_ptr->testAttribute(WebEngineSettings::AllowGeolocationOnInsecureOrigins);
+}
+
+/*!
+  \qmlproperty bool WebEngineSettings::allowWindowActivationFromJavaScript
+  \since QtWebEngine 1.6
+  Allows the window.focus() method in JavaScript. Disallowed by default.
+*/
+bool QQuickWebEngineSettings::allowWindowActivationFromJavaScript() const
+{
+    return d_ptr->testAttribute(WebEngineSettings::AllowWindowActivationFromJavaScript);
+}
+
+/*!
+  \qmlproperty bool WebEngineSettings::showScrollBars
+  \since QtWebEngine 1.6
+  Shows scroll bars. Enabled by default.
+*/
+bool QQuickWebEngineSettings::showScrollBars() const
+{
+    return d_ptr->testAttribute(WebEngineSettings::ShowScrollBars);
 }
 
 /*!
@@ -562,6 +581,22 @@ void QQuickWebEngineSettings::setAllowGeolocationOnInsecureOrigins(bool on)
     d_ptr->setAttribute(WebEngineSettings::AllowGeolocationOnInsecureOrigins, on);
     if (wasOn != on)
         Q_EMIT allowGeolocationOnInsecureOriginsChanged();
+}
+
+void QQuickWebEngineSettings::setAllowWindowActivationFromJavaScript(bool on)
+{
+    bool wasOn = d_ptr->testAttribute(WebEngineSettings::AllowWindowActivationFromJavaScript);
+    d_ptr->setAttribute(WebEngineSettings::AllowWindowActivationFromJavaScript, on);
+    if (wasOn != on)
+        Q_EMIT allowWindowActivationFromJavaScriptChanged();
+}
+
+void QQuickWebEngineSettings::setShowScrollBars(bool on)
+{
+    bool wasOn = d_ptr->testAttribute(WebEngineSettings::ShowScrollBars);
+    d_ptr->setAttribute(WebEngineSettings::ShowScrollBars, on);
+    if (wasOn != on)
+        Q_EMIT showScrollBarsChanged();
 }
 
 void QQuickWebEngineSettings::setParentSettings(QQuickWebEngineSettings *parentSettings)

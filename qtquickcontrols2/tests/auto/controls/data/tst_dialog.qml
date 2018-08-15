@@ -99,11 +99,14 @@ TestCase {
         verify(acceptedSpy.valid)
         control.accept()
         compare(acceptedSpy.count, 1)
+        compare(control.result, Dialog.Accepted)
 
         tryCompare(control, "visible", false)
     }
 
     function test_reject() {
+        skip("QTBUG-62549, QTBUG-62628")
+
         var control = createTemporaryObject(dialog, testCase)
 
         var openedSpy = createTemporaryObject(signalSpy, testCase, {target: control, signalName: "opened"})
@@ -118,6 +121,7 @@ TestCase {
         verify(rejectedSpy.valid)
         control.reject()
         compare(rejectedSpy.count, 1)
+        compare(control.result, Dialog.Rejected)
 
         tryCompare(control, "visible", false)
 
@@ -355,5 +359,43 @@ TestCase {
         compare(control.contentItem.height, control.availableHeight
                                             - (data.header ? control.header.height + control.spacing : 0)
                                             - (data.footer ? control.footer.height + control.spacing : 0))
+    }
+
+    function test_signals_data() {
+        return [
+            { tag: "Ok", standardButton: Dialog.Ok, signalName: "accepted" },
+            { tag: "Open", standardButton: Dialog.Open, signalName: "accepted" },
+            { tag: "Save", standardButton: Dialog.Save, signalName: "accepted" },
+            { tag: "Cancel", standardButton: Dialog.Cancel, signalName: "rejected" },
+            { tag: "Close", standardButton: Dialog.Close, signalName: "rejected" },
+            { tag: "Discard", standardButton: Dialog.Discard, signalName: "discarded" },
+            { tag: "Apply", standardButton: Dialog.Apply, signalName: "applied" },
+            { tag: "Reset", standardButton: Dialog.Reset, signalName: "reset" },
+            { tag: "RestoreDefaults", standardButton: Dialog.RestoreDefaults, signalName: "reset" },
+            { tag: "Help", standardButton: Dialog.Help, signalName: "helpRequested" },
+            { tag: "SaveAll", standardButton: Dialog.SaveAll, signalName: "accepted" },
+            { tag: "Yes", standardButton: Dialog.Yes, signalName: "accepted" },
+            { tag: "YesToAll", standardButton: Dialog.YesToAll, signalName: "accepted" },
+            { tag: "No", standardButton: Dialog.No, signalName: "rejected" },
+            { tag: "NoToAll", standardButton: Dialog.NoToAll, signalName: "rejected" },
+            { tag: "Abort", standardButton: Dialog.Abort, signalName: "rejected" },
+            { tag: "Retry", standardButton: Dialog.Retry, signalName: "accepted" },
+            { tag: "Ignore", standardButton: Dialog.Ignore, signalName: "accepted" }
+        ]
+    }
+
+    function test_signals(data) {
+        var control = createTemporaryObject(dialog, testCase)
+        verify(control)
+
+        control.standardButtons = data.standardButton
+        var button = control.standardButton(data.standardButton)
+        verify(button)
+
+        var buttonSpy = signalSpy.createObject(control.contentItem, {target: control, signalName: data.signalName})
+        verify(buttonSpy.valid)
+
+        button.clicked()
+        compare(buttonSpy.count, 1)
     }
 }

@@ -502,8 +502,9 @@ TestCase {
         mouseClick(comboBox, comboBox.x + 1, comboBox.y + 1)
         verify(!comboBox.activeFocus)
         comboBox.activeFocusOnPress = true
-        // two mouse clicks to open and close the popup menu
-        mouseClick(comboBox, comboBox.x + 1, comboBox.y + 1)
+        // two mouse clicks to open and close the popup menu. The 1ms delay between mouse presses is
+        // needed with software quick renderer. Without the delay, this test is flaky.
+        mouseClick(comboBox, comboBox.x + 1, comboBox.y + 1, Qt.LeftButton, Qt.NoModifier, 1)
         mouseClick(comboBox, comboBox.x + 1, comboBox.y + 1)
         verify(comboBox.activeFocus)
         comboBox.destroy()

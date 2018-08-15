@@ -237,6 +237,10 @@ QPlatformServices *QPlatformIntegration::services() const
     is required to have this capability.
 
     \value ApplicationIcon The platform supports setting the application icon. (since 5.5)
+
+    \value TopStackedNativeChildWindows The platform supports native child windows via
+    QWindowContainer without having to punch a transparent hole in the
+    backingstore. (since 5.10)
  */
 
 /*!
@@ -260,7 +264,8 @@ QPlatformServices *QPlatformIntegration::services() const
 
 bool QPlatformIntegration::hasCapability(Capability cap) const
 {
-    return cap == NonFullScreenWindows || cap == NativeWidgets || cap == WindowManagement;
+    return cap == NonFullScreenWindows || cap == NativeWidgets || cap == WindowManagement
+        || cap == TopStackedNativeChildWindows;
 }
 
 QPlatformPixmap *QPlatformIntegration::createPlatformPixmap(QPlatformPixmap::PixelType type) const
@@ -387,6 +392,8 @@ QVariant QPlatformIntegration::styleHint(StyleHint hint) const
         return false;
     case ShowIsMaximized:
         return false;
+    case ShowShortcutsInContextMenus:
+        return QPlatformTheme::defaultThemeHint(QPlatformTheme::ShowShortcutsInContextMenus);
     case PasswordMaskDelay:
         return QPlatformTheme::defaultThemeHint(QPlatformTheme::PasswordMaskDelay);
     case PasswordMaskCharacter:
@@ -621,5 +628,27 @@ void QPlatformIntegration::setApplicationIcon(const QIcon &icon) const
 {
     Q_UNUSED(icon);
 }
+
+#if QT_CONFIG(vulkan)
+
+/*!
+    Factory function for QPlatformVulkanInstance. The \a instance parameter is a
+    pointer to the instance for which a platform-specific backend needs to be
+    created.
+
+    Returns a pointer to a QPlatformOpenGLContext instance or \c NULL if the context could
+    not be created.
+
+    \sa QVulkanInstance
+    \since 5.10
+*/
+QPlatformVulkanInstance *QPlatformIntegration::createPlatformVulkanInstance(QVulkanInstance *instance) const
+{
+    Q_UNUSED(instance);
+    qWarning("This plugin does not support createPlatformVulkanInstance");
+    return nullptr;
+}
+
+#endif // QT_CONFIG(vulkan)
 
 QT_END_NAMESPACE

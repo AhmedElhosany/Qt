@@ -10,13 +10,6 @@
     padding: 11px 0 0 0;
 }
 
-.help-window-caption {
-    border-bottom: solid 1px rgb(153, 153, 153);
-    margin: 0 8px;
-    padding: 0 2px;
-    line-height: 28px;
-}
-
 .help-content {
     overflow-y: auto;
     overflow-x: hidden;
@@ -31,39 +24,10 @@
     padding: 12px;
 }
 
-.help-window-main .help-container-wrapper::-webkit-scrollbar {
-    width: 11px;
-}
-
-.help-window-main .help-container-wrapper::-webkit-scrollbar-corner,
-.help-window-main .help-container-wrapper::-webkit-resizer {
-    display: none;
-}
-
-.help-window-main .help-container-wrapper::-webkit-scrollbar-thumb:vertical {
-    background: linear-gradient(to right, rgb(128, 128, 128), rgb(96, 96, 96) 40%, rgb(128, 128, 128));
-    border-radius: 5px;
-    min-height: 20px;
-}
-
-.help-window-main .help-container-wrapper::-webkit-scrollbar-thumb:vertical:hover,
-.help-window-main .help-container-wrapper::-webkit-scrollbar-thumb:vertical:active {
-    background: linear-gradient(to right, rgb(176, 176, 176), rgb(144, 144, 144) 40%, rgb(176, 176, 176));
-}
-
-.help-window-main .help-container-wrapper::-webkit-scrollbar-track:vertical {
-    background: linear-gradient(to right, rgb(10, 10, 10), rgb(32, 32, 32) 25%, rgb(32, 32, 32));
-    border-radius: 5px;
-}
-
 .help-container {
     width: 100%;
     -webkit-user-select: auto;
     -webkit-column-width: 288px;
-}
-
-.help-no-columns {
-    -webkit-column-width: initial !important;
 }
 
 .help-block {
@@ -196,14 +160,6 @@ fieldset {
     padding: 0;
 }
 
-.settings-tab input:not([type]),
-.settings-tab input[type="text"] {
-    border: 1px solid rgb(213, 213, 213);
-    border-radius: 2px;
-    color: #444444;
-    padding: 3px;
-}
-
 .settings-tab input.numeric {
     text-align: right;
 }
@@ -252,69 +208,6 @@ fieldset {
 }
 
 .settings-tab select {
-    margin-left: 10px;
-}
-
-#workspace-tab-content .settings-tab.help-content.help-container {
-    -webkit-column-width: initial;
-    overflow: hidden;
-}
-
-
-#workspace-tab-content .button:hover {
-    opacity: 1.0 !important;
-}
-
-#workspace-tab-content .help-block {
-    width: auto;
-    margin-right: 20px;
-}
-
-p.folder-exclude-pattern {
-    margin-top: 0 !important;
-}
-
-.folder-exclude-pattern input {
-    margin-top: 10px;
-}
-
-.file-system-mapping-view {
-    margin-left: 30px;
-    margin-right: 10px;
-}
-
-.settings-tab .file-system-container {
-    margin-bottom: 18px;
-    padding: 0 8px;
-    border-left: 1px solid hsl(0, 0%, 90%);
-    max-width: 800px;
-}
-
-.settings-tab .file-system-header {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-}
-
-.settings-tab .file-system-name {
-    font-weight: bold;
-    flex: none;
-    margin-right: 10px;
-    font-size: 15px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 70%;
-}
-
-.settings-tab .file-system-path {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: auto;
-}
-
-.settings-tab .file-system-remove {
-    flex: none;
     margin-left: 10px;
 }
 

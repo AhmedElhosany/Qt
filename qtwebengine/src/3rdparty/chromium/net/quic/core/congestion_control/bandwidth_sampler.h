@@ -5,10 +5,12 @@
 #ifndef NET_QUIC_CORE_CONGESTION_CONTROL_BANDWIDTH_SAMPLER_H_
 #define NET_QUIC_CORE_CONGESTION_CONTROL_BANDWIDTH_SAMPLER_H_
 
-#include "net/base/linked_hash_map.h"
+#include "net/quic/core/packet_number_indexed_queue.h"
 #include "net/quic/core/quic_bandwidth.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/quic/core/quic_time.h"
+#include "net/quic/platform/api/quic_containers.h"
+#include "net/quic/platform/api/quic_export.h"
 
 namespace net {
 
@@ -16,7 +18,7 @@ namespace test {
 class BandwidthSamplerPeer;
 }  // namespace test
 
-struct NET_EXPORT_PRIVATE BandwidthSample {
+struct QUIC_EXPORT_PRIVATE BandwidthSample {
   // The bandwidth at that particular sample. Zero if no valid bandwidth sample
   // is available.
   QuicBandwidth bandwidth;
@@ -115,7 +117,7 @@ struct NET_EXPORT_PRIVATE BandwidthSample {
 // up until an ack for a packet that was sent after OnAppLimited() was called.
 // Note that while the scenario above is not the only scenario when the
 // connection is app-limited, the approach works in other cases too.
-class NET_EXPORT_PRIVATE BandwidthSampler {
+class QUIC_EXPORT_PRIVATE BandwidthSampler {
  public:
   BandwidthSampler();
   ~BandwidthSampler();
@@ -148,6 +150,9 @@ class NET_EXPORT_PRIVATE BandwidthSampler {
 
   QuicByteCount total_bytes_acked() const { return total_bytes_acked_; }
   bool is_app_limited() const { return is_app_limited_; }
+  QuicPacketNumber end_of_app_limited_phase() const {
+    return end_of_app_limited_phase_;
+  }
 
  private:
   friend class test::BandwidthSamplerPeer;
@@ -202,9 +207,16 @@ class NET_EXPORT_PRIVATE BandwidthSampler {
           total_bytes_acked_at_the_last_acked_packet(
               sampler.total_bytes_acked_),
           is_app_limited(sampler.is_app_limited_) {}
+
+    // Default constructor.  Required to put this structure into
+    // PacketNumberIndexedQueue.
+    ConnectionStateOnSentPacket()
+        : sent_time(QuicTime::Zero()),
+          last_acked_packet_sent_time(QuicTime::Zero()),
+          last_acked_packet_ack_time(QuicTime::Zero()) {}
   };
 
-  typedef linked_hash_map<QuicPacketNumber, ConnectionStateOnSentPacket>
+  typedef QuicLinkedHashMap<QuicPacketNumber, ConnectionStateOnSentPacket>
       ConnectionStateMap;
 
   // The total number of congestion controlled bytes sent during the connection.
@@ -238,6 +250,16 @@ class NET_EXPORT_PRIVATE BandwidthSampler {
   // Record of the connection state at the point where each packet in flight was
   // sent, indexed by the packet number.
   ConnectionStateMap connection_state_map_;
+  PacketNumberIndexedQueue<ConnectionStateOnSentPacket>
+      connection_state_map_new_;
+  const bool use_new_connection_state_map_;
+
+  // Handles the actual bandwidth calculations, whereas the outer method handles
+  // retrieving and removing |sent_packet|.
+  BandwidthSample OnPacketAcknowledgedInner(
+      QuicTime ack_time,
+      QuicPacketNumber packet_number,
+      const ConnectionStateOnSentPacket& sent_packet);
 };
 
 }  // namespace net

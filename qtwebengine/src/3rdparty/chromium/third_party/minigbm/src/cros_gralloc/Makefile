@@ -4,14 +4,22 @@
 
 GRALLOC = gralloc.cros.so
 
-SOURCES =  $(wildcard *.cc)
-SOURCES += $(wildcard ../*.c)
+SRCS    = $(wildcard *.cc)
+SRCS   += $(wildcard ../*.c)
+
+SRCS   += $(wildcard gralloc0/*.cc)
+
+SOURCES = $(filter-out ../gbm%, $(SRCS))
+PKG_CONFIG ?= pkg-config
 
 VPATH = $(dir $(SOURCES))
+LIBDRM_CFLAGS := $(shell $(PKG_CONFIG) --cflags libdrm)
+LIBDRM_LIBS := $(shell $(PKG_CONFIG) --libs libdrm)
 
-CPPFLAGS += -Wall -fPIC -Werror -flto
-CXXFLAGS += -std=c++11
-LIBS     += -shared -lcutils -lhardware -ldrm
+CPPFLAGS += -Wall -fPIC -Werror -flto $(LIBDRM_CFLAGS)
+CXXFLAGS += -std=c++14
+CFLAGS   += -std=c99
+LIBS     += -shared -lcutils -lhardware $(LIBDRM_LIBS)
 
 OBJS =  $(foreach source, $(SOURCES), $(addsuffix .o, $(basename $(source))))
 

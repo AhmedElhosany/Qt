@@ -27,10 +27,9 @@
 #include "bindings/core/v8/RadioNodeListOrElement.h"
 #include "core/HTMLNames.h"
 #include "core/frame/UseCounter.h"
-#include "core/html/HTMLFieldSetElement.h"
 #include "core/html/HTMLFormElement.h"
 #include "core/html/HTMLImageElement.h"
-#include "wtf/HashSet.h"
+#include "platform/wtf/HashSet.h"
 
 namespace blink {
 
@@ -39,86 +38,81 @@ using namespace HTMLNames;
 // Since the collections are to be "live", we have to do the
 // calculation every time if anything has changed.
 
-HTMLFormControlsCollection::HTMLFormControlsCollection(ContainerNode& ownerNode)
-    : HTMLCollection(ownerNode, FormControls, OverridesItemAfter),
-      m_cachedElement(nullptr),
-      m_cachedElementOffsetInArray(0) {
-  DCHECK(isHTMLFormElement(ownerNode) || isHTMLFieldSetElement(ownerNode));
+HTMLFormControlsCollection::HTMLFormControlsCollection(
+    ContainerNode& owner_node)
+    : HTMLCollection(owner_node, kFormControls, kOverridesItemAfter),
+      cached_element_(nullptr),
+      cached_element_offset_in_array_(0) {
+  DCHECK(isHTMLFormElement(owner_node));
 }
 
-HTMLFormControlsCollection* HTMLFormControlsCollection::create(
-    ContainerNode& ownerNode,
+HTMLFormControlsCollection* HTMLFormControlsCollection::Create(
+    ContainerNode& owner_node,
     CollectionType type) {
-  DCHECK_EQ(type, FormControls);
-  return new HTMLFormControlsCollection(ownerNode);
+  DCHECK_EQ(type, kFormControls);
+  return new HTMLFormControlsCollection(owner_node);
 }
 
 HTMLFormControlsCollection::~HTMLFormControlsCollection() {}
 
-const FormAssociatedElement::List&
-HTMLFormControlsCollection::formControlElements() const {
-  DCHECK(isHTMLFormElement(ownerNode()) || isHTMLFieldSetElement(ownerNode()));
-  if (isHTMLFormElement(ownerNode()))
-    return toHTMLFormElement(ownerNode()).associatedElements();
-  return toHTMLFieldSetElement(ownerNode()).associatedElements();
+const ListedElement::List& HTMLFormControlsCollection::ListedElements() const {
+  return toHTMLFormElement(ownerNode()).ListedElements();
 }
 
 const HeapVector<Member<HTMLImageElement>>&
-HTMLFormControlsCollection::formImageElements() const {
-  return toHTMLFormElement(ownerNode()).imageElements();
+HTMLFormControlsCollection::FormImageElements() const {
+  return toHTMLFormElement(ownerNode()).ImageElements();
 }
 
-static unsigned findFormAssociatedElement(
-    const FormAssociatedElement::List& associatedElements,
-    Element* element) {
+static unsigned FindListedElement(const ListedElement::List& listed_elements,
+                                  Element* element) {
   unsigned i = 0;
-  for (; i < associatedElements.size(); ++i) {
-    FormAssociatedElement* associatedElement = associatedElements[i];
-    if (associatedElement->isEnumeratable() &&
-        toHTMLElement(associatedElement) == element)
+  for (; i < listed_elements.size(); ++i) {
+    ListedElement* listed_element = listed_elements[i];
+    if (listed_element->IsEnumeratable() &&
+        ToHTMLElement(listed_element) == element)
       break;
   }
   return i;
 }
 
-HTMLElement* HTMLFormControlsCollection::virtualItemAfter(
+HTMLElement* HTMLFormControlsCollection::VirtualItemAfter(
     Element* previous) const {
-  const FormAssociatedElement::List& associatedElements = formControlElements();
+  const ListedElement::List& listed_elements = this->ListedElements();
   unsigned offset;
   if (!previous)
     offset = 0;
-  else if (m_cachedElement == previous)
-    offset = m_cachedElementOffsetInArray + 1;
+  else if (cached_element_ == previous)
+    offset = cached_element_offset_in_array_ + 1;
   else
-    offset = findFormAssociatedElement(associatedElements, previous) + 1;
+    offset = FindListedElement(listed_elements, previous) + 1;
 
-  for (unsigned i = offset; i < associatedElements.size(); ++i) {
-    FormAssociatedElement* associatedElement = associatedElements[i];
-    if (associatedElement->isEnumeratable()) {
-      m_cachedElement = toHTMLElement(associatedElement);
-      m_cachedElementOffsetInArray = i;
-      return m_cachedElement;
+  for (unsigned i = offset; i < listed_elements.size(); ++i) {
+    ListedElement* listed_element = listed_elements[i];
+    if (listed_element->IsEnumeratable()) {
+      cached_element_ = ToHTMLElement(listed_element);
+      cached_element_offset_in_array_ = i;
+      return cached_element_;
     }
   }
   return nullptr;
 }
 
-void HTMLFormControlsCollection::invalidateCache(Document* oldDocument) const {
-  HTMLCollection::invalidateCache(oldDocument);
-  m_cachedElement = nullptr;
-  m_cachedElementOffsetInArray = 0;
+void HTMLFormControlsCollection::InvalidateCache(Document* old_document) const {
+  HTMLCollection::InvalidateCache(old_document);
+  cached_element_ = nullptr;
+  cached_element_offset_in_array_ = 0;
 }
 
-static HTMLElement* firstNamedItem(
-    const FormAssociatedElement::List& elementsArray,
-    const QualifiedName& attrName,
-    const String& name) {
-  DCHECK(attrName == idAttr || attrName == nameAttr);
+static HTMLElement* FirstNamedItem(const ListedElement::List& elements_array,
+                                   const QualifiedName& attr_name,
+                                   const String& name) {
+  DCHECK(attr_name == idAttr || attr_name == nameAttr);
 
-  for (unsigned i = 0; i < elementsArray.size(); ++i) {
-    HTMLElement* element = toHTMLElement(elementsArray[i]);
-    if (elementsArray[i]->isEnumeratable() &&
-        element->fastGetAttribute(attrName) == name)
+  for (const auto& listed_element : elements_array) {
+    HTMLElement* element = ToHTMLElement(listed_element);
+    if (listed_element->IsEnumeratable() &&
+        element->FastGetAttribute(attr_name) == name)
       return element;
   }
   return nullptr;
@@ -131,117 +125,105 @@ HTMLElement* HTMLFormControlsCollection::namedItem(
   // attribute. If a match is not found, the method then searches for an
   // object with a matching name attribute, but only on those elements
   // that are allowed a name attribute.
-  if (HTMLElement* item = firstNamedItem(formControlElements(), idAttr, name))
+  if (HTMLElement* item = FirstNamedItem(ListedElements(), idAttr, name))
     return item;
-  return firstNamedItem(formControlElements(), nameAttr, name);
+  return FirstNamedItem(ListedElements(), nameAttr, name);
 }
 
-void HTMLFormControlsCollection::updateIdNameCache() const {
-  if (hasValidIdNameCache())
+void HTMLFormControlsCollection::UpdateIdNameCache() const {
+  if (HasValidIdNameCache())
     return;
 
-  NamedItemCache* cache = NamedItemCache::create();
-  HashSet<StringImpl*> foundInputElements;
+  NamedItemCache* cache = NamedItemCache::Create();
+  HashSet<StringImpl*> found_input_elements;
 
-  const FormAssociatedElement::List& elementsArray = formControlElements();
-
-  for (unsigned i = 0; i < elementsArray.size(); ++i) {
-    FormAssociatedElement* associatedElement = elementsArray[i];
-    if (associatedElement->isEnumeratable()) {
-      HTMLElement* element = toHTMLElement(associatedElement);
-      const AtomicString& idAttrVal = element->getIdAttribute();
-      const AtomicString& nameAttrVal = element->getNameAttribute();
-      if (!idAttrVal.isEmpty()) {
-        cache->addElementWithId(idAttrVal, element);
-        foundInputElements.add(idAttrVal.impl());
+  for (const auto& listed_element : ListedElements()) {
+    if (listed_element->IsEnumeratable()) {
+      HTMLElement* element = ToHTMLElement(listed_element);
+      const AtomicString& id_attr_val = element->GetIdAttribute();
+      const AtomicString& name_attr_val = element->GetNameAttribute();
+      if (!id_attr_val.IsEmpty()) {
+        cache->AddElementWithId(id_attr_val, element);
+        found_input_elements.insert(id_attr_val.Impl());
       }
-      if (!nameAttrVal.isEmpty() && idAttrVal != nameAttrVal) {
-        cache->addElementWithName(nameAttrVal, element);
-        foundInputElements.add(nameAttrVal.impl());
+      if (!name_attr_val.IsEmpty() && id_attr_val != name_attr_val) {
+        cache->AddElementWithName(name_attr_val, element);
+        found_input_elements.insert(name_attr_val.Impl());
       }
     }
   }
 
-  if (isHTMLFormElement(ownerNode())) {
-    // HTMLFormControlsCollection doesn't support named getter for IMG
-    // elements. However we still need to handle IMG elements here because
-    // HTMLFormElement named getter relies on this.
-    const HeapVector<Member<HTMLImageElement>>& imageElementsArray =
-        formImageElements();
-    for (unsigned i = 0; i < imageElementsArray.size(); ++i) {
-      HTMLImageElement* element = imageElementsArray[i];
-      const AtomicString& idAttrVal = element->getIdAttribute();
-      const AtomicString& nameAttrVal = element->getNameAttribute();
-      if (!idAttrVal.isEmpty() &&
-          !foundInputElements.contains(idAttrVal.impl()))
-        cache->addElementWithId(idAttrVal, element);
-      if (!nameAttrVal.isEmpty() && idAttrVal != nameAttrVal &&
-          !foundInputElements.contains(nameAttrVal.impl()))
-        cache->addElementWithName(nameAttrVal, element);
-    }
+  // HTMLFormControlsCollection doesn't support named getter for IMG
+  // elements. However we still need to handle IMG elements here because
+  // HTMLFormElement named getter relies on this.
+  for (const auto& element : FormImageElements()) {
+    const AtomicString& id_attr_val = element->GetIdAttribute();
+    const AtomicString& name_attr_val = element->GetNameAttribute();
+    if (!id_attr_val.IsEmpty() &&
+        !found_input_elements.Contains(id_attr_val.Impl()))
+      cache->AddElementWithId(id_attr_val, element);
+    if (!name_attr_val.IsEmpty() && id_attr_val != name_attr_val &&
+        !found_input_elements.Contains(name_attr_val.Impl()))
+      cache->AddElementWithName(name_attr_val, element);
   }
 
   // Set the named item cache last as traversing the tree may cause cache
   // invalidation.
-  setNamedItemCache(cache);
+  SetNamedItemCache(cache);
 }
 
 void HTMLFormControlsCollection::namedGetter(
     const AtomicString& name,
-    RadioNodeListOrElement& returnValue) {
-  HeapVector<Member<Element>> namedItems;
-  this->namedItems(name, namedItems);
+    RadioNodeListOrElement& return_value) {
+  HeapVector<Member<Element>> named_items;
+  this->NamedItems(name, named_items);
 
-  if (namedItems.isEmpty())
+  if (named_items.IsEmpty())
     return;
 
-  if (namedItems.size() == 1) {
-    if (!isHTMLImageElement(*namedItems[0]))
-      returnValue.setElement(namedItems.at(0));
+  if (named_items.size() == 1) {
+    if (!isHTMLImageElement(*named_items[0]))
+      return_value.setElement(named_items.at(0));
     return;
   }
 
   // This path never returns a RadioNodeList for <img> because
   // onlyMatchingImgElements flag is false by default.
-  returnValue.setRadioNodeList(ownerNode().radioNodeList(name));
-  if (isHTMLFieldSetElement(ownerNode()))
-    UseCounter::count(
-        document(),
-        UseCounter::FormControlsCollectionReturnsRadioNodeListForFieldSet);
+  return_value.setRadioNodeList(ownerNode().GetRadioNodeList(name));
 }
 
-void HTMLFormControlsCollection::supportedPropertyNames(Vector<String>& names) {
+void HTMLFormControlsCollection::SupportedPropertyNames(Vector<String>& names) {
   // http://www.whatwg.org/specs/web-apps/current-work/multipage/common-dom-interfaces.html#htmlformcontrolscollection-0:
   // The supported property names consist of the non-empty values of all the id
   // and name attributes of all the elements represented by the collection, in
   // tree order, ignoring later duplicates, with the id of an element preceding
   // its name if it contributes both, they differ from each other, and neither
   // is the duplicate of an earlier entry.
-  HashSet<AtomicString> existingNames;
+  HashSet<AtomicString> existing_names;
   unsigned length = this->length();
   for (unsigned i = 0; i < length; ++i) {
     HTMLElement* element = item(i);
     DCHECK(element);
-    const AtomicString& idAttribute = element->getIdAttribute();
-    if (!idAttribute.isEmpty()) {
-      HashSet<AtomicString>::AddResult addResult =
-          existingNames.add(idAttribute);
-      if (addResult.isNewEntry)
-        names.append(idAttribute);
+    const AtomicString& id_attribute = element->GetIdAttribute();
+    if (!id_attribute.IsEmpty()) {
+      HashSet<AtomicString>::AddResult add_result =
+          existing_names.insert(id_attribute);
+      if (add_result.is_new_entry)
+        names.push_back(id_attribute);
     }
-    const AtomicString& nameAttribute = element->getNameAttribute();
-    if (!nameAttribute.isEmpty()) {
-      HashSet<AtomicString>::AddResult addResult =
-          existingNames.add(nameAttribute);
-      if (addResult.isNewEntry)
-        names.append(nameAttribute);
+    const AtomicString& name_attribute = element->GetNameAttribute();
+    if (!name_attribute.IsEmpty()) {
+      HashSet<AtomicString>::AddResult add_result =
+          existing_names.insert(name_attribute);
+      if (add_result.is_new_entry)
+        names.push_back(name_attribute);
     }
   }
 }
 
 DEFINE_TRACE(HTMLFormControlsCollection) {
-  visitor->trace(m_cachedElement);
-  HTMLCollection::trace(visitor);
+  visitor->Trace(cached_element_);
+  HTMLCollection::Trace(visitor);
 }
 
 }  // namespace blink

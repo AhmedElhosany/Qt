@@ -99,7 +99,11 @@ namespace JobTypes {
         UpdateMeshTriangleList,
         FilterCompatibleTechniques,
         UpdateLevelOfDetail,
-        SyncTextureLoading
+        SyncTextureLoading,
+        LoadSkeleton,
+        UpdateSkinningPalette,
+        ProximityFiltering,
+        SyncFilterEntityByLayer
     };
 
 } // JobTypes

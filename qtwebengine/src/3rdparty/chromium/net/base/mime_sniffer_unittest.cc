@@ -339,17 +339,13 @@ TEST(MimeSnifferTest, XMLTest) {
   EXPECT_EQ("text/plain",
             SniffMimeType("<?xml?><notafeed", std::string(), "text/plain"));
 
-  // Positive test for the two instances we upgrade to XHTML.
-  EXPECT_EQ("application/xhtml+xml",
+  // We never upgrade to application/xhtml+xml.
+  EXPECT_EQ("text/xml",
             SniffMimeType("<html xmlns=\"http://www.w3.org/1999/xhtml\">",
-                          std::string(),
-                          "text/xml"));
-  EXPECT_EQ("application/xhtml+xml",
+                          std::string(), "text/xml"));
+  EXPECT_EQ("application/xml",
             SniffMimeType("<html xmlns=\"http://www.w3.org/1999/xhtml\">",
-                          std::string(),
-                          "application/xml"));
-
-  // Following our behavior with HTML, don't call other mime types XHTML.
+                          std::string(), "application/xml"));
   EXPECT_EQ("text/plain",
             SniffMimeType("<html xmlns=\"http://www.w3.org/1999/xhtml\">",
                           std::string(),
@@ -358,14 +354,13 @@ TEST(MimeSnifferTest, XMLTest) {
             SniffMimeType("<html xmlns=\"http://www.w3.org/1999/xhtml\">",
                           std::string(),
                           "application/rss+xml"));
-
-  // Don't sniff other HTML-looking bits as HTML.
   EXPECT_EQ("text/xml",
             SniffMimeType("<html><head>", std::string(), "text/xml"));
   EXPECT_EQ("text/xml",
-            SniffMimeType("<foo><html xmlns=\"http://www.w3.org/1999/xhtml\">",
-                          std::string(),
-                          "text/xml"));
+            SniffMimeType("<foo><rss "
+                          "xmlns:feedburner=\"http://rssnamespace.org/"
+                          "feedburner/ext/1.0\" version=\"2.0\">",
+                          std::string(), "text/xml"));
 }
 
 // Test content which is >= 1024 bytes, and includes no open angle bracket.
@@ -454,18 +449,27 @@ TEST(MimeSnifferTest, OfficeTest) {
 // RAW images.
 TEST(MimeSnifferTest, AudioVideoTest) {
   std::string mime_type;
+  const char kOggTestData[] = "OggS\x00";
+  EXPECT_TRUE(SniffMimeTypeFromLocalData(kOggTestData, sizeof(kOggTestData) - 1,
+                                         &mime_type));
+  EXPECT_EQ("audio/ogg", mime_type);
+  mime_type.clear();
+  // Check ogg header requires the terminal '\0' to be sniffed.
+  EXPECT_FALSE(SniffMimeTypeFromLocalData(
+      kOggTestData, sizeof(kOggTestData) - 2, &mime_type));
+  EXPECT_EQ("", mime_type);
+  mime_type.clear();
+
   const char kFlacTestData[] =
       "fLaC\x00\x00\x00\x22\x12\x00\x12\x00\x00\x00\x00\x00";
-  EXPECT_TRUE(SniffMimeTypeFromLocalData(kFlacTestData,
-                                         sizeof(kFlacTestData),
-                                         &mime_type));
+  EXPECT_TRUE(SniffMimeTypeFromLocalData(
+      kFlacTestData, sizeof(kFlacTestData) - 1, &mime_type));
   EXPECT_EQ("audio/x-flac", mime_type);
   mime_type.clear();
 
   const char kWMATestData[] =
       "\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c";
-  EXPECT_TRUE(SniffMimeTypeFromLocalData(kWMATestData,
-                                         sizeof(kWMATestData),
+  EXPECT_TRUE(SniffMimeTypeFromLocalData(kWMATestData, sizeof(kWMATestData) - 1,
                                          &mime_type));
   EXPECT_EQ("video/x-ms-asf", mime_type);
   mime_type.clear();
@@ -474,16 +478,14 @@ TEST(MimeSnifferTest, AudioVideoTest) {
   // format.
   const char kMP4TestData[] =
       "\x00\x00\x00\x20\x66\x74\x79\x70\x4d\x34\x41\x20\x00\x00\x00\x00";
-  EXPECT_TRUE(SniffMimeTypeFromLocalData(kMP4TestData,
-                                         sizeof(kMP4TestData),
+  EXPECT_TRUE(SniffMimeTypeFromLocalData(kMP4TestData, sizeof(kMP4TestData) - 1,
                                          &mime_type));
   EXPECT_EQ("video/mp4", mime_type);
   mime_type.clear();
 
   const char kAACTestData[] =
       "\xff\xf1\x50\x80\x02\x20\xb0\x23\x0a\x83\x20\x7d\x61\x90\x3e\xb1";
-  EXPECT_TRUE(SniffMimeTypeFromLocalData(kAACTestData,
-                                         sizeof(kAACTestData),
+  EXPECT_TRUE(SniffMimeTypeFromLocalData(kAACTestData, sizeof(kAACTestData) - 1,
                                          &mime_type));
   EXPECT_EQ("audio/mpeg", mime_type);
   mime_type.clear();

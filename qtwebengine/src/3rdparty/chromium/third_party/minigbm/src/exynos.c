@@ -1,28 +1,50 @@
 /*
- * Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+ * Copyright 2014 The Chromium OS Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
 #ifdef DRV_EXYNOS
 
+// clang-format off
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <xf86drm.h>
 #include <exynos_drm.h>
+// clang-format on
 
 #include "drv_priv.h"
 #include "helpers.h"
 #include "util.h"
 
-static int exynos_bo_create(struct bo *bo, uint32_t width, uint32_t height,
-			    uint32_t format, uint32_t flags)
+static const uint32_t render_target_formats[] = { DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888 };
+
+static const uint32_t texture_source_formats[] = { DRM_FORMAT_NV12 };
+
+static int exynos_init(struct driver *drv)
+{
+	int ret;
+	ret = drv_add_combinations(drv, render_target_formats, ARRAY_SIZE(render_target_formats),
+				   &LINEAR_METADATA, BO_USE_RENDER_MASK);
+	if (ret)
+		return ret;
+
+	ret = drv_add_combinations(drv, texture_source_formats, ARRAY_SIZE(texture_source_formats),
+				   &LINEAR_METADATA, BO_USE_TEXTURE_MASK);
+	if (ret)
+		return ret;
+
+	return drv_modify_linear_combinations(drv);
+}
+
+static int exynos_bo_create(struct bo *bo, uint32_t width, uint32_t height, uint32_t format,
+			    uint32_t flags)
 {
 	size_t plane;
 
-	if (format == DRV_FORMAT_NV12) {
+	if (format == DRM_FORMAT_NV12) {
 		uint32_t chroma_height;
 		/* V4L2 s5p-mfc requires width to be 16 byte aligned and height 32. */
 		width = ALIGN(width, 16);
@@ -34,7 +56,7 @@ static int exynos_bo_create(struct bo *bo, uint32_t width, uint32_t height,
 		bo->sizes[1] = bo->strides[1] * chroma_height + 64;
 		bo->offsets[0] = bo->offsets[1] = 0;
 		bo->total_size = bo->sizes[0] + bo->sizes[1];
-	} else if (format == DRV_FORMAT_XRGB8888 || format == DRV_FORMAT_ARGB8888) {
+	} else if (format == DRM_FORMAT_XRGB8888 || format == DRM_FORMAT_ARGB8888) {
 		bo->strides[0] = drv_stride_from_format(format, width, 0);
 		bo->total_size = bo->sizes[0] = height * bo->strides[0];
 		bo->offsets[0] = 0;
@@ -55,8 +77,8 @@ static int exynos_bo_create(struct bo *bo, uint32_t width, uint32_t height,
 
 		ret = drmIoctl(bo->drv->fd, DRM_IOCTL_EXYNOS_GEM_CREATE, &gem_create);
 		if (ret) {
-			fprintf(stderr, "drv: DRM_IOCTL_EXYNOS_GEM_CREATE failed "
-					"(size=%zu)\n", size);
+			fprintf(stderr, "drv: DRM_IOCTL_EXYNOS_GEM_CREATE failed (size=%zu)\n",
+				size);
 			goto cleanup_planes;
 		}
 
@@ -66,16 +88,13 @@ static int exynos_bo_create(struct bo *bo, uint32_t width, uint32_t height,
 	return 0;
 
 cleanup_planes:
-	for ( ; plane != 0; plane--) {
+	for (; plane != 0; plane--) {
 		struct drm_gem_close gem_close;
 		memset(&gem_close, 0, sizeof(gem_close));
 		gem_close.handle = bo->handles[plane - 1].u32;
-		int gem_close_ret = drmIoctl(bo->drv->fd, DRM_IOCTL_GEM_CLOSE,
-					     &gem_close);
+		int gem_close_ret = drmIoctl(bo->drv->fd, DRM_IOCTL_GEM_CLOSE, &gem_close);
 		if (gem_close_ret) {
-			fprintf(stderr,
-				"drv: DRM_IOCTL_GEM_CLOSE failed: %d\n",
-				gem_close_ret);
+			fprintf(stderr, "drv: DRM_IOCTL_GEM_CLOSE failed: %d\n", gem_close_ret);
 		}
 	}
 
@@ -86,19 +105,13 @@ cleanup_planes:
  * Use dumb mapping with exynos even though a GEM buffer is created.
  * libdrm does the same thing in exynos_drm.c
  */
-const struct backend backend_exynos =
-{
+struct backend backend_exynos = {
 	.name = "exynos",
+	.init = exynos_init,
 	.bo_create = exynos_bo_create,
 	.bo_destroy = drv_gem_bo_destroy,
+	.bo_import = drv_prime_bo_import,
 	.bo_map = drv_dumb_bo_map,
-	.format_list = {
-		{DRV_FORMAT_XRGB8888, DRV_BO_USE_SCANOUT | DRV_BO_USE_CURSOR | DRV_BO_USE_RENDERING},
-		{DRV_FORMAT_XRGB8888, DRV_BO_USE_SCANOUT | DRV_BO_USE_CURSOR | DRV_BO_USE_LINEAR},
-		{DRV_FORMAT_ARGB8888, DRV_BO_USE_SCANOUT | DRV_BO_USE_CURSOR | DRV_BO_USE_RENDERING},
-		{DRV_FORMAT_ARGB8888, DRV_BO_USE_SCANOUT | DRV_BO_USE_CURSOR | DRV_BO_USE_LINEAR},
-		{DRV_FORMAT_NV12, DRV_BO_USE_SCANOUT | DRV_BO_USE_RENDERING},
-	}
 };
 
 #endif

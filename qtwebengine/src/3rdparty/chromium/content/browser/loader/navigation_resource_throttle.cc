@@ -21,7 +21,6 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_data.h"
 #include "content/public/browser/resource_context.h"
-#include "content/public/browser/resource_controller.h"
 #include "content/public/browser/resource_dispatcher_host_delegate.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/ssl_status.h"
@@ -94,13 +93,13 @@ void CheckWillStartRequestOnUIThread(
     int render_process_id,
     int render_frame_host_id,
     const std::string& method,
-    const scoped_refptr<content::ResourceRequestBodyImpl>&
-        resource_request_body,
+    const scoped_refptr<content::ResourceRequestBody>& resource_request_body,
     const Referrer& sanitized_referrer,
     bool has_user_gesture,
     ui::PageTransition transition,
     bool is_external_protocol,
-    RequestContextType request_context_type) {
+    RequestContextType request_context_type,
+    blink::WebMixedContentContextType mixed_content_context_type) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   NavigationHandleImpl* navigation_handle =
       FindNavigationHandle(render_process_id, render_frame_host_id, callback);
@@ -110,6 +109,7 @@ void CheckWillStartRequestOnUIThread(
   navigation_handle->WillStartRequest(
       method, resource_request_body, sanitized_referrer, has_user_gesture,
       transition, is_external_protocol, request_context_type,
+      mixed_content_context_type,
       base::Bind(&SendCheckResultToIOThread, callback));
 }
 
@@ -134,7 +134,7 @@ void CheckWillRedirectRequestOnUIThread(
       ->FilterURL(false, &new_validated_url);
   navigation_handle->WillRedirectRequest(
       new_validated_url, new_method, new_referrer_url, new_is_external_protocol,
-      headers, connection_info,
+      headers, connection_info, nullptr,
       base::Bind(&SendCheckResultToIOThread, callback));
 }
 
@@ -179,10 +179,12 @@ void WillProcessResponseOnUIThread(
 NavigationResourceThrottle::NavigationResourceThrottle(
     net::URLRequest* request,
     ResourceDispatcherHostDelegate* resource_dispatcher_host_delegate,
-    RequestContextType request_context_type)
+    RequestContextType request_context_type,
+    blink::WebMixedContentContextType mixed_content_context_type)
     : request_(request),
       resource_dispatcher_host_delegate_(resource_dispatcher_host_delegate),
       request_context_type_(request_context_type),
+      mixed_content_context_type_(mixed_content_context_type),
       in_cross_site_transition_(false),
       on_transfer_done_result_(NavigationThrottle::DEFER),
       weak_ptr_factory_(this) {}
@@ -201,8 +203,11 @@ void NavigationResourceThrottle::WillStartRequest(bool* defer) {
     return;
 
   bool is_external_protocol =
-      !info->GetContext()->GetRequestContext()->job_factory()->IsHandledURL(
-          request_->url());
+      request_->url().is_valid() &&
+      !info->GetContext()
+           ->GetRequestContext()
+           ->job_factory()
+           ->IsHandledProtocol(request_->url().scheme());
   UIChecksPerformedCallback callback =
       base::Bind(&NavigationResourceThrottle::OnUIChecksPerformed,
                  weak_ptr_factory_.GetWeakPtr());
@@ -215,7 +220,8 @@ void NavigationResourceThrottle::WillStartRequest(bool* defer) {
                      request_->url(), Referrer(GURL(request_->referrer()),
                                                info->GetReferrerPolicy())),
                  info->HasUserGesture(), info->GetPageTransition(),
-                 is_external_protocol, request_context_type_));
+                 is_external_protocol, request_context_type_,
+                 mixed_content_context_type_));
   *defer = true;
 }
 
@@ -235,8 +241,11 @@ void NavigationResourceThrottle::WillRedirectRequest(
     return;
 
   bool new_is_external_protocol =
-      !info->GetContext()->GetRequestContext()->job_factory()->IsHandledURL(
-          request_->url());
+      request_->url().is_valid() &&
+      !info->GetContext()
+           ->GetRequestContext()
+           ->job_factory()
+           ->IsHandledProtocol(request_->url().scheme());
   DCHECK(redirect_info.new_method == "POST" ||
          redirect_info.new_method == "GET");
   UIChecksPerformedCallback callback =
@@ -301,8 +310,8 @@ void NavigationResourceThrottle::WillProcessResponse(bool* defer) {
 
   SSLStatus ssl_status;
   if (request_->ssl_info().cert.get()) {
-    NavigationResourceHandler::GetSSLStatusForRequest(
-        request_->url(), request_->ssl_info(), info->GetChildID(), &ssl_status);
+    NavigationResourceHandler::GetSSLStatusForRequest(request_->ssl_info(),
+                                                      &ssl_status);
   }
 
   BrowserThread::PostTask(
@@ -341,13 +350,24 @@ void NavigationResourceThrottle::OnUIChecksPerformed(
   }
 
   if (result == NavigationThrottle::CANCEL_AND_IGNORE) {
-    controller()->CancelAndIgnore();
+    CancelAndIgnore();
   } else if (result == NavigationThrottle::CANCEL) {
-    controller()->Cancel();
-  } else if (result == NavigationThrottle::BLOCK_REQUEST) {
-    controller()->CancelWithError(net::ERR_BLOCKED_BY_CLIENT);
+    Cancel();
+  } else if (result == NavigationThrottle::BLOCK_REQUEST ||
+             result == NavigationThrottle::BLOCK_REQUEST_AND_COLLAPSE) {
+    CancelWithError(net::ERR_BLOCKED_BY_CLIENT);
+  } else if (result == NavigationThrottle::BLOCK_RESPONSE) {
+    // TODO(mkwst): If we cancel the main frame request with anything other than
+    // 'net::ERR_ABORTED', we'll trigger some special behavior that might not be
+    // desirable here (non-POSTs will reload the page, while POST has some logic
+    // around reloading to avoid duplicating actions server-side). For the
+    // moment, only child frame navigations should be blocked. If we need to
+    // block main frame navigations in the future, we'll need to carefully
+    // consider the right thing to do here.
+    DCHECK(!ResourceRequestInfo::ForRequest(request_)->IsMainFrame());
+    CancelWithError(net::ERR_BLOCKED_BY_RESPONSE);
   } else {
-    controller()->Resume();
+    Resume();
   }
 }
 

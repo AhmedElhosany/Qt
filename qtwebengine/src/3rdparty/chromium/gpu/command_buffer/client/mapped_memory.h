@@ -50,6 +50,8 @@ class GPU_EXPORT MemoryChunk {
     return shm_id_;
   }
 
+  gpu::Buffer* shared_memory() const { return shm_.get(); }
+
   // Allocates a block of memory. If the buffer is out of directly available
   // memory, this function may wait until memory that was freed "pending a
   // token" can be re-used.
@@ -121,8 +123,7 @@ class GPU_EXPORT MemoryChunk {
 };
 
 // Manages MemoryChunks.
-class GPU_EXPORT MappedMemoryManager
-    : public base::trace_event::MemoryDumpProvider {
+class GPU_EXPORT MappedMemoryManager {
  public:
   enum MemoryLimit {
     kNoLimit = 0,
@@ -133,7 +134,7 @@ class GPU_EXPORT MappedMemoryManager
   MappedMemoryManager(CommandBufferHelper* helper,
                       size_t unused_memory_reclaim_limit);
 
-  ~MappedMemoryManager() override;
+  ~MappedMemoryManager();
 
   unsigned int chunk_size_multiple() const {
     return chunk_size_multiple_;
@@ -179,9 +180,9 @@ class GPU_EXPORT MappedMemoryManager
   // Free Any Shared memory that is not in use.
   void FreeUnused();
 
-  // Overridden from base::trace_event::MemoryDumpProvider:
+  // Dump memory usage - called from GLES2Implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
-                    base::trace_event::ProcessMemoryDump* pmd) override;
+                    base::trace_event::ProcessMemoryDump* pmd);
 
   // Used for testing
   size_t num_chunks() const {

@@ -812,8 +812,7 @@ void QQmlEngineDebugServiceImpl::engineAboutToBeRemoved(QJSEngine *engine)
 void QQmlEngineDebugServiceImpl::objectCreated(QJSEngine *engine, QObject *object)
 {
     Q_ASSERT(engine);
-    if (!m_engines.contains(engine))
-        return;
+    Q_ASSERT(m_engines.contains(engine));
 
     int engineId = QQmlDebugService::idForObject(engine);
     int objectId = QQmlDebugService::idForObject(object);

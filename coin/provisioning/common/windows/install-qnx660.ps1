@@ -38,13 +38,9 @@
 $version = "6.6.0"
 $nondottedversion = $version -replace '[.]',''
 $targetFolder = "c:"
-$fileName = "qnx" + $nondottedversion + ".zip"
-$url_cache = "\\ci-files01-hki.intra.qt.io\provisioning\windows\" + $fileName
-$zip = "C:\Windows\Temp\" + $fileName
+$url_cache = "\\ci-files01-hki.intra.qt.io\provisioning\windows\qnx" + $nondottedversion + ".zip"
 
-Download $url_cache $url_cache $zip
-Verify-Checksum $zip "52e451648eeef1f14a516fa03d8ddd1a59d485cd"
-Extract-7Zip $zip $targetFolder
+Get-ChildItem $url_cache | % {& "C:\Utils\sevenzip\7z.exe" "x" $_.fullname -o"C:\"}
 
-Set-EnvironmentVariable "QNX_660" "$targetFolder"
-Write-Output "QNX = $version" >> ~\versions.txt
+[Environment]::SetEnvironmentVariable("QNX_660", "$targetFolder", "Machine")
+echo "QNX = $version" >> ~\versions.txt

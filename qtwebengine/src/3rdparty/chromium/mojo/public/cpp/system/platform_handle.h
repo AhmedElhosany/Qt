@@ -37,6 +37,9 @@ const MojoPlatformHandleType kPlatformFileHandleType =
 #if defined(OS_MACOSX) && !defined(OS_IOS)
 const MojoPlatformHandleType kPlatformSharedBufferHandleType =
     MOJO_PLATFORM_HANDLE_TYPE_MACH_PORT;
+#elif defined(OS_FUCHSIA)
+const MojoPlatformHandleType kPlatformSharedBufferHandleType =
+    MOJO_PLATFORM_HANDLE_TYPE_FUCHSIA_HANDLE;
 #else
 const MojoPlatformHandleType kPlatformSharedBufferHandleType =
     MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR;
@@ -75,6 +78,17 @@ UnwrapSharedMemoryHandle(ScopedSharedBufferHandle handle,
                          base::SharedMemoryHandle* memory_handle,
                          size_t* size,
                          bool* read_only);
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+// Wraps a mach_port_t as a Mojo handle. This takes a reference to the
+// Mach port.
+MOJO_CPP_SYSTEM_EXPORT ScopedHandle WrapMachPort(mach_port_t port);
+
+// Unwraps a mach_port_t from a Mojo handle. The caller gets ownership of the
+// Mach port.
+MOJO_CPP_SYSTEM_EXPORT MojoResult UnwrapMachPort(ScopedHandle handle,
+                                                 mach_port_t* port);
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
 }  // namespace mojo
 

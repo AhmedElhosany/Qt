@@ -10,6 +10,7 @@
 
 #include "common/debug.h"
 #include "libANGLE/Display.h"
+#include "libANGLE/Surface.h"
 #include "libANGLE/renderer/gl/renderergl_utils.h"
 #include "libANGLE/renderer/gl/egl/android/DisplayAndroid.h"
 #include "libANGLE/renderer/gl/egl/FunctionsEGLDL.h"
@@ -31,7 +32,8 @@ const char *GetEGLPath()
 namespace rx
 {
 
-DisplayAndroid::DisplayAndroid() : DisplayEGL(), mDummyPbuffer(EGL_NO_SURFACE)
+DisplayAndroid::DisplayAndroid(const egl::DisplayState &state)
+    : DisplayEGL(state), mDummyPbuffer(EGL_NO_SURFACE)
 {
 }
 
@@ -72,15 +74,26 @@ egl::Error DisplayAndroid::initialize(egl::Display *display)
         EGL_CONFIG_CAVEAT, EGL_NONE,
         EGL_CONFORMANT, esBit,
         EGL_RENDERABLE_TYPE, esBit,
-        EGL_NONE
     };
+
+    if (mEGL->hasExtension("EGL_EXT_pixel_format_float"))
+    {
+        // Don't request floating point configs
+        mConfigAttribList.push_back(EGL_COLOR_COMPONENT_TYPE_EXT);
+        mConfigAttribList.push_back(EGL_COLOR_COMPONENT_TYPE_FIXED_EXT);
+    }
+
+    // Complete the attrib list
+    mConfigAttribList.push_back(EGL_NONE);
+
     // clang-format on
     EGLint numConfig;
 
     EGLBoolean success = mEGL->chooseConfig(mConfigAttribList.data(), &mConfig, 1, &numConfig);
     if (success == EGL_FALSE)
     {
-        return egl::Error(mEGL->getError(), "eglChooseConfig failed");
+        return egl::EglNotInitialized()
+               << "eglChooseConfig failed with " << egl::Error(mEGL->getError());
     }
 
     ANGLE_TRY(initializeContext(display->getAttributeMap()));
@@ -91,13 +104,15 @@ egl::Error DisplayAndroid::initialize(egl::Display *display)
     mDummyPbuffer = mEGL->createPbufferSurface(mConfig, dummyPbufferAttribs);
     if (mDummyPbuffer == EGL_NO_SURFACE)
     {
-        return egl::Error(mEGL->getError(), "eglCreatePbufferSurface failed");
+        return egl::EglNotInitialized()
+               << "eglCreatePbufferSurface failed with " << egl::Error(mEGL->getError());
     }
 
     success = mEGL->makeCurrent(mDummyPbuffer, mContext);
     if (success == EGL_FALSE)
     {
-        return egl::Error(mEGL->getError(), "eglMakeCurrent failed");
+        return egl::EglNotInitialized()
+               << "eglMakeCurrent failed with " << egl::Error(mEGL->getError());
     }
 
     mFunctionsGL = mEGL->makeFunctionsGL();
@@ -113,7 +128,7 @@ void DisplayAndroid::terminate()
     EGLBoolean success = mEGL->makeCurrent(EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (success == EGL_FALSE)
     {
-        ERR("eglMakeCurrent error 0x%04x", mEGL->getError());
+        ERR() << "eglMakeCurrent error " << egl::Error(mEGL->getError());
     }
 
     if (mDummyPbuffer != EGL_NO_SURFACE)
@@ -122,7 +137,7 @@ void DisplayAndroid::terminate()
         mDummyPbuffer = EGL_NO_SURFACE;
         if (success == EGL_FALSE)
         {
-            ERR("eglDestroySurface error 0x%04x", mEGL->getError());
+            ERR() << "eglDestroySurface error " << egl::Error(mEGL->getError());
         }
     }
 
@@ -132,14 +147,14 @@ void DisplayAndroid::terminate()
         mContext = EGL_NO_CONTEXT;
         if (success == EGL_FALSE)
         {
-            ERR("eglDestroyContext error 0x%04x", mEGL->getError());
+            ERR() << "eglDestroyContext error " << egl::Error(mEGL->getError());
         }
     }
 
     egl::Error result = mEGL->terminate();
     if (result.isError())
     {
-        ERR("eglTerminate error 0x%04x", result.getCode());
+        ERR() << "eglTerminate error " << result;
     }
 
     SafeDelete(mEGL);
@@ -147,7 +162,6 @@ void DisplayAndroid::terminate()
 }
 
 SurfaceImpl *DisplayAndroid::createWindowSurface(const egl::SurfaceState &state,
-                                                 const egl::Config *configuration,
                                                  EGLNativeWindowType window,
                                                  const egl::AttributeMap &attribs)
 {
@@ -155,8 +169,7 @@ SurfaceImpl *DisplayAndroid::createWindowSurface(const egl::SurfaceState &state,
     EGLint numConfig;
     EGLBoolean success;
 
-    const EGLint configAttribList[] = {EGL_CONFIG_ID, mConfigIds[configuration->configID],
-                                       EGL_NONE};
+    const EGLint configAttribList[] = {EGL_CONFIG_ID, mConfigIds[state.config->configID], EGL_NONE};
     success = mEGL->chooseConfig(configAttribList, &config, 1, &numConfig);
     ASSERT(success && numConfig == 1);
 
@@ -165,15 +178,13 @@ SurfaceImpl *DisplayAndroid::createWindowSurface(const egl::SurfaceState &state,
 }
 
 SurfaceImpl *DisplayAndroid::createPbufferSurface(const egl::SurfaceState &state,
-                                                  const egl::Config *configuration,
                                                   const egl::AttributeMap &attribs)
 {
     EGLConfig config;
     EGLint numConfig;
     EGLBoolean success;
 
-    const EGLint configAttribList[] = {EGL_CONFIG_ID, mConfigIds[configuration->configID],
-                                       EGL_NONE};
+    const EGLint configAttribList[] = {EGL_CONFIG_ID, mConfigIds[state.config->configID], EGL_NONE};
     success = mEGL->chooseConfig(configAttribList, &config, 1, &numConfig);
     ASSERT(success && numConfig == 1);
 
@@ -182,7 +193,6 @@ SurfaceImpl *DisplayAndroid::createPbufferSurface(const egl::SurfaceState &state
 }
 
 SurfaceImpl *DisplayAndroid::createPbufferFromClientBuffer(const egl::SurfaceState &state,
-                                                           const egl::Config *configuration,
                                                            EGLenum buftype,
                                                            EGLClientBuffer clientBuffer,
                                                            const egl::AttributeMap &attribs)
@@ -192,7 +202,6 @@ SurfaceImpl *DisplayAndroid::createPbufferFromClientBuffer(const egl::SurfaceSta
 }
 
 SurfaceImpl *DisplayAndroid::createPixmapSurface(const egl::SurfaceState &state,
-                                                 const egl::Config *configuration,
                                                  NativePixmapType nativePixmap,
                                                  const egl::AttributeMap &attribs)
 {
@@ -200,12 +209,12 @@ SurfaceImpl *DisplayAndroid::createPixmapSurface(const egl::SurfaceState &state,
     return nullptr;
 }
 
-ImageImpl *DisplayAndroid::createImage(EGLenum target,
-                                       egl::ImageSibling *buffer,
+ImageImpl *DisplayAndroid::createImage(const egl::ImageState &state,
+                                       EGLenum target,
                                        const egl::AttributeMap &attribs)
 {
     UNIMPLEMENTED();
-    return DisplayGL::createImage(target, buffer, attribs);
+    return DisplayGL::createImage(state, target, attribs);
 }
 
 template <typename T>
@@ -215,6 +224,23 @@ void DisplayAndroid::getConfigAttrib(EGLConfig config, EGLint attribute, T *valu
     EGLBoolean success = mEGL->getConfigAttrib(config, attribute, &tmp);
     ASSERT(success == EGL_TRUE);
     *value = tmp;
+}
+
+template <typename T, typename U>
+void DisplayAndroid::getConfigAttribIfExtension(EGLConfig config,
+                                                EGLint attribute,
+                                                T *value,
+                                                const char *extension,
+                                                const U &defaultValue) const
+{
+    if (mEGL->hasExtension(extension))
+    {
+        getConfigAttrib(config, attribute, value);
+    }
+    else
+    {
+        *value = static_cast<T>(defaultValue);
+    }
 }
 
 egl::ConfigSet DisplayAndroid::generateConfigs()
@@ -268,9 +294,13 @@ egl::ConfigSet DisplayAndroid::generateConfigs()
         getConfigAttrib(configs[i], EGL_TRANSPARENT_RED_VALUE, &config.transparentRedValue);
         getConfigAttrib(configs[i], EGL_TRANSPARENT_GREEN_VALUE, &config.transparentGreenValue);
         getConfigAttrib(configs[i], EGL_TRANSPARENT_BLUE_VALUE, &config.transparentBlueValue);
+        getConfigAttribIfExtension(configs[i], EGL_COLOR_COMPONENT_TYPE_EXT,
+                                   &config.colorComponentType, "EGL_EXT_pixel_format_float",
+                                   EGL_COLOR_COMPONENT_TYPE_FIXED_EXT);
 
         if (config.colorBufferType == EGL_RGB_BUFFER)
         {
+            ASSERT(config.colorComponentType == EGL_COLOR_COMPONENT_TYPE_FIXED_EXT);
             if (config.redSize == 8 && config.greenSize == 8 && config.blueSize == 8 &&
                 config.alphaSize == 8)
             {
@@ -336,10 +366,10 @@ bool DisplayAndroid::testDeviceLost()
     return false;
 }
 
-egl::Error DisplayAndroid::restoreLostDevice()
+egl::Error DisplayAndroid::restoreLostDevice(const egl::Display *display)
 {
     UNIMPLEMENTED();
-    return egl::Error(EGL_SUCCESS);
+    return egl::NoError();
 }
 
 bool DisplayAndroid::isValidNativeWindow(EGLNativeWindowType window) const
@@ -350,36 +380,19 @@ bool DisplayAndroid::isValidNativeWindow(EGLNativeWindowType window) const
 egl::Error DisplayAndroid::getDevice(DeviceImpl **device)
 {
     UNIMPLEMENTED();
-    return egl::Error(EGL_SUCCESS);
+    return egl::NoError();
 }
 
-egl::Error DisplayAndroid::waitClient() const
+egl::Error DisplayAndroid::waitClient(const gl::Context *context) const
 {
     UNIMPLEMENTED();
-    return egl::Error(EGL_SUCCESS);
+    return egl::NoError();
 }
 
-egl::Error DisplayAndroid::waitNative(EGLint engine,
-                                      egl::Surface *drawSurface,
-                                      egl::Surface *readSurface) const
+egl::Error DisplayAndroid::waitNative(const gl::Context *context, EGLint engine) const
 {
     UNIMPLEMENTED();
-    return egl::Error(EGL_SUCCESS);
-}
-
-egl::Error DisplayAndroid::getDriverVersion(std::string *version) const
-{
-    VendorID vendor = GetVendorID(mFunctionsGL);
-
-    switch (vendor)
-    {
-        case VENDOR_ID_QUALCOMM:
-            *version = reinterpret_cast<const char *>(mFunctionsGL->getString(GL_VERSION));
-            return egl::Error(EGL_SUCCESS);
-        default:
-            *version = "";
-            return egl::Error(EGL_SUCCESS);
-    }
+    return egl::NoError();
 }
 
 }  // namespace rx

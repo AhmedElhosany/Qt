@@ -4,6 +4,7 @@
 
 #include "net/base/sdch_manager.h"
 
+#include <inttypes.h>
 #include <limits.h>
 
 #include <utility>
@@ -13,7 +14,10 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/default_clock.h"
+#include "base/trace_event/memory_allocator_dump.h"
+#include "base/trace_event/process_memory_dump.h"
 #include "base/values.h"
 #include "crypto/sha2.h"
 #include "net/base/parse_number.h"
@@ -251,7 +255,7 @@ std::unique_ptr<SdchManager::DictionarySet> SdchManager::GetDictionarySet(
   if (count == 0)
     return NULL;
 
-  UMA_HISTOGRAM_COUNTS("Sdch3.Advertisement_Count", count);
+  UMA_HISTOGRAM_COUNTS_1M("Sdch3.Advertisement_Count", count);
 
   return result;
 }
@@ -322,6 +326,38 @@ void SdchManager::AddObserver(SdchObserver* observer) {
 
 void SdchManager::RemoveObserver(SdchObserver* observer) {
   observers_.RemoveObserver(observer);
+}
+
+void SdchManager::DumpMemoryStats(
+    base::trace_event::ProcessMemoryDump* pmd,
+    const std::string& parent_dump_absolute_name) const {
+  // If there are no dictionaries stored, return early without creating a new
+  // MemoryAllocatorDump.
+  size_t total_count = dictionaries_.size();
+  if (total_count == 0)
+    return;
+  std::string name = base::StringPrintf("net/sdch_manager_0x%" PRIxPTR,
+                                        reinterpret_cast<uintptr_t>(this));
+  base::trace_event::MemoryAllocatorDump* dump = pmd->GetAllocatorDump(name);
+  if (dump == nullptr) {
+    dump = pmd->CreateAllocatorDump(name);
+    size_t total_size = 0;
+    for (const auto& dictionary : dictionaries_) {
+      total_size += dictionary.second->data.text().size();
+    }
+    dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
+                    base::trace_event::MemoryAllocatorDump::kUnitsBytes,
+                    total_size);
+    dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameObjectCount,
+                    base::trace_event::MemoryAllocatorDump::kUnitsObjects,
+                    total_count);
+  }
+
+  // Create an empty row under parent's dump so size can be attributed correctly
+  // if |this| is shared between URLRequestContexts.
+  base::trace_event::MemoryAllocatorDump* empty_row_dump =
+      pmd->CreateAllocatorDump(parent_dump_absolute_name + "/sdch_manager");
+  pmd->AddOwnershipEdge(empty_row_dump->guid(), dump->guid());
 }
 
 SdchProblemCode SdchManager::AddSdchDictionary(
@@ -413,7 +449,8 @@ SdchProblemCode SdchManager::AddSdchDictionary(
   if (rv != SDCH_OK)
     return rv;
 
-  UMA_HISTOGRAM_COUNTS("Sdch3.Dictionary size loaded", dictionary_text.size());
+  UMA_HISTOGRAM_COUNTS_1M("Sdch3.Dictionary size loaded",
+                          dictionary_text.size());
   DVLOG(1) << "Loaded dictionary with client hash " << client_hash
            << " and server hash " << server_hash;
   SdchDictionary dictionary(dictionary_text, header_end + 2, client_hash,

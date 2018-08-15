@@ -12,7 +12,7 @@
 
 #include <string.h>
 
-#include "webrtc/base/checks.h"
+#include "webrtc/rtc_base/checks.h"
 
 // TODO(tommi): Could we have a static map of value name -> expected type
 // and use this to RTC_DCHECK on correct usage (somewhat strongly typed values)?
@@ -57,7 +57,7 @@ const char* InternalTypeToString(StatsReport::StatsType type) {
     case StatsReport::kStatsReportTypeDataChannel:
       return "datachannel";
   }
-  RTC_DCHECK(false);
+  RTC_NOTREACHED();
   return nullptr;
 }
 
@@ -538,6 +538,8 @@ const char* StatsReport::Value::display_name() const {
       return "googFrameWidthSent";
     case kStatsValueNameInitiator:
       return "googInitiator";
+    case kStatsValueNameInterframeDelaySumMs:
+      return "googInterframeDelaySum";
     case kStatsValueNameIssuerId:
       return "googIssuerId";
     case kStatsValueNameJitterReceived:
@@ -576,6 +578,8 @@ const char* StatsReport::Value::display_name() const {
       return "remoteCertificateId";
     case kStatsValueNameResidualEchoLikelihood:
       return "googResidualEchoLikelihood";
+    case kStatsValueNameResidualEchoLikelihoodRecentMax:
+      return "googResidualEchoLikelihoodRecentMax";
     case kStatsValueNameRetransmitBitrate:
       return "googRetransmitBitrate";
     case kStatsValueNameRtt:
@@ -590,16 +594,20 @@ const char* StatsReport::Value::display_name() const {
       return "srtpCipher";
     case kStatsValueNameTargetEncBitrate:
       return "googTargetEncBitrate";
+    case kStatsValueNameTotalAudioEnergy:
+      return "totalAudioEnergy";
+    case kStatsValueNameTotalSamplesDuration:
+      return "totalSamplesDuration";
     case kStatsValueNameTransmitBitrate:
       return "googTransmitBitrate";
     case kStatsValueNameTransportType:
       return "googTransportType";
     case kStatsValueNameTrackId:
       return "googTrackId";
+    case kStatsValueNameTimingFrameInfo:
+      return "googTimingFrameInfo";
     case kStatsValueNameTypingNoiseState:
       return "googTypingNoiseState";
-    case kStatsValueNameViewLimitedResolution:
-      return "googViewLimitedResolution";
     case kStatsValueNameWritable:
       return "googWritable";
   }
@@ -631,6 +639,8 @@ std::string StatsReport::Value::ToString() const {
 StatsReport::StatsReport(const Id& id) : id_(id), timestamp_(0.0) {
   RTC_DCHECK(id_.get());
 }
+
+StatsReport::~StatsReport() = default;
 
 // static
 StatsReport::Id StatsReport::NewBandwidthEstimationId() {
@@ -777,7 +787,7 @@ StatsReport* StatsCollection::ReplaceOrAddNew(const StatsReport::Id& id) {
   return InsertNew(id);
 }
 
-// Looks for a report with the given |id|.  If one is not found, NULL
+// Looks for a report with the given |id|.  If one is not found, null
 // will be returned.
 StatsReport* StatsCollection::Find(const StatsReport::Id& id) {
   RTC_DCHECK(thread_checker_.CalledOnValidThread());

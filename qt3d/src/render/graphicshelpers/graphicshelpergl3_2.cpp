@@ -282,6 +282,58 @@ void GraphicsHelperGL3_2::vertexAttribDivisor(GLuint index, GLuint divisor)
     qCWarning(Render::Rendering) << "Vertex attribute divisor not available with OpenGL 3.2 core";
 }
 
+void GraphicsHelperGL3_2::vertexAttributePointer(GLenum shaderDataType,
+                                                 GLuint index,
+                                                 GLint size,
+                                                 GLenum type,
+                                                 GLboolean normalized,
+                                                 GLsizei stride,
+                                                 const GLvoid *pointer)
+{
+    switch (shaderDataType) {
+    case GL_FLOAT:
+    case GL_FLOAT_VEC2:
+    case GL_FLOAT_VEC3:
+    case GL_FLOAT_VEC4:
+    case GL_FLOAT_MAT2:
+    case GL_FLOAT_MAT2x3:
+    case GL_FLOAT_MAT2x4:
+    case GL_FLOAT_MAT3:
+    case GL_FLOAT_MAT3x2:
+    case GL_FLOAT_MAT3x4:
+    case GL_FLOAT_MAT4x2:
+    case GL_FLOAT_MAT4x3:
+    case GL_FLOAT_MAT4:
+        m_funcs->glVertexAttribPointer(index, size, type, normalized, stride, pointer);
+        break;
+
+    case GL_INT:
+    case GL_INT_VEC2:
+    case GL_INT_VEC3:
+    case GL_INT_VEC4:
+    case GL_UNSIGNED_INT:
+    case GL_UNSIGNED_INT_VEC2:
+    case GL_UNSIGNED_INT_VEC3:
+    case GL_UNSIGNED_INT_VEC4:
+        m_funcs->glVertexAttribIPointer(index, size, type, stride, pointer);
+        break;
+
+    default:
+        qCWarning(Render::Rendering) << "vertexAttribPointer: Unhandled type";
+        Q_UNREACHABLE();
+    }
+}
+
+void GraphicsHelperGL3_2::readBuffer(GLenum mode)
+{
+    m_funcs->glReadBuffer(mode);
+}
+
+void GraphicsHelperGL3_2::drawBuffer(GLenum mode)
+{
+    m_funcs->glDrawBuffer(mode);
+}
+
 void GraphicsHelperGL3_2::blendEquation(GLenum mode)
 {
     m_funcs->glBlendEquation(mode);
@@ -381,6 +433,12 @@ bool GraphicsHelperGL3_2::checkFrameBufferComplete()
     return (m_funcs->glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
 }
 
+bool GraphicsHelperGL3_2::frameBufferNeedsRenderBuffer(const Attachment &attachment)
+{
+    Q_UNUSED(attachment);
+    return false;
+}
+
 void GraphicsHelperGL3_2::bindFrameBufferAttachment(QOpenGLTexture *texture, const Attachment &attachment)
 {
     GLenum attr = GL_DEPTH_STENCIL_ATTACHMENT;
@@ -404,6 +462,13 @@ void GraphicsHelperGL3_2::bindFrameBufferAttachment(QOpenGLTexture *texture, con
     else
         m_funcs->glFramebufferTexture(GL_DRAW_FRAMEBUFFER, attr, texture->textureId(), attachment.m_mipLevel);
     texture->release();
+}
+
+void GraphicsHelperGL3_2::bindFrameBufferAttachment(RenderBuffer *renderBuffer, const Attachment &attachment)
+{
+    Q_UNUSED(renderBuffer);
+    Q_UNUSED(attachment);
+    Q_UNREACHABLE();
 }
 
 bool GraphicsHelperGL3_2::supportsFeature(GraphicsHelperInterface::Feature feature) const
@@ -823,6 +888,11 @@ void GraphicsHelperGL3_2::enablePrimitiveRestart(int primitiveRestartIndex)
     m_funcs->glEnable(GL_PRIMITIVE_RESTART);
 }
 
+void GraphicsHelperGL3_2::enableVertexAttributeArray(int location)
+{
+    m_funcs->glEnableVertexAttribArray(location);
+}
+
 void GraphicsHelperGL3_2::disablePrimitiveRestart()
 {
     m_funcs->glDisable(GL_PRIMITIVE_RESTART);
@@ -896,9 +966,9 @@ void GraphicsHelperGL3_2::dispatchCompute(GLuint wx, GLuint wy, GLuint wz)
     qWarning() << "Compute Shaders are not supported by OpenGL 3.2 (since OpenGL 4.3)";
 }
 
-char *GraphicsHelperGL3_2::mapBuffer(GLenum target)
+char *GraphicsHelperGL3_2::mapBuffer(GLenum target, GLsizeiptr size)
 {
-    return static_cast<char*>(m_funcs->glMapBuffer(target, GL_READ_WRITE));
+    return static_cast<char*>(m_funcs->glMapBufferRange(target, 0, size, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT));
 }
 
 GLboolean GraphicsHelperGL3_2::unmapBuffer(GLenum target)

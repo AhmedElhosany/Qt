@@ -41,6 +41,7 @@ aura::WindowTreeHost* ShellScreen::CreateHostForPrimaryDisplay() {
       gfx::Rect(GetPrimaryDisplay().GetSizeInPixel()));
   host_->window()->AddObserver(this);
   host_->InitHost();
+  host_->window()->Show();
   return host_;
 }
 
@@ -72,7 +73,7 @@ bool ShellScreen::IsWindowUnderCursor(gfx::NativeWindow window) {
 }
 
 gfx::NativeWindow ShellScreen::GetWindowAtScreenPoint(const gfx::Point& point) {
-  return host_->window()->GetTopWindowContainingPoint(point);
+  return host_->window()->GetEventHandlerForPoint(point);
 }
 
 display::Display ShellScreen::GetDisplayNearestWindow(

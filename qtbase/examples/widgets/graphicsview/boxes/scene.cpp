@@ -50,9 +50,10 @@
 
 #include <QDebug>
 #include "scene.h"
+#include <QtCore/QRandomGenerator>
 #include <QtGui/qmatrix4x4.h>
 #include <QtGui/qvector3d.h>
-#include <cmath>
+#include <qmath.h>
 
 #include "3rdparty/fbm.h"
 
@@ -868,11 +869,12 @@ void Scene::renderCubemaps()
 
     QVector3D center;
 
+    const float eachAngle = 2 * M_PI / m_cubemaps.size();
     for (int i = m_frame % N; i < m_cubemaps.size(); i += N) {
         if (0 == m_cubemaps[i])
             continue;
 
-        float angle = 2.0f * PI * i / m_cubemaps.size();
+        float angle = i * eachAngle;
 
         center = m_trackBalls[1].rotation().rotatedVector(QVector3D(std::cos(angle), std::sin(angle), 0.0f));
 
@@ -1071,13 +1073,16 @@ void Scene::newItem(ItemDialog::ItemType type)
     QSize size = sceneRect().size().toSize();
     switch (type) {
     case ItemDialog::QtBoxItem:
-        addItem(new QtBox(64, rand() % (size.width() - 64) + 32, rand() % (size.height() - 64) + 32));
+        addItem(new QtBox(64, QRandomGenerator::global()->bounded(size.width() - 64) + 32,
+                          QRandomGenerator::global()->bounded(size.height() - 64) + 32));
         break;
     case ItemDialog::CircleItem:
-        addItem(new CircleItem(64, rand() % (size.width() - 64) + 32, rand() % (size.height() - 64) + 32));
+        addItem(new CircleItem(64, QRandomGenerator::global()->bounded(size.width() - 64) + 32,
+                               QRandomGenerator::global()->bounded(size.height() - 64) + 32));
         break;
     case ItemDialog::SquareItem:
-        addItem(new SquareItem(64, rand() % (size.width() - 64) + 32, rand() % (size.height() - 64) + 32));
+        addItem(new SquareItem(64, QRandomGenerator::global()->bounded(size.width() - 64) + 32,
+                               QRandomGenerator::global()->bounded(size.height() - 64) + 32));
         break;
     default:
         break;

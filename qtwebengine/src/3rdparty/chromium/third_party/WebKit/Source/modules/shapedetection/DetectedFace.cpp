@@ -4,20 +4,42 @@
 
 #include "modules/shapedetection/DetectedFace.h"
 
-#include "core/dom/DOMRect.h"
+#include "core/geometry/DOMRect.h"
+#include "modules/shapedetection/Landmark.h"
 
 namespace blink {
 
-DetectedFace* DetectedFace::create() {
-  return new DetectedFace();
+DetectedFace* DetectedFace::Create() {
+  return new DetectedFace(DOMRect::Create());
+}
+
+DetectedFace* DetectedFace::Create(DOMRect* bounding_box) {
+  return new DetectedFace(bounding_box);
+}
+
+DetectedFace* DetectedFace::Create(DOMRect* bounding_box,
+                                   const HeapVector<Landmark>& landmarks) {
+  return new DetectedFace(bounding_box, landmarks);
 }
 
 DOMRect* DetectedFace::boundingBox() const {
-  return m_boundingBox.get();
+  return bounding_box_.Get();
 }
 
+const HeapVector<Landmark>& DetectedFace::landmarks() const {
+  return landmarks_;
+}
+
+DetectedFace::DetectedFace(DOMRect* bounding_box)
+    : bounding_box_(bounding_box) {}
+
+DetectedFace::DetectedFace(DOMRect* bounding_box,
+                           const HeapVector<Landmark>& landmarks)
+    : bounding_box_(bounding_box), landmarks_(landmarks) {}
+
 DEFINE_TRACE(DetectedFace) {
-  visitor->trace(m_boundingBox);
+  visitor->Trace(bounding_box_);
+  visitor->Trace(landmarks_);
 }
 
 }  // namespace blink

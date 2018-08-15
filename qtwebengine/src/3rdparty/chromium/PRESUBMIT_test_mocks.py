@@ -27,6 +27,7 @@ class MockInputApi(object):
     self.files = []
     self.is_committing = False
     self.change = MockChange([])
+    self.presubmit_local_path = os.path.dirname(__file__)
 
   def AffectedFiles(self, file_filter=None, include_deletes=False):
     return self.files
@@ -38,7 +39,7 @@ class MockInputApi(object):
     return self.files
 
   def PresubmitLocalPath(self):
-    return os.path.dirname(__file__)
+    return self.presubmit_local_path
 
   def ReadFile(self, filename, mode='rU'):
     if hasattr(filename, 'AbsoluteLocalPath'):
@@ -99,6 +100,10 @@ class MockFile(object):
     self._new_contents = new_contents
     self._changed_contents = [(i + 1, l) for i, l in enumerate(new_contents)]
     self._action = action
+    self._scm_diff = "--- /dev/null\n+++ %s\n@@ -0,0 +1,%d @@\n" % (local_path,
+      len(new_contents))
+    for l in new_contents:
+      self._scm_diff += "+%s\n" % l
 
   def Action(self):
     return self._action
@@ -114,6 +119,9 @@ class MockFile(object):
 
   def AbsoluteLocalPath(self):
     return self._local_path
+
+  def GenerateScmDiff(self):
+    return self._scm_diff
 
   def rfind(self, p):
     """os.path.basename is called on MockFile so we need an rfind method."""

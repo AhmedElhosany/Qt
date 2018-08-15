@@ -99,11 +99,14 @@ Q_SIGNALS:
     void rejected();
     void helpRequested();
     void clicked(QQuickAbstractButton *button);
-
     void positionChanged();
     void alignmentChanged();
     void standardButtonsChanged();
     void delegateChanged();
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void applied();
+    Q_REVISION(3) void reset();
+    Q_REVISION(3) void discarded();
 
 protected:
     void updatePolish() override;

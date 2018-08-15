@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.ToolTip {
     id: control
@@ -58,10 +58,12 @@ T.ToolTip {
     contentItem: Text {
         text: control.text
         font: control.font
+        color: control.palette.toolTipText
         // TODO: wrapMode: Label.Wrap
     }
 
     background: Rectangle {
-        border.color: Default.frameDarkColor
+        border.color: control.palette.dark
+        color: control.palette.toolTipBase
     }
 }

@@ -181,4 +181,63 @@ TestCase {
         verify(control)
         compare(control.baselineOffset, control.contentItem.y + control.contentItem.baselineOffset)
     }
+
+    function test_display_data() {
+        return [
+            { "tag": "IconOnly", display: ToolButton.IconOnly },
+            { "tag": "TextOnly", display: ToolButton.TextOnly },
+            { "tag": "TextUnderIcon", display: ToolButton.TextUnderIcon },
+            { "tag": "TextBesideIcon", display: ToolButton.TextBesideIcon },
+            { "tag": "IconOnly, mirrored", display: ToolButton.IconOnly, mirrored: true },
+            { "tag": "TextOnly, mirrored", display: ToolButton.TextOnly, mirrored: true },
+            { "tag": "TextUnderIcon, mirrored", display: ToolButton.TextUnderIcon, mirrored: true },
+            { "tag": "TextBesideIcon, mirrored", display: ToolButton.TextBesideIcon, mirrored: true }
+        ]
+    }
+
+    function test_display(data) {
+        var control = createTemporaryObject(toolButton, testCase, {
+            text: "ToolButton",
+            display: data.display,
+            "icon.source": "qrc:/qt-project.org/imports/QtQuick/Controls.2/images/check.png",
+            "LayoutMirroring.enabled": !!data.mirrored
+        })
+        verify(control)
+        compare(control.icon.source, "qrc:/qt-project.org/imports/QtQuick/Controls.2/images/check.png")
+
+        var iconImage = findChild(control.contentItem, "image")
+        var textLabel = findChild(control.contentItem, "label")
+
+        switch (control.display) {
+        case ToolButton.IconOnly:
+            verify(iconImage)
+            verify(!textLabel)
+            compare(iconImage.x, (control.availableWidth - iconImage.width) / 2)
+            compare(iconImage.y, (control.availableHeight - iconImage.height) / 2)
+            break;
+        case ToolButton.TextOnly:
+            verify(!iconImage)
+            verify(textLabel)
+            compare(textLabel.x, (control.availableWidth - textLabel.width) / 2)
+            compare(textLabel.y, (control.availableHeight - textLabel.height) / 2)
+            break;
+        case ToolButton.TextUnderIcon:
+            verify(iconImage)
+            verify(textLabel)
+            compare(iconImage.x, (control.availableWidth - iconImage.width) / 2)
+            compare(textLabel.x, (control.availableWidth - textLabel.width) / 2)
+            verify(iconImage.y < textLabel.y)
+            break;
+        case ToolButton.TextBesideIcon:
+            verify(iconImage)
+            verify(textLabel)
+            if (control.mirrored)
+                verify(textLabel.x < iconImage.x)
+            else
+                verify(iconImage.x < textLabel.x)
+            compare(iconImage.y, (control.availableHeight - iconImage.height) / 2)
+            compare(textLabel.y, (control.availableHeight - textLabel.height) / 2)
+            break;
+        }
+    }
 }

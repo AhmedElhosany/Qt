@@ -4,6 +4,8 @@
 
 #include "components/sync_preferences/pref_model_associator.h"
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 #include "base/auto_reset.h"
@@ -61,12 +63,12 @@ PrefModelAssociator::PrefModelAssociator(
       pref_service_(NULL),
       type_(type),
       client_(client) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(type_ == PREFERENCES || type_ == PRIORITY_PREFERENCES);
 }
 
 PrefModelAssociator::~PrefModelAssociator() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   pref_service_ = NULL;
 
   synced_pref_observers_.clear();
@@ -77,7 +79,7 @@ void PrefModelAssociator::InitPrefAndAssociate(
     const std::string& pref_name,
     syncer::SyncChangeList* sync_changes) {
   const base::Value* user_pref_value =
-      pref_service_->GetUserPrefValue(pref_name.c_str());
+      pref_service_->GetUserPrefValue(pref_name);
   VLOG(1) << "Associating preference " << pref_name;
 
   if (sync_pref.IsValid()) {
@@ -101,16 +103,16 @@ void PrefModelAssociator::InitPrefAndAssociate(
       // Update the local preference based on what we got from the
       // sync server. Note: this only updates the user value store, which is
       // ignored if the preference is policy controlled.
-      if (new_value->IsType(base::Value::TYPE_NULL)) {
+      if (new_value->IsType(base::Value::Type::NONE)) {
         LOG(WARNING) << "Sync has null value for pref " << pref_name.c_str();
-        pref_service_->ClearPref(pref_name.c_str());
+        pref_service_->ClearPref(pref_name);
       } else if (!new_value->IsType(user_pref_value->GetType())) {
         LOG(WARNING) << "Synced value for " << preference.name()
                      << " is of type " << new_value->GetType()
                      << " which doesn't match pref type "
                      << user_pref_value->GetType();
       } else if (!user_pref_value->Equals(new_value.get())) {
-        pref_service_->Set(pref_name.c_str(), *new_value);
+        pref_service_->Set(pref_name, *new_value);
       }
 
       // If the merge resulted in an updated value, inform the syncer.
@@ -124,9 +126,9 @@ void PrefModelAssociator::InitPrefAndAssociate(
         sync_changes->push_back(syncer::SyncChange(
             FROM_HERE, syncer::SyncChange::ACTION_UPDATE, sync_data));
       }
-    } else if (!sync_value->IsType(base::Value::TYPE_NULL)) {
+    } else if (!sync_value->IsType(base::Value::Type::NONE)) {
       // Only a server value exists. Just set the local user value.
-      pref_service_->Set(pref_name.c_str(), *sync_value);
+      pref_service_->Set(pref_name, *sync_value);
     } else {
       LOG(WARNING) << "Sync has null value for pref " << pref_name.c_str();
     }
@@ -164,7 +166,7 @@ syncer::SyncMergeResult PrefModelAssociator::MergeDataAndStartSyncing(
     std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
     std::unique_ptr<syncer::SyncErrorFactory> sync_error_factory) {
   DCHECK_EQ(type_, type);
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(pref_service_);
   DCHECK(!sync_processor_.get());
   DCHECK(sync_processor.get());
@@ -238,9 +240,9 @@ std::unique_ptr<base::Value> PrefModelAssociator::MergePreference(
   if (client_) {
     std::string new_pref_name;
     if (client_->IsMergeableListPreference(name))
-      return base::WrapUnique(MergeListValues(local_value, server_value));
+      return MergeListValues(local_value, server_value);
     if (client_->IsMergeableDictionaryPreference(name))
-      return base::WrapUnique(MergeDictionaryValues(local_value, server_value));
+      return MergeDictionaryValues(local_value, server_value);
   }
 
   // If this is not a specially handled preference, server wins.
@@ -251,7 +253,7 @@ bool PrefModelAssociator::CreatePrefSyncData(
     const std::string& name,
     const base::Value& value,
     syncer::SyncData* sync_data) const {
-  if (value.IsType(base::Value::TYPE_NULL)) {
+  if (value.IsType(base::Value::Type::NONE)) {
     LOG(ERROR) << "Attempting to sync a null pref value for " << name;
     return false;
   }
@@ -275,61 +277,66 @@ bool PrefModelAssociator::CreatePrefSyncData(
   return true;
 }
 
-base::Value* PrefModelAssociator::MergeListValues(const base::Value& from_value,
-                                                  const base::Value& to_value) {
-  if (from_value.GetType() == base::Value::TYPE_NULL)
-    return to_value.DeepCopy();
-  if (to_value.GetType() == base::Value::TYPE_NULL)
-    return from_value.DeepCopy();
+std::unique_ptr<base::Value> PrefModelAssociator::MergeListValues(
+    const base::Value& from_value,
+    const base::Value& to_value) {
+  if (from_value.GetType() == base::Value::Type::NONE)
+    return base::MakeUnique<base::Value>(to_value);
+  if (to_value.GetType() == base::Value::Type::NONE)
+    return base::MakeUnique<base::Value>(from_value);
 
-  DCHECK(from_value.GetType() == base::Value::TYPE_LIST);
-  DCHECK(to_value.GetType() == base::Value::TYPE_LIST);
+  DCHECK(from_value.GetType() == base::Value::Type::LIST);
+  DCHECK(to_value.GetType() == base::Value::Type::LIST);
   const base::ListValue& from_list_value =
       static_cast<const base::ListValue&>(from_value);
   const base::ListValue& to_list_value =
       static_cast<const base::ListValue&>(to_value);
-  base::ListValue* result = to_list_value.DeepCopy();
 
-  for (const auto& value : from_list_value) {
-    result->AppendIfNotPresent(value->CreateDeepCopy());
-  }
-  return result;
+  auto result = base::MakeUnique<base::ListValue>(to_list_value);
+  base::Value::ListStorage& list = result->GetList();
+  std::copy_if(
+      from_list_value.GetList().begin(), from_list_value.GetList().end(),
+      std::back_inserter(list), [&list](const base::Value& value) {
+        return std::find(list.begin(), list.end(), value) == list.end();
+      });
+  return std::move(result);
 }
 
-base::Value* PrefModelAssociator::MergeDictionaryValues(
+std::unique_ptr<base::Value> PrefModelAssociator::MergeDictionaryValues(
     const base::Value& from_value,
     const base::Value& to_value) {
-  if (from_value.GetType() == base::Value::TYPE_NULL)
-    return to_value.DeepCopy();
-  if (to_value.GetType() == base::Value::TYPE_NULL)
-    return from_value.DeepCopy();
+  if (from_value.GetType() == base::Value::Type::NONE)
+    return base::MakeUnique<base::Value>(to_value);
+  if (to_value.GetType() == base::Value::Type::NONE)
+    return base::MakeUnique<base::Value>(from_value);
 
-  DCHECK_EQ(from_value.GetType(), base::Value::TYPE_DICTIONARY);
-  DCHECK_EQ(to_value.GetType(), base::Value::TYPE_DICTIONARY);
+  DCHECK_EQ(from_value.GetType(), base::Value::Type::DICTIONARY);
+  DCHECK_EQ(to_value.GetType(), base::Value::Type::DICTIONARY);
   const base::DictionaryValue& from_dict_value =
       static_cast<const base::DictionaryValue&>(from_value);
   const base::DictionaryValue& to_dict_value =
       static_cast<const base::DictionaryValue&>(to_value);
-  base::DictionaryValue* result = to_dict_value.DeepCopy();
+  auto result = base::MakeUnique<base::DictionaryValue>(to_dict_value);
 
   for (base::DictionaryValue::Iterator it(from_dict_value); !it.IsAtEnd();
        it.Advance()) {
     const base::Value* from_key_value = &it.value();
     base::Value* to_key_value;
     if (result->GetWithoutPathExpansion(it.key(), &to_key_value)) {
-      if (from_key_value->GetType() == base::Value::TYPE_DICTIONARY &&
-          to_key_value->GetType() == base::Value::TYPE_DICTIONARY) {
-        base::Value* merged_value =
+      if (from_key_value->GetType() == base::Value::Type::DICTIONARY &&
+          to_key_value->GetType() == base::Value::Type::DICTIONARY) {
+        std::unique_ptr<base::Value> merged_value =
             MergeDictionaryValues(*from_key_value, *to_key_value);
-        result->SetWithoutPathExpansion(it.key(), merged_value);
+        result->SetWithoutPathExpansion(it.key(), std::move(merged_value));
       }
       // Note that for all other types we want to preserve the "to"
       // values so we do nothing here.
     } else {
-      result->SetWithoutPathExpansion(it.key(), from_key_value->DeepCopy());
+      result->SetWithoutPathExpansion(
+          it.key(), base::MakeUnique<base::Value>(*from_key_value));
     }
   }
-  return result;
+  return std::move(result);
 }
 
 // Note: This will build a model of all preferences registered as syncable
@@ -343,8 +350,7 @@ syncer::SyncDataList PrefModelAssociator::GetAllSyncData(
   for (PreferenceSet::const_iterator iter = synced_preferences_.begin();
        iter != synced_preferences_.end(); ++iter) {
     std::string name = *iter;
-    const PrefService::Preference* pref =
-        pref_service_->FindPreference(name.c_str());
+    const PrefService::Preference* pref = pref_service_->FindPreference(name);
     DCHECK(pref);
     if (!pref->IsUserControlled() || pref->IsDefaultValue())
       continue;  // This is not data we care about.
@@ -475,7 +481,7 @@ void PrefModelAssociator::ProcessPrefChange(const std::string& name) {
     return;
 
   const PrefService::Preference* preference =
-      pref_service_->FindPreference(name.c_str());
+      pref_service_->FindPreference(name);
   if (!preference)
     return;
 

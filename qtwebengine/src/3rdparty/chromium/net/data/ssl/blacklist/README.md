@@ -8,6 +8,17 @@ are included.
 
 ## Compromises & Misissuances
 
+### China Internet Network Information Center (CNNIC)
+
+For details, see <https://security.googleblog.com/2015/03/maintaining-digital-certificate-security.html>
+
+As a result of misissuance of a sub-CA certificate, CNNIC end-entity
+certificates were temporarily whitelisted, and then trust in the root fully
+removed.
+
+  * [1c01c6f4dbb2fefc22558b2bca32563f49844acfc32b7be4b0ff599f9e8c7af7.pem](1c01c6f4dbb2fefc22558b2bca32563f49844acfc32b7be4b0ff599f9e8c7af7.pem)
+  * [e28393773da845a679f2080cc7fb44a3b7a1c3792cb7eb7729fdcb6a8d99aea7.pem](e28393773da845a679f2080cc7fb44a3b7a1c3792cb7eb7729fdcb6a8d99aea7.pem)
+
 ### Comodo
 
 For details, see <https://www.comodo.com/Comodo-Fraud-Incident-2011-03-23.html>,
@@ -132,6 +143,17 @@ Baseline Requirements, and then subsequently published the private key.
 
   * [83618f932d6947744d5ecca299d4b2820c01483947bd16be814e683f7436be24.pem](83618f932d6947744d5ecca299d4b2820c01483947bd16be814e683f7436be24.pem)
 
+### Superfish
+
+For details, see <https://www.eff.org/deeplinks/2015/02/how-remove-superfish-adware-your-lenovo-computer>
+
+Superfish software with an associated root certificate came preinstalled on
+Lenovo computers. The software used a single root certificate across all
+computers, and the private key was trivially extracted; thus the associated
+public key was blacklisted.
+
+  * [b6fe9151402bad1c06d7e66db67a26aa7356f2e6c644dbcf9f98968ff632e1b7.pem](b6fe9151402bad1c06d7e66db67a26aa7356f2e6c644dbcf9f98968ff632e1b7.pem)
+
 ## Miscellaneous
 
 ### DigiCert
@@ -193,3 +215,16 @@ This intermediate certificate was retired by T-Systems, and blacklisted
 for robustness at their request.
 
   * [f4a5984324de98bd979ef181a100cf940f2166173319a86a0d9d7c8fac3b0a8f.pem](f4a5984324de98bd979ef181a100cf940f2166173319a86a0d9d7c8fac3b0a8f.pem)
+
+### WoSign/StartCom
+
+For details, see <https://security.googleblog.com/2016/10/distrusting-wosign-and-startcom.html>
+
+  * [4b22d5a6aec99f3cdb79aa5ec06838479cd5ecba7164f7f22dc1d65f63d85708.pem](4b22d5a6aec99f3cdb79aa5ec06838479cd5ecba7164f7f22dc1d65f63d85708.pem)
+  * [7d8ce822222b90c0b14342c7a8145d1f24351f4d1a1fe0edfd312ee73fb00149.pem](7d8ce822222b90c0b14342c7a8145d1f24351f4d1a1fe0edfd312ee73fb00149.pem)
+  * [8b45da1c06f791eb0cabf26be588f5fb23165c2e614bf885562d0dce50b29b02.pem](8b45da1c06f791eb0cabf26be588f5fb23165c2e614bf885562d0dce50b29b02.pem)
+  * [c766a9bef2d4071c863a31aa4920e813b2d198608cb7b7cfe21143b836df09ea.pem](c766a9bef2d4071c863a31aa4920e813b2d198608cb7b7cfe21143b836df09ea.pem)
+  * [c7ba6567de93a798ae1faa791e712d378fae1f93c4397fea441bb7cbe6fd5995.pem](c7ba6567de93a798ae1faa791e712d378fae1f93c4397fea441bb7cbe6fd5995.pem)
+  * [d487a56f83b07482e85e963394c1ecc2c9e51d0903ee946b02c301581ed99e16.pem](d487a56f83b07482e85e963394c1ecc2c9e51d0903ee946b02c301581ed99e16.pem)
+  * [d6f034bd94aa233f0297eca4245b283973e447aa590f310c77f48fdf83112254.pem](d6f034bd94aa233f0297eca4245b283973e447aa590f310c77f48fdf83112254.pem)
+  * [e17890ee09a3fbf4f48b9c414a17d637b7a50647e9bc752322727fcc1742a911.pem](e17890ee09a3fbf4f48b9c414a17d637b7a50647e9bc752322727fcc1742a911.pem)

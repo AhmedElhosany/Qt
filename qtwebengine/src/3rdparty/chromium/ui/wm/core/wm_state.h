@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "ui/wm/wm_export.h"
+#include "ui/wm/core/wm_core_export.h"
 
 namespace wm {
 
@@ -17,10 +17,12 @@ class TransientWindowController;
 class TransientWindowStackingClient;
 
 // Installs state needed by the window manager.
-class WM_EXPORT WMState {
+class WM_CORE_EXPORT WMState {
  public:
   WMState();
   ~WMState();
+
+  CaptureController* capture_controller() { return capture_controller_.get(); }
 
  private:
   std::unique_ptr<TransientWindowStackingClient> window_stacking_client_;

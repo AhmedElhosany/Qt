@@ -53,7 +53,7 @@ bool RemoveContentType(base::ListValue* args,
     return false;
   // We remove the ContentSettingsType parameter since this is added by the
   // renderer, and is not part of the JSON schema.
-  args->Remove(0, NULL);
+  args->Remove(0, nullptr);
   *content_type =
       extensions::content_settings_helpers::StringToContentSettingsType(
           content_type_str);
@@ -153,10 +153,8 @@ ContentSettingsContentSettingGetFunction::Run() {
 
   ContentSetting setting;
   if (content_type == CONTENT_SETTINGS_TYPE_COOKIES) {
-    // TODO(jochen): Do we return the value for setting or for reading cookies?
-    bool setting_cookie = false;
-    setting = cookie_settings->GetCookieSetting(primary_url, secondary_url,
-                                                setting_cookie, NULL);
+    cookie_settings->GetCookieSetting(primary_url, secondary_url, nullptr,
+                                      &setting);
   } else {
     setting = map->GetContentSetting(primary_url, secondary_url, content_type,
                                      resource_identifier);
@@ -218,8 +216,9 @@ ContentSettingsContentSettingSetFunction::Run() {
   // [ask, block] for the default setting.
   if (primary_pattern == ContentSettingsPattern::Wildcard() &&
       secondary_pattern == ContentSettingsPattern::Wildcard() &&
-      !HostContentSettingsMap::IsDefaultSettingAllowedForType(setting,
-                                                              content_type)) {
+      !content_settings::ContentSettingsRegistry::GetInstance()
+           ->Get(content_type)
+           ->IsDefaultSettingValid(setting)) {
     static const char kUnsupportedDefaultSettingError[] =
         "'%s' is not supported as the default setting of %s.";
 
@@ -281,10 +280,10 @@ bool ContentSettingsContentSettingGetResourceIdentifiersFunction::RunAsync() {
     return true;
   }
 
-  PluginService::GetInstance()->GetPlugins(
-      base::Bind(&ContentSettingsContentSettingGetResourceIdentifiersFunction::
-                 OnGotPlugins,
-                 this));
+  PluginService::GetInstance()->GetPlugins(base::BindOnce(
+      &ContentSettingsContentSettingGetResourceIdentifiersFunction::
+          OnGotPlugins,
+      this));
   return true;
 }
 
@@ -309,11 +308,11 @@ void ContentSettingsContentSettingGetResourceIdentifiersFunction::OnGotPlugins(
   }
   SetResult(std::move(list));
   BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE, base::Bind(
+      BrowserThread::UI, FROM_HERE,
+      base::BindOnce(
           &ContentSettingsContentSettingGetResourceIdentifiersFunction::
-          SendResponse,
-          this,
-          true));
+              SendResponse,
+          this, true));
 }
 
 }  // namespace extensions

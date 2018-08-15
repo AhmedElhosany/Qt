@@ -12,10 +12,6 @@
 #include "extensions/browser/guest_view/extension_options/extension_options_guest_delegate.h"
 #include "url/gurl.h"
 
-namespace content {
-class BrowserContext;
-}
-
 namespace extensions {
 
 class ExtensionOptionsGuest
@@ -30,7 +26,6 @@ class ExtensionOptionsGuest
   ~ExtensionOptionsGuest() override;
 
   // GuestViewBase implementation.
-  bool CanRunInDetachedState() const final;
   void CreateWebContents(const base::DictionaryValue& create_params,
                          const WebContentsCreatedCallback& callback) final;
   void DidInitialize(const base::DictionaryValue& create_params) final;
@@ -39,7 +34,6 @@ class ExtensionOptionsGuest
   int GetTaskPrefix() const final;
   bool IsPreferredSizeModeEnabled() const final;
   void OnPreferredSizeChanged(const gfx::Size& pref_size) final;
-  bool ShouldHandleFindRequestsForEmbedder() const final;
 
   // content::WebContentsDelegate implementation.
   content::WebContents* OpenURLFromTab(
@@ -49,18 +43,20 @@ class ExtensionOptionsGuest
   bool HandleContextMenu(const content::ContextMenuParams& params) final;
   bool ShouldCreateWebContents(
       content::WebContents* web_contents,
+      content::RenderFrameHost* opener,
+      content::SiteInstance* source_site_instance,
       int32_t route_id,
       int32_t main_frame_route_id,
       int32_t main_frame_widget_route_id,
-      WindowContainerType window_container_type,
+      content::mojom::WindowContainerType window_container_type,
+      const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
       const std::string& partition_id,
       content::SessionStorageNamespace* session_storage_namespace) final;
 
   // content::WebContentsObserver implementation.
-  void DidNavigateMainFrame(const content::LoadCommittedDetails& details,
-                            const content::FrameNavigateParams& params) final;
+  void DidFinishNavigation(content::NavigationHandle* navigation_handle) final;
 
   std::unique_ptr<extensions::ExtensionOptionsGuestDelegate>
       extension_options_guest_delegate_;

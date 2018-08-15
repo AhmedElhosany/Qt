@@ -20,16 +20,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "webrtc/base/checks.h"
+#include "webrtc/rtc_base/checks.h"
 extern "C" {
 #include "webrtc/common_audio/ring_buffer.h"
 }
-#include "webrtc/base/checks.h"
 #include "webrtc/common_audio/signal_processing/include/signal_processing_library.h"
 #include "webrtc/modules/audio_processing/aec/aec_common.h"
 #include "webrtc/modules/audio_processing/aec/aec_core_optimized_methods.h"
 #include "webrtc/modules/audio_processing/logging/apm_data_dumper.h"
 #include "webrtc/modules/audio_processing/utility/delay_estimator_wrapper.h"
+#include "webrtc/rtc_base/checks.h"
 #include "webrtc/system_wrappers/include/cpu_features_wrapper.h"
 #include "webrtc/system_wrappers/include/metrics.h"
 #include "webrtc/typedefs.h"
@@ -202,20 +202,25 @@ void BlockBuffer::Insert(const float block[PART_LEN]) {
 
 void BlockBuffer::ExtractExtendedBlock(float extended_block[PART_LEN2]) {
   float* block_ptr = NULL;
-  RTC_DCHECK_LT(0u, AvaliableSpace());
+  RTC_DCHECK_LT(0, AvaliableSpace());
 
   // Extract the previous block.
   WebRtc_MoveReadPtr(buffer_, -1);
-  WebRtc_ReadBuffer(buffer_, reinterpret_cast<void**>(&block_ptr),
-                    &extended_block[0], 1);
-  if (block_ptr != &extended_block[0]) {
+  size_t read_elements = WebRtc_ReadBuffer(
+      buffer_, reinterpret_cast<void**>(&block_ptr), &extended_block[0], 1);
+  if (read_elements == 0u) {
+    std::fill_n(&extended_block[0], PART_LEN, 0.0f);
+  } else if (block_ptr != &extended_block[0]) {
     memcpy(&extended_block[0], block_ptr, PART_LEN * sizeof(float));
   }
 
   // Extract the current block.
-  WebRtc_ReadBuffer(buffer_, reinterpret_cast<void**>(&block_ptr),
-                    &extended_block[PART_LEN], 1);
-  if (block_ptr != &extended_block[PART_LEN]) {
+  read_elements =
+      WebRtc_ReadBuffer(buffer_, reinterpret_cast<void**>(&block_ptr),
+                        &extended_block[PART_LEN], 1);
+  if (read_elements == 0u) {
+    std::fill_n(&extended_block[PART_LEN], PART_LEN, 0.0f);
+  } else if (block_ptr != &extended_block[PART_LEN]) {
     memcpy(&extended_block[PART_LEN], block_ptr, PART_LEN * sizeof(float));
   }
 }
@@ -461,7 +466,7 @@ static void UpdateLogRatioMetric(Stats* metric, float numerator,
   // Average.
   metric->counter++;
   // This is to protect overflow, which should almost never happen.
-  RTC_CHECK_NE(0u, metric->counter);
+  RTC_CHECK_NE(0, metric->counter);
   metric->sum += metric->instant;
   metric->average = metric->sum / metric->counter;
 
@@ -469,7 +474,7 @@ static void UpdateLogRatioMetric(Stats* metric, float numerator,
   if (metric->instant > metric->average) {
     metric->hicounter++;
     // This is to protect overflow, which should almost never happen.
-    RTC_CHECK_NE(0u, metric->hicounter);
+    RTC_CHECK_NE(0, metric->hicounter);
     metric->hisum += metric->instant;
     metric->himean = metric->hisum / metric->hicounter;
   }
@@ -1500,7 +1505,6 @@ AecCore* WebRtcAec_CreateAec(int instance_count) {
   WebRtc_set_lookahead(aec->delay_estimator, kLookaheadBlocks);
 #endif
   aec->extended_filter_enabled = 0;
-  aec->aec3_enabled = 0;
   aec->refined_adaptive_filter_enabled = false;
 
   // Assembly optimization
@@ -1744,7 +1748,7 @@ void FormNearendBlock(
     const float nearend_buffer[NUM_HIGH_BANDS_MAX + 1]
                               [PART_LEN - (FRAME_LEN - PART_LEN)],
     float nearend_block[NUM_HIGH_BANDS_MAX + 1][PART_LEN]) {
-  RTC_DCHECK_LE(num_samples_from_nearend_frame, static_cast<size_t>(PART_LEN));
+  RTC_DCHECK_LE(num_samples_from_nearend_frame, PART_LEN);
   const int num_samples_from_buffer = PART_LEN - num_samples_from_nearend_frame;
 
   if (num_samples_from_buffer > 0) {
@@ -1795,15 +1799,14 @@ void FormOutputFrame(size_t output_start_index,
                      size_t* output_buffer_size,
                      float output_buffer[NUM_HIGH_BANDS_MAX + 1][2 * PART_LEN],
                      float* const* output_frame) {
-  RTC_DCHECK_LE(static_cast<size_t>(FRAME_LEN), *output_buffer_size);
+  RTC_DCHECK_LE(FRAME_LEN, *output_buffer_size);
   for (size_t i = 0; i < num_bands; ++i) {
     memcpy(&output_frame[i][output_start_index], &output_buffer[i][0],
            FRAME_LEN * sizeof(float));
   }
   (*output_buffer_size) -= FRAME_LEN;
   if (*output_buffer_size > 0) {
-    RTC_DCHECK_GE(static_cast<size_t>(2 * PART_LEN - FRAME_LEN),
-                  (*output_buffer_size));
+    RTC_DCHECK_GE(2 * PART_LEN - FRAME_LEN, (*output_buffer_size));
     for (size_t i = 0; i < num_bands; ++i) {
       memcpy(&output_buffer[i][0], &output_buffer[i][FRAME_LEN],
              (*output_buffer_size) * sizeof(float));
@@ -2013,15 +2016,6 @@ void WebRtcAec_enable_delay_agnostic(AecCore* self, int enable) {
 
 int WebRtcAec_delay_agnostic_enabled(AecCore* self) {
   return self->delay_agnostic_enabled;
-}
-
-void WebRtcAec_enable_aec3(AecCore* self, int enable) {
-  self->aec3_enabled = (enable != 0);
-}
-
-int WebRtcAec_aec3_enabled(AecCore* self) {
-  RTC_DCHECK(self->aec3_enabled == 0 || self->aec3_enabled == 1);
-  return self->aec3_enabled;
 }
 
 void WebRtcAec_enable_refined_adaptive_filter(AecCore* self, bool enable) {

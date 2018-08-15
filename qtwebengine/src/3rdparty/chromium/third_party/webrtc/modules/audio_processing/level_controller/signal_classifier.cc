@@ -14,18 +14,18 @@
 #include <numeric>
 #include <vector>
 
-#include "webrtc/base/array_view.h"
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/modules/audio_processing/audio_buffer.h"
 #include "webrtc/modules/audio_processing/level_controller/down_sampler.h"
 #include "webrtc/modules/audio_processing/level_controller/noise_spectrum_estimator.h"
 #include "webrtc/modules/audio_processing/logging/apm_data_dumper.h"
+#include "webrtc/rtc_base/array_view.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 namespace {
 
 void RemoveDcLevel(rtc::ArrayView<float> x) {
-  RTC_DCHECK_LT(0u, x.size());
+  RTC_DCHECK_LT(0, x.size());
   float mean = std::accumulate(x.data(), x.data() + x.size(), 0.f);
   mean /= x.size();
 
@@ -37,8 +37,8 @@ void RemoveDcLevel(rtc::ArrayView<float> x) {
 void PowerSpectrum(const OouraFft* ooura_fft,
                    rtc::ArrayView<const float> x,
                    rtc::ArrayView<float> spectrum) {
-  RTC_DCHECK_EQ(65u, spectrum.size());
-  RTC_DCHECK_EQ(128u, x.size());
+  RTC_DCHECK_EQ(65, spectrum.size());
+  RTC_DCHECK_EQ(128, x.size());
   float X[128];
   std::copy(x.data(), x.data() + x.size(), X);
   ooura_fft->Fft(X);
@@ -129,7 +129,7 @@ void SignalClassifier::Initialize(int sample_rate_hz) {
 
 void SignalClassifier::Analyze(const AudioBuffer& audio,
                                SignalType* signal_type) {
-  RTC_DCHECK_EQ(audio.num_frames(), static_cast<size_t>(sample_rate_hz_ / 100));
+  RTC_DCHECK_EQ(audio.num_frames(), sample_rate_hz_ / 100);
 
   // Compute the signal power spectrum.
   float downsampled_frame[80];

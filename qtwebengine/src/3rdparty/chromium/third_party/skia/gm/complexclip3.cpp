@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkCanvas.h"
 #include "SkPath.h"
 
@@ -52,14 +53,14 @@ protected:
         paint.setTextSize(SkIntToScalar(20));
 
         constexpr struct {
-            SkCanvas::ClipOp fOp;
-            const char*      fName;
+            SkClipOp    fOp;
+            const char* fName;
         } gOps[] = {
-            {SkCanvas::kIntersect_Op,         "I"},
-            {SkCanvas::kDifference_Op,        "D" },
-            {SkCanvas::kUnion_Op,             "U"},
-            {SkCanvas::kXOR_Op,               "X"  },
-            {SkCanvas::kReverseDifference_Op, "R"}
+            {kIntersect_SkClipOp,         "I"},
+            {kDifference_SkClipOp,        "D" },
+            {kUnion_SkClipOp,             "U"},
+            {kXOR_SkClipOp,               "X"  },
+            {kReverseDifference_SkClipOp, "R"}
         };
 
         canvas->translate(SkIntToScalar(20), SkIntToScalar(20));
@@ -102,8 +103,7 @@ protected:
                                                    doAAB ? "A" : "B",
                                                    doInvB ? "I" : "N");
 
-                        canvas->drawText(str.c_str(), strlen(str.c_str()), txtX, SkIntToScalar(130),
-                                         paint);
+                        canvas->drawString(str.c_str(), txtX, SkIntToScalar(130), paint);
                         if (doInvB) {
                             canvas->translate(SkIntToScalar(150),0);
                         } else {

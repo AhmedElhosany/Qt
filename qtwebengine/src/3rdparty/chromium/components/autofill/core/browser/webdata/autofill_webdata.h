@@ -17,7 +17,6 @@ class Time;
 
 }  // namespace base
 
-class Profile;
 class WebDataServiceConsumer;
 
 namespace autofill {
@@ -95,6 +94,9 @@ class AutofillWebData {
   // |guid| is identifier of the credit card to remove.
   virtual void RemoveCreditCard(const std::string& guid) = 0;
 
+  // Schedules a task to add a full server credit card to the web database.
+  virtual void AddFullServerCreditCard(const CreditCard& credit_card) = 0;
+
   // Initiates the request for local/server credit cards.  The method
   // OnWebDataServiceRequestDone of |consumer| gets called when the request is
   // finished, with the credit cards included in the argument |result|.  The
@@ -110,16 +112,11 @@ class AutofillWebData {
                                       const base::string16& full_number) = 0;
   virtual void MaskServerCreditCard(const std::string& id) = 0;
 
-  // Updates the use count and last use date for a server card (masked or not).
-  virtual void UpdateServerCardUsageStats(const CreditCard& credit_card) = 0;
+  // Updates the metadata for a server card (masked or not).
+  virtual void UpdateServerCardMetadata(const CreditCard& credit_card) = 0;
 
-  // Updates the use count and last use date for a server address.
-  virtual void UpdateServerAddressUsageStats(const AutofillProfile& profile)
-      = 0;
-
-  // Updates the billing address for a server card (masked or not).
-  virtual void UpdateServerCardBillingAddress(const CreditCard& credit_card)
-      = 0;
+  // Updates the metadata for a server address.
+  virtual void UpdateServerAddressMetadata(const AutofillProfile& profile) = 0;
 
   // Removes Autofill records from the database.
   virtual void RemoveAutofillDataModifiedBetween(

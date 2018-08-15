@@ -176,10 +176,9 @@ void SignalTransition::connectTriggered()
     QMetaMethod metaMethod = target->metaObject()->method(qobjectSignal->methodIndex());
     int signalIndex = QMetaObjectPrivate::signalIndex(metaMethod);
 
-    auto f = m_compilationUnit->runtimeFunctions[binding->value.compiledScriptIndex];
-    QQmlBoundSignalExpression *expression =
-            ctxtdata ? new QQmlBoundSignalExpression(target, signalIndex, ctxtdata, this, f)
-                     : nullptr;
+    QQmlBoundSignalExpression *expression = ctxtdata ?
+                new QQmlBoundSignalExpression(target, signalIndex,
+                                              ctxtdata, this, m_compilationUnit->runtimeFunctions[binding->value.compiledScriptIndex]) : 0;
     if (expression)
         expression->setNotifyOnValueChanged(false);
     m_signalExpression = expression;

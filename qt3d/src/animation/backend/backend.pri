@@ -26,7 +26,10 @@ HEADERS += \
     $$PWD/lerpclipblend_p.h \
     $$PWD/additiveclipblend_p.h \
     $$PWD/clipblendvalue_p.h \
-    $$PWD/animationclip_p.h
+    $$PWD/animationclip_p.h \
+    $$PWD/clock_p.h \
+    $$PWD/skeleton_p.h \
+    $$PWD/gltfimporter_p.h
 
 SOURCES += \
     $$PWD/handler.cpp \
@@ -50,4 +53,7 @@ SOURCES += \
     $$PWD/lerpclipblend.cpp \
     $$PWD/additiveclipblend.cpp \
     $$PWD/clipblendvalue.cpp \
-    $$PWD/animationclip.cpp
+    $$PWD/animationclip.cpp \
+    $$PWD/clock.cpp \
+    $$PWD/skeleton.cpp \
+    $$PWD/gltfimporter.cpp

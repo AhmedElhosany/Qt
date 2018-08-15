@@ -36,6 +36,7 @@
 
 #include "qquicktumbler_p.h"
 
+#include <QtGui/qpa/qplatformtheme.h>
 #include <QtQml/qqmlinfo.h>
 #include <QtQuick/private/qquickflickable_p.h>
 #include <QtQuickTemplates2/private/qquickcontrol_p_p.h>
@@ -119,7 +120,6 @@ namespace {
 */
 QQuickItem *QQuickTumblerPrivate::determineViewType(QQuickItem *contentItem)
 {
-    Q_Q(QQuickTumbler);
     if (!contentItem) {
         resetViewData();
         return nullptr;
@@ -129,16 +129,14 @@ QQuickItem *QQuickTumblerPrivate::determineViewType(QQuickItem *contentItem)
         view = contentItem;
         viewContentItem = contentItem;
         viewContentItemType = PathViewContentItem;
-
-        QObject::connect(view, SIGNAL(offsetChanged()), q, SLOT(_q_calculateAttachedDisplacements()));
+        viewOffset = 0;
 
         return contentItem;
     } else if (contentItem->inherits("QQuickListView")) {
         view = contentItem;
         viewContentItem = qobject_cast<QQuickFlickable*>(contentItem)->contentItem();
         viewContentItemType = ListViewContentItem;
-
-        QObject::connect(view, SIGNAL(contentYChanged()), q, SLOT(_q_calculateAttachedDisplacements()));
+        viewContentY = 0;
 
         return contentItem;
     } else {
@@ -159,6 +157,10 @@ void QQuickTumblerPrivate::resetViewData()
 {
     view = nullptr;
     viewContentItem = nullptr;
+    if (viewContentItemType == PathViewContentItem)
+        viewOffset = 0;
+    else if (viewContentItemType == ListViewContentItem)
+        viewContentY = 0;
     viewContentItemType = NoContentItem;
 }
 
@@ -241,16 +243,25 @@ void QQuickTumblerPrivate::_q_onViewCountChanged()
     }
 }
 
-void QQuickTumblerPrivate::_q_calculateAttachedDisplacements()
+void QQuickTumblerPrivate::_q_onViewOffsetChanged()
+{
+    viewOffset = view->property("offset").toReal();
+    calculateDisplacements();
+}
+
+void QQuickTumblerPrivate::_q_onViewContentYChanged()
+{
+    viewContentY = view->property("contentY").toReal();
+    calculateDisplacements();
+}
+
+void QQuickTumblerPrivate::calculateDisplacements()
 {
     const auto items = viewContentItemChildItems();
     for (QQuickItem *childItem : items) {
-        QQuickTumblerAttached *attached = qobject_cast<QQuickTumblerAttached *>(
-            qmlAttachedPropertiesObject<QQuickTumbler>(childItem, false));
-        if (attached) {
-            QQuickTumblerAttachedPrivate *attachedPrivate = QQuickTumblerAttachedPrivate::get(attached);
-            attachedPrivate->_q_calculateDisplacement();
-        }
+        QQuickTumblerAttached *attached = qobject_cast<QQuickTumblerAttached *>(qmlAttachedPropertiesObject<QQuickTumbler>(childItem, false));
+        if (attached)
+            QQuickTumblerAttachedPrivate::get(attached)->calculateDisplacement();
     }
 }
 
@@ -264,6 +275,12 @@ void QQuickTumblerPrivate::itemChildRemoved(QQuickItem *, QQuickItem *)
 {
     _q_updateItemWidths();
     _q_updateItemHeights();
+}
+
+void QQuickTumblerPrivate::itemGeometryChanged(QQuickItem *, QQuickGeometryChange change, const QRectF &)
+{
+    if (change.sizeChange())
+        calculateDisplacements();
 }
 
 QQuickTumbler::QQuickTumbler(QQuickItem *parent)
@@ -569,8 +586,13 @@ void QQuickTumblerPrivate::disconnectFromView()
     QObject::disconnect(view, SIGNAL(countChanged()), q, SLOT(_q_onViewCountChanged()));
     QObject::disconnect(view, SIGNAL(movingChanged()), q, SIGNAL(movingChanged()));
 
+    if (viewContentItemType == PathViewContentItem)
+        QObject::disconnect(view, SIGNAL(offsetChanged()), q, SLOT(_q_onViewOffsetChanged()));
+    else
+        QObject::disconnect(view, SIGNAL(contentYChanged()), q, SLOT(_q_onViewContentYChanged()));
+
     QQuickItemPrivate *oldViewContentItemPrivate = QQuickItemPrivate::get(viewContentItem);
-    oldViewContentItemPrivate->removeItemChangeListener(this, QQuickItemPrivate::Geometry | QQuickItemPrivate::Children);
+    oldViewContentItemPrivate->removeItemChangeListener(this, QQuickItemPrivate::Children | QQuickItemPrivate::Geometry);
 
     resetViewData();
 }
@@ -597,13 +619,21 @@ void QQuickTumblerPrivate::setupViewData(QQuickItem *newControlContentItem)
     QObject::connect(view, SIGNAL(countChanged()), q, SLOT(_q_onViewCountChanged()));
     QObject::connect(view, SIGNAL(movingChanged()), q, SIGNAL(movingChanged()));
 
+    if (viewContentItemType == PathViewContentItem) {
+        QObject::connect(view, SIGNAL(offsetChanged()), q, SLOT(_q_onViewOffsetChanged()));
+        _q_onViewOffsetChanged();
+    } else {
+        QObject::connect(view, SIGNAL(contentYChanged()), q, SLOT(_q_onViewContentYChanged()));
+        _q_onViewContentYChanged();
+    }
+
     QQuickItemPrivate *viewContentItemPrivate = QQuickItemPrivate::get(viewContentItem);
-    viewContentItemPrivate->addItemChangeListener(this, QQuickItemPrivate::Geometry | QQuickItemPrivate::Children);
+    viewContentItemPrivate->addItemChangeListener(this, QQuickItemPrivate::Children | QQuickItemPrivate::Geometry);
 
     // Sync the view's currentIndex with ours.
     syncCurrentIndex();
 
-    _q_calculateAttachedDisplacements();
+    calculateDisplacements();
 }
 
 void QQuickTumblerPrivate::syncCurrentIndex()
@@ -752,6 +782,16 @@ void QQuickTumbler::updatePolish()
     }
 }
 
+QFont QQuickTumbler::defaultFont() const
+{
+    return QQuickControlPrivate::themeFont(QPlatformTheme::ItemViewFont);
+}
+
+QPalette QQuickTumbler::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::ItemViewPalette);
+}
+
 QQuickTumblerAttachedPrivate::QQuickTumblerAttachedPrivate()
     : tumbler(nullptr),
       index(-1),
@@ -781,7 +821,7 @@ void QQuickTumblerAttachedPrivate::init(QQuickItem *delegateItem)
     }
 }
 
-void QQuickTumblerAttachedPrivate::_q_calculateDisplacement()
+void QQuickTumblerAttachedPrivate::calculateDisplacement()
 {
     const int previousDisplacement = displacement;
     displacement = 0;
@@ -809,7 +849,7 @@ void QQuickTumblerAttachedPrivate::_q_calculateDisplacement()
     }
 
     if (tumblerPrivate->viewContentItemType == QQuickTumblerPrivate::PathViewContentItem) {
-        const qreal offset = tumblerPrivate->view->property("offset").toReal();
+        const qreal offset = tumblerPrivate->viewOffset;
 
         displacement = count > 1 ? count - index - offset : 0;
         // Don't add 1 if count <= visibleItemCount
@@ -820,7 +860,7 @@ void QQuickTumblerAttachedPrivate::_q_calculateDisplacement()
         else if (displacement < -halfVisibleItems)
             displacement += count;
     } else {
-        const qreal contentY = tumblerPrivate->view->property("contentY").toReal();
+        const qreal contentY = tumblerPrivate->viewContentY;
         const qreal delegateH = delegateHeight(tumbler);
         const qreal preferredHighlightBegin = tumblerPrivate->view->property("preferredHighlightBegin").toReal();
         // Tumbler's displacement goes from negative at the top to positive towards the bottom, so we must switch this around.
@@ -836,11 +876,6 @@ void QQuickTumblerAttachedPrivate::emitIfDisplacementChanged(qreal oldDisplaceme
     Q_Q(QQuickTumblerAttached);
     if (newDisplacement != oldDisplacement)
         emit q->displacementChanged();
-}
-
-QQuickTumblerAttachedPrivate *QQuickTumblerAttachedPrivate::get(QQuickTumblerAttached *attached)
-{
-    return attached->d_func();
 }
 
 QQuickTumblerAttached::QQuickTumblerAttached(QObject *parent)
@@ -865,14 +900,10 @@ QQuickTumblerAttached::QQuickTumblerAttached(QObject *parent)
         if (delegateItem->parentItem() == tumblerPrivate->viewContentItem) {
             // This item belongs to the "new" view, meaning that the tumbler's contentItem
             // was probably assigned declaratively. If they're not equal, calling
-            // _q_calculateDisplacement() would use the old contentItem data, which is bad.
-            d->_q_calculateDisplacement();
+            // calculateDisplacement() would use the old contentItem data, which is bad.
+            d->calculateDisplacement();
         }
     }
-}
-
-QQuickTumblerAttached::~QQuickTumblerAttached()
-{
 }
 
 /*!

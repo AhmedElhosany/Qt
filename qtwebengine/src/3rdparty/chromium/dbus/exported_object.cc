@@ -11,7 +11,7 @@
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "dbus/bus.h"
@@ -94,7 +94,7 @@ void ExportedObject::SendSignal(Signal* signal) {
   dbus_message_ref(signal_message);
 
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  if (bus_->GetDBusTaskRunner()->RunsTasksOnCurrentThread()) {
+  if (bus_->GetDBusTaskRunner()->RunsTasksInCurrentSequence()) {
     // The Chrome OS power manager doesn't use a dedicated TaskRunner for
     // sending DBus messages.  Sending signals asynchronously can cause an
     // inversion in the message order if the power manager calls

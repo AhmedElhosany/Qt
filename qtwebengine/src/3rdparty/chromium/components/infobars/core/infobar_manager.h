@@ -17,10 +17,6 @@
 class ConfirmInfoBarDelegate;
 class GURL;
 
-namespace content {
-class WebContents;
-}
-
 namespace infobars {
 
 class InfoBar;
@@ -97,6 +93,8 @@ class InfoBarManager {
   void AddObserver(Observer* obs);
   void RemoveObserver(Observer* obs);
 
+  bool animations_enabled() const { return animations_enabled_; }
+
   // Returns the active entry ID.
   virtual int GetActiveEntryID() = 0;
 
@@ -108,6 +106,10 @@ class InfoBarManager {
   virtual void OpenURL(const GURL& url, WindowOpenDisposition disposition) = 0;
 
  protected:
+  void set_animations_enabled(bool animations_enabled) {
+    animations_enabled_ = animations_enabled;
+  }
+
   // Notifies the observer in |observer_list_|.
   // TODO(droger): Absorb these methods back into their callers once virtual
   // overrides are removed (see http://crbug.com/354380).
@@ -116,16 +118,17 @@ class InfoBarManager {
 
  private:
   // InfoBars associated with this InfoBarManager.  We own these pointers.
-  // However, this is not a ScopedVector, because we don't delete the infobars
-  // directly once they've been added to this; instead, when we're done with an
-  // infobar, we instruct it to delete itself and then orphan it.  See
-  // RemoveInfoBarInternal().
+  // However, this is not a vector of unique_ptr, because we don't delete the
+  // infobars directly once they've been added to this; instead, when we're
+  // done with an infobar, we instruct it to delete itself and then orphan it.
+  // See RemoveInfoBarInternal().
   typedef std::vector<InfoBar*> InfoBars;
 
   void RemoveInfoBarInternal(InfoBar* infobar, bool animate);
 
   InfoBars infobars_;
-  bool infobars_enabled_;
+  bool infobars_enabled_ = true;
+  bool animations_enabled_ = true;
 
   base::ObserverList<Observer, true> observer_list_;
 

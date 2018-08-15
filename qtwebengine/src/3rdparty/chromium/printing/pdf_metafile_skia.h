@@ -11,6 +11,8 @@
 
 #include "base/macros.h"
 #include "build/build_config.h"
+#include "cc/paint/paint_canvas.h"
+#include "printing/common/pdf_metafile_utils.h"
 #include "printing/metafile.h"
 #include "skia/ext/platform_canvas.h"
 
@@ -18,15 +20,7 @@
 #include <windows.h>
 #endif
 
-class SkCanvas;
-
 namespace printing {
-
-enum SkiaDocumentType {
-  PDF_SKIA_DOCUMENT_TYPE,
-  // MSKP is an experimental, fragile, and diagnostic-only document type.
-  MSKP_SKIA_DOCUMENT_TYPE,
-};
 
 struct PdfMetafileSkiaData;
 
@@ -73,13 +67,13 @@ class PRINTING_EXPORT PdfMetafileSkia : public Metafile {
 
   // This method calls StartPage and then returns an appropriate
   // PlatformCanvas implementation bound to the context created by
-  // StartPage or NULL on error.  The SkCanvas pointer that
+  // StartPage or NULL on error.  The PaintCanvas pointer that
   // is returned is owned by this PdfMetafileSkia object and does not
   // need to be ref()ed or unref()ed.  The canvas will remain valid
   // until FinishPage() or FinishDocument() is called.
-  SkCanvas* GetVectorCanvasForNewPage(const gfx::Size& page_size,
-                                      const gfx::Rect& content_area,
-                                      const float& scale_factor);
+  cc::PaintCanvas* GetVectorCanvasForNewPage(const gfx::Size& page_size,
+                                             const gfx::Rect& content_area,
+                                             const float& scale_factor);
 
  private:
   std::unique_ptr<PdfMetafileSkiaData> data_;

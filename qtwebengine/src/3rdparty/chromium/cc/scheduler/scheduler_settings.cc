@@ -31,9 +31,9 @@ SchedulerSettings::AsValue() const {
                     using_synchronous_renderer_compositor);
   state->SetInteger("background_frame_interval",
                     background_frame_interval.InMicroseconds());
-  state->SetBoolean("abort_commit_before_compositor_frame_sink_creation",
-                    abort_commit_before_compositor_frame_sink_creation);
   state->SetBoolean("enable_latency_recovery", enable_latency_recovery);
+  state->SetBoolean("wait_for_all_pipeline_stages_before_draw",
+                    wait_for_all_pipeline_stages_before_draw);
   return std::move(state);
 }
 

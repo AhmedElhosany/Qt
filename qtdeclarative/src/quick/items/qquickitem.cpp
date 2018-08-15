@@ -67,6 +67,7 @@
 #include <QtQuick/private/qquickstate_p.h>
 #include <private/qquickitem_p.h>
 #include <QtQuick/private/qquickaccessibleattached_p.h>
+#include <QtQuick/private/qquickpointerhandler_p.h>
 
 #include <private/qv4engine_p.h>
 #include <private/qv4object_p.h>
@@ -165,7 +166,7 @@ void QQuickTransform::update()
 }
 
 QQuickContents::QQuickContents(QQuickItem *item)
-: m_item(item), m_x(0), m_y(0), m_width(0), m_height(0)
+: m_item(item)
 {
 }
 
@@ -180,8 +181,8 @@ QQuickContents::~QQuickContents()
 
 bool QQuickContents::calcHeight(QQuickItem *changed)
 {
-    qreal oldy = m_y;
-    qreal oldheight = m_height;
+    qreal oldy = m_contents.y();
+    qreal oldheight = m_contents.height();
 
     if (changed) {
         qreal top = oldy;
@@ -191,8 +192,8 @@ bool QQuickContents::calcHeight(QQuickItem *changed)
             bottom = y + changed->height();
         if (y < top)
             top = y;
-        m_y = top;
-        m_height = bottom - top;
+        m_contents.setY(top);
+        m_contents.setHeight(bottom - top);
     } else {
         qreal top = std::numeric_limits<qreal>::max();
         qreal bottom = -std::numeric_limits<qreal>::max();
@@ -206,17 +207,17 @@ bool QQuickContents::calcHeight(QQuickItem *changed)
                 top = y;
         }
         if (!children.isEmpty())
-            m_y = top;
-        m_height = qMax(bottom - top, qreal(0.0));
+            m_contents.setY(top);
+        m_contents.setHeight(qMax(bottom - top, qreal(0.0)));
     }
 
-    return (m_height != oldheight || m_y != oldy);
+    return (m_contents.height() != oldheight || m_contents.y() != oldy);
 }
 
 bool QQuickContents::calcWidth(QQuickItem *changed)
 {
-    qreal oldx = m_x;
-    qreal oldwidth = m_width;
+    qreal oldx = m_contents.x();
+    qreal oldwidth = m_contents.width();
 
     if (changed) {
         qreal left = oldx;
@@ -226,8 +227,8 @@ bool QQuickContents::calcWidth(QQuickItem *changed)
             right = x + changed->width();
         if (x < left)
             left = x;
-        m_x = left;
-        m_width = right - left;
+        m_contents.setX(left);
+        m_contents.setWidth(right - left);
     } else {
         qreal left = std::numeric_limits<qreal>::max();
         qreal right = -std::numeric_limits<qreal>::max();
@@ -241,11 +242,11 @@ bool QQuickContents::calcWidth(QQuickItem *changed)
                 left = x;
         }
         if (!children.isEmpty())
-            m_x = left;
-        m_width = qMax(right - left, qreal(0.0));
+            m_contents.setX(left);
+        m_contents.setWidth(qMax(right - left, qreal(0.0)));
     }
 
-    return (m_width != oldwidth || m_x != oldx);
+    return (m_contents.width() != oldwidth || m_contents.x() != oldx);
 }
 
 void QQuickContents::complete()
@@ -2140,6 +2141,9 @@ void QQuickItemPrivate::updateSubFocusItem(QQuickItem *scope, bool focus)
 
     \value ItemAntialiasingHasChanged The antialiasing has changed. The current
     (boolean) value can be found in QQuickItem::antialiasing.
+
+    \value ItemEnabledHasChanged The item's enabled state has changed.
+    ItemChangeData::boolValue contains the new enabled state. (since Qt 5.10)
 */
 
 /*!
@@ -2941,6 +2945,7 @@ void QQuickItemPrivate::addChild(QQuickItem *child)
     if (childPrivate->subtreeHoverEnabled && !subtreeHoverEnabled)
         setHasHoverInChild(true);
 
+    childPrivate->recursiveRefFromEffectItem(extra.value().recursiveEffectRefCount);
     markSortedChildrenDirty(child);
     dirty(QQuickItemPrivate::ChildrenChanged);
 
@@ -2969,6 +2974,7 @@ void QQuickItemPrivate::removeChild(QQuickItem *child)
     if (childPrivate->subtreeHoverEnabled && subtreeHoverEnabled)
         setHasHoverInChild(false);
 
+    childPrivate->recursiveRefFromEffectItem(-extra.value().recursiveEffectRefCount);
     markSortedChildrenDirty(child);
     dirty(QQuickItemPrivate::ChildrenChanged);
 
@@ -3121,9 +3127,6 @@ void QQuickItemPrivate::itemToParentTransform(QTransform &t) const
 */
 QTransform QQuickItemPrivate::windowToGlobalTransform() const
 {
-    if (Q_UNLIKELY(window == nullptr))
-        return QTransform();
-
     QPoint quickWidgetOffset;
     QWindow *renderWindow = QQuickRenderControl::renderWindowFor(window, &quickWidgetOffset);
     QPointF pos = (renderWindow ? renderWindow : window)->mapToGlobal(quickWidgetOffset);
@@ -3135,9 +3138,6 @@ QTransform QQuickItemPrivate::windowToGlobalTransform() const
 */
 QTransform QQuickItemPrivate::globalToWindowTransform() const
 {
-    if (Q_UNLIKELY(window == nullptr))
-        return QTransform();
-
     QPoint quickWidgetOffset;
     QWindow *renderWindow = QQuickRenderControl::renderWindowFor(window, &quickWidgetOffset);
     QPointF pos = (renderWindow ? renderWindow : window)->mapToGlobal(quickWidgetOffset);
@@ -3196,6 +3196,11 @@ QQuickItemPrivate::QQuickItemPrivate()
     , antialiasingValid(false)
     , isTabFence(false)
     , replayingPressEvent(false)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    , touchEnabled(true)
+#else
+    , touchEnabled(false)
+#endif
     , dirtyAttributes(0)
     , nextDirtyItem(0)
     , prevDirtyItem(0)
@@ -3247,7 +3252,14 @@ void QQuickItemPrivate::data_append(QQmlListProperty<QObject> *prop, QObject *o)
     } else {
         if (o->inherits("QGraphicsItem"))
             qWarning("Cannot add a QtQuick 1.0 item (%s) into a QtQuick 2.0 scene!", o->metaObject()->className());
-        else {
+        else if (QQuickPointerHandler *pointerHandler = qmlobject_cast<QQuickPointerHandler *>(o)) {
+            Q_ASSERT(pointerHandler->parentItem() == that);
+            // Accept all buttons, and leave filtering to pointerEvent() and/or user JS,
+            // because there can be multiple handlers...
+            that->setAcceptedMouseButtons(Qt::AllButtons);
+            QQuickItemPrivate *p = QQuickItemPrivate::get(that);
+            p->extra.value().pointerHandlers.prepend(pointerHandler);
+        } else {
             QQuickWindow *thisWindow = qmlobject_cast<QQuickWindow *>(o);
             QQuickItem *item = that;
             QQuickWindow *itemWindow = that->window();
@@ -5026,22 +5038,31 @@ void QQuickItemPrivate::transformChanged()
 #endif
 }
 
+bool QQuickItemPrivate::filterKeyEvent(QKeyEvent *e, bool post)
+{
+    if (!extra.isAllocated() || !extra->keyHandler)
+        return false;
+
+    if (post)
+        e->accept();
+
+    if (e->type() == QEvent::KeyPress)
+        extra->keyHandler->keyPressed(e, post);
+    else
+        extra->keyHandler->keyReleased(e, post);
+
+    return e->isAccepted();
+}
+
 void QQuickItemPrivate::deliverKeyEvent(QKeyEvent *e)
 {
     Q_Q(QQuickItem);
 
     Q_ASSERT(e->isAccepted());
-    if (extra.isAllocated() && extra->keyHandler) {
-        if (e->type() == QEvent::KeyPress)
-            extra->keyHandler->keyPressed(e, false);
-        else
-            extra->keyHandler->keyReleased(e, false);
-
-        if (e->isAccepted())
-            return;
-        else
-            e->accept();
-    }
+    if (filterKeyEvent(e, false))
+        return;
+    else
+        e->accept();
 
     if (e->type() == QEvent::KeyPress)
         q->keyPressEvent(e);
@@ -5051,16 +5072,7 @@ void QQuickItemPrivate::deliverKeyEvent(QKeyEvent *e)
     if (e->isAccepted())
         return;
 
-    if (extra.isAllocated() && extra->keyHandler) {
-        e->accept();
-
-        if (e->type() == QEvent::KeyPress)
-            extra->keyHandler->keyPressed(e, true);
-        else
-            extra->keyHandler->keyReleased(e, true);
-    }
-
-    if (e->isAccepted() || !q->window())
+    if (filterKeyEvent(e, true) || !q->window())
         return;
 
     //only care about KeyPress now
@@ -5112,6 +5124,28 @@ void QQuickItemPrivate::deliverShortcutOverrideEvent(QKeyEvent *event)
     if (extra.isAllocated() && extra->keyHandler) {
         extra->keyHandler->shortcutOverride(event);
     }
+}
+
+/*!
+    \internal
+    Deliver the \a event to all PointerHandlers which are in the pre-determined
+    eventDeliveryTargets() vector.  If \a avoidExclusiveGrabber is true, it skips
+    delivery to any handler which is the exclusive grabber of any point within this event
+    (because delivery to exclusive grabbers is handled separately).
+*/
+bool QQuickItemPrivate::handlePointerEvent(QQuickPointerEvent *event, bool avoidExclusiveGrabber)
+{
+    bool delivered = false;
+    QVector<QQuickPointerHandler *> &eventDeliveryTargets = event->device()->eventDeliveryTargets();
+    if (extra.isAllocated()) {
+        for (QQuickPointerHandler *handler : extra->pointerHandlers) {
+            if ((!avoidExclusiveGrabber || !event->hasExclusiveGrabber(handler)) && !eventDeliveryTargets.contains(handler)) {
+                handler->handlePointerEvent(event);
+                delivered = true;
+            }
+        }
+    }
+    return delivered;
 }
 
 /*!
@@ -5945,6 +5979,7 @@ void QQuickItemPrivate::setEffectiveEnableRecur(QQuickItem *scope, bool newEffec
                 scope, q, Qt::OtherFocusReason, QQuickWindowPrivate::DontChangeFocusProperty | QQuickWindowPrivate::DontChangeSubFocusItem);
     }
 
+    itemChange(QQuickItem::ItemEnabledHasChanged, effectiveEnable);
     emit q->enabledChanged();
 }
 
@@ -6040,28 +6075,48 @@ void QQuickItemPrivate::removeFromDirtyList()
 void QQuickItemPrivate::refFromEffectItem(bool hide)
 {
     ++extra.value().effectRefCount;
-    if (1 == extra->effectRefCount) {
+    if (extra->effectRefCount == 1) {
         dirty(EffectReference);
-        if (parentItem) QQuickItemPrivate::get(parentItem)->dirty(ChildrenStackingChanged);
+        if (parentItem)
+            QQuickItemPrivate::get(parentItem)->dirty(ChildrenStackingChanged);
     }
     if (hide) {
         if (++extra->hideRefCount == 1)
             dirty(HideReference);
     }
+    recursiveRefFromEffectItem(1);
+}
+
+void QQuickItemPrivate::recursiveRefFromEffectItem(int refs)
+{
+    Q_Q(QQuickItem);
+    if (!refs)
+        return;
+    extra.value().recursiveEffectRefCount += refs;
+    for (int ii = 0; ii < childItems.count(); ++ii) {
+        QQuickItem *child = childItems.at(ii);
+        QQuickItemPrivate::get(child)->recursiveRefFromEffectItem(refs);
+    }
+    // Polish may rely on the effect ref count so trigger one, if item is not visible
+    // (if visible, it will be triggered automatically).
+    if (!effectiveVisible && refs > 0 && extra.value().recursiveEffectRefCount == 1) // it wasn't referenced, now it's referenced
+        q->polish();
 }
 
 void QQuickItemPrivate::derefFromEffectItem(bool unhide)
 {
     Q_ASSERT(extra->effectRefCount);
     --extra->effectRefCount;
-    if (0 == extra->effectRefCount) {
+    if (extra->effectRefCount == 0) {
         dirty(EffectReference);
-        if (parentItem) QQuickItemPrivate::get(parentItem)->dirty(ChildrenStackingChanged);
+        if (parentItem)
+            QQuickItemPrivate::get(parentItem)->dirty(ChildrenStackingChanged);
     }
     if (unhide) {
         if (--extra->hideRefCount == 0)
             dirty(HideReference);
     }
+    recursiveRefFromEffectItem(-1);
 }
 
 void QQuickItemPrivate::setCulled(bool cull)
@@ -6112,6 +6167,18 @@ void QQuickItemPrivate::itemChange(QQuickItem::ItemChange change, const QQuickIt
             for (const QQuickItemPrivate::ChangeListener &change : listeners) {
                 if (change.types & QQuickItemPrivate::Visibility) {
                     change.listener->itemVisibilityChanged(q);
+                }
+            }
+        }
+        break;
+    }
+    case QQuickItem::ItemEnabledHasChanged: {
+        q->itemChange(change, data);
+        if (!changeListeners.isEmpty()) {
+            const auto listeners = changeListeners; // NOTE: intentional copy (QTBUG-54732)
+            for (const QQuickItemPrivate::ChangeListener &change : listeners) {
+                if (change.types & QQuickItemPrivate::Enabled) {
+                    change.listener->itemEnabledChanged(q);
                 }
             }
         }
@@ -6781,8 +6848,27 @@ bool QQuickItem::heightValid() const
 }
 
 /*!
-    \internal
-  */
+    \since 5.10
+
+    Returns the size of the item.
+
+    \sa setSize, width, height
+ */
+
+QSizeF QQuickItem::size() const
+{
+    Q_D(const QQuickItem);
+    return QSizeF(d->width, d->height);
+}
+
+
+/*!
+    \since 5.10
+
+    Sets the size of the item to \a size.
+
+    \sa size, setWidth, setHeight
+ */
 void QQuickItem::setSize(const QSizeF &size)
 {
     Q_D(QQuickItem);
@@ -7172,6 +7258,36 @@ void QQuickItem::setAcceptHoverEvents(bool enabled)
     d->setHasHoverInChild(enabled);
 }
 
+/*!
+    Returns whether touch events are accepted by this item.
+
+    The default value is false.
+
+    If this is false, then the item will not receive any touch events through
+    the touchEvent() function.
+
+    \since 5.10
+*/
+bool QQuickItem::acceptTouchEvents() const
+{
+    Q_D(const QQuickItem);
+    return d->touchEnabled;
+}
+
+/*!
+    If \a enabled is true, this sets the item to accept touch events;
+    otherwise, touch events are not accepted by this item.
+
+    \since 5.10
+
+    \sa acceptTouchEvents()
+*/
+void QQuickItem::setAcceptTouchEvents(bool enabled)
+{
+    Q_D(QQuickItem);
+    d->touchEnabled = enabled;
+}
+
 void QQuickItemPrivate::setHasCursorInChild(bool hasCursor)
 {
 #if QT_CONFIG(cursor)
@@ -7334,8 +7450,8 @@ void QQuickItem::grabMouse()
         windowPriv->pointerEventInstance(windowPriv->touchMouseDevice)->pointById(windowPriv->touchMouseId) :
         windowPriv->pointerEventInstance(QQuickPointerDevice::genericMouseDevice())->point(0);
     if (point) {
-        QQuickItem *oldGrabber = point->grabber();
-        point->setGrabber(this);
+        QQuickItem *oldGrabber = point->grabberItem();
+        point->setGrabberItem(this);
         windowPriv->sendUngrabEvent(oldGrabber, fromTouch);
     }
 }
@@ -7355,7 +7471,7 @@ void QQuickItem::ungrabMouse()
     if (!d->window)
         return;
     QQuickWindowPrivate *windowPriv = QQuickWindowPrivate::get(d->window);
-    windowPriv->removeGrabber(this, true, (windowPriv->touchMouseId != -1 && windowPriv->touchMouseDevice));
+    windowPriv->removeGrabber(this, true, windowPriv->isDeliveringTouchAsMouse());
 }
 
 
@@ -7898,6 +8014,11 @@ QQuickItemLayer *QQuickItemPrivate::layer() const
 #endif
 }
 
+bool QQuickItemPrivate::hasPointerHandlers() const
+{
+    return extra.isAllocated() && !extra->pointerHandlers.isEmpty();
+}
+
 #if QT_CONFIG(quick_shadereffect)
 QQuickItemLayer::QQuickItemLayer(QQuickItem *item)
     : m_item(item)
@@ -7912,6 +8033,7 @@ QQuickItemLayer::QQuickItemLayer(QQuickItem *item)
     , m_effect(0)
     , m_effectSource(0)
     , m_textureMirroring(QQuickShaderEffectSource::MirrorVertically)
+    , m_samples(0)
 {
 }
 
@@ -7986,6 +8108,7 @@ void QQuickItemLayer::activate()
     m_effectSource->setWrapMode(m_wrapMode);
     m_effectSource->setFormat(m_format);
     m_effectSource->setTextureMirroring(m_textureMirroring);
+    m_effectSource->setSamples(m_samples);
 
     if (m_effectComponent)
         activateEffect();
@@ -8279,6 +8402,44 @@ void QQuickItemLayer::setTextureMirroring(QQuickShaderEffectSource::TextureMirro
 }
 
 /*!
+    \qmlproperty enumeration QtQuick::Item::layer.samples
+    \since 5.10
+
+    This property allows requesting multisampled rendering in the layer.
+
+    By default multisampling is enabled whenever multisampling is
+    enabled for the entire window, assuming the scenegraph renderer in
+    use and the underlying graphics API supports this.
+
+    By setting the value to 2, 4, etc. multisampled rendering can be requested
+    for a part of the scene without enabling multisampling for the entire
+    scene. This way multisampling is applied only to a given subtree, which can
+    lead to significant performance gains since multisampling is not applied to
+    other parts of the scene.
+
+    \note Enabling multisampling can be potentially expensive regardless of the
+    layer's size, as it incurs a hardware and driver dependent performance and
+    memory cost.
+
+    \note This property is only functional when support for multisample
+    renderbuffers and framebuffer blits is available. Otherwise the value is
+    silently ignored.
+ */
+
+void QQuickItemLayer::setSamples(int count)
+{
+    if (m_samples == count)
+        return;
+
+    m_samples = count;
+
+    if (m_effectSource)
+        m_effectSource->setSamples(m_samples);
+
+    emit samplesChanged(count);
+}
+
+/*!
     \qmlproperty string QtQuick::Item::layer.samplerName
 
     Holds the name of the effect's source texture property.
@@ -8397,6 +8558,7 @@ QQuickItemPrivate::ExtraData::ExtraData()
   layer(0),
 #endif
   effectRefCount(0), hideRefCount(0),
+  recursiveEffectRefCount(0),
   opacityNode(0), clipNode(0), rootNode(0),
   acceptedMouseButtons(0), origin(QQuickItem::Center),
   transparentForPositioner(false)
@@ -8427,19 +8589,19 @@ struct QQuickItemWrapper : public QObjectWrapper {
 
 struct QQuickItemWrapper : public QV4::QObjectWrapper {
     V4_OBJECT2(QQuickItemWrapper, QV4::QObjectWrapper)
-    static void markObjects(QV4::Heap::Base *that, QV4::ExecutionEngine *e);
+    static void markObjects(QV4::Heap::Base *that, QV4::MarkStack *markStack);
 };
 
 DEFINE_OBJECT_VTABLE(QQuickItemWrapper);
 
-void QQuickItemWrapper::markObjects(QV4::Heap::Base *that, QV4::ExecutionEngine *e)
+void QQuickItemWrapper::markObjects(QV4::Heap::Base *that, QV4::MarkStack *markStack)
 {
     QObjectWrapper::Data *This = static_cast<QObjectWrapper::Data *>(that);
     if (QQuickItem *item = static_cast<QQuickItem*>(This->object())) {
         for (QQuickItem *child : qAsConst(QQuickItemPrivate::get(item)->childItems))
-            QV4::QObjectWrapper::markWrapper(child, e);
+            QV4::QObjectWrapper::markWrapper(child, markStack);
     }
-    QV4::QObjectWrapper::markObjects(that, e);
+    QV4::QObjectWrapper::markObjects(that, markStack);
 }
 
 quint64 QQuickItemPrivate::_q_createJSWrapper(QV4::ExecutionEngine *engine)

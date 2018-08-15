@@ -8,6 +8,7 @@
 
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
+#include "components/version_info/version_info.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -20,6 +21,7 @@
 #include "extensions/browser/null_app_sorting.h"
 #include "extensions/browser/updater/null_extension_cache.h"
 #include "extensions/browser/url_request_util.h"
+#include "extensions/common/features/feature_channel.h"
 #include "extensions/shell/browser/api/generated_api_registration.h"
 #include "extensions/shell/browser/delegates/shell_kiosk_delegate.h"
 #include "extensions/shell/browser/shell_extension_host_delegate.h"
@@ -45,6 +47,9 @@ ShellExtensionsBrowserClient::ShellExtensionsBrowserClient(
       pref_service_(pref_service),
       api_client_(new ShellExtensionsAPIClient),
       extension_cache_(new NullExtensionCache()) {
+  // app_shell does not have a concept of channel yet, so leave UNKNOWN to
+  // enable all channel-dependent extension APIs.
+  SetCurrentChannel(version_info::Channel::UNKNOWN);
 }
 
 ShellExtensionsBrowserClient::~ShellExtensionsBrowserClient() {
@@ -88,6 +93,8 @@ BrowserContext* ShellExtensionsBrowserClient::GetOriginalContext(
 #if defined(OS_CHROMEOS)
 std::string ShellExtensionsBrowserClient::GetUserIdHashFromContext(
     content::BrowserContext* context) {
+  if (!chromeos::LoginState::IsInitialized())
+    return "";
   return chromeos::LoginState::Get()->primary_user_hash();
 }
 #endif
@@ -265,6 +272,11 @@ KioskDelegate* ShellExtensionsBrowserClient::GetKioskDelegate() {
   if (!kiosk_delegate_)
     kiosk_delegate_.reset(new ShellKioskDelegate());
   return kiosk_delegate_.get();
+}
+
+bool ShellExtensionsBrowserClient::IsLockScreenContext(
+    content::BrowserContext* context) {
+  return false;
 }
 
 }  // namespace extensions

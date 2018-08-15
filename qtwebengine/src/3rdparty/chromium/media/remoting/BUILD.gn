@@ -8,18 +8,20 @@ import("//third_party/protobuf/proto_library.gni")
 proto_library("media_remoting_proto") {
   proto_out_dir = "media/remoting"
   sources = [
-    "proto/remoting_rpc_message.proto",
+    "rpc.proto",
   ]
 }
 
+# This target is separate from "remoting" because this code is shared by the
+# receiver implementation (currently outside of the Chromium project).
 source_set("rpc") {
   sources = [
-    "rpc/proto_enum_utils.cc",
-    "rpc/proto_enum_utils.h",
-    "rpc/proto_utils.cc",
-    "rpc/proto_utils.h",
-    "rpc/rpc_broker.cc",
-    "rpc/rpc_broker.h",
+    "proto_enum_utils.cc",
+    "proto_enum_utils.h",
+    "proto_utils.cc",
+    "proto_utils.h",
+    "rpc_broker.cc",
+    "rpc_broker.h",
   ]
 
   deps = [
@@ -34,10 +36,14 @@ source_set("rpc") {
 
 source_set("remoting") {
   sources = [
-    "remote_demuxer_stream_adapter.cc",
-    "remote_demuxer_stream_adapter.h",
-    "remote_renderer_impl.cc",
-    "remote_renderer_impl.h",
+    "courier_renderer.cc",
+    "courier_renderer.h",
+    "courier_renderer_factory.cc",
+    "courier_renderer_factory.h",
+    "demuxer_stream_adapter.cc",
+    "demuxer_stream_adapter.h",
+    "metrics.cc",
+    "metrics.h",
     "remoting_cdm.cc",
     "remoting_cdm.h",
     "remoting_cdm_context.cc",
@@ -46,24 +52,21 @@ source_set("remoting") {
     "remoting_cdm_controller.h",
     "remoting_cdm_factory.cc",
     "remoting_cdm_factory.h",
-    "remoting_interstitial_ui.cc",
-    "remoting_interstitial_ui.h",
-    "remoting_renderer_controller.cc",
-    "remoting_renderer_controller.h",
-    "remoting_renderer_factory.cc",
-    "remoting_renderer_factory.h",
-    "remoting_sink_observer.cc",
-    "remoting_sink_observer.h",
-    "remoting_source_impl.cc",
-    "remoting_source_impl.h",
+    "renderer_controller.cc",
+    "renderer_controller.h",
+    "shared_session.cc",
+    "shared_session.h",
+    "sink_availability_observer.cc",
+    "sink_availability_observer.h",
+    "triggers.h",
   ]
+
   deps = [
     ":rpc",
     "//base",
     "//media",
     "//media/mojo/interfaces:remoting",
     "//mojo/public/cpp/bindings",
-    "//skia",
     "//ui/gfx",
   ]
 }
@@ -71,15 +74,22 @@ source_set("remoting") {
 source_set("media_remoting_tests") {
   testonly = true
   sources = [
-    "fake_remoting_controller.cc",
-    "fake_remoting_controller.h",
-    "fake_remoting_demuxer_stream_provider.cc",
-    "fake_remoting_demuxer_stream_provider.h",
-    "remote_demuxer_stream_adapter_unittest.cc",
-    "remote_renderer_impl_unittest.cc",
-    "remoting_renderer_controller_unittest.cc",
-    "rpc/proto_utils_unittest.cc",
-    "rpc/rpc_broker_unittest.cc",
+    "courier_renderer_unittest.cc",
+    "demuxer_stream_adapter_unittest.cc",
+    "end2end_test_renderer.cc",
+    "end2end_test_renderer.h",
+    "fake_media_resource.cc",
+    "fake_media_resource.h",
+    "fake_remoter.cc",
+    "fake_remoter.h",
+    "integration_test.cc",
+    "proto_utils_unittest.cc",
+    "receiver.cc",
+    "receiver.h",
+    "renderer_controller_unittest.cc",
+    "rpc_broker_unittest.cc",
+    "stream_provider.cc",
+    "stream_provider.h",
   ]
 
   deps = [
@@ -90,6 +100,7 @@ source_set("media_remoting_tests") {
     "//media",
     "//media/base:test_support",
     "//media/mojo/interfaces:remoting",
+    "//media/test:pipeline_integration_test_base",
     "//testing/gmock",
     "//testing/gtest",
     "//ui/gfx:test_support",

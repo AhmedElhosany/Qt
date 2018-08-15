@@ -9,6 +9,8 @@
 #include <memory>
 
 #include "base/json/json_reader.h"
+#include "base/memory/ptr_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -24,6 +26,17 @@ class JSONParserTest : public testing::Test {
     parser->pos_ = parser->start_pos_;
     parser->end_pos_ = parser->start_pos_ + input.length();
     return parser;
+  }
+
+  // MSan will do a better job detecting over-read errors if the input is
+  // not nul-terminated on the heap. This will copy |input| to a new buffer
+  // owned by |owner|, returning a StringPiece to |owner|.
+  StringPiece MakeNotNullTerminatedInput(const char* input,
+                                         std::unique_ptr<char[]>* owner) {
+    size_t str_len = strlen(input);
+    owner->reset(new char[str_len]);
+    memcpy(owner->get(), input, str_len);
+    return StringPiece(owner->get(), str_len);
   }
 
   void TestLastThree(JSONParser* parser) {
@@ -124,7 +137,7 @@ TEST_F(JSONParserTest, ConsumeLiterals) {
   TestLastThree(parser.get());
 
   ASSERT_TRUE(value.get());
-  EXPECT_TRUE(value->IsType(Value::TYPE_NULL));
+  EXPECT_TRUE(value->IsType(Value::Type::NONE));
 }
 
 TEST_F(JSONParserTest, ConsumeNumbers) {
@@ -244,14 +257,14 @@ TEST_F(JSONParserTest, ErrorMessages) {
   EXPECT_EQ(JSONReader::JSON_UNEXPECTED_DATA_AFTER_ROOT, error_code);
 
   std::string nested_json;
-  for (int i = 0; i < 101; ++i) {
+  for (int i = 0; i < 201; ++i) {
     nested_json.insert(nested_json.begin(), '[');
     nested_json.append(1, ']');
   }
   root = JSONReader::ReadAndReturnError(nested_json, JSON_PARSE_RFC,
                                         &error_code, &error_message);
   EXPECT_FALSE(root.get());
-  EXPECT_EQ(JSONParser::FormatErrorMessage(1, 100, JSONReader::kTooMuchNesting),
+  EXPECT_EQ(JSONParser::FormatErrorMessage(1, 200, JSONReader::kTooMuchNesting),
             error_message);
   EXPECT_EQ(JSONReader::JSON_TOO_MUCH_NESTING, error_code);
 
@@ -302,6 +315,12 @@ TEST_F(JSONParserTest, ErrorMessages) {
   EXPECT_EQ(JSONParser::FormatErrorMessage(1, 7, JSONReader::kInvalidEscape),
             error_message);
   EXPECT_EQ(JSONReader::JSON_INVALID_ESCAPE, error_code);
+
+  root = JSONReader::ReadAndReturnError(("[\"\\ufffe\"]"), JSON_PARSE_RFC,
+                                        &error_code, &error_message);
+  EXPECT_EQ(JSONParser::FormatErrorMessage(1, 7, JSONReader::kInvalidEscape),
+            error_message);
+  EXPECT_EQ(JSONReader::JSON_INVALID_ESCAPE, error_code);
 }
 
 TEST_F(JSONParserTest, Decode4ByteUtf8Char) {
@@ -322,6 +341,11 @@ TEST_F(JSONParserTest, DecodeUnicodeNonCharacter) {
   EXPECT_FALSE(JSONReader::Read("[\"\\ufdd0\"]"));
   EXPECT_FALSE(JSONReader::Read("[\"\\ufffe\"]"));
   EXPECT_FALSE(JSONReader::Read("[\"\\ud83f\\udffe\"]"));
+
+  EXPECT_TRUE(
+      JSONReader::Read("[\"\\ufdd0\"]", JSON_REPLACE_INVALID_CHARACTERS));
+  EXPECT_TRUE(
+      JSONReader::Read("[\"\\ufffe\"]", JSON_REPLACE_INVALID_CHARACTERS));
 }
 
 TEST_F(JSONParserTest, DecodeNegativeEscapeSequence) {
@@ -340,6 +364,89 @@ TEST_F(JSONParserTest, ReplaceInvalidCharacters) {
   std::string str;
   EXPECT_TRUE(value->GetAsString(&str));
   EXPECT_EQ(kUnicodeReplacementString, str);
+}
+
+TEST_F(JSONParserTest, ReplaceInvalidUTF16EscapeSequence) {
+  const std::string invalid = "\"\\ufffe\"";
+  std::unique_ptr<JSONParser> parser(
+      NewTestParser(invalid, JSON_REPLACE_INVALID_CHARACTERS));
+  std::unique_ptr<Value> value(parser->ConsumeString());
+  ASSERT_TRUE(value.get());
+  std::string str;
+  EXPECT_TRUE(value->GetAsString(&str));
+  EXPECT_EQ(kUnicodeReplacementString, str);
+}
+
+TEST_F(JSONParserTest, ParseNumberErrors) {
+  const struct {
+    const char* input;
+    bool parse_success;
+    double value;
+  } kCases[] = {
+      // clang-format off
+      {"1", true, 1},
+      {"2.", false, 0},
+      {"42", true, 42},
+      {"6e", false, 0},
+      {"43e2", true, 4300},
+      {"43e-", false, 0},
+      {"9e-3", true, 0.009},
+      {"2e+", false, 0},
+      {"2e+2", true, 200},
+      // clang-format on
+  };
+
+  for (unsigned int i = 0; i < arraysize(kCases); ++i) {
+    auto test_case = kCases[i];
+    SCOPED_TRACE(StringPrintf("case %u: \"%s\"", i, test_case.input));
+
+    std::unique_ptr<char[]> input_owner;
+    StringPiece input =
+        MakeNotNullTerminatedInput(test_case.input, &input_owner);
+
+    std::unique_ptr<Value> result = JSONReader::Read(input);
+    if (test_case.parse_success) {
+      EXPECT_TRUE(result);
+    } else {
+      EXPECT_FALSE(result);
+    }
+
+    if (!result)
+      continue;
+
+    double double_value = 0;
+    EXPECT_TRUE(result->GetAsDouble(&double_value));
+    EXPECT_EQ(test_case.value, double_value);
+  }
+}
+
+TEST_F(JSONParserTest, UnterminatedInputs) {
+  const char* kCases[] = {
+      // clang-format off
+      "/",
+      "//",
+      "/*",
+      "\"xxxxxx",
+      "\"",
+      "{   ",
+      "[\t",
+      "tru",
+      "fals",
+      "nul",
+      "\"\\x2",
+      "\"\\u123",
+      // clang-format on
+  };
+
+  for (unsigned int i = 0; i < arraysize(kCases); ++i) {
+    auto* test_case = kCases[i];
+    SCOPED_TRACE(StringPrintf("case %u: \"%s\"", i, test_case));
+
+    std::unique_ptr<char[]> input_owner;
+    StringPiece input = MakeNotNullTerminatedInput(test_case, &input_owner);
+
+    EXPECT_FALSE(JSONReader::Read(input));
+  }
 }
 
 }  // namespace internal

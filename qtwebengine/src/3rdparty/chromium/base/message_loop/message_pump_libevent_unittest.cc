@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <memory>
+#include <utility>
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
@@ -49,6 +50,10 @@ class MessagePumpLibeventTest : public testing::Test {
       PLOG(ERROR) << "close";
   }
 
+  void WaitUntilIoThreadStarted() {
+    ASSERT_TRUE(io_thread_.WaitUntilThreadStarted());
+  }
+
   MessageLoopForIO* io_loop() const {
     return static_cast<MessageLoopForIO*>(io_thread_.message_loop());
   }
@@ -81,15 +86,13 @@ class StupidWatcher : public MessagePumpLibevent::Watcher {
 
 // Test to make sure that we catch calling WatchFileDescriptor off of the
 // wrong thread.
-#if defined(OS_CHROMEOS) || defined(OS_LINUX)
-// Flaky on Chrome OS and Linux: crbug.com/138845.
-#define MAYBE_TestWatchingFromBadThread DISABLED_TestWatchingFromBadThread
-#else
-#define MAYBE_TestWatchingFromBadThread TestWatchingFromBadThread
-#endif
-TEST_F(MessagePumpLibeventTest, MAYBE_TestWatchingFromBadThread) {
-  MessagePumpLibevent::FileDescriptorWatcher watcher;
+TEST_F(MessagePumpLibeventTest, TestWatchingFromBadThread) {
+  MessagePumpLibevent::FileDescriptorWatcher watcher(FROM_HERE);
   StupidWatcher delegate;
+
+  // Ensure that |io_thread_| has started, otherwise we're racing against
+  // creation of the thread's MessagePump.
+  WaitUntilIoThreadStarted();
 
   ASSERT_DCHECK_DEATH(
       io_loop()->WatchFileDescriptor(STDOUT_FILENO, false,
@@ -137,7 +140,7 @@ class DeleteWatcher : public BaseWatcher {
 TEST_F(MessagePumpLibeventTest, DeleteWatcher) {
   std::unique_ptr<MessagePumpLibevent> pump(new MessagePumpLibevent);
   MessagePumpLibevent::FileDescriptorWatcher* watcher =
-      new MessagePumpLibevent::FileDescriptorWatcher;
+      new MessagePumpLibevent::FileDescriptorWatcher(FROM_HERE);
   DeleteWatcher delegate(watcher);
   pump->WatchFileDescriptor(pipefds_[1],
       false, MessagePumpLibevent::WATCH_READ_WRITE, watcher, &delegate);
@@ -161,7 +164,7 @@ class StopWatcher : public BaseWatcher {
 
 TEST_F(MessagePumpLibeventTest, StopWatcher) {
   std::unique_ptr<MessagePumpLibevent> pump(new MessagePumpLibevent);
-  MessagePumpLibevent::FileDescriptorWatcher watcher;
+  MessagePumpLibevent::FileDescriptorWatcher watcher(FROM_HERE);
   StopWatcher delegate(&watcher);
   pump->WatchFileDescriptor(pipefds_[1],
       false, MessagePumpLibevent::WATCH_READ_WRITE, &watcher, &delegate);
@@ -187,7 +190,7 @@ class NestedPumpWatcher : public MessagePumpLibevent::Watcher {
   void OnFileCanReadWithoutBlocking(int /* fd */) override {
     RunLoop runloop;
     ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, Bind(&QuitMessageLoopAndStart, runloop.QuitClosure()));
+        FROM_HERE, BindOnce(&QuitMessageLoopAndStart, runloop.QuitClosure()));
     runloop.Run();
   }
 
@@ -196,7 +199,7 @@ class NestedPumpWatcher : public MessagePumpLibevent::Watcher {
 
 TEST_F(MessagePumpLibeventTest, NestedPumpWatcher) {
   std::unique_ptr<MessagePumpLibevent> pump(new MessagePumpLibevent);
-  MessagePumpLibevent::FileDescriptorWatcher watcher;
+  MessagePumpLibevent::FileDescriptorWatcher watcher(FROM_HERE);
   NestedPumpWatcher delegate;
   pump->WatchFileDescriptor(pipefds_[1],
       false, MessagePumpLibevent::WATCH_READ, &watcher, &delegate);
@@ -212,20 +215,18 @@ void FatalClosure() {
 class QuitWatcher : public BaseWatcher {
  public:
   QuitWatcher(MessagePumpLibevent::FileDescriptorWatcher* controller,
-              RunLoop* run_loop)
-      : BaseWatcher(controller), run_loop_(run_loop) {}
-  ~QuitWatcher() override {}
+              base::Closure quit_closure)
+      : BaseWatcher(controller), quit_closure_(std::move(quit_closure)) {}
 
   void OnFileCanReadWithoutBlocking(int /* fd */) override {
     // Post a fatal closure to the MessageLoop before we quit it.
-    ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, Bind(&FatalClosure));
+    ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, BindOnce(&FatalClosure));
 
-    // Now quit the MessageLoop.
-    run_loop_->Quit();
+    quit_closure_.Run();
   }
 
  private:
-  RunLoop* run_loop_;  // weak
+  base::Closure quit_closure_;
 };
 
 void WriteFDWrapper(const int fd,
@@ -244,8 +245,8 @@ TEST_F(MessagePumpLibeventTest, QuitWatcher) {
   MessagePumpLibevent* pump = new MessagePumpLibevent;  // owned by |loop|.
   MessageLoop loop(WrapUnique(pump));
   RunLoop run_loop;
-  MessagePumpLibevent::FileDescriptorWatcher controller;
-  QuitWatcher delegate(&controller, &run_loop);
+  MessagePumpLibevent::FileDescriptorWatcher controller(FROM_HERE);
+  QuitWatcher delegate(&controller, run_loop.QuitClosure());
   WaitableEvent event(WaitableEvent::ResetPolicy::AUTOMATIC,
                       WaitableEvent::InitialState::NOT_SIGNALED);
   std::unique_ptr<WaitableEventWatcher> watcher(new WaitableEventWatcher);
@@ -256,15 +257,16 @@ TEST_F(MessagePumpLibeventTest, QuitWatcher) {
 
   // Make the IO thread wait for |event| before writing to pipefds[1].
   const char buf = 0;
-  const WaitableEventWatcher::EventCallback write_fd_task =
-      Bind(&WriteFDWrapper, pipefds_[1], &buf, 1);
+  WaitableEventWatcher::EventCallback write_fd_task =
+      BindOnce(&WriteFDWrapper, pipefds_[1], &buf, 1);
   io_loop()->task_runner()->PostTask(
-      FROM_HERE, Bind(IgnoreResult(&WaitableEventWatcher::StartWatching),
-                      Unretained(watcher.get()), &event, write_fd_task));
+      FROM_HERE,
+      BindOnce(IgnoreResult(&WaitableEventWatcher::StartWatching),
+               Unretained(watcher.get()), &event, std::move(write_fd_task)));
 
   // Queue |event| to signal on |loop|.
   loop.task_runner()->PostTask(
-      FROM_HERE, Bind(&WaitableEvent::Signal, Unretained(&event)));
+      FROM_HERE, BindOnce(&WaitableEvent::Signal, Unretained(&event)));
 
   // Now run the MessageLoop.
   run_loop.Run();
@@ -272,7 +274,7 @@ TEST_F(MessagePumpLibeventTest, QuitWatcher) {
   // StartWatching can move |watcher| to IO thread. Release on IO thread.
   io_loop()->task_runner()->PostTask(
       FROM_HERE,
-      Bind(&WaitableEventWatcher::StopWatching, Owned(watcher.release())));
+      BindOnce(&WaitableEventWatcher::StopWatching, Owned(watcher.release())));
 }
 
 }  // namespace

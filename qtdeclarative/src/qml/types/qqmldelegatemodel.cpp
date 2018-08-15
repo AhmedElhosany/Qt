@@ -988,12 +988,14 @@ QObject *QQmlDelegateModelPrivate::object(Compositor::Group group, int index, QQ
             if (QQmlAdaptorModelProxyInterface *proxy
                     = qobject_cast<QQmlAdaptorModelProxyInterface *>(cacheItem)) {
                 ctxt = new QQmlContextData;
-                ctxt->setParent(cacheItem->contextData, /*stronglyReferencedByParent*/true);
+                ctxt->setParent(cacheItem->contextData);
                 ctxt->contextObject = proxy->proxiedObject();
             }
         }
 
-        cacheItem->incubateObject(
+        QQmlComponentPrivate *cp = QQmlComponentPrivate::get(m_delegate);
+        cp->incubateObject(
+                    cacheItem->incubationTask,
                     m_delegate,
                     m_context->engine(),
                     ctxt,
@@ -1951,29 +1953,6 @@ void QQmlDelegateModelItem::Dispose()
         model->removeCacheItem(this);
     }
     delete this;
-}
-
-/*
-    This is essentially a copy of QQmlComponent::create(); except it takes the QQmlContextData
-    arguments instead of QQmlContext which means we don't have to construct the rather weighty
-    wrapper class for every delegate item.
-*/
-void QQmlDelegateModelItem::incubateObject(
-        QQmlComponent *component,
-        QQmlEngine *engine,
-        QQmlContextData *context,
-        QQmlContextData *forContext)
-{
-    QQmlIncubatorPrivate *incubatorPriv = QQmlIncubatorPrivate::get(incubationTask);
-    QQmlEnginePrivate *enginePriv = QQmlEnginePrivate::get(engine);
-    QQmlComponentPrivate *componentPriv = QQmlComponentPrivate::get(component);
-
-    incubatorPriv->compilationUnit = componentPriv->compilationUnit;
-    incubatorPriv->enginePriv = enginePriv;
-    incubatorPriv->creator.reset(new QQmlObjectCreator(context, componentPriv->compilationUnit, componentPriv->creationContext));
-    incubatorPriv->subComponentToCreate = componentPriv->start;
-
-    enginePriv->incubate(*incubationTask, forContext);
 }
 
 void QQmlDelegateModelItem::destroyObject()

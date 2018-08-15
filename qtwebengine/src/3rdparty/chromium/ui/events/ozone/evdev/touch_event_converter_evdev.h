@@ -11,6 +11,13 @@
 #include <bitset>
 #include <memory>
 
+#include <linux/input.h>
+// See if we compile against new enough headers and add missing definition
+// if the headers are too old.
+#ifndef MT_TOOL_PALM
+#define MT_TOOL_PALM 2
+#endif
+
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
@@ -25,7 +32,7 @@
 namespace ui {
 
 class DeviceEventDispatcherEvdev;
-class TouchNoiseFinder;
+class FalseTouchFinder;
 struct InProgressTouchEvdev;
 
 class EVENTS_OZONE_EVDEV_EXPORT TouchEventConverterEvdev
@@ -112,6 +119,12 @@ class EVENTS_OZONE_EVDEV_EXPORT TouchEventConverterEvdev
   int pressure_min_;
   int pressure_max_;  // Used to normalize pressure values.
 
+  // Input range for tilt.
+  int tilt_x_min_;
+  int tilt_x_range_;
+  int tilt_y_min_;
+  int tilt_y_range_;
+
   // Input range for x-axis.
   float x_min_tuxels_;
   float x_num_tuxels_;
@@ -138,8 +151,8 @@ class EVENTS_OZONE_EVDEV_EXPORT TouchEventConverterEvdev
   // In-progress touch points.
   std::vector<InProgressTouchEvdev> events_;
 
-  // Finds touch noise.
-  std::unique_ptr<TouchNoiseFinder> touch_noise_finder_;
+  // Finds touches that need to be filtered.
+  std::unique_ptr<FalseTouchFinder> false_touch_finder_;
 
   // Records the recent touch events. It is used to fill the feedback reports
   TouchEventLogEvdev touch_evdev_debug_buffer_;

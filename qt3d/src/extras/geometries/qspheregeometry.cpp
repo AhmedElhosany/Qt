@@ -254,8 +254,8 @@ void QSphereGeometryPrivate::init()
     m_texCoordAttribute = new QAttribute(q);
     m_tangentAttribute = new QAttribute(q);
     m_indexAttribute = new QAttribute(q);
-    m_vertexBuffer = new Qt3DRender::QBuffer(Qt3DRender::QBuffer::VertexBuffer, q);
-    m_indexBuffer = new Qt3DRender::QBuffer(Qt3DRender::QBuffer::IndexBuffer, q);
+    m_vertexBuffer = new Qt3DRender::QBuffer(q);
+    m_indexBuffer = new Qt3DRender::QBuffer(q);
 
     // vec3 pos, vec2 tex, vec3 normal, vec4 tangent
     const quint32 elementSize = 3 + 2 + 3 + 4;
@@ -382,6 +382,7 @@ void QSphereGeometryPrivate::init()
 
 /*!
  * \class Qt3DExtras::QSphereGeometry
+   \ingroup qt3d-extras-geometries
  * \inheaderfile Qt3DExtras/QSphereGeometry
  * \inmodule Qt3DExtras
  * \brief The QSphereGeometry class allows creation of a sphere in 3D space.

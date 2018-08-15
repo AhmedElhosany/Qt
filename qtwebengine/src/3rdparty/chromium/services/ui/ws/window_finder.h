@@ -7,7 +7,6 @@
 
 namespace gfx {
 class Point;
-class Transform;
 }
 
 namespace ui {
@@ -15,17 +14,23 @@ namespace ws {
 
 class ServerWindow;
 
-// Find the deepest visible child of |root| that should receive an event at
-// |location|. |location| is initially in the coordinate space of
-// |root_window|, on return it is converted to the coordinates of the return
-// value.
-ServerWindow* FindDeepestVisibleWindowForEvents(
-    ServerWindow* root_window,
-    gfx::Point* location);
+struct DeepestWindow {
+  ServerWindow* window = nullptr;
+  bool in_non_client_area = false;
+};
 
-// Retrieve the transform to the provided |window|'s coordinate space from the
-// root.
-gfx::Transform GetTransformToWindow(ServerWindow* window);
+enum class EventSource {
+  MOUSE,
+  TOUCH,
+};
+
+// Finds the deepest visible child of |root| that should receive an event at
+// |location|. |location| is in the coordinate space of |root_window|. The
+// |window| field in the returned structure is set to the child window. If no
+// valid child window is found |window| is set to null.
+DeepestWindow FindDeepestVisibleWindowForLocation(ServerWindow* root_window,
+                                                  EventSource event_source,
+                                                  const gfx::Point& location);
 
 }  // namespace ws
 }  // namespace ui

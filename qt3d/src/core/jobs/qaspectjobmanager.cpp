@@ -98,7 +98,8 @@ void QAspectJobManager::enqueueJobs(const QVector<QAspectJobPtr> &jobQueue)
 
         taskDepender->m_dependerCount += dependerCount;
     }
-#ifdef QT3D_JOBS_RUN_STATS
+
+#if QT_CONFIG(qt3d_profile_jobs)
     QThreadPooler::writeFrameJobLogStats();
 #endif
     m_threadPooler->mapDependables(taskList);

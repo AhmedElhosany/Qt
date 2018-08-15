@@ -18,14 +18,12 @@
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_bar.h"
 #include "chrome/common/extensions/api/extension_action/action_info.h"
@@ -34,6 +32,7 @@
 #include "extensions/browser/extension_function_registry.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/feature_switch.h"
@@ -91,8 +90,8 @@ ExtensionActionAPI::Observer::~Observer() {
 // ExtensionActionAPI
 //
 
-static base::LazyInstance<BrowserContextKeyedAPIFactory<ExtensionActionAPI> >
-    g_factory = LAZY_INSTANCE_INITIALIZER;
+static base::LazyInstance<BrowserContextKeyedAPIFactory<ExtensionActionAPI>>::
+    DestructorAtExit g_factory = LAZY_INSTANCE_INITIALIZER;
 
 ExtensionActionAPI::ExtensionActionAPI(content::BrowserContext* context)
     : browser_context_(context),
@@ -164,9 +163,9 @@ void ExtensionActionAPI::SetBrowserActionVisibility(
   if (GetBrowserActionVisibility(extension_id) == visible)
     return;
 
-  GetExtensionPrefs()->UpdateExtensionPref(extension_id,
-                                           kBrowserActionVisible,
-                                           new base::FundamentalValue(visible));
+  GetExtensionPrefs()->UpdateExtensionPref(
+      extension_id, kBrowserActionVisible,
+      base::MakeUnique<base::Value>(visible));
   for (auto& observer : observers_)
     observer.OnExtensionActionVisibilityChanged(extension_id, visible);
 }
@@ -180,14 +179,6 @@ bool ExtensionActionAPI::ShowExtensionActionPopup(
           *extension);
   if (!extension_action)
     return false;
-
-  if (extension_action->action_type() == ActionInfo::TYPE_PAGE &&
-      !FeatureSwitch::extension_action_redesign()->IsEnabled()) {
-    // We show page actions in the location bar unless the new toolbar is
-    // enabled.
-    return browser->window()->GetLocationBar()->ShowPageActionPopup(
-        extension, grant_active_tab_permissions);
-  }
 
   // Don't support showing action popups in a popup window.
   if (!browser->SupportsWindowFeature(Browser::FEATURE_TOOLBAR))
@@ -214,7 +205,8 @@ void ExtensionActionAPI::NotifyChange(ExtensionAction* extension_action,
 
 void ExtensionActionAPI::DispatchExtensionActionClicked(
     const ExtensionAction& extension_action,
-    WebContents* web_contents) {
+    WebContents* web_contents,
+    const Extension* extension) {
   events::HistogramValue histogram_value = events::UNKNOWN;
   const char* event_name = NULL;
   switch (extension_action.action_type()) {
@@ -234,7 +226,8 @@ void ExtensionActionAPI::DispatchExtensionActionClicked(
 
   if (event_name) {
     std::unique_ptr<base::ListValue> args(new base::ListValue());
-    args->Append(ExtensionTabUtil::CreateTabObject(web_contents)->ToValue());
+    args->Append(
+        ExtensionTabUtil::CreateTabObject(web_contents, extension)->ToValue());
 
     DispatchEventToExtension(web_contents->GetBrowserContext(),
                              extension_action.extension_id(), histogram_value,
@@ -281,9 +274,8 @@ void ExtensionActionAPI::DispatchEventToExtension(
   if (!EventRouter::Get(context))
     return;
 
-  std::unique_ptr<Event> event(
-      new Event(histogram_value, event_name, std::move(event_args)));
-  event->restrict_to_browser_context = context;
+  auto event = base::MakeUnique<Event>(histogram_value, event_name,
+                                       std::move(event_args), context);
   event->user_gesture = EventRouter::USER_GESTURE_ENABLED;
   EventRouter::Get(context)
       ->DispatchEventToExtension(extension_id, std::move(event));
@@ -294,11 +286,6 @@ void ExtensionActionAPI::NotifyPageActionsChanged(
   Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
   if (!browser)
     return;
-  LocationBar* location_bar =
-      browser->window() ? browser->window()->GetLocationBar() : NULL;
-  if (!location_bar)
-    return;
-  location_bar->UpdatePageActions();
 
   for (auto& observer : observers_)
     observer.OnPageActionsUpdated(web_contents);
@@ -372,21 +359,21 @@ bool ExtensionActionFunction::ExtractDataFromArguments() {
     return true;
 
   switch (first_arg->GetType()) {
-    case base::Value::TYPE_INTEGER:
+    case base::Value::Type::INTEGER:
       CHECK(first_arg->GetAsInteger(&tab_id_));
       break;
 
-    case base::Value::TYPE_DICTIONARY: {
+    case base::Value::Type::DICTIONARY: {
       // Found the details argument.
       details_ = static_cast<base::DictionaryValue*>(first_arg);
       // Still need to check for the tabId within details.
       base::Value* tab_id_value = NULL;
       if (details_->Get("tabId", &tab_id_value)) {
         switch (tab_id_value->GetType()) {
-          case base::Value::TYPE_NULL:
+          case base::Value::Type::NONE:
             // OK; tabId is optional, leave it default.
             return true;
-          case base::Value::TYPE_INTEGER:
+          case base::Value::Type::INTEGER:
             CHECK(tab_id_value->GetAsInteger(&tab_id_));
             return true;
           default:
@@ -398,7 +385,7 @@ bool ExtensionActionFunction::ExtractDataFromArguments() {
       break;
     }
 
-    case base::Value::TYPE_NULL:
+    case base::Value::Type::NONE:
       // The tabId might be an optional argument.
       break;
 
@@ -502,7 +489,7 @@ ExtensionActionSetBadgeBackgroundColorFunction::RunExtensionAction() {
   base::Value* color_value = NULL;
   EXTENSION_FUNCTION_VALIDATE(details_->Get("color", &color_value));
   SkColor color = 0;
-  if (color_value->IsType(base::Value::TYPE_LIST)) {
+  if (color_value->IsType(base::Value::Type::LIST)) {
     base::ListValue* list = NULL;
     EXTENSION_FUNCTION_VALIDATE(details_->GetList("color", &list));
     EXTENSION_FUNCTION_VALIDATE(list->GetSize() == 4);
@@ -514,7 +501,7 @@ ExtensionActionSetBadgeBackgroundColorFunction::RunExtensionAction() {
 
     color = SkColorSetARGB(color_array[3], color_array[0],
                            color_array[1], color_array[2]);
-  } else if (color_value->IsType(base::Value::TYPE_STRING)) {
+  } else if (color_value->IsType(base::Value::Type::STRING)) {
     std::string color_string;
     EXTENSION_FUNCTION_VALIDATE(details_->GetString("color", &color_string));
     if (!image_util::ParseCssColorString(color_string, &color))
@@ -528,20 +515,20 @@ ExtensionActionSetBadgeBackgroundColorFunction::RunExtensionAction() {
 
 ExtensionFunction::ResponseAction
 ExtensionActionGetTitleFunction::RunExtensionAction() {
-  return RespondNow(OneArgument(base::MakeUnique<base::StringValue>(
-      extension_action_->GetTitle(tab_id_))));
+  return RespondNow(OneArgument(
+      base::MakeUnique<base::Value>(extension_action_->GetTitle(tab_id_))));
 }
 
 ExtensionFunction::ResponseAction
 ExtensionActionGetPopupFunction::RunExtensionAction() {
-  return RespondNow(OneArgument(base::MakeUnique<base::StringValue>(
+  return RespondNow(OneArgument(base::MakeUnique<base::Value>(
       extension_action_->GetPopupUrl(tab_id_).spec())));
 }
 
 ExtensionFunction::ResponseAction
 ExtensionActionGetBadgeTextFunction::RunExtensionAction() {
-  return RespondNow(OneArgument(base::MakeUnique<base::StringValue>(
-      extension_action_->GetBadgeText(tab_id_))));
+  return RespondNow(OneArgument(
+      base::MakeUnique<base::Value>(extension_action_->GetBadgeText(tab_id_))));
 }
 
 ExtensionFunction::ResponseAction
@@ -600,7 +587,7 @@ bool BrowserActionOpenPopupFunction::RunAsync() {
   // instance around until a notification is observed.
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE,
-      base::Bind(&BrowserActionOpenPopupFunction::OpenPopupTimedOut, this),
+      base::BindOnce(&BrowserActionOpenPopupFunction::OpenPopupTimedOut, this),
       base::TimeDelta::FromSeconds(10));
   return true;
 }

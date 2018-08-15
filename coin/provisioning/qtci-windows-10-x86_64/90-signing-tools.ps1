@@ -41,4 +41,4 @@ $destination = "C:\Windows\temp\sign.zip"
 
 Download $url $url $destination
 Extract-Zip "$destination" "C:\Utils"
-Remove-Item -Path "$destination"
+Remove-Item "$destination"

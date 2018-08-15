@@ -78,6 +78,13 @@ QThreadData::~QThreadData()
        QThreadData::clearCurrentThreadData();
     }
 
+    // ~QThread() sets thread to nullptr, so if it isn't null here, it's
+    // because we're being run before the main object itself. This can only
+    // happen for QAdoptedThread. Note that both ~QThreadPrivate() and
+    // ~QObjectPrivate() will deref this object again, but that is acceptable
+    // because this destructor is still running (the _ref sub-object has not
+    // been destroyed) and there's no reentrancy. The refcount will become
+    // negative, but that's acceptable.
     QThread *t = thread;
     thread = 0;
     delete t;
@@ -291,7 +298,7 @@ QThreadPrivate::~QThreadPrivate()
     \fn int QThread::idealThreadCount()
 
     Returns the ideal number of threads that can be run on the system. This is done querying
-    the number of processor cores, both real and logical, in the system. This function returns -1
+    the number of processor cores, both real and logical, in the system. This function returns 1
     if the number of processor cores could not be detected.
 */
 
@@ -879,6 +886,75 @@ bool QThread::isInterruptionRequested() const
         return false;
     return d->interruptionRequested;
 }
+
+/*
+    \fn template <typename Function, typename Args...> static QThread *QThread::create(Function &&f, Args &&... args)
+    \since 5.10
+
+    Creates a new QThread object that will execute the function \a f with the
+    arguments \a args.
+
+    The new thread is not started -- it must be started by an explicit call
+    to start(). This allows you to connect to its signals, move QObjects
+    to the thread, choose the new thread's priority and so on. The function
+    \a f will be called in the new thread.
+
+    Returns the newly created QThread instance.
+
+    \note the caller acquires ownership of the returned QThread instance.
+
+    \note this function is only available when using C++17.
+
+    \warning do not call start() on the returned QThread instance more than once;
+    doing so will result in undefined behavior.
+
+    \sa start()
+*/
+
+/*
+    \fn template <typename Function> static QThread *QThread::create(Function &&f)
+    \since 5.10
+
+    Creates a new QThread object that will execute the function \a f.
+
+    The new thread is not started -- it must be started by an explicit call
+    to start(). This allows you to connect to its signals, move QObjects
+    to the thread, choose the new thread's priority and so on. The function
+    \a f will be called in the new thread.
+
+    Returns the newly created QThread instance.
+
+    \note the caller acquires ownership of the returned QThread instance.
+
+    \warning do not call start() on the returned QThread instance more than once;
+    doing so will result in undefined behavior.
+
+    \sa start()
+*/
+
+#if QT_CONFIG(cxx11_future)
+class QThreadCreateThread : public QThread
+{
+public:
+    explicit QThreadCreateThread(std::future<void> &&future)
+        : m_future(std::move(future))
+    {
+    }
+
+private:
+    void run() override
+    {
+        m_future.get();
+    }
+
+    std::future<void> m_future;
+};
+
+QThread *QThread::createThreadImpl(std::future<void> &&future)
+{
+    return new QThreadCreateThread(std::move(future));
+}
+#endif // QT_CONFIG(cxx11_future)
 
 /*!
     \class QDaemonThread

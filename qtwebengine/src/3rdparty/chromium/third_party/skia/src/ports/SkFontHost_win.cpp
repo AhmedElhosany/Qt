@@ -259,18 +259,21 @@ protected:
     SkScalerContext* onCreateScalerContext(const SkScalerContextEffects&,
                                            const SkDescriptor*) const override;
     void onFilterRec(SkScalerContextRec*) const override;
-    SkAdvancedTypefaceMetrics* onGetAdvancedTypefaceMetrics(
-                                PerGlyphInfo, const uint32_t*, uint32_t) const override;
+    std::unique_ptr<SkAdvancedTypefaceMetrics> onGetAdvancedMetrics() const override;
     void onGetFontDescriptor(SkFontDescriptor*, bool*) const override;
-    virtual int onCharsToGlyphs(const void* chars, Encoding encoding,
-                                uint16_t glyphs[], int glyphCount) const override;
+    int onCharsToGlyphs(const void* chars, Encoding encoding,
+                        uint16_t glyphs[], int glyphCount) const override;
     int onCountGlyphs() const override;
     int onGetUPEM() const override;
     void onGetFamilyName(SkString* familyName) const override;
     SkTypeface::LocalizedStrings* onCreateFamilyNameIterator() const override;
+    int onGetVariationDesignPosition(SkFontArguments::VariationPosition::Coordinate coordinates[],
+                                     int coordinateCount) const override
+    {
+        return -1;
+    }
     int onGetTableTags(SkFontTableTag tags[]) const override;
-    virtual size_t onGetTableData(SkFontTableTag, size_t offset,
-                                  size_t length, void* data) const override;
+    size_t onGetTableData(SkFontTableTag, size_t offset, size_t length, void* data) const override;
 };
 
 class FontMemResourceTypeface : public LogFontTypeface {
@@ -1005,7 +1008,7 @@ void SkScalerContext_GDI::generateFontMetrics(SkPaint::FontMetrics* metrics) {
     metrics->fUnderlineThickness = SkIntToScalar(otm.otmsUnderscoreSize);
     metrics->fUnderlinePosition = -SkIntToScalar(otm.otmsUnderscorePosition);
 
-    metrics->fFlags |= SkPaint::FontMetrics::kUnderlineThinknessIsValid_Flag;
+    metrics->fFlags |= SkPaint::FontMetrics::kUnderlineThicknessIsValid_Flag;
     metrics->fFlags |= SkPaint::FontMetrics::kUnderlinePositionIsValid_Flag;
 
     metrics->fXHeight = SkIntToScalar(otm.otmsXHeight);
@@ -1721,12 +1724,9 @@ void LogFontTypeface::onGetFontDescriptor(SkFontDescriptor* desc,
     *isLocalStream = this->fSerializeAsStream;
 }
 
-SkAdvancedTypefaceMetrics* LogFontTypeface::onGetAdvancedTypefaceMetrics(
-        PerGlyphInfo perGlyphInfo,
-        const uint32_t* glyphIDs,
-        uint32_t glyphIDsCount) const {
+std::unique_ptr<SkAdvancedTypefaceMetrics> LogFontTypeface::onGetAdvancedMetrics() const {
     LOGFONT lf = fLogFont;
-    SkAdvancedTypefaceMetrics* info = nullptr;
+    std::unique_ptr<SkAdvancedTypefaceMetrics> info(nullptr);
 
     HDC hdc = CreateCompatibleDC(nullptr);
     HFONT font = CreateFontIndirect(&lf);
@@ -1756,9 +1756,7 @@ SkAdvancedTypefaceMetrics* LogFontTypeface::onGetAdvancedTypefaceMetrics(
     }
     glyphCount = calculateGlyphCount(hdc, fLogFont);
 
-    info = new SkAdvancedTypefaceMetrics;
-    info->fEmSize = otm.otmEMSquare;
-    info->fLastGlyphID = SkToU16(glyphCount - 1);
+    info.reset(new SkAdvancedTypefaceMetrics);
     tchar_to_skstring(lf.lfFaceName, &info->fFontName);
     // If bit 1 is set, the font may not be embedded in a document.
     // If bit 1 is clear, the font can be embedded.
@@ -1767,9 +1765,7 @@ SkAdvancedTypefaceMetrics* LogFontTypeface::onGetAdvancedTypefaceMetrics(
         info->fFlags |= SkAdvancedTypefaceMetrics::kNotEmbeddable_FontFlag;
     }
 
-    if (perGlyphInfo & kToUnicode_PerGlyphInfo) {
-        populate_glyph_to_unicode(hdc, glyphCount, &(info->fGlyphToUnicode));
-    }
+    populate_glyph_to_unicode(hdc, glyphCount, &(info->fGlyphToUnicode));
 
     if (glyphCount > 0 &&
         (otm.otmTextMetrics.tmPitchAndFamily & TMPF_TRUETYPE)) {
@@ -2455,17 +2451,20 @@ protected:
 
     SkTypeface* onCreateFromStream(SkStreamAsset* bareStream, int ttcIndex) const override {
         std::unique_ptr<SkStreamAsset> stream(bareStream);
+        if (ttcIndex != 0) {
+            return nullptr;
+        }
         return create_from_stream(stream.get());
     }
 
     SkTypeface* onCreateFromData(SkData* data, int ttcIndex) const override {
         // could be in base impl
-        return this->createFromStream(new SkMemoryStream(sk_ref_sp(data)));
+        return this->createFromStream(new SkMemoryStream(sk_ref_sp(data)), ttcIndex);
     }
 
     SkTypeface* onCreateFromFile(const char path[], int ttcIndex) const override {
         // could be in base impl
-        return this->createFromStream(SkStream::MakeFromFile(path).release());
+        return this->createFromStream(SkStream::MakeFromFile(path).release(), ttcIndex);
     }
 
     SkTypeface* onLegacyCreateTypeface(const char familyName[], SkFontStyle style) const override {
@@ -2487,6 +2486,6 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////
 
-SkFontMgr* SkFontMgr_New_GDI() { return new SkFontMgrGDI; }
+sk_sp<SkFontMgr> SkFontMgr_New_GDI() { return sk_make_sp<SkFontMgrGDI>(); }
 
 #endif//defined(SK_BUILD_FOR_WIN32)

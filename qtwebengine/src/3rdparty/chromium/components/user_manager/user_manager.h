@@ -17,17 +17,8 @@
 class AccountId;
 class PrefService;
 
-namespace base {
-class DictionaryValue;
-}
-
 namespace chromeos {
-class LoginState;
 class ScopedUserManagerEnabler;
-}
-
-namespace cryptohome {
-class AsyncMethodCaller;
 }
 
 namespace user_manager {
@@ -48,11 +39,23 @@ class USER_MANAGER_EXPORT UserManager {
     // Called when the local state preferences is changed.
     virtual void LocalStateChanged(UserManager* user_manager);
 
+    // Called when the image of the given user is changed.
+    virtual void OnUserImageChanged(const User& user);
+
+    // Called when the profile image download for the given user fails or
+    // user has the default profile image or no porfile image at all.
+    virtual void OnUserProfileImageUpdateFailed(const User& user);
+
+    // Called when the profile image for the given user is downloaded.
+    // |profile_image| contains the downloaded profile image.
+    virtual void OnUserProfileImageUpdated(const User& user,
+                                           const gfx::ImageSkia& profile_image);
+
    protected:
     virtual ~Observer();
   };
 
-  // TODO(nkostylev): Refactor and move this observer out of UserManager.
+  // TODO(xiyuan): Refactor and move this observer out of UserManager.
   // Observer interface that defines methods used to notify on user session /
   // active user state changes. Default implementation is empty.
   class UserSessionStateObserver {
@@ -171,6 +174,14 @@ class USER_MANAGER_EXPORT UserManager {
 
   // Invoked by session manager to inform session start.
   virtual void OnSessionStarted() = 0;
+
+  // Invoked once profile initialization has been completed. This allows various
+  // subsystems (for example, policy framework) to skip an expensive online
+  // initialization process, and also allows the signin screen to force an
+  // online signin if it knows that profile initialization has not yet
+  // completed. |user| is the User associated with the profile that has
+  // completed initialization.
+  virtual void OnProfileInitialized(User* user) = 0;
 
   // Removes the user from the device. Note, it will verify that the given user
   // isn't the owner, so calling this method for the owner will take no effect.
@@ -309,10 +320,18 @@ class USER_MANAGER_EXPORT UserManager {
   virtual void RemoveSessionStateObserver(UserSessionStateObserver* obs) = 0;
 
   virtual void NotifyLocalStateChanged() = 0;
+  virtual void NotifyUserImageChanged(const User& user) = 0;
+  virtual void NotifyUserProfileImageUpdateFailed(const User& user) = 0;
+  virtual void NotifyUserProfileImageUpdated(
+      const User& user,
+      const gfx::ImageSkia& profile_image) = 0;
 
   // Changes the child status and notifies observers.
   virtual void ChangeUserChildStatus(User* user, bool is_child) = 0;
 
+  // Resets this profile to be regarded as if it has never been initialized
+  // before. Used on profile wipe.
+  virtual void ResetProfileEverInitialized(const AccountId& account_id) = 0;
 
   // Returns true if supervised users allowed.
   virtual bool AreSupervisedUsersAllowed() const = 0;
@@ -385,6 +404,19 @@ class USER_MANAGER_EXPORT UserManager {
   // Sets UserManager instance to the given |user_manager|.
   // Returns the previous value of the instance.
   static UserManager* SetForTesting(UserManager* user_manager);
+};
+
+// TODO(xiyuan): Move this along with UserSessionStateObserver
+class USER_MANAGER_EXPORT ScopedUserSessionStateObserver {
+ public:
+  explicit ScopedUserSessionStateObserver(
+      UserManager::UserSessionStateObserver* observer);
+  ~ScopedUserSessionStateObserver();
+
+ private:
+  UserManager::UserSessionStateObserver* const observer_;
+
+  DISALLOW_COPY_AND_ASSIGN(ScopedUserSessionStateObserver);
 };
 
 }  // namespace user_manager

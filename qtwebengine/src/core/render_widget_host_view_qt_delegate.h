@@ -48,7 +48,6 @@
 QT_BEGIN_NAMESPACE
 class QCursor;
 class QEvent;
-class QKeyEvent;
 class QPainter;
 class QSGLayer;
 class QSGNode;
@@ -58,16 +57,9 @@ class QVariant;
 class QWindow;
 class QInputMethodEvent;
 
-#if (QT_VERSION < QT_VERSION_CHECK(5, 8, 0))
-class QSGImageNode;
-typedef QSGImageNode QSGInternalImageNode;
-class QSGSimpleTextureNode;
-typedef QSGSimpleTextureNode QSGTextureNode;
-#else
 class QSGInternalImageNode;
 class QSGImageNode;
 typedef QSGImageNode QSGTextureNode;
-#endif
 
 QT_END_NAMESPACE
 
@@ -86,7 +78,6 @@ public:
     virtual void windowChanged() = 0;
     virtual bool forwardEvent(QEvent *) = 0;
     virtual QVariant inputMethodQuery(Qt::InputMethodQuery query) = 0;
-    virtual bool handleShortcutOverrideEvent(QKeyEvent *event);
 };
 
 class QWEBENGINE_EXPORT RenderWidgetHostViewQtDelegate {
@@ -113,7 +104,7 @@ public:
     virtual void updateCursor(const QCursor &) = 0;
     virtual void resize(int width, int height) = 0;
     virtual void move(const QPoint &) = 0;
-    virtual void inputMethodStateChanged(bool editorVisible) = 0;
+    virtual void inputMethodStateChanged(bool editorVisible, bool passwordInput) = 0;
     virtual void setInputMethodHints(Qt::InputMethodHints hints) = 0;
     virtual void setClearColor(const QColor &color) = 0;
 };

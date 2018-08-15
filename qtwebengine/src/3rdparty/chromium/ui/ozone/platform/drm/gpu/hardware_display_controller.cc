@@ -10,16 +10,17 @@
 #include <utility>
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/native_pixmap.h"
 #include "ui/gfx/swap_result.h"
 #include "ui/ozone/platform/drm/gpu/crtc_controller.h"
 #include "ui/ozone/platform/drm/gpu/drm_buffer.h"
 #include "ui/ozone/platform/drm/gpu/drm_device.h"
 #include "ui/ozone/platform/drm/gpu/page_flip_request.h"
-#include "ui/ozone/public/native_pixmap.h"
 
 namespace ui {
 
@@ -76,32 +77,30 @@ void HardwareDisplayController::Disable() {
 
 void HardwareDisplayController::SchedulePageFlip(
     const OverlayPlaneList& plane_list,
-    const PageFlipCallback& callback) {
-  ActualSchedulePageFlip(plane_list, false /* test_only */, callback);
+    SwapCompletionOnceCallback callback) {
+  ActualSchedulePageFlip(plane_list, false /* test_only */,
+                         std::move(callback));
 }
 
 bool HardwareDisplayController::TestPageFlip(
     const OverlayPlaneList& plane_list) {
   return ActualSchedulePageFlip(plane_list, true /* test_only */,
-                                base::Bind(&EmptyFlipCallback));
+                                base::BindOnce(&EmptyFlipCallback));
 }
 
 bool HardwareDisplayController::ActualSchedulePageFlip(
     const OverlayPlaneList& plane_list,
     bool test_only,
-    const PageFlipCallback& callback) {
+    SwapCompletionOnceCallback callback) {
   TRACE_EVENT0("drm", "HDC::SchedulePageFlip");
 
   DCHECK(!is_disabled_);
 
   // Ignore requests with no planes to schedule.
   if (plane_list.empty()) {
-    callback.Run(gfx::SwapResult::SWAP_ACK);
+    std::move(callback).Run(gfx::SwapResult::SWAP_ACK);
     return true;
   }
-
-  scoped_refptr<PageFlipRequest> page_flip_request =
-      new PageFlipRequest(crtc_controllers_.size(), callback);
 
   OverlayPlaneList pending_planes = plane_list;
   std::sort(pending_planes.begin(), pending_planes.end(),
@@ -109,22 +108,25 @@ bool HardwareDisplayController::ActualSchedulePageFlip(
               return l.z_order < r.z_order;
             });
   if (pending_planes.front().z_order != 0) {
-    callback.Run(gfx::SwapResult::SWAP_FAILED);
+    std::move(callback).Run(gfx::SwapResult::SWAP_FAILED);
     return false;
   }
+  scoped_refptr<PageFlipRequest> page_flip_request =
+      new PageFlipRequest(crtc_controllers_.size(), std::move(callback));
 
   for (const auto& planes : owned_hardware_planes_)
-    planes.first->plane_manager()->BeginFrame(planes.second);
+    planes.first->plane_manager()->BeginFrame(planes.second.get());
 
   bool status = true;
   for (const auto& controller : crtc_controllers_) {
     status &= controller->SchedulePageFlip(
-        owned_hardware_planes_.get(controller->drm().get()), pending_planes,
+        owned_hardware_planes_[controller->drm().get()].get(), pending_planes,
         test_only, page_flip_request);
   }
 
   for (const auto& planes : owned_hardware_planes_) {
-    if (!planes.first->plane_manager()->Commit(planes.second, test_only)) {
+    if (!planes.first->plane_manager()->Commit(planes.second.get(),
+                                               test_only)) {
       status = false;
     }
   }
@@ -200,15 +202,16 @@ bool HardwareDisplayController::MoveCursor(const gfx::Point& location) {
 void HardwareDisplayController::AddCrtc(
     std::unique_ptr<CrtcController> controller) {
   scoped_refptr<DrmDevice> drm = controller->drm();
-  owned_hardware_planes_.add(drm.get(),
-                             std::unique_ptr<HardwareDisplayPlaneList>(
-                                 new HardwareDisplayPlaneList()));
+
+  std::unique_ptr<HardwareDisplayPlaneList>& owned_planes =
+      owned_hardware_planes_[drm.get()];
+  if (!owned_planes)
+    owned_planes.reset(new HardwareDisplayPlaneList());
 
   // Check if this controller owns any planes and ensure we keep track of them.
   const std::vector<std::unique_ptr<HardwareDisplayPlane>>& all_planes =
       drm->plane_manager()->planes();
-  HardwareDisplayPlaneList* crtc_plane_list =
-      owned_hardware_planes_.get(drm.get());
+  HardwareDisplayPlaneList* crtc_plane_list = owned_planes.get();
   uint32_t crtc = controller->crtc();
   for (const auto& plane : all_planes) {
     if (plane->in_use() && (plane->owning_crtc() == crtc))
@@ -239,7 +242,7 @@ std::unique_ptr<CrtcController> HardwareDisplayController::RemoveCrtc(
       if (found) {
         std::vector<HardwareDisplayPlane*> all_planes;
         HardwareDisplayPlaneList* plane_list =
-            owned_hardware_planes_.get(drm.get());
+            owned_hardware_planes_[drm.get()].get();
         all_planes.swap(plane_list->old_plane_list);
         for (auto* plane : all_planes) {
           if (plane->owning_crtc() != crtc)

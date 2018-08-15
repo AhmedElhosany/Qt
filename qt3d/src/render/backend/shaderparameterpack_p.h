@@ -96,7 +96,7 @@ public:
     ~ShaderParameterPack();
 
     void setUniform(const int glslNameId, const UniformValue &val);
-    void setTexture(const int glslNameId, int uniformArrayIndex, Qt3DCore::QNodeId id);
+    void setTexture(const int glslNameId, Qt3DCore::QNodeId id);
     void setUniformBuffer(BlockToUBO blockToUBO);
     void setShaderStorageBuffer(BlockToSSBO blockToSSBO);
     void setSubmissionUniform(const ShaderUniform &uniform);
@@ -108,15 +108,13 @@ public:
     struct NamedTexture
     {
         NamedTexture() {}
-        NamedTexture(const int glslNameId, Qt3DCore::QNodeId texId, int uniformArrayIndex)
-            : glslNameId(glslNameId)
-            , texId(texId)
-            , uniformArrayIndex(uniformArrayIndex)
+        NamedTexture(const int nm, Qt3DCore::QNodeId t)
+            : glslNameId(nm)
+            , texId(t)
         { }
 
         int glslNameId;
         Qt3DCore::QNodeId texId;
-        int uniformArrayIndex;
     };
 
     inline QVector<NamedTexture> textures() const { return m_textures; }

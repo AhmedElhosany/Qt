@@ -55,8 +55,6 @@
 
 #include <algorithm>
 
-#include <Carbon/Carbon.h>
-
 QT_BEGIN_NAMESPACE
 
 Q_LOGGING_CATEGORY(lcQpaCocoaWindow, "qt.qpa.cocoa.window");
@@ -407,6 +405,7 @@ QT_END_NAMESPACE
     self.panelContents.needsDisplay = YES;
 
     self.needsDisplay = YES;
+    [super layout];
 }
 
 @end

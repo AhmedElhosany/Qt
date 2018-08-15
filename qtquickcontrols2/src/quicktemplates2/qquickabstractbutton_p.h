@@ -49,21 +49,27 @@
 //
 
 #include <QtQuickTemplates2/private/qquickcontrol_p.h>
+#include <QtQuickTemplates2/private/qquickicon_p.h>
 
 QT_BEGIN_NAMESPACE
 
+class QQuickAction;
 class QQuickAbstractButtonPrivate;
 
 class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickAbstractButton : public QQuickControl
 {
     Q_OBJECT
-    Q_PROPERTY(QString text READ text WRITE setText NOTIFY textChanged FINAL)
+    Q_PROPERTY(QString text READ text WRITE setText RESET resetText NOTIFY textChanged FINAL)
     Q_PROPERTY(bool down READ isDown WRITE setDown NOTIFY downChanged RESET resetDown FINAL)
     Q_PROPERTY(bool pressed READ isPressed NOTIFY pressedChanged FINAL)
     Q_PROPERTY(bool checked READ isChecked WRITE setChecked NOTIFY checkedChanged FINAL)
     Q_PROPERTY(bool checkable READ isCheckable WRITE setCheckable NOTIFY checkableChanged FINAL)
     Q_PROPERTY(bool autoExclusive READ autoExclusive WRITE setAutoExclusive NOTIFY autoExclusiveChanged FINAL)
     Q_PROPERTY(QQuickItem *indicator READ indicator WRITE setIndicator NOTIFY indicatorChanged FINAL)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(QQuickIcon icon READ icon WRITE setIcon NOTIFY iconChanged FINAL REVISION 3)
+    Q_PROPERTY(Display display READ display WRITE setDisplay NOTIFY displayChanged FINAL REVISION 3)
+    Q_PROPERTY(QQuickAction *action READ action WRITE setAction NOTIFY actionChanged FINAL REVISION 3)
     Q_CLASSINFO("DeferredPropertyNames", "background,contentItem,indicator")
 
 public:
@@ -72,6 +78,7 @@ public:
 
     QString text() const;
     void setText(const QString &text);
+    void resetText();
 
     bool isDown() const;
     void setDown(bool down);
@@ -95,6 +102,29 @@ public:
     QQuickItem *indicator() const;
     void setIndicator(QQuickItem *indicator);
 
+    // 2.3 (Qt 5.10)
+    QQuickIcon icon() const;
+    void setIcon(const QQuickIcon &icon);
+
+    enum Display {
+        IconOnly,
+        TextOnly,
+        TextBesideIcon,
+        TextUnderIcon
+    };
+    Q_ENUM(Display)
+
+    Display display() const;
+    void setDisplay(Display display);
+
+    QQuickAction *action() const;
+    void setAction(QQuickAction *action);
+
+#if QT_CONFIG(shortcut)
+    QKeySequence shortcut() const;
+    void setShortcut(const QKeySequence &shortcut);
+#endif
+
 public Q_SLOTS:
     void toggle();
 
@@ -114,18 +144,25 @@ Q_SIGNALS:
     void indicatorChanged();
     // 2.2 (Qt 5.9)
     Q_REVISION(2) void toggled();
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void iconChanged();
+    Q_REVISION(3) void displayChanged();
+    Q_REVISION(3) void actionChanged();
 
 protected:
     QQuickAbstractButton(QQuickAbstractButtonPrivate &dd, QQuickItem *parent);
 
     void componentComplete() override;
 
+    bool event(QEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void timerEvent(QTimerEvent *event) override;
+
+    void itemChange(ItemChange change, const ItemChangeData &value) override;
 
     enum ButtonChange {
         ButtonAutoRepeatChange,

@@ -13,18 +13,17 @@
 
 #include <map>
 
-#include "webrtc/base/deprecation.h"
 #include "webrtc/modules/rtp_rtcp/include/receive_statistics.h"
+#include "webrtc/modules/rtp_rtcp/include/rtp_header_extension_map.h"
 #include "webrtc/modules/rtp_rtcp/include/rtp_rtcp_defines.h"
-#include "webrtc/modules/rtp_rtcp/source/rtp_header_extension.h"
 #include "webrtc/modules/rtp_rtcp/source/rtp_rtcp_config.h"
+#include "webrtc/rtc_base/deprecation.h"
 #include "webrtc/typedefs.h"
 
 namespace webrtc {
 
 const uint8_t kRtpMarkerBitMask = 0x80;
 
-RtpData* NullObjectRtpData();
 RtpFeedback* NullObjectRtpFeedback();
 ReceiveStatistics* NullObjectReceiveStatistics();
 
@@ -35,8 +34,6 @@ struct Payload {
   bool audio;
   PayloadUnion typeSpecific;
 };
-
-typedef std::map<int8_t, Payload*> PayloadTypeMap;
 
 bool StringCompare(const char* str1, const char* str2, const uint32_t length);
 
@@ -58,9 +55,6 @@ class RtpHeaderParser {
                                    const RtpHeaderExtensionMap* ptrExtensionMap,
                                    const uint8_t* ptrRTPDataExtensionEnd,
                                    const uint8_t* ptr) const;
-
-  uint8_t ParsePaddingBytes(const uint8_t* ptrRTPDataExtensionEnd,
-                            const uint8_t* ptr) const;
 
   const uint8_t* const _ptrRTPDataBegin;
   const uint8_t* const _ptrRTPDataEnd;

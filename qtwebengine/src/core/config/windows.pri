@@ -4,7 +4,6 @@ gn_args += \
     is_clang=false \
     use_sysroot=false \
     use_kerberos=true \
-    enable_notifications=false \
     enable_session_service=false \
     ninja_use_custom_environment_files=false \
     is_multi_dll_chrome=false \
@@ -12,10 +11,20 @@ gn_args += \
 
 isDeveloperBuild() {
     gn_args += \
-        is_win_fastlink=true \
-        use_incremental_linking=true
+        is_win_fastlink=true
+
+    # Incremental linking doesn't work in release developer builds due to usage of /OPT:ICF
+    # by Chromium.
+    CONFIG(debug, debug|release) {
+        gn_args += \
+            use_incremental_linking=true
+    } else {
+        gn_args += \
+            use_incremental_linking=false
+    }
 } else {
     gn_args += \
+        is_win_fastlink=false \
         use_incremental_linking=false
 }
 

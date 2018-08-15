@@ -6,9 +6,8 @@
 
 #include <stddef.h>
 
-#include <algorithm>
-
 #include "base/bind.h"
+#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "tools/gn/config_values_extractors.h"
@@ -95,8 +94,7 @@ bool EnsureFileIsGeneratedByDependency(const Target* target,
       Toolchain::ToolType tool_type;
       if (!target->GetOutputFilesForSource(source, &tool_type, &source_outputs))
         continue;
-      if (std::find(source_outputs.begin(), source_outputs.end(), file) !=
-          source_outputs.end())
+      if (base::ContainsValue(source_outputs, file))
         return true;
     }
   }
@@ -275,8 +273,10 @@ Dependencies
   future, do not rely on this behavior.
 )";
 
-Target::Target(const Settings* settings, const Label& label)
-    : Item(settings, label),
+Target::Target(const Settings* settings,
+               const Label& label,
+               const InputFileSet& input_files)
+    : Item(settings, label, input_files),
       output_type_(UNKNOWN),
       output_prefix_override_(false),
       output_extension_set_(false),
@@ -285,8 +285,7 @@ Target::Target(const Settings* settings, const Label& label)
       complete_static_lib_(false),
       testonly_(false),
       create_pri_file_(false),
-      toolchain_(nullptr) {
-}
+      toolchain_(nullptr) {}
 
 Target::~Target() {
 }
@@ -353,8 +352,10 @@ bool Target::OnResolved(Err* err) {
   // private deps. This step re-exports them as public configs for targets that
   // depend on this one.
   for (const auto& dep : public_deps_) {
-    public_configs_.Append(dep.ptr->public_configs().begin(),
-                           dep.ptr->public_configs().end());
+    if (dep.ptr->toolchain() == toolchain()) {
+      public_configs_.Append(dep.ptr->public_configs().begin(),
+                             dep.ptr->public_configs().end());
+    }
   }
 
   // Copy our own libs and lib_dirs to the final set. This will be from our
@@ -503,10 +504,17 @@ bool Target::GetOutputFilesForSource(const SourceFile& source,
 }
 
 void Target::PullDependentTargetConfigs() {
-  for (const auto& pair : GetDeps(DEPS_LINKED))
-    MergeAllDependentConfigsFrom(pair.ptr, &configs_, &all_dependent_configs_);
-  for (const auto& pair : GetDeps(DEPS_LINKED))
-    MergePublicConfigsFrom(pair.ptr, &configs_);
+  for (const auto& pair : GetDeps(DEPS_LINKED)) {
+    if (pair.ptr->toolchain() == toolchain()) {
+      MergeAllDependentConfigsFrom(pair.ptr, &configs_,
+                                   &all_dependent_configs_);
+    }
+  }
+  for (const auto& pair : GetDeps(DEPS_LINKED)) {
+    if (pair.ptr->toolchain() == toolchain()) {
+      MergePublicConfigsFrom(pair.ptr, &configs_);
+    }
+  }
 }
 
 void Target::PullDependentTargetLibsFrom(const Target* dep, bool is_public) {

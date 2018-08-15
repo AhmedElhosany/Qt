@@ -10,8 +10,10 @@
 #include <memory>
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
+#include "components/bookmarks/browser/titled_url_node.h"
 #include "components/favicon_base/favicon_types.h"
 #include "ui/base/models/tree_node_model.h"
 #include "ui/gfx/image/image.h"
@@ -25,7 +27,7 @@ class BookmarkModel;
 
 // BookmarkNode contains information about a starred entry: title, URL, favicon,
 // id and type. BookmarkNodes are returned from BookmarkModel.
-class BookmarkNode : public ui::TreeNode<BookmarkNode> {
+class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
  public:
   enum Type {
     URL,
@@ -68,7 +70,7 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode> {
 
   // Returns the favicon's URL. Returns an empty URL if there is no favicon
   // associated with this bookmark.
-  const GURL& icon_url() const { return icon_url_; }
+  const GURL* icon_url() const { return icon_url_ ? icon_url_.get() : nullptr; }
 
   Type type() const { return type_; }
   void set_type(Type type) { type_ = type; }
@@ -115,6 +117,10 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode> {
   }
   int64_t sync_transaction_version() const { return sync_transaction_version_; }
 
+  // TitledUrlNode interface methods.
+  const base::string16& GetTitledUrlNodeTitle() const override;
+  const GURL& GetTitledUrlNodeUrl() const override;
+
   // TODO(sky): Consider adding last visit time here, it'll greatly simplify
   // HistoryContentsProvider.
 
@@ -129,7 +135,7 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode> {
 
   // Sets the favicon's URL.
   void set_icon_url(const GURL& icon_url) {
-    icon_url_ = icon_url;
+    icon_url_ = base::MakeUnique<GURL>(icon_url);
   }
 
   // Returns the favicon. In nearly all cases you should use the method
@@ -174,7 +180,7 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode> {
   favicon_base::IconType favicon_type_;
 
   // The URL of the node's favicon.
-  GURL icon_url_;
+  std::unique_ptr<GURL> icon_url_;
 
   // The loading state of the favicon.
   FaviconState favicon_state_;

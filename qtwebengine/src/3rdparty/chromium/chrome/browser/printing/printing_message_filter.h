@@ -12,6 +12,7 @@
 
 #include "base/macros.h"
 #include "build/build_config.h"
+#include "components/keyed_service/core/keyed_service_shutdown_notifier.h"
 #include "components/prefs/pref_member.h"
 #include "content/public/browser/browser_message_filter.h"
 #include "printing/features/features.h"
@@ -40,10 +41,18 @@ class PrintingMessageFilter : public content::BrowserMessageFilter {
   // content::BrowserMessageFilter methods.
   void OverrideThreadForMessage(const IPC::Message& message,
                                 content::BrowserThread::ID* thread) override;
+
   bool OnMessageReceived(const IPC::Message& message) override;
 
  private:
+  friend class base::DeleteHelper<PrintingMessageFilter>;
+  friend class content::BrowserThread;
+
   ~PrintingMessageFilter() override;
+
+  void OnDestruct() const override;
+
+  void ShutdownOnUIThread();
 
 #if defined(OS_ANDROID)
   // Used to ask the browser allocate a temporary file for the renderer
@@ -51,7 +60,9 @@ class PrintingMessageFilter : public content::BrowserMessageFilter {
   void OnAllocateTempFileForPrinting(int render_frame_id,
                                      base::FileDescriptor* temp_file_fd,
                                      int* sequence_number);
-  void OnTempFileForPrintingWritten(int render_frame_id, int sequence_number);
+  void OnTempFileForPrintingWritten(int render_frame_id,
+                                    int sequence_number,
+                                    int page_count);
 
   // Updates the file descriptor for the PrintViewManagerBasic of a given
   // |render_frame_id|.
@@ -87,8 +98,10 @@ class PrintingMessageFilter : public content::BrowserMessageFilter {
                         bool* cancel);
 #endif
 
-  std::unique_ptr<BooleanPrefMember, content::BrowserThread::DeleteOnUIThread>
-      is_printing_enabled_;
+  std::unique_ptr<KeyedServiceShutdownNotifier::Subscription>
+      printing_shutdown_notifier_;
+
+  BooleanPrefMember is_printing_enabled_;
 
   const int render_process_id_;
 

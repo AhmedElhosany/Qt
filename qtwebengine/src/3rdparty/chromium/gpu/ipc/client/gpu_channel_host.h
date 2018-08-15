@@ -13,21 +13,20 @@
 #include <vector>
 
 #include "base/atomic_sequence_num.h"
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/process.h"
+#include "base/single_thread_task_runner.h"
 #include "base/synchronization/lock.h"
 #include "gpu/config/gpu_info.h"
 #include "gpu/gpu_export.h"
-#include "gpu/ipc/common/gpu_stream_constants.h"
 #include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ipc/message_filter.h"
 #include "ipc/message_router.h"
-#include "ui/events/latency_info.h"
 #include "ui/gfx/gpu_memory_buffer.h"
+#include "ui/latency/latency_info.h"
 
 namespace base {
 class WaitableEvent;
@@ -42,7 +41,7 @@ class GpuMemoryBufferManager;
 }
 
 namespace gpu {
-
+struct SyncToken;
 class GpuChannelHost;
 using GpuChannelEstablishedCallback =
     base::Callback<void(scoped_refptr<GpuChannelHost>)>;
@@ -107,6 +106,7 @@ class GPU_EXPORT GpuChannelHost
                            int32_t put_offset,
                            uint32_t flush_count,
                            const std::vector<ui::LatencyInfo>& latency_info,
+                           const std::vector<SyncToken>& sync_token_fences,
                            bool put_offset_changed,
                            bool do_flush,
                            uint32_t* highest_verified_flush_id);
@@ -139,26 +139,16 @@ class GPU_EXPORT GpuChannelHost
   // GPU process. The caller is responsible for ensuring it is closed. Returns
   // an invalid handle on failure.
   base::SharedMemoryHandle ShareToGpuProcess(
-      base::SharedMemoryHandle source_handle);
+      const base::SharedMemoryHandle& source_handle);
 
   // Reserve one unused transfer buffer ID.
   int32_t ReserveTransferBufferId();
-
-  // Returns a GPU memory buffer handle to the buffer that can be sent via
-  // IPC to the GPU process. The caller is responsible for ensuring it is
-  // closed. Returns an invalid handle on failure.
-  gfx::GpuMemoryBufferHandle ShareGpuMemoryBufferToGpuProcess(
-      const gfx::GpuMemoryBufferHandle& source_handle,
-      bool* requires_sync_point);
 
   // Reserve one unused image ID.
   int32_t ReserveImageId();
 
   // Generate a route ID guaranteed to be unique for this channel.
   int32_t GenerateRouteID();
-
-  // Generate a stream ID guaranteed to be unique for this channel.
-  int32_t GenerateStreamID();
 
   // Sends a synchronous nop to the server which validate that all previous IPC
   // messages have been received. Once the synchronous nop has been sent to the
@@ -240,6 +230,7 @@ class GPU_EXPORT GpuChannelHost
     uint32_t flush_count;
     uint32_t flush_id;
     std::vector<ui::LatencyInfo> latency_info;
+    std::vector<SyncToken> sync_token_fences;
   };
 
   GpuChannelHost(GpuChannelHostFactory* factory,
@@ -256,7 +247,6 @@ class GPU_EXPORT GpuChannelHost
   // except:
   // - |next_image_id_|, atomic type
   // - |next_route_id_|, atomic type
-  // - |next_stream_id_|, atomic type
   // - |channel_| and |stream_flush_info_|, protected by |context_lock_|
   GpuChannelHostFactory* const factory_;
 
@@ -275,9 +265,6 @@ class GPU_EXPORT GpuChannelHost
 
   // Route IDs are allocated in sequence.
   base::AtomicSequenceNumber next_route_id_;
-
-  // Stream IDs are allocated in sequence.
-  base::AtomicSequenceNumber next_stream_id_;
 
   // Protects channel_ and stream_flush_info_.
   mutable base::Lock context_lock_;

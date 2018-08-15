@@ -11,6 +11,7 @@
 
 #include "gpu/command_buffer/common/mailbox.h"
 #include "media/base/media_export.h"
+#include "media/base/video_types.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -30,11 +31,15 @@ class MEDIA_EXPORT PictureBuffer {
   PictureBuffer(int32_t id,
                 const gfx::Size& size,
                 const TextureIds& client_texture_ids,
-                const TextureIds& service_texture_ids);
+                const TextureIds& service_texture_ids,
+                uint32_t texture_target,
+                VideoPixelFormat pixel_format);
   PictureBuffer(int32_t id,
                 const gfx::Size& size,
                 const TextureIds& client_texture_ids,
-                const std::vector<gpu::Mailbox>& texture_mailboxes);
+                const std::vector<gpu::Mailbox>& texture_mailboxes,
+                uint32_t texture_target,
+                VideoPixelFormat pixel_format);
   PictureBuffer(const PictureBuffer& other);
   ~PictureBuffer();
 
@@ -53,6 +58,10 @@ class MEDIA_EXPORT PictureBuffer {
   // |client_texture_ids|.
   const TextureIds& service_texture_ids() const { return service_texture_ids_; }
 
+  uint32_t texture_target() const { return texture_target_; }
+
+  VideoPixelFormat pixel_format() const { return pixel_format_; }
+
   gpu::Mailbox texture_mailbox(size_t plane) const;
 
  private:
@@ -61,6 +70,8 @@ class MEDIA_EXPORT PictureBuffer {
   TextureIds client_texture_ids_;
   TextureIds service_texture_ids_;
   std::vector<gpu::Mailbox> texture_mailboxes_;
+  uint32_t texture_target_ = 0;
+  VideoPixelFormat pixel_format_ = PIXEL_FORMAT_UNKNOWN;
 };
 
 // A decoded picture frame.
@@ -74,6 +85,8 @@ class MEDIA_EXPORT Picture {
           const gfx::Rect& visible_rect,
           const gfx::ColorSpace& color_space,
           bool allow_overlay);
+  Picture(const Picture&);
+  ~Picture();
 
   // Returns the id of the picture buffer where this picture is contained.
   int32_t picture_buffer_id() const { return picture_buffer_id_; }
@@ -103,6 +116,18 @@ class MEDIA_EXPORT Picture {
 
   void set_size_changed(bool size_changed) { size_changed_ = size_changed; }
 
+  bool surface_texture() const { return surface_texture_; }
+
+  void set_surface_texture(bool surface_texture) {
+    surface_texture_ = surface_texture;
+  }
+
+  bool wants_promotion_hint() const { return wants_promotion_hint_; }
+
+  void set_wants_promotion_hint(bool wants_promotion_hint) {
+    wants_promotion_hint_ = wants_promotion_hint;
+  }
+
  private:
   int32_t picture_buffer_id_;
   int32_t bitstream_buffer_id_;
@@ -110,6 +135,8 @@ class MEDIA_EXPORT Picture {
   gfx::ColorSpace color_space_;
   bool allow_overlay_;
   bool size_changed_;
+  bool surface_texture_;
+  bool wants_promotion_hint_;
 };
 
 }  // namespace media

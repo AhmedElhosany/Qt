@@ -49,12 +49,6 @@
 
 QT_BEGIN_NAMESPACE
 
-namespace {
-    typedef QList<DomWidgetData*> DomWidgetDataList;
-    typedef QList<DomProperty*> DomPropertyList;
-    typedef QList<QDesignerCustomWidgetInterface *> CustomWidgetInterfaces;
-}
-
 namespace qdesigner_internal {
 
 bool QSimpleResource::m_warningsEnabled = true;
@@ -82,35 +76,6 @@ QBrush QSimpleResource::setupBrush(DomBrush *brush)
 DomBrush *QSimpleResource::saveBrush(const QBrush &brush)
 {
     return QAbstractFormBuilder::saveBrush(brush);
-}
-
-DomScript *QSimpleResource::createScript(const QString &script, ScriptSource source)
-{
-    if (script.isEmpty())
-        return 0;
-    DomScript *domScript = new DomScript();
-    switch (source) {
-    case ScriptExtension:
-        domScript->setAttributeSource(QStringLiteral("extension"));
-        break;
-    case ScriptDesigner:
-        domScript->setAttributeSource(QStringLiteral("designer"));
-        break;
-    case ScriptCustomWidgetPlugin:
-        domScript->setAttributeSource(QStringLiteral("customwidgetplugin"));
-        break;
-    }
-    domScript->setAttributeLanguage(QStringLiteral("Qt Script"));
-    domScript->setText(script);
-    return domScript;
-}
-
-// Add a script to a list of DomScripts unless empty
-void QSimpleResource::addScript(const QString &script, ScriptSource source, DomScripts &domScripts)
-{
-    if (DomScript *domScript = createScript(script, source)) {
-        domScripts += domScript;
-    }
 }
 
 void QSimpleResource::addExtensionDataToDOM(QAbstractFormBuilder * /* afb */,
@@ -194,7 +159,7 @@ void QSimpleResource::addFakeMethodsToWidgetDataBase(const DomCustomWidget *domC
 // Classes whose base class could not be found are left in the list.
 
 void QSimpleResource::addCustomWidgetsToWidgetDatabase(const QDesignerFormEditorInterface *core,
-                                                       QList<DomCustomWidget*>& custom_widget_list)
+                                                       QVector<DomCustomWidget *> &custom_widget_list)
 {
     QDesignerWidgetDataBaseInterface *db = core->widgetDataBase();
     for (int i=0; i < custom_widget_list.size(); ) {
@@ -256,7 +221,7 @@ void QSimpleResource::handleDomCustomWidgets(const QDesignerFormEditorInterface 
 {
     if (dom_custom_widgets == 0)
         return;
-    QList<DomCustomWidget*> custom_widget_list = dom_custom_widgets->elementCustomWidget();
+    auto custom_widget_list = dom_custom_widgets->elementCustomWidget();
     // Attempt to insert each item derived from its base class.
     // This should at most require two iterations in the event that the classes are out of order
     // (derived first, max depth: promoted custom plugin = 2)

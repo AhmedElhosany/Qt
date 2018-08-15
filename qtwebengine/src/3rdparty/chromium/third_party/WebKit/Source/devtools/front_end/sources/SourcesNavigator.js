@@ -57,9 +57,8 @@ Sources.SourcesNavigatorView = class extends Sources.NavigatorView {
     var inspectedURL = mainTarget && mainTarget.inspectedURL();
     if (!inspectedURL)
       return;
-    for (var node of this._uiSourceCodeNodes.valuesArray()) {
-      var uiSourceCode = node.uiSourceCode();
-      if (uiSourceCode.url() === inspectedURL)
+    for (var uiSourceCode of this.workspace().uiSourceCodes()) {
+      if (this.accept(uiSourceCode) && uiSourceCode.url() === inspectedURL)
         this.revealUISourceCode(uiSourceCode, true);
     }
   }
@@ -116,9 +115,8 @@ Sources.NetworkNavigatorView = class extends Sources.NavigatorView {
     var inspectedURL = mainTarget && mainTarget.inspectedURL();
     if (!inspectedURL)
       return;
-    for (var node of this._uiSourceCodeNodes.valuesArray()) {
-      var uiSourceCode = node.uiSourceCode();
-      if (uiSourceCode.url() === inspectedURL)
+    for (var uiSourceCode of this.workspace().uiSourceCodes()) {
+      if (this.accept(uiSourceCode) && uiSourceCode.url() === inspectedURL)
         this.revealUISourceCode(uiSourceCode, true);
     }
   }
@@ -146,9 +144,10 @@ Sources.FilesNavigatorView = class extends Sources.NavigatorView {
     var toolbar = new UI.Toolbar('navigator-toolbar');
     var title = Common.UIString('Add folder to workspace');
     var addButton = new UI.ToolbarButton(title, 'largeicon-add', title);
-    addButton.addEventListener('click', () => Workspace.isolatedFileSystemManager.addFileSystem());
+    addButton.addEventListener(
+        UI.ToolbarButton.Events.Click, () => Persistence.isolatedFileSystemManager.addFileSystem());
     toolbar.appendToolbarItem(addButton);
-    this.element.insertBefore(toolbar.element, this.element.firstChild);
+    this.contentElement.insertBefore(toolbar.element, this.contentElement.firstChild);
   }
 
   /**
@@ -196,10 +195,10 @@ Sources.SnippetsNavigatorView = class extends Sources.NavigatorView {
   constructor() {
     super();
     var toolbar = new UI.Toolbar('navigator-toolbar');
-    var newButton = new UI.ToolbarButton('', 'largeicon-add', Common.UIString('New Snippet'));
-    newButton.addEventListener('click', this._handleCreateSnippet.bind(this));
+    var newButton = new UI.ToolbarButton('', 'largeicon-add', Common.UIString('New snippet'));
+    newButton.addEventListener(UI.ToolbarButton.Events.Click, this._handleCreateSnippet.bind(this));
     toolbar.appendToolbarItem(newButton);
-    this.element.insertBefore(toolbar.element, this.element.firstChild);
+    this.contentElement.insertBefore(toolbar.element, this.contentElement.firstChild);
   }
 
   /**
@@ -224,12 +223,13 @@ Sources.SnippetsNavigatorView = class extends Sources.NavigatorView {
   /**
    * @override
    * @param {!Event} event
-   * @param {!Workspace.UISourceCode} uiSourceCode
+   * @param {!Sources.NavigatorUISourceCodeTreeNode} node
    */
-  handleFileContextMenu(event, uiSourceCode) {
+  handleFileContextMenu(event, node) {
+    var uiSourceCode = node.uiSourceCode();
     var contextMenu = new UI.ContextMenu(event);
     contextMenu.appendItem(Common.UIString('Run'), this._handleEvaluateSnippet.bind(this, uiSourceCode));
-    contextMenu.appendItem(Common.UIString('Rename'), this.rename.bind(this, uiSourceCode));
+    contextMenu.appendItem(Common.UIString('Rename'), this.rename.bind(this, node));
     contextMenu.appendItem(Common.UIString('Remove'), this._handleRemoveSnippet.bind(this, uiSourceCode));
     contextMenu.appendSeparator();
     contextMenu.appendItem(Common.UIString('New'), this._handleCreateSnippet.bind(this));
@@ -243,7 +243,7 @@ Sources.SnippetsNavigatorView = class extends Sources.NavigatorView {
    */
   _handleEvaluateSnippet(uiSourceCode) {
     var executionContext = UI.context.flavor(SDK.ExecutionContext);
-    if (uiSourceCode.project().type() !== Workspace.projectTypes.Snippets || !executionContext)
+    if (!executionContext)
       return;
     Snippets.scriptSnippetModel.evaluateScriptSnippet(executionContext, uiSourceCode);
   }
@@ -275,5 +275,29 @@ Sources.SnippetsNavigatorView = class extends Sources.NavigatorView {
    */
   sourceDeleted(uiSourceCode) {
     this._handleRemoveSnippet(uiSourceCode);
+  }
+};
+
+/**
+ * @implements {UI.ActionDelegate}
+ */
+Sources.SourcesNavigatorView.CreatingActionDelegate = class {
+  /**
+   * @override
+   * @param {!UI.Context} context
+   * @param {string} actionId
+   * @return {boolean}
+   */
+  handleAction(context, actionId) {
+    switch (actionId) {
+      case 'sources.create-snippet':
+        var uiSourceCode = Snippets.scriptSnippetModel.createScriptSnippet('');
+        Common.Revealer.reveal(uiSourceCode);
+        return true;
+      case 'sources.add-folder-to-workspace':
+        Persistence.isolatedFileSystemManager.addFileSystem();
+        return true;
+    }
+    return false;
   }
 };

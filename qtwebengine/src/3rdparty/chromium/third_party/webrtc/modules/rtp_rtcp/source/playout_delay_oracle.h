@@ -11,11 +11,12 @@
 #ifndef WEBRTC_MODULES_RTP_RTCP_SOURCE_PLAYOUT_DELAY_ORACLE_H_
 #define WEBRTC_MODULES_RTP_RTCP_SOURCE_PLAYOUT_DELAY_ORACLE_H_
 
-#include "webrtc/base/basictypes.h"
-#include "webrtc/base/criticalsection.h"
-#include "webrtc/base/thread_annotations.h"
+#include <stdint.h>
+
 #include "webrtc/modules/include/module_common_types.h"
 #include "webrtc/modules/rtp_rtcp/include/rtp_rtcp_defines.h"
+#include "webrtc/rtc_base/criticalsection.h"
+#include "webrtc/rtc_base/thread_annotations.h"
 
 namespace webrtc {
 

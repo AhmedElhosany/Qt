@@ -332,9 +332,8 @@ std::unique_ptr<base::SharedMemory> UserScriptLoader::Serialize(
   // Copy the pickle to shared memory.
   memcpy(shared_memory.memory(), pickle.data(), pickle.size());
 
-  base::SharedMemoryHandle readonly_handle;
-  if (!shared_memory.ShareReadOnlyToProcess(base::GetCurrentProcessHandle(),
-                                            &readonly_handle))
+  base::SharedMemoryHandle readonly_handle = shared_memory.GetReadOnlyHandle();
+  if (!readonly_handle.IsValid())
     return std::unique_ptr<base::SharedMemory>();
 
   return base::MakeUnique<base::SharedMemory>(readonly_handle,
@@ -359,7 +358,7 @@ void UserScriptLoader::SetReady(bool ready) {
 void UserScriptLoader::OnScriptsLoaded(
     std::unique_ptr<UserScriptList> user_scripts,
     std::unique_ptr<base::SharedMemory> shared_memory) {
-  user_scripts_.reset(user_scripts.release());
+  user_scripts_ = std::move(user_scripts);
   if (pending_load_) {
     // While we were loading, there were further changes. Don't bother
     // notifying about these scripts and instead just immediately reload.
@@ -381,7 +380,7 @@ void UserScriptLoader::OnScriptsLoaded(
   }
 
   // We've got scripts ready to go.
-  shared_memory_.reset(shared_memory.release());
+  shared_memory_ = std::move(shared_memory);
 
   for (content::RenderProcessHost::iterator i(
            content::RenderProcessHost::AllHostsIterator());
@@ -417,14 +416,13 @@ void UserScriptLoader::SendUpdate(content::RenderProcessHost* process,
   if (!handle)
     return;
 
-  base::SharedMemoryHandle handle_for_process;
-  if (!shared_memory->ShareToProcess(handle, &handle_for_process))
-    return;  // This can legitimately fail if the renderer asserts at startup.
+  base::SharedMemoryHandle handle_for_process =
+      shared_memory->handle().Duplicate();
+  if (!handle_for_process.IsValid())
+    return;
 
-  if (base::SharedMemory::IsHandleValid(handle_for_process)) {
-    process->Send(new ExtensionMsg_UpdateUserScripts(
-        handle_for_process, host_id(), changed_hosts, whitelisted_only));
-  }
+  process->Send(new ExtensionMsg_UpdateUserScripts(
+      handle_for_process, host_id(), changed_hosts, whitelisted_only));
 }
 
 }  // namespace extensions

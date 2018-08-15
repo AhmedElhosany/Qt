@@ -5,9 +5,9 @@
 #include "content/browser/devtools/protocol/service_worker_handler.h"
 
 #include "base/bind.h"
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/containers/flat_set.h"
 #include "content/browser/background_sync/background_sync_context.h"
 #include "content/browser/background_sync/background_sync_manager.h"
 #include "content/browser/devtools/service_worker_devtools_agent_host.h"
@@ -29,14 +29,11 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/push_event_payload.h"
-#include "content/public/common/push_messaging_status.h"
+#include "content/public/common/push_messaging_status.mojom.h"
 #include "url/gurl.h"
 
 namespace content {
-namespace devtools {
-namespace service_worker {
-
-using Response = DevToolsProtocolClient::Response;
+namespace protocol {
 
 namespace {
 
@@ -51,20 +48,21 @@ void StatusNoOpKeepingRegistration(
     ServiceWorkerStatusCode status) {
 }
 
-void PushDeliveryNoOp(PushDeliveryStatus status) {
-}
+void PushDeliveryNoOp(mojom::PushDeliveryStatus status) {}
 
 const std::string GetVersionRunningStatusString(
     EmbeddedWorkerStatus running_status) {
   switch (running_status) {
     case EmbeddedWorkerStatus::STOPPED:
-      return kServiceWorkerVersionRunningStatusStopped;
+      return ServiceWorker::ServiceWorkerVersionRunningStatusEnum::Stopped;
     case EmbeddedWorkerStatus::STARTING:
-      return kServiceWorkerVersionRunningStatusStarting;
+      return ServiceWorker::ServiceWorkerVersionRunningStatusEnum::Starting;
     case EmbeddedWorkerStatus::RUNNING:
-      return kServiceWorkerVersionRunningStatusRunning;
+      return ServiceWorker::ServiceWorkerVersionRunningStatusEnum::Running;
     case EmbeddedWorkerStatus::STOPPING:
-      return kServiceWorkerVersionRunningStatusStopping;
+      return ServiceWorker::ServiceWorkerVersionRunningStatusEnum::Stopping;
+    default:
+      NOTREACHED();
   }
   return std::string();
 }
@@ -73,81 +71,21 @@ const std::string GetVersionStatusString(
     content::ServiceWorkerVersion::Status status) {
   switch (status) {
     case content::ServiceWorkerVersion::NEW:
-      return kServiceWorkerVersionStatusNew;
+      return ServiceWorker::ServiceWorkerVersionStatusEnum::New;
     case content::ServiceWorkerVersion::INSTALLING:
-      return kServiceWorkerVersionStatusInstalling;
+      return ServiceWorker::ServiceWorkerVersionStatusEnum::Installing;
     case content::ServiceWorkerVersion::INSTALLED:
-      return kServiceWorkerVersionStatusInstalled;
+      return ServiceWorker::ServiceWorkerVersionStatusEnum::Installed;
     case content::ServiceWorkerVersion::ACTIVATING:
-      return kServiceWorkerVersionStatusActivating;
+      return ServiceWorker::ServiceWorkerVersionStatusEnum::Activating;
     case content::ServiceWorkerVersion::ACTIVATED:
-      return kServiceWorkerVersionStatusActivated;
+      return ServiceWorker::ServiceWorkerVersionStatusEnum::Activated;
     case content::ServiceWorkerVersion::REDUNDANT:
-      return kServiceWorkerVersionStatusRedundant;
+      return ServiceWorker::ServiceWorkerVersionStatusEnum::Redundant;
+    default:
+      NOTREACHED();
   }
   return std::string();
-}
-
-scoped_refptr<ServiceWorkerVersion> CreateVersionDictionaryValue(
-    const ServiceWorkerVersionInfo& version_info) {
-  std::vector<std::string> clients;
-  for (const auto& client : version_info.clients) {
-    if (client.second.type == SERVICE_WORKER_PROVIDER_FOR_WINDOW) {
-      RenderFrameHostImpl* render_frame_host = RenderFrameHostImpl::FromID(
-          client.second.process_id, client.second.route_id);
-      WebContents* web_contents =
-          WebContents::FromRenderFrameHost(render_frame_host);
-      // There is a possibility that the frame is already deleted because of the
-      // thread hopping.
-      if (!web_contents)
-        continue;
-      scoped_refptr<DevToolsAgentHost> agent_host(
-          DevToolsAgentHost::GetOrCreateFor(web_contents));
-      if (agent_host)
-        clients.push_back(agent_host->GetId());
-    } else if (client.second.type ==
-               SERVICE_WORKER_PROVIDER_FOR_SHARED_WORKER) {
-      scoped_refptr<DevToolsAgentHost> agent_host(
-          DevToolsAgentHost::GetForWorker(client.second.process_id,
-                                          client.second.route_id));
-      if (agent_host)
-        clients.push_back(agent_host->GetId());
-    }
-  }
-  scoped_refptr<ServiceWorkerVersion> version(
-      ServiceWorkerVersion::Create()
-          ->set_version_id(base::Int64ToString(version_info.version_id))
-          ->set_registration_id(
-                base::Int64ToString(version_info.registration_id))
-          ->set_script_url(version_info.script_url.spec())
-          ->set_running_status(
-                GetVersionRunningStatusString(version_info.running_status))
-          ->set_status(GetVersionStatusString(version_info.status))
-          ->set_script_last_modified(
-                version_info.script_last_modified.ToDoubleT())
-          ->set_script_response_time(
-                version_info.script_response_time.ToDoubleT())
-          ->set_controlled_clients(clients));
-  scoped_refptr<DevToolsAgentHostImpl> host(
-      ServiceWorkerDevToolsManager::GetInstance()
-          ->GetDevToolsAgentHostForWorker(
-              version_info.process_id,
-              version_info.devtools_agent_route_id));
-  if (host)
-    version->set_target_id(host->GetId());
-  return version;
-}
-
-scoped_refptr<ServiceWorkerRegistration> CreateRegistrationDictionaryValue(
-    const ServiceWorkerRegistrationInfo& registration_info) {
-  scoped_refptr<ServiceWorkerRegistration> registration(
-      ServiceWorkerRegistration::Create()
-          ->set_registration_id(
-              base::Int64ToString(registration_info.registration_id))
-          ->set_scope_url(registration_info.pattern.spec())
-          ->set_is_deleted(registration_info.delete_flag ==
-                           ServiceWorkerRegistrationInfo::IS_DELETED));
-  return registration;
 }
 
 void StopServiceWorkerOnIO(scoped_refptr<ServiceWorkerContextWrapper> context,
@@ -173,11 +111,11 @@ void GetDevToolsRouteInfoOnIO(
 }
 
 Response CreateContextErrorResponse() {
-  return Response::InternalError("Could not connect to the context");
+  return Response::Error("Could not connect to the context");
 }
 
 Response CreateInvalidVersionIdErrorResponse() {
-  return Response::InternalError("Invalid version ID");
+  return Response::InvalidParams("Invalid version ID");
 }
 
 void DidFindRegistrationForDispatchSyncEventOnIO(
@@ -213,11 +151,18 @@ void DispatchSyncEventOnIO(scoped_refptr<ServiceWorkerContextWrapper> context,
 }  // namespace
 
 ServiceWorkerHandler::ServiceWorkerHandler()
-    : enabled_(false), render_frame_host_(nullptr), weak_factory_(this) {
+    : DevToolsDomainHandler(ServiceWorker::Metainfo::domainName),
+      enabled_(false),
+      render_frame_host_(nullptr),
+      weak_factory_(this) {
 }
 
 ServiceWorkerHandler::~ServiceWorkerHandler() {
-  Disable();
+}
+
+void ServiceWorkerHandler::Wire(UberDispatcher* dispatcher) {
+  frontend_.reset(new ServiceWorker::Frontend(dispatcher->channel()));
+  ServiceWorker::Dispatcher::wire(dispatcher, this);
 }
 
 void ServiceWorkerHandler::SetRenderFrameHost(
@@ -237,19 +182,11 @@ void ServiceWorkerHandler::SetRenderFrameHost(
       partition->GetServiceWorkerContext());
 }
 
-void ServiceWorkerHandler::SetClient(std::unique_ptr<Client> client) {
-  client_.swap(client);
-}
-
-void ServiceWorkerHandler::Detached() {
-  Disable();
-}
-
 Response ServiceWorkerHandler::Enable() {
   if (enabled_)
     return Response::OK();
   if (!context_)
-    return Response::InternalError("Could not connect to the context");
+    return CreateContextErrorResponse();
   enabled_ = true;
 
   context_watcher_ = new ServiceWorkerContextWatcher(
@@ -409,39 +346,97 @@ void ServiceWorkerHandler::OpenNewDevToolsWindow(int process_id,
 
 void ServiceWorkerHandler::OnWorkerRegistrationUpdated(
     const std::vector<ServiceWorkerRegistrationInfo>& registrations) {
-  std::vector<scoped_refptr<ServiceWorkerRegistration>> registration_values;
+  using Registration = ServiceWorker::ServiceWorkerRegistration;
+  std::unique_ptr<protocol::Array<Registration>> result =
+      protocol::Array<Registration>::create();
   for (const auto& registration : registrations) {
-    registration_values.push_back(
-        CreateRegistrationDictionaryValue(registration));
+    result->addItem(Registration::Create()
+        .SetRegistrationId(
+            base::Int64ToString(registration.registration_id))
+        .SetScopeURL(registration.pattern.spec())
+        .SetIsDeleted(registration.delete_flag ==
+                      ServiceWorkerRegistrationInfo::IS_DELETED)
+        .Build());
   }
-  client_->WorkerRegistrationUpdated(
-      WorkerRegistrationUpdatedParams::Create()->set_registrations(
-          registration_values));
+  frontend_->WorkerRegistrationUpdated(std::move(result));
 }
 
 void ServiceWorkerHandler::OnWorkerVersionUpdated(
     const std::vector<ServiceWorkerVersionInfo>& versions) {
-  std::vector<scoped_refptr<ServiceWorkerVersion>> version_values;
+  using Version = ServiceWorker::ServiceWorkerVersion;
+  std::unique_ptr<protocol::Array<Version>> result =
+      protocol::Array<Version>::create();
   for (const auto& version : versions) {
-    version_values.push_back(CreateVersionDictionaryValue(version));
+    base::flat_set<std::string> client_set;
+
+    for (const auto& client : version.clients) {
+      if (client.second.type == SERVICE_WORKER_PROVIDER_FOR_WINDOW) {
+        // PlzNavigate: a navigation may not yet be associated with a
+        // RenderFrameHost. Use the |web_contents_getter| instead.
+        WebContents* web_contents =
+            client.second.web_contents_getter
+                ? client.second.web_contents_getter.Run()
+                : WebContents::FromRenderFrameHost(RenderFrameHostImpl::FromID(
+                      client.second.process_id, client.second.route_id));
+        // There is a possibility that the frame is already deleted
+        // because of the thread hopping.
+        if (!web_contents)
+          continue;
+        client_set.insert(
+            DevToolsAgentHost::GetOrCreateFor(web_contents)->GetId());
+      } else if (client.second.type ==
+                 SERVICE_WORKER_PROVIDER_FOR_SHARED_WORKER) {
+        scoped_refptr<DevToolsAgentHost> agent_host(
+            DevToolsAgentHost::GetForWorker(client.second.process_id,
+                                            client.second.route_id));
+        if (agent_host)
+          client_set.insert(agent_host->GetId());
+      }
+    }
+    std::unique_ptr<protocol::Array<std::string>> clients =
+        protocol::Array<std::string>::create();
+    for (auto& c : client_set)
+      clients->addItem(c);
+
+    std::unique_ptr<Version> version_value = Version::Create()
+        .SetVersionId(base::Int64ToString(version.version_id))
+        .SetRegistrationId(
+            base::Int64ToString(version.registration_id))
+        .SetScriptURL(version.script_url.spec())
+        .SetRunningStatus(
+            GetVersionRunningStatusString(version.running_status))
+        .SetStatus(GetVersionStatusString(version.status))
+        .SetScriptLastModified(
+            version.script_last_modified.ToDoubleT())
+        .SetScriptResponseTime(
+            version.script_response_time.ToDoubleT())
+        .SetControlledClients(std::move(clients))
+        .Build();
+    scoped_refptr<DevToolsAgentHostImpl> host(
+        ServiceWorkerDevToolsManager::GetInstance()
+            ->GetDevToolsAgentHostForWorker(
+                version.process_id,
+                version.devtools_agent_route_id));
+    if (host)
+      version_value->SetTargetId(host->GetId());
+    result->addItem(std::move(version_value));
   }
-  client_->WorkerVersionUpdated(
-      WorkerVersionUpdatedParams::Create()->set_versions(version_values));
+  frontend_->WorkerVersionUpdated(std::move(result));
 }
 
 void ServiceWorkerHandler::OnErrorReported(
     int64_t registration_id,
     int64_t version_id,
-    const ServiceWorkerContextObserver::ErrorInfo& info) {
-  client_->WorkerErrorReported(
-      WorkerErrorReportedParams::Create()->set_error_message(
-          ServiceWorkerErrorMessage::Create()
-              ->set_error_message(base::UTF16ToUTF8(info.error_message))
-              ->set_registration_id(base::Int64ToString(registration_id))
-              ->set_version_id(base::Int64ToString(version_id))
-              ->set_source_url(info.source_url.spec())
-              ->set_line_number(info.line_number)
-              ->set_column_number(info.column_number)));
+    const ServiceWorkerContextCoreObserver::ErrorInfo& info) {
+  frontend_->WorkerErrorReported(
+      ServiceWorker::ServiceWorkerErrorMessage::Create()
+          .SetErrorMessage(base::UTF16ToUTF8(info.error_message))
+          .SetRegistrationId(base::Int64ToString(registration_id))
+          .SetVersionId(base::Int64ToString(version_id))
+          .SetSourceURL(info.source_url.spec())
+          .SetLineNumber(info.line_number)
+          .SetColumnNumber(info.column_number)
+          .Build());
 }
 
 void ServiceWorkerHandler::ClearForceUpdate() {
@@ -449,6 +444,5 @@ void ServiceWorkerHandler::ClearForceUpdate() {
     context_->SetForceUpdateOnPageLoad(false);
 }
 
-}  // namespace service_worker
-}  // namespace devtools
+}  // namespace protocol
 }  // namespace content

@@ -38,6 +38,8 @@
 
 #include <QtQuick/QQuickItem>
 #include <QtCore/QDebug>
+#include <QtGui/QCursor>
+#include <QtCore/QCoreApplication>
 
 bool QQuickVisualTestUtil::delegateVisible(QQuickItem *item)
 {
@@ -69,3 +71,24 @@ void QQuickVisualTestUtil::dumpTree(QQuickItem *parent, int depth)
     }
 }
 
+void QQuickVisualTestUtil::moveMouseAway(QQuickWindow *window)
+{
+#if QT_CONFIG(cursor) // Get the cursor out of the way.
+    // Using "bottomRight() + QPoint(100, 100)" was causing issues on Ubuntu,
+    // where the window was positioned at the bottom right corner of the window
+    // (even after centering the window on the screen), so we use another position.
+    QCursor::setPos(window->geometry().bottomLeft() + QPoint(0, 10));
+#endif
+
+    // make sure hover events from QQuickWindowPrivate::flushFrameSynchronousEvents()
+    // do not interfere with the tests
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(window, &leave);
+}
+
+void QQuickVisualTestUtil::centerOnScreen(QQuickWindow *window)
+{
+    const QRect screenGeometry = window->screen()->availableGeometry();
+    const QPoint offset = QPoint(window->width() / 2, window->height() / 2);
+    window->setFramePosition(screenGeometry.center() - offset);
+}

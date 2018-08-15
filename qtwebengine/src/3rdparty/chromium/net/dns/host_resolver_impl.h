@@ -14,7 +14,7 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_piece.h"
-#include "base/threading/non_thread_safe.h"
+#include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "net/base/net_export.h"
@@ -61,7 +61,6 @@ class NetLogWithSource;
 // Jobs are ordered in the queue based on their priority and order of arrival.
 class NET_EXPORT HostResolverImpl
     : public HostResolver,
-      NON_EXPORTED_BASE(public base::NonThreadSafe),
       public NetworkChangeNotifier::IPAddressObserver,
       public NetworkChangeNotifier::ConnectionTypeObserver,
       public NetworkChangeNotifier::DNSObserver {
@@ -158,6 +157,9 @@ class NET_EXPORT HostResolverImpl
       const PersistCallback& persist_callback,
       std::unique_ptr<const base::Value> old_data) override;
 
+  void SetNoIPv6OnWifi(bool no_ipv6_on_wifi) override;
+  bool GetNoIPv6OnWifi() override;
+
   void set_proc_params_for_test(const ProcTaskParams& proc_params) {
     proc_params_ = proc_params;
   }
@@ -179,8 +181,8 @@ class NET_EXPORT HostResolverImpl
   class LoopbackProbeJob;
   class DnsTask;
   class RequestImpl;
-  typedef HostCache::Key Key;
-  typedef std::map<Key, Job*> JobMap;
+  using Key = HostCache::Key;
+  using JobMap = std::map<Key, std::unique_ptr<Job>>;
 
   // Number of consecutive failures of DnsTask (with successful fallback to
   // ProcTask) before the DnsClient is disabled until the next DNS change.
@@ -192,19 +194,23 @@ class NET_EXPORT HostResolverImpl
   // incompatible, ERR_DNS_CACHE_MISS if entry was not found in cache and
   // HOSTS and is not localhost.
   //
+  // On success, the resulting addresses are written to |addresses|.
+  //
+  // On ERR_DNS_CACHE_MISS and OK, the cache key for the request is written to
+  // |key|. On other errors, it may not be.
+  //
   // If |allow_stale| is true, then stale cache entries can be returned.
   // |stale_info| must be non-null, and will be filled in with details of the
   // entry's staleness (if an entry is returned).
   //
   // If |allow_stale| is false, then stale cache entries will not be returned,
   // and |stale_info| must be null.
-  int ResolveHelper(const Key& key,
-                    const RequestInfo& info,
-                    const IPAddress* ip_address,
-                    AddressList* addresses,
+  int ResolveHelper(const RequestInfo& info,
                     bool allow_stale,
                     HostCache::EntryStaleness* stale_info,
-                    const NetLogWithSource& request_net_log);
+                    const NetLogWithSource& request_net_log,
+                    AddressList* addresses,
+                    Key* key);
 
   // Tries to resolve |key| as an IP, returns true and sets |net_error| if
   // succeeds, returns false otherwise.
@@ -253,7 +259,11 @@ class NET_EXPORT HostResolverImpl
   // Probes IPv6 support and returns true if IPv6 support is enabled.
   // Results are cached, i.e. when called repeatedly this method returns result
   // from the first probe for some time before probing again.
-  virtual bool IsIPv6Reachable(const NetLogWithSource& net_log);
+  bool IsIPv6Reachable(const NetLogWithSource& net_log);
+
+  // Attempts to connect a UDP socket to |dest|:53. Virtual for testing.
+  virtual bool IsGloballyReachable(const IPAddress& dest,
+                                   const NetLogWithSource& net_log);
 
   // Asynchronously checks if only loopback IPs are available.
   virtual void RunLoopbackProbeJob();
@@ -263,7 +273,7 @@ class NET_EXPORT HostResolverImpl
                    const HostCache::Entry& entry,
                    base::TimeDelta ttl);
 
-  // Removes |job| from |jobs_|, only if it exists.
+  // Removes |job| from |jobs_|, only if it exists, but does not delete it.
   void RemoveJob(Job* job);
 
   // Aborts all in progress jobs with ERR_NETWORK_CHANGED and notifies their
@@ -298,13 +308,6 @@ class NET_EXPORT HostResolverImpl
   // Called when a host name is successfully resolved and DnsTask was run on it
   // and resulted in |net_error|.
   void OnDnsTaskResolve(int net_error);
-
-  void OnCacheEntryEvicted(const HostCache::Key& key,
-                           const HostCache::Entry& entry);
-  void ClearCacheHitCallbacks(const HostCache::Key& key);
-  void MaybeAddCacheHitCallback(const HostCache::Key& key,
-                                const RequestInfo& info);
-  void RunCacheHitCallbacks(const HostCache::Key& key, const RequestInfo& info);
 
   void ApplyPersistentData(std::unique_ptr<const base::Value>);
   std::unique_ptr<const base::Value> GetPersistentData();
@@ -346,16 +349,16 @@ class NET_EXPORT HostResolverImpl
   // Number of consecutive failures of DnsTask, counted when fallback succeeds.
   unsigned num_dns_failures_;
 
+  // True if IPv6 should not be attempted when on a WiFi connection. See
+  // https://crbug.com/696569 for further context.
+  bool assume_ipv6_failure_on_wifi_;
+
   // True if DnsConfigService detected that system configuration depends on
   // local IPv6 connectivity. Disables probing.
   bool use_local_ipv6_;
 
   base::TimeTicks last_ipv6_probe_time_;
   bool last_ipv6_probe_result_;
-
-  // True iff ProcTask has successfully resolved a hostname known to have IPv6
-  // addresses using ADDRESS_FAMILY_UNSPECIFIED. Reset on IP address change.
-  bool resolved_known_ipv6_hostname_;
 
   // Any resolver flags that should be added to a request by default.
   HostResolverFlags additional_resolver_flags_;
@@ -368,12 +371,11 @@ class NET_EXPORT HostResolverImpl
   // tasks, but can be overridden for tests.
   scoped_refptr<base::TaskRunner> worker_task_runner_;
 
-  std::map<const HostCache::Key, std::vector<RequestInfo::CacheHitCallback>>
-      cache_hit_callbacks_;
-
   bool persist_initialized_;
   PersistCallback persist_callback_;
   base::OneShotTimer persist_timer_;
+
+  THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<HostResolverImpl> weak_ptr_factory_;
 

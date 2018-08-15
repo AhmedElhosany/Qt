@@ -56,8 +56,6 @@
 #include "qnetworkrequest_p.h" // for deriving QHttpPartPrivate from QNetworkHeadersPrivate
 #include "private/qobject_p.h"
 
-QT_REQUIRE_CONFIG(http);
-
 QT_BEGIN_NAMESPACE
 
 

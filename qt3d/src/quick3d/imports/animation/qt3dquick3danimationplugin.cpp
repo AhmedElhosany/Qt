@@ -45,10 +45,11 @@
 #include <Qt3DAnimation/qblendedclipanimator.h>
 #include <Qt3DAnimation/qclipanimator.h>
 #include <Qt3DAnimation/qchannelmapping.h>
+#include <Qt3DAnimation/qskeletonmapping.h>
 #include <Qt3DAnimation/qlerpclipblend.h>
 #include <Qt3DAnimation/qadditiveclipblend.h>
 #include <Qt3DAnimation/qclipblendvalue.h>
-
+#include <Qt3DAnimation/qclock.h>
 #include <Qt3DAnimation/qkeyframeanimation.h>
 #include <Qt3DAnimation/qanimationcontroller.h>
 #include <Qt3DAnimation/qabstractanimation.h>
@@ -87,6 +88,7 @@ void Qt3DQuick3DAnimationPlugin::registerTypes(const char *uri)
     qmlRegisterType<Qt3DAnimation::QLerpClipBlend>(uri, 2, 9, "LerpClipBlend");
     qmlRegisterType<Qt3DAnimation::QAdditiveClipBlend>(uri, 2, 9, "AdditiveClipBlend");
     qmlRegisterType<Qt3DAnimation::QClipBlendValue>(uri, 2, 9, "ClipBlendValue");
+    qmlRegisterType<Qt3DAnimation::QClock>(uri, 2, 9, "Clock");
 
     qmlRegisterUncreatableType<Qt3DAnimation::QAbstractAnimation>(uri, 2, 9, "AbstractAnimation", QStringLiteral("AbstractAnimation is abstract"));
     qmlRegisterExtendedType<Qt3DAnimation::QKeyframeAnimation, Qt3DAnimation::Quick::QQuick3DKeyframeAnimation>(uri, 2, 9, "KeyframeAnimation");
@@ -95,6 +97,9 @@ void Qt3DQuick3DAnimationPlugin::registerTypes(const char *uri)
     qmlRegisterExtendedType<Qt3DAnimation::QMorphingAnimation, Qt3DAnimation::Quick::QQuick3DMorphingAnimation>(uri, 2, 9, "MorphingAnimation");
     qmlRegisterExtendedType<Qt3DAnimation::QMorphTarget, Qt3DAnimation::Quick::QQuick3DMorphTarget>(uri, 2, 9, "MorphTarget");
     qmlRegisterExtendedType<Qt3DAnimation::QVertexBlendAnimation, Qt3DAnimation::Quick::QQuick3DVertexBlendAnimation>(uri, 2, 9, "VertexBlendAnimation");
+
+    qmlRegisterUncreatableType<Qt3DAnimation::QAbstractChannelMapping>(uri, 2, 10, "AbstractChannelMapping", QStringLiteral("QAbstractChannelMapping is abstract"));
+    qmlRegisterType<Qt3DAnimation::QSkeletonMapping>(uri, 2, 10, "SkeletonMapping");
 }
 
 QT_END_NAMESPACE

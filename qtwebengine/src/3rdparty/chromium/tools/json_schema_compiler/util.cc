@@ -32,7 +32,7 @@ bool PopulateItem(const base::Value& from, int* out) {
 
 bool PopulateItem(const base::Value& from, int* out, base::string16* error) {
   if (!from.GetAsInteger(out))
-    return ReportError(from, base::Value::TYPE_INTEGER, error);
+    return ReportError(from, base::Value::Type::INTEGER, error);
   return true;
 }
 
@@ -42,7 +42,7 @@ bool PopulateItem(const base::Value& from, bool* out) {
 
 bool PopulateItem(const base::Value& from, bool* out, base::string16* error) {
   if (!from.GetAsBoolean(out))
-    return ReportError(from, base::Value::TYPE_BOOLEAN, error);
+    return ReportError(from, base::Value::Type::BOOLEAN, error);
   return true;
 }
 
@@ -52,7 +52,7 @@ bool PopulateItem(const base::Value& from, double* out) {
 
 bool PopulateItem(const base::Value& from, double* out, base::string16* error) {
   if (!from.GetAsDouble(out))
-    return ReportError(from, base::Value::TYPE_DOUBLE, error);
+    return ReportError(from, base::Value::Type::DOUBLE, error);
   return true;
 }
 
@@ -64,25 +64,23 @@ bool PopulateItem(const base::Value& from,
                   std::string* out,
                   base::string16* error) {
   if (!from.GetAsString(out))
-    return ReportError(from, base::Value::TYPE_STRING, error);
+    return ReportError(from, base::Value::Type::STRING, error);
   return true;
 }
 
 bool PopulateItem(const base::Value& from, std::vector<char>* out) {
-  const base::BinaryValue* binary = nullptr;
-  if (!from.GetAsBinary(&binary))
+  if (!from.is_blob())
     return false;
-  out->assign(binary->GetBuffer(), binary->GetBuffer() + binary->GetSize());
+  *out = from.GetBlob();
   return true;
 }
 
 bool PopulateItem(const base::Value& from,
                   std::vector<char>* out,
                   base::string16* error) {
-  const base::BinaryValue* binary = nullptr;
-  if (!from.GetAsBinary(&binary))
-    return ReportError(from, base::Value::TYPE_BINARY, error);
-  out->assign(binary->GetBuffer(), binary->GetBuffer() + binary->GetSize());
+  if (!from.is_blob())
+    return ReportError(from, base::Value::Type::BINARY, error);
+  *out = from.GetBlob();
   return true;
 }
 
@@ -112,7 +110,7 @@ bool PopulateItem(const base::Value& from,
                   base::string16* error) {
   const base::DictionaryValue* dict = nullptr;
   if (!from.GetAsDictionary(&dict))
-    return ReportError(from, base::Value::TYPE_DICTIONARY, error);
+    return ReportError(from, base::Value::Type::DICTIONARY, error);
   *out = dict->CreateDeepCopy();
   return true;
 }
@@ -134,8 +132,7 @@ void AddItemToList(const std::string& from, base::ListValue* out) {
 }
 
 void AddItemToList(const std::vector<char>& from, base::ListValue* out) {
-  out->Append(
-      base::BinaryValue::CreateWithCopiedBuffer(from.data(), from.size()));
+  out->Append(base::Value::CreateWithCopiedBuffer(from.data(), from.size()));
 }
 
 void AddItemToList(const std::unique_ptr<base::Value>& from,

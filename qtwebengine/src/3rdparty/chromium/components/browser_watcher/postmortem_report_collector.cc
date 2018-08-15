@@ -6,137 +6,154 @@
 
 #include <utility>
 
-#include "base/debug/activity_analyzer.h"
-#include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/browser_watcher/postmortem_minidump_writer.h"
+#include "components/browser_watcher/stability_data_names.h"
 #include "third_party/crashpad/crashpad/client/settings.h"
 #include "third_party/crashpad/crashpad/util/misc/uuid.h"
 
-using base::FilePath;
-
 namespace browser_watcher {
 
-using base::debug::ActivitySnapshot;
-using base::debug::GlobalActivityAnalyzer;
-using base::debug::ThreadActivityAnalyzer;
+using base::FilePath;
 using crashpad::CrashReportDatabase;
+
+namespace {
+
+// DO NOT CHANGE VALUES. This is logged persistently in a histogram.
+enum SystemSessionAnalysisStatus {
+  SYSTEM_SESSION_ANALYSIS_SUCCESS = 0,
+  SYSTEM_SESSION_ANALYSIS_NO_TIMESTAMP = 1,
+  SYSTEM_SESSION_ANALYSIS_NO_ANALYZER = 2,
+  SYSTEM_SESSION_ANALYSIS_FAILED = 3,
+  SYSTEM_SESSION_ANALYSIS_OUTSIDE_RANGE = 4,
+  SYSTEM_SESSION_ANALYSIS_STATUS_MAX = 5
+};
+
+bool GetStartTimestamp(
+    const google::protobuf::Map<std::string, TypedValue>& global_data,
+    base::Time* time) {
+  DCHECK(time);
+
+  const auto& it = global_data.find(kStabilityStartTimestamp);
+  if (it == global_data.end())
+    return false;
+
+  const TypedValue& value = it->second;
+  if (value.value_case() != TypedValue::kSignedValue)
+    return false;
+
+  *time = base::Time::FromInternalValue(value.signed_value());
+  return true;
+}
+
+void LogCollectionStatus(CollectionStatus status) {
+  UMA_HISTOGRAM_ENUMERATION("ActivityTracker.Collect.Status", status,
+                            COLLECTION_STATUS_MAX);
+}
+
+}  // namespace
+
+void PostmortemDeleter::Process(
+    const std::vector<base::FilePath>& stability_files) {
+  for (const FilePath& file : stability_files) {
+    if (base::DeleteFile(file, false))
+      LogCollectionStatus(UNCLEAN_SHUTDOWN);
+    else
+      LogCollectionStatus(DEBUG_FILE_DELETION_FAILED);
+  }
+}
 
 PostmortemReportCollector::PostmortemReportCollector(
     const std::string& product_name,
     const std::string& version_number,
-    const std::string& channel_name)
+    const std::string& channel_name,
+    crashpad::CrashReportDatabase* report_database,
+    SystemSessionAnalyzer* analyzer)
     : product_name_(product_name),
       version_number_(version_number),
-      channel_name_(channel_name) {}
-
-int PostmortemReportCollector::CollectAndSubmitForUpload(
-    const base::FilePath& debug_info_dir,
-    const base::FilePath::StringType& debug_file_pattern,
-    const std::set<base::FilePath>& excluded_debug_files,
-    crashpad::CrashReportDatabase* report_database) {
-  DCHECK_NE(true, debug_info_dir.empty());
-  DCHECK_NE(true, debug_file_pattern.empty());
+      channel_name_(channel_name),
+      report_database_(report_database),
+      system_session_analyzer_(analyzer) {
   DCHECK_NE(nullptr, report_database);
+}
 
-  // Collect the list of files to harvest.
-  std::vector<FilePath> debug_files = GetDebugStateFilePaths(
-      debug_info_dir, debug_file_pattern, excluded_debug_files);
+PostmortemReportCollector::~PostmortemReportCollector() {}
 
+void PostmortemReportCollector::Process(
+    const std::vector<base::FilePath>& stability_files) {
   // Determine the crashpad client id.
   crashpad::UUID client_id;
-  crashpad::Settings* settings = report_database->GetSettings();
+  crashpad::Settings* settings = report_database_->GetSettings();
   if (settings) {
     // If GetSettings() or GetClientID() fails client_id will be left at its
     // default value, all zeroes, which is appropriate.
     settings->GetClientID(&client_id);
   }
 
-  // Process each stability file.
-  int success_cnt = 0;
-  for (const FilePath& file : debug_files) {
-    CollectionStatus status =
-        CollectAndSubmit(client_id, file, report_database);
-    // TODO(manzagop): consider making this a stability metric.
-    UMA_HISTOGRAM_ENUMERATION("ActivityTracker.Collect.Status", status,
-                              COLLECTION_STATUS_MAX);
-    if (status == SUCCESS)
-      ++success_cnt;
+  for (const FilePath& file : stability_files) {
+    CollectAndSubmitOneReport(client_id, file);
   }
-
-  return success_cnt;
 }
 
-std::vector<FilePath> PostmortemReportCollector::GetDebugStateFilePaths(
-    const base::FilePath& debug_info_dir,
-    const base::FilePath::StringType& debug_file_pattern,
-    const std::set<FilePath>& excluded_debug_files) {
-  DCHECK_NE(true, debug_info_dir.empty());
-  DCHECK_NE(true, debug_file_pattern.empty());
-
-  std::vector<FilePath> paths;
-  base::FileEnumerator enumerator(debug_info_dir, false /* recursive */,
-                                  base::FileEnumerator::FILES,
-                                  debug_file_pattern);
-  FilePath path;
-  for (path = enumerator.Next(); !path.empty(); path = enumerator.Next()) {
-    if (excluded_debug_files.find(path) == excluded_debug_files.end())
-      paths.push_back(path);
-  }
-  return paths;
-}
-
-PostmortemReportCollector::CollectionStatus
-PostmortemReportCollector::CollectAndSubmit(
+void PostmortemReportCollector::CollectAndSubmitOneReport(
     const crashpad::UUID& client_id,
-    const FilePath& file,
-    crashpad::CrashReportDatabase* report_database) {
-  DCHECK_NE(nullptr, report_database);
+    const FilePath& file) {
+  DCHECK_NE(nullptr, report_database_);
+  LogCollectionStatus(COLLECTION_ATTEMPT);
 
   // Note: the code below involves two notions of report: chrome internal state
   // reports and the crashpad reports they get wrapped into.
 
   // Collect the data from the debug file to a proto.
-  std::unique_ptr<StabilityReport> report_proto;
-  CollectionStatus status = Collect(file, &report_proto);
+  StabilityReport report_proto;
+  CollectionStatus status = CollectOneReport(file, &report_proto);
   if (status != SUCCESS) {
     // The file was empty, or there was an error collecting the data. Detailed
     // logging happens within the Collect function.
     if (!base::DeleteFile(file, false))
-      LOG(ERROR) << "Failed to delete " << file.value();
-    return status;
+      DLOG(ERROR) << "Failed to delete " << file.value();
+    LogCollectionStatus(status);
+    return;
   }
-  DCHECK_NE(nullptr, report_proto.get());
+
+  // Delete the stability file. If the file cannot be deleted, do not report its
+  // contents - it will be retried in a future processing run. Note that this
+  // approach can lead to under reporting and retries. However, under reporting
+  // is preferable to the over reporting that would happen with a file that
+  // cannot be deleted. Also note that the crash registration may still fail at
+  // this point: losing the report in such a case is deemed acceptable.
+  if (!base::DeleteFile(file, false)) {
+    DLOG(ERROR) << "Failed to delete " << file.value();
+    LogCollectionStatus(DEBUG_FILE_DELETION_FAILED);
+    return;
+  }
+
+  LogCollectionStatus(UNCLEAN_SHUTDOWN);
+  if (report_proto.system_state().session_state() == SystemState::UNCLEAN)
+    LogCollectionStatus(UNCLEAN_SESSION);
 
   // Prepare a crashpad report.
   CrashReportDatabase::NewReport* new_report = nullptr;
   CrashReportDatabase::OperationStatus database_status =
-      report_database->PrepareNewCrashReport(&new_report);
+      report_database_->PrepareNewCrashReport(&new_report);
   if (database_status != CrashReportDatabase::kNoError) {
-    LOG(ERROR) << "PrepareNewCrashReport failed";
-    return PREPARE_NEW_CRASH_REPORT_FAILED;
+    LogCollectionStatus(PREPARE_NEW_CRASH_REPORT_FAILED);
+    return;
   }
   CrashReportDatabase::CallErrorWritingCrashReport
-      call_error_writing_crash_report(report_database, new_report);
+      call_error_writing_crash_report(report_database_, new_report);
 
   // Write the report to a minidump.
-  if (!WriteReportToMinidump(*report_proto, client_id, new_report->uuid,
+  if (!WriteReportToMinidump(&report_proto, client_id, new_report->uuid,
                              reinterpret_cast<FILE*>(new_report->handle))) {
-    return WRITE_TO_MINIDUMP_FAILED;
-  }
-
-  // If the file cannot be deleted, do not report its contents. Note this can
-  // lead to under reporting and retries. However, under reporting is
-  // preferable to the over reporting that would happen with a file that
-  // cannot be deleted.
-  // TODO(manzagop): metrics for the number of non-deletable files.
-  if (!base::DeleteFile(file, false)) {
-    LOG(ERROR) << "Failed to delete " << file.value();
-    return DEBUG_FILE_DELETION_FAILED;
+    LogCollectionStatus(WRITE_TO_MINIDUMP_FAILED);
+    return;
   }
 
   // Finalize the report wrt the report database. Note that this doesn't trigger
@@ -144,121 +161,101 @@ PostmortemReportCollector::CollectAndSubmit(
   // writing, the delay is on the order of up to 15 minutes).
   call_error_writing_crash_report.Disarm();
   crashpad::UUID unused_report_id;
-  database_status = report_database->FinishedWritingCrashReport(
+  database_status = report_database_->FinishedWritingCrashReport(
       new_report, &unused_report_id);
   if (database_status != CrashReportDatabase::kNoError) {
-    LOG(ERROR) << "FinishedWritingCrashReport failed";
-    return FINISHED_WRITING_CRASH_REPORT_FAILED;
+    LogCollectionStatus(FINISHED_WRITING_CRASH_REPORT_FAILED);
+    return;
   }
+
+  LogCollectionStatus(SUCCESS);
+}
+
+CollectionStatus PostmortemReportCollector::CollectOneReport(
+    const base::FilePath& file,
+    StabilityReport* report) {
+  DCHECK(report);
+
+  CollectionStatus status = Extract(file, report);
+  if (status != SUCCESS)
+    return status;
+
+  SetReporterDetails(report);
+  RecordSystemShutdownState(report);
 
   return SUCCESS;
 }
 
-PostmortemReportCollector::CollectionStatus PostmortemReportCollector::Collect(
-    const base::FilePath& debug_state_file,
-    std::unique_ptr<StabilityReport>* report) {
-  DCHECK_NE(nullptr, report);
-  report->reset();
+void PostmortemReportCollector::SetReporterDetails(
+    StabilityReport* report) const {
+  DCHECK(report);
 
-  // Create a global analyzer.
-  std::unique_ptr<GlobalActivityAnalyzer> global_analyzer =
-      GlobalActivityAnalyzer::CreateWithFile(debug_state_file);
-  if (!global_analyzer)
-    return ANALYZER_CREATION_FAILED;
+  google::protobuf::Map<std::string, TypedValue>& global_data =
+      *(report->mutable_global_data());
 
-  // Early exit if there is no data.
-  ThreadActivityAnalyzer* thread_analyzer = global_analyzer->GetFirstAnalyzer();
-  if (!thread_analyzer) {
-    // No data. This case happens in the case of a clean exit.
-    return DEBUG_FILE_NO_DATA;
-  }
-
-  // Iterate through the thread analyzers, fleshing out the report.
-  report->reset(new StabilityReport());
-  // Note: a single process is instrumented.
-  ProcessState* process_state = (*report)->add_process_states();
-
-  for (; thread_analyzer != nullptr;
-       thread_analyzer = global_analyzer->GetNextAnalyzer()) {
-    // Only valid analyzers are expected per contract of GetFirstAnalyzer /
-    // GetNextAnalyzer.
-    DCHECK(thread_analyzer->IsValid());
-
-    if (!process_state->has_process_id()) {
-      process_state->set_process_id(
-          thread_analyzer->activity_snapshot().process_id);
-    }
-    DCHECK_EQ(thread_analyzer->activity_snapshot().process_id,
-              process_state->process_id());
-
-    ThreadState* thread_state = process_state->add_threads();
-    CollectThread(thread_analyzer->activity_snapshot(), thread_state);
-  }
-
-  return SUCCESS;
+  // Reporter version details. These are useful as the reporter may be of a
+  // different version.
+  global_data[kStabilityReporterChannel].set_string_value(channel_name());
+#if defined(ARCH_CPU_X86)
+  global_data[kStabilityReporterPlatform].set_string_value(
+      std::string("Win32"));
+#elif defined(ARCH_CPU_X86_64)
+  global_data[kStabilityReporterPlatform].set_string_value(
+      std::string("Win64"));
+#endif
+  global_data[kStabilityReporterProduct].set_string_value(product_name());
+  global_data[kStabilityReporterVersion].set_string_value(version_number());
 }
 
-void PostmortemReportCollector::CollectThread(
-    const base::debug::ActivitySnapshot& snapshot,
-    ThreadState* thread_state) {
-  DCHECK(thread_state);
+void PostmortemReportCollector::RecordSystemShutdownState(
+    StabilityReport* report) const {
+  DCHECK(report);
 
-  thread_state->set_thread_name(snapshot.thread_name);
-  thread_state->set_thread_id(snapshot.thread_id);
-  thread_state->set_activity_count(snapshot.activity_stack_depth);
+  // The session state for the stability report, recorded to provided visibility
+  // into whether the system session was clean.
+  SystemState::SessionState session_state = SystemState::UNKNOWN;
+  // The status of the analysis, recorded to provide insight into the success
+  // or failure of the analysis.
+  SystemSessionAnalysisStatus status = SYSTEM_SESSION_ANALYSIS_SUCCESS;
 
-  for (const base::debug::Activity& recorded : snapshot.activity_stack) {
-    Activity* collected = thread_state->add_activities();
-    switch (recorded.activity_type) {
-      case base::debug::Activity::ACT_TASK_RUN:
-        collected->set_type(Activity::ACT_TASK_RUN);
-        collected->set_origin_address(recorded.origin_address);
-        collected->set_task_sequence_id(recorded.data.task.sequence_id);
+  base::Time time;
+  if (!GetStartTimestamp(report->global_data(), &time)) {
+    status = SYSTEM_SESSION_ANALYSIS_NO_TIMESTAMP;
+  } else if (!system_session_analyzer_) {
+    status = SYSTEM_SESSION_ANALYSIS_NO_ANALYZER;
+  } else {
+    SystemSessionAnalyzer::Status analyzer_status =
+        system_session_analyzer_->IsSessionUnclean(time);
+    switch (analyzer_status) {
+      case SystemSessionAnalyzer::FAILED:
+        status = SYSTEM_SESSION_ANALYSIS_FAILED;
         break;
-      case base::debug::Activity::ACT_LOCK_ACQUIRE:
-        collected->set_type(Activity::ACT_LOCK_ACQUIRE);
-        collected->set_lock_address(recorded.data.lock.lock_address);
+      case SystemSessionAnalyzer::CLEAN:
+        session_state = SystemState::CLEAN;
         break;
-      case base::debug::Activity::ACT_EVENT_WAIT:
-        collected->set_type(Activity::ACT_EVENT_WAIT);
-        collected->set_event_address(recorded.data.event.event_address);
+      case SystemSessionAnalyzer::UNCLEAN:
+        session_state = SystemState::UNCLEAN;
         break;
-      case base::debug::Activity::ACT_THREAD_JOIN:
-        collected->set_type(Activity::ACT_THREAD_JOIN);
-        collected->set_thread_id(recorded.data.thread.thread_id);
-        break;
-      case base::debug::Activity::ACT_PROCESS_WAIT:
-        collected->set_type(Activity::ACT_PROCESS_WAIT);
-        collected->set_process_id(recorded.data.process.process_id);
-        break;
-      default:
+      case SystemSessionAnalyzer::OUTSIDE_RANGE:
+        status = SYSTEM_SESSION_ANALYSIS_OUTSIDE_RANGE;
         break;
     }
   }
+
+  report->mutable_system_state()->set_session_state(session_state);
+  UMA_HISTOGRAM_ENUMERATION(
+      "ActivityTracker.Collect.SystemSessionAnalysisStatus", status,
+      SYSTEM_SESSION_ANALYSIS_STATUS_MAX);
 }
 
 bool PostmortemReportCollector::WriteReportToMinidump(
-    const StabilityReport& report,
+    StabilityReport* report,
     const crashpad::UUID& client_id,
     const crashpad::UUID& report_id,
     base::PlatformFile minidump_file) {
-  MinidumpInfo minidump_info;
-  minidump_info.client_id = client_id;
-  minidump_info.report_id = report_id;
-  // TODO(manzagop): replace this information, i.e. the reporter's attributes,
-  // by that of the reportee. Doing so requires adding this information to the
-  // stability report. In the meantime, there is a tolerable information
-  // mismatch after upgrades.
-  minidump_info.product_name = product_name();
-  minidump_info.version_number = version_number();
-  minidump_info.channel_name = channel_name();
-#if defined(ARCH_CPU_X86)
-  minidump_info.platform = std::string("Win32");
-#elif defined(ARCH_CPU_X86_64)
-  minidump_info.platform = std::string("Win64");
-#endif
+  DCHECK(report);
 
-  return WritePostmortemDump(minidump_file, report, minidump_info);
+  return WritePostmortemDump(minidump_file, client_id, report_id, report);
 }
 
 }  // namespace browser_watcher

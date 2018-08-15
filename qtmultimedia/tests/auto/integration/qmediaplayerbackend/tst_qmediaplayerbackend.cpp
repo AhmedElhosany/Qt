@@ -36,6 +36,7 @@
 #include <qmediaplaylist.h>
 #include <qmediametadata.h>
 
+#include "../shared/mediafileselector.h"
 //TESTED_COMPONENT=src/multimedia
 
 QT_USE_NAMESPACE
@@ -76,10 +77,11 @@ private slots:
     void surfaceTest_data();
     void surfaceTest();
     void metadata();
+    void playerStateAtEOS();
 
 private:
     QMediaContent selectVideoFile(const QStringList& mediaCandidates);
-    QMediaContent selectMediaFile(const QStringList& mediaCandidates);
+    bool isWavSupported();
 
     //one second local wav file
     QMediaContent localWavFile;
@@ -171,31 +173,13 @@ QMediaContent tst_QMediaPlayerBackend::selectVideoFile(const QStringList& mediaC
     return QMediaContent();
 }
 
-QMediaContent tst_QMediaPlayerBackend::selectMediaFile(const QStringList& mediaCandidates)
+bool tst_QMediaPlayerBackend::isWavSupported()
 {
-    QMediaPlayer player;
-
-    QSignalSpy errorSpy(&player, SIGNAL(error(QMediaPlayer::Error)));
-
-    foreach (QString s, mediaCandidates) {
-        QFileInfo mediaFile(s);
-        if (!mediaFile.exists())
-            continue;
-        QMediaContent media = QMediaContent(QUrl::fromLocalFile(mediaFile.absoluteFilePath()));
-        player.setMedia(media);
-        player.play();
-
-        for (int i = 0; i < 2000 && player.mediaStatus() != QMediaPlayer::BufferedMedia && errorSpy.isEmpty(); i+=50) {
-            QTest::qWait(50);
-        }
-
-        if (player.mediaStatus() == QMediaPlayer::BufferedMedia && errorSpy.isEmpty()) {
-            return media;
-        }
-        errorSpy.clear();
-    }
-
-    return QMediaContent();
+#ifdef WAV_SUPPORT_NOT_FORCED
+    return !localWavFile.isNull();
+#else
+    return true;
+#endif
 }
 
 void tst_QMediaPlayerBackend::initTestCase()
@@ -204,35 +188,24 @@ void tst_QMediaPlayerBackend::initTestCase()
     if (!player.isAvailable())
         QSKIP("Media player service is not available");
 
-    const QString testFileName = QFINDTESTDATA("testdata/test.wav");
-    QFileInfo wavFile(testFileName);
-
-    QVERIFY(wavFile.exists());
-
-    localWavFile = QMediaContent(QUrl::fromLocalFile(wavFile.absoluteFilePath()));
-
-    const QString testFileName2 = QFINDTESTDATA("testdata/_test.wav");
-    QFileInfo wavFile2(testFileName2);
-
-    QVERIFY(wavFile2.exists());
-
-    localWavFile2 = QMediaContent(QUrl::fromLocalFile(wavFile2.absoluteFilePath()));
-
     qRegisterMetaType<QMediaContent>();
+
+    localWavFile = MediaFileSelector::selectMediaFile(QStringList() << QFINDTESTDATA("testdata/test.wav"));
+    localWavFile2 = MediaFileSelector::selectMediaFile(QStringList() << QFINDTESTDATA("testdata/_test.wav"));;
 
     QStringList mediaCandidates;
     mediaCandidates << QFINDTESTDATA("testdata/colors.mp4");
 #ifndef SKIP_OGV_TEST
     mediaCandidates << QFINDTESTDATA("testdata/colors.ogv");
 #endif
-    localVideoFile = selectMediaFile(mediaCandidates);
+    localVideoFile = MediaFileSelector::selectMediaFile(mediaCandidates);
 
     mediaCandidates.clear();
     mediaCandidates << QFINDTESTDATA("testdata/nokia-tune.mp3");
     mediaCandidates << QFINDTESTDATA("testdata/nokia-tune.mkv");
-    localCompressedSoundFile = selectMediaFile(mediaCandidates);
+    localCompressedSoundFile = MediaFileSelector::selectMediaFile(mediaCandidates);
 
-    localFileWithMetadata = selectMediaFile(QStringList() << QFINDTESTDATA("testdata/nokia-tune.mp3"));
+    localFileWithMetadata = MediaFileSelector::selectMediaFile(QStringList() << QFINDTESTDATA("testdata/nokia-tune.mp3"));
 
     qgetenv("QT_TEST_CI").toInt(&m_inCISystem,10);
 }
@@ -249,7 +222,11 @@ void tst_QMediaPlayerBackend::construction()
 
 void tst_QMediaPlayerBackend::loadMedia()
 {
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
     QMediaPlayer player;
+
     QCOMPARE(player.state(), QMediaPlayer::StoppedState);
     QCOMPARE(player.mediaStatus(), QMediaPlayer::NoMedia);
 
@@ -281,6 +258,9 @@ void tst_QMediaPlayerBackend::loadMedia()
 
 void tst_QMediaPlayerBackend::unloadMedia()
 {
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
     QMediaPlayer player;
     player.setNotifyInterval(50);
 
@@ -339,6 +319,9 @@ void tst_QMediaPlayerBackend::loadMediaInLoadingState()
 
 void tst_QMediaPlayerBackend::playPauseStop()
 {
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
     QMediaPlayer player;
     player.setNotifyInterval(50);
 
@@ -491,6 +474,9 @@ void tst_QMediaPlayerBackend::playPauseStop()
 
 void tst_QMediaPlayerBackend::processEOS()
 {
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
     QMediaPlayer player;
     player.setNotifyInterval(50);
 
@@ -623,6 +609,9 @@ private:
 // QTBUG-24927 - deleteLater() called to QMediaPlayer from its signal handler does not work as expected
 void tst_QMediaPlayerBackend::deleteLaterAtEOS()
 {
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
     QPointer<QMediaPlayer> player(new QMediaPlayer);
     DeleteLaterAtEos deleter(player);
     player->setMedia(localWavFile);
@@ -747,6 +736,9 @@ void tst_QMediaPlayerBackend::volumeAcrossFiles()
 
 void tst_QMediaPlayerBackend::initialVolume()
 {
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
     {
         QMediaPlayer player;
         player.setVolume(1);
@@ -1206,6 +1198,9 @@ void tst_QMediaPlayerBackend::playlist()
 
 void tst_QMediaPlayerBackend::playlistObject()
 {
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
     QMediaPlayer player;
 
     QSignalSpy mediaSpy(&player, SIGNAL(mediaChanged(QMediaContent)));
@@ -1416,6 +1411,28 @@ void tst_QMediaPlayerBackend::metadata()
     QVERIFY(!metadataAvailableSpy.last()[0].toBool());
     QCOMPARE(metadataChangedSpy.count(), 1);
     QVERIFY(player.availableMetaData().isEmpty());
+}
+
+void tst_QMediaPlayerBackend::playerStateAtEOS()
+{
+    if (!isWavSupported())
+        QSKIP("Sound format is not supported");
+
+    QMediaPlayer player;
+
+    bool endOfMediaReceived = false;
+    connect(&player, &QMediaPlayer::mediaStatusChanged, [&](QMediaPlayer::MediaStatus status) {
+        if (status == QMediaPlayer::EndOfMedia) {
+            QCOMPARE(player.state(), QMediaPlayer::StoppedState);
+            endOfMediaReceived = true;
+        }
+    });
+
+    player.setMedia(localWavFile);
+    player.play();
+
+    QTRY_COMPARE(player.mediaStatus(), QMediaPlayer::EndOfMedia);
+    QVERIFY(endOfMediaReceived);
 }
 
 TestVideoSurface::TestVideoSurface(bool storeFrames):

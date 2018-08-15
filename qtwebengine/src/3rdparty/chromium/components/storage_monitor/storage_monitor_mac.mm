@@ -238,8 +238,6 @@ void StorageMonitorMac::UpdateDisk(
       disk_info_map_.erase(it);
   } else {
     disk_info_map_[bsd_name] = info;
-    MediaStorageUtil::RecordDeviceInfoHistogram(true, info.device_id(),
-                                                info.storage_label());
     if (ShouldPostNotificationForDisk(info))
       receiver()->ProcessAttach(info);
   }
@@ -320,7 +318,7 @@ void StorageMonitorMac::EjectDevice(
   EjectDiskOptions* options = new EjectDiskOptions;
   options->bsd_name = bsd_name;
   options->callback = callback;
-  options->disk.reset(disk.release());
+  options->disk = std::move(disk);
   content::BrowserThread::PostTask(content::BrowserThread::UI, FROM_HERE,
                                    base::Bind(EjectDisk, options));
 }

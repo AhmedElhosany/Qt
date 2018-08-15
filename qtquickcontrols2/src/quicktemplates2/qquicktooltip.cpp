@@ -281,6 +281,11 @@ QFont QQuickToolTip::defaultFont() const
     return QQuickControlPrivate::themeFont(QPlatformTheme::TipLabelFont);
 }
 
+QPalette QQuickToolTip::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::ToolTipPalette);
+}
+
 void QQuickToolTip::itemChange(QQuickItem::ItemChange change, const QQuickItem::ItemChangeData &data)
 {
     Q_D(QQuickToolTip);
@@ -355,7 +360,7 @@ QQuickToolTip *QQuickToolTipAttachedPrivate::instance(bool create) const
     if (!tip && create) {
         // TODO: a cleaner way to create the instance? QQml(Meta)Type?
         QQmlComponent component(engine);
-        component.setData("import QtQuick.Controls 2.2; ToolTip { }", QUrl());
+        component.setData("import QtQuick.Controls 2.3; ToolTip { }", QUrl());
 
         QObject *object = component.create();
         if (object)

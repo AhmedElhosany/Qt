@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/stl_util.h"
 #include "base/trace_event/trace_event_argument.h"
 
 namespace cc {
@@ -32,6 +33,20 @@ struct MainThreadScrollingReason {
     kHandlingScrollFromMainThread = 1 << 13,
     kCustomScrollbarScrolling = 1 << 15,
 
+    // Style-related scrolling on main reasons.
+    // These *AndLCDText reasons are due to subpixel text rendering which can
+    // only be applied by blending glyphs with the background at a specific
+    // screen position; transparency and transforms break this.
+    kNonCompositedReasonsFirst = 16,
+    kHasOpacityAndLCDText = 1 << 16,
+    kHasTransformAndLCDText = 1 << 17,
+    kBackgroundNotOpaqueInRectAndLCDText = 1 << 18,
+    kHasBorderRadius = 1 << 19,
+    kHasClipRelatedProperty = 1 << 20,
+    kHasBoxShadowFromNonRootLayer = 1 << 21,
+    kIsNotStackingContextAndLCDText = 1 << 22,
+    kNonCompositedReasonsLast = 22,
+
     // Transient scrolling reasons. These are computed for each scroll begin.
     kNonFastScrollableRegion = 1 << 5,
     kFailedHitTest = 1 << 7,
@@ -41,9 +56,18 @@ struct MainThreadScrollingReason {
     kNonInvertibleTransform = 1 << 11,
     kPageBasedScrolling = 1 << 12,
 
-    // The number of flags in this struct (excluding itself).
-    kMainThreadScrollingReasonCount = 17,
+    // The maximum number of flags in this struct (excluding itself).
+    // New flags should increment this number but it should never be decremented
+    // because the values are used in UMA histograms. It should also be noted
+    // that it excludes the kNotScrollingOnMain value.
+    kMainThreadScrollingReasonCount = 23,
   };
+
+  static const uint32_t kNonCompositedReasons =
+      kHasOpacityAndLCDText | kHasTransformAndLCDText |
+      kBackgroundNotOpaqueInRectAndLCDText | kHasBorderRadius |
+      kHasClipRelatedProperty | kHasBoxShadowFromNonRootLayer |
+      kIsNotStackingContextAndLCDText;
 
   // Returns true if the given MainThreadScrollingReason can be set by the main
   // thread.
@@ -66,6 +90,12 @@ struct MainThreadScrollingReason {
     return (reasons & reasons_set_by_compositor) == reasons;
   }
 
+  // Returns true if there are any reasons that prevented the scroller
+  // from being composited.
+  static bool HasNonCompositedScrollReasons(uint32_t reasons) {
+    return (reasons & kNonCompositedReasons) != 0;
+  }
+
   static std::string mainThreadScrollingReasonsAsText(uint32_t reasons) {
     base::trace_event::TracedValue tracedValue;
     mainThreadScrollingReasonsAsTracedValue(reasons, &tracedValue);
@@ -73,7 +103,7 @@ struct MainThreadScrollingReason {
     // Remove '{main_thread_scrolling_reasons:[', ']}', and any '"' chars.
     std::string result =
         result_in_array_foramt.substr(34, result_in_array_foramt.length() - 36);
-    result.erase(std::remove(result.begin(), result.end(), '\"'), result.end());
+    base::Erase(result, '\"');
     return result;
   }
 
@@ -97,6 +127,23 @@ struct MainThreadScrollingReason {
       tracedValue->AppendString("Handling scroll from main thread");
     if (reasons & MainThreadScrollingReason::kCustomScrollbarScrolling)
       tracedValue->AppendString("Custom scrollbar scrolling");
+    if (reasons & MainThreadScrollingReason::kHasOpacityAndLCDText)
+      tracedValue->AppendString("Has opacity and LCD text");
+    if (reasons & MainThreadScrollingReason::kHasTransformAndLCDText)
+      tracedValue->AppendString("Has transform and LCD text");
+    if (reasons &
+        MainThreadScrollingReason::kBackgroundNotOpaqueInRectAndLCDText) {
+      tracedValue->AppendString(
+          "Background is not opaque in rect and LCD text");
+    }
+    if (reasons & MainThreadScrollingReason::kHasBorderRadius)
+      tracedValue->AppendString("Has border radius");
+    if (reasons & MainThreadScrollingReason::kHasClipRelatedProperty)
+      tracedValue->AppendString("Has clip related property");
+    if (reasons & MainThreadScrollingReason::kHasBoxShadowFromNonRootLayer)
+      tracedValue->AppendString("Has box shadow from non-root layer");
+    if (reasons & MainThreadScrollingReason::kIsNotStackingContextAndLCDText)
+      tracedValue->AppendString("Is not stacking context and LCD text");
 
     // Transient scrolling reasons.
     if (reasons & MainThreadScrollingReason::kNonFastScrollableRegion)

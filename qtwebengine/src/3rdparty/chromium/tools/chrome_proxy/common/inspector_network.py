@@ -4,8 +4,8 @@
 import logging
 
 from telemetry.core import exceptions
-from telemetry.timeline import trace_data
 from telemetry.timeline import model
+from tracing.trace_data import trace_data
 
 
 class InspectorNetworkException(Exception):
@@ -291,5 +291,5 @@ class TimelineRecorder(object):
     if len(events) == 0:
       return None
     builder = trace_data.TraceDataBuilder()
-    builder.AddEventsTo(trace_data.INSPECTOR_TRACE_PART, events)
+    builder.AddTraceFor(trace_data.INSPECTOR_TRACE_PART, events)
     return model.TimelineModel(builder.AsData(), shift_world_to_zero=False)

@@ -26,20 +26,15 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import getpass
 import logging
-import os
 import platform
 import re
-import shlex
-import subprocess
 import sys
 import webbrowser
 
 from webkitpy.common.system.executive import Executive
 from webkitpy.common.system.filesystem import FileSystem
-from webkitpy.common.system.platforminfo import PlatformInfo
-
+from webkitpy.common.system.platform_info import PlatformInfo
 
 _log = logging.getLogger(__name__)
 
@@ -48,44 +43,27 @@ class User(object):
     DEFAULT_NO = 'n'
     DEFAULT_YES = 'y'
 
-    def __init__(self, platforminfo=None):
+    def __init__(self, platform_info=None):
         # We cannot get the PlatformInfo object from a SystemHost because
         # User is part of SystemHost itself.
-        self._platforminfo = platforminfo or PlatformInfo(sys, platform, FileSystem(), Executive())
+        self._platform_info = platform_info or PlatformInfo(sys, platform, FileSystem(), Executive())
 
     # FIXME: These are @classmethods because bugzilla.py doesn't have a Tool object (thus no User instance).
     @classmethod
-    def prompt(cls, message, repeat=1, raw_input=raw_input):
+    def prompt(cls, message, repeat=1, input_func=raw_input):
         response = None
         while repeat and not response:
             repeat -= 1
-            response = raw_input(message)
+            response = input_func(message)
         return response
 
     @classmethod
-    def prompt_password(cls, message, repeat=1):
-        return cls.prompt(message, repeat=repeat, raw_input=getpass.getpass)
-
-    @classmethod
-    def prompt_with_multiple_lists(cls, list_title, subtitles, lists, can_choose_multiple=False, raw_input=raw_input):
-        item_index = 0
-        cumulated_list = []
-        print list_title
-        for i in range(len(subtitles)):
-            print "\n" + subtitles[i]
-            for item in lists[i]:
-                item_index += 1
-                print "%2d. %s" % (item_index, item)
-            cumulated_list += lists[i]
-        return cls._wait_on_list_response(cumulated_list, can_choose_multiple, raw_input)
-
-    @classmethod
-    def _wait_on_list_response(cls, list_items, can_choose_multiple, raw_input):
+    def _wait_on_list_response(cls, list_items, can_choose_multiple, input_func):
         while True:
             if can_choose_multiple:
                 response = cls.prompt(
-                    "Enter one or more numbers (comma-separated) or ranges (e.g. 3-7), or \"all\": ", raw_input=raw_input)
-                if not response.strip() or response == "all":
+                    'Enter one or more numbers (comma-separated) or ranges (e.g. 3-7), or \'all\': ', input_func=input_func)
+                if not response.strip() or response == 'all':
                     return list_items
 
                 try:
@@ -102,43 +80,29 @@ class User(object):
                 return [list_items[i] for i in indices]
             else:
                 try:
-                    result = int(cls.prompt("Enter a number: ", raw_input=raw_input)) - 1
+                    result = int(cls.prompt('Enter a number: ', input_func=input_func)) - 1
                 except ValueError:
                     continue
                 return list_items[result]
 
     @classmethod
-    def prompt_with_list(cls, list_title, list_items, can_choose_multiple=False, raw_input=raw_input):
+    def prompt_with_list(cls, list_title, list_items, can_choose_multiple=False, input_func=raw_input):
         print list_title
         i = 0
         for item in list_items:
             i += 1
-            print "%2d. %s" % (i, item)
-        return cls._wait_on_list_response(list_items, can_choose_multiple, raw_input)
+            print '%2d. %s' % (i, item)
+        return cls._wait_on_list_response(list_items, can_choose_multiple, input_func)
 
-    def edit(self, files):
-        editor = os.environ.get("EDITOR") or "vi"
-        args = shlex.split(editor)
-        # Note: Not thread safe: http://bugs.python.org/issue2320
-        subprocess.call(args + files)
-
-    def page(self, message):
-        pager = os.environ.get("PAGER") or "less"
-        try:
-            # Note: Not thread safe: http://bugs.python.org/issue2320
-            child_process = subprocess.Popen([pager], stdin=subprocess.PIPE)
-            child_process.communicate(input=message)
-        except IOError:
-            pass
-
-    def confirm(self, message=None, default=DEFAULT_YES, raw_input=raw_input):
+    def confirm(self, message=None, default=DEFAULT_YES, input_func=raw_input):
         if not message:
-            message = "Continue?"
+            message = 'Continue?'
         choice = {'y': 'Y/n', 'n': 'y/N'}[default]
-        response = raw_input("%s [%s]: " % (message, choice))
+        response = input_func('%s [%s]: ' % (message, choice))
+        response = response.strip().lower()
         if not response:
             response = default
-        return response.lower() == 'y'
+        return response and response[0] == 'y'
 
     def can_open_url(self):
         try:
@@ -149,5 +113,5 @@ class User(object):
 
     def open_url(self, url):
         if not self.can_open_url():
-            _log.warning("Failed to open %s", url)
+            _log.warning('Failed to open %s', url)
         webbrowser.open(url)

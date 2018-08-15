@@ -294,6 +294,7 @@ TEST(GURLTest, Resolve) {
     {"http://www.google.com/foo/", "/bar", true, "http://www.google.com/bar"},
     {"http://www.google.com/foo", "bar", true, "http://www.google.com/bar"},
     {"http://www.google.com/", "http://images.google.com/foo.html", true, "http://images.google.com/foo.html"},
+    {"http://www.google.com/", "http://images.\tgoogle.\ncom/\rfoo.html", true, "http://images.google.com/foo.html"},
     {"http://www.google.com/blah/bloo?c#d", "../../../hello/./world.html?a#b", true, "http://www.google.com/hello/world.html?a#b"},
     {"http://www.google.com/foo#bar", "#com", true, "http://www.google.com/foo#com"},
     {"http://www.google.com/", "Https:images.google.com", true, "https://images.google.com/"},
@@ -583,6 +584,7 @@ TEST(GURLTest, HostNoBrackets) {
     GURL url(cases[i].input);
     EXPECT_EQ(cases[i].expected_host, url.host());
     EXPECT_EQ(cases[i].expected_plainhost, url.HostNoBrackets());
+    EXPECT_EQ(cases[i].expected_plainhost, url.HostNoBracketsPiece());
   }
 }
 
@@ -644,10 +646,26 @@ TEST(GURLTest, Newlines) {
   // Constructor.
   GURL url_1(" \t ht\ntp://\twww.goo\rgle.com/as\ndf \n ");
   EXPECT_EQ("http://www.google.com/asdf", url_1.spec());
+  EXPECT_FALSE(
+      url_1.parsed_for_possibly_invalid_spec().potentially_dangling_markup);
 
   // Relative path resolver.
   GURL url_2 = url_1.Resolve(" \n /fo\to\r ");
   EXPECT_EQ("http://www.google.com/foo", url_2.spec());
+  EXPECT_FALSE(
+      url_2.parsed_for_possibly_invalid_spec().potentially_dangling_markup);
+
+  // Constructor.
+  GURL url_3(" \t ht\ntp://\twww.goo\rgle.com/as\ndf< \n ");
+  EXPECT_EQ("http://www.google.com/asdf%3C", url_3.spec());
+  EXPECT_TRUE(
+      url_3.parsed_for_possibly_invalid_spec().potentially_dangling_markup);
+
+  // Relative path resolver.
+  GURL url_4 = url_1.Resolve(" \n /fo\to<\r ");
+  EXPECT_EQ("http://www.google.com/foo%3C", url_4.spec());
+  EXPECT_TRUE(
+      url_4.parsed_for_possibly_invalid_spec().potentially_dangling_markup);
 
   // Note that newlines are NOT stripped from ReplaceComponents.
 }
@@ -736,6 +754,79 @@ TEST(GURLTest, ContentAndPathForNonStandardURLs) {
     GURL url(test.url);
     EXPECT_EQ(test.expected, url.path()) << test.url;
     EXPECT_EQ(test.expected, url.GetContent()) << test.url;
+  }
+}
+
+TEST(GURLTest, IsAboutBlank) {
+  const std::string kAboutBlankUrls[] = {"about:blank", "about:blank?foo",
+                                         "about:blank/#foo",
+                                         "about:blank?foo#foo"};
+  for (const auto& url : kAboutBlankUrls)
+    EXPECT_TRUE(GURL(url).IsAboutBlank()) << url;
+
+  const std::string kNotAboutBlankUrls[] = {
+      "http:blank",      "about:blan",          "about://blank",
+      "about:blank/foo", "about://:8000/blank", "about://foo:foo@/blank",
+      "foo@about:blank", "foo:bar@about:blank", "about:blank:8000"};
+  for (const auto& url : kNotAboutBlankUrls)
+    EXPECT_FALSE(GURL(url).IsAboutBlank()) << url;
+}
+
+TEST(GURLTest, EqualsIgnoringRef) {
+  const struct {
+    const char* url_a;
+    const char* url_b;
+    bool are_equals;
+  } kTestCases[] = {
+      // No ref.
+      {"http://a.com", "http://a.com", true},
+      {"http://a.com", "http://b.com", false},
+
+      // Same Ref.
+      {"http://a.com#foo", "http://a.com#foo", true},
+      {"http://a.com#foo", "http://b.com#foo", false},
+
+      // Different Refs.
+      {"http://a.com#foo", "http://a.com#bar", true},
+      {"http://a.com#foo", "http://b.com#bar", false},
+
+      // One has a ref, the other doesn't.
+      {"http://a.com#foo", "http://a.com", true},
+      {"http://a.com#foo", "http://b.com", false},
+
+      // Empty refs.
+      {"http://a.com#", "http://a.com#", true},
+      {"http://a.com#", "http://a.com", true},
+
+      // URLs that differ only by their last character.
+      {"http://aaa", "http://aab", false},
+      {"http://aaa#foo", "http://aab#foo", false},
+
+      // Different size of the part before the ref.
+      {"http://123#a", "http://123456#a", false},
+
+      // Blob URLs
+      {"blob:http://a.com#foo", "blob:http://a.com#foo", true},
+      {"blob:http://a.com#foo", "blob:http://a.com#bar", true},
+      {"blob:http://a.com#foo", "blob:http://b.com#bar", false},
+
+      // Filesystem URLs
+      {"filesystem:http://a.com#foo", "filesystem:http://a.com#foo", true},
+      {"filesystem:http://a.com#foo", "filesystem:http://a.com#bar", true},
+      {"filesystem:http://a.com#foo", "filesystem:http://b.com#bar", false},
+  };
+
+  for (const auto& test_case : kTestCases) {
+    SCOPED_TRACE(testing::Message()
+                 << std::endl
+                 << "url_a = " << test_case.url_a << std::endl
+                 << "url_b = " << test_case.url_b << std::endl);
+    // A versus B.
+    EXPECT_EQ(test_case.are_equals,
+              GURL(test_case.url_a).EqualsIgnoringRef(GURL(test_case.url_b)));
+    // B versus A.
+    EXPECT_EQ(test_case.are_equals,
+              GURL(test_case.url_b).EqualsIgnoringRef(GURL(test_case.url_a)));
   }
 }
 

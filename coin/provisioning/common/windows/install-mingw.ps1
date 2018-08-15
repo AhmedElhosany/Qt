@@ -55,13 +55,14 @@ function InstallMinGW
     Download $url_official $url_cache $mingwPackage
     Verify-Checksum $mingwPackage $sha1
 
-    Extract-7Zip $mingwPackage $TARGETDIR
+    Get-ChildItem $mingwPackage | % {& "C:\Utils\sevenzip\7z.exe" "x" $_.fullname "-o$TARGETDIR"}
 
-    Set-EnvironmentVariable "$envvar" "$targetdir\mingw32"
+    echo "Adding MinGW environment variable."
+    [Environment]::SetEnvironmentVariable("$envvar", "$targetdir\mingw32", [EnvironmentVariableTarget]::Machine)
 
-    Write-Host "Cleaning $mingwPackage.."
-    Remove-Item -Recurse -Force -Path "$mingwPackage"
+    echo "Cleaning $mingwPackage.."
+    Remove-Item -Recurse -Force "$mingwPackage"
 
-    Write-Output "MinGW = $version $release" >> ~\versions.txt
+    echo "MinGW = $version $release" >> ~\versions.txt
 
 }

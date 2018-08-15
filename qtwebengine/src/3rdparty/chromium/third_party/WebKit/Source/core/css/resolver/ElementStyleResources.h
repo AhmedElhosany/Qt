@@ -29,12 +29,12 @@
 #include "platform/CrossOriginAttributeValue.h"
 #include "platform/graphics/Color.h"
 #include "platform/heap/Handle.h"
-#include "wtf/HashMap.h"
-#include "wtf/Noncopyable.h"
+#include "platform/loader/fetch/FetchParameters.h"
+#include "platform/wtf/HashMap.h"
+#include "platform/wtf/Noncopyable.h"
 
 namespace blink {
 
-class CSSCursorImageValue;
 class CSSImageGeneratorValue;
 class CSSImageSetValue;
 class CSSImageValue;
@@ -53,32 +53,31 @@ class ElementStyleResources {
   WTF_MAKE_NONCOPYABLE(ElementStyleResources);
 
  public:
-  ElementStyleResources(Document&, float deviceScaleFactor);
+  ElementStyleResources(Document&, float device_scale_factor);
 
-  StyleImage* styleImage(CSSPropertyID, const CSSValue&);
-  StyleImage* cachedOrPendingFromValue(CSSPropertyID, const CSSImageValue&);
-  StyleImage* setOrPendingFromValue(CSSPropertyID, const CSSImageSetValue&);
-  SVGElementProxy& cachedOrPendingFromValue(const CSSURIValue&);
+  StyleImage* GetStyleImage(CSSPropertyID, const CSSValue&);
+  StyleImage* CachedOrPendingFromValue(CSSPropertyID, const CSSImageValue&);
+  StyleImage* SetOrPendingFromValue(CSSPropertyID, const CSSImageSetValue&);
+  SVGElementProxy& CachedOrPendingFromValue(const CSSURIValue&);
 
-  void loadPendingResources(ComputedStyle*);
+  void LoadPendingResources(ComputedStyle*);
 
  private:
-  StyleImage* cursorOrPendingFromValue(CSSPropertyID,
-                                       const CSSCursorImageValue&);
-  StyleImage* generatedOrPendingFromValue(CSSPropertyID,
+  StyleImage* GeneratedOrPendingFromValue(CSSPropertyID,
                                           const CSSImageGeneratorValue&);
 
-  void loadPendingSVGDocuments(ComputedStyle*);
-  void loadPendingImages(ComputedStyle*);
+  void LoadPendingSVGDocuments(ComputedStyle*);
+  void LoadPendingImages(ComputedStyle*);
 
-  StyleImage* loadPendingImage(
+  StyleImage* LoadPendingImage(
       ComputedStyle*,
       StylePendingImage*,
-      CrossOriginAttributeValue = CrossOriginAttributeNotSet);
+      FetchParameters::PlaceholderImageRequestType,
+      CrossOriginAttributeValue = kCrossOriginAttributeNotSet);
 
-  Member<Document> m_document;
-  HashSet<CSSPropertyID> m_pendingImageProperties;
-  float m_deviceScaleFactor;
+  Member<Document> document_;
+  HashSet<CSSPropertyID> pending_image_properties_;
+  float device_scale_factor_;
 };
 
 }  // namespace blink

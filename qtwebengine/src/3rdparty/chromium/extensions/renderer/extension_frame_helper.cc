@@ -8,7 +8,9 @@
 #include "base/strings/string_util.h"
 #include "base/timer/elapsed_timer.h"
 #include "content/public/renderer/render_frame.h"
+#include "content/public/renderer/render_view.h"
 #include "extensions/common/api/messaging/message.h"
+#include "extensions/common/api/messaging/port_id.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_messages.h"
 #include "extensions/common/manifest_handlers/background_info.h"
@@ -26,8 +28,10 @@ namespace extensions {
 
 namespace {
 
-base::LazyInstance<std::set<const ExtensionFrameHelper*>> g_frame_helpers =
-    LAZY_INSTANCE_INITIALIZER;
+constexpr int kMainWorldId = 0;
+
+base::LazyInstance<std::set<const ExtensionFrameHelper*>>::DestructorAtExit
+    g_frame_helpers = LAZY_INSTANCE_INITIALIZER;
 
 // Returns true if the render frame corresponding with |frame_helper| matches
 // the given criteria.
@@ -47,12 +51,10 @@ bool RenderFrameMatches(const ExtensionFrameHelper* frame_helper,
 
   // This logic matches ExtensionWebContentsObserver::GetExtensionFromFrame.
   blink::WebSecurityOrigin origin =
-      frame_helper->render_frame()->GetWebFrame()->getSecurityOrigin();
-  if (origin.isUnique() ||
-      !base::EqualsASCII(base::StringPiece16(origin.protocol()),
-                         kExtensionScheme) ||
-      !base::EqualsASCII(base::StringPiece16(origin.host()),
-                         match_extension_id.c_str()))
+      frame_helper->render_frame()->GetWebFrame()->GetSecurityOrigin();
+  if (origin.IsUnique() ||
+      !base::EqualsASCII(origin.Protocol().Utf16(), kExtensionScheme) ||
+      !base::EqualsASCII(origin.Host().Utf16(), match_extension_id.c_str()))
     return false;
 
   if (match_window_id != extension_misc::kUnknownWindowId &&
@@ -90,19 +92,6 @@ enum class PortType {
 
 }  // namespace
 
-struct ExtensionFrameHelper::PendingPortRequest {
-  PendingPortRequest(PortType type, const base::Callback<void(int)>& callback)
-      : type(type), callback(callback) {}
-  ~PendingPortRequest() {}
-
-  base::ElapsedTimer timer;
-  PortType type;
-  base::Callback<void(int)> callback;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PendingPortRequest);
-};
-
 ExtensionFrameHelper::ExtensionFrameHelper(content::RenderFrame* render_frame,
                                            Dispatcher* extension_dispatcher)
     : content::RenderFrameObserver(render_frame),
@@ -112,7 +101,6 @@ ExtensionFrameHelper::ExtensionFrameHelper(content::RenderFrame* render_frame,
       browser_window_id_(-1),
       extension_dispatcher_(extension_dispatcher),
       did_create_current_document_element_(false),
-      next_port_request_id_(0),
       weak_ptr_factory_(this) {
   g_frame_helpers.Get().insert(this);
 }
@@ -145,7 +133,7 @@ content::RenderFrame* ExtensionFrameHelper::GetBackgroundPageFrame(
                            extension_misc::kUnknownTabId, extension_id)) {
       blink::WebLocalFrame* web_frame = helper->render_frame()->GetWebFrame();
       // Check if this is the top frame.
-      if (web_frame->top() == web_frame)
+      if (web_frame->Top() == web_frame)
         return helper->render_frame();
     }
   }
@@ -184,6 +172,12 @@ void ExtensionFrameHelper::RunScriptsAtDocumentEnd() {
   // |this| might be dead by now.
 }
 
+void ExtensionFrameHelper::RunScriptsAtDocumentIdle() {
+  RunCallbacksWhileFrameIsValid(weak_ptr_factory_.GetWeakPtr(),
+                                &document_idle_callbacks_);
+  // |this| might be dead by now.
+}
+
 void ExtensionFrameHelper::ScheduleAtDocumentStart(
     const base::Closure& callback) {
   document_element_created_callbacks_.push_back(callback);
@@ -194,62 +188,9 @@ void ExtensionFrameHelper::ScheduleAtDocumentEnd(
   document_load_finished_callbacks_.push_back(callback);
 }
 
-void ExtensionFrameHelper::RequestPortId(
-    const ExtensionMsg_ExternalConnectionInfo& info,
-    const std::string& channel_name,
-    bool include_tls_channel_id,
-    const base::Callback<void(int)>& callback) {
-  int port_request_id = next_port_request_id_++;
-  pending_port_requests_[port_request_id] =
-      base::MakeUnique<PendingPortRequest>(PortType::EXTENSION, callback);
-  {
-    SCOPED_UMA_HISTOGRAM_TIMER(
-        "Extensions.Messaging.GetPortIdSyncTime.Extension");
-    render_frame()->Send(new ExtensionHostMsg_OpenChannelToExtension(
-        render_frame()->GetRoutingID(), info, channel_name,
-        include_tls_channel_id, port_request_id));
-  }
-}
-
-void ExtensionFrameHelper::RequestTabPortId(
-    const ExtensionMsg_TabTargetConnectionInfo& info,
-    const std::string& extension_id,
-    const std::string& channel_name,
-    const base::Callback<void(int)>& callback) {
-  int port_request_id = next_port_request_id_++;
-  pending_port_requests_[port_request_id] =
-      base::MakeUnique<PendingPortRequest>(PortType::TAB, callback);
-  {
-    SCOPED_UMA_HISTOGRAM_TIMER("Extensions.Messaging.GetPortIdSyncTime.Tab");
-    render_frame()->Send(new ExtensionHostMsg_OpenChannelToTab(
-        render_frame()->GetRoutingID(), info, extension_id, channel_name,
-        port_request_id));
-  }
-}
-
-void ExtensionFrameHelper::RequestNativeAppPortId(
-    const std::string& native_app_name,
-    const base::Callback<void(int)>& callback) {
-  int port_request_id = next_port_request_id_++;
-  pending_port_requests_[port_request_id] =
-      base::MakeUnique<PendingPortRequest>(PortType::NATIVE_APP, callback);
-  {
-    SCOPED_UMA_HISTOGRAM_TIMER(
-        "Extensions.Messaging.GetPortIdSyncTime.NativeApp");
-    render_frame()->Send(new ExtensionHostMsg_OpenChannelToNativeApp(
-        render_frame()->GetRoutingID(), native_app_name, port_request_id));
-  }
-}
-
-int ExtensionFrameHelper::RequestSyncPortId(
-    const ExtensionMsg_ExternalConnectionInfo& info,
-    const std::string& channel_name,
-    bool include_tls_channel_id) {
-  int port_id = 0;
-  render_frame()->Send(new ExtensionHostMsg_OpenChannelToExtensionSync(
-      render_frame()->GetRoutingID(), info, channel_name,
-      include_tls_channel_id, &port_id));
-  return port_id;
+void ExtensionFrameHelper::ScheduleAtDocumentIdle(
+    const base::Closure& callback) {
+  document_idle_callbacks_.push_back(callback);
 }
 
 void ExtensionFrameHelper::DidMatchCSS(
@@ -260,36 +201,34 @@ void ExtensionFrameHelper::DidMatchCSS(
       stopped_matching_selectors);
 }
 
-void ExtensionFrameHelper::DidStartProvisionalLoad() {
+void ExtensionFrameHelper::DidStartProvisionalLoad(
+    blink::WebDataSource* data_source) {
   if (!delayed_main_world_script_initialization_)
     return;
 
   delayed_main_world_script_initialization_ = false;
   v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
   v8::Local<v8::Context> context =
-      render_frame()->GetWebFrame()->mainWorldScriptContext();
+      render_frame()->GetWebFrame()->MainWorldScriptContext();
   v8::Context::Scope context_scope(context);
-  extension_dispatcher_->DidCreateScriptContext(
-      render_frame()->GetWebFrame(), context, 0, 0);
+  extension_dispatcher_->DidCreateScriptContext(render_frame()->GetWebFrame(),
+                                                context, kMainWorldId);
   // TODO(devlin): Add constants for main world id, no extension group.
 }
 
 void ExtensionFrameHelper::DidCreateScriptContext(
     v8::Local<v8::Context> context,
-    int extension_group,
     int world_id) {
-  if (context == render_frame()->GetWebFrame()->mainWorldScriptContext() &&
+  if (world_id == kMainWorldId &&
       render_frame()->IsBrowserSideNavigationPending()) {
-    DCHECK_EQ(0, extension_group);
-    DCHECK_EQ(0, world_id);
     DCHECK(!delayed_main_world_script_initialization_);
     // Defer initializing the extensions script context now because it depends
     // on having the URL of the provisional load which isn't available at this
     // point with PlzNavigate.
     delayed_main_world_script_initialization_ = true;
   } else {
-    extension_dispatcher_->DidCreateScriptContext(
-        render_frame()->GetWebFrame(), context, extension_group, world_id);
+    extension_dispatcher_->DidCreateScriptContext(render_frame()->GetWebFrame(),
+                                                  context, world_id);
   }
 }
 
@@ -317,19 +256,18 @@ bool ExtensionFrameHelper::OnMessageReceived(const IPC::Message& message) {
                         OnNotifyRendererViewType)
     IPC_MESSAGE_HANDLER(ExtensionMsg_Response, OnExtensionResponse)
     IPC_MESSAGE_HANDLER(ExtensionMsg_MessageInvoke, OnExtensionMessageInvoke)
-    IPC_MESSAGE_HANDLER(ExtensionMsg_AssignPortId, OnAssignPortId)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
 }
 
-void ExtensionFrameHelper::OnExtensionValidateMessagePort(int port_id) {
+void ExtensionFrameHelper::OnExtensionValidateMessagePort(const PortId& id) {
   MessagingBindings::ValidateMessagePort(
-      extension_dispatcher_->script_context_set(), port_id, render_frame());
+      extension_dispatcher_->script_context_set(), id, render_frame());
 }
 
 void ExtensionFrameHelper::OnExtensionDispatchOnConnect(
-    int target_port_id,
+    const PortId& target_port_id,
     const std::string& channel_name,
     const ExtensionMsg_TabConnectionInfo& source,
     const ExtensionMsg_ExternalConnectionInfo& info,
@@ -344,8 +282,7 @@ void ExtensionFrameHelper::OnExtensionDispatchOnConnect(
       render_frame());
 }
 
-void ExtensionFrameHelper::OnExtensionDeliverMessage(int target_id,
-                                                     int source_tab_id,
+void ExtensionFrameHelper::OnExtensionDeliverMessage(const PortId& target_id,
                                                      const Message& message) {
   MessagingBindings::DeliverMessage(
       extension_dispatcher_->script_context_set(), target_id, message,
@@ -353,10 +290,10 @@ void ExtensionFrameHelper::OnExtensionDeliverMessage(int target_id,
 }
 
 void ExtensionFrameHelper::OnExtensionDispatchOnDisconnect(
-    int port_id,
+    const PortId& id,
     const std::string& error_message) {
   MessagingBindings::DispatchOnDisconnect(
-      extension_dispatcher_->script_context_set(), port_id, error_message,
+      extension_dispatcher_->script_context_set(), id, error_message,
       render_frame());
 }
 
@@ -395,33 +332,27 @@ void ExtensionFrameHelper::OnExtensionMessageInvoke(
       render_frame(), extension_id, module_name, function_name, args);
 }
 
-void ExtensionFrameHelper::OnAssignPortId(int port_id, int request_id) {
-  auto iter = pending_port_requests_.find(request_id);
-  DCHECK(iter != pending_port_requests_.end());
-  PendingPortRequest& request = *iter->second;
-  switch (request.type) {
-    case PortType::EXTENSION: {
-      UMA_HISTOGRAM_TIMES("Extensions.Messaging.GetPortIdAsyncTime.Extension",
-                          request.timer.Elapsed());
-      break;
-    }
-    case PortType::TAB: {
-      UMA_HISTOGRAM_TIMES("Extensions.Messaging.GetPortIdAsyncTime.Tab",
-                          request.timer.Elapsed());
-      break;
-    }
-    case PortType::NATIVE_APP: {
-      UMA_HISTOGRAM_TIMES("Extensions.Messaging.GetPortIdAsyncTime.NativeApp",
-                          request.timer.Elapsed());
-      break;
-    }
-  }
-  request.callback.Run(port_id);
-  pending_port_requests_.erase(iter);
-}
-
 void ExtensionFrameHelper::OnDestruct() {
   delete this;
+}
+
+void ExtensionFrameHelper::DraggableRegionsChanged() {
+  if (!render_frame()->IsMainFrame())
+    return;
+
+  blink::WebVector<blink::WebDraggableRegion> webregions =
+      render_frame()->GetWebFrame()->GetDocument().DraggableRegions();
+  std::vector<DraggableRegion> regions;
+  for (blink::WebDraggableRegion& webregion : webregions) {
+    render_frame()->GetRenderView()->ConvertViewportToWindowViaWidget(
+        &webregion.bounds);
+
+    regions.push_back(DraggableRegion());
+    DraggableRegion& region = regions.back();
+    region.bounds = webregion.bounds;
+    region.draggable = webregion.draggable;
+  }
+  Send(new ExtensionHostMsg_UpdateDraggableRegions(routing_id(), regions));
 }
 
 }  // namespace extensions

@@ -7,8 +7,9 @@
 
 #include "SkDrawCommand.h"
 
-#include "png.h"
+#include "third_party/libpng/png.h"
 
+#include "SkAutoMalloc.h"
 #include "SkBlurMaskFilter.h"
 #include "SkColorFilter.h"
 #include "SkDashPathEffect.h"
@@ -26,6 +27,8 @@
 #include "SkValidatingReadBuffer.h"
 #include "SkWriteBuffer.h"
 #include "picture_utils.h"
+#include "SkClipOpPriv.h"
+#include <SkLatticeIter.h>
 
 #define SKDEBUGCANVAS_ATTRIBUTE_COMMAND           "command"
 #define SKDEBUGCANVAS_ATTRIBUTE_VISIBLE           "visible"
@@ -43,6 +46,7 @@
 #define SKDEBUGCANVAS_ATTRIBUTE_TEXT              "text"
 #define SKDEBUGCANVAS_ATTRIBUTE_COLOR             "color"
 #define SKDEBUGCANVAS_ATTRIBUTE_ALPHA             "alpha"
+#define SKDEBUGCANVAS_ATTRIBUTE_BLENDMODE         "blendMode"
 #define SKDEBUGCANVAS_ATTRIBUTE_STYLE             "style"
 #define SKDEBUGCANVAS_ATTRIBUTE_STROKEWIDTH       "strokeWidth"
 #define SKDEBUGCANVAS_ATTRIBUTE_STROKEMITER       "strokeMiter"
@@ -50,6 +54,14 @@
 #define SKDEBUGCANVAS_ATTRIBUTE_CAP               "cap"
 #define SKDEBUGCANVAS_ATTRIBUTE_ANTIALIAS         "antiAlias"
 #define SKDEBUGCANVAS_ATTRIBUTE_DITHER            "dither"
+#define SKDEBUGCANVAS_ATTRIBUTE_FAKEBOLDTEXT      "fakeBoldText"
+#define SKDEBUGCANVAS_ATTRIBUTE_LINEARTEXT        "linearText"
+#define SKDEBUGCANVAS_ATTRIBUTE_SUBPIXELTEXT      "subpixelText"
+#define SKDEBUGCANVAS_ATTRIBUTE_DEVKERNTEXT       "devKernText"
+#define SKDEBUGCANVAS_ATTRIBUTE_LCDRENDERTEXT     "lcdRenderText"
+#define SKDEBUGCANVAS_ATTRIBUTE_EMBEDDEDBITMAPTEXT "embeddedBitmapText"
+#define SKDEBUGCANVAS_ATTRIBUTE_AUTOHINTING       "forceAutoHinting"
+#define SKDEBUGCANVAS_ATTRIBUTE_VERTICALTEXT      "verticalText"
 #define SKDEBUGCANVAS_ATTRIBUTE_REGION            "region"
 #define SKDEBUGCANVAS_ATTRIBUTE_REGIONOP          "op"
 #define SKDEBUGCANVAS_ATTRIBUTE_EDGESTYLE         "edgeStyle"
@@ -103,6 +115,12 @@
 #define SKDEBUGCANVAS_ATTRIBUTE_WIDTH             "width"
 #define SKDEBUGCANVAS_ATTRIBUTE_HEIGHT            "height"
 #define SKDEBUGCANVAS_ATTRIBUTE_ALPHA             "alpha"
+#define SKDEBUGCANVAS_ATTRIBUTE_LATTICE           "lattice"
+#define SKDEBUGCANVAS_ATTRIBUTE_LATTICEXCOUNT     "xCount"
+#define SKDEBUGCANVAS_ATTRIBUTE_LATTICEYCOUNT     "yCount"
+#define SKDEBUGCANVAS_ATTRIBUTE_LATTICEXDIVS      "xDivs"
+#define SKDEBUGCANVAS_ATTRIBUTE_LATTICEYDIVS      "yDivs"
+#define SKDEBUGCANVAS_ATTRIBUTE_LATTICEFLAGS      "flags"
 
 #define SKDEBUGCANVAS_VERB_MOVE                   "move"
 #define SKDEBUGCANVAS_VERB_LINE                   "line"
@@ -195,7 +213,6 @@ SkDrawCommand::~SkDrawCommand() {
 const char* SkDrawCommand::GetCommandString(OpType type) {
     switch (type) {
         case kBeginDrawPicture_OpType: return "BeginDrawPicture";
-        case kBeginDrawShadowedPicture_OpType: return "BeginDrawShadowedPicture";
         case kClipPath_OpType: return "ClipPath";
         case kClipRegion_OpType: return "ClipRegion";
         case kClipRect_OpType: return "ClipRect";
@@ -208,6 +225,7 @@ const char* SkDrawCommand::GetCommandString(OpType type) {
         case kDrawClear_OpType: return "DrawClear";
         case kDrawDRRect_OpType: return "DrawDRRect";
         case kDrawImage_OpType: return "DrawImage";
+        case kDrawImageLattice_OpType: return "DrawImageLattice";
         case kDrawImageRect_OpType: return "DrawImageRect";
         case kDrawOval_OpType: return "DrawOval";
         case kDrawPaint_OpType: return "DrawPaint";
@@ -224,12 +242,10 @@ const char* SkDrawCommand::GetCommandString(OpType type) {
         case kDrawTextRSXform_OpType: return "DrawTextRSXform";
         case kDrawVertices_OpType: return "DrawVertices";
         case kEndDrawPicture_OpType: return "EndDrawPicture";
-        case kEndDrawShadowedPicture_OpType: return "EndDrawShadowedPicture";
         case kRestore_OpType: return "Restore";
         case kSave_OpType: return "Save";
         case kSaveLayer_OpType: return "SaveLayer";
         case kSetMatrix_OpType: return "SetMatrix";
-        case kTranslateZ_OpType: return "TranslateZ";
         default:
             SkDebugf("OpType error 0x%08x\n", type);
             SkASSERT(0);
@@ -287,9 +303,6 @@ SkDrawCommand* SkDrawCommand::fromJSON(Json::Value& command, UrlDataManager& url
         INSTALL_FACTORY(Save);
         INSTALL_FACTORY(SaveLayer);
         INSTALL_FACTORY(SetMatrix);
-#ifdef SK_EXPERIMENTAL_SHADOWING
-        INSTALL_FACTORY(TranslateZ);
-#endif
     }
     SkString name = SkString(command[SKDEBUGCANVAS_ATTRIBUTE_COMMAND].asCString());
     FROM_JSON* factory = factories.find(name);
@@ -303,7 +316,7 @@ SkDrawCommand* SkDrawCommand::fromJSON(Json::Value& command, UrlDataManager& url
 namespace {
 
 void xlate_and_scale_to_bounds(SkCanvas* canvas, const SkRect& bounds) {
-    const SkISize& size = canvas->getDeviceSize();
+    const SkISize& size = canvas->getBaseLayerSize();
 
     static const SkScalar kInsetFrac = 0.9f; // Leave a border around object
 
@@ -338,7 +351,7 @@ void render_path(SkCanvas* canvas, const SkPath& path) {
 }
 
 void render_bitmap(SkCanvas* canvas, const SkBitmap& input, const SkRect* srcRect = nullptr) {
-    const SkISize& size = canvas->getDeviceSize();
+    const SkISize& size = canvas->getBaseLayerSize();
 
     SkScalar xScale = SkIntToScalar(size.fWidth-2) / input.width();
     SkScalar yScale = SkIntToScalar(size.fHeight-2) / input.height();
@@ -417,6 +430,68 @@ void render_drrect(SkCanvas* canvas, const SkRRect& outer, const SkRRect& inner)
 
     canvas->drawDRRect(outer, inner, p);
     canvas->restore();
+}
+
+static const char* const gBlendModeMap[] = {
+    "clear",
+    "src",
+    "dst",
+    "srcOver",
+    "dstOver",
+    "srcIn",
+    "dstIn",
+    "srcOut",
+    "dstOut",
+    "srcATop",
+    "dstATop",
+    "xor",
+    "plus",
+    "modulate",
+
+    "screen",
+
+    "overlay",
+    "darken",
+    "lighten",
+    "colorDodge",
+    "colorBurn",
+    "hardLight",
+    "softLight",
+    "difference",
+    "exclusion",
+    "multiply",
+
+    "hue",
+    "saturation",
+    "color",
+    "luminosity",
+};
+
+static_assert(SK_ARRAY_COUNT(gBlendModeMap) == static_cast<size_t>(SkBlendMode::kLastMode) + 1,
+              "blendMode mismatch");
+static_assert(SK_ARRAY_COUNT(gBlendModeMap) == static_cast<size_t>(SkBlendMode::kLuminosity) + 1,
+              "blendMode mismatch");
+
+void apply_paint_blend_mode(const SkPaint& paint, Json::Value* target) {
+    const auto mode = paint.getBlendMode();
+    if (mode != SkBlendMode::kSrcOver) {
+        SkASSERT(static_cast<size_t>(mode) < SK_ARRAY_COUNT(gBlendModeMap));
+        (*target)[SKDEBUGCANVAS_ATTRIBUTE_BLENDMODE] =
+            Json::Value(gBlendModeMap[static_cast<size_t>(mode)]);
+    }
+}
+
+void extract_json_paint_blend_mode(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_BLENDMODE)) {
+        const char* mode = jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_BLENDMODE].asCString();
+
+        for (size_t i = 0; i < SK_ARRAY_COUNT(gBlendModeMap); ++i) {
+            if (!strcmp(mode, gBlendModeMap[i])) {
+                target->setBlendMode(static_cast<SkBlendMode>(i));
+                break;
+            }
+        }
+    }
 }
 
 };
@@ -584,19 +659,19 @@ Json::Value SkDrawCommand::MakeJsonRegion(const SkRegion& region) {
     return Json::Value("<unimplemented>");
 }
 
-static Json::Value make_json_regionop(SkCanvas::ClipOp op) {
+static Json::Value make_json_regionop(SkClipOp op) {
     switch (op) {
-        case SkCanvas::kDifference_Op:
+        case kDifference_SkClipOp:
             return Json::Value(SKDEBUGCANVAS_REGIONOP_DIFFERENCE);
-        case SkCanvas::kIntersect_Op:
+        case kIntersect_SkClipOp:
             return Json::Value(SKDEBUGCANVAS_REGIONOP_INTERSECT);
-        case SkCanvas::kUnion_Op:
+        case kUnion_SkClipOp:
             return Json::Value(SKDEBUGCANVAS_REGIONOP_UNION);
-        case SkCanvas::kXOR_Op:
+        case kXOR_SkClipOp:
             return Json::Value(SKDEBUGCANVAS_REGIONOP_XOR);
-        case SkCanvas::kReverseDifference_Op:
+        case kReverseDifference_SkClipOp:
             return Json::Value(SKDEBUGCANVAS_REGIONOP_REVERSE_DIFFERENCE);
-        case SkCanvas::kReplace_Op:
+        case kReplace_SkClipOp:
             return Json::Value(SKDEBUGCANVAS_REGIONOP_REPLACE);
         default:
             SkASSERT(false);
@@ -703,7 +778,7 @@ void SkDrawCommand::WritePNG(const uint8_t* rgba, unsigned width, unsigned heigh
 bool SkDrawCommand::flatten(const SkImage& image, Json::Value* target,
                             UrlDataManager& urlDataManager) {
     size_t rowBytes = 4 * image.width();
-    SkAutoFree buffer(sk_malloc_throw(rowBytes * image.height()));
+    SkAutoMalloc buffer(rowBytes * image.height());
     SkImageInfo dstInfo = SkImageInfo::Make(image.width(), image.height(),
                                             kN32_SkColorType, kPremul_SkAlphaType);
     if (!image.readPixels(dstInfo, buffer.get(), rowBytes, 0, 0)) {
@@ -737,8 +812,6 @@ static const char* color_type_name(SkColorType colorType) {
             return SKDEBUGCANVAS_COLORTYPE_565;
         case kGray_8_SkColorType:
             return SKDEBUGCANVAS_COLORTYPE_GRAY8;
-        case kIndex_8_SkColorType:
-            return SKDEBUGCANVAS_COLORTYPE_INDEX8;
         case kAlpha_8_SkColorType:
             return SKDEBUGCANVAS_COLORTYPE_ALPHA8;
         default:
@@ -812,9 +885,6 @@ static SkColorType colortype_from_name(const char* name) {
     else if (!strcmp(name, SKDEBUGCANVAS_COLORTYPE_GRAY8)) {
         return kGray_8_SkColorType;
     }
-    else if (!strcmp(name, SKDEBUGCANVAS_COLORTYPE_INDEX8)) {
-        return kIndex_8_SkColorType;
-    }
     else if (!strcmp(name, SKDEBUGCANVAS_COLORTYPE_ALPHA8)) {
         return kAlpha_8_SkColorType;
     }
@@ -827,7 +897,9 @@ static SkBitmap* convert_colortype(SkBitmap* bitmap, SkColorType colorType) {
         return bitmap;
     }
     SkBitmap* dst = new SkBitmap();
-    if (bitmap->copyTo(dst, colorType)) {
+    if (dst->tryAllocPixels(bitmap->info().makeColorType(colorType)) &&
+        bitmap->readPixels(dst->info(), dst->getPixels(), dst->rowBytes(), 0, 0))
+    {
         delete bitmap;
         return dst;
     }
@@ -857,9 +929,7 @@ static SkBitmap* load_bitmap(const Json::Value& jsonBitmap, UrlDataManager& urlD
         if (jsonBitmap.isMember(SKDEBUGCANVAS_ATTRIBUTE_COLOR)) {
             const char* ctName = jsonBitmap[SKDEBUGCANVAS_ATTRIBUTE_COLOR].asCString();
             SkColorType ct = colortype_from_name(ctName);
-            if (ct != kIndex_8_SkColorType) {
-                bitmap.reset(convert_colortype(bitmap.release(), ct));
-            }
+            bitmap.reset(convert_colortype(bitmap.release(), ct));
         }
         return bitmap.release();
     }
@@ -879,9 +949,7 @@ static sk_sp<SkImage> load_image(const Json::Value& jsonImage, UrlDataManager& u
 
 bool SkDrawCommand::flatten(const SkBitmap& bitmap, Json::Value* target,
                             UrlDataManager& urlDataManager) {
-    bitmap.lockPixels();
     sk_sp<SkImage> image(SkImage::MakeFromBitmap(bitmap));
-    bitmap.unlockPixels();
     (*target)[SKDEBUGCANVAS_ATTRIBUTE_COLOR] = Json::Value(color_type_name(bitmap.colorType()));
     (*target)[SKDEBUGCANVAS_ATTRIBUTE_ALPHA] = Json::Value(alpha_type_name(bitmap.alphaType()));
     bool success = flatten(*image, target, urlDataManager);
@@ -1155,6 +1223,16 @@ Json::Value SkDrawCommand::MakeJsonPaint(const SkPaint& paint, UrlDataManager& u
                  SkPaintDefaults_MiterLimit);
     store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_ANTIALIAS, paint.isAntiAlias(), false);
     store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_DITHER, paint.isDither(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_FAKEBOLDTEXT, paint.isFakeBoldText(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_LINEARTEXT, paint.isLinearText(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_SUBPIXELTEXT, paint.isSubpixelText(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_DEVKERNTEXT, paint.isDevKernText(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_LCDRENDERTEXT, paint.isLCDRenderText(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_EMBEDDEDBITMAPTEXT, paint.isEmbeddedBitmapText(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_AUTOHINTING, paint.isAutohinted(), false);
+    store_bool(&result, SKDEBUGCANVAS_ATTRIBUTE_VERTICALTEXT, paint.isVerticalText(), false);
+    //kGenA8FromLCD_Flag
+
     store_scalar(&result, SKDEBUGCANVAS_ATTRIBUTE_TEXTSIZE, paint.getTextSize(),
                  SkPaintDefaults_TextSize);
     store_scalar(&result, SKDEBUGCANVAS_ATTRIBUTE_TEXTSCALEX, paint.getTextScaleX(), SK_Scalar1);
@@ -1162,6 +1240,7 @@ Json::Value SkDrawCommand::MakeJsonPaint(const SkPaint& paint, UrlDataManager& u
     apply_paint_hinting(paint, &result);
     apply_paint_color(paint, &result);
     apply_paint_style(paint, &result);
+    apply_paint_blend_mode(paint, &result);
     apply_paint_cap(paint, &result);
     apply_paint_join(paint, &result);
     apply_paint_filterquality(paint, &result);
@@ -1173,6 +1252,38 @@ Json::Value SkDrawCommand::MakeJsonPaint(const SkPaint& paint, UrlDataManager& u
     apply_paint_imagefilter(paint, &result, urlDataManager);
     apply_paint_colorfilter(paint, &result, urlDataManager);
     apply_paint_typeface(paint, &result, urlDataManager);
+    return result;
+}
+
+Json::Value SkDrawCommand::MakeJsonLattice(const SkCanvas::Lattice& lattice) {
+    Json::Value result(Json::objectValue);
+    result[SKDEBUGCANVAS_ATTRIBUTE_LATTICEXCOUNT] = Json::Value(lattice.fXCount);
+    result[SKDEBUGCANVAS_ATTRIBUTE_LATTICEYCOUNT] = Json::Value(lattice.fYCount);
+    if (nullptr != lattice.fBounds) {
+        result[SKDEBUGCANVAS_ATTRIBUTE_BOUNDS] = MakeJsonIRect(*lattice.fBounds);
+    }
+    Json::Value XDivs(Json::arrayValue);
+    for (int i = 0; i < lattice.fXCount; i++) {
+        XDivs.append(Json::Value(lattice.fXDivs[i]));
+    }
+    result[SKDEBUGCANVAS_ATTRIBUTE_LATTICEXDIVS] = XDivs;
+    Json::Value YDivs(Json::arrayValue);
+    for (int i = 0; i < lattice.fYCount; i++) {
+        YDivs.append(Json::Value(lattice.fYDivs[i]));
+    }
+    result[SKDEBUGCANVAS_ATTRIBUTE_LATTICEYDIVS] = YDivs;
+    if (nullptr != lattice.fFlags) {
+        Json::Value flags(Json::arrayValue);
+        int flagCount = 0;
+        for (int row = 0; row < lattice.fYCount+1; row++) {
+            Json::Value flagsRow(Json::arrayValue);
+            for (int column = 0; column < lattice.fXCount+1; column++) {
+                flagsRow.append(Json::Value(lattice.fFlags[flagCount++]));
+            }
+            flags.append(flagsRow);
+        }
+        result[SKDEBUGCANVAS_ATTRIBUTE_LATTICEFLAGS] = flags;
+    }
     return result;
 }
 
@@ -1379,6 +1490,54 @@ static void extract_json_paint_dither(Json::Value& jsonPaint, SkPaint* target) {
     }
 }
 
+static void extract_json_paint_fakeboldtext(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_FAKEBOLDTEXT)) {
+        target->setFakeBoldText(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_FAKEBOLDTEXT].asBool());
+    }
+}
+
+static void extract_json_paint_lineartext(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_LINEARTEXT)) {
+        target->setLinearText(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_LINEARTEXT].asBool());
+    }
+}
+
+static void extract_json_paint_subpixeltext(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_SUBPIXELTEXT)) {
+        target->setSubpixelText(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_SUBPIXELTEXT].asBool());
+    }
+}
+
+static void extract_json_paint_devkerntext(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_DEVKERNTEXT)) {
+        target->setDevKernText(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_DEVKERNTEXT].asBool());
+    }
+}
+
+static void extract_json_paint_lcdrendertext(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_LCDRENDERTEXT)) {
+        target->setLCDRenderText(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_LCDRENDERTEXT].asBool());
+    }
+}
+
+static void extract_json_paint_embeddedbitmaptext(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_EMBEDDEDBITMAPTEXT)) {
+        target->setEmbeddedBitmapText(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_EMBEDDEDBITMAPTEXT].asBool());
+    }
+}
+
+static void extract_json_paint_autohinting(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_AUTOHINTING)) {
+        target->setAutohinted(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_AUTOHINTING].asBool());
+    }
+}
+
+static void extract_json_paint_verticaltext(Json::Value& jsonPaint, SkPaint* target) {
+    if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_VERTICALTEXT)) {
+        target->setVerticalText(jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_VERTICALTEXT].asBool());
+    }
+}
+
 static void extract_json_paint_blur(Json::Value& jsonPaint, SkPaint* target) {
     if (jsonPaint.isMember(SKDEBUGCANVAS_ATTRIBUTE_BLUR)) {
         Json::Value blur = jsonPaint[SKDEBUGCANVAS_ATTRIBUTE_BLUR];
@@ -1486,6 +1645,7 @@ static void extract_json_paint(Json::Value& paint, UrlDataManager& urlDataManage
     extract_json_paint_imagefilter(paint, urlDataManager, result);
     extract_json_paint_typeface(paint, urlDataManager, result);
     extract_json_paint_style(paint, result);
+    extract_json_paint_blend_mode(paint, result);
     extract_json_paint_strokewidth(paint, result);
     extract_json_paint_strokemiter(paint, result);
     extract_json_paint_strokejoin(paint, result);
@@ -1493,6 +1653,14 @@ static void extract_json_paint(Json::Value& paint, UrlDataManager& urlDataManage
     extract_json_paint_filterquality(paint, result);
     extract_json_paint_antialias(paint, result);
     extract_json_paint_dither(paint, result);
+    extract_json_paint_fakeboldtext(paint, result);
+    extract_json_paint_lineartext(paint, result);
+    extract_json_paint_subpixeltext(paint, result);
+    extract_json_paint_devkerntext(paint, result);
+    extract_json_paint_lcdrendertext(paint, result);
+    extract_json_paint_embeddedbitmaptext(paint, result);
+    extract_json_paint_autohinting(paint, result);
+    extract_json_paint_verticaltext(paint, result);
     extract_json_paint_blur(paint, result);
     extract_json_paint_dashing(paint, result);
     extract_json_paint_textalign(paint, result);
@@ -1529,14 +1697,6 @@ static void extract_json_matrix(Json::Value& matrix, SkMatrix* result) {
     };
     result->set9(values);
 }
-
-#ifdef SK_EXPERIMENTAL_SHADOWING
-// somehow this is only used in shadows...
-static void extract_json_scalar(Json::Value& scalar, SkScalar* result) {
-    SkScalar value = scalar.asFloat();
-    *result = value;
-}
-#endif
 
 static void extract_json_path(Json::Value& path, SkPath* result) {
     const char* fillType = path[SKDEBUGCANVAS_ATTRIBUTE_FILLTYPE].asCString();
@@ -1592,28 +1752,28 @@ static void extract_json_path(Json::Value& path, SkPath* result) {
     }
 }
 
-SkCanvas::ClipOp get_json_clipop(Json::Value& jsonOp) {
+SkClipOp get_json_clipop(Json::Value& jsonOp) {
     const char* op = jsonOp.asCString();
     if (!strcmp(op, SKDEBUGCANVAS_REGIONOP_DIFFERENCE)) {
-        return SkCanvas::kDifference_Op;
+        return kDifference_SkClipOp;
     }
     else if (!strcmp(op, SKDEBUGCANVAS_REGIONOP_INTERSECT)) {
-        return SkCanvas::kIntersect_Op;
+        return kIntersect_SkClipOp;
     }
     else if (!strcmp(op, SKDEBUGCANVAS_REGIONOP_UNION)) {
-        return SkCanvas::kUnion_Op;
+        return kUnion_SkClipOp;
     }
     else if (!strcmp(op, SKDEBUGCANVAS_REGIONOP_XOR)) {
-        return SkCanvas::kXOR_Op;
+        return kXOR_SkClipOp;
     }
     else if (!strcmp(op, SKDEBUGCANVAS_REGIONOP_REVERSE_DIFFERENCE)) {
-        return SkCanvas::kReverseDifference_Op;
+        return kReverseDifference_SkClipOp;
     }
     else if (!strcmp(op, SKDEBUGCANVAS_REGIONOP_REPLACE)) {
-        return SkCanvas::kReplace_Op;
+        return kReplace_SkClipOp;
     }
     SkASSERT(false);
-    return SkCanvas::kIntersect_Op;
+    return kIntersect_SkClipOp;
 }
 
 SkClearCommand::SkClearCommand(SkColor color) : INHERITED(kDrawClear_OpType) {
@@ -1636,7 +1796,7 @@ Json::Value SkClearCommand::toJSON(UrlDataManager& urlDataManager) const {
     return new SkClearCommand(get_json_color(color));
 }
 
-SkClipPathCommand::SkClipPathCommand(const SkPath& path, SkCanvas::ClipOp op, bool doAA)
+SkClipPathCommand::SkClipPathCommand(const SkPath& path, SkClipOp op, bool doAA)
     : INHERITED(kClipPath_OpType) {
     fPath = path;
     fOp = op;
@@ -1672,7 +1832,7 @@ SkClipPathCommand* SkClipPathCommand::fromJSON(Json::Value& command,
                                  command[SKDEBUGCANVAS_ATTRIBUTE_ANTIALIAS].asBool());
 }
 
-SkClipRegionCommand::SkClipRegionCommand(const SkRegion& region, SkCanvas::ClipOp op)
+SkClipRegionCommand::SkClipRegionCommand(const SkRegion& region, SkClipOp op)
     : INHERITED(kClipRegion_OpType) {
     fRegion = region;
     fOp = op;
@@ -1698,7 +1858,7 @@ SkClipRegionCommand* SkClipRegionCommand::fromJSON(Json::Value& command,
     return nullptr;
 }
 
-SkClipRectCommand::SkClipRectCommand(const SkRect& rect, SkCanvas::ClipOp op, bool doAA)
+SkClipRectCommand::SkClipRectCommand(const SkRect& rect, SkClipOp op, bool doAA)
     : INHERITED(kClipRect_OpType) {
     fRect = rect;
     fOp = op;
@@ -1733,7 +1893,7 @@ SkClipRectCommand* SkClipRectCommand::fromJSON(Json::Value& command,
                                  command[SKDEBUGCANVAS_ATTRIBUTE_ANTIALIAS].asBool());
 }
 
-SkClipRRectCommand::SkClipRRectCommand(const SkRRect& rrect, SkCanvas::ClipOp op, bool doAA)
+SkClipRRectCommand::SkClipRRectCommand(const SkRRect& rrect, SkClipOp op, bool doAA)
     : INHERITED(kClipRRect_OpType) {
     fRRect = rrect;
     fOp = op;
@@ -2165,6 +2325,60 @@ SkDrawImageCommand* SkDrawImageCommand::fromJSON(Json::Value& command,
     return result;
 }
 
+SkDrawImageLatticeCommand::SkDrawImageLatticeCommand(const SkImage* image,
+                                                     const SkCanvas::Lattice& lattice,
+                                                     const SkRect& dst, const SkPaint* paint)
+    : INHERITED(kDrawImageLattice_OpType)
+    , fImage(SkRef(image))
+    , fLattice(lattice)
+    , fDst(dst) {
+
+      fInfo.push(SkObjectParser::ImageToString(image));
+      fInfo.push(SkObjectParser::LatticeToString(lattice));
+      fInfo.push(SkObjectParser::RectToString(dst, "Dst: "));
+      if (paint) {
+          fPaint.set(*paint);
+          fInfo.push(SkObjectParser::PaintToString(*paint));
+      }
+}
+
+void SkDrawImageLatticeCommand::execute(SkCanvas* canvas) const {
+    SkLatticeIter iter(fLattice, fDst);
+    SkRect srcR, dstR;
+    while (iter.next(&srcR, &dstR)) {
+        canvas->legacy_drawImageRect(fImage.get(), &srcR, dstR,
+                                     fPaint.getMaybeNull(), SkCanvas::kStrict_SrcRectConstraint);
+    }
+}
+
+bool SkDrawImageLatticeCommand::render(SkCanvas* canvas) const {
+    SkAutoCanvasRestore acr(canvas, true);
+    canvas->clear(0xFFFFFFFF);
+
+    xlate_and_scale_to_bounds(canvas, fDst);
+
+    this->execute(canvas);
+    return true;
+}
+
+Json::Value SkDrawImageLatticeCommand::toJSON(UrlDataManager& urlDataManager) const {
+    Json::Value result = INHERITED::toJSON(urlDataManager);
+    Json::Value encoded;
+    if (flatten(*fImage.get(), &encoded, urlDataManager)) {
+        result[SKDEBUGCANVAS_ATTRIBUTE_BITMAP] = encoded;
+        result[SKDEBUGCANVAS_ATTRIBUTE_LATTICE] = MakeJsonLattice(fLattice);
+        result[SKDEBUGCANVAS_ATTRIBUTE_DST] = MakeJsonRect(fDst);
+        if (fPaint.isValid()) {
+            result[SKDEBUGCANVAS_ATTRIBUTE_PAINT] = MakeJsonPaint(*fPaint.get(), urlDataManager);
+        }
+    }
+
+    SkString desc;
+    result[SKDEBUGCANVAS_ATTRIBUTE_SHORTDESC] = Json::Value(str_append(&desc, fDst)->c_str());
+
+    return result;
+}
+
 SkDrawImageRectCommand::SkDrawImageRectCommand(const SkImage* image, const SkRect* src,
                                                const SkRect& dst, const SkPaint* paint,
                                                SkCanvas::SrcRectConstraint constraint)
@@ -2494,91 +2708,6 @@ SkEndDrawPictureCommand::SkEndDrawPictureCommand(bool restore)
     : INHERITED(kEndDrawPicture_OpType) , fRestore(restore) { }
 
 void SkEndDrawPictureCommand::execute(SkCanvas* canvas) const {
-    if (fRestore) {
-        canvas->restore();
-    }
-}
-
-SkBeginDrawShadowedPictureCommand::SkBeginDrawShadowedPictureCommand(const SkPicture* picture,
-                                                                     const SkMatrix* matrix,
-                                                                     const SkPaint* paint,
-                                                                     const SkShadowParams& params)
-        : INHERITED(kBeginDrawShadowedPicture_OpType)
-#ifdef SK_EXPERIMENTAL_SHADOWING
-        , fPicture(SkRef(picture))
-        , fShadowParams(params) {
-#else
-        , fPicture(SkRef(picture)) {
-#endif
-    SkString* str = new SkString;
-    str->appendf("SkPicture: L: %f T: %f R: %f B: %f\n",
-                 picture->cullRect().fLeft, picture->cullRect().fTop,
-                 picture->cullRect().fRight, picture->cullRect().fBottom);
-    str->appendf("SkShadowParams: bias:%f, minVariance:%f, shRadius:%f, shType:",
-                   params.fBiasingConstant,
-                   params.fMinVariance,
-                   params.fShadowRadius);
-
-    SkASSERT(SkShadowParams::kShadowTypeCount == 2);
-
-    switch (params.fType) {
-        case SkShadowParams::ShadowType::kNoBlur_ShadowType:
-            str->append("kNoBlur_ShadowType\n");
-            break;
-        case SkShadowParams::ShadowType::kVariance_ShadowType:
-            str->append("kVariance_ShadowType\n");
-            break;
-    }
-
-    fInfo.push(str);
-
-    if (matrix) {
-        fMatrix.set(*matrix);
-        fInfo.push(SkObjectParser::MatrixToString(*matrix));
-    }
-
-    if (paint) {
-        fPaint.set(*paint);
-        fInfo.push(SkObjectParser::PaintToString(*paint));
-    }
-}
-
-void SkBeginDrawShadowedPictureCommand::execute(SkCanvas* canvas) const {
-    if (fPaint.isValid()) {
-        SkRect bounds = fPicture->cullRect();
-        if (fMatrix.isValid()) {
-            fMatrix.get()->mapRect(&bounds);
-        }
-        canvas->saveLayer(&bounds, fPaint.get());
-    }
-
-    if (fMatrix.isValid()) {
-        if (!fPaint.isValid()) {
-            canvas->save();
-        }
-        canvas->concat(*fMatrix.get());
-    }
-}
-
-bool SkBeginDrawShadowedPictureCommand::render(SkCanvas* canvas) const {
-    canvas->clear(0xFFFFFFFF);
-    canvas->save();
-
-    xlate_and_scale_to_bounds(canvas, fPicture->cullRect());
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    canvas->drawShadowedPicture(fPicture.get(), fMatrix.get(), fPaint.get(), fShadowParams);
-#else
-    canvas->drawPicture(fPicture.get(), fMatrix.get(), fPaint.get());
-#endif
-    canvas->restore();
-
-    return true;
-}
-
-SkEndDrawShadowedPictureCommand::SkEndDrawShadowedPictureCommand(bool restore)
-        : INHERITED(kEndDrawShadowedPicture_OpType) , fRestore(restore) { }
-
-void SkEndDrawShadowedPictureCommand::execute(SkCanvas* canvas) const {
     if (fRestore) {
         canvas->restore();
     }
@@ -3298,61 +3427,20 @@ SkDrawTextRSXformCommand* SkDrawTextRSXformCommand::fromJSON(Json::Value& comman
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-SkDrawVerticesCommand::SkDrawVerticesCommand(SkCanvas::VertexMode vmode, int vertexCount,
-                                             const SkPoint vertices[], const SkPoint texs[],
-                                             const SkColor colors[], SkBlendMode bmode,
-                                             const uint16_t indices[], int indexCount,
+SkDrawVerticesCommand::SkDrawVerticesCommand(sk_sp<SkVertices> vertices, SkBlendMode bmode,
                                              const SkPaint& paint)
     : INHERITED(kDrawVertices_OpType)
+    , fVertices(std::move(vertices))
     , fBlendMode(bmode)
+    , fPaint(paint)
 {
-    fVmode = vmode;
-
-    fVertexCount = vertexCount;
-
-    fVertices = new SkPoint[vertexCount];
-    memcpy(fVertices, vertices, vertexCount * sizeof(SkPoint));
-
-    if (texs) {
-        fTexs = new SkPoint[vertexCount];
-        memcpy(fTexs, texs, vertexCount * sizeof(SkPoint));
-    } else {
-        fTexs = nullptr;
-    }
-
-    if (colors) {
-        fColors = new SkColor[vertexCount];
-        memcpy(fColors, colors, vertexCount * sizeof(SkColor));
-    } else {
-        fColors = nullptr;
-    }
-
-    if (indexCount > 0) {
-        fIndices = new uint16_t[indexCount];
-        memcpy(fIndices, indices, indexCount * sizeof(uint16_t));
-    } else {
-        fIndices = nullptr;
-    }
-
-    fIndexCount = indexCount;
-    fPaint = paint;
-
     // TODO(chudy)
     fInfo.push(SkObjectParser::CustomTextToString("To be implemented."));
     fInfo.push(SkObjectParser::PaintToString(paint));
 }
 
-SkDrawVerticesCommand::~SkDrawVerticesCommand() {
-    delete [] fVertices;
-    delete [] fTexs;
-    delete [] fColors;
-    delete [] fIndices;
-}
-
 void SkDrawVerticesCommand::execute(SkCanvas* canvas) const {
-    canvas->drawVertices(fVmode, fVertexCount, fVertices,
-                         fTexs, fColors, fBlendMode, fIndices,
-                         fIndexCount, fPaint);
+    canvas->drawVertices(fVertices, fBlendMode, fPaint);
 }
 
 SkRestoreCommand::SkRestoreCommand()
@@ -3500,33 +3588,4 @@ SkSetMatrixCommand* SkSetMatrixCommand::fromJSON(Json::Value& command,
     SkMatrix matrix;
     extract_json_matrix(command[SKDEBUGCANVAS_ATTRIBUTE_MATRIX], &matrix);
     return new SkSetMatrixCommand(matrix);
-}
-
-SkTranslateZCommand::SkTranslateZCommand(SkScalar z)
-    : INHERITED(kTranslateZ_OpType) {
-    fZTranslate = z;
-    fInfo.push(SkObjectParser::ScalarToString(fZTranslate, "drawDepthTranslation"));
-}
-
-void SkTranslateZCommand::execute(SkCanvas* canvas) const {
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    canvas->translateZ(fZTranslate);
-#endif
-}
-
-Json::Value SkTranslateZCommand::toJSON(UrlDataManager& urlDataManager) const {
-    Json::Value result = INHERITED::toJSON(urlDataManager);
-    result[SKDEBUGCANVAS_ATTRIBUTE_DRAWDEPTHTRANS] = MakeJsonScalar(fZTranslate);
-    return result;
-}
-
-SkTranslateZCommand* SkTranslateZCommand::fromJSON(Json::Value& command,
-                                       UrlDataManager& urlDataManager) {
-    SkScalar z;
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    extract_json_scalar(command[SKDEBUGCANVAS_ATTRIBUTE_DRAWDEPTHTRANS], &z);
-#else
-    z = 0;
-#endif
-    return new SkTranslateZCommand(z);
 }

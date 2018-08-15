@@ -19,10 +19,16 @@
 
 namespace views {
 
-
 // Helpers --------------------------------------------------------------------
 
 namespace {
+
+gfx::Insets FocusBorderInsets(const Label& label) {
+  // StyledLabel never adds a border, so the only Insets added are for the
+  // possible focus ring.
+  DCHECK(label.View::GetInsets().IsEmpty());
+  return label.GetInsets();
+}
 
 // Calculates the height of a line of text. Currently returns the height of
 // a label.
@@ -42,7 +48,18 @@ std::unique_ptr<Label> CreateLabelRange(
   if (style_info.is_link) {
     Link* link = new Link(text);
     link->set_listener(link_listener);
-    link->SetUnderline((style_info.font_style & gfx::Font::UNDERLINE) != 0);
+
+    // StyledLabel makes assumptions about how to inset the entire View based on
+    // the default focus style: If focus rings are not the default, nothing is
+    // inset. So an individual range can't deviate from that.
+    if (Link::GetDefaultFocusStyle() == Link::FocusStyle::UNDERLINE) {
+      // Nothing should (and nothing does) request underlines for links with MD.
+      DCHECK_EQ(0, style_info.font_style & gfx::Font::UNDERLINE);
+      link->SetUnderline(false);  // Override what Link::Init() does.
+    } else {
+      link->SetUnderline((style_info.font_style & gfx::Font::UNDERLINE) != 0);
+    }
+
     result.reset(link);
   } else {
     result.reset(new Label(text));
@@ -64,7 +81,6 @@ std::unique_ptr<Label> CreateLabelRange(
 }
 
 }  // namespace
-
 
 // StyledLabel::RangeStyleInfo ------------------------------------------------
 
@@ -178,16 +194,15 @@ const char* StyledLabel::GetClassName() const {
 
 gfx::Insets StyledLabel::GetInsets() const {
   gfx::Insets insets = View::GetInsets();
+  if (Link::GetDefaultFocusStyle() != Link::FocusStyle::RING)
+    return insets;
 
   // We need a focus border iff we contain a link that will have a focus border.
   // That in turn will be true only if the link is non-empty.
   for (StyleRanges::const_iterator i(style_ranges_.begin());
         i != style_ranges_.end(); ++i) {
     if (i->style_info.is_link && !i->range.is_empty()) {
-      const gfx::Insets focus_border_padding(
-          Label::kFocusBorderPadding, Label::kFocusBorderPadding,
-          Label::kFocusBorderPadding, Label::kFocusBorderPadding);
-      insets += focus_border_padding;
+      insets += gfx::Insets(Link::kFocusBorderPadding);
       break;
     }
   }
@@ -195,7 +210,7 @@ gfx::Insets StyledLabel::GetInsets() const {
   return insets;
 }
 
-gfx::Size StyledLabel::GetPreferredSize() const {
+gfx::Size StyledLabel::CalculatePreferredSize() const {
   return calculated_size_;
 }
 
@@ -256,15 +271,24 @@ gfx::Size StyledLabel::CalculateAndDoLayout(int width, bool dry_run) {
   base::string16 remaining_string = text_;
   StyleRanges::const_iterator current_range = style_ranges_.begin();
 
+  bool first_loop_iteration = true;
+
   // Iterate over the text, creating a bunch of labels and links and laying them
   // out in the appropriate positions.
   while (!remaining_string.empty()) {
-    // Don't put whitespace at beginning of a line with an exception for the
-    // first line (so the text's leading whitespace is respected).
-    if (x == 0 && line > 0) {
-      base::TrimWhitespace(remaining_string, base::TRIM_LEADING,
-                           &remaining_string);
+    if (x == 0 && !first_loop_iteration) {
+      if (remaining_string.front() == L'\n') {
+        // Wrapped to the next line on \n, remove it. Other whitespace,
+        // eg, spaces to indent next line, are preserved.
+        remaining_string.erase(0, 1);
+      } else {
+        // Wrapped on whitespace character or characters in the middle of the
+        // line - none of them are needed at the beginning of the next line.
+        base::TrimWhitespace(remaining_string, base::TRIM_LEADING,
+                             &remaining_string);
+      }
     }
+    first_loop_iteration = false;
 
     gfx::Range range(gfx::Range::InvalidRange());
     if (current_range != style_ranges_.end())
@@ -290,22 +314,18 @@ gfx::Size StyledLabel::CalculateAndDoLayout(int width, bool dry_run) {
                             gfx::WRAP_LONG_WORDS,
                             &substrings);
 
-    if (substrings.empty() || substrings[0].empty()) {
-      // Nothing fits on this line. Start a new line.
-      // If x is 0, first line may have leading whitespace that doesn't fit in a
-      // single line, so try trimming those. Otherwise there is no room for
-      // anything; abort.
-      if (x == 0) {
-        if (line == 0) {
-          base::TrimWhitespace(remaining_string, base::TRIM_LEADING,
-                               &remaining_string);
-          continue;
-        }
-        break;
-      }
-
+    if (substrings.empty()) {
+      // there is no room for anything; abort.
+      break;
+    }
+    if (substrings[0].empty()) {
       x = 0;
-      line++;
+      // Nothing fits on this line. Start a new line.
+      // As for the first line, don't advance line number so that it will be
+      // handled again at the beginning of the loop.
+      if (line > 0) {
+        ++line;
+      }
       continue;
     }
 
@@ -320,7 +340,7 @@ gfx::Size StyledLabel::CalculateAndDoLayout(int width, bool dry_run) {
         // If the chunk should not be wrapped, try to fit it entirely on the
         // next line.
         x = 0;
-        line++;
+        ++line;
         continue;
       }
 
@@ -345,19 +365,30 @@ gfx::Size StyledLabel::CalculateAndDoLayout(int width, bool dry_run) {
       label->SetBackgroundColor(displayed_on_background_color_);
     label->SetAutoColorReadabilityEnabled(auto_color_readability_enabled_);
 
-    // Calculate the size of the optional focus border, and overlap by that
-    // amount. Otherwise, "<a>link</a>," will render as "link ,".
-    gfx::Insets focus_border_insets(label->GetInsets());
-    focus_border_insets += -label->View::GetInsets();
     const gfx::Size view_size = label->GetPreferredSize();
-    label->SetBoundsRect(gfx::Rect(
-        gfx::Point(
-            GetInsets().left() + x - focus_border_insets.left(),
-            GetInsets().top() + line * line_height - focus_border_insets.top()),
-        view_size));
-    x += view_size.width() - focus_border_insets.width();
+    const gfx::Insets insets = GetInsets();
+    gfx::Point view_origin(insets.left() + x,
+                           insets.top() + line * line_height);
+    if (Link::GetDefaultFocusStyle() == Link::FocusStyle::RING) {
+      // Calculate the size of the optional focus border, and overlap by that
+      // amount. Otherwise, "<a>link</a>," will render as "link ,".
+      const gfx::Insets focus_border_insets = FocusBorderInsets(*label);
+      view_origin.Offset(-focus_border_insets.left(),
+                         -focus_border_insets.top());
+      label->SetBoundsRect(gfx::Rect(view_origin, view_size));
+      x += view_size.width() - focus_border_insets.width();
+      used_width = std::max(used_width, x);
+      total_height =
+          std::max(total_height, label->bounds().bottom() + insets.bottom() -
+                                     focus_border_insets.bottom());
+    } else {
+      label->SetBoundsRect(gfx::Rect(view_origin, view_size));
+      x += view_size.width();
+      total_height =
+          std::max(total_height, label->bounds().bottom() + insets.bottom());
+    }
     used_width = std::max(used_width, x);
-    total_height = std::max(total_height, label->bounds().bottom());
+
     if (!dry_run)
       AddChildView(label.release());
 

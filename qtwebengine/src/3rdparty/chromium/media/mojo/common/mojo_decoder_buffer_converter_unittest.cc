@@ -9,7 +9,10 @@
 #include <memory>
 
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/test/mock_callback.h"
 #include "media/base/decoder_buffer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -25,21 +28,11 @@ MATCHER_P(MatchesDecoderBuffer, buffer, "") {
   return arg->MatchesForTesting(*buffer);
 }
 
-class MockReadCB {
- public:
-  MOCK_METHOD1(Run, void(scoped_refptr<DecoderBuffer>));
-};
-
 class MojoDecoderBufferConverter {
  public:
   MojoDecoderBufferConverter(
       uint32_t data_pipe_capacity_bytes = kDefaultDataPipeCapacityBytes) {
-    MojoCreateDataPipeOptions options;
-    options.struct_size = sizeof(MojoCreateDataPipeOptions);
-    options.flags = MOJO_CREATE_DATA_PIPE_OPTIONS_FLAG_NONE;
-    options.element_num_bytes = 1;
-    options.capacity_num_bytes = data_pipe_capacity_bytes;
-    mojo::DataPipe data_pipe(options);
+    mojo::DataPipe data_pipe(data_pipe_capacity_bytes);
 
     writer = base::MakeUnique<MojoDecoderBufferWriter>(
         std::move(data_pipe.producer_handle));
@@ -49,15 +42,13 @@ class MojoDecoderBufferConverter {
 
   void ConvertAndVerify(const scoped_refptr<DecoderBuffer>& media_buffer) {
     base::RunLoop run_loop;
-    MockReadCB mock_cb;
+    base::MockCallback<MojoDecoderBufferReader::ReadCB> mock_cb;
     EXPECT_CALL(mock_cb, Run(MatchesDecoderBuffer(media_buffer)))
         .WillOnce(testing::InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
 
     mojom::DecoderBufferPtr mojo_buffer =
         writer->WriteDecoderBuffer(media_buffer);
-    reader->ReadDecoderBuffer(
-        std::move(mojo_buffer),
-        base::BindOnce(&MockReadCB::Run, base::Unretained(&mock_cb)));
+    reader->ReadDecoderBuffer(std::move(mojo_buffer), mock_cb.Get());
     run_loop.Run();
   }
 
@@ -79,7 +70,6 @@ TEST(MojoDecoderBufferConverterTest, ConvertDecoderBuffer_Normal) {
       reinterpret_cast<const uint8_t*>(&kSideData), kSideDataSize));
   buffer->set_timestamp(base::TimeDelta::FromMilliseconds(123));
   buffer->set_duration(base::TimeDelta::FromMilliseconds(456));
-  buffer->set_splice_timestamp(base::TimeDelta::FromMilliseconds(200));
   buffer->set_discard_padding(
       DecoderBuffer::DiscardPadding(base::TimeDelta::FromMilliseconds(5),
                                     base::TimeDelta::FromMilliseconds(6)));
@@ -191,7 +181,7 @@ TEST(MojoDecoderBufferConverterTest, WriterSidePipeError) {
 
   // Verify that ReadCB is called with a NULL decoder buffer.
   base::RunLoop run_loop;
-  MockReadCB mock_cb;
+  base::MockCallback<MojoDecoderBufferReader::ReadCB> mock_cb;
   EXPECT_CALL(mock_cb, Run(testing::IsNull()))
       .WillOnce(testing::InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
 
@@ -200,9 +190,7 @@ TEST(MojoDecoderBufferConverterTest, WriterSidePipeError) {
   MojoDecoderBufferConverter converter(kDataSize / 2);
   mojom::DecoderBufferPtr mojo_buffer =
       converter.writer->WriteDecoderBuffer(media_buffer);
-  converter.reader->ReadDecoderBuffer(
-      std::move(mojo_buffer),
-      base::BindOnce(&MockReadCB::Run, base::Unretained(&mock_cb)));
+  converter.reader->ReadDecoderBuffer(std::move(mojo_buffer), mock_cb.Get());
 
   // Before the entire data is transmitted, close the handle on writer side.
   // The reader side will get notified and report the error.

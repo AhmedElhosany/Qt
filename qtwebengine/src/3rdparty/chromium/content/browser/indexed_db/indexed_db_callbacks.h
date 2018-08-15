@@ -13,9 +13,9 @@
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/strings/string16.h"
-#include "base/threading/thread_checker.h"
 #include "content/browser/indexed_db/indexed_db_database_error.h"
 #include "content/browser/indexed_db/indexed_db_dispatcher_host.h"
 #include "content/common/indexed_db/indexed_db.mojom.h"
@@ -23,8 +23,11 @@
 #include "content/common/indexed_db/indexed_db_key_path.h"
 #include "url/origin.h"
 
+namespace base {
+class SequencedTaskRunner;
+}
+
 namespace content {
-class IndexedDBBlobInfo;
 class IndexedDBConnection;
 class IndexedDBCursor;
 class IndexedDBDatabase;
@@ -33,25 +36,19 @@ struct IndexedDBDatabaseMetadata;
 struct IndexedDBReturnValue;
 struct IndexedDBValue;
 
+// Expected to be constructed on IO thread and called/deleted from IDB sequence.
 class CONTENT_EXPORT IndexedDBCallbacks
     : public base::RefCounted<IndexedDBCallbacks> {
  public:
-  // Simple payload responses
-  IndexedDBCallbacks(IndexedDBDispatcherHost* dispatcher_host,
-                     int32_t ipc_thread_id,
-                     int32_t ipc_callbacks_id);
+  // Destructively converts an IndexedDBValue to a Mojo Value.
+  static ::indexed_db::mojom::ValuePtr ConvertAndEraseValue(
+      IndexedDBValue* value);
 
-  // IndexedDBCursor responses
-  IndexedDBCallbacks(IndexedDBDispatcherHost* dispatcher_host,
-                     int32_t ipc_thread_id,
-                     int32_t ipc_callbacks_id,
-                     int32_t ipc_cursor_id);
-
-  // Mojo-based responses
   IndexedDBCallbacks(
-      IndexedDBDispatcherHost* dispatcher_host,
+      base::WeakPtr<IndexedDBDispatcherHost> dispatcher_host,
       const url::Origin& origin,
-      ::indexed_db::mojom::CallbacksAssociatedPtrInfo callbacks_info);
+      ::indexed_db::mojom::CallbacksAssociatedPtrInfo callbacks_info,
+      scoped_refptr<base::SequencedTaskRunner> idb_runner);
 
   virtual void OnError(const IndexedDBDatabaseError& error);
 
@@ -71,7 +68,7 @@ class CONTENT_EXPORT IndexedDBCallbacks
                          const content::IndexedDBDatabaseMetadata& metadata);
 
   // IndexedDBDatabase::OpenCursor
-  virtual void OnSuccess(scoped_refptr<IndexedDBCursor> cursor,
+  virtual void OnSuccess(std::unique_ptr<IndexedDBCursor> cursor,
                          const IndexedDBKey& key,
                          const IndexedDBKey& primary_key,
                          IndexedDBValue* value);
@@ -105,49 +102,33 @@ class CONTENT_EXPORT IndexedDBCallbacks
   // IndexedDBCursor::Continue / Advance (when complete)
   virtual void OnSuccess();
 
-  // Checks to see if the associated dispatcher host is still connected. If
-  // not this request can be dropped.
-  virtual bool IsValid() const;
-
   void SetConnectionOpenStartTime(const base::TimeTicks& start_time);
-
-  void set_host_transaction_id(int64_t host_transaction_id) {
-    host_transaction_id_ = host_transaction_id;
-  }
 
  protected:
   virtual ~IndexedDBCallbacks();
 
  private:
-  void RegisterBlobsAndSend(const std::vector<IndexedDBBlobInfo>& blob_info,
-                            const base::Closure& callback);
-
   friend class base::RefCounted<IndexedDBCallbacks>;
 
   class IOThreadHelper;
 
-  // Originally from IndexedDBCallbacks:
-  scoped_refptr<IndexedDBDispatcherHost> dispatcher_host_;
-  int32_t ipc_callbacks_id_;
-  int32_t ipc_thread_id_;
+  // Stores if this callbacks object is complete and should not be called again.
+  bool complete_ = false;
 
-  // IndexedDBCursor callbacks ------------------------
-  int32_t ipc_cursor_id_;
-
-  // IndexedDBDatabase callbacks ------------------------
-  int64_t host_transaction_id_;
-  url::Origin origin_;
-  bool database_sent_ = false;
+  // Depending on whether the database needs upgrading, we create connections in
+  // different spots. This stores if we've already created the connection so
+  // OnSuccess(Connection) doesn't create an extra one.
+  bool connection_created_ = false;
 
   // Used to assert that OnSuccess is only called if there was no data loss.
   blink::WebIDBDataLoss data_loss_;
 
   // The "blocked" event should be sent at most once per request.
-  bool sent_blocked_;
+  bool sent_blocked_ = false;
   base::TimeTicks connection_open_start_time_;
 
   std::unique_ptr<IOThreadHelper, BrowserThread::DeleteOnIOThread> io_helper_;
-  base::ThreadChecker thread_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(IndexedDBCallbacks);
 };

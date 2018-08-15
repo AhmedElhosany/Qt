@@ -7,16 +7,18 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/single_thread_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/history/core/browser/history_model_worker.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/signin/core/browser/signin_manager_base.h"
 #include "components/sync/base/sync_prefs.h"
-#include "components/sync/driver/glue/browser_thread_model_worker.h"
-#include "components/sync/driver/glue/ui_model_worker.h"
 #include "components/sync/driver/signin_manager_wrapper.h"
 #include "components/sync/engine/passive_model_worker.h"
+#include "components/sync/engine/sequenced_model_worker.h"
+#include "components/sync/engine/ui_model_worker.h"
 #include "net/url_request/url_request_test_util.h"
 
 namespace browser_sync {
@@ -128,10 +130,9 @@ BundleSyncClient::CreateModelWorkerForGroup(syncer::ModelSafeGroup group) {
   DCHECK(file_thread_) << "DB thread was specified but FILE thread was not.";
   switch (group) {
     case syncer::GROUP_DB:
-      return new syncer::BrowserThreadModelWorker(db_thread_, syncer::GROUP_DB);
+      return new syncer::SequencedModelWorker(db_thread_, syncer::GROUP_DB);
     case syncer::GROUP_FILE:
-      return new syncer::BrowserThreadModelWorker(file_thread_,
-                                                  syncer::GROUP_FILE);
+      return new syncer::SequencedModelWorker(file_thread_, syncer::GROUP_FILE);
     case syncer::GROUP_UI:
       return new syncer::UIModelWorker(base::ThreadTaskRunnerHandle::Get());
     case syncer::GROUP_PASSIVE:
@@ -260,7 +261,6 @@ ProfileSyncService::InitParams ProfileSyncServiceBundle::CreateBasicInitParams(
   init_params.url_request_context = url_request_context();
   init_params.debug_identifier = "dummyDebugName";
   init_params.channel = version_info::Channel::UNKNOWN;
-  init_params.blocking_pool = worker_pool_owner_.pool().get();
 
   return init_params;
 }

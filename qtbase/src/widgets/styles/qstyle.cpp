@@ -1840,9 +1840,8 @@ void QStyle::drawItemPixmap(QPainter *painter, const QRect &rect, int alignment,
 
     \value SH_UnderlineShortcut  Whether shortcuts are underlined.
 
-    \value SH_SpellCheckUnderlineStyle  A
-        QTextCharFormat::UnderlineStyle value that specifies the way
-        misspelled words should be underlined.
+    \value SH_SpellCheckUnderlineStyle  Obsolete. Use SpellCheckUnderlineStyle
+    hint in QPlatformTheme instead.
 
     \value SH_SpinBox_AnimateButton  Animate a click when up or down is
     pressed in a spin box.
@@ -1972,9 +1971,7 @@ void QStyle::drawItemPixmap(QPainter *painter, const QRect &rect, int alignment,
            a tooltip is shown (notice: shown, not hidden). When a new wake isn't needed, a user-requested tooltip
            will be shown nearly instantly.
 
-    \value SH_Widget_Animate Determines if the widget should show animations or not, for example
-           a transition between checked and unchecked statuses in a checkbox.
-           This enum value has been introduced in Qt 5.2.
+    \value SH_Widget_Animate Deprecated. Use \l{SH_Widget_Animation_Duration} instead.
 
     \value SH_Splitter_OpaqueResize Determines if resizing is opaque
            This enum value has been introduced in Qt 5.2
@@ -1986,6 +1983,16 @@ void QStyle::drawItemPixmap(QPainter *painter, const QRect &rect, int alignment,
     \value SH_ItemView_ScrollMode The default vertical and horizontal scroll mode as specified
            by the style. Can be overridden with QAbstractItemView::setVerticalScrollMode() and
            QAbstractItemView::setHorizontalScrollMode(). This enum value has been introduced in Qt 5.7.
+
+    \value SH_TitleBar_ShowToolTipsOnButtons
+           Determines if tool tips are shown on window title bar buttons.
+           The Mac style, for example, sets this to false.
+           This enum value has been introduced in Qt 5.10.
+
+    \value SH_Widget_Animation_Duration
+           Determines how much an animation should last (in ms).
+           A value equal to zero means that the animations will be disabled.
+           This enum value has been introduced in Qt 5.10.
 
     \sa styleHint()
 */
@@ -2286,8 +2293,8 @@ int QStyle::sliderValueFromPosition(int min, int max, int pos, int span, bool up
      Returns the style's standard palette.
 
     Note that on systems that support system colors, the style's
-    standard palette is not used. In particular, the Windows XP,
-    Vista, and Mac styles do not use the standard palette, but make
+    standard palette is not used. In particular, the Windows
+    Vista and Mac styles do not use the standard palette, but make
     use of native theme engines. With these styles, you should not set
     the palette with QApplication::setPalette().
 

@@ -52,12 +52,18 @@
 
 QT_BEGIN_NAMESPACE
 
+class QQuickMenu;
 class QQuickMenuItemPrivate;
 
 class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickMenuItem : public QQuickAbstractButton
 {
     Q_OBJECT
     Q_PROPERTY(bool highlighted READ isHighlighted WRITE setHighlighted NOTIFY highlightedChanged FINAL)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(QQuickItem *arrow READ arrow WRITE setArrow NOTIFY arrowChanged FINAL REVISION 3)
+    Q_PROPERTY(QQuickMenu *menu READ menu NOTIFY menuChanged FINAL REVISION 3)
+    Q_PROPERTY(QQuickMenu *subMenu READ subMenu NOTIFY subMenuChanged FINAL REVISION 3)
+    Q_CLASSINFO("DeferredPropertyNames", "arrow,background,contentItem,indicator")
 
 public:
     explicit QQuickMenuItem(QQuickItem *parent = nullptr);
@@ -65,12 +71,26 @@ public:
     bool isHighlighted() const;
     void setHighlighted(bool highlighted);
 
+    // 2.3 (Qt 5.10)
+    QQuickItem *arrow() const;
+    void setArrow(QQuickItem *arrow);
+
+    QQuickMenu *menu() const;
+    QQuickMenu *subMenu() const;
+
 Q_SIGNALS:
     void triggered();
     void highlightedChanged();
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void arrowChanged();
+    Q_REVISION(3) void menuChanged();
+    Q_REVISION(3) void subMenuChanged();
 
 protected:
+    void componentComplete() override;
+
     QFont defaultFont() const override;
+    QPalette defaultPalette() const override;
 
 #if QT_CONFIG(accessibility)
     QAccessible::Role accessibleRole() const override;

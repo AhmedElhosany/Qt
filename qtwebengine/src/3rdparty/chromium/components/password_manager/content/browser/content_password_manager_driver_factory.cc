@@ -16,8 +16,8 @@
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/ssl_status.h"
@@ -51,7 +51,7 @@ void ContentPasswordManagerDriverFactory::CreateForWebContents(
 
   web_contents->SetUserData(
       kContentPasswordManagerDriverFactoryWebContentsUserDataKey,
-      new_factory.release());
+      std::move(new_factory));
 }
 
 ContentPasswordManagerDriverFactory::ContentPasswordManagerDriverFactory(
@@ -75,8 +75,8 @@ ContentPasswordManagerDriverFactory::FromWebContents(
 
 // static
 void ContentPasswordManagerDriverFactory::BindPasswordManagerDriver(
-    content::RenderFrameHost* render_frame_host,
-    autofill::mojom::PasswordManagerDriverRequest request) {
+    autofill::mojom::PasswordManagerDriverRequest request,
+    content::RenderFrameHost* render_frame_host) {
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
   if (!web_contents)
@@ -95,30 +95,6 @@ void ContentPasswordManagerDriverFactory::BindPasswordManagerDriver(
       factory->GetDriverForFrame(render_frame_host);
   if (driver)
     driver->BindRequest(std::move(request));
-}
-
-// static
-void ContentPasswordManagerDriverFactory::BindSensitiveInputVisibilityService(
-    content::RenderFrameHost* render_frame_host,
-    blink::mojom::SensitiveInputVisibilityServiceRequest request) {
-  content::WebContents* web_contents =
-      content::WebContents::FromRenderFrameHost(render_frame_host);
-  if (!web_contents)
-    return;
-
-  ContentPasswordManagerDriverFactory* factory =
-      ContentPasswordManagerDriverFactory::FromWebContents(web_contents);
-  // We try to bind to the driver, but if driver is not ready for now or totally
-  // not available for this render frame host, the request will be just dropped.
-  // This would cause the message pipe to be closed, which will raise a
-  // connection error on the peer side.
-  if (!factory)
-    return;
-
-  ContentPasswordManagerDriver* driver =
-      factory->GetDriverForFrame(render_frame_host);
-  if (driver)
-    driver->BindSensitiveInputVisibilityServiceRequest(std::move(request));
 }
 
 ContentPasswordManagerDriver*
@@ -145,12 +121,13 @@ void ContentPasswordManagerDriverFactory::RenderFrameDeleted(
   frame_driver_map_.erase(render_frame_host);
 }
 
-void ContentPasswordManagerDriverFactory::DidNavigateAnyFrame(
-    content::RenderFrameHost* render_frame_host,
-    const content::LoadCommittedDetails& details,
-    const content::FrameNavigateParams& params) {
-  frame_driver_map_.find(render_frame_host)
-      ->second->DidNavigateFrame(details, params);
+void ContentPasswordManagerDriverFactory::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  if (!navigation_handle->HasCommitted())
+    return;
+
+  frame_driver_map_.find(navigation_handle->GetRenderFrameHost())
+      ->second->DidNavigateFrame(navigation_handle);
 }
 
 void ContentPasswordManagerDriverFactory::RequestSendLoggingAvailability() {

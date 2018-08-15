@@ -16,6 +16,7 @@
 #include <iosfwd>
 #include <string>
 
+#include "base/logging.h"
 #include "build/build_config.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/safe_integer_conversions.h"
@@ -108,6 +109,11 @@ class GFX_EXPORT Rect {
     set_width(width);
     set_height(height);
   }
+
+  // Use in place of SetRect() when you know the edges of the rectangle instead
+  // of the dimensions, rather than trying to determine the width/height
+  // yourself. This safely handles cases where the width/height would overflow.
+  void SetByBounds(int left, int top, int right, int bottom);
 
   // Shrink the rectangle by a horizontal and vertical distance on all sides.
   void Inset(int horizontal, int vertical) {
@@ -206,18 +212,27 @@ class GFX_EXPORT Rect {
   gfx::Point origin_;
   gfx::Size size_;
 
+  // Returns true iff a+b would overflow max int.
+  static constexpr bool AddWouldOverflow(int a, int b) {
+    // In this function, GCC tries to make optimizations that would only work if
+    // max - a wouldn't overflow but it isn't smart enough to notice that a > 0.
+    // So cast everything to unsigned to avoid this.  As it is guaranteed that
+    // max - a and b are both already positive, the cast is a noop.
+    //
+    // This is intended to be: a > 0 && max - a < b
+    return a > 0 && b > 0 &&
+           static_cast<unsigned>(std::numeric_limits<int>::max() - a) <
+               static_cast<unsigned>(b);
+  }
+
   // Clamp the size to avoid integer overflow in bottom() and right().
   // This returns the width given an origin and a width.
+  // TODO(enne): this should probably use base::SaturatedAddition, but that
+  // function is not a constexpr.
   static constexpr int GetClampedValue(int origin, int size) {
     return AddWouldOverflow(origin, size)
                ? std::numeric_limits<int>::max() - origin
                : size;
-  }
-
-  // Returns a clamped width given a right and a left, assuming right > left.
-  static constexpr int GetClampedWidthFromExtents(int left, int right) {
-    return SubtractWouldOverflow(right, left) ? std::numeric_limits<int>::max()
-                                              : right - left;
   }
 };
 

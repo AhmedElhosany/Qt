@@ -11,12 +11,12 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/arc/bluetooth/bluetooth_type_converters.h"
 #include "device/bluetooth/bluetooth_gatt_service.h"
 #include "device/bluetooth/bluetooth_uuid.h"
-#include "mojo/public/cpp/bindings/array.h"
 
 namespace {
 
@@ -50,14 +50,10 @@ namespace mojo {
 arc::mojom::BluetoothAddressPtr
 TypeConverter<arc::mojom::BluetoothAddressPtr, std::string>::Convert(
     const std::string& address) {
-  std::string stripped = StripNonHex(address);
-
-  std::vector<uint8_t> address_bytes;
-  base::HexStringToBytes(stripped, &address_bytes);
 
   arc::mojom::BluetoothAddressPtr mojo_addr =
       arc::mojom::BluetoothAddress::New();
-  mojo_addr->address = mojo::Array<uint8_t>::From(address_bytes);
+  base::HexStringToBytes(StripNonHex(address), &mojo_addr->address);
 
   return mojo_addr;
 }
@@ -68,7 +64,7 @@ std::string TypeConverter<std::string, arc::mojom::BluetoothAddress>::Convert(
   std::ostringstream addr_stream;
   addr_stream << std::setfill('0') << std::hex << std::uppercase;
 
-  const mojo::Array<uint8_t>& bytes = address.address;
+  const std::vector<uint8_t>& bytes = address.address;
 
   if (address.address.size() != kAddressSize)
     return std::string(kInvalidAddress);
@@ -131,7 +127,7 @@ TypeConverter<arc::mojom::BluetoothSdpAttributePtr,
 
   switch (result->type) {
     case bluez::BluetoothServiceAttributeValueBlueZ::NULLTYPE:
-      result->value.Append(base::Value::CreateNullValue());
+      result->value.Append(base::MakeUnique<base::Value>());
       break;
     case bluez::BluetoothServiceAttributeValueBlueZ::UINT:
     case bluez::BluetoothServiceAttributeValueBlueZ::INT:
@@ -141,16 +137,12 @@ TypeConverter<arc::mojom::BluetoothSdpAttributePtr,
     case bluez::BluetoothServiceAttributeValueBlueZ::BOOL:
       result->type_size = attr_bluez.size();
       result->value.Append(attr_bluez.value().CreateDeepCopy());
-      result->sequence =
-          mojo::Array<arc::mojom::BluetoothSdpAttributePtr>::New(0);
       break;
     case bluez::BluetoothServiceAttributeValueBlueZ::SEQUENCE:
       if (depth + 1 >= arc::kBluetoothSDPMaxDepth) {
         result->type = bluez::BluetoothServiceAttributeValueBlueZ::NULLTYPE;
         result->type_size = 0;
-        result->value.Append(base::Value::CreateNullValue());
-        result->sequence =
-            mojo::Array<arc::mojom::BluetoothSdpAttributePtr>::New(0);
+        result->value.Append(base::MakeUnique<base::Value>());
         return result;
       }
       for (const auto& child : attr_bluez.sequence()) {
@@ -185,7 +177,7 @@ TypeConverter<bluez::BluetoothServiceAttributeValueBlueZ,
       if (attr->value.GetSize() != 1) {
         return bluez::BluetoothServiceAttributeValueBlueZ(
             bluez::BluetoothServiceAttributeValueBlueZ::NULLTYPE, 0,
-            base::Value::CreateNullValue());
+            base::MakeUnique<base::Value>());
       }
 
       std::unique_ptr<base::Value> value;
@@ -198,7 +190,7 @@ TypeConverter<bluez::BluetoothServiceAttributeValueBlueZ,
       if (depth + 1 >= arc::kBluetoothSDPMaxDepth || attr->sequence.empty()) {
         return bluez::BluetoothServiceAttributeValueBlueZ(
             bluez::BluetoothServiceAttributeValueBlueZ::NULLTYPE, 0,
-            base::Value::CreateNullValue());
+            base::MakeUnique<base::Value>());
       }
 
       auto bluez_sequence = base::MakeUnique<
@@ -215,7 +207,7 @@ TypeConverter<bluez::BluetoothServiceAttributeValueBlueZ,
   }
   return bluez::BluetoothServiceAttributeValueBlueZ(
       bluez::BluetoothServiceAttributeValueBlueZ::NULLTYPE, 0,
-      base::Value::CreateNullValue());
+      base::MakeUnique<base::Value>());
 }
 
 // static

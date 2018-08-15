@@ -5,42 +5,64 @@
 #ifndef InstalledAppController_h
 #define InstalledAppController_h
 
-#include "core/frame/DOMWindowProperty.h"
+#include "core/dom/ContextLifecycleObserver.h"
 #include "core/frame/LocalFrame.h"
 #include "modules/ModulesExport.h"
 #include "platform/Supplementable.h"
-#include "public/platform/modules/installedapp/WebInstalledAppClient.h"
+#include "platform/wtf/RefPtr.h"
+#include "platform/wtf/Vector.h"
+#include "public/platform/WebVector.h"
+#include "public/platform/modules/installedapp/WebRelatedApplication.h"
+#include "public/platform/modules/installedapp/WebRelatedAppsFetcher.h"
+#include "public/platform/modules/installedapp/installed_app_provider.mojom-blink.h"
+#include "public/platform/modules/installedapp/related_application.mojom-blink.h"
+
+#include <memory>
 
 namespace blink {
-
-class WebSecurityOrigin;
 
 class MODULES_EXPORT InstalledAppController final
     : public GarbageCollectedFinalized<InstalledAppController>,
       public Supplement<LocalFrame>,
-      public DOMWindowProperty {
+      public ContextLifecycleObserver {
   USING_GARBAGE_COLLECTED_MIXIN(InstalledAppController);
   WTF_MAKE_NONCOPYABLE(InstalledAppController);
 
  public:
   virtual ~InstalledAppController();
 
-  void getInstalledApps(const WebSecurityOrigin&,
-                        std::unique_ptr<AppInstalledCallbacks>);
+  // Gets a list of related apps from the current page's manifest that belong
+  // to the current underlying platform, and are installed.
+  void GetInstalledRelatedApps(std::unique_ptr<AppInstalledCallbacks>);
 
-  static void provideTo(LocalFrame&, WebInstalledAppClient*);
-  static InstalledAppController* from(LocalFrame&);
-  static const char* supplementName();
+  static void ProvideTo(LocalFrame&, WebRelatedAppsFetcher*);
+  static InstalledAppController* From(LocalFrame&);
+  static const char* SupplementName();
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
-  InstalledAppController(LocalFrame&, WebInstalledAppClient*);
+  class GetRelatedAppsCallbacks;
 
-  // Inherited from DOMWindowProperty.
-  void frameDestroyed() override;
+  InstalledAppController(LocalFrame&, WebRelatedAppsFetcher*);
 
-  WebInstalledAppClient* m_client;
+  // Inherited from ContextLifecycleObserver.
+  void ContextDestroyed(ExecutionContext*) override;
+
+  // Takes a set of related applications and filters them by those which belong
+  // to the current underlying platform, and are actually installed and related
+  // to the current page's origin. Passes the filtered list to the callback.
+  void FilterByInstalledApps(const WebVector<WebRelatedApplication>&,
+                             std::unique_ptr<AppInstalledCallbacks>);
+
+  // Callback from the InstalledAppProvider mojo service.
+  void OnFilterInstalledApps(std::unique_ptr<blink::AppInstalledCallbacks>,
+                             WTF::Vector<mojom::blink::RelatedApplicationPtr>);
+
+  // Handle to the InstalledApp mojo service.
+  mojom::blink::InstalledAppProviderPtr provider_;
+
+  WebRelatedAppsFetcher* related_apps_fetcher_;
 };
 
 }  // namespace blink

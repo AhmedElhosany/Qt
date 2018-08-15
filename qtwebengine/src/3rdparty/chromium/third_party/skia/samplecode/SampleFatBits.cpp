@@ -15,6 +15,7 @@
 #include "SkUtils.h"
 #include "SkImage.h"
 #include "SkSurface.h"
+#include "SkClipOpPriv.h"
 
 #define FAT_PIXEL_COLOR     SK_ColorBLACK
 #define PIXEL_CENTER_SIZE   3
@@ -258,9 +259,9 @@ void FatBits::drawLine(SkCanvas* canvas, SkPoint pts[]) {
         fMinSurface->getCanvas()->save();
         SkRect r = fClipRect;
         r.inset(SK_Scalar1/3, SK_Scalar1/3);
-        fMinSurface->getCanvas()->clipRect(r, SkCanvas::kIntersect_Op, true);
+        fMinSurface->getCanvas()->clipRect(r, kIntersect_SkClipOp, true);
     }
-    fMinSurface->getCanvas()->drawLine(pts[0].fX, pts[0].fY, pts[1].fX, pts[1].fY, paint);
+    fMinSurface->getCanvas()->drawLine(pts[0], pts[1], paint);
     if (fUseClip) {
         fMinSurface->getCanvas()->restore();
     }
@@ -461,7 +462,7 @@ protected:
             paint.setAntiAlias(true);
             paint.setTextSize(16);
             paint.setColor(SK_ColorBLUE);
-            canvas->drawText(str.c_str(), str.size(), 10, 16, paint);
+            canvas->drawString(str, 10, 16, paint);
         }
     }
 

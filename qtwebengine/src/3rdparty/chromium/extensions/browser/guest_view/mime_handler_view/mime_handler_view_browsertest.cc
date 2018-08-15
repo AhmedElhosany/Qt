@@ -7,8 +7,10 @@
 #include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/guest_view/browser/test_guest_view_manager.h"
@@ -131,9 +133,9 @@ class MimeHandlerViewTest : public ExtensionApiTest,
   void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
 
-    ASSERT_TRUE(StartEmbeddedTestServer());
     embedded_test_server()->ServeFilesFromDirectory(
         test_data_dir_.AppendASCII("mime_handler_view"));
+    ASSERT_TRUE(StartEmbeddedTestServer());
   }
 
   // TODO(ekaramad): These tests run for OOPIF guests too, except that they
@@ -146,13 +148,11 @@ class MimeHandlerViewTest : public ExtensionApiTest,
 
     bool use_cross_process_frames_for_guests = GetParam();
     if (use_cross_process_frames_for_guests) {
-      command_line->AppendSwitchASCII(
-          switches::kEnableFeatures,
-          ::features::kGuestViewCrossProcessFrames.name);
+      scoped_feature_list_.InitAndEnableFeature(
+          features::kGuestViewCrossProcessFrames);
     } else {
-      command_line->AppendSwitchASCII(
-          switches::kDisableFeatures,
-          ::features::kGuestViewCrossProcessFrames.name);
+      scoped_feature_list_.InitAndDisableFeature(
+          features::kGuestViewCrossProcessFrames);
     }
   }
 
@@ -209,6 +209,7 @@ class MimeHandlerViewTest : public ExtensionApiTest,
 
  private:
   TestGuestViewManagerFactory factory_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 INSTANTIATE_TEST_CASE_P(MimeHandlerViewTests,

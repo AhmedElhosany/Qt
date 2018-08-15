@@ -43,7 +43,6 @@
 #include <QtNetwork/private/qnetworksession_p.h>
 #include <QTcpServer>
 #include <QHostInfo>
-#include <QTcpSocket>
 
 #include "../../../network-settings.h"
 
@@ -282,8 +281,7 @@ void tst_QFtp::init()
 
     inFileDirExistsFunction = false;
 
-    srand(time(0));
-    uniqueExtension = QString::number((quintptr)this) + QString::number(rand())
+    uniqueExtension = QString::number((quintptr)this) + QString::number(QRandomGenerator::global()->generate())
         + QString::number((qulonglong)time(0));
 }
 

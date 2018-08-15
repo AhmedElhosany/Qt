@@ -19,50 +19,21 @@ cr.define('print_preview.ticket_items', function() {
    */
   function Scaling(appState, destinationStore, documentInfo) {
     print_preview.ticket_items.TicketItem.call(
-        this,
-        appState,
-        print_preview.AppState.Field.SCALING,
-        destinationStore,
+        this, appState, print_preview.AppStateField.SCALING, destinationStore,
         documentInfo);
-  };
-
-  /**
-   * Maximum scaling percentage
-   * @private {number}
-   * @const
-   */
-  Scaling.MAX_VAL = 200;
-
-  /**
-   * Minimum scaling percentage
-   * @private {number}
-   * @const
-   */
-  Scaling.MIN_VAL = 10;
+  }
 
   Scaling.prototype = {
     __proto__: print_preview.ticket_items.TicketItem.prototype,
 
     /** @override */
     wouldValueBeValid: function(value) {
-      if (/[^\d]+/.test(value)) {
-        return false;
-      }
-      var scaling = parseInt(value, 10);
-      return scaling >= Scaling.MIN_VAL && scaling <= Scaling.MAX_VAL;
+      return true;
     },
 
     /** @override */
     isValueEqual: function(value) {
       return this.getValueAsNumber() == value;
-    },
-
-    /**
-     * @param {number} The desired scaling percentage.
-     * @return {number} Nearest valid scaling percentage
-     */
-    getNearestValidValue: function(value) {
-      return Math.min(Math.max(value, Scaling.MIN_VAL), Scaling.MAX_VAL);
     },
 
     /** @override */
@@ -72,9 +43,9 @@ cr.define('print_preview.ticket_items', function() {
       var knownSizeToSaveAsPdf =
           (!this.getDocumentInfoInternal().isModifiable ||
            this.getDocumentInfoInternal().hasCssMediaStyles) &&
-           this.getSelectedDestInternal() &&
-           this.getSelectedDestInternal().id ==
-               print_preview.Destination.GooglePromotedId.SAVE_AS_PDF;
+          this.getSelectedDestInternal() &&
+          this.getSelectedDestInternal().id ==
+              print_preview.Destination.GooglePromotedId.SAVE_AS_PDF;
       return !knownSizeToSaveAsPdf;
     },
 
@@ -95,7 +66,5 @@ cr.define('print_preview.ticket_items', function() {
   };
 
   // Export
-  return {
-    Scaling: Scaling
-  };
+  return {Scaling: Scaling};
 });

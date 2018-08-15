@@ -26,21 +26,18 @@
 # (INCLUDING NEGLIGENCE OR/ OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from __future__ import print_function
+import collections
 import json
 import logging
 import optparse
-import sys
-import traceback
+import re
 
-from webkitpy.common.memoized import memoized
 from webkitpy.common.net.buildbot import Build
-from webkitpy.common.system.executive import ScriptError
+from webkitpy.layout_tests.models.test_expectations import BASELINE_SUFFIX_LIST
+from webkitpy.layout_tests.models.test_expectations import TestExpectations
 from webkitpy.layout_tests.models.testharness_results import is_all_pass_testharness_result
-from webkitpy.layout_tests.models.test_expectations import TestExpectations, BASELINE_SUFFIX_LIST, SKIP
 from webkitpy.layout_tests.port import factory
 from webkitpy.tool.commands.command import Command
-
 
 _log = logging.getLogger(__name__)
 
@@ -61,7 +58,14 @@ class AbstractRebaseliningCommand(Command):
         '--suffixes', default=','.join(BASELINE_SUFFIX_LIST), action='store',
         help='Comma-separated-list of file types to rebaseline.')
     builder_option = optparse.make_option(
-        '--builder', help='Builder to pull new baselines from.')
+        '--builder',
+        help=('Name of the builder to pull new baselines from, '
+              'e.g. "WebKit Mac10.12".'))
+    port_name_option = optparse.make_option(
+        '--port-name',
+        help=('Fully-qualified name of the port that new baselines belong to, '
+              'e.g. "mac-mac10.12". If not given, this is determined based on '
+              '--builder.'))
     test_option = optparse.make_option('--test', help='Test to rebaseline.')
     build_number_option = optparse.make_option(
         '--build-number', default=None, type='int',
@@ -73,10 +77,7 @@ class AbstractRebaseliningCommand(Command):
         self.expectation_line_changes = ChangeSet()
         self._tool = None
 
-    def _print_expectation_line_changes(self):
-        print(json.dumps(self.expectation_line_changes.to_dict()))
-
-    def _baseline_directory(self, builder_name):
+    def baseline_directory(self, builder_name):
         port = self._tool.port_factory.get_from_builder_name(builder_name)
         return port.baseline_version_dir()
 
@@ -84,10 +85,10 @@ class AbstractRebaseliningCommand(Command):
         return self._tool.filesystem.splitext(test_name)[0]
 
     def _file_name_for_actual_result(self, test_name, suffix):
-        return "%s-actual.%s" % (self._test_root(test_name), suffix)
+        return '%s-actual.%s' % (self._test_root(test_name), suffix)
 
     def _file_name_for_expected_result(self, test_name, suffix):
-        return "%s-expected.%s" % (self._test_root(test_name), suffix)
+        return '%s-expected.%s' % (self._test_root(test_name), suffix)
 
 
 class ChangeSet(object):
@@ -96,19 +97,20 @@ class ChangeSet(object):
     TODO(qyearsley): Remove this class, track list of lines to remove directly
     in an attribute of AbstractRebaseliningCommand.
     """
+
     def __init__(self, lines_to_remove=None):
         self.lines_to_remove = lines_to_remove or {}
 
-    def remove_line(self, test, builder):
+    def remove_line(self, test, port_name):
         if test not in self.lines_to_remove:
             self.lines_to_remove[test] = []
-        self.lines_to_remove[test].append(builder)
+        self.lines_to_remove[test].append(port_name)
 
     def to_dict(self):
         remove_lines = []
         for test in self.lines_to_remove:
-            for builder in self.lines_to_remove[test]:
-                remove_lines.append({'test': test, 'builder': builder})
+            for port_name in self.lines_to_remove[test]:
+                remove_lines.append({'test': test, 'port_name': port_name})
         return {'remove-lines': remove_lines}
 
     @staticmethod
@@ -117,163 +119,76 @@ class ChangeSet(object):
         if 'remove-lines' in change_dict:
             for line_to_remove in change_dict['remove-lines']:
                 test = line_to_remove['test']
-                builder = line_to_remove['builder']
+                port_name = line_to_remove['port_name']
                 if test not in lines_to_remove:
                     lines_to_remove[test] = []
-                lines_to_remove[test].append(builder)
+                lines_to_remove[test].append(port_name)
         return ChangeSet(lines_to_remove=lines_to_remove)
 
     def update(self, other):
         assert isinstance(other, ChangeSet)
-        assert type(other.lines_to_remove) is dict
+        assert isinstance(other.lines_to_remove, dict)
         for test in other.lines_to_remove:
             if test not in self.lines_to_remove:
                 self.lines_to_remove[test] = []
             self.lines_to_remove[test].extend(other.lines_to_remove[test])
 
 
-class CopyExistingBaselinesInternal(AbstractRebaseliningCommand):
-    name = "copy-existing-baselines-internal"
-    help_text = ("Copy existing baselines down one level in the baseline order to ensure "
-                 "new baselines don't break existing passing platforms.")
+class TestBaselineSet(object):
+    """Represents a collection of tests and platforms that can be rebaselined.
 
-    def __init__(self):
-        super(CopyExistingBaselinesInternal, self).__init__(options=[
-            self.results_directory_option,
-            self.suffixes_option,
-            self.builder_option,
-            self.test_option,
-        ])
+    A TestBaselineSet specifies tests to rebaseline along with information
+    about where to fetch the baselines from.
+    """
 
-    @memoized
-    def _immediate_predecessors_in_fallback(self, path_to_rebaseline):
-        port_names = self._tool.port_factory.all_port_names()
-        immediate_predecessors = []
-        for port_name in port_names:
-            port = self._tool.port_factory.get(port_name)
-            if not port.buildbot_archives_baselines():
-                continue
-            baseline_search_path = port.baseline_search_path()
-            try:
-                index = baseline_search_path.index(path_to_rebaseline)
-                if index:
-                    immediate_predecessors.append(self._tool.filesystem.basename(baseline_search_path[index - 1]))
-            except ValueError:
-                # baseline_search_path.index() throws a ValueError if the item isn't in the list.
-                pass
-        return immediate_predecessors
+    def __init__(self, host):
+        self._host = host
+        self._port = self._host.port_factory.get()
+        self._builder_names = set()
+        self._test_prefix_map = collections.defaultdict(list)
 
-    def _port_for_primary_baseline(self, baseline):
-        for port in [self._tool.port_factory.get(port_name) for port_name in self._tool.port_factory.all_port_names()]:
-            if self._tool.filesystem.basename(port.baseline_version_dir()) == baseline:
-                return port
-        raise Exception("Failed to find port for primary baseline %s." % baseline)
+    def __iter__(self):
+        return iter(self._iter_combinations())
 
-    def _copy_existing_baseline(self, builder_name, test_name, suffix):
-        baseline_directory = self._baseline_directory(builder_name)
-        ports = [self._port_for_primary_baseline(baseline)
-                 for baseline in self._immediate_predecessors_in_fallback(baseline_directory)]
+    def __bool__(self):
+        return bool(self._test_prefix_map)
 
-        old_baselines = []
-        new_baselines = []
+    def _iter_combinations(self):
+        """Iterates through (test, build, port) combinations."""
+        for test_prefix, build_port_pairs in self._test_prefix_map.iteritems():
+            for test in self._port.tests([test_prefix]):
+                for build, port_name in build_port_pairs:
+                    yield (test, build, port_name)
 
-        # Need to gather all the baseline paths before modifying the filesystem since
-        # the modifications can affect the results of port.expected_filename.
-        for port in ports:
-            old_baseline = port.expected_filename(test_name, "." + suffix)
-            if not self._tool.filesystem.exists(old_baseline):
-                _log.debug("No existing baseline for %s.", test_name)
-                continue
+    def __str__(self):
+        if not self._test_prefix_map:
+            return '<Empty TestBaselineSet>'
+        return ('<TestBaselineSet with:\n  ' +
+                '\n  '.join('%s: %s, %s' % triple for triple in self._iter_combinations()) +
+                '>')
 
-            new_baseline = self._tool.filesystem.join(
-                port.baseline_version_dir(),
-                self._file_name_for_expected_result(test_name, suffix))
-            if self._tool.filesystem.exists(new_baseline):
-                _log.debug("Existing baseline at %s, not copying over it.", new_baseline)
-                continue
+    def test_prefixes(self):
+        return sorted(self._test_prefix_map)
 
-            generic_expectations = TestExpectations(port, tests=[test_name], include_overrides=False)
-            full_expectations = TestExpectations(port, tests=[test_name], include_overrides=True)
-            # TODO(qyearsley): Change Port.skips_test so that this can be simplified.
-            if SKIP in full_expectations.get_expectations(test_name):
-                _log.debug("%s is skipped (perhaps temporarily) on %s.", test_name, port.name())
-                continue
-            if port.skips_test(test_name, generic_expectations, full_expectations):
-                _log.debug("%s is skipped on %s.", test_name, port.name())
-                continue
+    def build_port_pairs(self, test_prefix):
+        # Return a copy in case the caller modifies the returned list.
+        return list(self._test_prefix_map[test_prefix])
 
-            old_baselines.append(old_baseline)
-            new_baselines.append(new_baseline)
+    def add(self, test_prefix, build, port_name=None):
+        """Adds an entry for baselines to download for some set of tests.
 
-        for i in range(len(old_baselines)):
-            old_baseline = old_baselines[i]
-            new_baseline = new_baselines[i]
+        Args:
+            test_prefix: This can be a full test path, or directory of tests, or a path with globs.
+            build: A Build object. This specifies where to fetch baselines from.
+            port_name: This specifies what platform the baseline is for.
+        """
+        port_name = port_name or self._host.builders.port_name_for_builder_name(build.builder_name)
+        self._builder_names.add(build.builder_name)
+        self._test_prefix_map[test_prefix].append((build, port_name))
 
-            _log.debug("Copying baseline from %s to %s.", old_baseline, new_baseline)
-            self._tool.filesystem.maybe_make_directory(self._tool.filesystem.dirname(new_baseline))
-            self._tool.filesystem.copyfile(old_baseline, new_baseline)
-
-    def execute(self, options, args, tool):
-        self._tool = tool
-        for suffix in options.suffixes.split(','):
-            self._copy_existing_baseline(options.builder, options.test, suffix)
-
-
-class RebaselineTest(AbstractRebaseliningCommand):
-    name = "rebaseline-test-internal"
-    help_text = "Rebaseline a single test from a buildbot. Only intended for use by other webkit-patch commands."
-
-    def __init__(self):
-        super(RebaselineTest, self).__init__(options=[
-            self.results_directory_option,
-            self.suffixes_option,
-            self.builder_option,
-            self.test_option,
-            self.build_number_option,
-        ])
-
-    def _save_baseline(self, data, target_baseline):
-        if not data:
-            _log.debug("No baseline data to save.")
-            return
-
-        filesystem = self._tool.filesystem
-        filesystem.maybe_make_directory(filesystem.dirname(target_baseline))
-        filesystem.write_binary_file(target_baseline, data)
-
-    def _rebaseline_test(self, builder_name, test_name, suffix, results_url):
-        baseline_directory = self._baseline_directory(builder_name)
-
-        source_baseline = "%s/%s" % (results_url, self._file_name_for_actual_result(test_name, suffix))
-        target_baseline = self._tool.filesystem.join(baseline_directory, self._file_name_for_expected_result(test_name, suffix))
-
-        _log.debug("Retrieving source %s for target %s.", source_baseline, target_baseline)
-        self._save_baseline(self._tool.web.get_binary(source_baseline, convert_404_to_None=True),
-                            target_baseline)
-
-    def _rebaseline_test_and_update_expectations(self, options):
-        self._baseline_suffix_list = options.suffixes.split(',')
-
-        port = self._tool.port_factory.get_from_builder_name(options.builder)
-        if port.reference_files(options.test):
-            if 'png' in self._baseline_suffix_list:
-                _log.warning("Cannot rebaseline image result for reftest: %s", options.test)
-                return
-            assert self._baseline_suffix_list == ['txt']
-
-        if options.results_directory:
-            results_url = 'file://' + options.results_directory
-        else:
-            results_url = self._tool.buildbot.results_url(options.builder, build_number=options.build_number)
-
-        for suffix in self._baseline_suffix_list:
-            self._rebaseline_test(options.builder, options.test, suffix, results_url)
-        self.expectation_line_changes.remove_line(test=options.test, builder=options.builder)
-
-    def execute(self, options, args, tool):
-        self._tool = tool
-        self._rebaseline_test_and_update_expectations(options)
-        self._print_expectation_line_changes()
+    def all_builders(self):
+        """Returns all builder names in in this collection."""
+        return self._builder_names
 
 
 class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
@@ -295,16 +210,6 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
                 release_builders.append(builder_name)
         return release_builders
 
-    def _run_webkit_patch(self, args, verbose):
-        try:
-            verbose_args = ['--verbose'] if verbose else []
-            stderr = self._tool.executive.run_command([self._tool.path()] + verbose_args +
-                                                      args, cwd=self._tool.scm().checkout_root, return_stderr=True)
-            for line in stderr.splitlines():
-                _log.warning(line)
-        except ScriptError:
-            traceback.print_exc(file=sys.stderr)
-
     def _builders_to_fetch_from(self, builders_to_check):
         """Returns the subset of builders that will cover all of the baseline
         search paths used in the input list.
@@ -314,72 +219,72 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
         (since we don't save debug versions of baselines).
 
         Args:
-            builders_to_check: List of builder names.
+            builders_to_check: A collection of builder names.
+
+        Returns:
+            A set of builders that we may fetch from, which is a subset
+            of the input list.
         """
         release_builders = set()
         debug_builders = set()
-        builders_to_fallback_paths = {}
         for builder in builders_to_check:
             port = self._tool.port_factory.get_from_builder_name(builder)
             if port.test_configuration().build_type == 'release':
                 release_builders.add(builder)
             else:
                 debug_builders.add(builder)
+
+        builders_to_fallback_paths = {}
         for builder in list(release_builders) + list(debug_builders):
             port = self._tool.port_factory.get_from_builder_name(builder)
             fallback_path = port.baseline_search_path()
             if fallback_path not in builders_to_fallback_paths.values():
                 builders_to_fallback_paths[builder] = fallback_path
-        return builders_to_fallback_paths.keys()
 
-    @staticmethod
-    def _builder_names(builds):
-        # TODO(qyearsley): If test_prefix_list dicts are converted to instances
-        # of some class, then this could be replaced with  a method on that class.
-        return [b.builder_name for b in builds]
+        return set(builders_to_fallback_paths)
 
-    def _rebaseline_commands(self, test_prefix_list, options):
+    def _rebaseline_commands(self, test_baseline_set, options):
         path_to_webkit_patch = self._tool.path()
-        cwd = self._tool.scm().checkout_root
+        cwd = self._tool.git().checkout_root
         copy_baseline_commands = []
         rebaseline_commands = []
         lines_to_remove = {}
-        port = self._tool.port_factory.get()
 
-        for test_prefix in test_prefix_list:
-            for test in port.tests([test_prefix]):
-                builders_to_fetch_from = self._builders_to_fetch_from(self._builder_names(test_prefix_list[test_prefix]))
-                for build in sorted(test_prefix_list[test_prefix]):
-                    builder, build_number = build.builder_name, build.build_number
-                    if builder not in builders_to_fetch_from:
-                        break
-                    else:
-                        actual_failures_suffixes = self._suffixes_for_actual_failures(
-                            test, build, test_prefix_list[test_prefix][build])
-                    if not actual_failures_suffixes:
-                        # If we're not going to rebaseline the test because it's passing on this
-                        # builder, we still want to remove the line from TestExpectations.
-                        if test not in lines_to_remove:
-                            lines_to_remove[test] = []
-                        lines_to_remove[test].append(builder)
-                        continue
+        builders_to_fetch_from = self._builders_to_fetch_from(test_baseline_set.all_builders())
+        for test, build, port_name in test_baseline_set:
+            if build.builder_name not in builders_to_fetch_from:
+                continue
 
-                    suffixes = ','.join(actual_failures_suffixes)
-                    args = ['--suffixes', suffixes, '--builder', builder, '--test', test]
+            suffixes = self._suffixes_for_actual_failures(test, build)
+            if not suffixes:
+                # If we're not going to rebaseline the test because it's passing on this
+                # builder, we still want to remove the line from TestExpectations.
+                if test not in lines_to_remove:
+                    lines_to_remove[test] = []
+                lines_to_remove[test].append(port_name)
+                continue
 
-                    if options.verbose:
-                        args.append('--verbose')
+            args = []
+            if options.verbose:
+                args.append('--verbose')
+            args.extend([
+                '--test', test,
+                '--suffixes', ','.join(suffixes),
+                '--port-name', port_name,
+            ])
 
-                    copy_baseline_commands.append(
-                        tuple([[self._tool.executable, path_to_webkit_patch, 'copy-existing-baselines-internal'] + args, cwd]))
+            copy_command = [self._tool.executable, path_to_webkit_patch, 'copy-existing-baselines-internal'] + args
+            copy_baseline_commands.append(tuple([copy_command, cwd]))
 
-                    if build_number:
-                        args.extend(['--build-number', str(build_number)])
-                    if options.results_directory:
-                        args.extend(['--results-directory', options.results_directory])
+            args.extend(['--builder', build.builder_name])
+            if build.build_number:
+                args.extend(['--build-number', str(build.build_number)])
+            if options.results_directory:
+                args.extend(['--results-directory', options.results_directory])
 
-                    rebaseline_commands.append(
-                        tuple([[self._tool.executable, path_to_webkit_patch, 'rebaseline-test-internal'] + args, cwd]))
+            rebaseline_command = [self._tool.executable, path_to_webkit_patch, 'rebaseline-test-internal'] + args
+            rebaseline_commands.append(tuple([rebaseline_command, cwd]))
+
         return copy_baseline_commands, rebaseline_commands, lines_to_remove
 
     @staticmethod
@@ -400,28 +305,30 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
                 _log.debug('Could not add file based off output "%s"', stdout)
         return change_set
 
-    def _optimize_baselines(self, test_prefix_list, verbose=False):
-        optimize_commands = []
-        for test in test_prefix_list:
-            all_suffixes = set()
-            builders_to_fetch_from = self._builders_to_fetch_from(self._builder_names(test_prefix_list[test]))
-            for build in sorted(test_prefix_list[test]):
-                if build.builder_name not in builders_to_fetch_from:
-                    break
-                all_suffixes.update(self._suffixes_for_actual_failures(test, build, test_prefix_list[test][build]))
-
-            # No need to optimize baselines for a test with no failures.
-            if not all_suffixes:
+    def _optimize_baselines(self, test_baseline_set, verbose=False):
+        """Returns a list of commands to run in parallel to de-duplicate baselines."""
+        tests_to_suffixes = collections.defaultdict(set)
+        builders_to_fetch_from = self._builders_to_fetch_from(test_baseline_set.all_builders())
+        for test, build, _ in test_baseline_set:
+            if build.builder_name not in builders_to_fetch_from:
                 continue
+            tests_to_suffixes[test].update(self._suffixes_for_actual_failures(test, build))
 
+        optimize_commands = []
+        for test, suffixes in tests_to_suffixes.iteritems():
+            # No need to optimize baselines for a test with no failures.
+            if not suffixes:
+                continue
             # FIXME: We should propagate the platform options as well.
-            cmd_line = ['--suffixes', ','.join(all_suffixes), test]
+            args = []
             if verbose:
-                cmd_line.append('--verbose')
-
+                args.append('--verbose')
+            args.extend(['--suffixes', ','.join(suffixes), test])
             path_to_webkit_patch = self._tool.path()
-            cwd = self._tool.scm().checkout_root
-            optimize_commands.append(tuple([[self._tool.executable, path_to_webkit_patch, 'optimize-baselines'] + cmd_line, cwd]))
+            cwd = self._tool.git().checkout_root
+            command = [self._tool.executable, path_to_webkit_patch, 'optimize-baselines'] + args
+            optimize_commands.append(tuple([command, cwd]))
+
         return optimize_commands
 
     def _update_expectations_files(self, lines_to_remove):
@@ -432,9 +339,7 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
 
         # This is so we remove lines for builders that skip this test, e.g. Android skips most
         # tests and we don't want to leave stray [ Android ] lines in TestExpectations..
-        # This is only necessary for "webkit-patch rebaseline" and for rebaselining expected
-        # failures from garden-o-matic. rebaseline-expectations and auto-rebaseline will always
-        # pass the exact set of ports to rebaseline.
+        # This is only necessary for "webkit-patch rebaseline".
         for port_name in self._tool.port_factory.all_port_names():
             port = self._tool.port_factory.get(port_name)
             generic_expectations = TestExpectations(port, tests=tests, include_overrides=False)
@@ -446,8 +351,8 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
                             to_remove.append((test, test_configuration))
 
         for test in lines_to_remove:
-            for builder in lines_to_remove[test]:
-                port = self._tool.port_factory.get_from_builder_name(builder)
+            for port_name in lines_to_remove[test]:
+                port = self._tool.port_factory.get(port_name)
                 for test_configuration in port.all_test_configurations():
                     if test_configuration.version == port.test_configuration().version:
                         to_remove.append((test, test_configuration))
@@ -471,36 +376,23 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
 
         return change_set.lines_to_remove
 
-    def rebaseline(self, options, test_prefix_list):
-        """Downloads new baselines in parallel, then updates expectations files
-        and optimizes baselines.
+    def rebaseline(self, options, test_baseline_set):
+        """Fetches new baselines and removes related test expectation lines.
 
         Args:
-            options: An object with the options passed to the current command.
-            test_prefix_list: A map of test names to Build objects to file suffixes
-                for new baselines. For example:
-                {
-                    "some/test.html": {Build("builder-1", 412): ["txt"], Build("builder-2", 100): ["txt"]},
-                    "some/other.html": {Build("builder-1", 412): ["txt"]}
-                }
-                This would mean that new text baselines should be downloaded for
-                "some/test.html" on both builder-1 (build 412) and builder-2
-                (build 100), and new text baselines should be downloaded for
-                "some/other.html" but only from builder-1.
-                TODO(qyearsley): Replace test_prefix_list everywhere with some
-                sort of class that contains the same data.
+            options: An object with the command line options.
+            test_baseline_set: A TestBaselineSet instance, which represents
+                a set of tests/platform combinations to rebaseline.
         """
-        if self._tool.scm().has_working_directory_changes(pathspec=self._layout_tests_dir()):
+        if self._tool.git().has_working_directory_changes(pathspec=self._layout_tests_dir()):
             _log.error('There are uncommitted changes in the layout tests directory; aborting.')
             return
 
-        for test, builds_to_check in sorted(test_prefix_list.items()):
-            _log.info("Rebaselining %s", test)
-            for build, suffixes in sorted(builds_to_check.items()):
-                _log.debug("  %s: %s", build, ",".join(suffixes))
+        for test in sorted({t for t, _, _ in test_baseline_set}):
+            _log.info('Rebaselining %s', test)
 
         copy_baseline_commands, rebaseline_commands, extra_lines_to_remove = self._rebaseline_commands(
-            test_prefix_list, options)
+            test_baseline_set, options)
         lines_to_remove = {}
 
         self._run_in_parallel(copy_baseline_commands)
@@ -519,13 +411,19 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
             # TODO(wkorman): Consider changing temporary branch to base off of HEAD rather than
             # origin/master to ensure we run baseline optimization processes with the same code as
             # auto-rebaseline itself.
-            self._run_in_parallel(self._optimize_baselines(test_prefix_list, options.verbose))
+            self._run_in_parallel(self._optimize_baselines(test_baseline_set, options.verbose))
 
-        self._remove_all_pass_testharness_baselines(test_prefix_list)
+        self._remove_all_pass_testharness_baselines(test_baseline_set)
 
-        self._tool.scm().add_all(pathspec=self._layout_tests_dir())
+        self._tool.git().add_list(self.unstaged_baselines())
 
-    def _remove_all_pass_testharness_baselines(self, test_prefix_list):
+    def unstaged_baselines(self):
+        """Returns absolute paths for unstaged (including untracked) baselines."""
+        baseline_re = re.compile(r'.*[\\/]LayoutTests[\\/].*-expected\.(txt|png|wav)$')
+        unstaged_changes = self._tool.git().unstaged_changes()
+        return sorted(self._tool.git().absolute_path(path) for path in unstaged_changes if re.match(baseline_re, path))
+
+    def _remove_all_pass_testharness_baselines(self, test_baseline_set):
         """Removes all of the all-PASS baselines for the given builders and tests.
 
         In general, for testharness.js tests, the absence of a baseline
@@ -533,62 +431,42 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
         new all-PASS baselines may be downloaded, but they should not be kept.
         """
         filesystem = self._tool.filesystem
-        baseline_paths = self._all_baseline_paths(test_prefix_list)
+        baseline_paths = self._possible_baseline_paths(test_baseline_set)
         for path in baseline_paths:
-            if not (filesystem.exists(path) and
-                    filesystem.splitext(path)[1] == '.txt'):
+            if not (filesystem.exists(path) and filesystem.splitext(path)[1] == '.txt'):
                 continue
             contents = filesystem.read_text_file(path)
             if is_all_pass_testharness_result(contents):
                 _log.info('Removing all-PASS testharness baseline: %s', path)
                 filesystem.remove(path)
 
-    def _all_baseline_paths(self, test_prefix_list):
-        """Return file paths for all baselines for the given tests and builders.
+    def _possible_baseline_paths(self, test_baseline_set):
+        """Returns file paths for all baselines for the given tests and builders.
 
         Args:
-            test_prefix_list: A dict mapping test prefixes, which could be
-                directories or full test paths, to builds to baseline suffixes.
-                TODO(qyearsley): If a class is added to replace test_prefix_list,
-                then this can be made a method on that class.
+            test_baseline_set: A TestBaselineSet instance.
 
         Returns:
-            A list of absolute paths to possible baseline files,
-            which may or may not exist on the local filesystem.
+            A list of absolute paths where baselines could possibly exist.
         """
         filesystem = self._tool.filesystem
-        baseline_paths = []
-        port = self._tool.port_factory.get()
-
-        for test_prefix in test_prefix_list:
-            tests = port.tests([test_prefix])
-            all_suffixes = set()
-
-            for build, suffixes in test_prefix_list[test_prefix].iteritems():
-                all_suffixes.update(suffixes)
-                port_baseline_dir = self._baseline_directory(build.builder_name)
-                baseline_paths.extend([
-                    filesystem.join(port_baseline_dir, self._file_name_for_expected_result(test, suffix))
-                    for test in tests for suffix in suffixes
-                ])
-
-            baseline_paths.extend([
-                filesystem.join(self._layout_tests_dir(), self._file_name_for_expected_result(test, suffix))
-                for test in tests for suffix in all_suffixes
-            ])
-
+        baseline_paths = set()
+        for test, build, _ in test_baseline_set:
+            filenames = [self._file_name_for_expected_result(test, suffix) for suffix in BASELINE_SUFFIX_LIST]
+            port_baseline_dir = self.baseline_directory(build.builder_name)
+            baseline_paths.update({filesystem.join(port_baseline_dir, filename) for filename in filenames})
+            baseline_paths.update({filesystem.join(self._layout_tests_dir(), filename) for filename in filenames})
         return sorted(baseline_paths)
 
     def _layout_tests_dir(self):
         return self._tool.port_factory.get().layout_tests_dir()
 
-    def _suffixes_for_actual_failures(self, test, build, existing_suffixes):
+    def _suffixes_for_actual_failures(self, test, build):
         """Gets the baseline suffixes for actual mismatch failures in some results.
 
         Args:
             test: A full test path string.
             build: A Build object.
-            existing_suffixes: A collection of all suffixes to consider.
 
         Returns:
             A set of file suffix strings.
@@ -601,119 +479,95 @@ class AbstractParallelRebaselineCommand(AbstractRebaseliningCommand):
         if not test_result:
             _log.debug('No test result for test %s in build %s', test, build)
             return set()
-        return set(existing_suffixes) & TestExpectations.suffixes_for_test_result(test_result)
-
-
-class RebaselineJson(AbstractParallelRebaselineCommand):
-    name = "rebaseline-json"
-    help_text = "Rebaseline based off JSON passed to stdin. Intended to only be called from other scripts."
-
-    def __init__(self,):
-        super(RebaselineJson, self).__init__(options=[
-            self.no_optimize_option,
-            self.results_directory_option,
-        ])
-
-    def execute(self, options, args, tool):
-        self._tool = tool
-        self.rebaseline(options, json.loads(sys.stdin.read()))
+        return TestExpectations.suffixes_for_test_result(test_result)
 
 
 class RebaselineExpectations(AbstractParallelRebaselineCommand):
-    name = "rebaseline-expectations"
-    help_text = "Rebaselines the tests indicated in TestExpectations."
+    name = 'rebaseline-expectations'
+    help_text = 'Rebaselines the tests indicated in TestExpectations.'
     show_in_main_help = True
 
     def __init__(self):
         super(RebaselineExpectations, self).__init__(options=[
             self.no_optimize_option,
         ] + self.platform_options)
-        self._test_prefix_list = None
+        self._test_baseline_set = None
 
     @staticmethod
     def _tests_to_rebaseline(port):
-        tests_to_rebaseline = {}
+        tests_to_rebaseline = []
         for path, value in port.expectations_dict().items():
             expectations = TestExpectations(port, include_overrides=False, expectations_dict={path: value})
             for test in expectations.get_rebaselining_failures():
-                suffixes = TestExpectations.suffixes_for_expectations(expectations.get_expectations(test))
-                tests_to_rebaseline[test] = suffixes or BASELINE_SUFFIX_LIST
+                tests_to_rebaseline.append(test)
         return tests_to_rebaseline
 
     def _add_tests_to_rebaseline(self, port_name):
         builder_name = self._tool.builders.builder_name_for_port_name(port_name)
         if not builder_name:
             return
-        tests = self._tests_to_rebaseline(self._tool.port_factory.get(port_name)).items()
+        tests = self._tests_to_rebaseline(self._tool.port_factory.get(port_name))
 
         if tests:
-            _log.info("Retrieving results for %s from %s.", port_name, builder_name)
+            _log.info('Retrieving results for %s from %s.', port_name, builder_name)
 
-        for test_name, suffixes in tests:
-            _log.info("    %s (%s)", test_name, ','.join(suffixes))
-            if test_name not in self._test_prefix_list:
-                self._test_prefix_list[test_name] = {}
-            self._test_prefix_list[test_name][Build(builder_name)] = suffixes
+        for test_name in tests:
+            _log.info('    %s', test_name)
+            self._test_baseline_set.add(test_name, Build(builder_name))
 
     def execute(self, options, args, tool):
         self._tool = tool
+        self._test_baseline_set = TestBaselineSet(tool)
         options.results_directory = None
-        self._test_prefix_list = {}
         port_names = tool.port_factory.all_port_names(options.platform)
         for port_name in port_names:
             self._add_tests_to_rebaseline(port_name)
-        if not self._test_prefix_list:
-            _log.warning("Did not find any tests marked Rebaseline.")
+        if not self._test_baseline_set:
+            _log.warning('Did not find any tests marked Rebaseline.')
             return
 
-        self.rebaseline(options, self._test_prefix_list)
+        self.rebaseline(options, self._test_baseline_set)
 
 
 class Rebaseline(AbstractParallelRebaselineCommand):
-    name = "rebaseline"
-    help_text = "Rebaseline tests with results from the build bots."
+    name = 'rebaseline'
+    help_text = 'Rebaseline tests with results from the continuous builders.'
     show_in_main_help = True
-    argument_names = "[TEST_NAMES]"
+    argument_names = '[TEST_NAMES]'
 
     def __init__(self):
         super(Rebaseline, self).__init__(options=[
             self.no_optimize_option,
             # FIXME: should we support the platform options in addition to (or instead of) --builders?
-            self.suffixes_option,
             self.results_directory_option,
-            optparse.make_option("--builders", default=None, action="append",
-                                 help=("Comma-separated-list of builders to pull new baselines from "
-                                       "(can also be provided multiple times).")),
+            optparse.make_option('--builders', default=None, action='append',
+                                 help=('Comma-separated-list of builders to pull new baselines from '
+                                       '(can also be provided multiple times).')),
         ])
 
     def _builders_to_pull_from(self):
         return self._tool.user.prompt_with_list(
-            "Which builder to pull results from:", self._release_builders(), can_choose_multiple=True)
+            'Which builder to pull results from:', self._release_builders(), can_choose_multiple=True)
 
     def execute(self, options, args, tool):
         self._tool = tool
         if not args:
-            _log.error("Must list tests to rebaseline.")
+            _log.error('Must list tests to rebaseline.')
             return
 
         if options.builders:
             builders_to_check = []
             for builder_names in options.builders:
-                builders_to_check += builder_names.split(",")
+                builders_to_check += builder_names.split(',')
         else:
             builders_to_check = self._builders_to_pull_from()
 
-        test_prefix_list = {}
-        suffixes_to_update = options.suffixes.split(",")
+        test_baseline_set = TestBaselineSet(tool)
 
         for builder in builders_to_check:
-            for test in args:
-                if test not in test_prefix_list:
-                    test_prefix_list[test] = {}
-                build = Build(builder)
-                test_prefix_list[test][build] = suffixes_to_update
+            for test_prefix in args:
+                test_baseline_set.add(test_prefix, Build(builder))
 
-        if options.verbose:
-            _log.debug("rebaseline-json: " + str(test_prefix_list))
+        _log.debug('Rebaselining: %s', test_baseline_set)
 
-        self.rebaseline(options, test_prefix_list)
+        self.rebaseline(options, test_baseline_set)

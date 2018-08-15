@@ -26,16 +26,15 @@
 #ifndef ScrollAnimatorMac_h
 #define ScrollAnimatorMac_h
 
+#include <memory>
 #include "platform/Timer.h"
 #include "platform/WebTaskRunner.h"
 #include "platform/geometry/FloatPoint.h"
 #include "platform/geometry/FloatSize.h"
 #include "platform/geometry/IntRect.h"
 #include "platform/heap/Handle.h"
-#include "platform/scheduler/CancellableTaskFactory.h"
 #include "platform/scroll/ScrollAnimatorBase.h"
-#include "wtf/RetainPtr.h"
-#include <memory>
+#include "platform/wtf/RetainPtr.h"
 
 OBJC_CLASS BlinkScrollAnimationHelperDelegate;
 OBJC_CLASS BlinkScrollbarPainterControllerDelegate;
@@ -48,86 +47,87 @@ namespace blink {
 class Scrollbar;
 
 class PLATFORM_EXPORT ScrollAnimatorMac : public ScrollAnimatorBase {
-  USING_PRE_FINALIZER(ScrollAnimatorMac, dispose);
+  USING_PRE_FINALIZER(ScrollAnimatorMac, Dispose);
 
  public:
   ScrollAnimatorMac(ScrollableArea*);
   ~ScrollAnimatorMac() override;
 
-  void dispose() override;
+  void Dispose() override;
 
-  void immediateScrollToOffsetForScrollAnimation(const ScrollOffset& newOffset);
-  bool haveScrolledSincePageLoad() const { return m_haveScrolledSincePageLoad; }
+  void ImmediateScrollToOffsetForScrollAnimation(
+      const ScrollOffset& new_offset);
+  bool HaveScrolledSincePageLoad() const {
+    return have_scrolled_since_page_load_;
+  }
 
-  void updateScrollerStyle();
+  void UpdateScrollerStyle();
 
-  bool scrollbarPaintTimerIsActive() const;
-  void startScrollbarPaintTimer();
-  void stopScrollbarPaintTimer();
+  bool ScrollbarPaintTimerIsActive() const;
+  void StartScrollbarPaintTimer();
+  void StopScrollbarPaintTimer();
 
-  void sendContentAreaScrolledSoon(const ScrollOffset& scrollDelta);
+  void SendContentAreaScrolledSoon(const ScrollOffset& scroll_delta);
 
-  void setVisibleScrollerThumbRect(const IntRect&);
+  void SetVisibleScrollerThumbRect(const IntRect&);
 
-  DEFINE_INLINE_VIRTUAL_TRACE() { ScrollAnimatorBase::trace(visitor); }
+  DEFINE_INLINE_VIRTUAL_TRACE() { ScrollAnimatorBase::Trace(visitor); }
 
  private:
-  RetainPtr<id> m_scrollAnimationHelper;
-  RetainPtr<BlinkScrollAnimationHelperDelegate> m_scrollAnimationHelperDelegate;
+  RetainPtr<id> scroll_animation_helper_;
+  RetainPtr<BlinkScrollAnimationHelperDelegate>
+      scroll_animation_helper_delegate_;
 
-  RetainPtr<ScrollbarPainterController> m_scrollbarPainterController;
+  RetainPtr<ScrollbarPainterController> scrollbar_painter_controller_;
   RetainPtr<BlinkScrollbarPainterControllerDelegate>
-      m_scrollbarPainterControllerDelegate;
-  RetainPtr<BlinkScrollbarPainterDelegate> m_horizontalScrollbarPainterDelegate;
-  RetainPtr<BlinkScrollbarPainterDelegate> m_verticalScrollbarPainterDelegate;
+      scrollbar_painter_controller_delegate_;
+  RetainPtr<BlinkScrollbarPainterDelegate>
+      horizontal_scrollbar_painter_delegate_;
+  RetainPtr<BlinkScrollbarPainterDelegate> vertical_scrollbar_painter_delegate_;
 
-  void initialScrollbarPaintTask();
-  std::unique_ptr<CancellableTaskFactory> m_initialScrollbarPaintTaskFactory;
+  void InitialScrollbarPaintTask();
+  TaskHandle initial_scrollbar_paint_task_handle_;
 
-  void sendContentAreaScrolledTask();
-  std::unique_ptr<CancellableTaskFactory> m_sendContentAreaScrolledTaskFactory;
-  std::unique_ptr<WebTaskRunner> m_taskRunner;
-  ScrollOffset m_contentAreaScrolledTimerScrollDelta;
+  void SendContentAreaScrolledTask();
+  TaskHandle send_content_area_scrolled_task_handle_;
+  RefPtr<WebTaskRunner> task_runner_;
+  ScrollOffset content_area_scrolled_timer_scroll_delta_;
 
-  ScrollResult userScroll(ScrollGranularity,
+  ScrollResult UserScroll(ScrollGranularity,
                           const ScrollOffset& delta) override;
-  void scrollToOffsetWithoutAnimation(const ScrollOffset&) override;
+  void ScrollToOffsetWithoutAnimation(const ScrollOffset&) override;
 
-  void handleWheelEventPhase(PlatformWheelEventPhase) override;
+  void CancelAnimation() override;
 
-  void cancelAnimation() override;
+  void ContentAreaWillPaint() const override;
+  void MouseEnteredContentArea() const override;
+  void MouseExitedContentArea() const override;
+  void MouseMovedInContentArea() const override;
+  void MouseEnteredScrollbar(Scrollbar&) const override;
+  void MouseExitedScrollbar(Scrollbar&) const override;
+  void ContentsResized() const override;
+  void ContentAreaDidShow() const override;
+  void ContentAreaDidHide() const override;
 
-  void contentAreaWillPaint() const override;
-  void mouseEnteredContentArea() const override;
-  void mouseExitedContentArea() const override;
-  void mouseMovedInContentArea() const override;
-  void mouseEnteredScrollbar(Scrollbar&) const override;
-  void mouseExitedScrollbar(Scrollbar&) const override;
-  void contentsResized() const override;
-  void contentAreaDidShow() const override;
-  void contentAreaDidHide() const override;
-  void didBeginScrollGesture() const;
-  void didEndScrollGesture() const;
-  void mayBeginScrollGesture() const;
+  void FinishCurrentScrollAnimations() override;
 
-  void finishCurrentScrollAnimations() override;
+  void DidAddVerticalScrollbar(Scrollbar&) override;
+  void WillRemoveVerticalScrollbar(Scrollbar&) override;
+  void DidAddHorizontalScrollbar(Scrollbar&) override;
+  void WillRemoveHorizontalScrollbar(Scrollbar&) override;
 
-  void didAddVerticalScrollbar(Scrollbar&) override;
-  void willRemoveVerticalScrollbar(Scrollbar&) override;
-  void didAddHorizontalScrollbar(Scrollbar&) override;
-  void willRemoveHorizontalScrollbar(Scrollbar&) override;
+  void NotifyContentAreaScrolled(const ScrollOffset& delta,
+                                 ScrollType) override;
 
-  void notifyContentAreaScrolled(const ScrollOffset& delta) override;
+  bool SetScrollbarsVisibleForTesting(bool) override;
 
-  bool setScrollbarsVisibleForTesting(bool) override;
+  ScrollOffset AdjustScrollOffsetIfNecessary(const ScrollOffset&) const;
 
-  ScrollOffset adjustScrollOffsetIfNecessary(const ScrollOffset&) const;
+  void ImmediateScrollTo(const ScrollOffset&);
 
-  void immediateScrollTo(const ScrollOffset&);
-
-  bool m_haveScrolledSincePageLoad;
-  bool m_needsScrollerStyleUpdate;
-  IntRect m_visibleScrollerThumbRect;
+  bool have_scrolled_since_page_load_;
+  bool needs_scroller_style_update_;
+  IntRect visible_scroller_thumb_rect_;
 };
 
 }  // namespace blink

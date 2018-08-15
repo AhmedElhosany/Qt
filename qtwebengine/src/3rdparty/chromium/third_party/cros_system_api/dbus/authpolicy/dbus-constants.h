@@ -6,14 +6,17 @@
 #define SYSTEM_API_DBUS_AUTHPOLICY_DBUS_CONSTANTS_H_
 
 namespace authpolicy {
+
 const char kAuthPolicyInterface[] = "org.chromium.AuthPolicy";
 const char kAuthPolicyServicePath[] = "/org/chromium/AuthPolicy";
 const char kAuthPolicyServiceName[] = "org.chromium.AuthPolicy";
 // Methods
 const char kAuthPolicyAuthenticateUser[] = "AuthenticateUser";
+const char kAuthPolicyGetUserStatus[] = "GetUserStatus";
 const char kAuthPolicyJoinADDomain[] = "JoinADDomain";
 const char kAuthPolicyRefreshUserPolicy[] = "RefreshUserPolicy";
 const char kAuthPolicyRefreshDevicePolicy[] = "RefreshDevicePolicy";
-}  // namespace authpolicy
 
-#endif  // SYSTEM_API_DBUS_AUTHPOLICY_DBUS_CONSTANTS_H_
+} // namespace authpolicy
+
+#endif // SYSTEM_API_DBUS_AUTHPOLICY_DBUS_CONSTANTS_H_

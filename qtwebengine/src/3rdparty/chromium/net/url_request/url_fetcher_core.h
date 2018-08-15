@@ -20,6 +20,7 @@
 #include "net/base/chunked_upload_data_stream.h"
 #include "net/base/host_port_pair.h"
 #include "net/http/http_request_headers.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context_getter_observer.h"
@@ -27,6 +28,7 @@
 #include "url/gurl.h"
 
 namespace base {
+class SequencedTaskRunner;
 class SingleThreadTaskRunner;
 }  // namespace base
 
@@ -46,7 +48,8 @@ class URLFetcherCore : public base::RefCountedThreadSafe<URLFetcherCore>,
   URLFetcherCore(URLFetcher* fetcher,
                  const GURL& original_url,
                  URLFetcher::RequestType request_type,
-                 URLFetcherDelegate* d);
+                 URLFetcherDelegate* d,
+                 net::NetworkTrafficAnnotationTag traffic_annotation);
 
   // Starts the load. It's important that this not happen in the constructor
   // because it causes the IO thread to begin AddRef()ing and Release()ing
@@ -216,10 +219,10 @@ class URLFetcherCore : public base::RefCountedThreadSafe<URLFetcherCore>,
 
   // Notify Delegate about the progress of upload/download.
   void InformDelegateUploadProgress();
-  void InformDelegateUploadProgressInDelegateThread(int64_t current,
-                                                    int64_t total);
+  void InformDelegateUploadProgressInDelegateSequence(int64_t current,
+                                                      int64_t total);
   void InformDelegateDownloadProgress();
-  void InformDelegateDownloadProgressInDelegateThread(
+  void InformDelegateDownloadProgressInDelegateSequence(
       int64_t current,
       int64_t total,
       int64_t current_network_bytes);
@@ -233,8 +236,8 @@ class URLFetcherCore : public base::RefCountedThreadSafe<URLFetcherCore>,
   URLFetcher::RequestType request_type_;  // What type of request is this?
   URLRequestStatus status_;          // Status of the request
   URLFetcherDelegate* delegate_;     // Object to notify on completion
-  // Task runner for the creating thread. Used to interact with the delegate.
-  scoped_refptr<base::SingleThreadTaskRunner> delegate_task_runner_;
+  // Task runner for the creating sequence. Used to interact with the delegate.
+  const scoped_refptr<base::SequencedTaskRunner> delegate_task_runner_;
   // Task runner for network operations.
   scoped_refptr<base::SingleThreadTaskRunner> network_task_runner_;
   // Task runner for upload file access.
@@ -345,7 +348,9 @@ class URLFetcherCore : public base::RefCountedThreadSafe<URLFetcherCore>,
   // Total expected bytes to receive (-1 if it cannot be determined).
   int64_t total_response_bytes_;
 
-  static base::LazyInstance<Registry> g_registry;
+  const net::NetworkTrafficAnnotationTag traffic_annotation_;
+
+  static base::LazyInstance<Registry>::DestructorAtExit g_registry;
 
   DISALLOW_COPY_AND_ASSIGN(URLFetcherCore);
 };

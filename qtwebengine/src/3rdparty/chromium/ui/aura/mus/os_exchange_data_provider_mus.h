@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "mojo/public/cpp/bindings/map.h"
 #include "ui/aura/aura_export.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/gfx/geometry/vector2d.h"
@@ -90,8 +89,8 @@ class AURA_EXPORT OSExchangeDataProviderMus
 #if defined(USE_AURA) || defined(OS_MACOSX)
   void SetDragImage(const gfx::ImageSkia& image,
                     const gfx::Vector2d& cursor_offset) override;
-  const gfx::ImageSkia& GetDragImage() const override;
-  const gfx::Vector2d& GetDragImageOffset() const override;
+  gfx::ImageSkia GetDragImage() const override;
+  gfx::Vector2d GetDragImageOffset() const override;
 #endif
 
  private:

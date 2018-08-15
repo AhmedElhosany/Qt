@@ -4,12 +4,15 @@
 
 #include "extensions/renderer/request_sender.h"
 
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/values.h"
 #include "content/public/renderer/render_frame.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_messages.h"
+#include "extensions/renderer/bindings/api_binding_types.h"
+#include "extensions/renderer/ipc_message_sender.h"
 #include "extensions/renderer/script_context.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
 #include "third_party/WebKit/public/web/WebLocalFrame.h"
@@ -32,20 +35,8 @@ struct PendingRequest {
   blink::WebUserGestureToken token;
 };
 
-RequestSender::ScopedTabID::ScopedTabID(RequestSender* request_sender,
-                                        int tab_id)
-    : request_sender_(request_sender),
-      tab_id_(tab_id),
-      previous_tab_id_(request_sender->source_tab_id_) {
-  request_sender_->source_tab_id_ = tab_id;
-}
-
-RequestSender::ScopedTabID::~ScopedTabID() {
-  DCHECK_EQ(tab_id_, request_sender_->source_tab_id_);
-  request_sender_->source_tab_id_ = previous_tab_id_;
-}
-
-RequestSender::RequestSender() : source_tab_id_(-1) {}
+RequestSender::RequestSender(IPCMessageSender* ipc_message_sender)
+    : ipc_message_sender_(ipc_message_sender) {}
 
 RequestSender::~RequestSender() {}
 
@@ -99,42 +90,31 @@ bool RequestSender::StartRequest(Source* source,
 
   GURL source_url;
   if (blink::WebLocalFrame* webframe = context->web_frame())
-    source_url = webframe->document().url();
+    source_url = webframe->GetDocument().Url();
 
   InsertRequest(request_id,
                 base::MakeUnique<PendingRequest>(
                     name, source,
-                    blink::WebUserGestureIndicator::currentUserGestureToken()));
+                    blink::WebUserGestureIndicator::CurrentUserGestureToken()));
 
-  ExtensionHostMsg_Request_Params params;
-  params.name = name;
-  params.arguments.Swap(value_args);
-  params.extension_id = context->GetExtensionID();
-  params.source_url = source_url;
-  params.source_tab_id = source_tab_id_;
-  params.request_id = request_id;
-  params.has_callback = has_callback;
-  params.user_gesture =
-      blink::WebUserGestureIndicator::isProcessingUserGesture();
+  auto params = base::MakeUnique<ExtensionHostMsg_Request_Params>();
+  params->name = name;
+  params->arguments.Swap(value_args);
+  params->extension_id = context->GetExtensionID();
+  params->source_url = source_url;
+  params->request_id = request_id;
+  params->has_callback = has_callback;
+  params->user_gesture =
+      blink::WebUserGestureIndicator::IsProcessingUserGestureThreadSafe();
 
   // Set Service Worker specific params to default values.
-  params.worker_thread_id = -1;
-  params.service_worker_version_id = kInvalidServiceWorkerVersionId;
+  params->worker_thread_id = -1;
+  params->service_worker_version_id = kInvalidServiceWorkerVersionId;
 
-  SendRequest(render_frame, for_io_thread, params);
+  binding::RequestThread thread =
+      for_io_thread ? binding::RequestThread::IO : binding::RequestThread::UI;
+  ipc_message_sender_->SendRequestIPC(context, std::move(params), thread);
   return true;
-}
-
-void RequestSender::SendRequest(content::RenderFrame* render_frame,
-                                bool for_io_thread,
-                                ExtensionHostMsg_Request_Params& params) {
-  if (for_io_thread) {
-    render_frame->Send(new ExtensionHostMsg_RequestForIOThread(
-        render_frame->GetRoutingID(), params));
-  } else {
-    render_frame->Send(
-        new ExtensionHostMsg_Request(render_frame->GetRoutingID(), params));
-  }
 }
 
 void RequestSender::HandleResponse(int request_id,

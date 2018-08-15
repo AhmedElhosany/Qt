@@ -2,22 +2,44 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/debug/stack_trace.h"
 #include "base/syslog_logging.h"
 
 #if defined(OS_WIN)
-#include "base/win/eventlog_messages.h"
-
-#include <windows.h>
+#include "base/bind.h"
+#include "base/callback_helpers.h"
+#include "base/debug/stack_trace.h"
 #elif defined(OS_LINUX)
+// <syslog.h> defines a LOG_WARNING macro that could conflict with
+// base::LOG_WARNING.
 #include <syslog.h>
+#undef LOG_WARNING
 #endif
 
-#include <cstring>
 #include <ostream>
 #include <string>
 
 namespace logging {
+
+#if defined(OS_WIN)
+
+namespace {
+
+std::string* g_event_source_name = nullptr;
+uint16_t g_category = 0;
+uint32_t g_event_id = 0;
+
+}  // namespace
+
+void SetEventSource(const std::string& name,
+                    uint16_t category,
+                    uint32_t event_id) {
+  DCHECK_EQ(nullptr, g_event_source_name);
+  g_event_source_name = new std::string(name);
+  g_category = category;
+  g_event_id = event_id;
+}
+
+#endif  // defined(OS_WIN)
 
 EventLogMessage::EventLogMessage(const char* file,
                                  int line,
@@ -27,13 +49,21 @@ EventLogMessage::EventLogMessage(const char* file,
 
 EventLogMessage::~EventLogMessage() {
 #if defined(OS_WIN)
-  const char kEventSource[] = "chrome";
-  HANDLE event_log_handle = RegisterEventSourceA(NULL, kEventSource);
-  if (event_log_handle == NULL) {
+  // If g_event_source_name is nullptr (which it is per default) SYSLOG will
+  // degrade gracefully to regular LOG. If you see this happening most probably
+  // you are using SYSLOG before you called SetEventSourceName.
+  if (g_event_source_name == nullptr)
+    return;
+
+  HANDLE event_log_handle =
+      RegisterEventSourceA(nullptr, g_event_source_name->c_str());
+  if (event_log_handle == nullptr) {
     stream() << " !!NOT ADDED TO EVENTLOG!!";
     return;
   }
 
+  base::ScopedClosureRunner auto_deregister(
+      base::Bind(base::IgnoreResult(&DeregisterEventSource), event_log_handle));
   std::string message(log_message_.str());
   WORD log_type = EVENTLOG_ERROR_TYPE;
   switch (log_message_.severity()) {
@@ -53,11 +83,10 @@ EventLogMessage::~EventLogMessage() {
       break;
   }
   LPCSTR strings[1] = {message.data()};
-  if (!ReportEventA(event_log_handle, log_type, BROWSER_CATEGORY,
-                    MSG_LOG_MESSAGE, NULL, 1, 0, strings, NULL)) {
+  if (!ReportEventA(event_log_handle, log_type, g_category, g_event_id, nullptr,
+                    1, 0, strings, nullptr)) {
     stream() << " !!NOT ADDED TO EVENTLOG!!";
   }
-  DeregisterEventSource(event_log_handle);
 #elif defined(OS_LINUX)
   const char kEventSource[] = "chrome";
   openlog(kEventSource, LOG_NOWAIT | LOG_PID, LOG_USER);

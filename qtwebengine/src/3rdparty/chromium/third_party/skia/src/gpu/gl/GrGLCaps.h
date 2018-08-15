@@ -11,16 +11,15 @@
 
 #include <functional>
 
-#include "glsl/GrGLSL.h"
 #include "GrCaps.h"
 #include "GrGLStencilAttachment.h"
 #include "GrSwizzle.h"
 #include "SkChecksum.h"
 #include "SkTHash.h"
 #include "SkTArray.h"
+#include "../private/GrGLSL.h"
 
 class GrGLContextInfo;
-class GrGLSLCaps;
 class GrGLRenderTarget;
 
 /**
@@ -42,11 +41,9 @@ public:
          */
         kNone_MSFBOType = 0,
         /**
-         * OpenGL < 3.0 with GL_EXT_framebuffer_object. Doesn't allow rendering to ALPHA.
-         */
-        kEXT_MSFBOType,
-        /**
-         * OpenGL 3.0+, OpenGL ES 3.0+, and GL_ARB_framebuffer_object.
+         * OpenGL 3.0+, OpenGL ES 3.0+, GL_ARB_framebuffer_object,
+         * GL_CHROMIUM_framebuffer_multisample, GL_ANGLE_framebuffer_multisample,
+         * or GL_EXT_framebuffer_multisample
          */
         kStandard_MSFBOType,
         /**
@@ -115,6 +112,8 @@ public:
     GrGLCaps(const GrContextOptions& contextOptions, const GrGLContextInfo& ctxInfo,
              const GrGLInterface* glInterface);
 
+    int getSampleCount(int requestedCount, GrPixelConfig config) const override;
+
     bool isConfigTexturable(GrPixelConfig config) const override {
         return SkToBool(fConfigTable[config].fFlags & ConfigInfo::kTextureable_Flag);
     }
@@ -126,7 +125,9 @@ public:
             return SkToBool(fConfigTable[config].fFlags & ConfigInfo::kRenderable_Flag);
         }
     }
-
+    bool canConfigBeImageStorage(GrPixelConfig config) const override {
+        return SkToBool(fConfigTable[config].fFlags & ConfigInfo::kCanUseAsImageStorage_Flag);
+    }
     bool canConfigBeFBOColorAttachment(GrPixelConfig config) const {
         return SkToBool(fConfigTable[config].fFlags & ConfigInfo::kFBOColorAttachment_Flag);
     }
@@ -152,12 +153,15 @@ public:
                             GrGLenum* internalFormat, GrGLenum* externalFormat,
                             GrGLenum* externalType) const;
 
-    bool getCompressedTexImageFormats(GrPixelConfig surfaceConfig, GrGLenum* internalFormat) const;
-
     bool getReadPixelsFormat(GrPixelConfig surfaceConfig, GrPixelConfig externalConfig,
                              GrGLenum* externalFormat, GrGLenum* externalType) const;
 
     bool getRenderbufferFormat(GrPixelConfig config, GrGLenum* internalFormat) const;
+
+    /** The format to use read/write a texture as an image in a shader */
+    GrGLenum getImageFormat(GrPixelConfig config) const {
+        return fConfigTable[config].fFormats.fSizedInternalFormat;
+    }
 
     /**
     * Gets an array of legal stencil formats. These formats are not guaranteed
@@ -281,6 +285,9 @@ public:
     /// Is there support for GL_RED and GL_R8
     bool textureRedSupport() const { return fTextureRedSupport; }
 
+    /// Is GL_ALPHA8 renderable
+    bool alpha8IsRenderable() const { return fAlpha8IsRenderable; }
+
     /// Is GL_ARB_IMAGING supported
     bool imagingSupport() const { return fImagingSupport; }
 
@@ -339,6 +346,9 @@ public:
 
     bool doManualMipmapping() const { return fDoManualMipmapping; }
 
+    bool srgbDecodeDisableSupport() const { return fSRGBDecodeDisableSupport; }
+    bool srgbDecodeDisableAffectsMipmaps() const { return fSRGBDecodeDisableAffectsMipmaps; }
+
     /**
      * Returns a string containing the caps info.
      */
@@ -350,7 +360,42 @@ public:
         return fRGBAToBGRAReadbackConversionsAreSlow;
     }
 
-    const GrGLSLCaps* glslCaps() const { return reinterpret_cast<GrGLSLCaps*>(fShaderCaps.get()); }
+    // Certain Intel GPUs on Mac fail to clear if the glClearColor is made up of only 1s and 0s.
+    bool clearToBoundaryValuesIsBroken() const { return fClearToBoundaryValuesIsBroken; }
+
+    /// glClearTex(Sub)Image support
+    bool clearTextureSupport() const { return fClearTextureSupport; }
+
+    // Adreno/MSAA drops a draw on the imagefiltersbase GM if the base vertex param to
+    // glDrawArrays is nonzero.
+    // https://bugs.chromium.org/p/skia/issues/detail?id=6650
+    bool drawArraysBaseVertexIsBroken() const { return fDrawArraysBaseVertexIsBroken; }
+
+    /// Adreno 4xx devices experience an issue when there are a large number of stencil clip bit
+    /// clears. The minimal repro steps are not precisely known but drawing a rect with a stencil
+    /// op instead of using glClear seems to resolve the issue.
+    bool useDrawToClearStencilClip() const { return fUseDrawToClearStencilClip; }
+
+    // If true then we must use an intermediate surface to perform partial updates to unorm textures
+    // that have ever been bound to a FBO.
+    bool disallowTexSubImageForUnormConfigTexturesEverBoundToFBO() const {
+        return fDisallowTexSubImageForUnormConfigTexturesEverBoundToFBO;
+    }
+
+    // Use an intermediate surface to write pixels (full or partial overwrite) to into a texture
+    // that is bound to an FBO.
+    bool useDrawInsteadOfAllRenderTargetWrites() const {
+        return fUseDrawInsteadOfAllRenderTargetWrites;
+    }
+
+    // At least some Adreno 3xx drivers draw lines incorrectly after drawing non-lines. Toggling
+    // face culling on and off seems to resolve this.
+    bool requiresCullFaceEnableDisableWhenDrawingLinesAfterNonLines() const {
+        return fRequiresCullFaceEnableDisableWhenDrawingLinesAfterNonLines;
+    }
+
+    bool initDescForDstCopy(const GrRenderTargetProxy* src, GrSurfaceDesc* desc,
+                            bool* rectsMustMatch, bool* disallowSubrect) const override;
 
 private:
     enum ExternalFormatUsage {
@@ -370,15 +415,15 @@ private:
 
     void onApplyOptionsOverrides(const GrContextOptions& options) override;
 
-    void initFSAASupport(const GrGLContextInfo&, const GrGLInterface*);
+    void initFSAASupport(const GrContextOptions& contextOptions, const GrGLContextInfo&,
+                         const GrGLInterface*);
     void initBlendEqationSupport(const GrGLContextInfo&);
-    void initStencilFormats(const GrGLContextInfo&);
+    void initStencilSupport(const GrGLContextInfo&);
     // This must be called after initFSAASupport().
-    void initConfigTable(const GrGLContextInfo&, const GrGLInterface* gli, GrGLSLCaps* glslCaps);
+    void initConfigTable(const GrContextOptions&, const GrGLContextInfo&, const GrGLInterface*,
+                         GrShaderCaps*);
 
-    void initShaderPrecisionTable(const GrGLContextInfo& ctxInfo,
-                                  const GrGLInterface* intf,
-                                  GrGLSLCaps* glslCaps);
+    void initShaderPrecisionTable(const GrGLContextInfo&, const GrGLInterface*, GrShaderCaps*);
 
     GrGLStandard fStandard;
 
@@ -397,6 +442,7 @@ private:
     bool fPackFlipYSupport : 1;
     bool fTextureUsageSupport : 1;
     bool fTextureRedSupport : 1;
+    bool fAlpha8IsRenderable: 1;
     bool fImagingSupport  : 1;
     bool fVertexArrayObjectSupport : 1;
     bool fDirectStateAccessSupport : 1;
@@ -418,6 +464,15 @@ private:
     bool fMipMapLevelAndLodControlSupport : 1;
     bool fRGBAToBGRAReadbackConversionsAreSlow : 1;
     bool fDoManualMipmapping : 1;
+    bool fSRGBDecodeDisableSupport : 1;
+    bool fSRGBDecodeDisableAffectsMipmaps : 1;
+    bool fClearToBoundaryValuesIsBroken : 1;
+    bool fClearTextureSupport : 1;
+    bool fDrawArraysBaseVertexIsBroken : 1;
+    bool fUseDrawToClearStencilClip : 1;
+    bool fDisallowTexSubImageForUnormConfigTexturesEverBoundToFBO : 1;
+    bool fUseDrawInsteadOfAllRenderTargetWrites : 1;
+    bool fRequiresCullFaceEnableDisableWhenDrawingLinesAfterNonLines : 1;
 
     uint32_t fBlitFramebufferFlags;
 
@@ -451,7 +506,6 @@ private:
         GrGLenum fExternalFormat[kExternalFormatUsageCnt];
         GrGLenum fExternalType;
 
-
         // Either the base or sized internal format depending on the GL and config.
         GrGLenum fInternalFormatTexImage;
         GrGLenum fInternalFormatRenderbuffer;
@@ -477,7 +531,9 @@ private:
         };
 
         // Index fStencilFormats.
-        int      fStencilFormatIndex;
+        int fStencilFormatIndex;
+
+        SkTDArray<int> fColorSampleCounts;
 
         enum {
             kVerifiedColorAttachment_Flag = 0x1,
@@ -489,6 +545,7 @@ private:
             kFBOColorAttachment_Flag      = 0x10,
             kCanUseTexStorage_Flag        = 0x20,
             kCanUseWithTexelBuffer_Flag   = 0x40,
+            kCanUseAsImageStorage_Flag    = 0x80,
         };
         uint32_t fFlags;
 

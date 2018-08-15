@@ -18,7 +18,7 @@ SkBitmapRegionCodec::SkBitmapRegionCodec(SkAndroidCodec* codec)
 
 bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocator,
         const SkIRect& desiredSubset, int sampleSize, SkColorType prefColorType,
-        bool requireUnpremul) {
+        bool requireUnpremul, sk_sp<SkColorSpace> prefColorSpace) {
 
     // Fix the input sampleSize if necessary.
     if (sampleSize < 1) {
@@ -52,20 +52,10 @@ bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocat
     // Create the image info for the decode
     SkColorType dstColorType = fCodec->computeOutputColorType(prefColorType);
     SkAlphaType dstAlphaType = fCodec->computeOutputAlphaType(requireUnpremul);
-
-    // Enable legacy behavior to avoid any gamma correction.  Android's assets are
-    // adjusted to expect a non-gamma correct premultiply.
-    sk_sp<SkColorSpace> colorSpace = nullptr;
+    sk_sp<SkColorSpace> dstColorSpace = fCodec->computeOutputColorSpace(dstColorType,
+                                                                        prefColorSpace);
     SkImageInfo decodeInfo = SkImageInfo::Make(scaledSize.width(), scaledSize.height(),
-                                               dstColorType, dstAlphaType, colorSpace);
-
-    // Construct a color table for the decode if necessary
-    sk_sp<SkColorTable> colorTable(nullptr);
-    int maxColors = 256;
-    SkPMColor colors[256];
-    if (kIndex_8_SkColorType == dstColorType) {
-        colorTable.reset(new SkColorTable(colors, maxColors));
-    }
+                                               dstColorType, dstAlphaType, dstColorSpace);
 
     // Initialize the destination bitmap
     int scaledOutX = 0;
@@ -92,7 +82,7 @@ bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocat
         outInfo = outInfo.makeColorType(kAlpha_8_SkColorType).makeAlphaType(kPremul_SkAlphaType);
     }
     bitmap->setInfo(outInfo);
-    if (!bitmap->tryAllocPixels(allocator, colorTable.get())) {
+    if (!bitmap->tryAllocPixels(allocator)) {
         SkCodecPrintf("Error: Could not allocate pixels.\n");
         return false;
     }
@@ -114,8 +104,6 @@ bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocat
     SkAndroidCodec::AndroidOptions options;
     options.fSampleSize = sampleSize;
     options.fSubset = &subset;
-    options.fColorPtr = colors;
-    options.fColorCount = &maxColors;
     options.fZeroInitialized = zeroInit;
     void* dst = bitmap->getAddr(scaledOutX, scaledOutY);
 
@@ -126,17 +114,10 @@ bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocat
         return false;
     }
 
-    // Intialize the color table
-    if (kIndex_8_SkColorType == dstColorType) {
-        colorTable->dangerous_overwriteColors(colors, maxColors);
-    }
-
     return true;
 }
 
 bool SkBitmapRegionCodec::conversionSupported(SkColorType colorType) {
-    // Enable legacy behavior.
-    sk_sp<SkColorSpace> colorSpace = nullptr;
-    SkImageInfo dstInfo = fCodec->getInfo().makeColorType(colorType).makeColorSpace(colorSpace);
+    SkImageInfo dstInfo = fCodec->getInfo().makeColorType(colorType);
     return conversion_possible(dstInfo, fCodec->getInfo());
 }

@@ -16,10 +16,15 @@ proto_library("proto") {
     "omnibox_input_type.proto",
     "perf_data.proto",
     "perf_stat.proto",
+    "printer_event.proto",
     "profiler_event.proto",
     "sampled_profile.proto",
     "system_profile.proto",
     "translate_event.proto",
+    "ukm/entry.proto",
+    "ukm/report.proto",
+    "ukm/source.proto",
     "user_action_event.proto",
   ]
+  proto_in_dir = "."
 }

@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/strings/utf_string_conversions.h"
 #include "components/supervised_user_error_page/supervised_user_error_page.h"
-#include "grit/components_resources.h"
-#include "grit/components_strings.h"
+
+#include "base/strings/utf_string_conversions.h"
+#include "components/grit/components_resources.h"
+#include "components/strings/grit/components_strings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -39,8 +40,7 @@ BlockMessageIDTestParameter block_message_id_test_params[] = {
     {DEFAULT, false, true, IDS_SUPERVISED_USER_BLOCK_MESSAGE_DEFAULT},
     {DEFAULT, true, true, IDS_CHILD_BLOCK_MESSAGE_DEFAULT_SINGLE_PARENT},
     {DEFAULT, true, false, IDS_CHILD_BLOCK_MESSAGE_DEFAULT_MULTI_PARENT},
-    {ASYNC_CHECKER, false, false, IDS_SUPERVISED_USER_BLOCK_MESSAGE_SAFE_SITES},
-    {ASYNC_CHECKER, false, true, IDS_SUPERVISED_USER_BLOCK_MESSAGE_SAFE_SITES},
+    // SafeSites is not enabled for supervised users.
     {ASYNC_CHECKER, true, true, IDS_SUPERVISED_USER_BLOCK_MESSAGE_SAFE_SITES},
     {ASYNC_CHECKER, true, false, IDS_SUPERVISED_USER_BLOCK_MESSAGE_SAFE_SITES},
     {MANUAL, false, false, IDS_SUPERVISED_USER_BLOCK_MESSAGE_MANUAL},
@@ -62,6 +62,7 @@ struct BuildHtmlTestParameter {
   const std::string& second_custodian;
   const std::string& second_custodian_email;
   bool is_child_account;
+  bool is_deprecated;
   FilteringBehaviorReason reason;
   bool has_two_parents;
 };
@@ -75,15 +76,11 @@ TEST_P(SupervisedUserErrorPageTest_BuildHtml, BuildHtml) {
       param.allow_access_requests, param.profile_image_url,
       param.profile_image_url2, param.custodian, param.custodian_email,
       param.second_custodian, param.second_custodian_email,
-      param.is_child_account, param.reason, "");
-  // The result should contain the original HTML plus scripts that plug values
-  // into it. The test can't easily check that the scripts are correct, but
-  // can check that the output contains the expected values.
-  std::string html =
-      ResourceBundle::GetSharedInstance()
-          .GetRawDataResource(IDR_SUPERVISED_USER_BLOCK_INTERSTITIAL_HTML)
-          .as_string();
-  EXPECT_THAT(result, testing::HasSubstr(html));
+      param.is_child_account, param.is_deprecated, param.reason, "");
+  // The result should contain the original HTML (with $i18n{} replacements)
+  // plus scripts that plug values into it. The test can't easily check that the
+  // scripts are correct, but can check that the output contains the expected
+  // values.
   EXPECT_THAT(result, testing::HasSubstr(param.profile_image_url));
   EXPECT_THAT(result, testing::HasSubstr(param.profile_image_url2));
   EXPECT_THAT(result, testing::HasSubstr(param.custodian));
@@ -92,13 +89,12 @@ TEST_P(SupervisedUserErrorPageTest_BuildHtml, BuildHtml) {
     EXPECT_THAT(result, testing::HasSubstr(param.second_custodian));
     EXPECT_THAT(result, testing::HasSubstr(param.second_custodian_email));
   }
-#if defined(GOOGLE_CHROME_BUILD)
-  if (param.is_child_account &&
-      (param.reason == ASYNC_CHECKER || param.reason == BLACKLIST))
+  if (param.reason == ASYNC_CHECKER || param.reason == BLACKLIST) {
     EXPECT_THAT(result, testing::HasSubstr("\"showFeedbackLink\":true"));
-  else
-#endif
+  } else {
     EXPECT_THAT(result, testing::HasSubstr("\"showFeedbackLink\":false"));
+  }
+
   // Messages containing parameters aren't tested since they get modified before
   // they are added to the result.
   if (param.allow_access_requests) {
@@ -191,16 +187,18 @@ TEST_P(SupervisedUserErrorPageTest_BuildHtml, BuildHtml) {
 }
 
 BuildHtmlTestParameter build_html_test_parameter[] = {
-    {true, "url1", "url2", "custodian", "custodian_email", "", "", true,
+    {true, "url1", "url2", "custodian", "custodian_email", "", "", true, false,
      DEFAULT, false},
     {true, "url1", "url2", "custodian", "custodian_email", "custodian2",
-     "custodian2_email", true, DEFAULT, true},
+     "custodian2_email", true, false, DEFAULT, true},
     {false, "url1", "url2", "custodian", "custodian_email", "custodian2",
-     "custodian2_email", true, DEFAULT, true},
+     "custodian2_email", true, false, DEFAULT, true},
+    {false, "url1", "url2", "custodian", "custodian_email", "custodian2",
+     "custodian2_email", false, true, DEFAULT, true},
     {true, "url1", "url2", "custodian", "custodian_email", "custodian2",
-     "custodian2_email", false, DEFAULT, true},
+     "custodian2_email", false, false, DEFAULT, true},
     {true, "url1", "url2", "custodian", "custodian_email", "custodian2",
-     "custodian2_email", false, ASYNC_CHECKER, true},
+     "custodian2_email", true, false, ASYNC_CHECKER, true},
 };
 
 INSTANTIATE_TEST_CASE_P(GetBlockMessageIDParameterized,

@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 
+#include "SkArenaAlloc.h"
 #include "SkBlitter.h"
 #include "SkAntiRun.h"
 #include "SkColor.h"
@@ -13,26 +14,16 @@
 #include "SkWriteBuffer.h"
 #include "SkMask.h"
 #include "SkMaskFilter.h"
+#include "SkPaintPriv.h"
+#include "SkShaderBase.h"
 #include "SkString.h"
 #include "SkTLazy.h"
 #include "SkUtils.h"
-#include "SkXfermode.h"
 #include "SkXfermodeInterpretation.h"
-
-// define this for testing srgb blits
-//#define SK_FORCE_PM4f_FOR_L32_BLITS
 
 SkBlitter::~SkBlitter() {}
 
 bool SkBlitter::isNullBlitter() const { return false; }
-
-bool SkBlitter::resetShaderContext(const SkShader::ContextRec&) {
-    return true;
-}
-
-SkShader::Context* SkBlitter::getShaderContext() const {
-    return nullptr;
-}
 
 const SkPixmap* SkBlitter::justAnOpaqueColor(uint32_t* value) {
     return nullptr;
@@ -590,35 +581,26 @@ SkBlitter* SkBlitterClipper::apply(SkBlitter* blitter, const SkRegion* clip,
 #include "SkColorShader.h"
 #include "SkColorPriv.h"
 
-class Sk3DShader : public SkShader {
+class Sk3DShader : public SkShaderBase {
 public:
     Sk3DShader(sk_sp<SkShader> proxy) : fProxy(std::move(proxy)) {}
 
-    size_t onContextSize(const ContextRec& rec) const override {
-        size_t size = sizeof(Sk3DShaderContext);
+    Context* onMakeContext(const ContextRec& rec, SkArenaAlloc* alloc) const override {
+        SkShaderBase::Context* proxyContext = nullptr;
         if (fProxy) {
-            size += fProxy->contextSize(rec);
-        }
-        return size;
-    }
-
-    Context* onCreateContext(const ContextRec& rec, void* storage) const override {
-        SkShader::Context* proxyContext = nullptr;
-        if (fProxy) {
-            char* proxyContextStorage = (char*) storage + sizeof(Sk3DShaderContext);
-            proxyContext = fProxy->createContext(rec, proxyContextStorage);
+            proxyContext = as_SB(fProxy)->makeContext(rec, alloc);
             if (!proxyContext) {
                 return nullptr;
             }
         }
-        return new (storage) Sk3DShaderContext(*this, rec, proxyContext);
+        return alloc->make<Sk3DShaderContext>(*this, rec, proxyContext);
     }
 
-    class Sk3DShaderContext : public SkShader::Context {
+    class Sk3DShaderContext : public Context {
     public:
         // Calls proxyContext's destructor but will NOT free its memory.
         Sk3DShaderContext(const Sk3DShader& shader, const ContextRec& rec,
-                          SkShader::Context* proxyContext)
+                          Context* proxyContext)
             : INHERITED(shader, rec)
             , fMask(nullptr)
             , fProxyContext(proxyContext)
@@ -628,7 +610,7 @@ public:
             }
         }
 
-        virtual ~Sk3DShaderContext() {
+        ~Sk3DShaderContext() override {
             if (fProxyContext) {
                 fProxyContext->~Context();
             }
@@ -702,12 +684,12 @@ public:
 
     private:
         // Unowned.
-        const SkMask*       fMask;
+        const SkMask* fMask;
         // Memory is unowned, but we need to call the destructor.
-        SkShader::Context*  fProxyContext;
-        SkPMColor           fPMColor;
+        Context*      fProxyContext;
+        SkPMColor     fPMColor;
 
-        typedef SkShader::Context INHERITED;
+        typedef Context INHERITED;
     };
 
 #ifndef SK_IGNORE_TO_STRING
@@ -716,7 +698,7 @@ public:
 
         if (fProxy) {
             str->append("Proxy: ");
-            fProxy->toString(str);
+            as_SB(fProxy)->toString(str);
         }
 
         this->INHERITED::toString(str);
@@ -735,7 +717,7 @@ protected:
 private:
     sk_sp<SkShader> fProxy;
 
-    typedef SkShader INHERITED;
+    typedef SkShaderBase INHERITED;
 };
 
 sk_sp<SkFlattenable> Sk3DShader::CreateProc(SkReadBuffer& buffer) {
@@ -744,7 +726,7 @@ sk_sp<SkFlattenable> Sk3DShader::CreateProc(SkReadBuffer& buffer) {
 
 class Sk3DBlitter : public SkBlitter {
 public:
-    Sk3DBlitter(SkBlitter* proxy, SkShader::Context* shaderContext)
+    Sk3DBlitter(SkBlitter* proxy, SkShaderBase::Context* shaderContext)
         : fProxy(proxy)
         , fShaderContext(shaderContext)
     {}
@@ -781,39 +763,75 @@ public:
 
 private:
     // Both pointers are unowned. They will be deleted by SkSmallAllocator.
-    SkBlitter*          fProxy;
-    SkShader::Context*  fShaderContext;
+    SkBlitter*              fProxy;
+    SkShaderBase::Context*  fShaderContext;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "SkCoreBlitters.h"
 
-SkShader::ContextRec::DstType SkBlitter::PreferredShaderDest(const SkImageInfo& dstInfo) {
-#ifdef SK_FORCE_PM4f_FOR_L32_BLITS
-    return SkShader::ContextRec::kPM4f_DstType;
-#else
+SkShaderBase::ContextRec::DstType SkBlitter::PreferredShaderDest(const SkImageInfo& dstInfo) {
     return (dstInfo.gammaCloseToSRGB() || dstInfo.colorType() == kRGBA_F16_SkColorType)
-            ? SkShader::ContextRec::kPM4f_DstType
-            : SkShader::ContextRec::kPMColor_DstType;
+            ? SkShaderBase::ContextRec::kPM4f_DstType
+            : SkShaderBase::ContextRec::kPMColor_DstType;
+}
+
+// hack for testing, not to be exposed to clients
+bool gSkForceRasterPipelineBlitter;
+
+bool SkBlitter::UseRasterPipelineBlitter(const SkPixmap& device, const SkPaint& paint,
+                                         const SkMatrix& matrix) {
+    if (gSkForceRasterPipelineBlitter) {
+        return true;
+    }
+    if (device.info().alphaType() == kUnpremul_SkAlphaType) {
+        return true;
+    }
+#if 0 || defined(SK_FORCE_RASTER_PIPELINE_BLITTER)
+    return true;
+#else
+    // By policy we choose not to handle legacy 8888 with SkRasterPipelineBlitter.
+    if (device.colorSpace()) {
+        return true;
+    }
+    if (paint.getColorFilter()) {
+        return true;
+    }
+    if (paint.getFilterQuality() == kHigh_SkFilterQuality) {
+        return true;
+    }
+    // ... unless the blend mode is complicated enough.
+    if (paint.getBlendMode() > SkBlendMode::kLastSeparableMode) {
+        return true;
+    }
+    if (matrix.hasPerspective()) {
+        return true;
+    }
+    // ... or unless the shader is raster pipeline-only.
+    if (paint.getShader() && as_SB(paint.getShader())->isRasterPipelineOnly()) {
+        return true;
+    }
+
+    return device.colorType() != kN32_SkColorType;
 #endif
 }
 
 SkBlitter* SkBlitter::Choose(const SkPixmap& device,
                              const SkMatrix& matrix,
                              const SkPaint& origPaint,
-                             SkTBlitterAllocator* allocator,
+                             SkArenaAlloc* alloc,
                              bool drawCoverage) {
-    SkASSERT(allocator != nullptr);
+    SkASSERT(alloc != nullptr);
 
     // which check, in case we're being called by a client with a dummy device
     // (e.g. they have a bounder that always aborts the draw)
     if (kUnknown_SkColorType == device.colorType() ||
             (drawCoverage && (kAlpha_8_SkColorType != device.colorType()))) {
-        return allocator->createT<SkNullBlitter>();
+        return alloc->make<SkNullBlitter>();
     }
 
-    SkShader* shader = origPaint.getShader();
+    auto* shader = as_SB(origPaint.getShader());
     SkColorFilter* cf = origPaint.getColorFilter();
     SkBlendMode mode = origPaint.getBlendMode();
     sk_sp<Sk3DShader> shader3D;
@@ -825,7 +843,7 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
         shader3D = sk_make_sp<Sk3DShader>(sk_ref_sp(shader));
         // we know we haven't initialized lazyPaint yet, so just do it
         paint.writable()->setShader(shader3D);
-        shader = shader3D.get();
+        shader = as_SB(shader3D.get());
     }
 
     if (mode != SkBlendMode::kSrcOver) {
@@ -836,7 +854,7 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
                 paint.writable()->setBlendMode(mode);
                 break;
             case kSkipDrawing_SkXfermodeInterpretation:{
-                return allocator->createT<SkNullBlitter>();
+                return alloc->make<SkNullBlitter>();
             }
             default:
                 break;
@@ -858,7 +876,20 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
         p->setColor(0);
     }
 
-    if (SkBlitter* blitter = SkCreateRasterPipelineBlitter(device, *paint, matrix, allocator)) {
+    if (kAlpha_8_SkColorType == device.colorType() && drawCoverage) {
+        SkASSERT(nullptr == shader);
+        SkASSERT(paint->isSrcOver());
+        return alloc->make<SkA8_Coverage_Blitter>(device, *paint);
+    }
+
+    if (paint->isDither() && !SkPaintPriv::ShouldDither(*paint, device.colorType())) {
+        // Disable dithering when not needed.
+        paint.writable()->setDither(false);
+    }
+
+    if (UseRasterPipelineBlitter(device, *paint, matrix)) {
+        auto blitter = SkCreateRasterPipelineBlitter(device, *paint, matrix, alloc);
+        SkASSERT(blitter);
         return blitter;
     }
 
@@ -867,7 +898,7 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
             // xfermodes (and filters) require shaders for our current blitters
             paint.writable()->setShader(SkShader::MakeColorShader(paint->getColor()));
             paint.writable()->setAlpha(0xFF);
-            shader = paint->getShader();
+            shader = as_SB(paint->getShader());
         } else if (cf) {
             // if no shader && no xfermode, we just apply the colorfilter to
             // our color and move on.
@@ -881,7 +912,7 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
     if (cf) {
         SkASSERT(shader);
         paint.writable()->setShader(shader->makeWithColorFilter(sk_ref_sp(cf)));
-        shader = paint->getShader();
+        shader = as_SB(paint->getShader());
         // blitters should ignore the presence/absence of a filter, since
         // if there is one, the shader will take care of it.
     }
@@ -889,108 +920,61 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
     /*
      *  We create a SkShader::Context object, and store it on the blitter.
      */
-    SkShader::Context* shaderContext = nullptr;
+    SkShaderBase::Context* shaderContext = nullptr;
     if (shader) {
-        const SkShader::ContextRec rec(*paint, matrix, nullptr,
-                                       PreferredShaderDest(device.info()));
-        size_t contextSize = shader->contextSize(rec);
-        if (contextSize) {
-            // Try to create the ShaderContext
-            shaderContext = allocator->createWithIniter(
-                contextSize,
-                [&rec, shader](void* storage) {
-                    return shader->createContext(rec, storage);
-                });
-            if (!shaderContext) {
-                return allocator->createT<SkNullBlitter>();
-            }
-            SkASSERT(shaderContext);
-        } else {
-            return allocator->createT<SkNullBlitter>();
+        const SkShaderBase::ContextRec rec(*paint, matrix, nullptr,
+                                       PreferredShaderDest(device.info()),
+                                       device.colorSpace());
+        // Try to create the ShaderContext
+        shaderContext = shader->makeContext(rec, alloc);
+        if (!shaderContext) {
+            return alloc->make<SkNullBlitter>();
         }
+        SkASSERT(shaderContext);
     }
 
     SkBlitter*  blitter = nullptr;
     switch (device.colorType()) {
-        case kAlpha_8_SkColorType:
-            if (drawCoverage) {
-                SkASSERT(nullptr == shader);
-                SkASSERT(paint->isSrcOver());
-                blitter = allocator->createT<SkA8_Coverage_Blitter>(device, *paint);
-            } else if (shader) {
-                blitter = allocator->createT<SkA8_Shader_Blitter>(device, *paint, shaderContext);
-            } else {
-                blitter = allocator->createT<SkA8_Blitter>(device, *paint);
-            }
-            break;
-
-        case kRGB_565_SkColorType:
-            blitter = SkBlitter_ChooseD565(device, *paint, shaderContext, allocator);
-            break;
-
         case kN32_SkColorType:
-#ifdef SK_FORCE_PM4f_FOR_L32_BLITS
-            if (true)
-#else
-            if (device.info().gammaCloseToSRGB())
-#endif
-            {
-                blitter = SkBlitter_ARGB32_Create(device, *paint, shaderContext, allocator);
-            } else {
-                if (shader) {
-                        blitter = allocator->createT<SkARGB32_Shader_Blitter>(
-                                device, *paint, shaderContext);
-                } else if (paint->getColor() == SK_ColorBLACK) {
-                    blitter = allocator->createT<SkARGB32_Black_Blitter>(device, *paint);
-                } else if (paint->getAlpha() == 0xFF) {
-                    blitter = allocator->createT<SkARGB32_Opaque_Blitter>(device, *paint);
-                } else {
-                    blitter = allocator->createT<SkARGB32_Blitter>(device, *paint);
-                }
-            }
-            break;
+            // sRGB and general color spaces are handled via raster pipeline.
+            SkASSERT(!device.colorSpace());
 
-        case kRGBA_F16_SkColorType:
-            blitter = SkBlitter_F16_Create(device, *paint, shaderContext, allocator);
+            if (shader) {
+                blitter = alloc->make<SkARGB32_Shader_Blitter>(device, *paint, shaderContext);
+            } else if (paint->getColor() == SK_ColorBLACK) {
+                blitter = alloc->make<SkARGB32_Black_Blitter>(device, *paint);
+            } else if (paint->getAlpha() == 0xFF) {
+                blitter = alloc->make<SkARGB32_Opaque_Blitter>(device, *paint);
+            } else {
+                blitter = alloc->make<SkARGB32_Blitter>(device, *paint);
+            }
             break;
 
         default:
+            // should have been handled via raster pipeline.
+            SkASSERT(false);
             break;
     }
 
     if (!blitter) {
-        blitter = allocator->createT<SkNullBlitter>();
+        blitter = alloc->make<SkNullBlitter>();
     }
 
     if (shader3D) {
         SkBlitter* innerBlitter = blitter;
+        // FIXME - comment about allocator
         // innerBlitter was allocated by allocator, which will delete it.
         // We know shaderContext or its proxies is of type Sk3DShaderContext, so we need to
         // wrapper the blitter to notify it when we see an emboss mask.
-        blitter = allocator->createT<Sk3DBlitter>(innerBlitter, shaderContext);
+        blitter = alloc->make<Sk3DBlitter>(innerBlitter, shaderContext);
     }
     return blitter;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-class SkZeroShaderContext : public SkShader::Context {
-public:
-    SkZeroShaderContext(const SkShader& shader, const SkShader::ContextRec& rec)
-        // Override rec with the identity matrix, so it is guaranteed to be invertible.
-        : INHERITED(shader, SkShader::ContextRec(*rec.fPaint, SkMatrix::I(), nullptr,
-                                                 rec.fPreferredDstType)) {}
-
-    void shadeSpan(int x, int y, SkPMColor colors[], int count) override {
-        sk_bzero(colors, count * sizeof(SkPMColor));
-    }
-
-private:
-    typedef SkShader::Context INHERITED;
-};
-
 SkShaderBlitter::SkShaderBlitter(const SkPixmap& device, const SkPaint& paint,
-                                 SkShader::Context* shaderContext)
+                                 SkShaderBase::Context* shaderContext)
         : INHERITED(device)
         , fShader(paint.getShader())
         , fShaderContext(shaderContext) {
@@ -999,28 +983,11 @@ SkShaderBlitter::SkShaderBlitter(const SkPixmap& device, const SkPaint& paint,
 
     fShader->ref();
     fShaderFlags = fShaderContext->getFlags();
-    fConstInY = SkToBool(fShaderFlags & SkShader::kConstInY32_Flag);
+    fConstInY = SkToBool(fShaderFlags & SkShaderBase::kConstInY32_Flag);
 }
 
 SkShaderBlitter::~SkShaderBlitter() {
     fShader->unref();
-}
-
-bool SkShaderBlitter::resetShaderContext(const SkShader::ContextRec& rec) {
-    // Only destroy the old context if we have a new one. We need to ensure to have a
-    // live context in fShaderContext because the storage is owned by an SkSmallAllocator
-    // outside of this class.
-    // The new context will be of the same size as the old one because we use the same
-    // shader to create it. It is therefore safe to re-use the storage.
-    fShaderContext->~Context();
-    SkShader::Context* ctx = fShader->createContext(rec, (void*)fShaderContext);
-    if (nullptr == ctx) {
-        // Need a valid context in fShaderContext's storage, so we can later (or our caller) call
-        // the in-place destructor.
-        new (fShaderContext) SkZeroShaderContext(*fShader, rec);
-        return false;
-    }
-    return true;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1068,6 +1035,16 @@ void SkRectClipCheckBlitter::blitMask(const SkMask& mask, const SkIRect& clip) {
 
 const SkPixmap* SkRectClipCheckBlitter::justAnOpaqueColor(uint32_t* value) {
     return fBlitter->justAnOpaqueColor(value);
+}
+
+void SkRectClipCheckBlitter::blitAntiH2(int x, int y, U8CPU a0, U8CPU a1) {
+    SkASSERT(fClipRect.contains(SkIRect::MakeXYWH(x, y, 2, 1)));
+    fBlitter->blitAntiH2(x, y, a0, a1);
+}
+
+void SkRectClipCheckBlitter::blitAntiV2(int x, int y, U8CPU a0, U8CPU a1) {
+    SkASSERT(fClipRect.contains(SkIRect::MakeXYWH(x, y, 1, 2)));
+    fBlitter->blitAntiV2(x, y, a0, a1);
 }
 
 #endif

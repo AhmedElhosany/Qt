@@ -7,9 +7,10 @@
 #include <memory>
 
 #include "net/quic/core/quic_utils.h"
+#include "net/quic/platform/api/quic_test.h"
+#include "net/quic/platform/api/quic_text_utils.h"
 #include "net/quic/test_tools/quic_test_utils.h"
 
-using base::StringPiece;
 using std::string;
 
 namespace {
@@ -157,9 +158,9 @@ namespace test {
 // EncryptWithNonce wraps the |Encrypt| method of |encrypter| to allow passing
 // in an nonce and also to allocate the buffer needed for the ciphertext.
 QuicData* EncryptWithNonce(Aes128Gcm12Encrypter* encrypter,
-                           StringPiece nonce,
-                           StringPiece associated_data,
-                           StringPiece plaintext) {
+                           QuicStringPiece nonce,
+                           QuicStringPiece associated_data,
+                           QuicStringPiece plaintext) {
   size_t ciphertext_size = encrypter->GetCiphertextSize(plaintext.length());
   std::unique_ptr<char[]> ciphertext(new char[ciphertext_size]);
 
@@ -171,19 +172,21 @@ QuicData* EncryptWithNonce(Aes128Gcm12Encrypter* encrypter,
   return new QuicData(ciphertext.release(), ciphertext_size, true);
 }
 
-TEST(Aes128Gcm12EncrypterTest, Encrypt) {
+class Aes128Gcm12EncrypterTest : public QuicTest {};
+
+TEST_F(Aes128Gcm12EncrypterTest, Encrypt) {
   for (size_t i = 0; i < arraysize(test_group_array); i++) {
     SCOPED_TRACE(i);
     const TestVector* test_vectors = test_group_array[i];
     const TestGroupInfo& test_info = test_group_info[i];
     for (size_t j = 0; test_vectors[j].key != nullptr; j++) {
       // Decode the test vector.
-      string key = QuicUtils::HexDecode(test_vectors[j].key);
-      string iv = QuicUtils::HexDecode(test_vectors[j].iv);
-      string pt = QuicUtils::HexDecode(test_vectors[j].pt);
-      string aad = QuicUtils::HexDecode(test_vectors[j].aad);
-      string ct = QuicUtils::HexDecode(test_vectors[j].ct);
-      string tag = QuicUtils::HexDecode(test_vectors[j].tag);
+      string key = QuicTextUtils::HexDecode(test_vectors[j].key);
+      string iv = QuicTextUtils::HexDecode(test_vectors[j].iv);
+      string pt = QuicTextUtils::HexDecode(test_vectors[j].pt);
+      string aad = QuicTextUtils::HexDecode(test_vectors[j].aad);
+      string ct = QuicTextUtils::HexDecode(test_vectors[j].ct);
+      string tag = QuicTextUtils::HexDecode(test_vectors[j].tag);
 
       // The test vector's lengths should look sane. Note that the lengths
       // in |test_info| are in bits.
@@ -201,7 +204,7 @@ TEST(Aes128Gcm12EncrypterTest, Encrypt) {
           // This deliberately tests that the encrypter can handle an AAD that
           // is set to nullptr, as opposed to a zero-length, non-nullptr
           // pointer.
-          aad.length() ? aad : StringPiece(), pt));
+          aad.length() ? aad : QuicStringPiece(), pt));
       ASSERT_TRUE(encrypted.get());
 
       // The test vectors have 16 byte authenticators but this code only uses
@@ -220,14 +223,14 @@ TEST(Aes128Gcm12EncrypterTest, Encrypt) {
   }
 }
 
-TEST(Aes128Gcm12EncrypterTest, GetMaxPlaintextSize) {
+TEST_F(Aes128Gcm12EncrypterTest, GetMaxPlaintextSize) {
   Aes128Gcm12Encrypter encrypter;
   EXPECT_EQ(1000u, encrypter.GetMaxPlaintextSize(1012));
   EXPECT_EQ(100u, encrypter.GetMaxPlaintextSize(112));
   EXPECT_EQ(10u, encrypter.GetMaxPlaintextSize(22));
 }
 
-TEST(Aes128Gcm12EncrypterTest, GetCiphertextSize) {
+TEST_F(Aes128Gcm12EncrypterTest, GetCiphertextSize) {
   Aes128Gcm12Encrypter encrypter;
   EXPECT_EQ(1012u, encrypter.GetCiphertextSize(1000));
   EXPECT_EQ(112u, encrypter.GetCiphertextSize(100));

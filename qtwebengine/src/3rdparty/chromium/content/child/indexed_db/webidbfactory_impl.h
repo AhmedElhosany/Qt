@@ -6,6 +6,7 @@
 #define CONTENT_CHILD_INDEXED_DB_WEBIDBFACTORY_IMPL_H_
 
 #include "base/memory/ref_counted.h"
+#include "base/single_thread_task_runner.h"
 #include "content/common/indexed_db/indexed_db.mojom.h"
 #include "third_party/WebKit/public/platform/WebVector.h"
 #include "third_party/WebKit/public/platform/modules/indexeddb/WebIDBCallbacks.h"
@@ -22,33 +23,31 @@ class SyncMessageFilter;
 }
 
 namespace content {
-class ThreadSafeSender;
 
 class WebIDBFactoryImpl : public blink::WebIDBFactory {
  public:
   WebIDBFactoryImpl(scoped_refptr<IPC::SyncMessageFilter> sync_message_filter,
-                    scoped_refptr<ThreadSafeSender> thread_safe_sender,
                     scoped_refptr<base::SingleThreadTaskRunner> io_runner);
   ~WebIDBFactoryImpl() override;
 
   // See WebIDBFactory.h for documentation on these functions.
-  void getDatabaseNames(blink::WebIDBCallbacks* callbacks,
+  void GetDatabaseNames(blink::WebIDBCallbacks* callbacks,
                         const blink::WebSecurityOrigin& origin) override;
-  void open(const blink::WebString& name,
+  void Open(const blink::WebString& name,
             long long version,
             long long transaction_id,
             blink::WebIDBCallbacks* callbacks,
             blink::WebIDBDatabaseCallbacks* databaseCallbacks,
             const blink::WebSecurityOrigin& origin) override;
-  void deleteDatabase(const blink::WebString& name,
+  void DeleteDatabase(const blink::WebString& name,
                       blink::WebIDBCallbacks* callbacks,
-                      const blink::WebSecurityOrigin& origin) override;
+                      const blink::WebSecurityOrigin& origin,
+                      bool force_close) override;
 
  private:
   class IOThreadHelper;
 
   IOThreadHelper* io_helper_;
-  scoped_refptr<ThreadSafeSender> thread_safe_sender_;
   scoped_refptr<base::SingleThreadTaskRunner> io_runner_;
 };
 

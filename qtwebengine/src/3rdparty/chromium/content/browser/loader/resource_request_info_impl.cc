@@ -20,14 +20,11 @@ namespace content {
 
 namespace {
 
-WebContents* GetWebContentsFromFTNID(int frame_tree_node_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  FrameTreeNode* frame_tree_node =
-      FrameTreeNode::GloballyFindByID(frame_tree_node_id);
-  if (!frame_tree_node)
-    return nullptr;
-
-  return WebContentsImpl::FromFrameTreeNode(frame_tree_node);
+int FrameTreeNodeIdFromHostIds(int render_process_host_id,
+                               int render_frame_host_id) {
+  RenderFrameHost* render_frame_host =
+      RenderFrameHost::FromID(render_process_host_id, render_frame_host_id);
+  return render_frame_host ? render_frame_host->GetFrameTreeNodeId() : -1;
 }
 
 }  // namespace
@@ -52,7 +49,7 @@ void ResourceRequestInfo::AllocateForTesting(net::URLRequest* request,
                                              bool parent_is_main_frame,
                                              bool allow_download,
                                              bool is_async,
-                                             bool is_using_lofi) {
+                                             PreviewsState previews_state) {
   // Make sure both |is_main_frame| and |parent_is_main_frame| aren't set at the
   // same time.
   DCHECK(!(is_main_frame && parent_is_main_frame));
@@ -62,35 +59,33 @@ void ResourceRequestInfo::AllocateForTesting(net::URLRequest* request,
   DCHECK(resource_type != RESOURCE_TYPE_MAIN_FRAME || is_main_frame);
 
   ResourceRequestInfoImpl* info = new ResourceRequestInfoImpl(
-      PROCESS_TYPE_RENDERER,                   // process_type
-      render_process_id,                       // child_id
-      render_view_id,                          // route_id
-      -1,                                      // frame_tree_node_id
-      0,                                       // origin_pid
-      0,                                       // request_id
-      render_frame_id,                         // render_frame_id
-      is_main_frame,                           // is_main_frame
-      parent_is_main_frame,                    // parent_is_main_frame
-      resource_type,                           // resource_type
-      ui::PAGE_TRANSITION_LINK,                // transition_type
-      false,                                   // should_replace_current_entry
-      false,                                   // is_download
-      false,                                   // is_stream
-      allow_download,                          // allow_download
-      false,                                   // has_user_gesture
-      false,                                   // enable load timing
-      request->has_upload(),                   // enable upload progress
-      false,                                   // do_not_prompt_for_login
-      blink::WebReferrerPolicyDefault,         // referrer_policy
-      blink::WebPageVisibilityStateVisible,    // visibility_state
-      context,                                 // context
-      base::WeakPtr<ResourceMessageFilter>(),  // filter
-      false,                                   // report_raw_headers
-      is_async,                                // is_async
-      is_using_lofi,                           // is_using_lofi
-      std::string(),                           // original_headers
-      nullptr,                                 // body
-      false);                                  // initiated_in_secure_context
+      ResourceRequesterInfo::CreateForRendererTesting(
+          render_process_id),                 // resource_requester_info
+      render_view_id,                         // route_id
+      -1,                                     // frame_tree_node_id
+      0,                                      // origin_pid
+      0,                                      // request_id
+      render_frame_id,                        // render_frame_id
+      is_main_frame,                          // is_main_frame
+      parent_is_main_frame,                   // parent_is_main_frame
+      resource_type,                          // resource_type
+      ui::PAGE_TRANSITION_LINK,               // transition_type
+      false,                                  // should_replace_current_entry
+      false,                                  // is_download
+      false,                                  // is_stream
+      allow_download,                         // allow_download
+      false,                                  // has_user_gesture
+      false,                                  // enable load timing
+      request->has_upload(),                  // enable upload progress
+      false,                                  // do_not_prompt_for_login
+      blink::kWebReferrerPolicyDefault,       // referrer_policy
+      blink::kWebPageVisibilityStateVisible,  // visibility_state
+      context,                                // context
+      false,                                  // report_raw_headers
+      is_async,                               // is_async
+      previews_state,                         // previews_state
+      nullptr,                                // body
+      false);                                 // initiated_in_secure_context
   info->AssociateWithRequest(request);
 }
 
@@ -131,8 +126,7 @@ const ResourceRequestInfoImpl* ResourceRequestInfoImpl::ForRequest(
 }
 
 ResourceRequestInfoImpl::ResourceRequestInfoImpl(
-    int process_type,
-    int child_id,
+    scoped_refptr<ResourceRequesterInfo> requester_info,
     int route_id,
     int frame_tree_node_id,
     int origin_pid,
@@ -153,16 +147,13 @@ ResourceRequestInfoImpl::ResourceRequestInfoImpl(
     blink::WebReferrerPolicy referrer_policy,
     blink::WebPageVisibilityState visibility_state,
     ResourceContext* context,
-    base::WeakPtr<ResourceMessageFilter> filter,
     bool report_raw_headers,
     bool is_async,
-    bool is_using_lofi,
-    const std::string& original_headers,
-    const scoped_refptr<ResourceRequestBodyImpl> body,
+    PreviewsState previews_state,
+    const scoped_refptr<ResourceRequestBody> body,
     bool initiated_in_secure_context)
     : detachable_handler_(NULL),
-      process_type_(process_type),
-      child_id_(child_id),
+      requester_info_(std::move(requester_info)),
       route_id_(route_id),
       frame_tree_node_id_(frame_tree_node_id),
       origin_pid_(origin_pid),
@@ -186,11 +177,9 @@ ResourceRequestInfoImpl::ResourceRequestInfoImpl(
       referrer_policy_(referrer_policy),
       visibility_state_(visibility_state),
       context_(context),
-      filter_(filter),
       report_raw_headers_(report_raw_headers),
       is_async_(is_async),
-      is_using_lofi_(is_using_lofi),
-      original_headers_(original_headers),
+      previews_state_(previews_state),
       body_(body),
       initiated_in_secure_context_(initiated_in_secure_context) {}
 
@@ -204,7 +193,7 @@ ResourceRequestInfoImpl::GetWebContentsGetterForRequest() const {
   // ID should be used to access the WebContents.
   if (frame_tree_node_id_ != -1) {
     DCHECK(IsBrowserSideNavigationEnabled());
-    return base::Bind(&GetWebContentsFromFTNID, frame_tree_node_id_);
+    return base::Bind(WebContents::FromFrameTreeNodeId, frame_tree_node_id_);
   }
 
   // In other cases, use the RenderProcessHost ID + RenderFrameHost ID to get
@@ -220,12 +209,30 @@ ResourceRequestInfoImpl::GetWebContentsGetterForRequest() const {
                     render_process_host_id, render_frame_host_id);
 }
 
+ResourceRequestInfo::FrameTreeNodeIdGetter
+ResourceRequestInfoImpl::GetFrameTreeNodeIdGetterForRequest() const {
+  if (frame_tree_node_id_ != -1) {
+    DCHECK(IsBrowserSideNavigationEnabled());
+    return base::Bind([](int id) { return id; }, frame_tree_node_id_);
+  }
+
+  int render_process_host_id = -1;
+  int render_frame_host_id = -1;
+  if (!GetAssociatedRenderFrame(&render_process_host_id,
+                                &render_frame_host_id)) {
+    NOTREACHED();
+  }
+
+  return base::Bind(&FrameTreeNodeIdFromHostIds, render_process_host_id,
+                    render_frame_host_id);
+}
+
 ResourceContext* ResourceRequestInfoImpl::GetContext() const {
   return context_;
 }
 
 int ResourceRequestInfoImpl::GetChildID() const {
-  return child_id_;
+  return requester_info_->child_id();
 }
 
 int ResourceRequestInfoImpl::GetRouteID() const {
@@ -233,7 +240,7 @@ int ResourceRequestInfoImpl::GetRouteID() const {
 }
 
 GlobalRequestID ResourceRequestInfoImpl::GetGlobalRequestID() const {
-  return GlobalRequestID(child_id_, request_id_);
+  return GlobalRequestID(GetChildID(), request_id_);
 }
 
 int ResourceRequestInfoImpl::GetOriginPID() const {
@@ -261,7 +268,8 @@ ResourceType ResourceRequestInfoImpl::GetResourceType() const {
 }
 
 int ResourceRequestInfoImpl::GetProcessType() const {
-  return process_type_;
+  return requester_info_->IsBrowserSideNavigation() ? PROCESS_TYPE_BROWSER
+                                                    : PROCESS_TYPE_RENDERER;
 }
 
 blink::WebReferrerPolicy ResourceRequestInfoImpl::GetReferrerPolicy() const {
@@ -288,7 +296,7 @@ bool ResourceRequestInfoImpl::WasIgnoredByHandler() const {
 bool ResourceRequestInfoImpl::GetAssociatedRenderFrame(
     int* render_process_id,
     int* render_frame_id) const {
-  *render_process_id = child_id_;
+  *render_process_id = GetChildID();
   *render_frame_id = render_frame_id_;
   return true;
 }
@@ -301,8 +309,8 @@ bool ResourceRequestInfoImpl::IsDownload() const {
   return is_download_;
 }
 
-bool ResourceRequestInfoImpl::IsUsingLoFi() const {
-  return is_using_lofi_;
+PreviewsState ResourceRequestInfoImpl::GetPreviewsState() const {
+  return previews_state_;
 }
 
 bool ResourceRequestInfoImpl::ShouldReportRawHeaders() const {
@@ -314,13 +322,13 @@ NavigationUIData* ResourceRequestInfoImpl::GetNavigationUIData() const {
 }
 
 void ResourceRequestInfoImpl::AssociateWithRequest(net::URLRequest* request) {
-  request->SetUserData(NULL, this);
+  request->SetUserData(nullptr, base::WrapUnique(this));
   int render_process_id;
   int render_frame_id;
   if (GetAssociatedRenderFrame(&render_process_id, &render_frame_id)) {
-    request->SetUserData(
-        URLRequestUserData::kUserDataKey,
-        new URLRequestUserData(render_process_id, render_frame_id));
+    request->SetUserData(URLRequestUserData::kUserDataKey,
+                         base::MakeUnique<URLRequestUserData>(render_process_id,
+                                                              render_frame_id));
   }
 }
 
@@ -329,26 +337,36 @@ int ResourceRequestInfoImpl::GetRequestID() const {
 }
 
 GlobalRoutingID ResourceRequestInfoImpl::GetGlobalRoutingID() const {
-  return GlobalRoutingID(child_id_, route_id_);
+  return GlobalRoutingID(GetChildID(), route_id_);
 }
 
 void ResourceRequestInfoImpl::UpdateForTransfer(
-    int child_id,
     int route_id,
     int render_frame_id,
     int origin_pid,
     int request_id,
-    base::WeakPtr<ResourceMessageFilter> filter) {
-  child_id_ = child_id;
+    ResourceRequesterInfo* requester_info,
+    mojom::URLLoaderAssociatedRequest url_loader_request,
+    mojom::URLLoaderClientPtr url_loader_client) {
   route_id_ = route_id;
   render_frame_id_ = render_frame_id;
   origin_pid_ = origin_pid;
   request_id_ = request_id;
-  filter_ = filter;
+  requester_info_ = requester_info;
+
+  // on_transfer_ is non-null only when MojoAsyncResourceHandler is used.
+  if (on_transfer_) {
+    on_transfer_.Run(std::move(url_loader_request),
+                     std::move(url_loader_client));
+  }
 }
 
 void ResourceRequestInfoImpl::ResetBody() {
   body_ = nullptr;
+}
+
+void ResourceRequestInfoImpl::SetBlobHandles(BlobHandles blob_handles) {
+  blob_handles_ = std::move(blob_handles);
 }
 
 }  // namespace content

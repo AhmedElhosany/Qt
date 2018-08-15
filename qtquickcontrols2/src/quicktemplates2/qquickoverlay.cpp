@@ -47,102 +47,42 @@
 
 QT_BEGIN_NAMESPACE
 
-void QQuickOverlayPrivate::popupAboutToShow()
-{
-    Q_Q(QQuickOverlay);
-    QQuickPopup *popup = qobject_cast<QQuickPopup *>(q->sender());
-    if (!popup || !popup->dim())
-        return;
+/*!
+    \qmltype Overlay
+    \inherits Item
+    \instantiates QQuickOverlay
+    \inqmlmodule QtQuick.Controls
+    \since 5.10
+    \brief A window overlay for popups.
 
-    // use QQmlProperty instead of QQuickItem::setOpacity() to trigger QML Behaviors
-    QQuickPopupPrivate *p = QQuickPopupPrivate::get(popup);
-    if (p->dimmer)
-        QQmlProperty::write(p->dimmer, QStringLiteral("opacity"), 1.0);
-}
+    Overlay provides a layer for popups, ensuring that popups are displayed above
+    other content and that the background is dimmed when a \l {Popup::}{modal} or
+    \l {Popup::dim}{dimmed} popup is visible.
 
-void QQuickOverlayPrivate::popupAboutToHide()
-{
-    Q_Q(QQuickOverlay);
-    QQuickPopup *popup = qobject_cast<QQuickPopup *>(q->sender());
-    if (!popup || !popup->dim())
-        return;
+    The overlay is an ordinary Item that covers the entire window. It can be used
+    as a visual parent to position a popup in scene coordinates. The following
+    example uses the attached \c overlay property to position a popup to the center
+    of the window, despite the position of the button that opens the popup.
 
-    // use QQmlProperty instead of QQuickItem::setOpacity() to trigger QML Behaviors
-    QQuickPopupPrivate *p = QQuickPopupPrivate::get(popup);
-    if (p->dimmer)
-        QQmlProperty::write(p->dimmer, QStringLiteral("opacity"), 0.0);
-}
+    \code
+    Button {
+        onClicked: popup.open()
 
-static QQuickItem *createDimmer(QQmlComponent *component, QQuickPopup *popup, QQuickItem *parent)
-{
-    QQuickItem *item = nullptr;
-    if (component) {
-        QQmlContext *creationContext = component->creationContext();
-        if (!creationContext)
-            creationContext = qmlContext(popup);
-        QQmlContext *context = new QQmlContext(creationContext, popup);
-        context->setContextObject(popup);
-        item = qobject_cast<QQuickItem*>(component->beginCreate(context));
-    }
+        Popup {
+            id: popup
 
-    // when there is no overlay component available (with plain QQuickWindow),
-    // use a plain QQuickItem as a fallback to block hover events
-    if (!item && popup->isModal())
-        item = new QQuickItem;
+            parent: Overlay.overlay
 
-    if (item) {
-        item->setOpacity(popup->isVisible() ? 1.0 : 0.0);
-        item->setParentItem(parent);
-        item->stackBefore(popup->popupItem());
-        item->setZ(popup->z());
-        if (popup->isModal()) {
-            item->setAcceptedMouseButtons(Qt::AllButtons);
-#if QT_CONFIG(cursor)
-            item->setCursor(Qt::ArrowCursor);
-#endif
-#if QT_CONFIG(quicktemplates2_hover)
-            // TODO: switch to QStyleHints::useHoverEffects in Qt 5.8
-            item->setAcceptHoverEvents(true);
-            // item->setAcceptHoverEvents(QGuiApplication::styleHints()->useHoverEffects());
-            // connect(QGuiApplication::styleHints(), &QStyleHints::useHoverEffectsChanged, item, &QQuickItem::setAcceptHoverEvents);
-#endif
+            x: (parent.width - width) / 2
+            y: (parent.height - height) / 2
+            width: 100
+            height: 100
         }
-        if (component)
-            component->completeCreate();
     }
-    return item;
-}
+    \endcode
 
-void QQuickOverlayPrivate::createOverlay(QQuickPopup *popup)
-{
-    Q_Q(QQuickOverlay);
-    QQuickPopupPrivate *p = QQuickPopupPrivate::get(popup);
-    if (!p->dimmer)
-        p->dimmer = createDimmer(popup->isModal() ? modal : modeless, popup, q);
-    p->resizeOverlay();
-}
-
-void QQuickOverlayPrivate::destroyOverlay(QQuickPopup *popup)
-{
-    QQuickPopupPrivate *p = QQuickPopupPrivate::get(popup);
-    if (p->dimmer) {
-        p->dimmer->setParentItem(nullptr);
-        p->dimmer->deleteLater();
-        p->dimmer = nullptr;
-    }
-}
-
-void QQuickOverlayPrivate::toggleOverlay()
-{
-    Q_Q(QQuickOverlay);
-    QQuickPopup *popup = qobject_cast<QQuickPopup *>(q->sender());
-    if (!popup)
-        return;
-
-    destroyOverlay(popup);
-    if (popup->dim())
-        createOverlay(popup);
-}
+    \sa ApplicationWindow
+*/
 
 QVector<QQuickPopup *> QQuickOverlayPrivate::stackingOrderPopups() const
 {
@@ -461,37 +401,18 @@ QQuickOverlay *QQuickOverlay::overlay(QQuickWindow *window)
     return overlay;
 }
 
+QQuickOverlayAttached *QQuickOverlay::qmlAttachedProperties(QObject *object)
+{
+    return new QQuickOverlayAttached(object);
+}
+
 void QQuickOverlay::itemChange(ItemChange change, const ItemChangeData &data)
 {
     Q_D(QQuickOverlay);
     QQuickItem::itemChange(change, data);
 
-    QQuickPopup *popup = nullptr;
-    if (change == ItemChildAddedChange || change == ItemChildRemovedChange) {
-        popup = qobject_cast<QQuickPopup *>(data.item->parent());
+    if (change == ItemChildAddedChange || change == ItemChildRemovedChange)
         setVisible(!d->allDrawers.isEmpty() || !childItems().isEmpty());
-    }
-    if (!popup)
-        return;
-
-    if (change == ItemChildAddedChange) {
-        if (popup->dim())
-            d->createOverlay(popup);
-        QObjectPrivate::connect(popup, &QQuickPopup::dimChanged, d, &QQuickOverlayPrivate::toggleOverlay);
-        QObjectPrivate::connect(popup, &QQuickPopup::modalChanged, d, &QQuickOverlayPrivate::toggleOverlay);
-        if (!qobject_cast<QQuickDrawer *>(popup)) {
-            QObjectPrivate::connect(popup, &QQuickPopup::aboutToShow, d, &QQuickOverlayPrivate::popupAboutToShow);
-            QObjectPrivate::connect(popup, &QQuickPopup::aboutToHide, d, &QQuickOverlayPrivate::popupAboutToHide);
-        }
-    } else if (change == ItemChildRemovedChange) {
-        d->destroyOverlay(popup);
-        QObjectPrivate::disconnect(popup, &QQuickPopup::dimChanged, d, &QQuickOverlayPrivate::toggleOverlay);
-        QObjectPrivate::disconnect(popup, &QQuickPopup::modalChanged, d, &QQuickOverlayPrivate::toggleOverlay);
-        if (!qobject_cast<QQuickDrawer *>(popup)) {
-            QObjectPrivate::disconnect(popup, &QQuickPopup::aboutToShow, d, &QQuickOverlayPrivate::popupAboutToShow);
-            QObjectPrivate::disconnect(popup, &QQuickPopup::aboutToHide, d, &QQuickOverlayPrivate::popupAboutToHide);
-        }
-    }
 }
 
 void QQuickOverlay::geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry)
@@ -652,6 +573,151 @@ bool QQuickOverlay::eventFilter(QObject *object, QEvent *event)
     }
 
     return false;
+}
+
+class QQuickOverlayAttachedPrivate : public QObjectPrivate
+{
+    Q_DECLARE_PUBLIC(QQuickOverlayAttached)
+
+public:
+    QQuickOverlayAttachedPrivate()
+        : window(nullptr),
+          modal(nullptr),
+          modeless(nullptr)
+    {
+    }
+
+    void setWindow(QQuickWindow *newWindow);
+
+    QQuickWindow *window;
+    QQmlComponent *modal;
+    QQmlComponent *modeless;
+};
+
+void QQuickOverlayAttachedPrivate::setWindow(QQuickWindow *newWindow)
+{
+    Q_Q(QQuickOverlayAttached);
+    if (window == newWindow)
+        return;
+
+    if (QQuickOverlay *oldOverlay = QQuickOverlay::overlay(window)) {
+        QObject::disconnect(oldOverlay, &QQuickOverlay::pressed, q, &QQuickOverlayAttached::pressed);
+        QObject::disconnect(oldOverlay, &QQuickOverlay::released, q, &QQuickOverlayAttached::released);
+    }
+
+    if (QQuickOverlay *newOverlay = QQuickOverlay::overlay(newWindow)) {
+        QObject::connect(newOverlay, &QQuickOverlay::pressed, q, &QQuickOverlayAttached::pressed);
+        QObject::connect(newOverlay, &QQuickOverlay::released, q, &QQuickOverlayAttached::released);
+    }
+
+    window = newWindow;
+    emit q->overlayChanged();
+}
+
+/*!
+    \qmlattachedsignal QtQuick.Controls::Overlay::pressed()
+
+    This attached signal is emitted when the overlay is pressed by the user while
+    a popup is visible.
+
+    The signal can be attached to any item, popup, or window. When attached to an
+    item or a popup, the signal is only emitted if the item or popup is in a window.
+*/
+
+/*!
+    \qmlattachedsignal QtQuick.Controls::Overlay::released()
+
+    This attached signal is emitted when the overlay is released by the user while
+    a popup is visible.
+
+    The signal can be attached to any item, popup, or window. When attached to an
+    item or a popup, the signal is only emitted if the item or popup is in a window.
+*/
+
+QQuickOverlayAttached::QQuickOverlayAttached(QObject *parent)
+    : QObject(*(new QQuickOverlayAttachedPrivate), parent)
+{
+    Q_D(QQuickOverlayAttached);
+    if (QQuickItem *item = qobject_cast<QQuickItem *>(parent)) {
+        d->setWindow(item->window());
+        QObjectPrivate::connect(item, &QQuickItem::windowChanged, d, &QQuickOverlayAttachedPrivate::setWindow);
+    } else if (QQuickPopup *popup = qobject_cast<QQuickPopup *>(parent)) {
+        d->setWindow(popup->window());
+        QObjectPrivate::connect(popup, &QQuickPopup::windowChanged, d, &QQuickOverlayAttachedPrivate::setWindow);
+    } else {
+        d->setWindow(qobject_cast<QQuickWindow *>(parent));
+    }
+}
+
+/*!
+    \qmlattachedproperty Overlay QtQuick.Controls::Overlay::overlay
+    \readonly
+
+    This attached property holds the window overlay item.
+
+    The property can be attached to any item, popup, or window. When attached to an
+    item or a popup, the value is \c null if the item or popup is not in a window.
+*/
+QQuickOverlay *QQuickOverlayAttached::overlay() const
+{
+    Q_D(const QQuickOverlayAttached);
+    return QQuickOverlay::overlay(d->window);
+}
+
+/*!
+    \qmlattachedproperty Component QtQuick.Controls::Overlay::modal
+
+    This attached property holds a component to use as a visual item that implements
+    background dimming for modal popups. It is created for and stacked below visible
+    modal popups.
+
+    The property can be attached to any popup.
+
+    \sa Popup::modal
+*/
+QQmlComponent *QQuickOverlayAttached::modal() const
+{
+    Q_D(const QQuickOverlayAttached);
+    return d->modal;
+}
+
+void QQuickOverlayAttached::setModal(QQmlComponent *modal)
+{
+    Q_D(QQuickOverlayAttached);
+    if (d->modal == modal)
+        return;
+
+    delete d->modal;
+    d->modal = modal;
+    emit modalChanged();
+}
+
+/*!
+    \qmlattachedproperty Component QtQuick.Controls::Overlay::modeless
+
+    This attached property holds a component to use as a visual item that implements
+    background dimming for modeless popups. It is created for and stacked below visible
+    dimming popups.
+
+    The property can be attached to any popup.
+
+    \sa Popup::dim
+*/
+QQmlComponent *QQuickOverlayAttached::modeless() const
+{
+    Q_D(const QQuickOverlayAttached);
+    return d->modeless;
+}
+
+void QQuickOverlayAttached::setModeless(QQmlComponent *modeless)
+{
+    Q_D(QQuickOverlayAttached);
+    if (d->modeless == modeless)
+        return;
+
+    delete d->modeless;
+    d->modeless = modeless;
+    emit modelessChanged();
 }
 
 QT_END_NAMESPACE

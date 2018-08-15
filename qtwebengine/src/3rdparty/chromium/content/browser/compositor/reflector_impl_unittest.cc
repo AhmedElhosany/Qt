@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/browser/compositor/reflector_impl.h"
+
+#include "base/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "build/build_config.h"
@@ -11,9 +15,8 @@
 #include "cc/scheduler/delay_based_time_source.h"
 #include "cc/test/test_context_provider.h"
 #include "cc/test/test_web_graphics_context_3d.h"
-#include "components/display_compositor/compositor_overlay_candidate_validator.h"
+#include "components/viz/service/display_embedder/compositor_overlay_candidate_validator.h"
 #include "content/browser/compositor/browser_compositor_output_surface.h"
-#include "content/browser/compositor/reflector_impl.h"
 #include "content/browser/compositor/reflector_texture.h"
 #include "content/browser/compositor/test/no_transport_image_transport_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,7 +25,7 @@
 #include "ui/compositor/test/context_factories_for_test.h"
 
 #if defined(USE_OZONE)
-#include "components/display_compositor/compositor_overlay_candidate_validator_ozone.h"
+#include "components/viz/service/display_embedder/compositor_overlay_candidate_validator_ozone.h"
 #include "ui/ozone/public/overlay_candidates_ozone.h"
 #endif  // defined(USE_OZONE)
 
@@ -33,16 +36,16 @@ class FakeTaskRunner : public base::SingleThreadTaskRunner {
   FakeTaskRunner() {}
 
   bool PostNonNestableDelayedTask(const tracked_objects::Location& from_here,
-                                  const base::Closure& task,
+                                  base::OnceClosure task,
                                   base::TimeDelta delay) override {
     return true;
   }
   bool PostDelayedTask(const tracked_objects::Location& from_here,
-                       const base::Closure& task,
+                       base::OnceClosure task,
                        base::TimeDelta delay) override {
     return true;
   }
-  bool RunsTasksOnCurrentThread() const override { return true; }
+  bool RunsTasksInCurrentSequence() const override { return true; }
 
  protected:
   ~FakeTaskRunner() override {}
@@ -60,15 +63,14 @@ class TestOverlayCandidatesOzone : public ui::OverlayCandidatesOzone {
 };
 #endif  // defined(USE_OZONE)
 
-std::unique_ptr<display_compositor::CompositorOverlayCandidateValidator>
+std::unique_ptr<viz::CompositorOverlayCandidateValidator>
 CreateTestValidatorOzone() {
 #if defined(USE_OZONE)
-  return std::unique_ptr<
-      display_compositor::CompositorOverlayCandidateValidator>(
-      new display_compositor::CompositorOverlayCandidateValidatorOzone(
+  return std::unique_ptr<viz::CompositorOverlayCandidateValidator>(
+      new viz::CompositorOverlayCandidateValidatorOzone(
           std::unique_ptr<ui::OverlayCandidatesOzone>(
               new TestOverlayCandidatesOzone()),
-          false));
+          ""));
 #else
   return nullptr;
 #endif  // defined(USE_OZONE)
@@ -76,14 +78,10 @@ CreateTestValidatorOzone() {
 
 class TestOutputSurface : public BrowserCompositorOutputSurface {
  public:
-  TestOutputSurface(scoped_refptr<cc::ContextProvider> context_provider,
-                    scoped_refptr<ui::CompositorVSyncManager> vsync_manager,
-                    cc::SyntheticBeginFrameSource* begin_frame_source)
+  TestOutputSurface(scoped_refptr<viz::ContextProvider> context_provider)
       : BrowserCompositorOutputSurface(std::move(context_provider),
-                                       std::move(vsync_manager),
-                                       begin_frame_source,
-                                       CreateTestValidatorOzone()) {
-  }
+                                       UpdateVSyncParametersCallback(),
+                                       CreateTestValidatorOzone()) {}
 
   void SetFlip(bool flip) { capabilities_.flipped_output_surface = flip; }
 
@@ -91,14 +89,19 @@ class TestOutputSurface : public BrowserCompositorOutputSurface {
   void EnsureBackbuffer() override {}
   void DiscardBackbuffer() override {}
   void BindFramebuffer() override {}
+  void SetDrawRectangle(const gfx::Rect& draw_rectangle) override {}
   void Reshape(const gfx::Size& size,
                float device_scale_factor,
                const gfx::ColorSpace& color_space,
-               bool has_alpha) override {}
+               bool has_alpha,
+               bool use_stencil) override {}
   void SwapBuffers(cc::OutputSurfaceFrame frame) override {}
   uint32_t GetFramebufferCopyTextureFormat() override { return GL_RGB; }
   bool IsDisplayedAsOverlayPlane() const override { return false; }
   unsigned GetOverlayTextureId() const override { return 0; }
+  gfx::BufferFormat GetOverlayBufferFormat() const override {
+    return gfx::BufferFormat::RGBX_8888;
+  }
   bool SurfaceIsSuspendForRecycle() const override { return false; }
 
   void OnReflectorChanged() override {
@@ -127,32 +130,36 @@ class ReflectorImplTest : public testing::Test {
  public:
   void SetUp() override {
     bool enable_pixel_output = false;
-    ui::ContextFactory* context_factory =
-        ui::InitializeContextFactoryForTests(enable_pixel_output);
+    ui::ContextFactory* context_factory = nullptr;
+    ui::ContextFactoryPrivate* context_factory_private = nullptr;
+
+    message_loop_ = base::MakeUnique<base::MessageLoop>();
+    ui::InitializeContextFactoryForTests(enable_pixel_output, &context_factory,
+                                         &context_factory_private);
     ImageTransportFactory::InitializeForUnitTests(
-        std::unique_ptr<ImageTransportFactory>(
-            new NoTransportImageTransportFactory));
-    message_loop_.reset(new base::MessageLoop());
+        base::MakeUnique<NoTransportImageTransportFactory>());
     task_runner_ = message_loop_->task_runner();
     compositor_task_runner_ = new FakeTaskRunner();
     begin_frame_source_.reset(new cc::DelayBasedBeginFrameSource(
         base::MakeUnique<cc::DelayBasedTimeSource>(
             compositor_task_runner_.get())));
-    compositor_.reset(
-        new ui::Compositor(context_factory, compositor_task_runner_.get()));
+    compositor_.reset(new ui::Compositor(
+        context_factory_private->AllocateFrameSinkId(), context_factory,
+        context_factory_private, compositor_task_runner_.get(),
+        false /* enable_surface_synchronization */));
     compositor_->SetAcceleratedWidget(gfx::kNullAcceleratedWidget);
 
     auto context_provider = cc::TestContextProvider::Create();
     context_provider->BindToCurrentThread();
-    output_surface_ = base::MakeUnique<TestOutputSurface>(
-        std::move(context_provider), compositor_->vsync_manager(),
-        begin_frame_source_.get());
+    output_surface_ =
+        base::MakeUnique<TestOutputSurface>(std::move(context_provider));
 
     root_layer_.reset(new ui::Layer(ui::LAYER_SOLID_COLOR));
     compositor_->SetRootLayer(root_layer_.get());
     mirroring_layer_.reset(new ui::Layer(ui::LAYER_SOLID_COLOR));
     compositor_->root_layer()->Add(mirroring_layer_.get());
-    output_surface_->Reshape(kSurfaceSize, 1.f, gfx::ColorSpace(), false);
+    output_surface_->Reshape(kSurfaceSize, 1.f, gfx::ColorSpace(), false,
+                             false);
     mirroring_layer_->SetBounds(gfx::Rect(kSurfaceSize));
   }
 
@@ -165,7 +172,7 @@ class ReflectorImplTest : public testing::Test {
   void TearDown() override {
     if (reflector_)
       reflector_->RemoveMirroringLayer(mirroring_layer_.get());
-    cc::TextureMailbox mailbox;
+    viz::TextureMailbox mailbox;
     std::unique_ptr<cc::SingleReleaseCallback> release;
     if (mirroring_layer_->PrepareTextureMailbox(&mailbox, &release)) {
       release->Run(gpu::SyncToken(), false);

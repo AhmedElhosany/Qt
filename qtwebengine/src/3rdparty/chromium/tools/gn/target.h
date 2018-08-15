@@ -27,9 +27,7 @@
 #include "tools/gn/unique_vector.h"
 
 class DepsIteratorRange;
-class InputFile;
 class Settings;
-class Token;
 class Toolchain;
 
 class Target : public Item {
@@ -57,7 +55,9 @@ class Target : public Item {
   typedef std::vector<SourceFile> FileList;
   typedef std::vector<std::string> StringVector;
 
-  Target(const Settings* settings, const Label& label);
+  Target(const Settings* settings,
+         const Label& label,
+         const InputFileSet& input_files);
   ~Target() override;
 
   // Returns a string naming the output type.

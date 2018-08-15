@@ -68,7 +68,7 @@ DEF_SIMPLE_GM(imagefilters_xfermodes, canvas, 480, 480) {
 }
 
 static sk_sp<SkImage> make_image(SkCanvas* canvas) {
-    const SkImageInfo info = SkImageInfo::MakeN32Premul(100, 100);
+    const SkImageInfo info = SkImageInfo::MakeS32(100, 100, kPremul_SkAlphaType);
     auto surface(canvas->makeSurface(info));
     if (!surface) {
         surface = SkSurface::MakeRaster(info);
@@ -123,7 +123,7 @@ static void draw_set(SkCanvas* canvas, sk_sp<SkImageFilter> filters[], int count
         canvas->save();
         SkRRect rr = SkRRect::MakeRectXY(r.makeOffset(dx, dy), 20, 20);
         canvas->clipRRect(rr, true);
-        canvas->saveLayer({ &rr.getBounds(), nullptr, filters[i].get(), 0 });
+        canvas->saveLayer({ &rr.getBounds(), nullptr, filters[i].get(), nullptr, nullptr, 0 });
         canvas->drawColor(0x40FFFFFF);
         canvas->restore();
         canvas->restore();

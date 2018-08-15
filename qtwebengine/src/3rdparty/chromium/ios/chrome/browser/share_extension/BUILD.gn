@@ -8,14 +8,15 @@ source_set("share_extension") {
     "share_extension_item_receiver.mm",
     "share_extension_service.h",
     "share_extension_service.mm",
-    "share_extension_service_factory.cc",
     "share_extension_service_factory.h",
+    "share_extension_service_factory.mm",
   ]
   deps = [
     "//base",
     "//components/bookmarks/browser",
     "//components/keyed_service/core",
     "//components/keyed_service/ios",
+    "//components/reading_list/core",
     "//ios/chrome/browser",
     "//ios/chrome/browser/bookmarks",
     "//ios/chrome/browser/browser_state",
@@ -25,4 +26,5 @@ source_set("share_extension") {
     "//net",
     "//url",
   ]
+  configs += [ "//build/config/compiler:enable_arc" ]
 }

@@ -8,6 +8,7 @@
 
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "base/bind.h"
@@ -15,13 +16,13 @@
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/sequenced_task_runner_handle.h"
+#include "components/password_manager/core/browser/android_affiliation/mock_affiliated_match_helper.h"
 #include "components/password_manager/core/browser/credential_manager_password_form_manager.h"
-#include "components/password_manager/core/browser/mock_affiliated_match_helper.h"
 #include "components/password_manager/core/browser/password_manager.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
@@ -33,8 +34,11 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_renderer_host.h"
+#include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
+#include "url/url_constants.h"
 
 using content::BrowserContext;
 using content::WebContents;
@@ -57,13 +61,12 @@ class MockPasswordManagerClient : public StubPasswordManagerClient {
   MOCK_CONST_METHOD0(IsSavingAndFillingEnabledForCurrentPage, bool());
   MOCK_CONST_METHOD0(IsFillingEnabledForCurrentPage, bool());
   MOCK_METHOD0(OnCredentialManagerUsed, bool());
-  MOCK_CONST_METHOD0(IsOffTheRecord, bool());
+  MOCK_CONST_METHOD0(IsIncognito, bool());
   MOCK_METHOD0(NotifyUserAutoSigninPtr, bool());
   MOCK_METHOD1(NotifyUserCouldBeAutoSignedInPtr,
                bool(autofill::PasswordForm* form));
   MOCK_METHOD0(NotifyStorePasswordCalled, void());
-  MOCK_METHOD2(PromptUserToSavePasswordPtr,
-               void(PasswordFormManager*, CredentialSourceType type));
+  MOCK_METHOD1(PromptUserToSavePasswordPtr, void(PasswordFormManager*));
   MOCK_METHOD3(PromptUserToChooseCredentialsPtr,
                bool(const std::vector<autofill::PasswordForm*>& local_forms,
                     const GURL& origin,
@@ -79,10 +82,9 @@ class MockPasswordManagerClient : public StubPasswordManagerClient {
 
   bool PromptUserToSaveOrUpdatePassword(
       std::unique_ptr<PasswordFormManager> manager,
-      CredentialSourceType type,
       bool update_password) override {
     manager_.swap(manager);
-    PromptUserToSavePasswordPtr(manager_.get(), type);
+    PromptUserToSavePasswordPtr(manager_.get());
     return true;
   }
 
@@ -101,7 +103,7 @@ class MockPasswordManagerClient : public StubPasswordManagerClient {
       const CredentialsCallback& callback) override {
     EXPECT_FALSE(local_forms.empty());
     const autofill::PasswordForm* form = local_forms[0].get();
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
         base::Bind(callback, base::Owned(new autofill::PasswordForm(*form))));
     std::vector<autofill::PasswordForm*> raw_forms(local_forms.size());
@@ -163,10 +165,7 @@ base::WeakPtr<PasswordManagerDriver> TestCredentialManagerImpl::GetDriver() {
 }
 
 void RunAllPendingTasks() {
-  base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
-  run_loop.Run();
+  content::RunAllBlockingPoolTasksUntilIdle();
 }
 
 class SlightlyLessStubbyPasswordManagerDriver
@@ -197,6 +196,12 @@ void GetCredentialCallback(bool* called,
   *out_info = info;
 }
 
+GURL HttpURLFromHttps(const GURL& https_url) {
+  GURL::Replacements rep;
+  rep.SetSchemeStr(url::kHttpScheme);
+  return https_url.ReplaceComponents(rep);
+}
+
 }  // namespace
 
 class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
@@ -218,7 +223,7 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
         .WillByDefault(testing::Return(true));
     ON_CALL(*client_, OnCredentialManagerUsed())
         .WillByDefault(testing::Return(true));
-    ON_CALL(*client_, IsOffTheRecord()).WillByDefault(testing::Return(false));
+    ON_CALL(*client_, IsIncognito()).WillByDefault(testing::Return(false));
 
     NavigateAndCommit(GURL("https://example.com/test.html"));
 
@@ -227,7 +232,7 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
     form_.icon_url = GURL("https://example.com/icon.png");
     form_.password_value = base::ASCIIToUTF16("Password");
     form_.origin = web_contents()->GetLastCommittedURL().GetOrigin();
-    form_.signon_realm = form_.origin.spec();
+    form_.signon_realm = form_.origin.GetOrigin().spec();
     form_.scheme = autofill::PasswordForm::SCHEME_HTML;
     form_.skip_zero_click = false;
 
@@ -251,7 +256,8 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
     origin_path_form_.display_name = base::ASCIIToUTF16("Display Name 2");
     origin_path_form_.password_value = base::ASCIIToUTF16("Password 2");
     origin_path_form_.origin = GURL("https://example.com/path");
-    origin_path_form_.signon_realm = origin_path_form_.origin.spec();
+    origin_path_form_.signon_realm =
+        origin_path_form_.origin.GetOrigin().spec();
     origin_path_form_.scheme = autofill::PasswordForm::SCHEME_HTML;
     origin_path_form_.skip_zero_click = false;
 
@@ -259,7 +265,7 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
     subdomain_form_.display_name = base::ASCIIToUTF16("Display Name 2");
     subdomain_form_.password_value = base::ASCIIToUTF16("Password 2");
     subdomain_form_.origin = GURL("https://subdomain.example.com/path");
-    subdomain_form_.signon_realm = subdomain_form_.origin.spec();
+    subdomain_form_.signon_realm = subdomain_form_.origin.GetOrigin().spec();
     subdomain_form_.scheme = autofill::PasswordForm::SCHEME_HTML;
     subdomain_form_.skip_zero_click = false;
 
@@ -267,7 +273,8 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
     cross_origin_form_.display_name = base::ASCIIToUTF16("Display Name");
     cross_origin_form_.password_value = base::ASCIIToUTF16("Password");
     cross_origin_form_.origin = GURL("https://example.net/");
-    cross_origin_form_.signon_realm = cross_origin_form_.origin.spec();
+    cross_origin_form_.signon_realm =
+        cross_origin_form_.origin.GetOrigin().spec();
     cross_origin_form_.scheme = autofill::PasswordForm::SCHEME_HTML;
     cross_origin_form_.skip_zero_click = false;
 
@@ -282,17 +289,17 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
     content::RenderViewHostTestHarness::TearDown();
   }
 
-  void ExpectZeroClickSignInFailure(bool zero_click_only,
+  void ExpectZeroClickSignInFailure(CredentialMediationRequirement mediation,
                                     bool include_passwords,
                                     const std::vector<GURL>& federations) {
     bool called = false;
     mojom::CredentialManagerError error;
     base::Optional<CredentialInfo> credential;
-    CallGet(zero_click_only, include_passwords, federations,
-            base::Bind(&GetCredentialCallback, &called, &error, &credential));
     EXPECT_CALL(*client_, PromptUserToChooseCredentialsPtr(_, _, _))
         .Times(testing::Exactly(0));
     EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
+    CallGet(mediation, include_passwords, federations,
+            base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
     RunAllPendingTasks();
 
@@ -301,18 +308,18 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
     EXPECT_EQ(CredentialType::CREDENTIAL_TYPE_EMPTY, credential->type);
   }
 
-  void ExpectZeroClickSignInSuccess(bool zero_click_only,
+  void ExpectZeroClickSignInSuccess(CredentialMediationRequirement mediation,
                                     bool include_passwords,
                                     const std::vector<GURL>& federations,
                                     CredentialType type) {
     bool called = false;
     mojom::CredentialManagerError error;
     base::Optional<CredentialInfo> credential;
-    CallGet(zero_click_only, include_passwords, federations,
-            base::Bind(&GetCredentialCallback, &called, &error, &credential));
     EXPECT_CALL(*client_, PromptUserToChooseCredentialsPtr(_, _, _))
         .Times(testing::Exactly(0));
     EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(1));
+    CallGet(mediation, include_passwords, federations,
+            base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
     RunAllPendingTasks();
 
@@ -321,14 +328,14 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
     EXPECT_EQ(type, credential->type);
   }
 
-  void ExpectCredentialType(bool zero_click_only,
+  void ExpectCredentialType(CredentialMediationRequirement mediation,
                             bool include_passwords,
                             const std::vector<GURL>& federations,
                             CredentialType type) {
     bool called = false;
     mojom::CredentialManagerError error;
     base::Optional<CredentialInfo> credential;
-    CallGet(zero_click_only, include_passwords, federations,
+    CallGet(mediation, include_passwords, federations,
             base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
     RunAllPendingTasks();
@@ -342,21 +349,21 @@ class CredentialManagerImplTest : public content::RenderViewHostTestHarness {
 
   // Helpers for testing CredentialManagerImpl methods.
   void CallStore(const CredentialInfo& info,
-                 const CredentialManagerImpl::StoreCallback& callback) {
-    cm_service_impl_->Store(info, callback);
+                 CredentialManagerImpl::StoreCallback callback) {
+    cm_service_impl_->Store(info, std::move(callback));
   }
 
-  void CallRequireUserMediation(
-      const CredentialManagerImpl::RequireUserMediationCallback& callback) {
-    cm_service_impl_->RequireUserMediation(callback);
+  void CallPreventSilentAccess(
+      CredentialManagerImpl::PreventSilentAccessCallback callback) {
+    cm_service_impl_->PreventSilentAccess(std::move(callback));
   }
 
-  void CallGet(bool zero_click_only,
+  void CallGet(CredentialMediationRequirement mediation,
                bool include_passwords,
                const std::vector<GURL>& federations,
-               const CredentialManagerImpl::GetCallback& callback) {
-    cm_service_impl_->Get(zero_click_only, include_passwords, federations,
-                          callback);
+               CredentialManagerImpl::GetCallback callback) {
+    cm_service_impl_->Get(mediation, include_passwords, federations,
+                          std::move(callback));
   }
 
  protected:
@@ -393,8 +400,7 @@ TEST_F(CredentialManagerImplTest, IsZeroClickAllowed) {
 
 TEST_F(CredentialManagerImplTest, CredentialManagerOnStore) {
   CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API))
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
       .Times(testing::Exactly(1));
   EXPECT_CALL(*client_, NotifyStorePasswordCalled());
 
@@ -406,7 +412,8 @@ TEST_F(CredentialManagerImplTest, CredentialManagerOnStore) {
   RunAllPendingTasks();
 
   EXPECT_TRUE(called);
-  EXPECT_TRUE(client_->pending_manager()->HasCompletedMatching());
+  EXPECT_EQ(FormFetcher::State::NOT_WAITING,
+            client_->pending_manager()->form_fetcher()->GetState());
 
   autofill::PasswordForm new_form =
       client_->pending_manager()->pending_credentials();
@@ -422,8 +429,7 @@ TEST_F(CredentialManagerImplTest, CredentialManagerOnStore) {
 }
 
 TEST_F(CredentialManagerImplTest, CredentialManagerOnStoreFederated) {
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API))
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
       .Times(testing::Exactly(1));
   EXPECT_CALL(*client_, NotifyStorePasswordCalled());
 
@@ -439,7 +445,8 @@ TEST_F(CredentialManagerImplTest, CredentialManagerOnStoreFederated) {
   RunAllPendingTasks();
 
   EXPECT_TRUE(called);
-  EXPECT_TRUE(client_->pending_manager()->HasCompletedMatching());
+  EXPECT_EQ(FormFetcher::State::NOT_WAITING,
+            client_->pending_manager()->form_fetcher()->GetState());
 
   autofill::PasswordForm new_form =
       client_->pending_manager()->pending_credentials();
@@ -465,8 +472,7 @@ TEST_F(CredentialManagerImplTest, StoreFederatedAfterPassword) {
   federated.federation_origin = url::Origin(GURL("https://google.com/"));
   federated.signon_realm = "federation://example.com/google.com";
   CredentialInfo info(federated, CredentialType::CREDENTIAL_TYPE_FEDERATED);
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API));
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_));
   EXPECT_CALL(*client_, NotifyStorePasswordCalled());
 
   bool called = false;
@@ -477,7 +483,8 @@ TEST_F(CredentialManagerImplTest, StoreFederatedAfterPassword) {
   RunAllPendingTasks();
 
   EXPECT_TRUE(called);
-  EXPECT_TRUE(client_->pending_manager()->HasCompletedMatching());
+  EXPECT_EQ(FormFetcher::State::NOT_WAITING,
+            client_->pending_manager()->form_fetcher()->GetState());
   client_->pending_manager()->Save();
 
   RunAllPendingTasks();
@@ -498,7 +505,7 @@ TEST_F(CredentialManagerImplTest, CredentialManagerStoreOverwrite) {
   // the password without prompting the user.
   CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
   info.password = base::ASCIIToUTF16("Totally new password.");
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_, _)).Times(0);
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_)).Times(0);
   EXPECT_CALL(*client_, NotifyStorePasswordCalled());
   bool called = false;
   CallStore(info, base::Bind(&RespondCallback, &called));
@@ -514,6 +521,94 @@ TEST_F(CredentialManagerImplTest, CredentialManagerStoreOverwrite) {
   EXPECT_EQ(1U, passwords[form_.signon_realm].size());
   EXPECT_EQ(base::ASCIIToUTF16("Totally new password."),
             passwords[form_.signon_realm][0].password_value);
+}
+
+TEST_F(CredentialManagerImplTest,
+       CredentialManagerStorePSLMatchDoesNotTriggerBubble) {
+  autofill::PasswordForm psl_form = subdomain_form_;
+  psl_form.username_value = form_.username_value;
+  psl_form.password_value = form_.password_value;
+  store_->AddLogin(psl_form);
+
+  // Calling 'Store' with a new credential that is a PSL match for an existing
+  // credential with identical username and password should result in a silent
+  // save without prompting the user.
+  CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
+      .Times(testing::Exactly(0));
+  EXPECT_CALL(*client_, NotifyStorePasswordCalled());
+  bool called = false;
+  CallStore(info, base::Bind(&RespondCallback, &called));
+  RunAllPendingTasks();
+  EXPECT_TRUE(called);
+
+  // Check that both credentials are present in the password store.
+  TestPasswordStore::PasswordMap passwords = store_->stored_passwords();
+  EXPECT_EQ(2U, passwords.size());
+  EXPECT_EQ(1U, passwords[form_.signon_realm].size());
+  EXPECT_EQ(1U, passwords[psl_form.signon_realm].size());
+}
+
+TEST_F(CredentialManagerImplTest,
+       CredentialManagerStorePSLMatchWithDifferentUsernameTriggersBubble) {
+  base::string16 delta = base::ASCIIToUTF16("_totally_different");
+  autofill::PasswordForm psl_form = subdomain_form_;
+  psl_form.username_value = form_.username_value + delta;
+  psl_form.password_value = form_.password_value;
+  store_->AddLogin(psl_form);
+
+  // Calling 'Store' with a new credential that is a PSL match for an existing
+  // credential but has a different username should prompt the user and not
+  // result in a silent save.
+  CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
+      .Times(testing::Exactly(1));
+  EXPECT_CALL(*client_, NotifyStorePasswordCalled());
+  bool called = false;
+  CallStore(info, base::Bind(&RespondCallback, &called));
+  RunAllPendingTasks();
+  EXPECT_TRUE(called);
+
+  // Check that only the initial credential is present in the password store
+  // and the new one is still pending.
+  TestPasswordStore::PasswordMap passwords = store_->stored_passwords();
+  EXPECT_EQ(1U, passwords.size());
+  EXPECT_EQ(1U, passwords[psl_form.signon_realm].size());
+
+  const auto& pending_cred = client_->pending_manager()->pending_credentials();
+  EXPECT_EQ(info.id, pending_cred.username_value);
+  EXPECT_EQ(info.password, pending_cred.password_value);
+}
+
+TEST_F(CredentialManagerImplTest,
+       CredentialManagerStorePSLMatchWithDifferentPasswordTriggersBubble) {
+  base::string16 delta = base::ASCIIToUTF16("_totally_different");
+  autofill::PasswordForm psl_form = subdomain_form_;
+  psl_form.username_value = form_.username_value;
+  psl_form.password_value = form_.password_value + delta;
+  store_->AddLogin(psl_form);
+
+  // Calling 'Store' with a new credential that is a PSL match for an existing
+  // credential but has a different password should prompt the user and not
+  // result in a silent save.
+  CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
+      .Times(testing::Exactly(1));
+  EXPECT_CALL(*client_, NotifyStorePasswordCalled());
+  bool called = false;
+  CallStore(info, base::Bind(&RespondCallback, &called));
+  RunAllPendingTasks();
+  EXPECT_TRUE(called);
+
+  // Check that only the initial credential is present in the password store
+  // and the new one is still pending.
+  TestPasswordStore::PasswordMap passwords = store_->stored_passwords();
+  EXPECT_EQ(1U, passwords.size());
+  EXPECT_EQ(1U, passwords[psl_form.signon_realm].size());
+
+  const auto& pending_cred = client_->pending_manager()->pending_credentials();
+  EXPECT_EQ(info.id, pending_cred.username_value);
+  EXPECT_EQ(info.password, pending_cred.password_value);
 }
 
 TEST_F(CredentialManagerImplTest, CredentialManagerStoreOverwriteZeroClick) {
@@ -570,7 +665,6 @@ TEST_F(CredentialManagerImplTest, CredentialManagerGetOverwriteZeroClick) {
   form_.skip_zero_click = true;
   form_.username_element = base::ASCIIToUTF16("username-element");
   form_.password_element = base::ASCIIToUTF16("password-element");
-  form_.signon_realm = "this is a realm";
   form_.origin = GURL("https://example.com/old_form.html");
   store_->AddLogin(form_);
   RunAllPendingTasks();
@@ -583,7 +677,7 @@ TEST_F(CredentialManagerImplTest, CredentialManagerGetOverwriteZeroClick) {
   bool called = false;
   mojom::CredentialManagerError error;
   base::Optional<CredentialInfo> credential;
-  CallGet(false, true, federations,
+  CallGet(CredentialMediationRequirement::kOptional, true, federations,
           base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
   RunAllPendingTasks();
@@ -601,8 +695,7 @@ TEST_F(CredentialManagerImplTest,
   CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
   EXPECT_CALL(*client_, IsSavingAndFillingEnabledForCurrentPage())
       .WillRepeatedly(testing::Return(false));
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API))
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
       .Times(testing::Exactly(0));
   EXPECT_CALL(*client_, NotifyStorePasswordCalled()).Times(0);
 
@@ -615,7 +708,7 @@ TEST_F(CredentialManagerImplTest,
   EXPECT_FALSE(client_->pending_manager());
 }
 
-TEST_F(CredentialManagerImplTest, CredentialManagerOnRequireUserMediation) {
+TEST_F(CredentialManagerImplTest, CredentialManagerOnPreventSilentAccess) {
   store_->AddLogin(form_);
   store_->AddLogin(subdomain_form_);
   store_->AddLogin(cross_origin_form_);
@@ -631,7 +724,7 @@ TEST_F(CredentialManagerImplTest, CredentialManagerOnRequireUserMediation) {
   EXPECT_FALSE(passwords[cross_origin_form_.signon_realm][0].skip_zero_click);
 
   bool called = false;
-  CallRequireUserMediation(base::Bind(&RespondCallback, &called));
+  CallPreventSilentAccess(base::Bind(&RespondCallback, &called));
 
   RunAllPendingTasks();
 
@@ -648,7 +741,7 @@ TEST_F(CredentialManagerImplTest, CredentialManagerOnRequireUserMediation) {
 }
 
 TEST_F(CredentialManagerImplTest,
-       CredentialManagerOnRequireUserMediationIncognito) {
+       CredentialManagerOnPreventSilentAccessIncognito) {
   EXPECT_CALL(*client_, IsSavingAndFillingEnabledForCurrentPage())
       .WillRepeatedly(testing::Return(false));
   store_->AddLogin(form_);
@@ -660,7 +753,7 @@ TEST_F(CredentialManagerImplTest,
   EXPECT_FALSE(passwords[form_.signon_realm][0].skip_zero_click);
 
   bool called = false;
-  CallRequireUserMediation(base::Bind(&RespondCallback, &called));
+  CallPreventSilentAccess(base::Bind(&RespondCallback, &called));
   RunAllPendingTasks();
 
   EXPECT_TRUE(called);
@@ -672,7 +765,7 @@ TEST_F(CredentialManagerImplTest,
 }
 
 TEST_F(CredentialManagerImplTest,
-       CredentialManagerOnRequireUserMediationWithAffiliation) {
+       CredentialManagerOnPreventSilentAccessWithAffiliation) {
   store_->AddLogin(form_);
   store_->AddLogin(cross_origin_form_);
   store_->AddLogin(affiliated_form1_);
@@ -697,7 +790,7 @@ TEST_F(CredentialManagerImplTest,
   EXPECT_FALSE(passwords[affiliated_form2_.signon_realm][0].skip_zero_click);
 
   bool called = false;
-  CallRequireUserMediation(base::Bind(&RespondCallback, &called));
+  CallPreventSilentAccess(base::Bind(&RespondCallback, &called));
   RunAllPendingTasks();
 
   passwords = store_->stored_passwords();
@@ -711,15 +804,14 @@ TEST_F(CredentialManagerImplTest,
 TEST_F(CredentialManagerImplTest,
        CredentialManagerOnRequestCredentialWithEmptyPasswordStore) {
   std::vector<GURL> federations;
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API))
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
       .Times(testing::Exactly(0));
   EXPECT_CALL(*client_, PromptUserToChooseCredentialsPtr(_, _, _))
       .Times(testing::Exactly(0));
   EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
 
-  ExpectCredentialType(false, true, federations,
-                       CredentialType::CREDENTIAL_TYPE_EMPTY);
+  ExpectCredentialType(CredentialMediationRequirement::kOptional, true,
+                       federations, CredentialType::CREDENTIAL_TYPE_EMPTY);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -731,8 +823,38 @@ TEST_F(CredentialManagerImplTest,
   EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
 
   std::vector<GURL> federations;
-  ExpectCredentialType(false, true, federations,
-                       CredentialType::CREDENTIAL_TYPE_EMPTY);
+  ExpectCredentialType(CredentialMediationRequirement::kOptional, true,
+                       federations, CredentialType::CREDENTIAL_TYPE_EMPTY);
+}
+
+TEST_F(CredentialManagerImplTest,
+       CredentialManagerOnRequestCredentialWithPSLCredential) {
+  store_->AddLogin(subdomain_form_);
+  subdomain_form_.is_public_suffix_match = true;
+  EXPECT_CALL(*client_,
+              PromptUserToChooseCredentialsPtr(
+                  UnorderedElementsAre(Pointee(subdomain_form_)), _, _));
+  EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(0);
+
+  ExpectCredentialType(CredentialMediationRequirement::kOptional, true,
+                       std::vector<GURL>(),
+                       CredentialType::CREDENTIAL_TYPE_PASSWORD);
+}
+
+TEST_F(CredentialManagerImplTest,
+       CredentialManagerOnRequestCredentialWithPSLAndNormalCredentials) {
+  store_->AddLogin(form_);
+  store_->AddLogin(origin_path_form_);
+  store_->AddLogin(subdomain_form_);
+
+  EXPECT_CALL(*client_, PromptUserToChooseCredentialsPtr(
+                            UnorderedElementsAre(Pointee(origin_path_form_),
+                                                 Pointee(form_)),
+                            _, _));
+
+  ExpectCredentialType(CredentialMediationRequirement::kOptional, true,
+                       std::vector<GURL>(),
+                       CredentialType::CREDENTIAL_TYPE_PASSWORD);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -746,13 +868,14 @@ TEST_F(CredentialManagerImplTest,
   store_->AddLogin(duplicate);
 
   std::vector<GURL> federations;
-  ExpectZeroClickSignInSuccess(false, true, federations,
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kOptional, true,
+                               federations,
                                CredentialType::CREDENTIAL_TYPE_PASSWORD);
 }
 
 TEST_F(CredentialManagerImplTest,
        CredentialManagerOnRequestCredentialWithDuplicates) {
-  // Add 8 credentials. Two buckets of duplicates, one empty username and one
+  // Add 6 credentials. Two buckets of duplicates, one empty username and one
   // federated one. There should be just 3 in the account chooser.
   form_.preferred = true;
   form_.username_element = base::ASCIIToUTF16("username_element");
@@ -761,20 +884,12 @@ TEST_F(CredentialManagerImplTest,
   empty.username_value.clear();
   store_->AddLogin(empty);
   autofill::PasswordForm duplicate = form_;
-  duplicate.username_element = base::ASCIIToUTF16("username_element1");
-  duplicate.is_public_suffix_match = true;
-  store_->AddLogin(duplicate);
-  duplicate = form_;
   duplicate.username_element = base::ASCIIToUTF16("username_element2");
   duplicate.preferred = false;
   store_->AddLogin(duplicate);
 
   origin_path_form_.preferred = true;
   store_->AddLogin(origin_path_form_);
-  duplicate = origin_path_form_;
-  duplicate.username_element = base::ASCIIToUTF16("username_element3");
-  duplicate.is_public_suffix_match = true;
-  store_->AddLogin(duplicate);
   duplicate = origin_path_form_;
   duplicate.username_element = base::ASCIIToUTF16("username_element4");
   duplicate.preferred = false;
@@ -797,7 +912,7 @@ TEST_F(CredentialManagerImplTest,
   base::Optional<CredentialInfo> credential;
   std::vector<GURL> federations;
   federations.push_back(GURL("https://google.com/"));
-  CallGet(false, true, federations,
+  CallGet(CredentialMediationRequirement::kOptional, true, federations,
           base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
   RunAllPendingTasks();
@@ -808,15 +923,14 @@ TEST_F(CredentialManagerImplTest,
   store_->AddLogin(cross_origin_form_);
 
   std::vector<GURL> federations;
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API))
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_))
       .Times(testing::Exactly(0));
   EXPECT_CALL(*client_, PromptUserToChooseCredentialsPtr(_, _, _))
       .Times(testing::Exactly(0));
   EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
 
-  ExpectCredentialType(false, true, federations,
-                       CredentialType::CREDENTIAL_TYPE_EMPTY);
+  ExpectCredentialType(CredentialMediationRequirement::kOptional, true,
+                       federations, CredentialType::CREDENTIAL_TYPE_EMPTY);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -832,7 +946,7 @@ TEST_F(CredentialManagerImplTest,
   bool called = false;
   mojom::CredentialManagerError error;
   base::Optional<CredentialInfo> credential;
-  CallGet(false, true, federations,
+  CallGet(CredentialMediationRequirement::kOptional, true, federations,
           base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
   RunAllPendingTasks();
@@ -849,16 +963,8 @@ TEST_F(
       .Times(testing::Exactly(0));
   EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
 
-  bool called = false;
-  mojom::CredentialManagerError error;
-  base::Optional<CredentialInfo> credential;
-  CallGet(true, true, federations,
-          base::Bind(&GetCredentialCallback, &called, &error, &credential));
-
-  RunAllPendingTasks();
-
-  EXPECT_TRUE(called);
-  EXPECT_EQ(mojom::CredentialManagerError::SUCCESS, error);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -870,7 +976,8 @@ TEST_F(CredentialManagerImplTest,
 
   EXPECT_CALL(*client_, NotifyUserCouldBeAutoSignedInPtr(_)).Times(0);
 
-  ExpectZeroClickSignInSuccess(true, true, federations,
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
                                CredentialType::CREDENTIAL_TYPE_PASSWORD);
 }
 
@@ -883,7 +990,8 @@ TEST_F(CredentialManagerImplTest,
 
   EXPECT_CALL(*client_, NotifyUserCouldBeAutoSignedInPtr(_)).Times(0);
 
-  ExpectZeroClickSignInFailure(true, false, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, false,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -898,7 +1006,8 @@ TEST_F(CredentialManagerImplTest,
 
   EXPECT_CALL(*client_, NotifyUserCouldBeAutoSignedInPtr(_)).Times(0);
 
-  ExpectZeroClickSignInSuccess(true, true, federations,
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
                                CredentialType::CREDENTIAL_TYPE_FEDERATED);
 }
 
@@ -914,7 +1023,8 @@ TEST_F(CredentialManagerImplTest,
 
   EXPECT_CALL(*client_, NotifyUserCouldBeAutoSignedInPtr(_)).Times(0);
 
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -933,7 +1043,8 @@ TEST_F(CredentialManagerImplTest,
 
   // We pass in 'true' for the 'include_passwords' argument to ensure that
   // password-type credentials are included as potential matches.
-  ExpectZeroClickSignInSuccess(true, true, federations,
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
                                CredentialType::CREDENTIAL_TYPE_PASSWORD);
 }
 
@@ -953,7 +1064,8 @@ TEST_F(CredentialManagerImplTest,
 
   // We pass in 'false' for the 'include_passwords' argument to ensure that
   // password-type credentials are excluded as potential matches.
-  ExpectZeroClickSignInFailure(true, false, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, false,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -975,7 +1087,8 @@ TEST_F(CredentialManagerImplTest,
       ->ExpectCallToGetAffiliatedAndroidRealms(
           cm_service_impl_->GetSynthesizedFormForOrigin(), affiliated_realms);
 
-  ExpectZeroClickSignInSuccess(true, true, federations,
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
                                CredentialType::CREDENTIAL_TYPE_FEDERATED);
 }
 
@@ -998,7 +1111,8 @@ TEST_F(CredentialManagerImplTest,
       ->ExpectCallToGetAffiliatedAndroidRealms(
           cm_service_impl_->GetSynthesizedFormForOrigin(), affiliated_realms);
 
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest, RequestCredentialWithoutFirstRun) {
@@ -1011,7 +1125,8 @@ TEST_F(CredentialManagerImplTest, RequestCredentialWithoutFirstRun) {
               NotifyUserCouldBeAutoSignedInPtr(testing::Pointee(form_)))
       .Times(1);
 
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest, RequestCredentialWithFirstRunAndSkip) {
@@ -1025,7 +1140,8 @@ TEST_F(CredentialManagerImplTest, RequestCredentialWithFirstRunAndSkip) {
               NotifyUserCouldBeAutoSignedInPtr(testing::Pointee(form_)))
       .Times(1);
 
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest, RequestCredentialWithTLSErrors) {
@@ -1037,7 +1153,8 @@ TEST_F(CredentialManagerImplTest, RequestCredentialWithTLSErrors) {
 
   std::vector<GURL> federations;
 
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest, RequestCredentialWhilePrerendering) {
@@ -1049,7 +1166,8 @@ TEST_F(CredentialManagerImplTest, RequestCredentialWhilePrerendering) {
 
   std::vector<GURL> federations;
 
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -1063,8 +1181,8 @@ TEST_F(CredentialManagerImplTest,
   EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
 
   // With two items in the password store, we shouldn't get credentials back.
-  ExpectCredentialType(true, true, federations,
-                       CredentialType::CREDENTIAL_TYPE_EMPTY);
+  ExpectCredentialType(CredentialMediationRequirement::kSilent, true,
+                       federations, CredentialType::CREDENTIAL_TYPE_EMPTY);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -1080,8 +1198,8 @@ TEST_F(CredentialManagerImplTest,
 
   // With two items in the password store, we shouldn't get credentials back,
   // even though only one item has |skip_zero_click| set |false|.
-  ExpectCredentialType(true, true, federations,
-                       CredentialType::CREDENTIAL_TYPE_EMPTY);
+  ExpectCredentialType(CredentialMediationRequirement::kSilent, true,
+                       federations, CredentialType::CREDENTIAL_TYPE_EMPTY);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -1098,8 +1216,8 @@ TEST_F(CredentialManagerImplTest,
 
   // We only have cross-origin zero-click credentials; they should not be
   // returned.
-  ExpectCredentialType(true, true, federations,
-                       CredentialType::CREDENTIAL_TYPE_EMPTY);
+  ExpectCredentialType(CredentialMediationRequirement::kSilent, true,
+                       federations, CredentialType::CREDENTIAL_TYPE_EMPTY);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -1117,14 +1235,14 @@ TEST_F(CredentialManagerImplTest,
   mojom::CredentialManagerError error_1;
   base::Optional<CredentialInfo> credential_1;
   CallGet(
-      false, true, federations,
+      CredentialMediationRequirement::kOptional, true, federations,
       base::Bind(&GetCredentialCallback, &called_1, &error_1, &credential_1));
   // 2nd request.
   bool called_2 = false;
   mojom::CredentialManagerError error_2;
   base::Optional<CredentialInfo> credential_2;
   CallGet(
-      false, true, federations,
+      CredentialMediationRequirement::kOptional, true, federations,
       base::Bind(&GetCredentialCallback, &called_2, &error_2, &credential_2));
 
   EXPECT_CALL(*client_, PromptUserToChooseCredentialsPtr(_, _, _))
@@ -1181,7 +1299,7 @@ TEST_F(CredentialManagerImplTest, ResetSkipZeroClickAfterPrompt) {
   bool called = false;
   mojom::CredentialManagerError error;
   base::Optional<CredentialInfo> credential;
-  CallGet(false, true, federations,
+  CallGet(CredentialMediationRequirement::kOptional, true, federations,
           base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
   RunAllPendingTasks();
@@ -1195,7 +1313,7 @@ TEST_F(CredentialManagerImplTest, ResetSkipZeroClickAfterPrompt) {
 }
 
 TEST_F(CredentialManagerImplTest, NoResetSkipZeroClickAfterPromptInIncognito) {
-  EXPECT_CALL(*client_, IsOffTheRecord()).WillRepeatedly(testing::Return(true));
+  EXPECT_CALL(*client_, IsIncognito()).WillRepeatedly(testing::Return(true));
   // Turn on the global zero-click flag which should be overriden by Incognito.
   client_->set_zero_click_enabled(true);
   form_.skip_zero_click = true;
@@ -1217,7 +1335,7 @@ TEST_F(CredentialManagerImplTest, NoResetSkipZeroClickAfterPromptInIncognito) {
   bool called = false;
   mojom::CredentialManagerError error;
   base::Optional<CredentialInfo> credential;
-  CallGet(false, true, std::vector<GURL>(),
+  CallGet(CredentialMediationRequirement::kOptional, true, std::vector<GURL>(),
           base::Bind(&GetCredentialCallback, &called, &error, &credential));
 
   RunAllPendingTasks();
@@ -1230,7 +1348,7 @@ TEST_F(CredentialManagerImplTest, NoResetSkipZeroClickAfterPromptInIncognito) {
 }
 
 TEST_F(CredentialManagerImplTest, IncognitoZeroClickRequestCredential) {
-  EXPECT_CALL(*client_, IsOffTheRecord()).WillRepeatedly(testing::Return(true));
+  EXPECT_CALL(*client_, IsIncognito()).WillRepeatedly(testing::Return(true));
   store_->AddLogin(form_);
 
   std::vector<GURL> federations;
@@ -1238,8 +1356,8 @@ TEST_F(CredentialManagerImplTest, IncognitoZeroClickRequestCredential) {
       .Times(testing::Exactly(0));
   EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
 
-  ExpectCredentialType(true, true, federations,
-                       CredentialType::CREDENTIAL_TYPE_EMPTY);
+  ExpectCredentialType(CredentialMediationRequirement::kSilent, true,
+                       federations, CredentialType::CREDENTIAL_TYPE_EMPTY);
 }
 
 TEST_F(CredentialManagerImplTest, ZeroClickWithAffiliatedFormInPasswordStore) {
@@ -1258,7 +1376,8 @@ TEST_F(CredentialManagerImplTest, ZeroClickWithAffiliatedFormInPasswordStore) {
       ->ExpectCallToGetAffiliatedAndroidRealms(
           cm_service_impl_->GetSynthesizedFormForOrigin(), affiliated_realms);
 
-  ExpectZeroClickSignInSuccess(true, true, federations,
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
                                CredentialType::CREDENTIAL_TYPE_PASSWORD);
 }
 
@@ -1280,7 +1399,8 @@ TEST_F(CredentialManagerImplTest,
       ->ExpectCallToGetAffiliatedAndroidRealms(
           cm_service_impl_->GetSynthesizedFormForOrigin(), affiliated_realms);
 
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -1290,16 +1410,25 @@ TEST_F(CredentialManagerImplTest,
   // in.
   store_->AddLogin(affiliated_form1_);
 
-  auto mock_helper = base::WrapUnique(new MockAffiliatedMatchHelper);
-  store_->SetAffiliatedMatchHelper(std::move(mock_helper));
+  store_->SetAffiliatedMatchHelper(
+      base::MakeUnique<MockAffiliatedMatchHelper>());
+
+  std::vector<std::string> affiliated_realms;
+  PasswordStore::FormDigest digest =
+      cm_service_impl_->GetSynthesizedFormForOrigin();
+  // First expect affiliations for the HTTPS domain.
+  static_cast<MockAffiliatedMatchHelper*>(store_->affiliated_match_helper())
+      ->ExpectCallToGetAffiliatedAndroidRealms(digest, affiliated_realms);
+
+  digest.origin = HttpURLFromHttps(digest.origin);
+  digest.signon_realm = digest.origin.spec();
+  // The second call happens for HTTP as the migration is triggered.
+  static_cast<MockAffiliatedMatchHelper*>(store_->affiliated_match_helper())
+      ->ExpectCallToGetAffiliatedAndroidRealms(digest, affiliated_realms);
 
   std::vector<GURL> federations;
-  std::vector<std::string> affiliated_realms;
-  static_cast<MockAffiliatedMatchHelper*>(store_->affiliated_match_helper())
-      ->ExpectCallToGetAffiliatedAndroidRealms(
-          cm_service_impl_->GetSynthesizedFormForOrigin(), affiliated_realms);
-
-  ExpectZeroClickSignInFailure(true, true, federations);
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               federations);
 }
 
 TEST_F(CredentialManagerImplTest,
@@ -1319,8 +1448,77 @@ TEST_F(CredentialManagerImplTest,
       ->ExpectCallToGetAffiliatedAndroidRealms(
           cm_service_impl_->GetSynthesizedFormForOrigin(), affiliated_realms);
 
-  ExpectZeroClickSignInSuccess(true, true, federations,
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
                                CredentialType::CREDENTIAL_TYPE_PASSWORD);
+}
+
+TEST_F(CredentialManagerImplTest, ZeroClickWithPSLCredential) {
+  subdomain_form_.skip_zero_click = false;
+  store_->AddLogin(subdomain_form_);
+
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kSilent, true,
+                               std::vector<GURL>());
+}
+
+TEST_F(CredentialManagerImplTest, ZeroClickWithPSLAndNormalCredentials) {
+  form_.password_value.clear();
+  form_.federation_origin = url::Origin(GURL("https://google.com/"));
+  form_.signon_realm = "federation://" + form_.origin.host() + "/google.com";
+  form_.skip_zero_click = false;
+  store_->AddLogin(form_);
+  store_->AddLogin(subdomain_form_);
+
+  std::vector<GURL> federations = {GURL("https://google.com/")};
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
+                               CredentialType::CREDENTIAL_TYPE_FEDERATED);
+}
+
+TEST_F(CredentialManagerImplTest, ZeroClickAfterMigratingHttpCredential) {
+  // There is an http credential saved. It should be migrated and used for auto
+  // sign-in.
+  form_.origin = HttpURLFromHttps(form_.origin);
+  form_.signon_realm = form_.origin.GetOrigin().spec();
+  // That is the default value for old credentials.
+  form_.skip_zero_click = true;
+  store_->AddLogin(form_);
+
+  std::vector<GURL> federations;
+  ExpectZeroClickSignInSuccess(CredentialMediationRequirement::kSilent, true,
+                               federations,
+                               CredentialType::CREDENTIAL_TYPE_PASSWORD);
+}
+
+TEST_F(CredentialManagerImplTest, MigrateWithEmptyStore) {
+  // HTTP scheme is valid for localhost. Nothing should crash.
+  NavigateAndCommit(GURL("http://127.0.0.1:8000/"));
+
+  std::vector<GURL> federations;
+  ExpectZeroClickSignInFailure(CredentialMediationRequirement::kOptional, true,
+                               federations);
+}
+
+TEST_F(CredentialManagerImplTest, MediationRequiredPreventsAutoSignIn) {
+  form_.skip_zero_click = false;
+  store_->AddLogin(form_);
+
+  std::vector<GURL> federations;
+  bool called = false;
+  mojom::CredentialManagerError error;
+  base::Optional<CredentialInfo> credential;
+
+  EXPECT_CALL(*client_, PromptUserToChooseCredentialsPtr(_, _, _))
+      .Times(testing::Exactly(1));
+  EXPECT_CALL(*client_, NotifyUserAutoSigninPtr()).Times(testing::Exactly(0));
+  CallGet(CredentialMediationRequirement::kRequired, true, federations,
+          base::Bind(&GetCredentialCallback, &called, &error, &credential));
+
+  RunAllPendingTasks();
+
+  EXPECT_TRUE(called);
+  EXPECT_EQ(mojom::CredentialManagerError::SUCCESS, error);
+  EXPECT_EQ(CredentialType::CREDENTIAL_TYPE_PASSWORD, credential->type);
 }
 
 TEST_F(CredentialManagerImplTest, GetSynthesizedFormForOrigin) {
@@ -1332,8 +1530,7 @@ TEST_F(CredentialManagerImplTest, GetSynthesizedFormForOrigin) {
 }
 
 TEST_F(CredentialManagerImplTest, BlacklistPasswordCredential) {
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API));
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_));
 
   CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
   bool called = false;
@@ -1362,8 +1559,7 @@ TEST_F(CredentialManagerImplTest, BlacklistFederatedCredential) {
   form_.password_value = base::string16();
   form_.signon_realm = "federation://example.com/example.com";
 
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API));
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_));
   CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_FEDERATED);
   bool called = false;
   CallStore(info, base::Bind(&RespondCallback, &called));
@@ -1398,8 +1594,7 @@ TEST_F(CredentialManagerImplTest, RespectBlacklistingPasswordCredential) {
 
   CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_PASSWORD);
   bool called = false;
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API));
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_));
   CallStore(info, base::Bind(&RespondCallback, &called));
   // Allow the PasswordFormManager to talk to the password store
   RunAllPendingTasks();
@@ -1420,8 +1615,7 @@ TEST_F(CredentialManagerImplTest, RespectBlacklistingFederatedCredential) {
   form_.signon_realm = "federation://example.com/example.com";
   CredentialInfo info(form_, CredentialType::CREDENTIAL_TYPE_FEDERATED);
   bool called = false;
-  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(
-                            _, CredentialSourceType::CREDENTIAL_SOURCE_API));
+  EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_));
   CallStore(info, base::Bind(&RespondCallback, &called));
   // Allow the PasswordFormManager to talk to the password store
   RunAllPendingTasks();

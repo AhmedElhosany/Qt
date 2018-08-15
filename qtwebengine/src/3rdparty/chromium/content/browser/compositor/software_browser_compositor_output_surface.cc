@@ -16,19 +16,17 @@
 #include "cc/output/output_surface_frame.h"
 #include "cc/output/software_output_device.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
-#include "ui/events/latency_info.h"
 #include "ui/gfx/vsync_provider.h"
+#include "ui/latency/latency_info.h"
 
 namespace content {
 
 SoftwareBrowserCompositorOutputSurface::SoftwareBrowserCompositorOutputSurface(
     std::unique_ptr<cc::SoftwareOutputDevice> software_device,
-    const scoped_refptr<ui::CompositorVSyncManager>& vsync_manager,
-    cc::SyntheticBeginFrameSource* begin_frame_source,
+    const UpdateVSyncParametersCallback& update_vsync_parameters_callback,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner)
     : BrowserCompositorOutputSurface(std::move(software_device),
-                                     vsync_manager,
-                                     begin_frame_source),
+                                     update_vsync_parameters_callback),
       task_runner_(std::move(task_runner)),
       weak_factory_(this) {}
 
@@ -56,11 +54,17 @@ void SoftwareBrowserCompositorOutputSurface::BindFramebuffer() {
   NOTREACHED();
 }
 
+void SoftwareBrowserCompositorOutputSurface::SetDrawRectangle(
+    const gfx::Rect& draw_rectangle) {
+  NOTREACHED();
+}
+
 void SoftwareBrowserCompositorOutputSurface::Reshape(
     const gfx::Size& size,
     float device_scale_factor,
     const gfx::ColorSpace& color_space,
-    bool has_alpha) {
+    bool has_alpha,
+    bool use_stencil) {
   software_device()->Resize(size, device_scale_factor);
 }
 
@@ -75,16 +79,13 @@ void SoftwareBrowserCompositorOutputSurface::SwapBuffers(
         ui::INPUT_EVENT_LATENCY_TERMINATED_FRAME_SWAP_COMPONENT, 0, 0,
         swap_time, 1);
   }
-  task_runner_->PostTask(FROM_HERE,
-                         base::Bind(&RenderWidgetHostImpl::CompositorFrameDrawn,
-                                    frame.latency_info));
+  task_runner_->PostTask(
+      FROM_HERE, base::Bind(&RenderWidgetHostImpl::OnGpuSwapBuffersCompleted,
+                            frame.latency_info));
 
   gfx::VSyncProvider* vsync_provider = software_device()->GetVSyncProvider();
-  if (vsync_provider) {
-    vsync_provider->GetVSyncParameters(base::Bind(
-        &BrowserCompositorOutputSurface::OnUpdateVSyncParametersFromGpu,
-        weak_factory_.GetWeakPtr()));
-  }
+  if (vsync_provider)
+    vsync_provider->GetVSyncParameters(update_vsync_parameters_callback_);
 
   task_runner_->PostTask(
       FROM_HERE,
@@ -102,6 +103,11 @@ bool SoftwareBrowserCompositorOutputSurface::IsDisplayedAsOverlayPlane() const {
 
 unsigned SoftwareBrowserCompositorOutputSurface::GetOverlayTextureId() const {
   return 0;
+}
+
+gfx::BufferFormat
+SoftwareBrowserCompositorOutputSurface::GetOverlayBufferFormat() const {
+  return gfx::BufferFormat::RGBX_8888;
 }
 
 bool SoftwareBrowserCompositorOutputSurface::SurfaceIsSuspendForRecycle()

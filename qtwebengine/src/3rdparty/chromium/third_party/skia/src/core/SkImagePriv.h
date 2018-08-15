@@ -9,7 +9,6 @@
 #define SkImagePriv_DEFINED
 
 #include "SkImage.h"
-#include "SkSmallAllocator.h"
 #include "SkSurface.h"
 
 enum SkCopyPixelsMode {
@@ -18,25 +17,13 @@ enum SkCopyPixelsMode {
     kNever_SkCopyPixelsMode,      //!< never copy src pixels (even if they are marked mutable)
 };
 
+// A good size for creating shader contexts on the stack.
 enum {kSkBlitterContextSize = 3332};
-
-// Commonly used allocator. It currently is only used to allocate up to 3 objects. The total
-// bytes requested is calculated using one of our large shaders, its context size plus the size of
-// an Sk3DBlitter in SkDraw.cpp
-// Note that some contexts may contain other contexts (e.g. for compose shaders), but we've not
-// yet found a situation where the size below isn't big enough.
-typedef SkSmallAllocator<3, kSkBlitterContextSize> SkTBlitterAllocator;
 
 // If alloc is non-nullptr, it will be used to allocate the returned SkShader, and MUST outlive
 // the SkShader.
 sk_sp<SkShader> SkMakeBitmapShader(const SkBitmap& src, SkShader::TileMode, SkShader::TileMode,
-                                   const SkMatrix* localMatrix, SkCopyPixelsMode,
-                                   SkTBlitterAllocator* alloc);
-
-// Call this if you explicitly want to use/share this pixelRef in the image
-extern sk_sp<SkImage> SkMakeImageFromPixelRef(const SkImageInfo&, SkPixelRef*,
-                                              const SkIPoint& pixelRefOrigin,
-                                              size_t rowBytes);
+                                   const SkMatrix* localMatrix, SkCopyPixelsMode);
 
 /**
  *  Examines the bitmap to decide if it can share the existing pixelRef, or
@@ -56,24 +43,25 @@ extern sk_sp<SkImage> SkMakeImageFromPixelRef(const SkImageInfo&, SkPixelRef*,
  *  SkImageInfo, or the bitmap's pixels cannot be accessed, this will return
  *  nullptr.
  */
-extern sk_sp<SkImage> SkMakeImageFromRasterBitmap(const SkBitmap&, SkCopyPixelsMode,
-                                                  SkTBlitterAllocator* = nullptr);
+extern sk_sp<SkImage> SkMakeImageFromRasterBitmap(const SkBitmap&, SkCopyPixelsMode);
+
+/**
+ *  Similar to SkMakeImageFromRasterBitmap, this wraps a |src| bitmap in an image.
+ *
+ *  It also promises to transform the bitmap into the |dst| color space before it
+ *  is drawn.  The transform will happen lazily.
+ *
+ *  If |id| is non-zero, the output image will use that as its unique id.  Otherwise,
+ *  it will generate a new id.
+ */
+extern sk_sp<SkImage> SkMakeImageInColorSpace(const SkBitmap& src, sk_sp<SkColorSpace> dst,
+                                              uint32_t id,
+                                              SkCopyPixelsMode = kNever_SkCopyPixelsMode);
 
 // Given an image created from SkNewImageFromBitmap, return its pixelref. This
 // may be called to see if the surface and the image share the same pixelref,
 // in which case the surface may need to perform a copy-on-write.
 extern const SkPixelRef* SkBitmapImageGetPixelRef(const SkImage* rasterImage);
-
-// When a texture is shared by a surface and an image its budgeted status is that of the
-// surface. This function is used when the surface makes a new texture for itself in order
-// for the orphaned image to determine whether the original texture counts against the
-// budget or not.
-extern void SkTextureImageApplyBudgetedDecision(SkImage* textureImage);
-
-// Update the texture wrapped by an image created with NewTexture. This
-// is called when a surface and image share the same GrTexture and the
-// surface needs to perform a copy-on-write
-extern void SkTextureImageSetTexture(SkImage* image, GrTexture* texture);
 
 /**
  *  Will attempt to upload and lock the contents of the image as a texture, so that subsequent
@@ -100,5 +88,12 @@ bool SkImage_pinAsTexture(const SkImage*, GrContext*);
  *  The context passed to unpin must match the one passed to pin.
  */
 void SkImage_unpinAsTexture(const SkImage*, GrContext*);
+
+/**
+ *  Returns a new image containing the same pixel values as the source, but with a different color
+ *  space assigned. This performs no color space conversion. Primarily used in tests, to visualize
+ *  the results of rendering in wide or narrow gamuts.
+ */
+sk_sp<SkImage> SkImageMakeRasterCopyAndAssignColorSpace(const SkImage*, SkColorSpace*);
 
 #endif

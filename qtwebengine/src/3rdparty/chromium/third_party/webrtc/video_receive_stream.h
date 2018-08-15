@@ -16,12 +16,12 @@
 #include <string>
 #include <vector>
 
-#include "webrtc/base/platform_file.h"
+#include "webrtc/api/call/transport.h"
 #include "webrtc/common_types.h"
 #include "webrtc/common_video/include/frame_callback.h"
 #include "webrtc/config.h"
 #include "webrtc/media/base/videosinkinterface.h"
-#include "webrtc/transport.h"
+#include "webrtc/rtc_base/platform_file.h"
 
 namespace webrtc {
 
@@ -45,7 +45,10 @@ class VideoReceiveStream {
     // used to unpack incoming packets.
     std::string payload_name;
 
-    DecoderSpecificSettings decoder_specific;
+    // This map contains the codec specific parameters from SDP, i.e. the "fmtp"
+    // parameters. It is the same as cricket::CodecParameterMap used in
+    // cricket::VideoCodec.
+    std::map<std::string, std::string> codec_params;
   };
 
   struct Stats {
@@ -54,6 +57,7 @@ class VideoReceiveStream {
     int network_frame_rate = 0;
     int decode_frame_rate = 0;
     int render_frame_rate = 0;
+    uint32_t frames_rendered = 0;
 
     // Decoder stats.
     std::string decoder_implementation_name = "unknown";
@@ -65,7 +69,9 @@ class VideoReceiveStream {
     int jitter_buffer_ms = 0;
     int min_playout_delay_ms = 0;
     int render_delay_ms = 10;
+    uint64_t interframe_delay_sum_ms = 0;
     uint32_t frames_decoded = 0;
+    rtc::Optional<uint64_t> qp_sum;
 
     int current_payload_type = -1;
 
@@ -113,6 +119,7 @@ class VideoReceiveStream {
 
       // Synchronization source (stream identifier) to be received.
       uint32_t remote_ssrc = 0;
+
       // Sender SSRC used for sending RTCP (such as receiver reports).
       uint32_t local_ssrc = 0;
 
@@ -126,6 +133,15 @@ class VideoReceiveStream {
         bool receiver_reference_time_report = false;
       } rtcp_xr;
 
+      // TODO(nisse): This remb setting is currently set but never
+      // applied. REMB logic is now the responsibility of
+      // PacketRouter, and it will generate REMB feedback if
+      // OnReceiveBitrateChanged is used, which depends on how the
+      // estimators belonging to the ReceiveSideCongestionController
+      // are configured. Decide if this setting should be deleted, and
+      // if it needs to be replaced by a setting in PacketRouter to
+      // disable REMB feedback.
+
       // See draft-alvestrand-rmcat-remb for information.
       bool remb = false;
 
@@ -138,19 +154,15 @@ class VideoReceiveStream {
       // See UlpfecConfig for description.
       UlpfecConfig ulpfec;
 
-      // RTX settings for incoming video payloads that may be received. RTX is
-      // disabled if there's no config present.
-      struct Rtx {
-        // SSRCs to use for the RTX streams.
-        uint32_t ssrc = 0;
+      // SSRC for retransmissions.
+      uint32_t rtx_ssrc = 0;
 
-        // Payload type to use for the RTX stream.
-        int payload_type = 0;
-      };
+      // Set if the stream is protected using FlexFEC.
+      bool protected_by_flexfec = false;
 
-      // Map from video RTP payload type -> RTX config.
-      typedef std::map<int, Rtx> RtxMap;
-      RtxMap rtx;
+      // Map from video payload type (apt) -> RTX payload type (pt).
+      // For RTX to be enabled, both an SSRC and this mapping are needed.
+      std::map<int, int> rtx_payload_types;
 
       // RTP header extensions used for the received stream.
       std::vector<RtpExtension> extensions;
@@ -181,14 +193,6 @@ class VideoReceiveStream {
     // saving the stream to a file. 'nullptr' disables the callback.
     EncodedFrameObserver* pre_decode_callback = nullptr;
 
-    // Called for each decoded frame. E.g. used when adding effects to the
-    // decoded
-    // stream. 'nullptr' disables the callback.
-    // TODO(tommi): This seems to be only used by a test or two.  Consider
-    // removing it (and use an appropriate alternative in the tests) as well
-    // as the associated code in VideoStreamDecoder.
-    I420FrameCallback* pre_render_callback = nullptr;
-
     // Target delay in milliseconds. A positive value indicates this stream is
     // used for streaming instead of a real-time call.
     int target_delay_ms = 0;
@@ -203,6 +207,8 @@ class VideoReceiveStream {
 
   // TODO(pbos): Add info on currently-received codec to Stats.
   virtual Stats GetStats() const = 0;
+
+  virtual rtc::Optional<TimingFrameInfo> GetAndResetTimingFrameInfo() = 0;
 
   // Takes ownership of the file, is responsible for closing it later.
   // Calling this method will close and finalize any current log.

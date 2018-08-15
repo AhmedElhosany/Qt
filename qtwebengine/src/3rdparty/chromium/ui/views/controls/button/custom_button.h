@@ -17,6 +17,8 @@
 
 namespace views {
 
+class Painter;
+
 // A button with custom rendering. The base of ImageButton and LabelButton.
 // Note that this type of button is not focusable by default and will not be
 // part of the focus chain, unless in accessibility mode. Call
@@ -27,6 +29,14 @@ class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
   enum NotifyAction {
     NOTIFY_ON_PRESS,
     NOTIFY_ON_RELEASE,
+  };
+
+  // An enum describing the events on which a button should be clicked for a
+  // given key event.
+  enum KeyClickAction {
+    CLICK_ON_KEY_PRESS,
+    CLICK_ON_KEY_RELEASE,
+    CLICK_NONE,
   };
 
   // The menu button's class name.
@@ -89,9 +99,14 @@ class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
   }
 
   void set_ink_drop_base_color(SkColor color) { ink_drop_base_color_ = color; }
+  void set_has_ink_drop_action_on_click(bool has_ink_drop_action_on_click) {
+    has_ink_drop_action_on_click_ = has_ink_drop_action_on_click;
+  }
 
   void SetHotTracked(bool is_hot_tracked);
   bool IsHotTracked() const;
+
+  void SetFocusPainter(std::unique_ptr<Painter> focus_painter);
 
   // Overridden from View:
   void OnEnabledChanged() override;
@@ -111,6 +126,9 @@ class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
   void ShowContextMenu(const gfx::Point& p,
                        ui::MenuSourceType source_type) override;
   void OnDragDone() override;
+  // Instead of overriding this, subclasses that want custom painting should use
+  // PaintButtonContents.
+  void OnPaint(gfx::Canvas* canvas) final;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void VisibilityChanged(View* starting_from, bool is_visible) override;
 
@@ -124,6 +142,7 @@ class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
   // Overridden from View:
   void ViewHierarchyChanged(
       const ViewHierarchyChangedDetails& details) override;
+  void OnFocus() override;
   void OnBlur() override;
 
  protected:
@@ -134,20 +153,27 @@ class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
   // the current node_data. CustomButton's implementation of StateChanged() does
   // nothing; this method is provided for subclasses that wish to do something
   // on state changes.
-  virtual void StateChanged();
+  virtual void StateChanged(ButtonState old_state);
 
   // Returns true if the event is one that can trigger notifying the listener.
   // This implementation returns true if the left mouse button is down.
   virtual bool IsTriggerableEvent(const ui::Event& event);
+
+  // Returns true if the ink drop should be updated by CustomButton when
+  // OnClickCanceled() is called. This method is provided for subclasses.
+  // If the method is overriden and returns false, the subclass is responsible
+  // will be responsible for updating the ink drop.
+  virtual bool ShouldUpdateInkDropOnClickCanceled() const;
 
   // Returns true if the button should become pressed when the user
   // holds the mouse down over the button. For this implementation,
   // we simply return IsTriggerableEvent(event).
   virtual bool ShouldEnterPushedState(const ui::Event& event);
 
-  void set_has_ink_drop_action_on_click(bool has_ink_drop_action_on_click) {
-    has_ink_drop_action_on_click_ = has_ink_drop_action_on_click;
-  }
+  // Override to paint custom button contents. Any background or border set on
+  // the view will be painted before this is called and |focus_painter_| will be
+  // painted afterwards.
+  virtual void PaintButtonContents(gfx::Canvas* canvas);
 
   // Returns true if the button should enter hovered state; that is, if the
   // mouse is over the button, and no other window has capture (which would
@@ -164,6 +190,8 @@ class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
   }
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(BlueButtonTest, Border);
+
   ButtonState state_;
 
   gfx::ThrobAnimation hover_animation_;
@@ -193,6 +221,8 @@ class VIEWS_EXPORT CustomButton : public Button, public gfx::AnimationDelegate {
 
   // The color of the ripple and hover.
   SkColor ink_drop_base_color_;
+
+  std::unique_ptr<Painter> focus_painter_;
 
   DISALLOW_COPY_AND_ASSIGN(CustomButton);
 };

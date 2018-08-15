@@ -16,8 +16,8 @@
 #include "base/memory/free_deleter.h"
 #include "base/single_thread_task_runner.h"
 #include "base/task_runner.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "base/threading/worker_pool.h"
 #include "build/build_config.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -685,23 +685,15 @@ bool XkbKeyboardLayoutEngine::SetCurrentLayoutByName(
   }
   LoadKeymapCallback reply_callback = base::Bind(
       &XkbKeyboardLayoutEngine::OnKeymapLoaded, weak_ptr_factory_.GetWeakPtr());
-  base::WorkerPool::PostTask(
+  base::PostTaskWithTraits(
       FROM_HERE,
+      {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
       base::Bind(&LoadKeymap, layout_name, base::ThreadTaskRunnerHandle::Get(),
-                 reply_callback),
-      true);
-  return true;
+                 reply_callback));
 #else
-  // Required by ozone-wayland (at least) for non ChromeOS builds. See
-  // http://xkbcommon.org/doc/current/md_doc_quick-guide.html for further info.
-  xkb_keymap* keymap = xkb_keymap_new_from_string(
-      xkb_context_.get(), layout_name.c_str(), XKB_KEYMAP_FORMAT_TEXT_V1,
-      XKB_KEYMAP_COMPILE_NO_FLAGS);
-  if (!keymap)
-    return false;
-  SetKeymap(keymap);
-  return true;
+  NOTIMPLEMENTED();
 #endif  // defined(OS_CHROMEOS)
+  return true;
 }
 
 void XkbKeyboardLayoutEngine::OnKeymapLoaded(
@@ -748,23 +740,28 @@ bool XkbKeyboardLayoutEngine::Lookup(DomCode dom_code,
   // Obtain keysym and character.
   xkb_keysym_t xkb_keysym;
   uint32_t character = 0;
-  if (!XkbLookup(xkb_keycode, xkb_flags, &xkb_keysym, &character))
-    return false;
+  if (!XkbLookup(xkb_keycode, xkb_flags, &xkb_keysym, &character)) {
+    // If we do not have matching legacy Xkb keycode for the Dom code,
+    // we could be dealing with a newer application launcher or similar
+    // key. Let's see if we have a basic mapping for it.
+    return DomCodeToNonPrintableDomKey(dom_code, dom_key, key_code);
+  }
 
   // Classify the keysym and convert to DOM and VKEY representations.
-  if ((character == 0) &&
-      ((xkb_keysym != XKB_KEY_at) || (flags & EF_CONTROL_DOWN) == 0)) {
+  if (xkb_keysym != XKB_KEY_at || (flags & EF_CONTROL_DOWN) == 0) {
     // Non-character key. (We only support NUL as ^@.)
     *dom_key = NonPrintableXKeySymToDomKey(xkb_keysym);
-    if (*dom_key == DomKey::NONE) {
-      *dom_key = DomKey::UNIDENTIFIED;
-      *key_code = VKEY_UNKNOWN;
-    } else {
+    if (*dom_key != DomKey::NONE) {
       *key_code = NonPrintableDomKeyToKeyboardCode(*dom_key);
+      if (*key_code == VKEY_UNKNOWN)
+        *key_code = DomCodeToUsLayoutNonLocatedKeyboardCode(dom_code);
+      return true;
     }
-    if (*key_code == VKEY_UNKNOWN)
+    if (character == 0) {
+      *dom_key = DomKey::UNIDENTIFIED;
       *key_code = DomCodeToUsLayoutNonLocatedKeyboardCode(dom_code);
-    return true;
+      return true;
+    }
   }
 
   // Per UI Events rules for determining |key|, if the character is
@@ -799,13 +796,17 @@ bool XkbKeyboardLayoutEngine::Lookup(DomCode dom_code,
   return true;
 }
 
-void XkbKeyboardLayoutEngine::SetKeymapFromStringForTest(
-    const char* keymap_string) {
-  xkb_keymap* keymap = xkb_keymap_new_from_string(
-      xkb_context_.get(), keymap_string, XKB_KEYMAP_FORMAT_TEXT_V1,
+bool XkbKeyboardLayoutEngine::SetCurrentLayoutFromBuffer(
+    const char* keymap_string,
+    size_t size) {
+  xkb_keymap* keymap = xkb_keymap_new_from_buffer(
+      xkb_context_.get(), keymap_string, size, XKB_KEYMAP_FORMAT_TEXT_V1,
       XKB_KEYMAP_COMPILE_NO_FLAGS);
-  if (keymap)
-    SetKeymap(keymap);
+  if (!keymap)
+    return false;
+
+  SetKeymap(keymap);
+  return true;
 }
 
 void XkbKeyboardLayoutEngine::SetKeymap(xkb_keymap* keymap) {
@@ -822,7 +823,7 @@ void XkbKeyboardLayoutEngine::SetKeymap(xkb_keymap* keymap) {
                {ui::EF_MOD3_DOWN, "Mod3"},
                {ui::EF_CAPS_LOCK_ON, XKB_MOD_NAME_CAPS}};
   xkb_flag_map_.clear();
-  xkb_flag_map_.resize(arraysize(flags));
+  xkb_flag_map_.reserve(arraysize(flags));
   for (size_t i = 0; i < arraysize(flags); ++i) {
     xkb_mod_index_t index = xkb_keymap_mod_get_index(keymap, flags[i].xkb_name);
     if (index == XKB_MOD_INVALID) {

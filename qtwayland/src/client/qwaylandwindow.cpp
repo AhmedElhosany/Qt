@@ -111,7 +111,7 @@ QWaylandWindow::~QWaylandWindow()
     delete mWindowDecoration;
 
     if (isInitialized())
-        reset();
+        reset(false);
 
     QList<QWaylandInputDevice *> inputDevices = mDisplay->inputDevices();
     for (int i = 0; i < inputDevices.size(); ++i)
@@ -133,8 +133,11 @@ void QWaylandWindow::initWindow()
     if (window()->type() == Qt::Desktop)
         return;
 
-    if (!isInitialized())
+    if (!isInitialized()) {
         initializeWlSurface();
+        QPlatformSurfaceEvent e(QPlatformSurfaceEvent::SurfaceCreated);
+        QGuiApplication::sendEvent(window(), &e);
+    }
 
     if (shouldCreateSubSurface()) {
         Q_ASSERT(!mSubSurfaceWindow);
@@ -212,7 +215,7 @@ void QWaylandWindow::initWindow()
     // but since we're creating the shellsurface only now we reset mState to
     // make sure the state gets sent out to the compositor
     mState = Qt::WindowNoState;
-    setWindowStateInternal(window()->windowState());
+    setWindowStateInternal(window()->windowStates());
     handleContentOrientationChange(window()->contentOrientation());
     mFlags = window()->flags();
 }
@@ -241,8 +244,12 @@ bool QWaylandWindow::shouldCreateSubSurface() const
     return QPlatformWindow::parent() != Q_NULLPTR;
 }
 
-void QWaylandWindow::reset()
+void QWaylandWindow::reset(bool sendDestroyEvent)
 {
+    if (isInitialized() && sendDestroyEvent) {
+        QPlatformSurfaceEvent e(QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed);
+        QGuiApplication::sendEvent(window(), &e);
+    }
     delete mShellSurface;
     mShellSurface = 0;
     delete mSubSurfaceWindow;
@@ -677,7 +684,7 @@ void QWaylandWindow::setOrientationMask(Qt::ScreenOrientations mask)
         mShellSurface->setContentOrientationMask(mask);
 }
 
-void QWaylandWindow::setWindowState(Qt::WindowState state)
+void QWaylandWindow::setWindowState(Qt::WindowStates state)
 {
     if (setWindowStateInternal(state))
         QWindowSystemInterface::flushWindowSystemEvents(); // Required for oldState to work on WindowStateChanged
@@ -695,16 +702,16 @@ void QWaylandWindow::setWindowFlags(Qt::WindowFlags flags)
 bool QWaylandWindow::createDecoration()
 {
     // so far only xdg-shell support this "unminimize" trick, may be moved elsewhere
-    if (mState == Qt::WindowMinimized) {
+    if (mState & Qt::WindowMinimized) {
         QWaylandXdgSurface *xdgSurface = qobject_cast<QWaylandXdgSurface *>(mShellSurface);
         if ( xdgSurface ) {
-            if (xdgSurface->isFullscreen()) {
-                setWindowStateInternal(Qt::WindowFullScreen);
-            } else if (xdgSurface->isMaximized()) {
-                setWindowStateInternal(Qt::WindowMaximized);
-            } else {
-                setWindowStateInternal(Qt::WindowNoState);
-            }
+            Qt::WindowStates states;
+            if (xdgSurface->isFullscreen())
+                states |= Qt::WindowFullScreen;
+            if (xdgSurface->isMaximized())
+                states |= Qt::WindowMaximized;
+
+            setWindowStateInternal(states);
         }
     }
 
@@ -789,7 +796,7 @@ static QWaylandWindow *closestShellSurfaceWindow(QWindow *window)
 {
     while (window) {
         auto w = static_cast<QWaylandWindow *>(window->handle());
-        if (w && w->shellSurface())
+        if (w->shellSurface())
             return w;
         window = window->transientParent() ? window->transientParent() : window->parent();
     }
@@ -962,7 +969,7 @@ bool QWaylandWindow::setMouseGrabEnabled(bool grab)
     return true;
 }
 
-bool QWaylandWindow::setWindowStateInternal(Qt::WindowState state)
+bool QWaylandWindow::setWindowStateInternal(Qt::WindowStates state)
 {
     if (mState == state) {
         return false;
@@ -975,19 +982,14 @@ bool QWaylandWindow::setWindowStateInternal(Qt::WindowState state)
 
     if (mShellSurface) {
         createDecoration();
-        switch (state) {
-            case Qt::WindowFullScreen:
-                mShellSurface->setFullscreen();
-                break;
-            case Qt::WindowMaximized:
-                mShellSurface->setMaximized();
-                break;
-            case Qt::WindowMinimized:
-                mShellSurface->setMinimized();
-                break;
-            default:
-                mShellSurface->setNormal();
-        }
+        if (state & Qt::WindowMaximized)
+            mShellSurface->setMaximized();
+        if (state & Qt::WindowFullScreen)
+            mShellSurface->setFullscreen();
+        if (state & Qt::WindowMinimized)
+            mShellSurface->setMinimized();
+        if (!state)
+            mShellSurface->setNormal();
     }
 
     QWindowSystemInterface::handleWindowStateChanged(window(), mState);

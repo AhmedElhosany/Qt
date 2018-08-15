@@ -261,6 +261,8 @@ public:
     void editItem(QTableWidgetItem *item);
     void openPersistentEditor(QTableWidgetItem *item);
     void closePersistentEditor(QTableWidgetItem *item);
+    using QAbstractItemView::isPersistentEditorOpen;
+    bool isPersistentEditorOpen(QTableWidgetItem *item) const;
 
     QWidget *cellWidget(int row, int column) const;
     void setCellWidget(int row, int column, QWidget *widget);
@@ -325,10 +327,18 @@ protected:
 #endif
     virtual bool dropMimeData(int row, int column, const QMimeData *data, Qt::DropAction action);
     virtual Qt::DropActions supportedDropActions() const;
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+public:
+#else
+protected:
+#endif
     QList<QTableWidgetItem*> items(const QMimeData *data) const;
 
     QModelIndex indexFromItem(QTableWidgetItem *item) const;
     QTableWidgetItem *itemFromIndex(const QModelIndex &index) const;
+
+protected:
 #if QT_CONFIG(draganddrop)
     void dropEvent(QDropEvent *event) Q_DECL_OVERRIDE;
 #endif

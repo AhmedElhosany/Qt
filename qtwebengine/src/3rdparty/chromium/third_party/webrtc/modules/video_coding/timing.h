@@ -13,9 +13,9 @@
 
 #include <memory>
 
-#include "webrtc/base/thread_annotations.h"
 #include "webrtc/modules/video_coding/codec_timer.h"
-#include "webrtc/system_wrappers/include/critical_section_wrapper.h"
+#include "webrtc/rtc_base/criticalsection.h"
+#include "webrtc/rtc_base/thread_annotations.h"
 #include "webrtc/typedefs.h"
 
 namespace webrtc {
@@ -92,14 +92,18 @@ class VCMTiming {
   // certain amount of processing time.
   bool EnoughTimeToDecode(uint32_t available_processing_time_ms) const;
 
-  // Return current timing information.
-  void GetTimings(int* decode_ms,
-                  int* max_decode_ms,
-                  int* current_delay_ms,
-                  int* target_delay_ms,
-                  int* jitter_buffer_ms,
-                  int* min_playout_delay_ms,
-                  int* render_delay_ms) const;
+  // Return current timing information. Returns true if the first frame has been
+  // decoded, false otherwise.
+  virtual bool GetTimings(int* decode_ms,
+                          int* max_decode_ms,
+                          int* current_delay_ms,
+                          int* target_delay_ms,
+                          int* jitter_buffer_ms,
+                          int* min_playout_delay_ms,
+                          int* render_delay_ms) const;
+
+  void SetTimingFrameInfo(const TimingFrameInfo& info);
+  rtc::Optional<TimingFrameInfo> GetTimingFrameInfo();
 
   enum { kDefaultRenderDelayMs = 10 };
   enum { kDelayMaxChangeMsPerS = 100 };
@@ -113,7 +117,7 @@ class VCMTiming {
  private:
   void UpdateHistograms() const;
 
-  CriticalSectionWrapper* crit_sect_;
+  rtc::CriticalSection crit_sect_;
   Clock* const clock_;
   bool master_ GUARDED_BY(crit_sect_);
   TimestampExtrapolator* ts_extrapolator_ GUARDED_BY(crit_sect_);
@@ -130,6 +134,7 @@ class VCMTiming {
   int current_delay_ms_ GUARDED_BY(crit_sect_);
   int last_decode_ms_ GUARDED_BY(crit_sect_);
   uint32_t prev_frame_timestamp_ GUARDED_BY(crit_sect_);
+  rtc::Optional<TimingFrameInfo> timing_frame_info_ GUARDED_BY(crit_sect_);
 
   // Statistics.
   size_t num_decoded_frames_ GUARDED_BY(crit_sect_);

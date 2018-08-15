@@ -7,7 +7,9 @@
 
 var MessagingNatives = requireNative('messaging_natives');
 var WebViewConstants = require('webViewConstants').WebViewConstants;
-var WebViewInternal = require('webViewInternal').WebViewInternal;
+var WebViewInternal = getInternalApi ?
+    getInternalApi('webViewInternal') :
+    require('webViewInternal').WebViewInternal;
 
 var PERMISSION_TYPES = ['media',
                         'geolocation',
@@ -36,6 +38,12 @@ function WebViewActionRequest(webViewImpl, event, webViewEvent, interfaceName) {
     this.webViewEvent[infoName] = this.event.requestInfo[infoName];
   }
 }
+
+// Prevent GuestViewEvents inadvertently inheritng code from the global Object,
+// allowing a pathway for unintended execution of user code.
+// TODO(wjmaclean): Use utils.expose() here instead, track down other issues
+// of Object inheritance. https://crbug.com/701034
+WebViewActionRequest.prototype.__proto__ = null;
 
 // Performs the default action for the request.
 WebViewActionRequest.prototype.defaultAction = function() {

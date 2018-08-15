@@ -474,11 +474,10 @@ bool QFSFileEngine::rename(const QString &newName)
 bool QFSFileEngine::renameOverwrite(const QString &newName)
 {
     Q_D(QFSFileEngine);
-    bool ret = ::MoveFileEx((wchar_t*)d->fileEntry.nativeFilePath().utf16(),
-                            (wchar_t*)QFileSystemEntry(newName).nativeFilePath().utf16(),
-                            MOVEFILE_REPLACE_EXISTING) != 0;
+    QSystemError error;
+    bool ret = QFileSystemEngine::renameOverwriteFile(d->fileEntry, QFileSystemEntry(newName), error);
     if (!ret)
-        setError(QFile::RenameError, QSystemError(::GetLastError(), QSystemError::NativeError).toString());
+        setError(QFile::RenameError, error.toString());
     return ret;
 }
 
@@ -694,6 +693,8 @@ QAbstractFileEngine::FileFlags QFSFileEngine::fileFlags(QAbstractFileEngine::Fil
     }
     if (type & FlagsMask) {
         if (d->metaData.exists()) {
+            // if we succeeded in querying, then the file exists: a file on
+            // Windows cannot be deleted if we have an open handle to it
             ret |= ExistsFlag;
             if (d->fileEntry.isRoot())
                 ret |= RootFlag;
@@ -854,15 +855,41 @@ bool QFSFileEngine::setSize(qint64 size)
     return false;
 }
 
-
-QDateTime QFSFileEngine::fileTime(FileTime time) const
+bool QFSFileEngine::setFileTime(const QDateTime &newDate, FileTime time)
 {
-    Q_D(const QFSFileEngine);
+    Q_D(QFSFileEngine);
 
-    if (d->doStat(QFileSystemMetaData::Times))
-        return d->metaData.fileTime(time);
+    if (d->openMode == QFile::NotOpen) {
+        setError(QFile::PermissionsError, qt_error_string(ERROR_ACCESS_DENIED));
+        return false;
+    }
 
-    return QDateTime();
+    if (!newDate.isValid() || time == QAbstractFileEngine::MetadataChangeTime) {
+        setError(QFile::UnspecifiedError, qt_error_string(ERROR_INVALID_PARAMETER));
+        return false;
+    }
+
+    HANDLE handle = d->fileHandle;
+    if (handle == INVALID_HANDLE_VALUE) {
+        if (d->fh)
+            handle = reinterpret_cast<HANDLE>(::_get_osfhandle(QT_FILENO(d->fh)));
+        else if (d->fd != -1)
+            handle = reinterpret_cast<HANDLE>(::_get_osfhandle(d->fd));
+    }
+
+    if (handle == INVALID_HANDLE_VALUE) {
+        setError(QFile::PermissionsError, qt_error_string(ERROR_ACCESS_DENIED));
+        return false;
+    }
+
+    QSystemError error;
+    if (!QFileSystemEngine::setFileTime(handle, newDate, time, error)) {
+        setError(QFile::PermissionsError, error.toString());
+        return false;
+    }
+
+    d->metaData.clearFlags(QFileSystemMetaData::Times);
+    return true;
 }
 
 uchar *QFSFileEnginePrivate::map(qint64 offset, qint64 size,
@@ -1000,6 +1027,17 @@ bool QFSFileEnginePrivate::unmap(uchar *ptr)
     }
 
     return true;
+}
+
+/*!
+    \reimp
+*/
+bool QFSFileEngine::cloneTo(QAbstractFileEngine *target)
+{
+    // There's some Windows Server 2016 API, but we won't
+    // bother with it.
+    Q_UNUSED(target);
+    return false;
 }
 
 QT_END_NAMESPACE

@@ -8,36 +8,42 @@
 #include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "components/leveldb/public/cpp/util.h"
 #include "content/browser/browser_thread_impl.h"
-#include "content/browser/gpu/shader_disk_cache.h"
-#include "content/browser/quota/mock_quota_manager.h"
+#include "content/browser/dom_storage/local_storage_database.pb.h"
+#include "content/browser/gpu/shader_cache_factory.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/local_storage_usage_info.h"
 #include "content/public/browser/storage_partition.h"
-#include "content/public/test/mock_special_storage_policy.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "content/test/mock_leveldb_database.h"
 #include "net/base/test_completion_callback.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_store.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "ppapi/features/features.h"
 #include "storage/browser/quota/quota_manager.h"
+#include "storage/browser/test/mock_quota_manager.h"
+#include "storage/browser/test/mock_special_storage_policy.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(ENABLE_PLUGINS)
-#include "ppapi/shared_impl/ppapi_constants.h"
+#if BUILDFLAG(ENABLE_PLUGINS)
+#include "base/memory/ptr_util.h"
+#include "ppapi/shared_impl/ppapi_constants.h"  // nogncheck
 #include "storage/browser/fileapi/async_file_util.h"
 #include "storage/browser/fileapi/file_system_context.h"
 #include "storage/browser/fileapi/file_system_operation_context.h"
 #include "storage/browser/fileapi/isolated_context.h"
 #include "storage/common/fileapi/file_system_util.h"
-#endif  // defined(ENABLE_PLUGINS)
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 using net::CanonicalCookie;
 
@@ -53,24 +59,15 @@ const char kTestOrigin2[] = "http://host2:1/";
 const char kTestOrigin3[] = "http://host3:1/";
 const char kTestOriginDevTools[] = "chrome-devtools://abcdefghijklmnopqrstuvw/";
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 const char kWidevineCdmPluginId[] = "application_x-ppapi-widevine-cdm";
 const char kClearKeyCdmPluginId[] = "application_x-ppapi-clearkey-cdm";
-#endif  // defined(ENABLE_PLUGINS)
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 const GURL kOrigin1(kTestOrigin1);
 const GURL kOrigin2(kTestOrigin2);
 const GURL kOrigin3(kTestOrigin3);
 const GURL kOriginDevTools(kTestOriginDevTools);
-
-const base::FilePath::CharType kDomStorageOrigin1[] =
-    FILE_PATH_LITERAL("http_host1_1.localstorage");
-
-const base::FilePath::CharType kDomStorageOrigin2[] =
-    FILE_PATH_LITERAL("http_host2_1.localstorage");
-
-const base::FilePath::CharType kDomStorageOrigin3[] =
-    FILE_PATH_LITERAL("http_host3_1.localstorage");
 
 const storage::StorageType kTemporary = storage::kStorageTypeTemporary;
 const storage::StorageType kPersistent = storage::kStorageTypePersistent;
@@ -180,7 +177,9 @@ class RemoveCookieTester {
 class RemoveLocalStorageTester {
  public:
   explicit RemoveLocalStorageTester(TestBrowserContext* profile)
-      : profile_(profile), dom_storage_context_(NULL) {
+      : dom_storage_context_(NULL),
+        mock_db_(&mock_data_),
+        db_binding_(&mock_db_) {
     dom_storage_context_ =
         content::BrowserContext::GetDefaultStoragePartition(profile)->
             GetDOMStorageContext();
@@ -199,35 +198,64 @@ class RemoveLocalStorageTester {
 
   void AddDOMStorageTestData() {
     // Note: This test depends on details of how the dom_storage library
-    // stores data in the host file system.
-    base::FilePath storage_path =
-        profile_->GetPath().AppendASCII("Local Storage");
-    base::CreateDirectory(storage_path);
+    // stores data in the database.
+    leveldb::mojom::LevelDBDatabaseAssociatedPtr database_ptr;
+    leveldb::mojom::LevelDBDatabaseAssociatedRequest request =
+        MakeIsolatedRequest(&database_ptr);
+    static_cast<DOMStorageContextWrapper*>(dom_storage_context_)
+        ->SetLocalStorageDatabaseForTesting(std::move(database_ptr));
+    db_binding_.Bind(std::move(request));
 
-    // Write some files.
-    base::WriteFile(storage_path.Append(kDomStorageOrigin1), NULL, 0);
-    base::WriteFile(storage_path.Append(kDomStorageOrigin2), NULL, 0);
-    base::WriteFile(storage_path.Append(kDomStorageOrigin3), NULL, 0);
+    LocalStorageOriginMetaData data;
 
-    // Tweak their dates.
     base::Time now = base::Time::Now();
-    base::TouchFile(storage_path.Append(kDomStorageOrigin1), now, now);
+    data.set_last_modified(now.ToInternalValue());
+    data.set_size_bytes(16);
+    mock_data_[CreateMetaDataKey(url::Origin(kOrigin1))] =
+        leveldb::StdStringToUint8Vector(data.SerializeAsString());
+    mock_data_[CreateDataKey(url::Origin(kOrigin1))] = {};
 
     base::Time one_day_ago = now - base::TimeDelta::FromDays(1);
-    base::TouchFile(storage_path.Append(kDomStorageOrigin2),
-                    one_day_ago, one_day_ago);
+    data.set_last_modified(one_day_ago.ToInternalValue());
+    mock_data_[CreateMetaDataKey(url::Origin(kOrigin2))] =
+        leveldb::StdStringToUint8Vector(data.SerializeAsString());
+    mock_data_[CreateDataKey(url::Origin(kOrigin2))] = {};
 
     base::Time sixty_days_ago = now - base::TimeDelta::FromDays(60);
-    base::TouchFile(storage_path.Append(kDomStorageOrigin3),
-                    sixty_days_ago, sixty_days_ago);
+    data.set_last_modified(sixty_days_ago.ToInternalValue());
+    mock_data_[CreateMetaDataKey(url::Origin(kOrigin3))] =
+        leveldb::StdStringToUint8Vector(data.SerializeAsString());
+    mock_data_[CreateDataKey(url::Origin(kOrigin3))] = {};
   }
 
  private:
+  std::vector<uint8_t> CreateDataKey(const url::Origin& origin) {
+    auto serialized_origin =
+        leveldb::StdStringToUint8Vector(origin.Serialize());
+    std::vector<uint8_t> key = {'_'};
+    key.insert(key.end(), serialized_origin.begin(), serialized_origin.end());
+    key.push_back(0);
+    key.push_back('X');
+    return key;
+  }
+
+  std::vector<uint8_t> CreateMetaDataKey(const url::Origin& origin) {
+    const uint8_t kMetaPrefix[] = {'M', 'E', 'T', 'A', ':'};
+    auto serialized_origin =
+        leveldb::StdStringToUint8Vector(origin.Serialize());
+    std::vector<uint8_t> key;
+    key.reserve(arraysize(kMetaPrefix) + serialized_origin.size());
+    key.insert(key.end(), kMetaPrefix, kMetaPrefix + arraysize(kMetaPrefix));
+    key.insert(key.end(), serialized_origin.begin(), serialized_origin.end());
+    return key;
+  }
+
   void GetLocalStorageUsage() {
     dom_storage_context_->GetLocalStorageUsage(
         base::Bind(&RemoveLocalStorageTester::OnGotLocalStorageUsage,
                    base::Unretained(this)));
   }
+
   void OnGotLocalStorageUsage(
       const std::vector<content::LocalStorageUsageInfo>& infos) {
     infos_ = infos;
@@ -235,8 +263,11 @@ class RemoveLocalStorageTester {
   }
 
   // We don't own these pointers.
-  TestBrowserContext* profile_;
   content::DOMStorageContext* dom_storage_context_;
+
+  std::map<std::vector<uint8_t>, std::vector<uint8_t>> mock_data_;
+  MockLevelDBDatabase mock_db_;
+  mojo::AssociatedBinding<leveldb::mojom::LevelDBDatabase> db_binding_;
 
   std::vector<content::LocalStorageUsageInfo> infos_;
 
@@ -245,7 +276,7 @@ class RemoveLocalStorageTester {
   DISALLOW_COPY_AND_ASSIGN(RemoveLocalStorageTester);
 };
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 class RemovePluginPrivateDataTester {
  public:
   explicit RemovePluginPrivateDataTester(
@@ -278,6 +309,8 @@ class RemovePluginPrivateDataTester {
     SetFileTimestamp(widevine_file1, now);
     SetFileTimestamp(widevine_file2, sixty_days_ago);
   }
+
+  void DeleteClearKeyTestData() { DeleteFile(clearkey_file_); }
 
   // Returns true, if the given origin exists in a PluginPrivateFileSystem.
   bool DataExistsForOrigin(const GURL& origin) {
@@ -359,6 +392,20 @@ class RemovePluginPrivateDataTester {
     return file_url;
   }
 
+  void DeleteFile(storage::FileSystemURL file_url) {
+    AwaitCompletionHelper await_completion;
+    storage::AsyncFileUtil* file_util = filesystem_context_->GetAsyncFileUtil(
+        storage::kFileSystemTypePluginPrivate);
+    std::unique_ptr<storage::FileSystemOperationContext> operation_context =
+        base::MakeUnique<storage::FileSystemOperationContext>(
+            filesystem_context_);
+    file_util->DeleteFile(
+        std::move(operation_context), file_url,
+        base::Bind(&RemovePluginPrivateDataTester::OnFileDeleted,
+                   base::Unretained(this), &await_completion));
+    await_completion.BlockUntilNotified();
+  }
+
   // Sets the last_access_time and last_modified_time to |time_stamp| on the
   // file specified by |file_url|. The file must already exist.
   void SetFileTimestamp(const storage::FileSystemURL& file_url,
@@ -387,6 +434,12 @@ class RemovePluginPrivateDataTester {
                      bool created) {
     EXPECT_EQ(base::File::FILE_OK, result) << base::File::ErrorToString(result);
     EXPECT_TRUE(created);
+    await_completion->Notify();
+  }
+
+  void OnFileDeleted(AwaitCompletionHelper* await_completion,
+                     base::File::Error result) {
+    EXPECT_EQ(base::File::FILE_OK, result) << base::File::ErrorToString(result);
     await_completion->Notify();
   }
 
@@ -431,12 +484,13 @@ class RemovePluginPrivateDataTester {
   // We don't own this pointer.
   storage::FileSystemContext* filesystem_context_;
 
-  // Keep track of the URL for the ClearKey file so that it can be written to.
+  // Keep track of the URL for the ClearKey file so that it can be written to
+  // or deleted.
   storage::FileSystemURL clearkey_file_;
 
   DISALLOW_COPY_AND_ASSIGN(RemovePluginPrivateDataTester);
 };
-#endif  // defined(ENABLE_PLUGINS)
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 bool IsWebSafeSchemeForTest(const std::string& scheme) {
   return scheme == "http";
@@ -551,7 +605,7 @@ void ClearData(content::StoragePartition* partition,
       time, time, run_loop->QuitClosure());
 }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 void ClearPluginPrivateData(content::StoragePartition* partition,
                             const GURL& storage_origin,
                             const base::Time delete_begin,
@@ -563,7 +617,7 @@ void ClearPluginPrivateData(content::StoragePartition* partition,
       StoragePartition::OriginMatcherFunction(), delete_begin, delete_end,
       run_loop->QuitClosure());
 }
-#endif  // defined(ENABLE_PLUGINS)
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 }  // namespace
 
@@ -601,19 +655,19 @@ class StoragePartitionShaderClearTest : public testing::Test {
   StoragePartitionShaderClearTest()
       : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
         browser_context_(new TestBrowserContext()) {
-    ShaderCacheFactory::InitInstance(
+    InitShaderCacheFactorySingleton(
         base::ThreadTaskRunnerHandle::Get(),
         BrowserThread::GetTaskRunnerForThread(BrowserThread::CACHE));
-    ShaderCacheFactory::GetInstance()->SetCacheInfo(
+    GetShaderCacheFactorySingleton()->SetCacheInfo(
         kDefaultClientId,
-        BrowserContext::GetDefaultStoragePartition(
-            browser_context())->GetPath());
-    cache_ = ShaderCacheFactory::GetInstance()->Get(kDefaultClientId);
+        BrowserContext::GetDefaultStoragePartition(browser_context())
+            ->GetPath());
+    cache_ = GetShaderCacheFactorySingleton()->Get(kDefaultClientId);
   }
 
   ~StoragePartitionShaderClearTest() override {
     cache_ = NULL;
-    ShaderCacheFactory::GetInstance()->RemoveCacheInfo(kDefaultClientId);
+    GetShaderCacheFactorySingleton()->RemoveCacheInfo(kDefaultClientId);
   }
 
   void InitCache() {
@@ -640,7 +694,7 @@ class StoragePartitionShaderClearTest : public testing::Test {
   content::TestBrowserThreadBundle thread_bundle_;
   std::unique_ptr<TestBrowserContext> browser_context_;
 
-  scoped_refptr<ShaderDiskCache> cache_;
+  scoped_refptr<gpu::ShaderDiskCache> cache_;
 };
 
 // Tests ---------------------------------------------------------------------
@@ -1129,6 +1183,10 @@ TEST_F(StoragePartitionImplTest, RemoveUnprotectedLocalStorageForever) {
                  partition, base::Time(), base::Time::Max(),
                  base::Bind(&DoesOriginMatchForUnprotectedWeb), &run_loop));
   run_loop.Run();
+  // ClearData only guarantees that tasks to delete data are scheduled when its
+  // callback is invoked. It doesn't guarantee data has actually been cleared.
+  // So run all scheduled tasks to make sure data is cleared.
+  base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(tester.DOMStorageExistsForOrigin(kOrigin1));
   EXPECT_FALSE(tester.DOMStorageExistsForOrigin(kOrigin2));
@@ -1161,6 +1219,10 @@ TEST_F(StoragePartitionImplTest, RemoveProtectedLocalStorageForever) {
                  base::Bind(&DoesOriginMatchForBothProtectedAndUnprotectedWeb),
                  &run_loop));
   run_loop.Run();
+  // ClearData only guarantees that tasks to delete data are scheduled when its
+  // callback is invoked. It doesn't guarantee data has actually been cleared.
+  // So run all scheduled tasks to make sure data is cleared.
+  base::RunLoop().RunUntilIdle();
 
   // Even if kOrigin1 is protected, it will be deleted since we specify
   // ClearData to delete protected data.
@@ -1190,6 +1252,10 @@ TEST_F(StoragePartitionImplTest, RemoveLocalStorageForLastWeek) {
                  base::Bind(&DoesOriginMatchForBothProtectedAndUnprotectedWeb),
                  &run_loop));
   run_loop.Run();
+  // ClearData only guarantees that tasks to delete data are scheduled when its
+  // callback is invoked. It doesn't guarantee data has actually been cleared.
+  // So run all scheduled tasks to make sure data is cleared.
+  base::RunLoop().RunUntilIdle();
 
   // kOrigin1 and kOrigin2 do not have age more than a week.
   EXPECT_FALSE(tester.DOMStorageExistsForOrigin(kOrigin1));
@@ -1197,7 +1263,7 @@ TEST_F(StoragePartitionImplTest, RemoveLocalStorageForLastWeek) {
   EXPECT_TRUE(tester.DOMStorageExistsForOrigin(kOrigin3));
 }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 TEST_F(StoragePartitionImplTest, RemovePluginPrivateDataForever) {
   StoragePartitionImpl* partition = static_cast<StoragePartitionImpl*>(
       BrowserContext::GetDefaultStoragePartition(browser_context()));
@@ -1291,7 +1357,33 @@ TEST_F(StoragePartitionImplTest, RemovePluginPrivateDataWhileWriting) {
   base::File file2 = tester.OpenClearKeyFileForWrite();
   EXPECT_FALSE(file2.IsValid());
 }
-#endif  // defined(ENABLE_PLUGINS)
+
+TEST_F(StoragePartitionImplTest, RemovePluginPrivateDataAfterDeletion) {
+  StoragePartitionImpl* partition = static_cast<StoragePartitionImpl*>(
+      BrowserContext::GetDefaultStoragePartition(browser_context()));
+
+  RemovePluginPrivateDataTester tester(partition->GetFileSystemContext());
+  tester.AddPluginPrivateTestData();
+  EXPECT_TRUE(tester.DataExistsForOrigin(kOrigin1));
+  EXPECT_TRUE(tester.DataExistsForOrigin(kOrigin2));
+
+  // Delete the single file saved for |kOrigin1|. This does not remove the
+  // origin from the list of Origins. However, ClearPluginPrivateData() will
+  // remove it.
+  tester.DeleteClearKeyTestData();
+  EXPECT_TRUE(tester.DataExistsForOrigin(kOrigin1));
+  EXPECT_TRUE(tester.DataExistsForOrigin(kOrigin2));
+
+  base::RunLoop run_loop;
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::Bind(&ClearPluginPrivateData, partition, GURL(),
+                            base::Time(), base::Time::Max(), &run_loop));
+  run_loop.Run();
+
+  EXPECT_FALSE(tester.DataExistsForOrigin(kOrigin1));
+  EXPECT_FALSE(tester.DataExistsForOrigin(kOrigin2));
+}
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
 
 TEST(StoragePartitionImplStaticTest, CreatePredicateForHostCookies) {
   GURL url("http://www.example.com/");

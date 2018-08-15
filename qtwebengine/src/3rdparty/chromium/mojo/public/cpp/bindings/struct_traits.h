@@ -5,6 +5,8 @@
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_STRUCT_TRAITS_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_STRUCT_TRAITS_H_
 
+#include "mojo/public/cpp/bindings/lib/template_util.h"
+
 namespace mojo {
 
 // This must be specialized for any type |T| to be serialized/deserialized as
@@ -28,18 +30,17 @@ namespace mojo {
 //        wrapper type, or the following alternatives:
 //        - string:
 //          Value or reference of any type that has a StringTraits defined.
-//          Supported by default: base::StringPiece, std::string, mojo::String,
+//          Supported by default: base::StringPiece, std::string,
 //          WTF::String (in blink).
 //
 //        - array:
 //          Value or reference of any type that has an ArrayTraits defined.
-//          Supported by default: std::vector, CArray, mojo::Array, WTF::Vector
-//          (in blink), mojo::WTFArray (in blink).
+//          Supported by default: std::vector, CArray, WTF::Vector (in blink)
 //
 //        - map:
 //          Value or reference of any type that has a MapTraits defined.
-//          Supported by default: std::map, std::unordered_map, mojo::Map,
-//          WTF::HashMap (in blink), mojo::WTFMap (in blink).
+//          Supported by default: std::map, std::unordered_map,
+//          WTF::HashMap (in blink).
 //
 //        - struct:
 //          Value or reference of any type that has a StructTraits defined.
@@ -159,7 +160,11 @@ namespace mojo {
 //   };
 //
 template <typename DataViewType, typename T>
-struct StructTraits;
+struct StructTraits {
+  static_assert(internal::AlwaysFalse<T>::value,
+                "Cannot find the mojo::StructTraits specialization. Did you "
+                "forget to include the corresponding header file?");
+};
 
 }  // namespace mojo
 

@@ -13,6 +13,7 @@
 
 #include "base/macros.h"
 #include "base/observer_list.h"
+#include "base/optional.h"
 #include "base/scoped_observer.h"
 #include "build/build_config.h"
 #include "ui/base/ui_base_types.h"
@@ -56,8 +57,11 @@ class Layer;
 class NativeTheme;
 class OSExchangeData;
 class ThemeProvider;
-class Window;
 }  // namespace ui
+
+namespace wm {
+enum class ShadowElevation;
+}
 
 namespace views {
 
@@ -209,6 +213,10 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     InitParams(const InitParams& other);
     ~InitParams();
 
+    // Returns the activatablity based on |activatable|, but also handles the
+    // case where |activatable| is |ACTIVATABLE_DEFAULT|.
+    bool CanActivate() const;
+
     Type type;
     // If null, a default implementation will be constructed. The default
     // implementation deletes itself when the Widget closes.
@@ -232,6 +240,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     Ownership ownership;
     bool mirror_origin_in_rtl;
     ShadowType shadow_type;
+    // A hint about the size of the shadow if the type is SHADOW_TYPE_DROP. May
+    // be ignored on some platforms. No value indicates no preference.
+    base::Optional<wm::ShadowElevation> shadow_elevation;
     // Specifies that the system default caption and icon should not be
     // rendered, and that the client area should be equivalent to the window
     // area. Only used on some platforms (Windows and Linux).
@@ -242,8 +253,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // Whether the widget should be maximized or minimized.
     ui::WindowShowState show_state;
     gfx::NativeView parent;
-    // Used only by mus and is necessitated by mus not being a NativeView.
-    ui::Window* parent_mus = nullptr;
     // Specifies the initial bounds of the Widget. Default is empty, which means
     // the NativeWidget may specify a default size. If the parent is specified,
     // |bounds| is in the parent's coordinate system. If the parent is not
@@ -456,7 +465,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Default behavior is to animate both show and hide.
   void SetVisibilityAnimationTransition(VisibilityTransition transition);
 
-  // Starts a nested message loop that moves the window. This can be used to
+  // Starts a nested run loop that moves the window. This can be used to
   // start a window move operation from a mouse or touch event. This returns
   // when the move completes. |drag_offset| is the offset from the top left
   // corner of the window to the point where the cursor is dragging, and is used
@@ -492,7 +501,8 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Shows the widget. The widget is activated if during initialization the
   // can_activate flag in the InitParams structure is set to true.
-  virtual void Show();
+  void Show();
+
   // Hides the widget.
   void Hide();
 
@@ -707,9 +717,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // reordering if there are no views with an associated NativeView.
   void ReorderNativeViews();
 
-  // Schedules an update to the root layers. The actual processing occurs when
-  // GetRootLayers() is invoked.
-  void UpdateRootLayers();
+  // Called by a View when the status of it's layer or one of the views
+  // descendants layer status changes.
+  void LayerTreeChanged();
 
   const NativeWidget* native_widget() const;
   NativeWidget* native_widget();
@@ -762,10 +772,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // mouse location to refresh hovering status in the widget.
   void SynthesizeMouseMoveEvent();
 
-  // Called by our RootView after it has performed a Layout. Used to forward
-  // window sizing information to the window server on some platforms.
-  void OnRootViewLayout();
-
   // Whether the widget supports translucency.
   bool IsTranslucentWindowOpacitySupported() const;
 
@@ -812,15 +818,19 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   void OnScrollEvent(ui::ScrollEvent* event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
   bool ExecuteCommand(int command_id) override;
-  const std::vector<ui::Layer*>& GetRootLayers() override;
   bool HasHitTestMask() const override;
   void GetHitTestMask(gfx::Path* mask) const override;
   Widget* AsWidget() override;
   const Widget* AsWidget() const override;
   bool SetInitialFocus(ui::WindowShowState show_state) override;
+  bool ShouldDescendIntoChildForEventHandling(
+      ui::Layer* root_layer,
+      gfx::NativeView child,
+      ui::Layer* child_layer,
+      const gfx::Point& location) override;
 
   // Overridden from ui::EventSource:
-  ui::EventProcessor* GetEventProcessor() override;
+  ui::EventSink* GetEventSink() override;
 
   // Overridden from FocusTraversable:
   FocusSearch* GetFocusSearch() override;
@@ -851,6 +861,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   friend class ComboboxTest;
   friend class CustomButtonTest;
   friend class TextfieldTest;
+  friend class ViewAuraTest;
 
   // Persists the window's restored position and "show" state using the
   // window delegate.
@@ -871,6 +882,10 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // the delegate wants to use a specified bounds.
   bool GetSavedWindowPlacement(gfx::Rect* bounds,
                                ui::WindowShowState* show_state);
+
+  // Returns the Views whose layers are parented directly to the Widget's
+  // layer.
+  const View::Views& GetViewsWithLayers();
 
   internal::NativeWidgetPrivate* native_widget_;
 
@@ -963,11 +978,11 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // true.
   bool auto_release_capture_;
 
-  // See description in GetRootLayers().
-  std::vector<ui::Layer*> root_layers_;
+  // See description in GetViewsWithLayers().
+  View::Views views_with_layers_;
 
-  // Is |root_layers_| out of date?
-  bool root_layers_dirty_;
+  // Does |views_with_layers_| need updating?
+  bool views_with_layers_dirty_;
 
   // True when window movement via mouse interaction with the frame should be
   // disabled.

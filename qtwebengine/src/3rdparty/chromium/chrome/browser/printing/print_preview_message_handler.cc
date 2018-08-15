@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "base/bind.h"
@@ -21,7 +22,6 @@
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "components/printing/common/print_messages.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "printing/page_size_margins.h"
@@ -44,9 +44,9 @@ void StopWorker(int document_cookie) {
   scoped_refptr<PrinterQuery> printer_query =
       queue->PopPrinterQuery(document_cookie);
   if (printer_query.get()) {
-    BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-                            base::Bind(&PrinterQuery::StopWorker,
-                                       printer_query));
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
+        base::BindOnce(&PrinterQuery::StopWorker, printer_query));
   }
 }
 
@@ -113,7 +113,7 @@ void PrintPreviewMessageHandler::OnDidGetPreviewPageCount(
   if (!print_preview_ui)
     return;
 
-  if (!params.is_modifiable || params.clear_preview_data)
+  if (params.clear_preview_data)
     print_preview_ui->ClearAllPreviewData();
 
   print_preview_ui->OnDidGetPreviewPageCount(params);
@@ -190,6 +190,12 @@ void PrintPreviewMessageHandler::OnDidGetDefaultPageLayout(
 void PrintPreviewMessageHandler::OnPrintPreviewCancelled(int document_cookie) {
   // Always need to stop the worker.
   StopWorker(document_cookie);
+
+  // Notify UI
+  PrintPreviewUI* print_preview_ui = GetPrintPreviewUI();
+  if (!print_preview_ui)
+    return;
+  print_preview_ui->OnPrintPreviewCancelled();
 }
 
 void PrintPreviewMessageHandler::OnInvalidPrinterSettings(int document_cookie) {

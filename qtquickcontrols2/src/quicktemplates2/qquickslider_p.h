@@ -68,6 +68,9 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickSlider : public QQuickControl
     Q_PROPERTY(Qt::Orientation orientation READ orientation WRITE setOrientation NOTIFY orientationChanged FINAL)
     Q_PROPERTY(QQuickItem *handle READ handle WRITE setHandle NOTIFY handleChanged FINAL)
     Q_PROPERTY(bool live READ live WRITE setLive NOTIFY liveChanged FINAL REVISION 2)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(bool horizontal READ isHorizontal NOTIFY orientationChanged FINAL REVISION 3)
+    Q_PROPERTY(bool vertical READ isVertical NOTIFY orientationChanged FINAL REVISION 3)
     Q_CLASSINFO("DeferredPropertyNames", "background,handle")
 
 public:
@@ -113,6 +116,10 @@ public:
     // 2.2 (Qt 5.9)
     bool live() const;
     void setLive(bool live);
+
+    // 2.3 (Qt 5.10)
+    bool isHorizontal() const;
+    bool isVertical() const;
 
 public Q_SLOTS:
     void increase();

@@ -42,6 +42,7 @@
 #include <Qt3DRender/private/nodemanagers_p.h>
 #include <Qt3DRender/private/entity_p.h>
 #include <Qt3DRender/private/job_common_p.h>
+#include <Qt3DRender/private/layerfilternode_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -51,61 +52,206 @@ namespace Render {
 
 namespace {
 int layerFilterJobCounter = 0;
+
+// TO DO: This will be moved to a dedicated job with smarter
+// heuristics in a later commit
+void addLayerIdToEntityChildren(const QVector<Entity *> &children,
+                                const Qt3DCore::QNodeId layerId)
+{
+    for (Entity *child : children) {
+        child->addRecursiveLayerId(layerId);
+        addLayerIdToEntityChildren(child->children(), layerId);
+    }
+}
+
+void updateEntityLayers(NodeManagers *manager)
+{
+    EntityManager *entityManager = manager->renderNodesManager();
+
+    const QVector<HEntity> handles = entityManager->activeHandles();
+
+    // Clear list of recursive layerIds
+    for (const HEntity &handle : handles) {
+        Entity *entity = entityManager->data(handle);
+        entity->clearRecursiveLayerIds();
+    }
+
+    LayerManager *layerManager = manager->layerManager();
+
+    // Set recursive layerIds on children
+    for (const HEntity &handle : handles) {
+        Entity *entity = entityManager->data(handle);
+        const Qt3DCore::QNodeIdVector entityLayers = entity->componentsUuid<Layer>();
+
+        for (const Qt3DCore::QNodeId layerId : entityLayers) {
+            Layer *layer = layerManager->lookupResource(layerId);
+            if (layer->recursive()) {
+                // Find all children of the entity and add the layers to them
+                addLayerIdToEntityChildren(entity->children(), layerId);
+            }
+        }
+    }
+}
+
 } // anonymous
 
 FilterLayerEntityJob::FilterLayerEntityJob()
     : Qt3DCore::QAspectJob()
     , m_manager(nullptr)
-    , m_hasLayerFilter(false)
 {
     SET_JOB_RUN_STAT_TYPE(this, JobTypes::LayerFiltering, layerFilterJobCounter++);
 }
+
 
 void FilterLayerEntityJob::run()
 {
 
     m_filteredEntities.clear();
-    if (m_hasLayerFilter) { // LayerFilter set -> filter
-        LayerManager *layerManager = m_manager->layerManager();
-
-        // Remove layerIds which are not active/enabled
-        for (auto i = m_layerIds.size() - 1; i >= 0; --i) {
-            Layer *backendLayer = layerManager->lookupResource(m_layerIds.at(i));
-            if (backendLayer == nullptr || !backendLayer->isEnabled())
-                m_layerIds.removeAt(i);
-        }
-
+    if (hasLayerFilter()) { // LayerFilter set -> filter
+        updateEntityLayers(m_manager);
         filterLayerAndEntity();
     } else { // No LayerFilter set -> retrieve all
         selectAllEntities();
     }
+
+    // sort needed for set_intersection in RenderViewBuilder
+    std::sort(m_filteredEntities.begin(), m_filteredEntities.end());
 }
 
-// Note: we assume that m_layerIds contains only enabled layers
-// -> meaning that if an Entity references such a layer, it's enabled
+// We accept the entity if it contains any of the layers that are in the layer filter
+void FilterLayerEntityJob::filterAcceptAnyMatchingLayers(Entity *entity,
+                                                         const Qt3DCore::QNodeIdVector &layerIds)
+{
+    const Qt3DCore::QNodeIdVector entityLayers = entity->layerIds();
+
+    for (const Qt3DCore::QNodeId id : entityLayers) {
+        const bool layerAccepted = layerIds.contains(id);
+
+        if (layerAccepted) {
+            m_filteredEntities.push_back(entity);
+            break;
+        }
+    }
+}
+
+// We accept the entity if it contains all the layers that are in the layer
+// filter
+void FilterLayerEntityJob::filterAcceptAllMatchingLayers(Entity *entity,
+                                                         const Qt3DCore::QNodeIdVector &layerIds)
+{
+    const Qt3DCore::QNodeIdVector entityLayers = entity->layerIds();
+    int layersAccepted = 0;
+
+    for (const Qt3DCore::QNodeId id : entityLayers) {
+        if (layerIds.contains(id))
+            ++layersAccepted;
+    }
+
+    if (layersAccepted == layerIds.size())
+        m_filteredEntities.push_back(entity);
+}
+
+// We discard the entity if it contains any of the layers that are in the layer
+// filter
+// In other words that means we select an entity if one of its layers is not on
+// the layer filter
+void FilterLayerEntityJob::filterDiscardAnyMatchingLayers(Entity *entity,
+                                                          const Qt3DCore::QNodeIdVector &layerIds)
+{
+    const Qt3DCore::QNodeIdVector entityLayers = entity->layerIds();
+    bool entityCanBeDiscarded = false;
+
+    for (const Qt3DCore::QNodeId id : entityLayers) {
+        if (layerIds.contains(id)) {
+            entityCanBeDiscarded =  true;
+            break;
+        }
+    }
+
+    if (!entityCanBeDiscarded)
+        m_filteredEntities.push_back(entity);
+}
+
+// We discard the entity if it contains all of the layers that are in the layer
+// filter
+// In other words that means we select an entity if none of its layers are on
+// the layer filter
+void FilterLayerEntityJob::filterDiscardAllMatchingLayers(Entity *entity,
+                                                          const Qt3DCore::QNodeIdVector &layerIds)
+{
+    const Qt3DCore::QNodeIdVector entityLayers = entity->layerIds();
+
+    int containedLayers = 0;
+
+    for (const Qt3DCore::QNodeId id : layerIds) {
+        if (entityLayers.contains(id))
+            ++containedLayers;
+    }
+
+    if (containedLayers != layerIds.size())
+        m_filteredEntities.push_back(entity);
+}
+
 void FilterLayerEntityJob::filterLayerAndEntity()
 {
     EntityManager *entityManager = m_manager->renderNodesManager();
     const QVector<HEntity> handles = entityManager->activeHandles();
 
-    for (const HEntity handle : handles) {
+    QVector<Entity *> entitiesToFilter;
+    entitiesToFilter.reserve(handles.size());
+
+    for (const HEntity &handle : handles) {
         Entity *entity = entityManager->data(handle);
 
-        if (!entity->isTreeEnabled())
-            continue;
+        if (entity->isTreeEnabled())
+            entitiesToFilter.push_back(entity);
+    }
 
-        const Qt3DCore::QNodeIdVector entityLayers = entity->componentsUuid<Layer>();
+    FrameGraphManager *frameGraphManager = m_manager->frameGraphManager();
+    LayerManager *layerManager = m_manager->layerManager();
 
-        // An Entity is positively filtered if it contains at least one Layer component with the same id as the
-        // layers selected by the LayerFilter
+    for (const Qt3DCore::QNodeId layerFilterId : qAsConst(m_layerFilterIds)) {
+        LayerFilterNode *layerFilter = static_cast<LayerFilterNode *>(frameGraphManager->lookupNode(layerFilterId));
+        Qt3DCore::QNodeIdVector layerIds = layerFilter->layerIds();
 
-        for (const Qt3DCore::QNodeId id : entityLayers) {
-            if (m_layerIds.contains(id)) {
-                m_filteredEntities.push_back(entity);
+        // Remove layerIds which are not active/enabled
+        for (int i = layerIds.size() - 1; i >= 0; --i) {
+            Layer *backendLayer = layerManager->lookupResource(layerIds.at(i));
+            if (backendLayer == nullptr || !backendLayer->isEnabled())
+                layerIds.removeAt(i);
+        }
+
+        const QLayerFilter::FilterMode filterMode = layerFilter->filterMode();
+
+        // Perform filtering
+        for (Entity *entity : entitiesToFilter) {
+            switch (filterMode) {
+            case QLayerFilter::AcceptAnyMatchingLayers: {
+                filterAcceptAnyMatchingLayers(entity, layerIds);
                 break;
             }
+            case QLayerFilter::AcceptAllMatchingLayers: {
+                filterAcceptAllMatchingLayers(entity, layerIds);
+                break;
+            }
+            case QLayerFilter::DiscardAnyMatchingLayers: {
+                filterDiscardAnyMatchingLayers(entity, layerIds);
+                break;
+            }
+            case QLayerFilter::DiscardAllMatchingLayers: {
+                filterDiscardAllMatchingLayers(entity, layerIds);
+                break;
+            }
+            default:
+                Q_UNREACHABLE();
+            }
         }
+
+        // Entities to filter for the next frame are the filtered result of the
+        // current LayerFilter
+        entitiesToFilter = std::move(m_filteredEntities);
     }
+    m_filteredEntities = std::move(entitiesToFilter);
 }
 
 // No layer filter -> retrieve all entities
@@ -115,7 +261,7 @@ void FilterLayerEntityJob::selectAllEntities()
     const QVector<HEntity> handles = entityManager->activeHandles();
 
     m_filteredEntities.reserve(handles.size());
-    for (const HEntity handle : handles) {
+    for (const HEntity &handle : handles) {
         Entity *e = entityManager->data(handle);
         if (e->isTreeEnabled())
             m_filteredEntities.push_back(e);

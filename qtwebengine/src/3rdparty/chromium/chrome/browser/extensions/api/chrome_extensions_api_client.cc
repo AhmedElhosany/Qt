@@ -12,8 +12,10 @@
 #include "chrome/browser/extensions/api/chrome_device_permissions_prompt.h"
 #include "chrome/browser/extensions/api/declarative_content/chrome_content_rules_registry.h"
 #include "chrome/browser/extensions/api/declarative_content/default_content_predicate_evaluators.h"
+#include "chrome/browser/extensions/api/file_system/chrome_file_system_delegate.h"
 #include "chrome/browser/extensions/api/management/chrome_management_api_delegate.h"
 #include "chrome/browser/extensions/api/metrics_private/chrome_metrics_private_delegate.h"
+#include "chrome/browser/extensions/api/networking_cast_private/chrome_networking_cast_private_delegate.h"
 #include "chrome/browser/extensions/api/storage/managed_value_store_cache.h"
 #include "chrome/browser/extensions/api/storage/sync_value_store_cache.h"
 #include "chrome/browser/extensions/api/web_request/chrome_extension_web_request_event_router_delegate.h"
@@ -35,7 +37,9 @@
 #include "printing/features/features.h"
 
 #if defined(OS_CHROMEOS)
+#include "chrome/browser/extensions/api/file_handlers/non_native_file_system_delegate_chromeos.h"
 #include "chrome/browser/extensions/api/virtual_keyboard_private/chrome_virtual_keyboard_delegate.h"
+#include "chrome/browser/extensions/clipboard_extension_helper_chromeos.h"
 #endif
 
 #if BUILDFLAG(ENABLE_PRINTING)
@@ -165,5 +169,45 @@ MetricsPrivateDelegate* ChromeExtensionsAPIClient::GetMetricsPrivateDelegate() {
     metrics_private_delegate_.reset(new ChromeMetricsPrivateDelegate());
   return metrics_private_delegate_.get();
 }
+
+NetworkingCastPrivateDelegate*
+ChromeExtensionsAPIClient::GetNetworkingCastPrivateDelegate() {
+#if defined(OS_CHROMEOS) || defined(OS_WIN) || defined(OS_MACOSX)
+  if (!networking_cast_private_delegate_)
+    networking_cast_private_delegate_ =
+        ChromeNetworkingCastPrivateDelegate::Create();
+#endif
+  return networking_cast_private_delegate_.get();
+}
+
+FileSystemDelegate* ChromeExtensionsAPIClient::GetFileSystemDelegate() {
+  if (!file_system_delegate_)
+    file_system_delegate_ = base::MakeUnique<ChromeFileSystemDelegate>();
+  return file_system_delegate_.get();
+}
+
+#if defined(OS_CHROMEOS)
+NonNativeFileSystemDelegate*
+ChromeExtensionsAPIClient::GetNonNativeFileSystemDelegate() {
+  if (!non_native_file_system_delegate_) {
+    non_native_file_system_delegate_ =
+        base::MakeUnique<NonNativeFileSystemDelegateChromeOS>();
+  }
+  return non_native_file_system_delegate_.get();
+}
+
+void ChromeExtensionsAPIClient::SaveImageDataToClipboard(
+    const std::vector<char>& image_data,
+    api::clipboard::ImageType type,
+    AdditionalDataItemList additional_items,
+    const base::Closure& success_callback,
+    const base::Callback<void(const std::string&)>& error_callback) {
+  if (!clipboard_extension_helper_)
+    clipboard_extension_helper_ = base::MakeUnique<ClipboardExtensionHelper>();
+  clipboard_extension_helper_->DecodeAndSaveImageData(
+      image_data, type, std::move(additional_items), success_callback,
+      error_callback);
+}
+#endif
 
 }  // namespace extensions

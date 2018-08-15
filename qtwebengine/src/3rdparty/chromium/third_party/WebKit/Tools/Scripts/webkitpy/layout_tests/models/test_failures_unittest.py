@@ -54,11 +54,13 @@ class TestFailuresTest(unittest.TestCase):
                 return ''
 
         failure_obj = UnknownFailure()
-        self.assertRaises(ValueError, determine_result_type, [failure_obj])
+        with self.assertRaises(ValueError):
+            determine_result_type([failure_obj])
 
     def test_message_is_virtual(self):
         failure_obj = TestFailure()
-        self.assertRaises(NotImplementedError, failure_obj.message)
+        with self.assertRaises(NotImplementedError):
+            failure_obj.message()
 
     def test_loads(self):
         for c in ALL_FAILURE_CLASSES:
@@ -70,7 +72,7 @@ class TestFailuresTest(unittest.TestCase):
         crash_set = set([FailureCrash(), FailureCrash()])
         self.assertEqual(len(crash_set), 1)
         # The hash happens to be the name of the class, but sets still work:
-        crash_set = set([FailureCrash(), "FailureCrash"])
+        crash_set = set([FailureCrash(), 'FailureCrash'])
         self.assertEqual(len(crash_set), 2)
 
     def test_crashes(self):

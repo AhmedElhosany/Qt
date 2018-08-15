@@ -13,6 +13,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequenced_task_runner_helpers.h"
 #include "base/supports_user_data.h"
 #include "storage/browser/storage_browser_export.h"
 #include "storage/common/blob_storage/blob_storage_constants.h"
@@ -64,17 +65,25 @@ class STORAGE_EXPORT BlobDataHandle
   // The callback will be run on the IO thread when construction of the blob
   // is complete. If construction is already complete, then the task is run
   // immediately on the current message loop (i.e. IO thread).
-  // Must be called on IO thread.  Returns if construction successful.
+  // Must be called on IO thread.
   // Calling this multiple times results in registering multiple
   // completion callbacks.
   void RunOnConstructionComplete(const BlobStatusCallback& done);
+
+  // The callback will be run on the IO thread when construction of the blob
+  // has began. If construction has already began (or has finished already),
+  // then the task is run immediately on the current message loop (i.e. IO
+  // thread).
+  // Must be called on IO thread.
+  // Calling this multiple times results in registering multiple
+  // callbacks.
+  void RunOnConstructionBegin(const BlobStatusCallback& done);
 
   // A BlobReader is used to read the data from the blob.  This object is
   // intended to be transient and should not be stored for any extended period
   // of time.
   std::unique_ptr<BlobReader> CreateReader(
-      FileSystemContext* file_system_context,
-      base::SequencedTaskRunner* file_task_runner) const;
+      FileSystemContext* file_system_context) const;
 
   // May be accessed on any thread.
   const std::string& uuid() const;

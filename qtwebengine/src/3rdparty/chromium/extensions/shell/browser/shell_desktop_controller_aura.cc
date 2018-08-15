@@ -11,6 +11,8 @@
 #include "base/command_line.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
@@ -24,13 +26,13 @@
 #include "ui/aura/client/default_capture_client.h"
 #include "ui/aura/layout_manager.h"
 #include "ui/aura/window.h"
-#include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/image_cursors.h"
-#include "ui/base/ime/input_method_initializer.h"
+#include "ui/base/ime/input_method.h"
 #include "ui/base/user_activity/user_activity_detector.h"
 #include "ui/display/screen.h"
+#include "ui/events/event_sink.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/wm/core/base_focus_rules.h"
@@ -47,7 +49,7 @@
 #include "ui/display/types/display_snapshot.h"
 
 #if defined(USE_X11)
-#include "ui/display/chromeos/x11/native_display_delegate_x11.h"
+#include "ui/display/manager/chromeos/x11/native_display_delegate_x11.h"
 #endif
 
 #if defined(USE_OZONE)
@@ -95,7 +97,7 @@ class FillLayout : public aura::LayoutManager {
 };
 
 // A class that bridges the gap between CursorManager and Aura. It borrows
-// heavily from AshNativeCursorManager.
+// heavily from NativeCursorManagerAsh.
 class ShellNativeCursorManager : public wm::NativeCursorManager {
  public:
   explicit ShellNativeCursorManager(aura::WindowTreeHost* host)
@@ -126,16 +128,16 @@ class ShellNativeCursorManager : public wm::NativeCursorManager {
     if (visible) {
       SetCursor(delegate->GetCursor(), delegate);
     } else {
-      gfx::NativeCursor invisible_cursor(ui::kCursorNone);
+      gfx::NativeCursor invisible_cursor(ui::CursorType::kNone);
       image_cursors_->SetPlatformCursor(&invisible_cursor);
       ApplyCursor(invisible_cursor);
     }
   }
 
-  void SetCursorSet(ui::CursorSetType cursor_set,
-                    wm::NativeCursorManagerDelegate* delegate) override {
-    image_cursors_->SetCursorSet(cursor_set);
-    delegate->CommitCursorSet(cursor_set);
+  void SetCursorSize(ui::CursorSize cursor_size,
+                     wm::NativeCursorManagerDelegate* delegate) override {
+    image_cursors_->SetCursorSize(cursor_size);
+    delegate->CommitCursorSize(cursor_size);
     if (delegate->IsCursorVisible())
       SetCursor(delegate->GetCursor(), delegate);
   }
@@ -180,13 +182,13 @@ ShellDesktopControllerAura::ShellDesktopControllerAura()
 #if defined(OS_CHROMEOS)
   chromeos::DBusThreadManager::Get()->GetPowerManagerClient()->AddObserver(
       this);
-  display_configurator_.reset(new ui::DisplayConfigurator);
+  display_configurator_.reset(new display::DisplayConfigurator);
 #if defined(USE_OZONE)
   display_configurator_->Init(
       ui::OzonePlatform::GetInstance()->CreateNativeDisplayDelegate(), false);
 #elif defined(USE_X11)
-  display_configurator_->Init(base::MakeUnique<ui::NativeDisplayDelegateX11>(),
-                              false);
+  display_configurator_->Init(
+      base::MakeUnique<display::NativeDisplayDelegateX11>(), false);
 #endif
   display_configurator_->ForceInitialConfigure(0);
   display_configurator_->AddObserver(this);
@@ -238,7 +240,6 @@ void ShellDesktopControllerAura::CloseAppWindows() {
 }
 
 aura::Window* ShellDesktopControllerAura::GetDefaultParent(
-    aura::Window* context,
     aura::Window* window,
     const gfx::Rect& bounds) {
   return host_->window();
@@ -256,10 +257,10 @@ void ShellDesktopControllerAura::PowerButtonEventReceived(
 }
 
 void ShellDesktopControllerAura::OnDisplayModeChanged(
-    const ui::DisplayConfigurator::DisplayStateList& displays) {
+    const display::DisplayConfigurator::DisplayStateList& displays) {
   gfx::Size size = GetPrimaryDisplaySize();
   if (!size.IsEmpty())
-    host_->UpdateRootWindowSize(size);
+    host_->UpdateRootWindowSizeInPixels(size);
 }
 #endif
 
@@ -271,12 +272,17 @@ void ShellDesktopControllerAura::OnHostCloseRequested(
       FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
 }
 
+ui::EventDispatchDetails ShellDesktopControllerAura::DispatchKeyEventPostIME(
+    ui::KeyEvent* key_event) {
+  return host_->DispatchKeyEventPostIME(key_event);
+}
+
 void ShellDesktopControllerAura::InitWindowManager() {
   wm::FocusController* focus_controller =
       new wm::FocusController(new AppsFocusRules());
   aura::client::SetFocusClient(host_->window(), focus_controller);
   host_->window()->AddPreTargetHandler(focus_controller);
-  aura::client::SetActivationClient(host_->window(), focus_controller);
+  wm::SetActivationClient(host_->window(), focus_controller);
   focus_client_.reset(focus_controller);
 
   capture_client_.reset(
@@ -290,7 +296,7 @@ void ShellDesktopControllerAura::InitWindowManager() {
           new ShellNativeCursorManager(host_.get()))));
   cursor_manager_->SetDisplay(
       display::Screen::GetScreen()->GetPrimaryDisplay());
-  cursor_manager_->SetCursor(ui::kCursorPointer);
+  cursor_manager_->SetCursor(ui::CursorType::kPointer);
   aura::client::SetCursorClient(host_->window(), cursor_manager_.get());
 
   user_activity_detector_.reset(new ui::UserActivityDetector);
@@ -318,12 +324,16 @@ void ShellDesktopControllerAura::CreateRootWindow() {
 
   screen_.reset(new ShellScreen(size));
   display::Screen::SetScreenInstance(screen_.get());
-  // TODO(mukai): Set up input method.
 
   host_.reset(screen_->CreateHostForPrimaryDisplay());
   aura::client::SetWindowParentingClient(host_->window(), this);
   root_window_event_filter_.reset(new wm::CompoundEventFilter);
   host_->window()->AddPreTargetHandler(root_window_event_filter_.get());
+
+  // Trigger creation of an input method and become its delegate.
+  ui::InputMethod* input_method = host_->GetInputMethod();
+  input_method->SetDelegate(this);
+
   InitWindowManager();
 
   host_->AddObserver(this);
@@ -338,9 +348,12 @@ void ShellDesktopControllerAura::DestroyRootWindow() {
       static_cast<wm::FocusController*>(focus_client_.get());
   if (focus_controller) {
     host_->window()->RemovePreTargetHandler(focus_controller);
-    aura::client::SetActivationClient(host_->window(), NULL);
+    wm::SetActivationClient(host_->window(), NULL);
   }
+
+  host_->window()->RemovePreTargetHandler(root_window_event_filter_.get());
   root_window_event_filter_.reset();
+
   capture_client_.reset();
   focus_client_.reset();
   cursor_manager_.reset();
@@ -349,16 +362,17 @@ void ShellDesktopControllerAura::DestroyRootWindow() {
 #endif
   user_activity_detector_.reset();
   host_.reset();
+  display::Screen::SetScreenInstance(nullptr);
   screen_.reset();
 }
 
 gfx::Size ShellDesktopControllerAura::GetPrimaryDisplaySize() {
 #if defined(OS_CHROMEOS)
-  const ui::DisplayConfigurator::DisplayStateList& displays =
+  const display::DisplayConfigurator::DisplayStateList& displays =
       display_configurator_->cached_displays();
   if (displays.empty())
     return gfx::Size();
-  const ui::DisplayMode* mode = displays[0]->current_mode();
+  const display::DisplayMode* mode = displays[0]->current_mode();
   return mode ? mode->size() : gfx::Size();
 #else
   return gfx::Size();

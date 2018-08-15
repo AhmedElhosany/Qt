@@ -121,7 +121,10 @@ static const struct {
     { "TreeView", 1, 4 },
 
     { "TextArea", 1, 5 },
-    { "TreeView", 1, 5 }
+    { "TreeView", 1, 5 },
+
+    { "Calendar", 1, 6 },
+    { "Slider", 1, 6 }
 };
 
 QtQuickControls1Plugin::QtQuickControls1Plugin(QObject *parent) : QQmlExtensionPlugin(parent)

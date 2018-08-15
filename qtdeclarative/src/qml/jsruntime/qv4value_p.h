@@ -56,8 +56,6 @@
 #include "qv4global_p.h"
 #include <private/qv4heap_p.h>
 
-#include <private/qnumeric_p.h>
-
 #if QT_POINTER_SIZE == 8
 #define QV4_USE_64_BIT_VALUE_ENCODING
 #endif
@@ -364,8 +362,6 @@ public:
         return d;
     }
     QML_NEARLY_ALWAYS_INLINE void setDouble(double d) {
-        if (qt_is_nan(d))
-            d = qt_qnan();
         memcpy(&_val, &d, 8);
 #ifdef QV4_USE_64_BIT_VALUE_ENCODING
         _val ^= NaNEncodeMask;
@@ -491,7 +487,7 @@ public:
     // Section 9.12
     bool sameValue(Value other) const;
 
-    inline void mark(ExecutionEngine *e);
+    inline void mark(MarkStack *markStack);
 
     Value &operator =(const ScopedValue &v);
     Value &operator=(ReturnedValue v) { _val = v; return *this; }
@@ -721,7 +717,6 @@ inline unsigned int Value::toUInt32() const
 {
     return (unsigned int)toInt32();
 }
-
 
 }
 

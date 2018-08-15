@@ -405,7 +405,6 @@ class MEDIA_GPU_EXPORT V4L2SliceVideoDecodeAccelerator
   VideoCodecProfile video_profile_;
   uint32_t input_format_fourcc_;
   uint32_t output_format_fourcc_;
-  gfx::Size visible_size_;
   gfx::Size coded_size_;
 
   struct BitstreamBufferRef;
@@ -470,10 +469,6 @@ class MEDIA_GPU_EXPORT V4L2SliceVideoDecodeAccelerator
 
   DISALLOW_COPY_AND_ASSIGN(V4L2SliceVideoDecodeAccelerator);
 };
-
-class V4L2H264Picture;
-class V4L2VP8Picture;
-class V4L2VP9Picture;
 
 }  // namespace media
 

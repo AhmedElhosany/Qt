@@ -30,48 +30,44 @@
 
 #include "core/css/CSSStyleSheet.h"
 #include "core/css/StyleSheet.h"
+#include "core/dom/Document.h"
 #include "core/dom/DocumentStyleSheetCollection.h"
 
 namespace blink {
 
 DocumentStyleSheetCollector::DocumentStyleSheetCollector(
     StyleSheetCollection* collection,
-    HeapVector<Member<StyleSheet>>* sheetsForList,
-    HeapHashSet<Member<Document>>* visitedDocuments)
-    : m_collection(collection),
-      m_styleSheetsForStyleSheetList(sheetsForList),
-      m_visitedDocuments(visitedDocuments) {}
+    HeapVector<Member<StyleSheet>>* sheets_for_list,
+    HeapHashSet<Member<Document>>* visited_documents)
+    : collection_(collection),
+      style_sheets_for_style_sheet_list_(sheets_for_list),
+      visited_documents_(visited_documents) {}
 
 DocumentStyleSheetCollector::~DocumentStyleSheetCollector() {}
 
-void DocumentStyleSheetCollector::appendActiveStyleSheets(
-    const HeapVector<TraceWrapperMember<CSSStyleSheet>>& sheets) {
-  DCHECK(m_collection);
-  m_collection->appendActiveStyleSheets(sheets);
+void DocumentStyleSheetCollector::AppendActiveStyleSheet(
+    const ActiveStyleSheet& sheet) {
+  DCHECK(collection_);
+  collection_->AppendActiveStyleSheet(sheet);
 }
 
-void DocumentStyleSheetCollector::appendActiveStyleSheet(CSSStyleSheet* sheet) {
-  DCHECK(m_collection);
-  m_collection->appendActiveStyleSheet(sheet);
-}
-
-void DocumentStyleSheetCollector::appendSheetForList(StyleSheet* sheet) {
-  if (m_styleSheetsForStyleSheetList) {
-    m_styleSheetsForStyleSheetList->append(sheet);
+void DocumentStyleSheetCollector::AppendSheetForList(StyleSheet* sheet) {
+  if (style_sheets_for_style_sheet_list_) {
+    style_sheets_for_style_sheet_list_->push_back(sheet);
   } else {
-    m_collection->appendSheetForList(sheet);
+    collection_->AppendSheetForList(sheet);
   }
 }
 
 ActiveDocumentStyleSheetCollector::ActiveDocumentStyleSheetCollector(
     StyleSheetCollection& collection)
-    : DocumentStyleSheetCollector(&collection, nullptr, &m_visitedDocuments) {}
+    : DocumentStyleSheetCollector(&collection, nullptr, &visited_documents_) {}
 
 ImportedDocumentStyleSheetCollector::ImportedDocumentStyleSheetCollector(
     DocumentStyleSheetCollector& collector,
-    HeapVector<Member<StyleSheet>>& sheetForList)
-    : DocumentStyleSheetCollector(collector.m_collection,
-                                  &sheetForList,
-                                  collector.m_visitedDocuments) {}
+    HeapVector<Member<StyleSheet>>& sheet_for_list)
+    : DocumentStyleSheetCollector(collector.collection_,
+                                  &sheet_for_list,
+                                  collector.visited_documents_) {}
 
 }  // namespace blink

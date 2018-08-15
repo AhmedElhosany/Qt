@@ -28,7 +28,7 @@ RCC_DIR = $$OUT_PWD/$$getConfigDir()/.rcc
 
 # Assume that we want mobile touch and low-end hardware behaviors
 # whenever we are cross compiling.
-contains(WEBENGINE_CONFIG, embedded_build): DEFINES += QTWEBENGINE_EMBEDDED_SWITCHES
+qtConfig(webengine-embedded-build): DEFINES += QTWEBENGINE_EMBEDDED_SWITCHES
 
 qtConfig(egl): CONFIG += egl
 
@@ -44,6 +44,7 @@ SOURCES = \
         browser_context_adapter.cpp \
         browser_context_adapter_client.cpp \
         browser_context_qt.cpp \
+        browsing_data_remover_delegate_qt.cpp \
         browser_message_filter_qt.cpp \
         certificate_error_controller.cpp \
         chromium_gpu_helper.cpp \
@@ -79,7 +80,6 @@ SOURCES = \
         qrc_protocol_handler_qt.cpp \
         render_view_observer_host_qt.cpp \
         render_widget_host_view_qt.cpp \
-        render_widget_host_view_qt_delegate.cpp \
         renderer/content_renderer_client_qt.cpp \
         renderer/render_frame_observer_qt.cpp \
         renderer/render_view_observer_qt.cpp \
@@ -96,6 +96,7 @@ SOURCES = \
         url_request_context_getter_qt.cpp \
         url_request_custom_job.cpp \
         url_request_custom_job_delegate.cpp \
+        url_request_custom_job_proxy.cpp \
         url_request_qrc_job_qt.cpp \
         user_script.cpp \
         visited_links_manager_qt.cpp \
@@ -117,6 +118,7 @@ HEADERS = \
         browser_context_adapter.h \
         browser_context_adapter_client.h \
         browser_context_qt.h \
+        browsing_data_remover_delegate_qt.h \
         browser_message_filter_qt.h \
         certificate_error_controller_p.h \
         certificate_error_controller.h \
@@ -171,6 +173,7 @@ HEADERS = \
         url_request_context_getter_qt.h \
         url_request_custom_job.h \
         url_request_custom_job_delegate.h \
+        url_request_custom_job_proxy.h \
         url_request_qrc_job_qt.h \
         user_script.h \
         visited_links_manager_qt.h \
@@ -185,13 +188,8 @@ HEADERS = \
         web_engine_settings.h \
         web_event_factory.h
 
+qtConfig(webengine-pepper-plugins) {
 
-use?(pdf) {
-    SOURCES += pdfium_document_wrapper_qt.cpp
-    HEADERS += pdfium_document_wrapper_qt.h
-}
-
-use?(pepper_plugins) {
     SOURCES += \
         renderer_host/pepper/pepper_flash_browser_host_qt.cpp \
         renderer_host/pepper/pepper_host_factory_qt.cpp \
@@ -207,7 +205,8 @@ use?(pepper_plugins) {
         renderer/pepper/pepper_renderer_host_factory_qt.h
 }
 
-use?(printing) {
+qtConfig(webengine-printing-and-pdf) {
+
     SOURCES += \
         printing_message_filter_qt.cpp \
         print_view_manager_base_qt.cpp \
@@ -219,6 +218,10 @@ use?(printing) {
         print_view_manager_base_qt.h \
         print_view_manager_qt.h \
         renderer/print_web_view_helper_delegate_qt.h
+
+    # pdf sources
+    SOURCES += pdfium_document_wrapper_qt.cpp
+    HEADERS += pdfium_document_wrapper_qt.h
 }
 
 contains(QT_CONFIG, opengl) {

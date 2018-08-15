@@ -35,7 +35,7 @@ cr.define('alertOverlay', function() {
       okButton.clickCallback = null;
       cancelButton.clickCallback = null;
     });
-  };
+  }
 
   /**
    * Updates the alert overlay with the given message, button titles, and
@@ -52,8 +52,9 @@ cr.define('alertOverlay', function() {
    *     user presses the cancel button. Can be undefined if |opt_cancelTitle|
    *     is falsey.
    */
-  function setValues(title, message, opt_okTitle, opt_cancelTitle,
-                     opt_okCallback, opt_cancelCallback) {
+  function setValues(
+      title, message, opt_okTitle, opt_cancelTitle, opt_okCallback,
+      opt_cancelCallback) {
     if (typeof title != 'undefined')
       $('alertOverlayTitle').textContent = title;
     $('alertOverlayTitle').hidden = typeof title == 'undefined';
@@ -71,13 +72,10 @@ cr.define('alertOverlay', function() {
       cancelButton.textContent = opt_cancelTitle;
     cancelButton.hidden = !opt_cancelTitle;
     cancelButton.clickCallback = opt_cancelCallback;
-  };
+  }
 
   // Export
-  return {
-    initialize: initialize,
-    setValues: setValues
-  };
+  return {initialize: initialize, setValues: setValues};
 });
 
 document.addEventListener('DOMContentLoaded', alertOverlay.initialize);

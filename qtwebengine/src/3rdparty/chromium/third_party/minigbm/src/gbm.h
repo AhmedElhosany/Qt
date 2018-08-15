@@ -35,6 +35,7 @@ extern "C" {
 
 #define __GBM__ 1
 
+#include <stddef.h>
 #include <stdint.h>
 
 /**
@@ -238,6 +239,10 @@ enum gbm_bo_flags {
     * buffer.
     */
    GBM_BO_USE_LINEAR    = (1 << 4),
+   /**
+    * The buffer will be used as a texture that will be sampled from.
+    */
+   GBM_BO_USE_TEXTURING    = (1 << 5),
 };
 
 int
@@ -260,6 +265,12 @@ struct gbm_bo *
 gbm_bo_create(struct gbm_device *gbm,
               uint32_t width, uint32_t height,
               uint32_t format, uint32_t flags);
+
+struct gbm_bo *
+gbm_bo_create_with_modifiers(struct gbm_device *gbm,
+                             uint32_t width, uint32_t height,
+                             uint32_t format,
+                             const uint64_t *modifiers, uint32_t count);
 
 #define GBM_BO_IMPORT_WL_BUFFER         0x5501
 #define GBM_BO_IMPORT_EGL_IMAGE         0x5502

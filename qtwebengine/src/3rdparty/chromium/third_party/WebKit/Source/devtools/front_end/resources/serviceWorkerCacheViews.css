@@ -11,25 +11,12 @@
 }
 
 .service-worker-cache-data-view .data-view-toolbar .key-input {
-    font-size: 11px;
     margin: auto 0;
     width: 200px;
 }
 
 .service-worker-cache-data-view .data-grid {
     flex: auto;
-}
-
-.service-worker-cache-data-view .data-grid .data-container tr:nth-child(even) {
-    background-color: white;
-}
-
-.service-worker-cache-data-view .data-grid .data-container tr:nth-child(odd) {
-    background-color: #EAF3FF;
-}
-
-.service-worker-cache-data-view .data-grid .data-container tr:nth-last-child(1) {
-    background-color: white;
 }
 
 .service-worker-cache-data-view .data-grid .data-container tr:nth-last-child(1) td {

@@ -68,25 +68,30 @@ private:
     WebChannelTransport() { }
     virtual gin::ObjectTemplateBuilder GetObjectTemplateBuilder(v8::Isolate *isolate) override;
 
-    void NativeQtSendMessage(gin::Arguments *args)
+    bool NativeQtSendMessage(gin::Arguments *args)
     {
         content::RenderView *renderView = GetRenderView(args->isolate());
         if (!renderView || args->Length() != 1)
-            return;
+            return false;
         v8::Handle<v8::Value> val;
         args->GetNext(&val);
         if (!val->IsString() && !val->IsStringObject())
-            return;
+            return false;
         v8::String::Utf8Value utf8(val->ToString());
 
         QByteArray valueData(*utf8, utf8.length());
         QJsonParseError error;
         QJsonDocument doc = QJsonDocument::fromJson(valueData, &error);
-        if (error.error != QJsonParseError::NoError)
+        if (error.error != QJsonParseError::NoError) {
             qWarning("%s %d: Parsing error: %s",__FILE__, __LINE__, qPrintable(error.errorString()));
+            return false;
+        }
         int size = 0;
         const char *rawData = doc.rawData(&size);
+        if (size == 0)
+            return false;
         renderView->Send(new WebChannelIPCTransportHost_SendMessage(renderView->GetRoutingID(), std::vector<char>(rawData, rawData + size)));
+        return true;
     }
 
     DISALLOW_COPY_AND_ASSIGN(WebChannelTransport);
@@ -100,9 +105,9 @@ void WebChannelTransport::Install(blink::WebFrame *frame, uint worldId)
     v8::HandleScope handleScope(isolate);
     v8::Handle<v8::Context> context;
     if (worldId == 0)
-        context = frame->mainWorldScriptContext();
+        context = frame->ToWebLocalFrame()->MainWorldScriptContext();
     else
-        context = frame->toWebLocalFrame()->isolatedWorldScriptContext(worldId, 0);
+        context = frame->ToWebLocalFrame()->IsolatedWorldScriptContext(worldId);
     v8::Context::Scope contextScope(context);
 
     gin::Handle<WebChannelTransport> transport = gin::CreateHandle(isolate, new WebChannelTransport);
@@ -121,9 +126,9 @@ void WebChannelTransport::Uninstall(blink::WebFrame *frame, uint worldId)
     v8::HandleScope handleScope(isolate);
     v8::Handle<v8::Context> context;
     if (worldId == 0)
-        context = frame->mainWorldScriptContext();
+        context = frame->ToWebLocalFrame()->MainWorldScriptContext();
     else
-        context = frame->toWebLocalFrame()->isolatedWorldScriptContext(worldId, 0);
+        context = frame->ToWebLocalFrame()->IsolatedWorldScriptContext(worldId);
     v8::Context::Scope contextScope(context);
 
     v8::Handle<v8::Object> global(context->Global());
@@ -140,12 +145,12 @@ gin::ObjectTemplateBuilder WebChannelTransport::GetObjectTemplateBuilder(v8::Iso
 
 content::RenderView *WebChannelTransport::GetRenderView(v8::Isolate *isolate)
 {
-    blink::WebLocalFrame *webframe = blink::WebLocalFrame::frameForContext(isolate->GetCurrentContext());
+    blink::WebLocalFrame *webframe = blink::WebLocalFrame::FrameForContext(isolate->GetCurrentContext());
     DCHECK(webframe) << "There should be an active frame since we just got a native function called.";
     if (!webframe)
         return 0;
 
-    blink::WebView *webview = webframe->view();
+    blink::WebView *webview = webframe->View();
     if (!webview)
         return 0;  // can happen during closing
 
@@ -174,7 +179,7 @@ void WebChannelIPCTransport::installWebChannel(uint worldId)
     blink::WebView *webView = render_view()->GetWebView();
     if (!webView)
         return;
-    WebChannelTransport::Install(webView->mainFrame(), worldId);
+    WebChannelTransport::Install(webView->MainFrame(), worldId);
     m_installed = true;
     m_installedWorldId = worldId;
 }
@@ -185,7 +190,7 @@ void WebChannelIPCTransport::uninstallWebChannel(uint worldId)
     blink::WebView *webView = render_view()->GetWebView();
     if (!webView)
         return;
-    WebChannelTransport::Uninstall(webView->mainFrame(), worldId);
+    WebChannelTransport::Uninstall(webView->MainFrame(), worldId);
     m_installed = false;
 }
 
@@ -201,12 +206,12 @@ void WebChannelIPCTransport::dispatchWebChannelMessage(const std::vector<char> &
 
     v8::Isolate *isolate = v8::Isolate::GetCurrent();
     v8::HandleScope handleScope(isolate);
-    blink::WebFrame *frame = webView->mainFrame();
+    blink::WebFrame *frame = webView->MainFrame();
     v8::Handle<v8::Context> context;
     if (worldId == 0)
-        context = frame->mainWorldScriptContext();
+        context = frame->ToWebLocalFrame()->MainWorldScriptContext();
     else
-        context = frame->toWebLocalFrame()->isolatedWorldScriptContext(worldId, 0);
+        context = frame->ToWebLocalFrame()->IsolatedWorldScriptContext(worldId);
     v8::Context::Scope contextScope(context);
 
     v8::Handle<v8::Object> global(context->Global());
@@ -234,7 +239,7 @@ void WebChannelIPCTransport::dispatchWebChannelMessage(const std::vector<char> &
     const int argc = 1;
     v8::Handle<v8::Value> argv[argc];
     argv[0] = messageObject;
-    frame->callFunctionEvenIfScriptDisabled(callback, webChannelObjectValue->ToObject(), argc, argv);
+    frame->ToWebLocalFrame()->CallFunctionEvenIfScriptDisabled(callback, webChannelObjectValue->ToObject(), argc, argv);
 }
 
 bool WebChannelIPCTransport::OnMessageReceived(const IPC::Message &message)
@@ -247,6 +252,11 @@ bool WebChannelIPCTransport::OnMessageReceived(const IPC::Message &message)
         IPC_MESSAGE_UNHANDLED(handled = false)
     IPC_END_MESSAGE_MAP()
     return handled;
+}
+
+void WebChannelIPCTransport::OnDestruct()
+{
+    delete this;
 }
 
 } // namespace

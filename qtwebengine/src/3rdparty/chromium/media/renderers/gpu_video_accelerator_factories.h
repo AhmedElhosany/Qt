@@ -28,7 +28,6 @@ class SharedMemory;
 }
 
 namespace gfx {
-class Rect;
 class Size;
 }
 
@@ -74,6 +73,9 @@ class MEDIA_EXPORT GpuVideoAcceleratorFactories {
   // Return the channel token, or an empty token if the channel is unusable.
   virtual base::UnguessableToken GetChannelToken() = 0;
 
+  // Returns the |route_id| of the command buffer, or 0 if there is none.
+  virtual int32_t GetCommandBufferRouteId() = 0;
+
   // Caller owns returned pointer, but should call Destroy() on it (instead of
   // directly deleting) for proper destruction, as per the
   // VideoDecodeAccelerator interface.
@@ -94,10 +96,11 @@ class MEDIA_EXPORT GpuVideoAcceleratorFactories {
                               uint32_t texture_target) = 0;
   virtual void DeleteTexture(uint32_t texture_id) = 0;
   virtual gpu::SyncToken CreateSyncToken() = 0;
+  virtual void ShallowFlushCHROMIUM() = 0;
 
   virtual void WaitSyncToken(const gpu::SyncToken& sync_token) = 0;
 
-  virtual std::unique_ptr<gfx::GpuMemoryBuffer> AllocateGpuMemoryBuffer(
+  virtual std::unique_ptr<gfx::GpuMemoryBuffer> CreateGpuMemoryBuffer(
       const gfx::Size& size,
       gfx::BufferFormat format,
       gfx::BufferUsage usage) = 0;

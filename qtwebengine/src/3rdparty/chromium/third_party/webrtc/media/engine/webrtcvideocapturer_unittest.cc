@@ -15,14 +15,14 @@
 #include <memory>
 #include <vector>
 
-#include "webrtc/base/gunit.h"
-#include "webrtc/base/logging.h"
-#include "webrtc/base/stringutils.h"
-#include "webrtc/base/thread.h"
 #include "webrtc/media/base/testutils.h"
 #include "webrtc/media/base/videocommon.h"
 #include "webrtc/media/engine/fakewebrtcvcmfactory.h"
 #include "webrtc/media/engine/webrtcvideocapturer.h"
+#include "webrtc/rtc_base/gunit.h"
+#include "webrtc/rtc_base/logging.h"
+#include "webrtc/rtc_base/stringutils.h"
+#include "webrtc/rtc_base/thread.h"
 
 using cricket::VideoFormat;
 
@@ -42,7 +42,7 @@ class WebRtcVideoCapturerTest : public testing::Test {
     vga.width = 640;
     vga.height = 480;
     vga.maxFPS = 30;
-    vga.rawType = webrtc::kVideoI420;
+    vga.videoType = webrtc::VideoType::kI420;
     factory_->device_info.AddCapability(kTestDeviceId, vga);
   }
 
@@ -75,7 +75,7 @@ TEST_F(WebRtcVideoCapturerTest, TestInit) {
 }
 
 TEST_F(WebRtcVideoCapturerTest, TestInitVcm) {
-  EXPECT_TRUE(capturer_->Init(factory_->Create(0,
+  EXPECT_TRUE(capturer_->Init(factory_->Create(
       reinterpret_cast<const char*>(kTestDeviceId.c_str()))));
 }
 
@@ -101,7 +101,7 @@ TEST_F(WebRtcVideoCapturerTest, TestCapture) {
 }
 
 TEST_F(WebRtcVideoCapturerTest, TestCaptureVcm) {
-  EXPECT_TRUE(capturer_->Init(factory_->Create(0,
+  EXPECT_TRUE(capturer_->Init(factory_->Create(
       reinterpret_cast<const char*>(kTestDeviceId.c_str()))));
   cricket::VideoCapturerListener listener(capturer_.get());
   EXPECT_TRUE(capturer_->GetSupportedFormats()->empty());

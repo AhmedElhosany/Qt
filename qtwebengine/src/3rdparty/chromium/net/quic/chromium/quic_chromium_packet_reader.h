@@ -3,15 +3,15 @@
 // found in the LICENSE file.
 //
 
-#ifndef NET_QUIC_QUIC_CHROMIUM_PACKET_READER_H_
-#define NET_QUIC_QUIC_CHROMIUM_PACKET_READER_H_
+#ifndef NET_QUIC_CHROMIUM_QUIC_CHROMIUM_PACKET_READER_H_
+#define NET_QUIC_CHROMIUM_QUIC_CHROMIUM_PACKET_READER_H_
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_export.h"
 #include "net/log/net_log_with_source.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/quic/core/quic_time.h"
 #include "net/socket/datagram_client_socket.h"
 
@@ -33,8 +33,8 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketReader {
     virtual void OnReadError(int result,
                              const DatagramClientSocket* socket) = 0;
     virtual bool OnPacket(const QuicReceivedPacket& packet,
-                          IPEndPoint local_address,
-                          IPEndPoint peer_address) = 0;
+                          const QuicSocketAddress& local_address,
+                          const QuicSocketAddress& peer_address) = 0;
   };
 
   QuicChromiumPacketReader(DatagramClientSocket* socket,
@@ -48,6 +48,9 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketReader {
   // Causes the QuicConnectionHelper to start reading from the socket
   // and passing the data along to the QuicConnection.
   void StartReading();
+
+  // Returns the estimate of dynamically allocated memory in bytes.
+  size_t EstimateMemoryUsage() const;
 
  private:
   // A completion callback invoked when a read completes.
@@ -71,4 +74,4 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketReader {
 
 }  // namespace net
 
-#endif  // NET_QUIC_QUIC_CHROMIUM_PACKET_READER_H_
+#endif  // NET_QUIC_CHROMIUM_QUIC_CHROMIUM_PACKET_READER_H_

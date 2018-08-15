@@ -18,6 +18,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "gin/array_buffer.h"
 #include "gin/public/isolate_holder.h"
 #include "gin/v8_initializer.h"
@@ -366,7 +367,7 @@ class SharedIsolateFactory {
 
   // Lazily creates a v8::Isolate, or returns the already created instance.
   v8::Isolate* GetSharedIsolate() {
-    base::AutoLock l(lock_);
+    base::AutoLock lock(lock_);
 
     if (!holder_) {
       // Do one-time initialization for V8.
@@ -391,14 +392,15 @@ class SharedIsolateFactory {
         has_initialized_v8_ = true;
       }
 
-      holder_.reset(new gin::IsolateHolder(gin::IsolateHolder::kUseLocker));
+      holder_.reset(new gin::IsolateHolder(base::ThreadTaskRunnerHandle::Get(),
+                                           gin::IsolateHolder::kUseLocker));
     }
 
     return holder_->isolate();
   }
 
   v8::Isolate* GetSharedIsolateWithoutCreating() {
-    base::AutoLock l(lock_);
+    base::AutoLock lock(lock_);
     return holder_ ? holder_->isolate() : NULL;
   }
 

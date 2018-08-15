@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.RoundButton {
     id: control
@@ -49,15 +49,23 @@ T.RoundButton {
     baselineOffset: contentItem.y + contentItem.baselineOffset
 
     padding: 6
+    spacing: 6
 
-    contentItem: Text {
+    icon.width: 24
+    icon.height: 24
+    icon.color: control.checked || control.highlighted ? control.palette.brightText :
+                control.flat && !control.down ? (control.visualFocus ? control.palette.highlight : control.palette.windowText) : control.palette.buttonText
+
+    contentItem: IconLabel {
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+
+        icon: control.icon
         text: control.text
         font: control.font
-        opacity: enabled || control.highlighted || control.checked ? 1 : 0.3
-        color: control.checked || control.highlighted ? Default.textLightColor : (control.visualFocus ? Default.focusColor : (control.down ? Default.textDarkColor : Default.textColor))
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideRight
+        color: control.checked || control.highlighted ? control.palette.brightText :
+               control.flat && !control.down ? (control.visualFocus ? control.palette.highlight : control.palette.windowText) : control.palette.buttonText
     }
 
     background: Rectangle {
@@ -66,10 +74,9 @@ T.RoundButton {
         radius: control.radius
         opacity: enabled ? 1 : 0.3
         visible: !control.flat || control.down || control.checked || control.highlighted
-        color: control.checked || control.highlighted ?
-            (control.visualFocus ? (control.down ? Default.buttonCheckedFocusColor : Default.focusColor) : (control.down ? Default.buttonCheckedPressedColor : Default.buttonCheckedColor)) :
-            (control.visualFocus ? (control.down ? Default.focusPressedColor : Default.focusLightColor) : (control.down ? Default.buttonPressedColor : Default.buttonColor))
-        border.color: Default.focusColor
+        color: Color.blend(control.checked || control.highlighted ? control.palette.dark : control.palette.button,
+                                                                    control.palette.mid, control.down ? 0.5 : 0.0)
+        border.color: control.palette.highlight
         border.width: control.visualFocus ? 2 : 0
     }
 }

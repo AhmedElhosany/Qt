@@ -48,6 +48,7 @@
 // We mean it.
 //
 
+#include <QtGui/qpalette.h>
 #include <QtQuick/private/qquicktextedit_p.h>
 #include <QtQuickTemplates2/private/qtquicktemplates2global_p.h>
 
@@ -70,6 +71,8 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickTextArea : public QQuickTextEdit
     // 2.1 (Qt 5.8)
     Q_PROPERTY(bool hovered READ isHovered NOTIFY hoveredChanged FINAL REVISION 1)
     Q_PROPERTY(bool hoverEnabled READ isHoverEnabled WRITE setHoverEnabled RESET resetHoverEnabled NOTIFY hoverEnabledChanged FINAL REVISION 1)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(QPalette palette READ palette WRITE setPalette RESET resetPalette NOTIFY paletteChanged FINAL REVISION 3)
     Q_CLASSINFO("DeferredPropertyNames", "background")
 
 public:
@@ -100,6 +103,11 @@ public:
     void setHoverEnabled(bool enabled);
     void resetHoverEnabled();
 
+    // 2.3 (Qt 5.10)
+    QPalette palette() const;
+    void setPalette(const QPalette &palette);
+    void resetPalette();
+
 Q_SIGNALS:
     void fontChanged();
     void implicitWidthChanged3();
@@ -113,6 +121,8 @@ Q_SIGNALS:
     Q_REVISION(1) void released(QQuickMouseEvent *event);
     Q_REVISION(1) void hoveredChanged();
     Q_REVISION(1) void hoverEnabledChanged();
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void paletteChanged();
 
 protected:
     void classBegin() override;

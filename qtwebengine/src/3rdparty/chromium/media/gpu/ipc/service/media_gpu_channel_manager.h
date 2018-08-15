@@ -8,11 +8,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <unordered_map>
 
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
+#include "base/unguessable_token.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
+#include "media/base/android_overlay_mojo_factory.h"
 #include "media/video/video_decode_accelerator.h"
 
 namespace gpu {
@@ -24,7 +27,8 @@ namespace media {
 
 class MediaGpuChannel;
 
-class MediaGpuChannelManager {
+class MediaGpuChannelManager
+    : public base::SupportsWeakPtr<MediaGpuChannelManager> {
  public:
   explicit MediaGpuChannelManager(gpu::GpuChannelManager* channel_manager);
   ~MediaGpuChannelManager();
@@ -33,10 +37,18 @@ class MediaGpuChannelManager {
   void RemoveChannel(int32_t client_id);
   void DestroyAllChannels();
 
+  void SetOverlayFactory(AndroidOverlayMojoFactoryCB overlay_factory_cb);
+
+  // TODO(sandersd): Should we expose the MediaGpuChannel instead?
+  gpu::GpuChannel* LookupChannel(const base::UnguessableToken& channel_token);
+
  private:
   gpu::GpuChannelManager* const channel_manager_;
-  base::ScopedPtrHashMap<int32_t, std::unique_ptr<MediaGpuChannel>>
+  std::unordered_map<int32_t, std::unique_ptr<MediaGpuChannel>>
       media_gpu_channels_;
+  std::map<base::UnguessableToken, int32_t> token_to_channel_;
+  std::map<int32_t, base::UnguessableToken> channel_to_token_;
+  AndroidOverlayMojoFactoryCB overlay_factory_cb_;
   DISALLOW_COPY_AND_ASSIGN(MediaGpuChannelManager);
 };
 

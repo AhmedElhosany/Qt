@@ -105,6 +105,8 @@ public:
     QPixmap currentPixmap() const;
 
     bool isValid() const;
+    QImageReader::ImageReaderError lastError() const;
+    QString lastErrorString() const;
 
     bool jumpToFrame(int frameNumber);
     int loopCount() const;

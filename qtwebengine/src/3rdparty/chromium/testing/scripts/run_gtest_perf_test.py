@@ -82,18 +82,26 @@ def main():
     assert xvfb_proc and openbox_proc and xcompmgr_proc, 'Failed to start xvfb'
 
   try:
-    valid = True
     rc = 0
     try:
       executable = rest_args[0]
+      extra_flags = []
+      if len(rest_args) > 1:
+        extra_flags = rest_args[1:]
+
+      # These flags are to make sure that test output perf metrics in the log.
+      if not '--verbose' in extra_flags:
+        extra_flags.append('--verbose')
+      if not '--test-launcher-print-test-stdio=always' in extra_flags:
+        extra_flags.append('--test-launcher-print-test-stdio=always')
+
       if IsWindows():
         executable = '.\%s.exe' % executable
       else:
         executable = './%s' % executable
       with common.temporary_file() as tempfile_path:
-        valid = (common.run_command_with_output([executable],
-            env=env, stdoutfile=tempfile_path) == 0)
-
+        rc = common.run_command_with_output([executable] + extra_flags,
+            env=env, stdoutfile=tempfile_path)
         # Now get the correct json format from the stdout to write to the
         # perf results file
         results_processor = (
@@ -104,8 +112,9 @@ def main():
           f.write(charts)
     except Exception:
       traceback.print_exc()
-      valid = False
+      rc = 1
 
+    valid = (rc == 0)
     failures = [] if valid else ['(entire test suite)']
     with open(args.isolated_script_test_output, 'w') as fp:
       json.dump({

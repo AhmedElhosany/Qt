@@ -41,11 +41,9 @@
 #include "SkBlitRow_opts.h"
 #include "SkBlurImageFilter_opts.h"
 #include "SkChecksum_opts.h"
-#include "SkColorCubeFilter_opts.h"
 #include "SkMorphologyImageFilter_opts.h"
-#include "SkRasterPipeline_opts.h"
 #include "SkSwizzler_opts.h"
-#include "SkTextureCompressor_opts.h"
+#include "SkUtils_opts.h"
 #include "SkXfermode_opts.h"
 
 namespace SkOpts {
@@ -55,7 +53,6 @@ namespace SkOpts {
     // They'll still get a chance to be replaced with even better ones, e.g. using SSE4.1.
 #define DEFINE_DEFAULT(name) decltype(name) name = SK_OPTS_NS::name
     DEFINE_DEFAULT(create_xfermode);
-    DEFINE_DEFAULT(color_cube_filter_span);
 
     DEFINE_DEFAULT(box_blur_xx);
     DEFINE_DEFAULT(box_blur_xy);
@@ -65,9 +62,6 @@ namespace SkOpts {
     DEFINE_DEFAULT(dilate_y);
     DEFINE_DEFAULT( erode_x);
     DEFINE_DEFAULT( erode_y);
-
-    DEFINE_DEFAULT(texture_compressor);
-    DEFINE_DEFAULT(fill_block_dimensions);
 
     DEFINE_DEFAULT(blit_mask_d32_a8);
 
@@ -87,9 +81,12 @@ namespace SkOpts {
 
     DEFINE_DEFAULT(srcover_srgb_srgb);
 
+    DEFINE_DEFAULT(memset16);
+    DEFINE_DEFAULT(memset32);
+    DEFINE_DEFAULT(memset64);
+
     DEFINE_DEFAULT(hash_fn);
 
-    DEFINE_DEFAULT(compile_pipeline);
 #undef DEFINE_DEFAULT
 
     // Each Init_foo() is defined in src/opts/SkOpts_foo.cpp.
@@ -97,7 +94,6 @@ namespace SkOpts {
     void Init_sse41();
     void Init_sse42();
     void Init_avx();
-    void Init_hsw();
     void Init_crc32();
 
     static void init() {
@@ -107,7 +103,6 @@ namespace SkOpts {
         if (SkCpu::Supports(SkCpu::SSE41)) { Init_sse41(); }
         if (SkCpu::Supports(SkCpu::SSE42)) { Init_sse42(); }
         if (SkCpu::Supports(SkCpu::AVX  )) { Init_avx();   }
-        if (SkCpu::Supports(SkCpu::HSW  )) { Init_hsw();   }
 
     #elif defined(SK_CPU_ARM64)
         if (SkCpu::Supports(SkCpu::CRC32)) { Init_crc32(); }

@@ -5,37 +5,53 @@
 #ifndef SyncManager_h
 #define SyncManager_h
 
-#include "bindings/core/v8/ScriptWrappable.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Handle.h"
-#include "wtf/text/WTFString.h"
+#include "platform/wtf/text/WTFString.h"
+#include "public/platform/modules/background_sync/background_sync.mojom-blink.h"
 
 namespace blink {
 
-class ExecutionContext;
 class ScriptPromise;
+class ScriptPromiseResolver;
 class ScriptState;
 class ServiceWorkerRegistration;
 
-class SyncManager final : public GarbageCollected<SyncManager>,
+class SyncManager final : public GarbageCollectedFinalized<SyncManager>,
                           public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static SyncManager* create(ServiceWorkerRegistration* registration) {
+  static SyncManager* Create(ServiceWorkerRegistration* registration) {
     return new SyncManager(registration);
   }
 
-  ScriptPromise registerFunction(ScriptState*,
-                                 ExecutionContext*,
-                                 const String&);
+  ScriptPromise registerFunction(ScriptState*, const String& tag);
   ScriptPromise getTags(ScriptState*);
 
   DECLARE_TRACE();
 
+  enum { kUnregisteredSyncID = -1 };
+
  private:
   explicit SyncManager(ServiceWorkerRegistration*);
 
-  Member<ServiceWorkerRegistration> m_registration;
+  // Returns an initialized BackgroundSyncServicePtr. A connection with the
+  // the browser's BackgroundSyncService is created the first time this method
+  // is called.
+  const mojom::blink::BackgroundSyncServicePtr& GetBackgroundSyncServicePtr();
+
+  // Callbacks
+  static void RegisterCallback(ScriptPromiseResolver*,
+                               mojom::blink::BackgroundSyncError,
+                               mojom::blink::SyncRegistrationPtr options);
+  static void GetRegistrationsCallback(
+      ScriptPromiseResolver*,
+      mojom::blink::BackgroundSyncError,
+      WTF::Vector<mojom::blink::SyncRegistrationPtr> registrations);
+
+  Member<ServiceWorkerRegistration> registration_;
+  mojom::blink::BackgroundSyncServicePtr background_sync_service_;
 };
 
 }  // namespace blink

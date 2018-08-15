@@ -7,19 +7,20 @@
 
 #include <stdint.h>
 
+#include <map>
 #include <memory>
-#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "media/base/cdm_context.h"
+#include "media/base/cdm_key_information.h"
+#include "media/base/content_decryption_module.h"
 #include "media/base/decryptor.h"
 #include "media/base/media_export.h"
-#include "media/base/media_keys.h"
 
 class GURL;
 
@@ -31,24 +32,25 @@ namespace media {
 
 // Decrypts an AES encrypted buffer into an unencrypted buffer. The AES
 // encryption must be CTR with a key size of 128bits.
-class MEDIA_EXPORT AesDecryptor : public MediaKeys,
+class MEDIA_EXPORT AesDecryptor : public ContentDecryptionModule,
                                   public CdmContext,
                                   public Decryptor {
  public:
   AesDecryptor(const GURL& security_origin,
                const SessionMessageCB& session_message_cb,
                const SessionClosedCB& session_closed_cb,
-               const SessionKeysChangeCB& session_keys_change_cb);
+               const SessionKeysChangeCB& session_keys_change_cb,
+               const SessionExpirationUpdateCB& session_expiration_update_cb);
 
-  // MediaKeys implementation.
+  // ContentDecryptionModule implementation.
   void SetServerCertificate(const std::vector<uint8_t>& certificate,
                             std::unique_ptr<SimpleCdmPromise> promise) override;
   void CreateSessionAndGenerateRequest(
-      SessionType session_type,
+      CdmSessionType session_type,
       EmeInitDataType init_data_type,
       const std::vector<uint8_t>& init_data,
       std::unique_ptr<NewSessionCdmPromise> promise) override;
-  void LoadSession(SessionType session_type,
+  void LoadSession(CdmSessionType session_type,
                    const std::string& session_id,
                    std::unique_ptr<NewSessionCdmPromise> promise) override;
   void UpdateSession(const std::string& session_id,
@@ -83,6 +85,37 @@ class MEDIA_EXPORT AesDecryptor : public MediaKeys,
   void DeinitializeDecoder(StreamType stream_type) override;
 
  private:
+  friend class ClearKeyPersistentSessionCdm;
+
+  // Internally this class supports persistent license type sessions so that
+  // it can be used by ClearKeyPersistentSessionCdm. The following methods
+  // will be used from ClearKeyPersistentSessionCdm to create and update
+  // persistent sessions. Note that ClearKeyPersistentSessionCdm is only used
+  // for testing, so persistent sessions will not be available generally.
+
+  // Creates a new session with ID |session_id| and type |session_type|, and
+  // adds it to the list of active sessions. Returns false if the session ID
+  // is already in the list.
+  bool CreateSession(const std::string& session_id,
+                     CdmSessionType session_type);
+
+  // Gets the state of the session |session_id| as a JWK.
+  std::string GetSessionStateAsJWK(const std::string& session_id);
+
+  // Update session |session_id| with the JWK provided in |json_web_key_set|.
+  // Returns true and sets |key_added| if successful, otherwise returns false
+  // and |error_message| is the reason for failure.
+  bool UpdateSessionWithJWK(const std::string& session_id,
+                            const std::string& json_web_key_set,
+                            bool* key_added,
+                            std::string* error_message);
+
+  // Performs the final steps of UpdateSession (notify any listeners for keys
+  // changed, resolve the promise, and generate a keys change event).
+  void FinishUpdate(const std::string& session_id,
+                    bool key_added,
+                    std::unique_ptr<SimpleCdmPromise> promise);
+
   // TODO(fgalligan): Remove this and change KeyMap to use crypto::SymmetricKey
   // as there are no decryptors that are performing an integrity check.
   // Helper class that manages the decryption key.
@@ -94,6 +127,7 @@ class MEDIA_EXPORT AesDecryptor : public MediaKeys,
     // Creates the encryption key.
     bool Init();
 
+    const std::string& secret() { return secret_; }
     crypto::SymmetricKey* decryption_key() { return decryption_key_.get(); }
 
    private:
@@ -113,9 +147,9 @@ class MEDIA_EXPORT AesDecryptor : public MediaKeys,
   class SessionIdDecryptionKeyMap;
 
   // Key ID <-> SessionIdDecryptionKeyMap map.
-  typedef base::ScopedPtrHashMap<std::string,
-                                 std::unique_ptr<SessionIdDecryptionKeyMap>>
-      KeyIdToSessionKeysMap;
+  using KeyIdToSessionKeysMap =
+      std::unordered_map<std::string,
+                         std::unique_ptr<SessionIdDecryptionKeyMap>>;
 
   ~AesDecryptor() override;
 
@@ -135,10 +169,14 @@ class MEDIA_EXPORT AesDecryptor : public MediaKeys,
   // Deletes all keys associated with |session_id|.
   void DeleteKeysForSession(const std::string& session_id);
 
+  CdmKeysInfo GenerateKeysInfoList(const std::string& session_id,
+                                   CdmKeyInformation::KeyStatus status);
+
   // Callbacks for firing session events.
   SessionMessageCB session_message_cb_;
   SessionClosedCB session_closed_cb_;
   SessionKeysChangeCB session_keys_change_cb_;
+  SessionExpirationUpdateCB session_expiration_update_cb_;
 
   // Since only Decrypt() is called off the renderer thread, we only need to
   // protect |key_map_|, the only member variable that is shared between
@@ -146,12 +184,11 @@ class MEDIA_EXPORT AesDecryptor : public MediaKeys,
   KeyIdToSessionKeysMap key_map_;  // Protected by |key_map_lock_|.
   mutable base::Lock key_map_lock_;  // Protects the |key_map_|.
 
-  // Keeps track of current valid sessions.
-  std::set<std::string> valid_sessions_;
-
-  // Make session ID unique per renderer by making it static. Session
-  // IDs seen by the app will be "1", "2", etc.
-  static uint32_t next_session_id_;
+  // Keeps track of current open sessions and their type. Although publicly
+  // AesDecryptor only supports temporary sessions, ClearKeyPersistentSessionCdm
+  // uses this class to also support persistent sessions, so save the
+  // CdmSessionType for each session.
+  std::map<std::string, CdmSessionType> open_sessions_;
 
   NewKeyCB new_audio_key_cb_;
   NewKeyCB new_video_key_cb_;

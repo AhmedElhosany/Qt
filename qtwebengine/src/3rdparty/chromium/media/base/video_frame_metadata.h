@@ -42,12 +42,6 @@ class MEDIA_EXPORT VideoFrameMetadata {
     // contexts.
     COPY_REQUIRED,
 
-    // Indicates that the frame is owned by the decoder and that destroying the
-    // decoder will make the frame unrenderable. TODO(sandersd): Remove once OSX
-    // and Windows hardware decoders support frames which outlive the decoder.
-    // http://crbug.com/595716 and http://crbug.com/602708.
-    DECODER_OWNS_FRAME,
-
     // Indicates if the current frame is the End of its current Stream. Use
     // Get/SetBoolean() for this Key.
     END_OF_STREAM,
@@ -110,6 +104,20 @@ class MEDIA_EXPORT VideoFrameMetadata {
     // Indicates that the frame is rotated.
     ROTATION,
 
+    // Android only: if set, then this frame is not suitable for overlay, even
+    // if ALLOW_OVERLAY is set.  However, it allows us to process the overlay
+    // to see if it would have been promoted, if it were backed by a SurfaceView
+    // instead.  This lets us figure out when SurfaceViews are appropriate.
+    SURFACE_TEXTURE,
+
+    // Android only: if set, then this frame's resource would like to be
+    // notified about its promotability to an overlay.
+    WANTS_PROMOTION_HINT,
+
+    // Windows only: if set, then this frame must be displayed in an overlay
+    // rather than being composited into the framebuffer.
+    REQUIRE_OVERLAY,
+
     NUM_KEYS
   };
 
@@ -146,14 +154,14 @@ class MEDIA_EXPORT VideoFrameMetadata {
   bool IsTrue(Key key) const WARN_UNUSED_RESULT;
 
   // For serialization.
-  void MergeInternalValuesInto(base::DictionaryValue* out) const;
+  std::unique_ptr<base::DictionaryValue> CopyInternalValues() const;
   void MergeInternalValuesFrom(const base::DictionaryValue& in);
 
   // Merges internal values from |metadata_source|.
   void MergeMetadataFrom(const VideoFrameMetadata* metadata_source);
 
  private:
-  const base::BinaryValue* GetBinaryValue(Key key) const;
+  const base::Value* GetBinaryValue(Key key) const;
 
   base::DictionaryValue dictionary_;
 

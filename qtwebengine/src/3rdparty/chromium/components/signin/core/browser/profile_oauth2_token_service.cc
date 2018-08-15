@@ -4,21 +4,9 @@
 
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
 
-void ProfileOAuth2TokenService::OnRefreshTokenAvailable(
-    const std::string& account_id) {
-  CancelRequestsForAccount(account_id);
-  ClearCacheForAccount(account_id);
-}
-
-void ProfileOAuth2TokenService::OnRefreshTokenRevoked(
-    const std::string& account_id) {
-  CancelRequestsForAccount(account_id);
-  ClearCacheForAccount(account_id);
-}
-
 ProfileOAuth2TokenService::ProfileOAuth2TokenService(
-    OAuth2TokenServiceDelegate* delegate)
-    : OAuth2TokenService(delegate) {
+    std::unique_ptr<OAuth2TokenServiceDelegate> delegate)
+    : OAuth2TokenService(std::move(delegate)), all_credentials_loaded_(false) {
   AddObserver(this);
 }
 
@@ -36,6 +24,10 @@ void ProfileOAuth2TokenService::LoadCredentials(
   GetDelegate()->LoadCredentials(primary_account_id);
 }
 
+bool ProfileOAuth2TokenService::AreAllCredentialsLoaded() {
+  return all_credentials_loaded_;
+}
+
 void ProfileOAuth2TokenService::UpdateCredentials(
     const std::string& account_id,
     const std::string& refresh_token) {
@@ -49,4 +41,20 @@ void ProfileOAuth2TokenService::RevokeCredentials(
 
 const net::BackoffEntry* ProfileOAuth2TokenService::GetDelegateBackoffEntry() {
   return GetDelegate()->BackoffEntry();
+}
+
+void ProfileOAuth2TokenService::OnRefreshTokenAvailable(
+    const std::string& account_id) {
+  CancelRequestsForAccount(account_id);
+  ClearCacheForAccount(account_id);
+}
+
+void ProfileOAuth2TokenService::OnRefreshTokenRevoked(
+    const std::string& account_id) {
+  CancelRequestsForAccount(account_id);
+  ClearCacheForAccount(account_id);
+}
+
+void ProfileOAuth2TokenService::OnRefreshTokensLoaded() {
+  all_credentials_loaded_ = true;
 }

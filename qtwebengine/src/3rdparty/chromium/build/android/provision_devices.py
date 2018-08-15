@@ -137,7 +137,8 @@ def ProvisionDevice(device, blacklist, options):
     if blacklist:
       blacklist.Extend([str(device)], reason='provision_timeout')
 
-  except device_errors.CommandFailedError:
+  except (device_errors.CommandFailedError,
+          device_errors.DeviceUnreachableError):
     logging.exception('Failed to provision device %s. Adding to blacklist.',
                       str(device))
     if blacklist:
@@ -552,6 +553,7 @@ def main():
   try:
     return ProvisionDevices(args)
   except (device_errors.DeviceUnreachableError, device_errors.NoDevicesError):
+    logging.exception('Unable to provision local devices.')
     return exit_codes.INFRA
 
 

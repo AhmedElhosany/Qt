@@ -38,11 +38,14 @@
                 "domain": "DOMDebugger"
             },
             {
+                "domain": "DOMSnapshot"
+            },
+            {
                 "domain": "DOMStorage"
             },
             {
                 "domain": "IndexedDB",
-                "async": ["requestDatabaseNames", "requestDatabase", "requestData", "clearObjectStore"]
+                "async": ["requestDatabaseNames", "requestDatabase", "requestData", "clearObjectStore", "deleteDatabase"]
             },
             {
                 "domain": "LayerTree"
@@ -51,7 +54,7 @@
                 "domain": "Log"
             },
             {
-                "domain": "Rendering"
+                "domain": "Overlay"
             },
             {
                 "domain": "Input",
@@ -77,24 +80,25 @@
             {
                 "domain": "Page",
                 "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "captureScreenshot", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
-                            "getAppManifest", "requestAppBanner", "setControlNavigations", "processNavigation"],
+                            "getAppManifest", "requestAppBanner", "setControlNavigations", "processNavigation", "printToPDF"],
                 "async": ["getResourceContent", "searchInResource"],
                 "exclude_events": ["screencastFrame", "screencastVisibilityChanged", "colorPicked", "interstitialShown", "interstitialHidden", "navigationRequested"]
             },
             {
                 "domain": "Emulation",
                 "include": ["forceViewport", "resetViewport", "resetPageScaleFactor", "setPageScaleFactor", "setScriptExecutionDisabled", "setTouchEmulationEnabled",
-                            "setEmulatedMedia", "setCPUThrottlingRate", "setVirtualTimePolicy"],
+                            "setEmulatedMedia", "setCPUThrottlingRate", "setVirtualTimePolicy", "setDefaultBackgroundColorOverride"],
                 "include_events": ["virtualTimeBudgetExpired"]
             },
             {
                 "domain": "Network",
-                "exclude": ["clearBrowserCache", "clearBrowserCookies", "getCookies", "deleteCookie", "setCookie", "canEmulateNetworkConditions"],
+                "exclude": ["clearBrowserCache", "clearBrowserCookies", "getCookies", "getAllCookies", "deleteCookie", "setCookie", "canEmulateNetworkConditions",
+                            "setRequestInterceptionEnabled", "continueInterceptedRequest"],
                 "async": ["getResponseBody"]
             },
             {
                 "domain": "Target",
-                "include": ["setAutoAttach", "sendMessageToTarget"],
+                "include": ["setAutoAttach", "sendMessageToTarget", "setAttachToFrames"],
                 "include_events": ["attachedToTarget", "detachedFromTarget", "receivedMessageFromTarget"]
             }
         ]
@@ -102,9 +106,19 @@
 
     "imported": {
         "header": "<v8-inspector-protocol.h>",
-        "to_imported_string": "toV8InspectorStringView(%s)",
-        "from_imported_string": "toCoreString(%s)",
-        "namespace": ["v8_inspector", "protocol"]
+        "to_imported_string": "ToV8InspectorStringView(%s)",
+        "from_imported_string": "ToCoreString(%s)",
+        "namespace": ["v8_inspector", "protocol"],
+        "options": [
+            {
+                "domain": "Runtime",
+                "imported": ["RemoteObject", "StackTrace"]
+            },
+            {
+                "domain": "Debugger",
+                "imported": ["SearchMatch"]
+            }
+        ]
     },
 
     "lib": {

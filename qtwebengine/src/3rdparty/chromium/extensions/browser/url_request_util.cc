@@ -67,9 +67,10 @@ bool AllowCrossRendererResourceLoad(net::URLRequest* request,
   // hybrid hosted/packaged apps. The one exception is access to icons, since
   // some extensions want to be able to do things like create their own
   // launchers.
-  std::string resource_root_relative_path =
-      request->url().path().empty() ? std::string()
-                                    : request->url().path().substr(1);
+  base::StringPiece resource_root_relative_path =
+      request->url().path_piece().empty()
+          ? base::StringPiece()
+          : request->url().path_piece().substr(1);
   if (extension->is_hosted_app() &&
       !IconsInfo::GetIcons(extension)
            .ContainsPath(resource_root_relative_path)) {
@@ -151,17 +152,32 @@ bool AllowCrossRendererResourceLoadHelper(bool is_guest,
                                           const std::string& resource_path,
                                           ui::PageTransition page_transition,
                                           bool* allowed) {
-  // |owner_extension == extension| needs to be checked because extension
-  // resources should only be accessible to WebViews owned by that extension.
-  if (is_guest && owner_extension == extension &&
-      WebviewInfo::IsResourceWebviewAccessible(extension, partition_id,
-                                               resource_path)) {
-    *allowed = true;
-    return true;
-  }
+  if (is_guest) {
+    // Exceptionally, the resource at path "/success.html" that belongs to the
+    // sign-in extension (loaded by chrome://chrome-signin) is accessible to
+    // WebViews that are not owned by that extension.
+    // This exception is required as in order to mark the end of the the sign-in
+    // flow, Gaia redirects to the following continue URL:
+    // "chrome-extension://mfffpogegjflfpflabcdkioaeobkgjik/success.html".
+    //
+    // TODO(http://crbug.com/688565) Remove this check once the sign-in
+    // extension is deprecated and removed.
+    bool is_signin_extension =
+        extension && extension->id() == "mfffpogegjflfpflabcdkioaeobkgjik";
+    if (is_signin_extension && resource_path == "/success.html") {
+      *allowed = true;
+      return true;
+    }
 
-  if (is_guest && !ui::PageTransitionIsWebTriggerable(page_transition)) {
-    *allowed = false;
+    // An extension's resources should only be accessible to WebViews owned by
+    // that extension.
+    if (owner_extension != extension) {
+      *allowed = false;
+      return true;
+    }
+
+    *allowed = WebviewInfo::IsResourceWebviewAccessible(extension, partition_id,
+                                                        resource_path);
     return true;
   }
 

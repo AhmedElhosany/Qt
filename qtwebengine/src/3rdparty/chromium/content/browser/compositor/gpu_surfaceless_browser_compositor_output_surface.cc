@@ -8,31 +8,29 @@
 
 #include "cc/output/output_surface_client.h"
 #include "cc/output/output_surface_frame.h"
-#include "components/display_compositor/buffer_queue.h"
-#include "components/display_compositor/compositor_overlay_candidate_validator.h"
-#include "components/display_compositor/gl_helper.h"
+#include "components/viz/common/gl_helper.h"
+#include "components/viz/service/display_embedder/buffer_queue.h"
+#include "components/viz/service/display_embedder/compositor_overlay_candidate_validator.h"
 #include "content/browser/compositor/reflector_impl.h"
-#include "content/common/gpu/client/context_provider_command_buffer.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
+#include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
 
 namespace content {
 
 GpuSurfacelessBrowserCompositorOutputSurface::
     GpuSurfacelessBrowserCompositorOutputSurface(
-        scoped_refptr<ContextProviderCommandBuffer> context,
+        scoped_refptr<ui::ContextProviderCommandBuffer> context,
         gpu::SurfaceHandle surface_handle,
-        scoped_refptr<ui::CompositorVSyncManager> vsync_manager,
-        cc::SyntheticBeginFrameSource* begin_frame_source,
-        std::unique_ptr<display_compositor::CompositorOverlayCandidateValidator>
+        const UpdateVSyncParametersCallback& update_vsync_parameters_callback,
+        std::unique_ptr<viz::CompositorOverlayCandidateValidator>
             overlay_candidate_validator,
         unsigned int target,
         unsigned int internalformat,
         gfx::BufferFormat format,
         gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager)
     : GpuBrowserCompositorOutputSurface(std::move(context),
-                                        std::move(vsync_manager),
-                                        begin_frame_source,
+                                        update_vsync_parameters_callback,
                                         std::move(overlay_candidate_validator)),
       gpu_memory_buffer_manager_(gpu_memory_buffer_manager) {
   capabilities_.uses_default_gl_framebuffer = false;
@@ -46,9 +44,9 @@ GpuSurfacelessBrowserCompositorOutputSurface::
   // implementation.
   capabilities_.max_frames_pending = 2;
 
-  gl_helper_.reset(new display_compositor::GLHelper(
-      context_provider_->ContextGL(), context_provider_->ContextSupport()));
-  buffer_queue_.reset(new display_compositor::BufferQueue(
+  gl_helper_.reset(new viz::GLHelper(context_provider_->ContextGL(),
+                                     context_provider_->ContextSupport()));
+  buffer_queue_.reset(new viz::BufferQueue(
       context_provider_->ContextGL(), target, internalformat, format,
       gl_helper_.get(), gpu_memory_buffer_manager_, surface_handle));
   buffer_queue_->Initialize();
@@ -65,7 +63,13 @@ bool GpuSurfacelessBrowserCompositorOutputSurface::IsDisplayedAsOverlayPlane()
 
 unsigned GpuSurfacelessBrowserCompositorOutputSurface::GetOverlayTextureId()
     const {
-  return buffer_queue_->current_texture_id();
+  return buffer_queue_->GetCurrentTextureId();
+}
+
+gfx::BufferFormat
+GpuSurfacelessBrowserCompositorOutputSurface::GetOverlayBufferFormat() const {
+  DCHECK(buffer_queue_);
+  return buffer_queue_->buffer_format();
 }
 
 void GpuSurfacelessBrowserCompositorOutputSurface::SwapBuffers(
@@ -75,7 +79,11 @@ void GpuSurfacelessBrowserCompositorOutputSurface::SwapBuffers(
   // TODO(ccameron): What if a swap comes again before OnGpuSwapBuffersCompleted
   // happens, we'd see the wrong swap size there?
   swap_size_ = reshape_size_;
-  buffer_queue_->SwapBuffers(frame.sub_buffer_rect);
+
+  gfx::Rect damage_rect =
+      frame.sub_buffer_rect ? *frame.sub_buffer_rect : gfx::Rect(swap_size_);
+  buffer_queue_->SwapBuffers(damage_rect);
+
   GpuBrowserCompositorOutputSurface::SwapBuffers(std::move(frame));
 }
 
@@ -93,12 +101,13 @@ void GpuSurfacelessBrowserCompositorOutputSurface::Reshape(
     const gfx::Size& size,
     float device_scale_factor,
     const gfx::ColorSpace& color_space,
-    bool has_alpha) {
+    bool has_alpha,
+    bool use_stencil) {
   reshape_size_ = size;
-  GpuBrowserCompositorOutputSurface::Reshape(size, device_scale_factor,
-                                             color_space, has_alpha);
+  GpuBrowserCompositorOutputSurface::Reshape(
+      size, device_scale_factor, color_space, has_alpha, use_stencil);
   DCHECK(buffer_queue_);
-  buffer_queue_->Reshape(size, device_scale_factor, color_space);
+  buffer_queue_->Reshape(size, device_scale_factor, color_space, use_stencil);
 }
 
 void GpuSurfacelessBrowserCompositorOutputSurface::OnGpuSwapBuffersCompleted(

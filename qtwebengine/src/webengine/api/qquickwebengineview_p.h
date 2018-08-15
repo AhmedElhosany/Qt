@@ -199,7 +199,9 @@ public:
         MediaAudioCapture,
         MediaVideoCapture,
         MediaAudioVideoCapture,
-        Geolocation
+        Geolocation,
+        DesktopVideoCapture,
+        DesktopAudioVideoCapture
     };
     Q_ENUM(Feature)
 
@@ -244,6 +246,22 @@ public:
         Unselect,
         SavePage,
         ViewSource,
+
+        ToggleBold,
+        ToggleItalic,
+        ToggleUnderline,
+        ToggleStrikethrough,
+
+        AlignLeft,
+        AlignCenter,
+        AlignRight,
+        AlignJustified,
+        Indent,
+        Outdent,
+
+        InsertOrderedList,
+        InsertUnorderedList,
+
         WebActionCount
     };
     Q_ENUM(WebAction)

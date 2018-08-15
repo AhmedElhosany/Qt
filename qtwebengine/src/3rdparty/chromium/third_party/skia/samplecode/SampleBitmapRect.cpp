@@ -15,7 +15,6 @@
 #include "SkRegion.h"
 #include "SkShader.h"
 #include "SkUtils.h"
-#include "SkXfermode.h"
 #include "SkColorPriv.h"
 #include "SkColorFilter.h"
 #include "SkTime.h"
@@ -172,7 +171,7 @@ static void make_big_bitmap(SkBitmap* bm) {
 
     SkCanvas canvas(*bm);
 
-    canvas.drawText(gText, strlen(gText), 0, paint.getTextSize()*4/5, paint);
+    canvas.drawString(gText, 0, paint.getTextSize()*4/5, paint);
 }
 
 class BitmapRectView2 : public SampleView {

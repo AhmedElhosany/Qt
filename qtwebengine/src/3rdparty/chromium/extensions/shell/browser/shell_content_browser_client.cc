@@ -10,7 +10,9 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "components/guest_view/browser/guest_view_message_filter.h"
+#include "content/public/browser/browser_main_runner.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_instance.h"
@@ -37,6 +39,7 @@
 #include "extensions/shell/browser/shell_extension_system.h"
 #include "extensions/shell/browser/shell_navigation_ui_data.h"
 #include "extensions/shell/browser/shell_speech_recognition_manager_delegate.h"
+#include "storage/browser/quota/quota_settings.h"
 #include "url/gurl.h"
 
 #if !defined(DISABLE_NACL)
@@ -120,6 +123,14 @@ bool ShellContentBrowserClient::ShouldUseProcessPerSite(
   return true;
 }
 
+void ShellContentBrowserClient::GetQuotaSettings(
+    content::BrowserContext* context,
+    content::StoragePartition* partition,
+    storage::OptionalQuotaSettingsCallback callback) {
+  storage::GetNominalDynamicSettings(
+      partition->GetPath(), context->IsOffTheRecord(), std::move(callback));
+}
+
 bool ShellContentBrowserClient::IsHandledURL(const GURL& url) {
   if (!url.is_valid())
     return false;
@@ -134,10 +145,9 @@ bool ShellContentBrowserClient::IsHandledURL(const GURL& url) {
       url::kFileScheme,
       url::kFileSystemScheme,
       kExtensionScheme,
-      kExtensionResourceScheme,
   };
-  for (size_t i = 0; i < arraysize(kProtocolList); ++i) {
-    if (url.scheme() == kProtocolList[i])
+  for (const char* scheme : kProtocolList) {
+    if (url.SchemeIs(scheme))
       return true;
   }
   return false;
@@ -167,6 +177,10 @@ void ShellContentBrowserClient::SiteInstanceGotProcess(
 
 void ShellContentBrowserClient::SiteInstanceDeleting(
     content::SiteInstance* site_instance) {
+  // Don't do anything if we're shutting down.
+  if (content::BrowserMainRunner::ExitedMainMessageLoop())
+    return;
+
   // If this isn't an extension renderer there's nothing to do.
   const Extension* extension = GetExtension(site_instance);
   if (!extension)
@@ -231,11 +245,12 @@ ShellContentBrowserClient::GetDevToolsManagerDelegate() {
   return new content::ShellDevToolsManagerDelegate(GetBrowserContext());
 }
 
-ScopedVector<content::NavigationThrottle>
+std::vector<std::unique_ptr<content::NavigationThrottle>>
 ShellContentBrowserClient::CreateThrottlesForNavigation(
     content::NavigationHandle* navigation_handle) {
-  ScopedVector<content::NavigationThrottle> throttles;
-  throttles.push_back(new ExtensionNavigationThrottle(navigation_handle));
+  std::vector<std::unique_ptr<content::NavigationThrottle>> throttles;
+  throttles.push_back(
+      base::MakeUnique<ExtensionNavigationThrottle>(navigation_handle));
   return throttles;
 }
 
@@ -253,19 +268,24 @@ ShellBrowserMainParts* ShellContentBrowserClient::CreateShellBrowserMainParts(
 
 void ShellContentBrowserClient::AppendRendererSwitches(
     base::CommandLine* command_line) {
-  // TODO(jamescook): Should we check here if the process is in the extension
-  // service process map, or can we assume all renderers are extension
-  // renderers?
-  command_line->AppendSwitch(switches::kExtensionProcess);
+  static const char* const kSwitchNames[] = {
+      switches::kWhitelistedExtensionID,
+      // TODO(jamescook): Should we check here if the process is in the
+      // extension service process map, or can we assume all renderers are
+      // extension renderers?
+      switches::kExtensionProcess,
+  };
+  command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
+                                 kSwitchNames, arraysize(kSwitchNames));
 
 #if !defined(DISABLE_NACL)
   // NOTE: app_shell does not support non-SFI mode, so it does not pass through
   // SFI switches either here or for the zygote process.
-  static const char* const kSwitchNames[] = {
-    ::switches::kEnableNaClDebug,
+  static const char* const kNaclSwitchNames[] = {
+      ::switches::kEnableNaClDebug,
   };
   command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
-                                 kSwitchNames, arraysize(kSwitchNames));
+                                 kNaclSwitchNames, arraysize(kNaclSwitchNames));
 #endif  // !defined(DISABLE_NACL)
 }
 

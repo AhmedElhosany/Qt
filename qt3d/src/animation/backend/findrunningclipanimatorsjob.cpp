@@ -86,14 +86,15 @@ void FindRunningClipAnimatorsJob::run()
 
         const AnimationClip *clip = m_handler->animationClipLoaderManager()->lookupResource(clipAnimator->clipId());
         Q_ASSERT(clip);
-        const ComponentIndices formatIndices = generateClipFormatIndices(channelNamesAndTypes,
-                                                                         channelComponentIndices,
-                                                                         clip);
-        clipAnimator->setFormatIndices(formatIndices);
+        const ClipFormat format = generateClipFormatIndices(channelNamesAndTypes,
+                                                            channelComponentIndices,
+                                                            clip);
+        clipAnimator->setClipFormat(format);
 
         const QVector<MappingData> mappingData = buildPropertyMappings(channelMappings,
                                                                        channelNamesAndTypes,
-                                                                       channelComponentIndices);
+                                                                       format.formattedComponentIndices,
+                                                                       format.sourceClipMask);
         clipAnimator->setMappingData(mappingData);
     }
 

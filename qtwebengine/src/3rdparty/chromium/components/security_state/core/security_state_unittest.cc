@@ -5,11 +5,13 @@
 #include "components/security_state/core/security_state.h"
 
 #include <stdint.h>
+#include <utility>
 
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/histogram_tester.h"
+#include "base/test/scoped_command_line.h"
 #include "components/security_state/core/switches.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_cipher_suite_names.h"
@@ -26,6 +28,12 @@ namespace {
 const char kHttpsUrl[] = "https://foo.test/";
 const char kHttpUrl[] = "http://foo.test/";
 
+// This list doesn't include data: URL, as data: URLs will be explicitly marked
+// as not secure.
+const char* const kPseudoUrls[] = {
+    "blob:http://test/some-guid", "filesystem:http://test/some-guid",
+};
+
 bool IsOriginSecure(const GURL& url) {
   return url == kHttpsUrl;
 }
@@ -40,12 +48,17 @@ class TestSecurityStateHelper {
                            << net::SSL_CONNECTION_VERSION_SHIFT),
         cert_status_(net::CERT_STATUS_SHA1_SIGNATURE_PRESENT),
         displayed_mixed_content_(false),
+        contained_mixed_form_(false),
         ran_mixed_content_(false),
         malicious_content_status_(MALICIOUS_CONTENT_STATUS_NONE),
         displayed_password_field_on_http_(false),
-        displayed_credit_card_field_on_http_(false) {}
+        displayed_credit_card_field_on_http_(false),
+        is_incognito_(false) {}
   virtual ~TestSecurityStateHelper() {}
 
+  void SetCertificate(scoped_refptr<net::X509Certificate> cert) {
+    cert_ = std::move(cert);
+  }
   void set_connection_status(int connection_status) {
     connection_status_ = connection_status;
   }
@@ -55,10 +68,13 @@ class TestSecurityStateHelper {
   void AddCertStatus(net::CertStatus cert_status) {
     cert_status_ |= cert_status;
   }
-  void SetDisplayedMixedContent(bool displayed_mixed_content) {
+  void set_displayed_mixed_content(bool displayed_mixed_content) {
     displayed_mixed_content_ = displayed_mixed_content;
   }
-  void SetRanMixedContent(bool ran_mixed_content) {
+  void set_contained_mixed_form(bool contained_mixed_form) {
+    contained_mixed_form_ = contained_mixed_form;
+  }
+  void set_ran_mixed_content(bool ran_mixed_content) {
     ran_mixed_content_ = ran_mixed_content;
   }
   void set_malicious_content_status(
@@ -73,6 +89,7 @@ class TestSecurityStateHelper {
       bool displayed_credit_card_field_on_http) {
     displayed_credit_card_field_on_http_ = displayed_credit_card_field_on_http;
   }
+  void set_is_incognito(bool is_incognito) { is_incognito_ = is_incognito; }
 
   void SetUrl(const GURL& url) { url_ = url; }
 
@@ -85,11 +102,13 @@ class TestSecurityStateHelper {
     state->connection_status = connection_status_;
     state->security_bits = 256;
     state->displayed_mixed_content = displayed_mixed_content_;
+    state->contained_mixed_form = contained_mixed_form_;
     state->ran_mixed_content = ran_mixed_content_;
     state->malicious_content_status = malicious_content_status_;
     state->displayed_password_field_on_http = displayed_password_field_on_http_;
     state->displayed_credit_card_field_on_http =
         displayed_credit_card_field_on_http_;
+    state->is_incognito = is_incognito_;
     return state;
   }
 
@@ -102,56 +121,70 @@ class TestSecurityStateHelper {
 
  private:
   GURL url_;
-  const scoped_refptr<net::X509Certificate> cert_;
+  scoped_refptr<net::X509Certificate> cert_;
   int connection_status_;
   net::CertStatus cert_status_;
   bool displayed_mixed_content_;
+  bool contained_mixed_form_;
   bool ran_mixed_content_;
   MaliciousContentStatus malicious_content_status_;
   bool displayed_password_field_on_http_;
   bool displayed_credit_card_field_on_http_;
+  bool is_incognito_;
 };
 
 }  // namespace
 
-// Tests that SHA1-signed certificates expiring in 2016 downgrade the
-// security state of the page.
+// Tests that SHA1-signed certificates, when not allowed by policy, downgrade
+// the security state of the page to DANGEROUS.
+TEST(SecurityStateTest, SHA1Blocked) {
+  TestSecurityStateHelper helper;
+  helper.AddCertStatus(net::CERT_STATUS_WEAK_SIGNATURE_ALGORITHM);
+  helper.AddCertStatus(net::CERT_STATUS_SHA1_SIGNATURE_PRESENT);
+  SecurityInfo security_info;
+  helper.GetSecurityInfo(&security_info);
+  EXPECT_TRUE(security_info.sha1_in_chain);
+  EXPECT_EQ(DANGEROUS, security_info.security_level);
+}
+
+// Tests that SHA1-signed certificates, when allowed by policy, downgrade the
+// security state of the page to NONE.
 TEST(SecurityStateTest, SHA1Warning) {
   TestSecurityStateHelper helper;
   SecurityInfo security_info;
   helper.GetSecurityInfo(&security_info);
-  EXPECT_EQ(DEPRECATED_SHA1_MINOR, security_info.sha1_deprecation_status);
-  EXPECT_EQ(DANGEROUS, security_info.security_level);
+  EXPECT_TRUE(security_info.sha1_in_chain);
+  EXPECT_EQ(NONE, security_info.security_level);
 }
 
-// Tests that SHA1 warnings don't interfere with the handling of mixed
-// content.
+// Tests that SHA1-signed certificates, when allowed by policy, don't interfere
+// with the handling of mixed content.
 TEST(SecurityStateTest, SHA1WarningMixedContent) {
   TestSecurityStateHelper helper;
-  helper.SetDisplayedMixedContent(true);
+  helper.set_displayed_mixed_content(true);
   SecurityInfo security_info1;
   helper.GetSecurityInfo(&security_info1);
-  EXPECT_EQ(DEPRECATED_SHA1_MINOR, security_info1.sha1_deprecation_status);
+  EXPECT_TRUE(security_info1.sha1_in_chain);
   EXPECT_EQ(CONTENT_STATUS_DISPLAYED, security_info1.mixed_content_status);
-  EXPECT_EQ(DANGEROUS, security_info1.security_level);
+  EXPECT_EQ(NONE, security_info1.security_level);
 
-  helper.SetDisplayedMixedContent(false);
-  helper.SetRanMixedContent(true);
+  helper.set_displayed_mixed_content(false);
+  helper.set_ran_mixed_content(true);
   SecurityInfo security_info2;
   helper.GetSecurityInfo(&security_info2);
-  EXPECT_EQ(DEPRECATED_SHA1_MINOR, security_info2.sha1_deprecation_status);
+  EXPECT_TRUE(security_info2.sha1_in_chain);
   EXPECT_EQ(CONTENT_STATUS_RAN, security_info2.mixed_content_status);
   EXPECT_EQ(DANGEROUS, security_info2.security_level);
 }
 
-// Tests that SHA1 warnings don't interfere with the handling of major
-// cert errors.
+// Tests that SHA1-signed certificates, when allowed by policy,
+// don't interfere with the handling of major cert errors.
 TEST(SecurityStateTest, SHA1WarningBrokenHTTPS) {
   TestSecurityStateHelper helper;
   helper.AddCertStatus(net::CERT_STATUS_DATE_INVALID);
   SecurityInfo security_info;
   helper.GetSecurityInfo(&security_info);
-  EXPECT_EQ(DEPRECATED_SHA1_MINOR, security_info.sha1_deprecation_status);
+  EXPECT_TRUE(security_info.sha1_in_chain);
   EXPECT_EQ(DANGEROUS, security_info.security_level);
 }
 
@@ -248,49 +281,55 @@ TEST(SecurityStateTest, AlwaysWarnOnDataUrls) {
 }
 
 // Tests that password fields cause the security level to be downgraded
-// to HTTP_SHOW_WARNING when the command-line switch is set.
+// to HTTP_SHOW_WARNING.
 TEST(SecurityStateTest, PasswordFieldWarning) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kMarkHttpAs, switches::kMarkHttpWithPasswordsOrCcWithChip);
   TestSecurityStateHelper helper;
   helper.SetUrl(GURL(kHttpUrl));
   helper.set_displayed_password_field_on_http(true);
   SecurityInfo security_info;
   helper.GetSecurityInfo(&security_info);
   EXPECT_TRUE(security_info.displayed_password_field_on_http);
+  EXPECT_EQ(HTTP_SHOW_WARNING, security_info.security_level);
+}
+
+// Tests that password fields cause the security level to be downgraded
+// to HTTP_SHOW_WARNING on pseudo URLs.
+TEST(SecurityStateTest, PasswordFieldWarningOnPseudoUrls) {
+  for (const char* const url : kPseudoUrls) {
+    TestSecurityStateHelper helper;
+    helper.SetUrl(GURL(url));
+    helper.set_displayed_password_field_on_http(true);
+    SecurityInfo security_info;
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_TRUE(security_info.displayed_password_field_on_http);
+    EXPECT_EQ(HTTP_SHOW_WARNING, security_info.security_level);
+  }
+}
+
+// Tests that credit card fields cause the security level to be downgraded
+// to HTTP_SHOW_WARNING.
+TEST(SecurityStateTest, CreditCardFieldWarning) {
+  TestSecurityStateHelper helper;
+  helper.SetUrl(GURL(kHttpUrl));
+  helper.set_displayed_credit_card_field_on_http(true);
+  SecurityInfo security_info;
+  helper.GetSecurityInfo(&security_info);
+  EXPECT_TRUE(security_info.displayed_credit_card_field_on_http);
   EXPECT_EQ(HTTP_SHOW_WARNING, security_info.security_level);
 }
 
 // Tests that credit card fields cause the security level to be downgraded
-// to HTTP_SHOW_WARNING when the command-line switch is set.
-TEST(SecurityStateTest, CreditCardFieldWarning) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kMarkHttpAs, switches::kMarkHttpWithPasswordsOrCcWithChip);
-  TestSecurityStateHelper helper;
-  helper.SetUrl(GURL(kHttpUrl));
-  helper.set_displayed_credit_card_field_on_http(true);
-  SecurityInfo security_info;
-  helper.GetSecurityInfo(&security_info);
-  EXPECT_TRUE(security_info.displayed_credit_card_field_on_http);
-  EXPECT_EQ(HTTP_SHOW_WARNING, security_info.security_level);
-}
-
-// Tests that neither password nor credit fields cause the security
-// level to be downgraded to HTTP_SHOW_WARNING when the command-line switch
-// is NOT set.
-TEST(SecurityStateTest, HttpWarningNotSetWithoutSwitch) {
-  TestSecurityStateHelper helper;
-  helper.SetUrl(GURL(kHttpUrl));
-  helper.set_displayed_password_field_on_http(true);
-  SecurityInfo security_info;
-  helper.GetSecurityInfo(&security_info);
-  EXPECT_TRUE(security_info.displayed_password_field_on_http);
-  EXPECT_EQ(NONE, security_info.security_level);
-
-  helper.set_displayed_credit_card_field_on_http(true);
-  helper.GetSecurityInfo(&security_info);
-  EXPECT_TRUE(security_info.displayed_credit_card_field_on_http);
-  EXPECT_EQ(NONE, security_info.security_level);
+// to HTTP_SHOW_WARNING on pseudo URLs.
+TEST(SecurityStateTest, CreditCardFieldWarningOnPseudoUrls) {
+  for (const char* const url : kPseudoUrls) {
+    TestSecurityStateHelper helper;
+    helper.SetUrl(GURL(url));
+    helper.set_displayed_credit_card_field_on_http(true);
+    SecurityInfo security_info;
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_TRUE(security_info.displayed_credit_card_field_on_http);
+    EXPECT_EQ(HTTP_SHOW_WARNING, security_info.security_level);
+  }
 }
 
 // Tests that neither |displayed_password_field_on_http| nor
@@ -306,13 +345,50 @@ TEST(SecurityStateTest, PrivateUserDataNotSet) {
   EXPECT_EQ(NONE, security_info.security_level);
 }
 
+// Tests that neither |displayed_password_field_on_http| nor
+// |displayed_credit_card_field_on_http| is set on pseudo URLs when the
+// corresponding VisibleSecurityState flags are not set.
+TEST(SecurityStateTest, PrivateUserDataNotSetOnPseudoUrls) {
+  for (const char* const url : kPseudoUrls) {
+    TestSecurityStateHelper helper;
+    helper.SetUrl(GURL(url));
+    SecurityInfo security_info;
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_FALSE(security_info.displayed_password_field_on_http);
+    EXPECT_FALSE(security_info.displayed_credit_card_field_on_http);
+    EXPECT_EQ(NONE, security_info.security_level);
+  }
+}
+
+// Tests that |incognito_downgraded_security_level| is set only when the
+// corresponding VisibleSecurityState flag is set and the HTTPBad Phase 2
+// experiment is enabled.
+TEST(SecurityStateTest, IncognitoFlagPropagates) {
+  TestSecurityStateHelper helper;
+  helper.SetUrl(GURL(kHttpUrl));
+  SecurityInfo security_info;
+  helper.GetSecurityInfo(&security_info);
+  EXPECT_FALSE(security_info.incognito_downgraded_security_level);
+
+  helper.set_is_incognito(true);
+  helper.GetSecurityInfo(&security_info);
+  EXPECT_FALSE(security_info.incognito_downgraded_security_level);
+  {
+    // Enable the "non-secure-while-incognito" configuration.
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        security_state::switches::kMarkHttpAs,
+        security_state::switches::kMarkHttpAsNonSecureWhileIncognito);
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_TRUE(security_info.incognito_downgraded_security_level);
+  }
+}
+
 // Tests that SSL.MarkHttpAsStatus histogram is updated when security state is
 // computed for a page.
 TEST(SecurityStateTest, MarkHttpAsStatusHistogram) {
   const char* kHistogramName = "SSL.MarkHttpAsStatus";
   base::HistogramTester histograms;
-  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kMarkHttpAs, switches::kMarkHttpWithPasswordsOrCcWithChip);
   TestSecurityStateHelper helper;
   helper.SetUrl(GURL(kHttpUrl));
 
@@ -322,12 +398,115 @@ TEST(SecurityStateTest, MarkHttpAsStatusHistogram) {
   SecurityInfo security_info;
   histograms.ExpectTotalCount(kHistogramName, 0);
   helper.GetSecurityInfo(&security_info);
-  histograms.ExpectUniqueSample(kHistogramName, 2 /* HTTP_SHOW_WARNING */, 1);
+  histograms.ExpectUniqueSample(
+      kHistogramName, 2 /* HTTP_SHOW_WARNING_ON_SENSITIVE_FIELDS */, 1);
 
   // Ensure histogram recorded correctly even without a password input.
   helper.set_displayed_password_field_on_http(false);
   helper.GetSecurityInfo(&security_info);
-  histograms.ExpectUniqueSample(kHistogramName, 2 /* HTTP_SHOW_WARNING */, 2);
+  histograms.ExpectUniqueSample(
+      kHistogramName, 2 /* HTTP_SHOW_WARNING_ON_SENSITIVE_FIELDS */, 2);
+
+  {
+    // Test the "non-secure-while-incognito" configuration.
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        security_state::switches::kMarkHttpAs,
+        security_state::switches::kMarkHttpAsNonSecureWhileIncognito);
+
+    base::HistogramTester histograms;
+    TestSecurityStateHelper helper;
+    helper.SetUrl(GURL(kHttpUrl));
+
+    // Ensure histogram recorded correctly when the Incognito flag is present.
+    helper.set_is_incognito(true);
+    SecurityInfo security_info;
+    histograms.ExpectTotalCount(kHistogramName, 0);
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_TRUE(security_info.incognito_downgraded_security_level);
+    histograms.ExpectUniqueSample(kHistogramName,
+                                  4 /* NON_SECURE_WHILE_INCOGNITO */, 1);
+
+    // Ensure histogram recorded correctly even without the Incognito flag.
+    helper.set_is_incognito(false);
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_FALSE(security_info.incognito_downgraded_security_level);
+    histograms.ExpectUniqueSample(kHistogramName,
+                                  4 /* NON_SECURE_WHILE_INCOGNITO */, 2);
+  }
+
+  {
+    // Test the "non-secure-while-incognito-or-editing" configuration.
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        security_state::switches::kMarkHttpAs,
+        security_state::switches::kMarkHttpAsNonSecureWhileIncognitoOrEditing);
+
+    base::HistogramTester histograms;
+    TestSecurityStateHelper helper;
+    helper.SetUrl(GURL(kHttpUrl));
+
+    // Ensure histogram recorded correctly when the Incognito flag is present.
+    helper.set_is_incognito(true);
+    SecurityInfo security_info;
+    histograms.ExpectTotalCount(kHistogramName, 0);
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_TRUE(security_info.incognito_downgraded_security_level);
+    histograms.ExpectUniqueSample(
+        kHistogramName, 5 /* NON_SECURE_WHILE_INCOGNITO_OR_EDITING */, 1);
+
+    // Ensure histogram recorded correctly even without the Incognito flag.
+    helper.set_is_incognito(false);
+    helper.GetSecurityInfo(&security_info);
+    EXPECT_FALSE(security_info.incognito_downgraded_security_level);
+    histograms.ExpectUniqueSample(
+        kHistogramName, 5 /* NON_SECURE_WHILE_INCOGNITO_OR_EDITING */, 2);
+  }
+}
+
+TEST(SecurityStateTest, DetectSubjectAltName) {
+  TestSecurityStateHelper helper;
+
+  // Ensure subjectAltName is detected as present when the cert includes it.
+  SecurityInfo san_security_info;
+  helper.GetSecurityInfo(&san_security_info);
+  EXPECT_FALSE(san_security_info.cert_missing_subject_alt_name);
+
+  // Ensure subjectAltName is detected as missing when the cert doesn't
+  // include it.
+  scoped_refptr<net::X509Certificate> cert = net::ImportCertFromFile(
+      net::GetTestCertsDirectory(), "salesforce_com_test.pem");
+  ASSERT_TRUE(cert);
+  helper.SetCertificate(std::move(cert));
+
+  SecurityInfo no_san_security_info;
+  helper.GetSecurityInfo(&no_san_security_info);
+  EXPECT_TRUE(no_san_security_info.cert_missing_subject_alt_name);
+}
+
+// Tests that a mixed form is reflected in the SecurityInfo.
+TEST(SecurityStateTest, MixedForm) {
+  TestSecurityStateHelper helper;
+
+  SecurityInfo no_mixed_form_security_info;
+  helper.GetSecurityInfo(&no_mixed_form_security_info);
+  EXPECT_FALSE(no_mixed_form_security_info.contained_mixed_form);
+
+  helper.set_contained_mixed_form(true);
+
+  SecurityInfo mixed_form_security_info;
+  helper.GetSecurityInfo(&mixed_form_security_info);
+  EXPECT_TRUE(mixed_form_security_info.contained_mixed_form);
+  EXPECT_EQ(CONTENT_STATUS_NONE, mixed_form_security_info.mixed_content_status);
+  EXPECT_EQ(NONE, mixed_form_security_info.security_level);
+
+  helper.set_ran_mixed_content(true);
+  SecurityInfo mixed_form_and_active_security_info;
+  helper.GetSecurityInfo(&mixed_form_and_active_security_info);
+  EXPECT_TRUE(mixed_form_and_active_security_info.contained_mixed_form);
+  EXPECT_EQ(CONTENT_STATUS_RAN,
+            mixed_form_and_active_security_info.mixed_content_status);
+  EXPECT_EQ(DANGEROUS, mixed_form_and_active_security_info.security_level);
 }
 
 }  // namespace security_state

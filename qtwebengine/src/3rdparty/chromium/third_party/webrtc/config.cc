@@ -9,10 +9,11 @@
  */
 #include "webrtc/config.h"
 
+#include <algorithm>
 #include <sstream>
 #include <string>
 
-#include "webrtc/base/checks.h"
+#include "webrtc/rtc_base/checks.h"
 
 namespace webrtc {
 std::string NackConfig::ToString() const {
@@ -31,29 +32,19 @@ std::string UlpfecConfig::ToString() const {
   return ss.str();
 }
 
-FlexfecConfig::FlexfecConfig()
-    : flexfec_payload_type(-1), flexfec_ssrc(0), protected_media_ssrcs() {}
-
-FlexfecConfig::~FlexfecConfig() = default;
-
-std::string FlexfecConfig::ToString() const {
-  std::stringstream ss;
-  ss << "{flexfec_payload_type: " << flexfec_payload_type;
-  ss << ", flexfec_ssrc: " << flexfec_ssrc;
-  ss << ", protected_media_ssrcs: [";
-  size_t i = 0;
-  for (; i + 1 < protected_media_ssrcs.size(); ++i)
-    ss << protected_media_ssrcs[i] << ", ";
-  if (!protected_media_ssrcs.empty())
-    ss << protected_media_ssrcs[i];
-  ss << "]}";
-  return ss.str();
+bool UlpfecConfig::operator==(const UlpfecConfig& other) const {
+  return ulpfec_payload_type == other.ulpfec_payload_type &&
+         red_payload_type == other.red_payload_type &&
+         red_rtx_payload_type == other.red_rtx_payload_type;
 }
 
 std::string RtpExtension::ToString() const {
   std::stringstream ss;
   ss << "{uri: " << uri;
   ss << ", id: " << id;
+  if (encrypt) {
+    ss << ", encrypt";
+  }
   ss << '}';
   return ss.str();
 }
@@ -85,9 +76,22 @@ const char* RtpExtension::kPlayoutDelayUri =
     "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
 const int RtpExtension::kPlayoutDelayDefaultId = 6;
 
+const char* RtpExtension::kVideoContentTypeUri =
+    "http://www.webrtc.org/experiments/rtp-hdrext/video-content-type";
+const int RtpExtension::kVideoContentTypeDefaultId = 7;
+
+const char* RtpExtension::kVideoTimingUri =
+    "http://www.webrtc.org/experiments/rtp-hdrext/video-timing";
+const int RtpExtension::kVideoTimingDefaultId = 8;
+
+const char* RtpExtension::kEncryptHeaderExtensionsUri =
+    "urn:ietf:params:rtp-hdrext:encrypt";
+
+const int RtpExtension::kMinId = 1;
+const int RtpExtension::kMaxId = 14;
+
 bool RtpExtension::IsSupportedForAudio(const std::string& uri) {
-  return uri == webrtc::RtpExtension::kAbsSendTimeUri ||
-         uri == webrtc::RtpExtension::kAudioLevelUri ||
+  return uri == webrtc::RtpExtension::kAudioLevelUri ||
          uri == webrtc::RtpExtension::kTransportSequenceNumberUri;
 }
 
@@ -96,7 +100,64 @@ bool RtpExtension::IsSupportedForVideo(const std::string& uri) {
          uri == webrtc::RtpExtension::kAbsSendTimeUri ||
          uri == webrtc::RtpExtension::kVideoRotationUri ||
          uri == webrtc::RtpExtension::kTransportSequenceNumberUri ||
-         uri == webrtc::RtpExtension::kPlayoutDelayUri;
+         uri == webrtc::RtpExtension::kPlayoutDelayUri ||
+         uri == webrtc::RtpExtension::kVideoContentTypeUri ||
+         uri == webrtc::RtpExtension::kVideoTimingUri;
+}
+
+bool RtpExtension::IsEncryptionSupported(const std::string& uri) {
+  return uri == webrtc::RtpExtension::kAudioLevelUri ||
+         uri == webrtc::RtpExtension::kTimestampOffsetUri ||
+#if !defined(ENABLE_EXTERNAL_AUTH)
+         // TODO(jbauch): Figure out a way to always allow "kAbsSendTimeUri"
+         // here and filter out later if external auth is really used in
+         // srtpfilter. External auth is used by Chromium and replaces the
+         // extension header value of "kAbsSendTimeUri", so it must not be
+         // encrypted (which can't be done by Chromium).
+         uri == webrtc::RtpExtension::kAbsSendTimeUri ||
+#endif
+         uri == webrtc::RtpExtension::kVideoRotationUri ||
+         uri == webrtc::RtpExtension::kTransportSequenceNumberUri ||
+         uri == webrtc::RtpExtension::kPlayoutDelayUri ||
+         uri == webrtc::RtpExtension::kVideoContentTypeUri;
+}
+
+const RtpExtension* RtpExtension::FindHeaderExtensionByUri(
+    const std::vector<RtpExtension>& extensions,
+    const std::string& uri) {
+  for (const auto& extension : extensions) {
+    if (extension.uri == uri) {
+      return &extension;
+    }
+  }
+  return nullptr;
+}
+
+std::vector<RtpExtension> RtpExtension::FilterDuplicateNonEncrypted(
+    const std::vector<RtpExtension>& extensions) {
+  std::vector<RtpExtension> filtered;
+  for (auto extension = extensions.begin(); extension != extensions.end();
+      ++extension) {
+    if (extension->encrypt) {
+      filtered.push_back(*extension);
+      continue;
+    }
+
+    // Only add non-encrypted extension if no encrypted with the same URI
+    // is also present...
+    if (std::find_if(extension + 1, extensions.end(),
+        [extension](const RtpExtension& check) {
+          return extension->uri == check.uri;
+        }) != extensions.end()) {
+      continue;
+    }
+
+    // ...and has not been added before.
+    if (!FindHeaderExtensionByUri(filtered, extension->uri)) {
+      filtered.push_back(*extension);
+    }
+  }
+  return filtered;
 }
 
 VideoStream::VideoStream()
@@ -167,11 +228,11 @@ VideoEncoderConfig::VideoEncoderConfig(const VideoEncoderConfig&) = default;
 void VideoEncoderConfig::EncoderSpecificSettings::FillEncoderSpecificSettings(
     VideoCodec* codec) const {
   if (codec->codecType == kVideoCodecH264) {
-    FillVideoCodecH264(&codec->codecSpecific.H264);
+    FillVideoCodecH264(codec->H264());
   } else if (codec->codecType == kVideoCodecVP8) {
-    FillVideoCodecVp8(&codec->codecSpecific.VP8);
+    FillVideoCodecVp8(codec->VP8());
   } else if (codec->codecType == kVideoCodecVP9) {
-    FillVideoCodecVp9(&codec->codecSpecific.VP9);
+    FillVideoCodecVp9(codec->VP9());
   } else {
     RTC_NOTREACHED() << "Encoder specifics set/used for unknown codec type.";
   }
@@ -218,9 +279,5 @@ void VideoEncoderConfig::Vp9EncoderSpecificSettings::FillVideoCodecVp9(
     VideoCodecVP9* vp9_settings) const {
   *vp9_settings = specifics_;
 }
-
-DecoderSpecificSettings::DecoderSpecificSettings() = default;
-
-DecoderSpecificSettings::~DecoderSpecificSettings() = default;
 
 }  // namespace webrtc

@@ -8,9 +8,11 @@
 #include "SkDeferredCanvas.h"
 #include "SkDrawable.h"
 #include "SkPath.h"
+#include "SkRSXform.h"
 #include "SkRRect.h"
 #include "SkSurface.h"
 #include "SkTextBlob.h"
+#include "SkClipOpPriv.h"
 
 bool SkDeferredCanvas::Rec::isConcat(SkMatrix* m) const {
     switch (fType) {
@@ -44,8 +46,11 @@ void SkDeferredCanvas::Rec::setConcat(const SkMatrix& m) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-SkDeferredCanvas::SkDeferredCanvas(SkCanvas* canvas)
-    : SkCanvas({0,0,1,1}, SkCanvas::kConservativeRasterClip_InitFlag) {
+SkDeferredCanvas::SkDeferredCanvas(SkCanvas* canvas, EvalType evalType)
+    : INHERITED(canvas->getBaseLayerSize().width(), canvas->getBaseLayerSize().height())
+    , fCanvas(nullptr)  // must be here for reset to work.
+    , fEvalType(evalType)
+{
     this->reset(canvas);
 }
 
@@ -58,7 +63,8 @@ void SkDeferredCanvas::reset(SkCanvas* canvas) {
     }
     fRecs.reset();
     if (canvas) {
-        this->resetForNextPicture(SkIRect::MakeSize(canvas->getBaseLayerSize()));
+        this->resetCanvas(canvas->getBaseLayerSize().width(),
+                          canvas->getBaseLayerSize().height());
         fCanvas = canvas;
     }
 }
@@ -111,7 +117,7 @@ void SkDeferredCanvas::emit(const Rec& rec) {
         case kClipRect_Type:
             fCanvas->clipRect(rec.fData.fBounds);
             this->INHERITED::onClipRect(rec.fData.fBounds,
-                                        kIntersect_Op, kHard_ClipEdgeStyle);
+                                        kIntersect_SkClipOp, kHard_ClipEdgeStyle);
             break;
         case kTrans_Type:
         case kScaleTrans_Type: {
@@ -284,8 +290,8 @@ void SkDeferredCanvas::didSetMatrix(const SkMatrix& matrix) {
     this->INHERITED::didSetMatrix(matrix);
 }
 
-void SkDeferredCanvas::onClipRect(const SkRect& rect, ClipOp op, ClipEdgeStyle edgeStyle) {
-    if (kIntersect_Op == op) {
+void SkDeferredCanvas::onClipRect(const SkRect& rect, SkClipOp op, ClipEdgeStyle edgeStyle) {
+    if (kIntersect_SkClipOp == op) {
         this->push_cliprect(rect);
     } else {
         this->flush_all();
@@ -294,19 +300,19 @@ void SkDeferredCanvas::onClipRect(const SkRect& rect, ClipOp op, ClipEdgeStyle e
     }
 }
 
-void SkDeferredCanvas::onClipRRect(const SkRRect& rrect, ClipOp op, ClipEdgeStyle edgeStyle) {
+void SkDeferredCanvas::onClipRRect(const SkRRect& rrect, SkClipOp op, ClipEdgeStyle edgeStyle) {
     this->flush_all();
     fCanvas->clipRRect(rrect, op, kSoft_ClipEdgeStyle == edgeStyle);
     this->INHERITED::onClipRRect(rrect, op, edgeStyle);
 }
 
-void SkDeferredCanvas::onClipPath(const SkPath& path, ClipOp op, ClipEdgeStyle edgeStyle) {
+void SkDeferredCanvas::onClipPath(const SkPath& path, SkClipOp op, ClipEdgeStyle edgeStyle) {
     this->flush_all();
     fCanvas->clipPath(path, op, kSoft_ClipEdgeStyle == edgeStyle);
     this->INHERITED::onClipPath(path, op, edgeStyle);
 }
 
-void SkDeferredCanvas::onClipRegion(const SkRegion& deviceRgn, ClipOp op) {
+void SkDeferredCanvas::onClipRegion(const SkRegion& deviceRgn, SkClipOp op) {
     this->flush_all();
     fCanvas->clipRegion(deviceRgn, op);
     this->INHERITED::onClipRegion(deviceRgn, op);
@@ -492,23 +498,23 @@ void SkDeferredCanvas::onDrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScal
 #include "SkCanvasPriv.h"
 void SkDeferredCanvas::onDrawPicture(const SkPicture* picture, const SkMatrix* matrix,
                                  const SkPaint* paint) {
-#if 0
-    SkAutoCanvasMatrixPaint acmp(this, matrix, paint, picture->cullRect());
-    picture->playback(this);
-#else
-    this->flush_before_saves();
-    fCanvas->drawPicture(picture, matrix, paint);
-#endif
+    if (kEager == fEvalType) {
+        SkAutoCanvasMatrixPaint acmp(this, matrix, paint, picture->cullRect());
+        picture->playback(this);
+    } else {
+        this->flush_before_saves();
+        fCanvas->drawPicture(picture, matrix, paint);
+    }
 }
 
 void SkDeferredCanvas::onDrawDrawable(SkDrawable* drawable, const SkMatrix* matrix) {
-    // TODO: investigate culling and applying concat to the matrix
-#if 0
-    drawable->draw(this, matrix);
-#else
-    this->flush_before_saves();
-    fCanvas->drawDrawable(drawable, matrix);
-#endif
+    if (kEager == fEvalType) {
+        // TODO: investigate culling and applying concat to the matrix
+        drawable->draw(this, matrix);
+    } else {
+        this->flush_before_saves();
+        fCanvas->drawDrawable(drawable, matrix);
+    }
 }
 
 void SkDeferredCanvas::onDrawAtlas(const SkImage* image, const SkRSXform xform[],
@@ -519,14 +525,10 @@ void SkDeferredCanvas::onDrawAtlas(const SkImage* image, const SkRSXform xform[]
     fCanvas->drawAtlas(image, xform, rects, colors, count, bmode, cull, paint);
 }
 
-void SkDeferredCanvas::onDrawVertices(VertexMode vmode, int vertexCount,
-                                  const SkPoint vertices[], const SkPoint texs[],
-                                  const SkColor colors[], SkBlendMode bmode,
-                                  const uint16_t indices[], int indexCount,
-                                  const SkPaint& paint) {
+void SkDeferredCanvas::onDrawVerticesObject(const SkVertices* vertices, SkBlendMode bmode,
+                                            const SkPaint& paint) {
     this->flush_before_saves();
-    fCanvas->drawVertices(vmode, vertexCount, vertices, texs, colors, bmode,
-                           indices, indexCount, paint);
+    fCanvas->drawVertices(vertices, bmode, paint);
 }
 
 void SkDeferredCanvas::onDrawPatch(const SkPoint cubics[12], const SkColor colors[4],
@@ -556,11 +558,11 @@ sk_sp<SkSurface> SkDeferredCanvas::onNewSurface(const SkImageInfo& info,
     return fCanvas->makeSurface(info, &props);
 }
 SkISize SkDeferredCanvas::getBaseLayerSize() const { return fCanvas->getBaseLayerSize(); }
-bool SkDeferredCanvas::getClipBounds(SkRect* bounds) const {
-    return fCanvas->getClipBounds(bounds);
+SkRect SkDeferredCanvas::onGetLocalClipBounds() const {
+    return fCanvas->getLocalClipBounds();
 }
-bool SkDeferredCanvas::getClipDeviceBounds(SkIRect* bounds) const {
-    return fCanvas->getClipDeviceBounds(bounds);
+SkIRect SkDeferredCanvas::onGetDeviceClipBounds() const {
+    return fCanvas->getDeviceClipBounds();
 }
 bool SkDeferredCanvas::isClipEmpty() const { return fCanvas->isClipEmpty(); }
 bool SkDeferredCanvas::isClipRect() const { return fCanvas->isClipRect(); }

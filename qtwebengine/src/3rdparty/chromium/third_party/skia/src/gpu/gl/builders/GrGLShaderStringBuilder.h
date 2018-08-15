@@ -17,9 +17,14 @@
 GrGLuint GrGLCompileAndAttachShader(const GrGLContext& glCtx,
                                     GrGLuint programId,
                                     GrGLenum type,
-                                    const char** strings,
+                                    const char** skslStrings,
                                     int* lengths,
                                     int count,
-                                    GrGpu::Stats*);
+                                    GrGpu::Stats*,
+                                    const SkSL::Program::Settings& settings,
+                                    SkSL::Program::Inputs* inputs);
+
+void GrGLPrintShader(const GrGLContext&, GrGLenum type, const char** skslStrings, int* lengths,
+                     int count, const SkSL::Program::Settings&);
 
 #endif

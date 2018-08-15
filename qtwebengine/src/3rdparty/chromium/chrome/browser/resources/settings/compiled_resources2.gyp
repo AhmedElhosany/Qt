@@ -6,7 +6,6 @@
     {
       'target_name': 'direction_delegate',
       'dependencies': [
-        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:load_time_data',
       ],
@@ -22,9 +21,17 @@
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
     {
+      'target_name': 'focus_row_behavior',
+      'dependencies': [
+        '<(DEPTH)/ui/webui/resources/js/cr/ui/compiled_resources2.gyp:focus_row',
+      ],
+      'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
+    },
+    {
       'target_name': 'global_scroll_target_behavior',
       'dependencies': [
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
+        'route',
       ],
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
@@ -40,6 +47,16 @@
       'target_name': 'route',
       'dependencies': [
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:load_time_data',
+        'page_visibility'
+      ],
+      'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
+    },
+    {
+      'target_name': 'page_visibility',
+      'dependencies': [
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:load_time_data',
       ],
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
@@ -56,12 +73,13 @@
       'dependencies': [
         'a11y_page/compiled_resources2.gyp:*',
         'about_page/compiled_resources2.gyp:*',
-        'advanced_page/compiled_resources2.gyp:*',
+        'android_apps_page/compiled_resources2.gyp:*',
         'animation/compiled_resources2.gyp:*',
         'appearance_page/compiled_resources2.gyp:*',
         'basic_page/compiled_resources2.gyp:*',
         'bluetooth_page/compiled_resources2.gyp:*',
         'certificate_manager_page/compiled_resources2.gyp:*',
+        'chrome_cleanup_page/compiled_resources2.gyp:*',
         'clear_browsing_data_dialog/compiled_resources2.gyp:*',
         'controls/compiled_resources2.gyp:*',
         'date_time_page/compiled_resources2.gyp:*',

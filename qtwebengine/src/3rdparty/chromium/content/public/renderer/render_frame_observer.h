@@ -19,10 +19,12 @@
 #include "v8/include/v8.h"
 
 namespace blink {
+class WebDataSource;
 class WebFormElement;
 class WebNode;
 class WebString;
 struct WebURLError;
+class WebWorkerFetchContext;
 }
 
 namespace content {
@@ -61,13 +63,12 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   // dispatched just before the Javascript unload event.
   virtual void WillCommitProvisionalLoad() {}
   virtual void DidCommitProvisionalLoad(bool is_new_navigation,
-                                        bool is_same_page_navigation) {}
-  virtual void DidStartProvisionalLoad() {}
+                                        bool is_same_document_navigation) {}
+  virtual void DidStartProvisionalLoad(blink::WebDataSource* data_source) {}
   virtual void DidFailProvisionalLoad(const blink::WebURLError& error) {}
   virtual void DidFinishLoad() {}
   virtual void DidFinishDocumentLoad() {}
   virtual void DidCreateScriptContext(v8::Local<v8::Context> context,
-                                      int extension_group,
                                       int world_id) {}
   virtual void WillReleaseScriptContext(v8::Local<v8::Context> context,
                                         int world_id) {}
@@ -123,6 +124,12 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
 
   // Called when script in the page calls window.print().
   virtual void ScriptedPrint(bool user_initiated) {}
+
+  // Called when draggable regions change.
+  virtual void DraggableRegionsChanged() {}
+
+  // Called when a worker fetch context will be created.
+  virtual void WillCreateWorkerFetchContext(blink::WebWorkerFetchContext*) {}
 
   // IPC::Listener implementation.
   bool OnMessageReceived(const IPC::Message& message) override;

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//media/media_options.gni")
 import("//remoting/build/config/remoting_build.gni")
 
 group("remoting_all") {
@@ -36,6 +37,10 @@ group("remoting_all") {
     ]
   }
 
+  if (is_ios) {
+    deps += [ "//remoting/ios:all" ]
+  }
+
   if (enable_remoting_host) {
     deps += [
       "//remoting:remoting_perftests",
@@ -59,7 +64,10 @@ group("remoting_all") {
     }
 
     if (is_linux && !is_chromeos) {
-      deps += [ "//remoting/host/linux:remoting_dev_me2me_host" ]
+      deps += [
+        "//remoting/host/linux:remoting_dev_me2me_host",
+        "//remoting/host/linux:remoting_user_session",
+      ]
     }
   }
 
@@ -106,9 +114,10 @@ group("test_support") {
   deps = [
     "//base",
     "//net",
-    "//remoting/base",
+    "//remoting/base:test_support",
     "//remoting/client",
-    "//remoting/codec",
+    "//remoting/codec:decoder",
+    "//remoting/codec:encoder",
     "//remoting/protocol:test_support",
     "//remoting/resources",
     "//remoting/signaling:test_support",
@@ -117,7 +126,7 @@ group("test_support") {
     "//testing/gtest",
   ]
 
-  if (enable_configuration_policy) {
+  if (!is_ios) {
     deps += [ "//components/policy/core/browser:test_support" ]
   }
 
@@ -144,6 +153,9 @@ test("remoting_unittests") {
     "//google_apis",
     "//remoting/base:unit_tests",
     "//remoting/client:unit_tests",
+    "//remoting/client/display:unit_tests",
+    "//remoting/client/input:unit_tests",
+    "//remoting/client/ui:unit_tests",
     "//remoting/protocol:unit_tests",
     "//remoting/signaling:unit_tests",
     "//remoting/test:unit_tests",
@@ -160,11 +172,13 @@ test("remoting_unittests") {
   }
 
   if (enable_webrtc) {
-    deps += [ "//third_party/libjingle:libjingle_webrtc" ]
+    deps += [ "//third_party/webrtc_overrides:init_webrtc" ]
   }
 
   if (is_android) {
     deps += [ "//net/android:net_java" ]
+
+    libs += [ "android" ]
   }
 
   if (is_win) {
@@ -175,10 +189,6 @@ test("remoting_unittests") {
       "rpcrt4.lib",
       "wtsapi32.lib",
     ]
-  }
-
-  if (enable_configuration_policy) {
-    #deps += [ "//components/policy/core/browser:test_support" ]
   }
 }
 
@@ -202,12 +212,12 @@ if (enable_remoting_host) {
       "//net:test_support",
       "//remoting/base",
       "//testing/gtest",
-      "//third_party/libjingle",
       "//third_party/webrtc/modules/desktop_capture",
+      "//third_party/webrtc_overrides",
     ]
 
     if (enable_webrtc) {
-      deps += [ "//third_party/libjingle:libjingle_webrtc" ]
+      deps += [ "//third_party/webrtc_overrides:init_webrtc" ]
     }
 
     if (is_win) {

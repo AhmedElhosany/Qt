@@ -45,8 +45,10 @@
 #include <QTime>
 #include <QTimer>
 #include <QIODevice>
+#include <QSocketNotifier>
 
 #include <sys/asoundlib.h>
+#include <sys/neutrino.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -80,6 +82,8 @@ public:
     QAudioFormat format() const Q_DECL_OVERRIDE;
     void setVolume(qreal volume) Q_DECL_OVERRIDE;
     qreal volume() const Q_DECL_OVERRIDE;
+    void setCategory(const QString &category) Q_DECL_OVERRIDE;
+    QString category() const Q_DECL_OVERRIDE;
 
 private slots:
     void pullData();
@@ -89,6 +93,14 @@ private:
     void close();
     void setError(QAudio::Error error);
     void setState(QAudio::State state);
+
+    void addPcmEventFilter();
+    void createPcmNotifiers();
+    void destroyPcmNotifiers();
+    void setTypeName(snd_pcm_channel_params_t *params);
+
+    void suspendInternal(QAudio::State suspendState);
+    void resumeInternal();
 
     friend class QnxPushIODevice;
     qint64 write(const char *data, qint64 len);
@@ -102,6 +114,7 @@ private:
     QAudio::State m_state;
     QAudioFormat m_format;
     qreal m_volume;
+    QString m_category;
     int m_periodSize;
 
     snd_pcm_t *m_pcmHandle;
@@ -109,6 +122,13 @@ private:
     QTime m_startTimeStamp;
     QTime m_intervalTimeStamp;
     qint64 m_intervalOffset;
+
+#if _NTO_VERSION >= 700
+    QSocketNotifier *m_pcmNotifier;
+
+private slots:
+    void pcmNotifierActivated(int socket);
+#endif
 };
 
 class QnxPushIODevice : public QIODevice

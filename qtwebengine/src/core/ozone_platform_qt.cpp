@@ -99,6 +99,7 @@ public:
     // PlatformEventDispatcher:
     bool CanDispatchEvent(const PlatformEvent& event) override;
     uint32_t DispatchEvent(const PlatformEvent& event) override;
+    void PrepareForShutdown() override;
 
 private:
     PlatformWindowDelegate* delegate_;
@@ -134,6 +135,11 @@ uint32_t PlatformWindowQt::DispatchEvent(const ui::PlatformEvent& native_event)
     return ui::POST_DISPATCH_STOP_PROPAGATION;
 }
 
+void PlatformWindowQt::PrepareForShutdown()
+{
+}
+
+
 class OzonePlatformQt : public OzonePlatform {
 public:
     OzonePlatformQt();
@@ -143,14 +149,14 @@ public:
     ui::CursorFactoryOzone* GetCursorFactoryOzone() override;
     GpuPlatformSupportHost* GetGpuPlatformSupportHost() override;
     std::unique_ptr<PlatformWindow> CreatePlatformWindow(PlatformWindowDelegate* delegate, const gfx::Rect& bounds) override;
-    std::unique_ptr<ui::NativeDisplayDelegate> CreateNativeDisplayDelegate() override;
+    std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate() override;
     ui::InputController* GetInputController() override;
     std::unique_ptr<ui::SystemInputInjector> CreateSystemInputInjector() override;
     ui::OverlayManagerOzone* GetOverlayManager() override;
 
 private:
-    void InitializeUI() override;
-    void InitializeGPU() override;
+    void InitializeUI(const ui::OzonePlatform::InitParams &) override;
+    void InitializeGPU(const ui::OzonePlatform::InitParams &) override;
 
     std::unique_ptr<QtWebEngineCore::SurfaceFactoryQt> surface_factory_ozone_;
     std::unique_ptr<CursorFactoryOzone> cursor_factory_ozone_;
@@ -202,13 +208,13 @@ ui::OverlayManagerOzone* OzonePlatformQt::GetOverlayManager()
     return overlay_manager_.get();
 }
 
-std::unique_ptr<ui::NativeDisplayDelegate> OzonePlatformQt::CreateNativeDisplayDelegate()
+std::unique_ptr<display::NativeDisplayDelegate> OzonePlatformQt::CreateNativeDisplayDelegate()
 {
     NOTREACHED();
     return nullptr;
 }
 
-void OzonePlatformQt::InitializeUI()
+void OzonePlatformQt::InitializeUI(const ui::OzonePlatform::InitParams &)
 {
     overlay_manager_.reset(new StubOverlayManager());
     cursor_factory_ozone_.reset(new CursorFactoryOzone());
@@ -216,7 +222,7 @@ void OzonePlatformQt::InitializeUI()
     input_controller_ = CreateStubInputController();
 }
 
-void OzonePlatformQt::InitializeGPU()
+void OzonePlatformQt::InitializeGPU(const ui::OzonePlatform::InitParams &)
 {
     surface_factory_ozone_.reset(new QtWebEngineCore::SurfaceFactoryQt());
 }
@@ -226,7 +232,7 @@ void OzonePlatformQt::InitializeGPU()
 
 OzonePlatform* CreateOzonePlatformQt() { return new OzonePlatformQt; }
 
-ClientNativePixmapFactory* CreateClientNativePixmapFactoryQt()
+gfx::ClientNativePixmapFactory* CreateClientNativePixmapFactoryQt()
 {
     return CreateStubClientNativePixmapFactory();
 }

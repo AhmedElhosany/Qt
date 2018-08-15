@@ -355,6 +355,8 @@ bool QWindowsTabletSupport::translateTabletProximityEvent(WPARAM /* wParam */, L
 
     if (!LOWORD(lParam)) {
         qCDebug(lcQpaTablet) << "leave proximity for device #" << m_currentDevice;
+        if (m_currentDevice < 0 || m_currentDevice >= m_devices.size()) // QTBUG-65120, spurious leave observed
+            return false;
         if (totalPacks > 0) {
             QWindowSystemInterface::handleTabletLeaveProximityEvent(proximityBuffer[0].pkTime,
                                                                     m_devices.at(m_currentDevice).currentDevice,
@@ -473,13 +475,13 @@ bool QWindowsTabletSupport::translateTabletPacketEvent()
             // Z = sin(altitude)
             // X Tilt = arctan(X / Z)
             // Y Tilt = arctan(Y / Z)
-            const double radAzim = (packet.pkOrientation.orAzimuth / 10.0) * (M_PI / 180);
-            const double tanAlt = std::tan((std::abs(packet.pkOrientation.orAltitude / 10.0)) * (M_PI / 180));
+            const double radAzim = qDegreesToRadians(packet.pkOrientation.orAzimuth / 10.0);
+            const double tanAlt = std::tan(qDegreesToRadians(std::abs(packet.pkOrientation.orAltitude / 10.0)));
 
-            const double degX = std::atan(std::sin(radAzim) / tanAlt);
-            const double degY = std::atan(std::cos(radAzim) / tanAlt);
-            tiltX = int(degX * (180 / M_PI));
-            tiltY = int(-degY * (180 / M_PI));
+            const double radX = std::atan(std::sin(radAzim) / tanAlt);
+            const double radY = std::atan(std::cos(radAzim) / tanAlt);
+            tiltX = int(qRadiansToDegrees(radX));
+            tiltY = int(qRadiansToDegrees(-radY));
             rotation = 360.0 - (packet.pkOrientation.orTwist / 10.0);
             if (rotation > 180.0)
                 rotation -= 360.0;

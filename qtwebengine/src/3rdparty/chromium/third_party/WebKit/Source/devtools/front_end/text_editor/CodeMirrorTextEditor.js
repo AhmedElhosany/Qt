@@ -52,7 +52,9 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       electricChars: true,
       styleActiveLine: true,
       indentUnit: 4,
-      lineWrapping: options.lineWrapping
+      lineWrapping: options.lineWrapping,
+      lineWiseCopyCut: false,
+      tabIndex: 0
     });
     this._codeMirrorElement = this.element.lastElementChild;
 
@@ -65,8 +67,8 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       'Down': 'goLineDown',
       'End': 'goLineEnd',
       'Home': 'goLineStartSmart',
-      'PageUp': 'smartPageUp',
-      'PageDown': 'smartPageDown',
+      'PageUp': 'goSmartPageUp',
+      'PageDown': 'goSmartPageDown',
       'Delete': 'delCharAfter',
       'Backspace': 'delCharBefore',
       'Tab': 'defaultTab',
@@ -132,6 +134,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       'Cmd-U': 'undoLastSelection',
       fallthrough: 'devtools-common'
     };
+
     if (options.bracketMatchingSetting)
       options.bracketMatchingSetting.addChangeListener(this._enableBracketMatchingIfNeeded, this);
     this._enableBracketMatchingIfNeeded();
@@ -142,14 +145,18 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
 
     this._codeMirror.setOption('flattenSpans', false);
 
-    this._codeMirror.setOption('maxHighlightLength', TextEditor.CodeMirrorTextEditor.maxHighlightLength);
+    var maxHighlightLength = options.maxHighlightLength;
+    if (typeof maxHighlightLength !== 'number')
+      maxHighlightLength = TextEditor.CodeMirrorTextEditor.maxHighlightLength;
+    this._codeMirror.setOption('maxHighlightLength', maxHighlightLength);
     this._codeMirror.setOption('mode', null);
     this._codeMirror.setOption('crudeMeasuringFrom', 1000);
 
     this._shouldClearHistory = true;
     this._lineSeparator = '\n';
 
-    this._fixWordMovement = new TextEditor.CodeMirrorTextEditor.FixWordMovement(this._codeMirror);
+    TextEditor.CodeMirrorTextEditor._fixWordMovement(this._codeMirror);
+
     this._selectNextOccurrenceController =
         new TextEditor.CodeMirrorTextEditor.SelectNextOccurrenceController(this, this._codeMirror);
 
@@ -163,14 +170,13 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
 
     /** @type {!Multimap<number, !TextEditor.CodeMirrorTextEditor.Decoration>} */
     this._decorations = new Multimap();
-    this._nestedUpdatesCounter = 0;
 
-    this.element.addEventListener('focus', this._handleElementFocus.bind(this), false);
     this.element.addEventListener('keydown', this._handleKeyDown.bind(this), true);
     this.element.addEventListener('keydown', this._handlePostKeyDown.bind(this), false);
-    this.element.tabIndex = 0;
 
     this._needsRefresh = true;
+
+    this._readOnly = false;
 
     this._mimeType = '';
     if (options.mimeType)
@@ -322,6 +328,53 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
+   * @param {!CodeMirror} codeMirror
+   */
+  static _fixWordMovement(codeMirror) {
+    function moveLeft(shift, codeMirror) {
+      codeMirror.setExtending(shift);
+      var cursor = codeMirror.getCursor('head');
+      codeMirror.execCommand('goGroupLeft');
+      var newCursor = codeMirror.getCursor('head');
+      if (newCursor.ch === 0 && newCursor.line !== 0) {
+        codeMirror.setExtending(false);
+        return;
+      }
+
+      var skippedText = codeMirror.getRange(newCursor, cursor, '#');
+      if (/^\s+$/.test(skippedText))
+        codeMirror.execCommand('goGroupLeft');
+      codeMirror.setExtending(false);
+    }
+
+    function moveRight(shift, codeMirror) {
+      codeMirror.setExtending(shift);
+      var cursor = codeMirror.getCursor('head');
+      codeMirror.execCommand('goGroupRight');
+      var newCursor = codeMirror.getCursor('head');
+      if (newCursor.ch === 0 && newCursor.line !== 0) {
+        codeMirror.setExtending(false);
+        return;
+      }
+
+      var skippedText = codeMirror.getRange(cursor, newCursor, '#');
+      if (/^\s+$/.test(skippedText))
+        codeMirror.execCommand('goGroupRight');
+      codeMirror.setExtending(false);
+    }
+
+    var modifierKey = Host.isMac() ? 'Alt' : 'Ctrl';
+    var leftKey = modifierKey + '-Left';
+    var rightKey = modifierKey + '-Right';
+    var keyMap = {};
+    keyMap[leftKey] = moveLeft.bind(null, false);
+    keyMap[rightKey] = moveRight.bind(null, false);
+    keyMap['Shift-' + leftKey] = moveLeft.bind(null, true);
+    keyMap['Shift-' + rightKey] = moveRight.bind(null, true);
+    codeMirror.addKeyMap(keyMap);
+  }
+
+  /**
    * @protected
    * @return {!CodeMirror}
    */
@@ -387,8 +440,8 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       var position = charNumber;
       var nextPosition = charNumber + 1;
       return valid(position, text.length) && valid(nextPosition, text.length) &&
-          Common.TextUtils.isWordChar(text[position]) && Common.TextUtils.isWordChar(text[nextPosition]) &&
-          Common.TextUtils.isUpperCase(text[position]) && Common.TextUtils.isLowerCase(text[nextPosition]);
+          TextUtils.TextUtils.isWordChar(text[position]) && TextUtils.TextUtils.isWordChar(text[nextPosition]) &&
+          TextUtils.TextUtils.isUpperCase(text[position]) && TextUtils.TextUtils.isLowerCase(text[nextPosition]);
     }
 
     /**
@@ -400,8 +453,8 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       var position = charNumber;
       var prevPosition = charNumber - 1;
       return valid(position, text.length) && valid(prevPosition, text.length) &&
-          Common.TextUtils.isWordChar(text[position]) && Common.TextUtils.isWordChar(text[prevPosition]) &&
-          Common.TextUtils.isUpperCase(text[position]) && Common.TextUtils.isLowerCase(text[prevPosition]);
+          TextUtils.TextUtils.isWordChar(text[position]) && TextUtils.TextUtils.isWordChar(text[prevPosition]) &&
+          TextUtils.TextUtils.isUpperCase(text[position]) && TextUtils.TextUtils.isLowerCase(text[prevPosition]);
     }
 
     /**
@@ -423,13 +476,13 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
     var charNumber = direction === 1 ? columnNumber : columnNumber - 1;
 
     // Move through initial spaces if any.
-    while (valid(charNumber, length) && Common.TextUtils.isSpaceChar(text[charNumber]))
+    while (valid(charNumber, length) && TextUtils.TextUtils.isSpaceChar(text[charNumber]))
       charNumber += direction;
     if (!valid(charNumber, length))
       return constrainPosition(lineNumber, length, charNumber);
 
-    if (Common.TextUtils.isStopChar(text[charNumber])) {
-      while (valid(charNumber, length) && Common.TextUtils.isStopChar(text[charNumber]))
+    if (TextUtils.TextUtils.isStopChar(text[charNumber])) {
+      while (valid(charNumber, length) && TextUtils.TextUtils.isStopChar(text[charNumber]))
         charNumber += direction;
       if (!valid(charNumber, length))
         return constrainPosition(lineNumber, length, charNumber);
@@ -438,7 +491,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
 
     charNumber += direction;
     while (valid(charNumber, length) && !isWordStart(text, charNumber) && !isWordEnd(text, charNumber) &&
-           Common.TextUtils.isWordChar(text[charNumber]))
+           TextUtils.TextUtils.isWordChar(text[charNumber]))
       charNumber += direction;
 
     if (!valid(charNumber, length))
@@ -560,7 +613,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   /**
    * @param {number} x
    * @param {number} y
-   * @return {?Common.TextRange}
+   * @return {?TextUtils.TextRange}
    */
   coordinatesToCursorPosition(x, y) {
     var element = this.element.ownerDocument.elementFromPoint(x, y);
@@ -575,14 +628,15 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
+   * @override
    * @param {number} lineNumber
-   * @param {number} column
+   * @param {number} columnNumber
    * @return {?{startColumn: number, endColumn: number, type: string}}
    */
-  tokenAtTextPosition(lineNumber, column) {
+  tokenAtTextPosition(lineNumber, columnNumber) {
     if (lineNumber < 0 || lineNumber >= this._codeMirror.lineCount())
       return null;
-    var token = this._codeMirror.getTokenAt(new CodeMirror.Pos(lineNumber, (column || 0) + 1));
+    var token = this._codeMirror.getTokenAt(new CodeMirror.Pos(lineNumber, (columnNumber || 0) + 1));
     if (!token)
       return null;
     return {startColumn: token.start, endColumn: token.end, type: token.type};
@@ -644,6 +698,14 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
+   * @param {!Object} mode
+   */
+  setHighlightMode(mode) {
+    this._mimeType = '';
+    this._codeMirror.setOption('mode', mode);
+  }
+
+  /**
    * @protected
    * @param {string} mimeType
    */
@@ -664,6 +726,10 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
    * @param {boolean} readOnly
    */
   setReadOnly(readOnly) {
+    if (this._readOnly === readOnly)
+      return;
+    this.clearPositionHighlight();
+    this._readOnly = readOnly;
     this.element.classList.toggle('CodeMirror-readonly', readOnly);
     this._codeMirror.setOption('readOnly', readOnly);
   }
@@ -673,6 +739,13 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
    */
   readOnly() {
     return !!this._codeMirror.getOption('readOnly');
+  }
+
+  /**
+   * @param {function(number):string} formatter
+   */
+  setLineNumberFormatter(formatter) {
+    this._codeMirror.setOption('lineNumberFormatter', formatter);
   }
 
   /**
@@ -701,7 +774,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
-   * @param {!Common.TextRange} range
+   * @param {!TextUtils.TextRange} range
    * @param {symbol=} type
    * @return {!Array.<!TextEditor.TextEditorBookMark>}
    */
@@ -735,10 +808,6 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
    */
   hasFocus() {
     return this._codeMirror.hasFocus();
-  }
-
-  _handleElementFocus() {
-    this._codeMirror.focus();
   }
 
   /**
@@ -835,7 +904,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       if (decoration.element !== element)
         return;
       this._codeMirror.removeLineWidget(decoration.widget);
-      this._decorations.remove(lineNumber, decoration);
+      this._decorations.delete(lineNumber, decoration);
     }
   }
 
@@ -856,10 +925,12 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       return;
     this.scrollLineIntoView(lineNumber);
     if (shouldHighlight) {
-      this._codeMirror.addLineClass(this._highlightedLine, null, 'cm-highlight');
-      this._clearHighlightTimeout = setTimeout(this.clearPositionHighlight.bind(this), 2000);
+      this._codeMirror.addLineClass(
+          this._highlightedLine, null, this._readOnly ? 'cm-readonly-highlight' : 'cm-highlight');
+      if (!this._readOnly)
+        this._clearHighlightTimeout = setTimeout(this.clearPositionHighlight.bind(this), 2000);
     }
-    this.setSelection(Common.TextRange.createFromLocation(lineNumber, columnNumber));
+    this.setSelection(TextUtils.TextRange.createFromLocation(lineNumber, columnNumber));
   }
 
   clearPositionHighlight() {
@@ -867,8 +938,10 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
       clearTimeout(this._clearHighlightTimeout);
     delete this._clearHighlightTimeout;
 
-    if (this._highlightedLine)
-      this._codeMirror.removeLineClass(this._highlightedLine, null, 'cm-highlight');
+    if (this._highlightedLine) {
+      this._codeMirror.removeLineClass(
+          this._highlightedLine, null, this._readOnly ? 'cm-readonly-highlight' : 'cm-highlight');
+    }
     delete this._highlightedLine;
   }
 
@@ -885,6 +958,8 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
    * @param {number} height
    */
   _updatePaddingBottom(width, height) {
+    if (!this._options.padBottom)
+      return;
     var scrollInfo = this._codeMirror.getScrollInfo();
     var newPaddingBottom;
     var linesElement = this._codeMirrorElement.querySelector('.CodeMirror-lines');
@@ -934,16 +1009,18 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
-   * @param {!Common.TextRange} range
+   * @param {!TextUtils.TextRange} range
    * @param {string} text
    * @param {string=} origin
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
   editRange(range, text, origin) {
     var pos = TextEditor.CodeMirrorUtils.toPos(range);
     this._codeMirror.replaceRange(text, pos.start, pos.end, origin);
-    return TextEditor.CodeMirrorUtils.toRange(
+    var newRange = TextEditor.CodeMirrorUtils.toRange(
         pos.start, this._codeMirror.posFromIndex(this._codeMirror.indexFromPos(pos.start) + text.length));
+    this.dispatchEventToListeners(UI.TextEditor.Events.TextChanged, {oldRange: range, newRange: newRange});
+    return newRange;
   }
 
   /**
@@ -958,7 +1035,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
    * @param {number} lineNumber
    * @param {number} column
    * @param {function(string):boolean} isWordChar
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
   wordRangeForCursorPosition(lineNumber, column, isWordChar) {
     var line = this.line(lineNumber);
@@ -971,7 +1048,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
     var wordEnd = column;
     while (wordEnd < line.length && isWordChar(line.charAt(wordEnd)))
       ++wordEnd;
-    return new Common.TextRange(lineNumber, wordStart, lineNumber, wordEnd);
+    return new TextUtils.TextRange(lineNumber, wordStart, lineNumber, wordEnd);
   }
 
   /**
@@ -989,6 +1066,25 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
 
     this._decorations.valuesArray().forEach(decoration => this._codeMirror.removeLineWidget(decoration.widget));
     this._decorations.clear();
+
+    var edits = [];
+    var currentEdit;
+
+    for (var changeIndex = 0; changeIndex < changes.length; ++changeIndex) {
+      var changeObject = changes[changeIndex];
+      var edit = TextEditor.CodeMirrorUtils.changeObjectToEditOperation(changeObject);
+      if (currentEdit && edit.oldRange.equal(currentEdit.newRange)) {
+        currentEdit.newRange = edit.newRange;
+      } else {
+        currentEdit = edit;
+        edits.push(currentEdit);
+      }
+    }
+
+    for (var i = 0; i < edits.length; i++) {
+      this.dispatchEventToListeners(
+          UI.TextEditor.Events.TextChanged, {oldRange: edits[i].oldRange, newRange: edits[i].newRange});
+    }
   }
 
   /**
@@ -1039,7 +1135,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
 
   /**
    * @override
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
   selection() {
     var start = this._codeMirror.getCursor('anchor');
@@ -1049,7 +1145,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
-   * @return {!Array.<!Common.TextRange>}
+   * @return {!Array.<!TextUtils.TextRange>}
    */
   selections() {
     var selectionList = this._codeMirror.listSelections();
@@ -1062,7 +1158,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
-   * @return {?Common.TextRange}
+   * @return {?TextUtils.TextRange}
    */
   lastSelection() {
     return this._lastSelection;
@@ -1070,7 +1166,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
 
   /**
    * @override
-   * @param {!Common.TextRange} textRange
+   * @param {!TextUtils.TextRange} textRange
    */
   setSelection(textRange) {
     this._lastSelection = textRange;
@@ -1083,7 +1179,7 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
   }
 
   /**
-   * @param {!Array.<!Common.TextRange>} ranges
+   * @param {!Array.<!TextUtils.TextRange>} ranges
    * @param {number=} primarySelectionIndex
    */
   setSelections(ranges, primarySelectionIndex) {
@@ -1127,19 +1223,19 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
 
   /**
    * @override
-   * @param {!Common.TextRange=} textRange
+   * @param {!TextUtils.TextRange=} textRange
    * @return {string}
    */
   text(textRange) {
     if (!textRange)
-      return this._codeMirror.getValue().replace(/\n/g, this._lineSeparator);
+      return this._codeMirror.getValue(this._lineSeparator);
     var pos = TextEditor.CodeMirrorUtils.toPos(textRange.normalize());
-    return this._codeMirror.getRange(pos.start, pos.end).replace(/\n/g, this._lineSeparator);
+    return this._codeMirror.getRange(pos.start, pos.end, this._lineSeparator);
   }
 
   /**
    * @override
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
   fullRange() {
     var lineCount = this.linesCount;
@@ -1169,44 +1265,6 @@ TextEditor.CodeMirrorTextEditor = class extends UI.VBox {
    */
   newlineAndIndent() {
     this._codeMirror.execCommand('newlineAndIndent');
-  }
-
-  /**
-   * @param {number} line
-   * @param {string} name
-   * @param {?Object} value
-   */
-  setAttribute(line, name, value) {
-    if (line < 0 || line >= this._codeMirror.lineCount())
-      return;
-    var handle = this._codeMirror.getLineHandle(line);
-    if (handle.attributes === undefined)
-      handle.attributes = {};
-    handle.attributes[name] = value;
-  }
-
-  /**
-   * @param {number} line
-   * @param {string} name
-   * @return {?Object} value
-   */
-  getAttribute(line, name) {
-    if (line < 0 || line >= this._codeMirror.lineCount())
-      return null;
-    var handle = this._codeMirror.getLineHandle(line);
-    return handle.attributes && handle.attributes[name] !== undefined ? handle.attributes[name] : null;
-  }
-
-  /**
-   * @param {number} line
-   * @param {string} name
-   */
-  removeAttribute(line, name) {
-    if (line < 0 || line >= this._codeMirror.lineCount())
-      return;
-    var handle = this._codeMirror.getLineHandle(line);
-    if (handle && handle.attributes)
-      delete handle.attributes[name];
   }
 
   /**
@@ -1305,8 +1363,8 @@ CodeMirror.commands.dismiss = function(codemirror) {
 /**
  * @return {!Object|undefined}
  */
-CodeMirror.commands.smartPageUp = function(codemirror) {
-  if (codemirror._codeMirrorTextEditor.selection().equal(Common.TextRange.createFromLocation(0, 0)))
+CodeMirror.commands.goSmartPageUp = function(codemirror) {
+  if (codemirror._codeMirrorTextEditor.selection().equal(TextUtils.TextRange.createFromLocation(0, 0)))
     return CodeMirror.Pass;
   codemirror.execCommand('goPageUp');
 };
@@ -1314,7 +1372,7 @@ CodeMirror.commands.smartPageUp = function(codemirror) {
 /**
  * @return {!Object|undefined}
  */
-CodeMirror.commands.smartPageDown = function(codemirror) {
+CodeMirror.commands.goSmartPageDown = function(codemirror) {
   if (codemirror._codeMirrorTextEditor.selection().equal(codemirror._codeMirrorTextEditor.fullRange().collapseToEnd()))
     return CodeMirror.Pass;
   codemirror.execCommand('goPageDown');
@@ -1349,7 +1407,7 @@ TextEditor.CodeMirrorPositionHandle = class {
    * @return {?{lineNumber: number, columnNumber: number}}
    */
   resolve() {
-    var lineNumber = this._codeMirror.getLineNumber(this._lineHandle);
+    var lineNumber = this._lineHandle ? this._codeMirror.getLineNumber(this._lineHandle) : null;
     if (typeof lineNumber !== 'number')
       return null;
     return {lineNumber: lineNumber, columnNumber: this._columnNumber};
@@ -1363,58 +1421,6 @@ TextEditor.CodeMirrorPositionHandle = class {
   equal(positionHandle) {
     return positionHandle._lineHandle === this._lineHandle && positionHandle._columnNumber === this._columnNumber &&
         positionHandle._codeMirror === this._codeMirror;
-  }
-};
-
-/**
- * @unrestricted
- */
-TextEditor.CodeMirrorTextEditor.FixWordMovement = class {
-  /**
-   * @param {!CodeMirror} codeMirror
-   */
-  constructor(codeMirror) {
-    function moveLeft(shift, codeMirror) {
-      codeMirror.setExtending(shift);
-      var cursor = codeMirror.getCursor('head');
-      codeMirror.execCommand('goGroupLeft');
-      var newCursor = codeMirror.getCursor('head');
-      if (newCursor.ch === 0 && newCursor.line !== 0) {
-        codeMirror.setExtending(false);
-        return;
-      }
-
-      var skippedText = codeMirror.getRange(newCursor, cursor, '#');
-      if (/^\s+$/.test(skippedText))
-        codeMirror.execCommand('goGroupLeft');
-      codeMirror.setExtending(false);
-    }
-
-    function moveRight(shift, codeMirror) {
-      codeMirror.setExtending(shift);
-      var cursor = codeMirror.getCursor('head');
-      codeMirror.execCommand('goGroupRight');
-      var newCursor = codeMirror.getCursor('head');
-      if (newCursor.ch === 0 && newCursor.line !== 0) {
-        codeMirror.setExtending(false);
-        return;
-      }
-
-      var skippedText = codeMirror.getRange(cursor, newCursor, '#');
-      if (/^\s+$/.test(skippedText))
-        codeMirror.execCommand('goGroupRight');
-      codeMirror.setExtending(false);
-    }
-
-    var modifierKey = Host.isMac() ? 'Alt' : 'Ctrl';
-    var leftKey = modifierKey + '-Left';
-    var rightKey = modifierKey + '-Right';
-    var keyMap = {};
-    keyMap[leftKey] = moveLeft.bind(null, false);
-    keyMap[rightKey] = moveRight.bind(null, false);
-    keyMap['Shift-' + leftKey] = moveLeft.bind(null, true);
-    keyMap['Shift-' + rightKey] = moveRight.bind(null, true);
-    codeMirror.addKeyMap(keyMap);
   }
 };
 
@@ -1437,8 +1443,8 @@ TextEditor.CodeMirrorTextEditor.SelectNextOccurrenceController = class {
   }
 
   /**
-   * @param {!Array.<!Common.TextRange>} selections
-   * @param {!Common.TextRange} range
+   * @param {!Array.<!TextUtils.TextRange>} selections
+   * @param {!TextUtils.TextRange} range
    * @return {boolean}
    */
   _findRange(selections, range) {
@@ -1487,19 +1493,19 @@ TextEditor.CodeMirrorTextEditor.SelectNextOccurrenceController = class {
   }
 
   /**
-   * @param {!Array.<!Common.TextRange>} selections
+   * @param {!Array.<!TextUtils.TextRange>} selections
    */
   _expandSelectionsToWords(selections) {
     var newSelections = [];
     for (var i = 0; i < selections.length; ++i) {
       var selection = selections[i];
       var startRangeWord = this._textEditor.wordRangeForCursorPosition(
-                               selection.startLine, selection.startColumn, Common.TextUtils.isWordChar) ||
-          Common.TextRange.createFromLocation(selection.startLine, selection.startColumn);
+                               selection.startLine, selection.startColumn, TextUtils.TextUtils.isWordChar) ||
+          TextUtils.TextRange.createFromLocation(selection.startLine, selection.startColumn);
       var endRangeWord = this._textEditor.wordRangeForCursorPosition(
-                             selection.endLine, selection.endColumn, Common.TextUtils.isWordChar) ||
-          Common.TextRange.createFromLocation(selection.endLine, selection.endColumn);
-      var newSelection = new Common.TextRange(
+                             selection.endLine, selection.endColumn, TextUtils.TextUtils.isWordChar) ||
+          TextUtils.TextRange.createFromLocation(selection.endLine, selection.endColumn);
+      var newSelection = new TextUtils.TextRange(
           startRangeWord.startLine, startRangeWord.startColumn, endRangeWord.endLine, endRangeWord.endColumn);
       newSelections.push(newSelection);
     }
@@ -1508,9 +1514,9 @@ TextEditor.CodeMirrorTextEditor.SelectNextOccurrenceController = class {
   }
 
   /**
-   * @param {!Common.TextRange} range
+   * @param {!TextUtils.TextRange} range
    * @param {boolean} fullWord
-   * @return {?Common.TextRange}
+   * @return {?TextUtils.TextRange}
    */
   _findNextOccurrence(range, fullWord) {
     range = range.normalize();
@@ -1550,7 +1556,7 @@ TextEditor.CodeMirrorTextEditor.SelectNextOccurrenceController = class {
 
     if (typeof matchedLineNumber !== 'number')
       return null;
-    return new Common.TextRange(
+    return new TextUtils.TextRange(
         matchedLineNumber, matchedColumnNumber, matchedLineNumber, matchedColumnNumber + textToFind.length);
   }
 };
@@ -1565,13 +1571,13 @@ TextEditor.TextEditorPositionHandle.prototype = {
   /**
    * @return {?{lineNumber: number, columnNumber: number}}
    */
-  resolve: function() {},
+  resolve() {},
 
   /**
    * @param {!TextEditor.TextEditorPositionHandle} positionHandle
    * @return {boolean}
    */
-  equal: function(positionHandle) {}
+  equal(positionHandle) {}
 };
 
 TextEditor.CodeMirrorTextEditor._overrideModeWithPrefixedTokens('css', 'css-');
@@ -1591,7 +1597,7 @@ TextEditor.CodeMirrorMimeMode.prototype = {
   /**
    * @param {!Runtime.Extension} extension
    */
-  install: function(extension) {}
+  install(extension) {}
 };
 
 /**
@@ -1633,11 +1639,11 @@ TextEditor.TextEditorBookMark = class {
   }
 
   /**
-   * @return {?Common.TextRange}
+   * @return {?TextUtils.TextRange}
    */
   position() {
     var pos = this._marker.find();
-    return pos ? Common.TextRange.createFromLocation(pos.line, pos.ch) : null;
+    return pos ? TextUtils.TextRange.createFromLocation(pos.line, pos.ch) : null;
   }
 };
 

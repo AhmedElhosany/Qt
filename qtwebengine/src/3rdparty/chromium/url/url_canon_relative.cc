@@ -4,6 +4,8 @@
 
 // Canonicalizer functions for working with and resolving relative URLs.
 
+#include <algorithm>
+
 #include "base/logging.h"
 #include "url/url_canon.h"
 #include "url/url_canon_internal.h"
@@ -264,7 +266,7 @@ int CopyBaseDriveSpecIfNecessary(const char* base_url,
 #endif  // WIN32
 
 // A subroutine of DoResolveRelativeURL, this resolves the URL knowning that
-// the input is a relative path or less (qyuery or ref).
+// the input is a relative path or less (query or ref).
 template<typename CHAR>
 bool DoResolveRelativePath(const char* base_url,
                            const Parsed& base_parsed,
@@ -280,7 +282,13 @@ bool DoResolveRelativePath(const char* base_url,
   // also know we have a path so can copy up to there.
   Component path, query, ref;
   ParsePathInternal(relative_url, relative_component, &path, &query, &ref);
-  // Canonical URLs always have a path, so we can use that offset.
+
+  // Canonical URLs always have a path, so we can use that offset. Reserve
+  // enough room for the base URL, the new path, and some extra bytes for
+  // possible escaped characters.
+  output->ReserveSizeIfNeeded(
+      base_parsed.path.begin +
+      std::max(path.end(), std::max(query.end(), ref.end())));
   output->Append(base_url, base_parsed.path.begin);
 
   if (path.len > 0) {
@@ -394,6 +402,11 @@ bool DoResolveRelativeHost(const char* base_url,
   replacements.SetQuery(relative_url, relative_parsed.query);
   replacements.SetRef(relative_url, relative_parsed.ref);
 
+  // Length() does not include the old scheme, so make sure to add it from the
+  // base URL.
+  output->ReserveSizeIfNeeded(
+      replacements.components().Length() +
+      base_parsed.CountCharactersBefore(Parsed::USERNAME, false));
   return ReplaceStandardURL(base_url, base_parsed, replacements,
                             query_converter, output, out_parsed);
 }
@@ -428,8 +441,13 @@ bool DoResolveRelativeURL(const char* base_url,
                           CharsetConverter* query_converter,
                           CanonOutput* output,
                           Parsed* out_parsed) {
-  // Starting point for our output parsed. We'll fix what we change.
+  // |base_parsed| is the starting point for our output. Since we may have
+  // removed whitespace from |relative_url| before entering this method, we'll
+  // carry over the |potentially_dangling_markup| flag.
+  bool potentially_dangling_markup = out_parsed->potentially_dangling_markup;
   *out_parsed = base_parsed;
+  if (potentially_dangling_markup)
+    out_parsed->potentially_dangling_markup = true;
 
   // Sanity check: the input should have a host or we'll break badly below.
   // We can only resolve relative URLs with base URLs that have hosts and

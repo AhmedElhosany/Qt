@@ -43,9 +43,11 @@
 #include "qeglfskmsgbmdevice.h"
 #include "qeglfskmsgbmscreen.h"
 #include "qeglfskmsgbmcursor.h"
+#include "private/qeglfswindow_p.h"
 #include "private/qeglfscursor_p.h"
 
 #include <QtDeviceDiscoverySupport/private/qdevicediscovery_p.h>
+#include <QtEglSupport/private/qeglconvenience_p.h>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -67,20 +69,35 @@ QEglFSKmsGbmIntegration::QEglFSKmsGbmIntegration()
     qCDebug(qLcEglfsKmsDebug, "New DRM/KMS via GBM integration created");
 }
 
-EGLNativeWindowType QEglFSKmsGbmIntegration::createNativeWindow(QPlatformWindow *platformWindow,
-                                                     const QSize &size,
-                                                     const QSurfaceFormat &format)
-{
-    Q_UNUSED(size);
-    Q_UNUSED(format);
+#ifndef EGL_EXT_platform_base
+typedef EGLDisplay (EGLAPIENTRYP PFNEGLGETPLATFORMDISPLAYEXTPROC) (EGLenum platform, void *native_display, const EGLint *attrib_list);
+typedef EGLSurface (EGLAPIENTRYP PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC) (EGLDisplay dpy, EGLConfig config, void *native_window, const EGLint *attrib_list);
+#endif
 
-    QEglFSKmsGbmScreen *screen = static_cast<QEglFSKmsGbmScreen *>(platformWindow->screen());
-    if (screen->surface()) {
-        qWarning("Only single window per screen supported!");
-        return 0;
+#ifndef EGL_PLATFORM_GBM_KHR
+#define EGL_PLATFORM_GBM_KHR 0x31D7
+#endif
+
+EGLDisplay QEglFSKmsGbmIntegration::createDisplay(EGLNativeDisplayType nativeDisplay)
+{
+    qCDebug(qLcEglfsKmsDebug, "Querying EGLDisplay");
+    EGLDisplay display;
+
+    PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplay = nullptr;
+    const char *extensions = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    if (extensions && (strstr(extensions, "EGL_KHR_platform_gbm") || strstr(extensions, "EGL_MESA_platform_gbm"))) {
+        getPlatformDisplay = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
+            eglGetProcAddress("eglGetPlatformDisplayEXT"));
     }
 
-    return reinterpret_cast<EGLNativeWindowType>(screen->createSurface());
+    if (getPlatformDisplay) {
+        display = getPlatformDisplay(EGL_PLATFORM_GBM_KHR, nativeDisplay, nullptr);
+    } else {
+        qCDebug(qLcEglfsKmsDebug, "No eglGetPlatformDisplay for GBM, falling back to eglGetDisplay");
+        display = eglGetDisplay(nativeDisplay);
+    }
+
+    return display;
 }
 
 EGLNativeWindowType QEglFSKmsGbmIntegration::createNativeOffscreenWindow(const QSurfaceFormat &format)
@@ -141,6 +158,51 @@ QKmsDevice *QEglFSKmsGbmIntegration::createDevice()
     }
 
     return new QEglFSKmsGbmDevice(screenConfig(), path);
+}
+
+class QEglFSKmsGbmWindow : public QEglFSWindow
+{
+public:
+    QEglFSKmsGbmWindow(QWindow *w, const QEglFSKmsGbmIntegration *integration)
+        : QEglFSWindow(w)
+        , m_integration(integration)
+    {}
+    void resetSurface() override;
+    const QEglFSKmsGbmIntegration *m_integration;
+};
+
+void QEglFSKmsGbmWindow::resetSurface()
+{
+    QEglFSKmsGbmScreen *gbmScreen = static_cast<QEglFSKmsGbmScreen *>(screen());
+    if (gbmScreen->surface()) {
+        qWarning("Only single window per screen supported!");
+        return;
+    }
+
+    EGLDisplay display = gbmScreen->display();
+    QSurfaceFormat platformFormat = m_integration->surfaceFormatFor(window()->requestedFormat());
+    m_config = QEglFSDeviceIntegration::chooseConfig(display, platformFormat);
+    m_format = q_glFormatFromConfig(display, m_config, platformFormat);
+    m_window = reinterpret_cast<EGLNativeWindowType>(gbmScreen->createSurface());
+
+    PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC createPlatformWindowSurface = nullptr;
+    const char *extensions = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    if (extensions && (strstr(extensions, "EGL_KHR_platform_gbm") || strstr(extensions, "EGL_MESA_platform_gbm"))) {
+        createPlatformWindowSurface = reinterpret_cast<PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC>(
+            eglGetProcAddress("eglCreatePlatformWindowSurfaceEXT"));
+    }
+
+    if (createPlatformWindowSurface) {
+        m_surface = createPlatformWindowSurface(display, m_config, reinterpret_cast<void *>(m_window), nullptr);
+    } else {
+        qCDebug(qLcEglfsKmsDebug, "No eglCreatePlatformWindowSurface for GBM, falling back to eglCreateWindowSurface");
+        m_surface = eglCreateWindowSurface(display, m_config, m_window, nullptr);
+    }
+}
+
+QEglFSWindow *QEglFSKmsGbmIntegration::createWindow(QWindow *window) const
+{
+    return new QEglFSKmsGbmWindow(window, this);
 }
 
 QT_END_NAMESPACE

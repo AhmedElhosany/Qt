@@ -73,20 +73,23 @@ inline pa_sample_spec audioFormatToSampleSpec(const QAudioFormat &format)
 
     spec.rate = format.sampleRate();
     spec.channels = format.channelCount();
+    spec.format = PA_SAMPLE_INVALID;
+    const bool isBigEndian = (format.byteOrder() == QAudioFormat::BigEndian);
 
-    if (format.sampleSize() == 8)
-        spec.format = PA_SAMPLE_U8;
-    else if (format.sampleSize() == 16) {
-        switch (format.byteOrder()) {
-            case QAudioFormat::BigEndian: spec.format = PA_SAMPLE_S16BE; break;
-            case QAudioFormat::LittleEndian: spec.format = PA_SAMPLE_S16LE; break;
+    if (format.sampleType() == QAudioFormat::UnSignedInt) {
+        if (format.sampleSize() == 8)
+            spec.format = PA_SAMPLE_U8;
+    } else if (format.sampleType() == QAudioFormat::SignedInt) {
+        if (format.sampleSize() == 16) {
+            spec.format = isBigEndian ? PA_SAMPLE_S16BE : PA_SAMPLE_S16LE;
+        } else if (format.sampleSize() == 24) {
+            spec.format = isBigEndian ? PA_SAMPLE_S24BE : PA_SAMPLE_S24LE;
+        } else if (format.sampleSize() == 32) {
+            spec.format = isBigEndian ? PA_SAMPLE_S32BE : PA_SAMPLE_S32LE;
         }
-    }
-    else if (format.sampleSize() == 32) {
-        switch (format.byteOrder()) {
-            case QAudioFormat::BigEndian: spec.format = PA_SAMPLE_S32BE; break;
-            case QAudioFormat::LittleEndian: spec.format = PA_SAMPLE_S32LE; break;
-        }
+    } else if (format.sampleType() == QAudioFormat::Float) {
+        if (format.sampleSize() == 32)
+            spec.format = isBigEndian ? PA_SAMPLE_FLOAT32BE : PA_SAMPLE_FLOAT32LE;
     }
 
     return spec;
@@ -190,7 +193,11 @@ private Q_SLOTS:
 
         pa_context_set_state_callback(m_context, context_state_callback, this);
 
-        if (pa_context_connect(m_context, 0, (pa_context_flags_t)0, 0) < 0) {
+        const QByteArray srvStrEnv = qgetenv("QT_PULSE_SERVER_STRING");
+        const char *srvStr = srvStrEnv.isNull() ? 0 : srvStrEnv.constData();
+        pa_context_flags_t flags = qEnvironmentVariableIsSet("QT_PULSE_NOAUTOSPAWN") ? PA_CONTEXT_NOAUTOSPAWN : (pa_context_flags_t)0;
+
+        if (pa_context_connect(m_context, srvStr, flags, 0) < 0) {
             qWarning("PulseAudioService: pa_context_connect() failed");
             pa_context_unref(m_context);
             unlock();
@@ -529,31 +536,34 @@ void QSoundEffectPrivate::setLoopCount(int loopCount)
 
 qreal QSoundEffectPrivate::volume() const
 {
-    QReadLocker locker(&m_volumeLock);
+    QMutexLocker locker(&m_volumeLock);
     return m_volume;
 }
 
 void QSoundEffectPrivate::setVolume(qreal volume)
 {
-    QWriteLocker locker(&m_volumeLock);
+    QMutexLocker locker(&m_volumeLock);
 
     if (qFuzzyCompare(m_volume, volume))
         return;
 
     m_volume = qBound(qreal(0), volume, qreal(1));
+    locker.unlock();
     emit volumeChanged();
 }
 
 bool QSoundEffectPrivate::isMuted() const
 {
-    QReadLocker locker(&m_volumeLock);
+    QMutexLocker locker(&m_volumeLock);
     return m_muted;
 }
 
 void QSoundEffectPrivate::setMuted(bool muted)
 {
-    QWriteLocker locker(&m_volumeLock);
+    m_volumeLock.lock();
     m_muted = muted;
+    m_volumeLock.unlock();
+
     emit mutedChanged();
 }
 
@@ -878,7 +888,7 @@ int QSoundEffectPrivate::writeToStream(const void *data, int size)
     if (size < 1)
         return 0;
 
-    m_volumeLock.lockForRead();
+    m_volumeLock.lock();
     qreal volume = m_muted ? 0 : m_volume;
     m_volumeLock.unlock();
     pa_free_cb_t writeDoneCb = stream_write_done_callback;

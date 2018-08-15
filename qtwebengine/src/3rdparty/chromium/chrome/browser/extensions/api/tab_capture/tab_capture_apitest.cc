@@ -4,6 +4,7 @@
 
 #include "base/command_line.h"
 #include "base/location.h"
+#include "base/message_loop/message_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/test_timeouts.h"
@@ -26,10 +27,6 @@
 #include "extensions/common/switches.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
-
-#if defined(OS_WIN)
-#include "base/win/windows_version.h"
-#endif
 
 namespace extensions {
 
@@ -54,9 +51,8 @@ class TabCaptureApiTest : public ExtensionApiTest {
  protected:
   void SimulateMouseClickInCurrentTab() {
     content::SimulateMouseClick(
-        browser()->tab_strip_model()->GetActiveWebContents(),
-        0,
-        blink::WebMouseEvent::Button::Left);
+        browser()->tab_strip_model()->GetActiveWebContents(), 0,
+        blink::WebMouseEvent::Button::kLeft);
   }
 };
 
@@ -70,13 +66,8 @@ class TabCaptureApiPixelTest : public TabCaptureApiTest {
 
  protected:
   bool IsTooIntensiveForThisPlatform() const {
-#if defined(OS_WIN)
-    if (base::win::GetVersion() < base::win::VERSION_VISTA)
-      return true;
-#endif
-
-    // The tests are too slow to succeed with OSMesa on the bots.
-    if (UsingOSMesa())
+    // The tests are too slow to succeed with software GL on the bots.
+    if (UsingSoftwareGL())
       return true;
 
 #if defined(NDEBUG)
@@ -166,9 +157,15 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, ApiTests) {
   ASSERT_TRUE(RunExtensionSubtest("tab_capture", "api_tests.html")) << message_;
 }
 
+#if defined(OS_MACOSX) && defined(ADDRESS_SANITIZER)
+// Flaky on ASAN on Mac. See https://crbug.com/674497.
+#define MAYBE_MaxOffscreenTabs DISABLED_MaxOffscreenTabs
+#else
+#define MAYBE_MaxOffscreenTabs MaxOffscreenTabs
+#endif
 // Tests that there is a maximum limitation to the number of simultaneous
 // off-screen tabs.
-IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MaxOffscreenTabs) {
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_MaxOffscreenTabs) {
   AddExtensionToCommandLineWhitelist();
   ASSERT_TRUE(RunExtensionSubtest("tab_capture", "max_offscreen_tabs.html"))
       << message_;
@@ -305,17 +302,12 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_ActiveTabPermission) {
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-// http://crbug.com/177163
-#if defined(OS_WIN) && !defined(NDEBUG)
-#define MAYBE_FullscreenEvents DISABLED_FullscreenEvents
-#else
-#define MAYBE_FullscreenEvents FullscreenEvents
-#endif
+// Flaky: http://crbug.com/675851
 // Tests that fullscreen transitions during a tab capture session dispatch
 // events to the onStatusChange listener.  The test loads a page that toggles
 // fullscreen mode, using the Fullscreen Javascript API, in response to mouse
 // clicks.
-IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_FullscreenEvents) {
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, DISABLED_FullscreenEvents) {
   AddExtensionToCommandLineWhitelist();
 
   ExtensionTestMessageListener capture_started("tab_capture_started", false);

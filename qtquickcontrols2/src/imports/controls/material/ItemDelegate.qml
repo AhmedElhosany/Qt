@@ -34,10 +34,12 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Templates 2.2 as T
-import QtQuick.Controls.Material 2.2
-import QtQuick.Controls.Material.impl 2.2
+import QtQuick 2.10
+import QtQuick.Templates 2.3 as T
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Controls.Material 2.3
+import QtQuick.Controls.Material.impl 2.3
 
 T.ItemDelegate {
     id: control
@@ -52,15 +54,20 @@ T.ItemDelegate {
     padding: 16
     spacing: 16
 
-    contentItem: Text {
-        leftPadding: control.checkable && !control.mirrored ? (control.indicator ? control.indicator.width : 0) + control.spacing : 0
-        rightPadding: control.checkable && control.mirrored ? (control.indicator ? control.indicator.width : 0) + control.spacing : 0
+    icon.width: 24
+    icon.height: 24
+    icon.color: enabled ? Material.foreground : Material.hintTextColor
 
+    contentItem: IconLabel {
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+        alignment: control.display === IconLabel.IconOnly || control.display === IconLabel.TextUnderIcon ? Qt.AlignCenter : Qt.AlignLeft
+
+        icon: control.icon
         text: control.text
         font: control.font
         color: control.enabled ? control.Material.foreground : control.Material.hintTextColor
-        elide: Text.ElideRight
-        verticalAlignment: Text.AlignVCenter
     }
 
     background: Rectangle {

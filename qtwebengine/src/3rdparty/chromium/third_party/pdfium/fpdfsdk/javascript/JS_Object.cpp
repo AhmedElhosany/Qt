@@ -7,7 +7,7 @@
 #include "fpdfsdk/javascript/JS_Object.h"
 
 #include "fpdfsdk/javascript/JS_Define.h"
-#include "fpdfsdk/javascript/cjs_context.h"
+#include "fpdfsdk/javascript/cjs_event_context.h"
 
 CJS_EmbedObj::CJS_EmbedObj(CJS_Object* pJSObject) : m_pJSObject(pJSObject) {}
 
@@ -16,7 +16,6 @@ CJS_EmbedObj::~CJS_EmbedObj() {
 
 void FreeObject(const v8::WeakCallbackInfo<CJS_Object>& data) {
   CJS_Object* pJSObj = data.GetParameter();
-  pJSObj->ExitInstance();
   delete pJSObj;
   CFXJS_Engine::FreeObjectPrivate(data.GetInternalField(0));
 }
@@ -44,5 +43,3 @@ void CJS_Object::Dispose() {
 }
 
 void CJS_Object::InitInstance(IJS_Runtime* pIRuntime) {}
-
-void CJS_Object::ExitInstance() {}

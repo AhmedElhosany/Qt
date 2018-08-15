@@ -24,8 +24,11 @@ class JSGraph;
 class V8_EXPORT_PRIVATE MachineOperatorReducer final
     : public NON_EXPORTED_BASE(Reducer) {
  public:
-  explicit MachineOperatorReducer(JSGraph* jsgraph);
+  explicit MachineOperatorReducer(JSGraph* jsgraph,
+                                  bool allow_signalling_nan = true);
   ~MachineOperatorReducer();
+
+  const char* reducer_name() const override { return "MachineOperatorReducer"; }
 
   Reduction Reduce(Node* node) override;
 
@@ -96,6 +99,7 @@ class V8_EXPORT_PRIVATE MachineOperatorReducer final
   Reduction ReduceFloat64InsertLowWord32(Node* node);
   Reduction ReduceFloat64InsertHighWord32(Node* node);
   Reduction ReduceFloat64Compare(Node* node);
+  Reduction ReduceFloat64RoundDown(Node* node);
 
   Graph* graph() const;
   JSGraph* jsgraph() const { return jsgraph_; }
@@ -103,6 +107,7 @@ class V8_EXPORT_PRIVATE MachineOperatorReducer final
   MachineOperatorBuilder* machine() const;
 
   JSGraph* jsgraph_;
+  bool allow_signalling_nan_;
 };
 
 }  // namespace compiler

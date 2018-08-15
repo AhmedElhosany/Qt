@@ -66,12 +66,10 @@
 #include "QtNetwork/private/qauthenticator_p.h"
 #include "QtNetwork/qsslconfiguration.h"
 #include "QtNetwork/qnetworkconfigmanager.h"
-
-#if QT_CONFIG(http)
-#include "qhttpmultipart.h"
+#include "QtNetwork/qhttpmultipart.h"
 #include "qhttpmultipart_p.h"
+
 #include "qnetworkreplyhttpimpl_p.h"
-#endif
 
 #include "qthread.h"
 
@@ -471,7 +469,7 @@ QNetworkAccessManager::QNetworkAccessManager(QObject *parent)
     qRegisterMetaType<QSslPreSharedKeyAuthenticator *>();
 #endif
     qRegisterMetaType<QList<QPair<QByteArray,QByteArray> > >();
-#if QT_CONFIG(http)
+#ifndef QT_NO_HTTP
     qRegisterMetaType<QHttpNetworkRequest>();
 #endif
     qRegisterMetaType<QNetworkReply::NetworkError>();
@@ -737,9 +735,51 @@ bool QNetworkAccessManager::isStrictTransportSecurityEnabled() const
 }
 
 /*!
+    \since 5.10
+
+    If \a enabled is \c true, the internal HSTS cache will use a persistent store
+    to read and write HSTS policies. \a storeDir defines where this store will be
+    located. The default location is defined by QStandardPaths::CacheLocation.
+    If there is no writable QStandartPaths::CacheLocation and \a storeDir is an
+    empty string, the store will be located in the program's working directory.
+
+    \note If HSTS cache already contains HSTS policies by the time persistent
+    store is enabled, these policies will be preserved in the store. In case both
+    cache and store contain the same known hosts, policies from cache are considered
+    to be more up-to-date (and thus will overwrite the previous values in the store).
+    If this behavior is undesired, enable HSTS store before enabling Strict Tranport
+    Security. By default, the persistent store of HSTS policies is disabled.
+
+    \sa isStrictTransportSecurityStoreEnabled(), setStrictTransportSecurityEnabled(),
+    QStandardPaths::standardLocations()
+*/
+
+void QNetworkAccessManager::enableStrictTransportSecurityStore(bool enabled, const QString &storeDir)
+{
+    Q_D(QNetworkAccessManager);
+    d->stsStore.reset(enabled ? new QHstsStore(storeDir) : nullptr);
+    d->stsCache.setStore(d->stsStore.data());
+}
+
+/*!
+    \since 5.10
+
+    Returns true if HSTS cache uses a permanent store to load and store HSTS
+    policies.
+
+    \sa enableStrictTransportSecurityStore()
+*/
+
+bool QNetworkAccessManager::isStrictTransportSecurityStoreEnabled() const
+{
+    Q_D(const QNetworkAccessManager);
+    return bool(d->stsStore.data());
+}
+
+/*!
     \since 5.9
 
-    Adds HTTP Strict Transport Security policies into HSTS cache.
+    Adds HTTP Strict Transport Security policies contained in \a knownHosts into HSTS cache.
 
     \note An expired policy will remove a known host from the cache, if previously
     present.
@@ -751,7 +791,7 @@ bool QNetworkAccessManager::isStrictTransportSecurityEnabled() const
     policies, but this information can be overridden by "Strict-Transport-Security"
     response headers.
 
-    \sa addStrictTransportSecurityHosts(), QHstsPolicy
+    \sa addStrictTransportSecurityHosts(), enableStrictTransportSecurityStore(), QHstsPolicy
 */
 
 void QNetworkAccessManager::addStrictTransportSecurityHosts(const QVector<QHstsPolicy> &knownHosts)
@@ -837,7 +877,6 @@ QNetworkReply *QNetworkAccessManager::post(const QNetworkRequest &request, const
     return reply;
 }
 
-#if QT_CONFIG(http)
 /*!
     \since 4.8
 
@@ -877,7 +916,6 @@ QNetworkReply *QNetworkAccessManager::put(const QNetworkRequest &request, QHttpM
     QNetworkReply *reply = put(newRequest, device);
     return reply;
 }
-#endif // QT_CONFIG(http)
 
 /*!
     Uploads the contents of \a data to the destination \a request and
@@ -1245,7 +1283,6 @@ QNetworkReply *QNetworkAccessManager::sendCustomRequest(const QNetworkRequest &r
     return reply;
 }
 
-#if QT_CONFIG(http)
 /*!
     \since 5.8
 
@@ -1267,7 +1304,6 @@ QNetworkReply *QNetworkAccessManager::sendCustomRequest(const QNetworkRequest &r
     QNetworkReply *reply = sendCustomRequest(newRequest, verb, device);
     return reply;
 }
-#endif // QT_CONFIG(http)
 
 /*!
     Returns a new QNetworkReply object to handle the operation \a op
@@ -1380,7 +1416,7 @@ QNetworkReply *QNetworkAccessManager::createRequest(QNetworkAccessManager::Opera
         }
     }
 
-#if QT_CONFIG(http)
+#ifndef QT_NO_HTTP
     // Since Qt 5 we use the new QNetworkReplyHttpImpl
     if (scheme == QLatin1String("http") || scheme == QLatin1String("preconnect-http")
 #ifndef QT_NO_SSL
@@ -1412,7 +1448,7 @@ QNetworkReply *QNetworkAccessManager::createRequest(QNetworkAccessManager::Opera
 #endif
         return reply;
     }
-#endif // QT_CONFIG(http)
+#endif // QT_NO_HTTP
 
     // first step: create the reply
     QNetworkReplyImpl *reply = new QNetworkReplyImpl(this);
@@ -1488,7 +1524,7 @@ QStringList QNetworkAccessManager::supportedSchemesImplementation() const
 
     QStringList schemes = d->backendSupportedSchemes();
     // Those ones don't exist in backends
-#if QT_CONFIG(http)
+#ifndef QT_NO_HTTP
     schemes << QStringLiteral("http");
 #ifndef QT_NO_SSL
     if (QSslSocket::supportsSsl())
@@ -1955,7 +1991,6 @@ void QNetworkAccessManagerPrivate::_q_networkSessionFailed(QNetworkSession::Sess
 
 #endif // QT_NO_BEARERMANAGEMENT
 
-#if QT_CONFIG(http)
 QNetworkRequest QNetworkAccessManagerPrivate::prepareMultipart(const QNetworkRequest &request, QHttpMultiPart *multiPart)
 {
     // copy the request, we probably need to add some headers
@@ -2003,7 +2038,6 @@ QNetworkRequest QNetworkAccessManagerPrivate::prepareMultipart(const QNetworkReq
 
     return newRequest;
 }
-#endif // QT_CONFIG(http)
 
 QT_END_NAMESPACE
 

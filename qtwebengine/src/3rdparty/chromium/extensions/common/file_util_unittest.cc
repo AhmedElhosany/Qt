@@ -12,16 +12,18 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_paths.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
-#include "grit/extensions_strings.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -52,7 +54,7 @@ scoped_refptr<Extension> LoadExtensionManifest(
   std::unique_ptr<base::Value> result = deserializer.Deserialize(NULL, error);
   if (!result.get())
     return NULL;
-  CHECK_EQ(base::Value::TYPE_DICTIONARY, result->GetType());
+  CHECK_EQ(base::Value::Type::DICTIONARY, result->GetType());
   return LoadExtensionManifest(*base::DictionaryValue::From(std::move(result)),
                                manifest_dir, location, extra_flags, error);
 }
@@ -152,8 +154,9 @@ TEST_F(FileUtilTest, CheckIllegalFilenamesNoUnderscores) {
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
   std::string data = "{ \"name\": { \"message\": \"foobar\" } }";
-  ASSERT_TRUE(base::WriteFile(
-      src_path.AppendASCII("some_file.txt"), data.c_str(), data.length()));
+  ASSERT_EQ(static_cast<int>(data.length()),
+            base::WriteFile(src_path.AppendASCII("some_file.txt"), data.c_str(),
+                            data.length()));
   std::string error;
   EXPECT_TRUE(file_util::CheckForIllegalFilenames(temp.GetPath(), &error));
 }
@@ -213,8 +216,9 @@ TEST_F(FileUtilTest,
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
   std::string data = "{ \"name\": { \"message\": \"foobar\" } }";
-  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("lpt1.txt"), data.c_str(),
-                              data.length()));
+  ASSERT_EQ(static_cast<int>(data.length()),
+            base::WriteFile(src_path.AppendASCII("lpt1.txt"), data.c_str(),
+                            data.length()));
 
   std::string error;
   EXPECT_FALSE(
@@ -288,9 +292,9 @@ TEST_F(FileUtilTest, BackgroundScriptsMustExist) {
   value->SetString("version", "1");
   value->SetInteger("manifest_version", 1);
 
-  base::ListValue* scripts = new base::ListValue();
+  base::ListValue* scripts =
+      value->SetList("background.scripts", base::MakeUnique<base::ListValue>());
   scripts->AppendString("foo.js");
-  value->Set("background.scripts", scripts);
 
   std::string error;
   std::vector<extensions::InstallWarning> warnings;
@@ -350,19 +354,20 @@ TEST_F(FileUtilTest, FindPrivateKeyFiles) {
   base::FilePath src_path = temp.GetPath().AppendASCII("some_dir");
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
-  ASSERT_TRUE(base::WriteFile(
-      src_path.AppendASCII("a_key.pem"), private_key, arraysize(private_key)));
-  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("second_key.pem"),
-                              private_key,
-                              arraysize(private_key)));
+  ASSERT_EQ(static_cast<int>(arraysize(private_key)),
+            base::WriteFile(src_path.AppendASCII("a_key.pem"), private_key,
+                            arraysize(private_key)));
+  ASSERT_EQ(static_cast<int>(arraysize(private_key)),
+            base::WriteFile(src_path.AppendASCII("second_key.pem"), private_key,
+                            arraysize(private_key)));
   // Shouldn't find a key with a different extension.
-  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("key.diff_ext"),
-                              private_key,
-                              arraysize(private_key)));
+  ASSERT_EQ(static_cast<int>(arraysize(private_key)),
+            base::WriteFile(src_path.AppendASCII("key.diff_ext"), private_key,
+                            arraysize(private_key)));
   // Shouldn't find a key that isn't parsable.
-  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("unparsable_key.pem"),
-                              private_key,
-                              arraysize(private_key) - 30));
+  ASSERT_EQ(static_cast<int>(arraysize(private_key)) - 30,
+            base::WriteFile(src_path.AppendASCII("unparsable_key.pem"),
+                            private_key, arraysize(private_key) - 30));
   std::vector<base::FilePath> private_keys =
       file_util::FindPrivateKeyFiles(temp.GetPath());
   EXPECT_EQ(2U, private_keys.size());
@@ -386,10 +391,12 @@ TEST_F(FileUtilTest, WarnOnPrivateKey) {
       "  \"manifest_version\": 2,\n"
       "  \"description\": \"The first extension that I made.\"\n"
       "}\n";
-  ASSERT_TRUE(base::WriteFile(
-      ext_path.AppendASCII("manifest.json"), manifest, strlen(manifest)));
-  ASSERT_TRUE(base::WriteFile(
-      ext_path.AppendASCII("a_key.pem"), private_key, strlen(private_key)));
+  ASSERT_EQ(static_cast<int>(strlen(manifest)),
+            base::WriteFile(ext_path.AppendASCII("manifest.json"), manifest,
+                            strlen(manifest)));
+  ASSERT_EQ(static_cast<int>(strlen(private_key)),
+            base::WriteFile(ext_path.AppendASCII("a_key.pem"), private_key,
+                            strlen(private_key)));
 
   std::string error;
   scoped_refptr<Extension> extension(
@@ -481,71 +488,6 @@ TEST_F(FileUtilTest, ExtensionURLToRelativeFilePath) {
     EXPECT_EQ(expected_path.value(), actual_path.value()) <<
       " For the path " << url;
   }
-}
-
-TEST_F(FileUtilTest, ExtensionResourceURLToFilePath) {
-  // Setup filesystem for testing.
-  base::FilePath root_path;
-  ASSERT_TRUE(base::CreateNewTempDirectory(
-      base::FilePath::StringType(), &root_path));
-  root_path = base::MakeAbsoluteFilePath(root_path);
-  ASSERT_FALSE(root_path.empty());
-
-  base::FilePath api_path = root_path.Append(FILE_PATH_LITERAL("apiname"));
-  ASSERT_TRUE(base::CreateDirectory(api_path));
-
-  const char data[] = "Test Data";
-  base::FilePath resource_path = api_path.Append(FILE_PATH_LITERAL("test.js"));
-  ASSERT_TRUE(base::WriteFile(resource_path, data, sizeof(data)));
-  resource_path = api_path.Append(FILE_PATH_LITERAL("escape spaces.js"));
-  ASSERT_TRUE(base::WriteFile(resource_path, data, sizeof(data)));
-  resource_path = api_path.Append(FILE_PATH_LITERAL("escape spaces.js"));
-  ASSERT_TRUE(base::WriteFile(resource_path, data, sizeof(data)));
-  resource_path = api_path.Append(FILE_PATH_LITERAL("..%2f..%2fsimple.html"));
-  ASSERT_TRUE(base::WriteFile(resource_path, data, sizeof(data)));
-
-#ifdef FILE_PATH_USES_WIN_SEPARATORS
-#define SEP "\\"
-#else
-#define SEP "/"
-#endif
-#define URL_PREFIX "chrome-extension-resource://"
-  struct TestCase {
-    const char* url;
-    const base::FilePath::CharType* expected_path;
-  } test_cases[] = {
-      {URL_PREFIX "apiname/test.js", FILE_PATH_LITERAL("test.js")},
-      {URL_PREFIX "/apiname/test.js", FILE_PATH_LITERAL("test.js")},
-      // Test % escape
-      {URL_PREFIX "apiname/%74%65st.js", FILE_PATH_LITERAL("test.js")},
-      {URL_PREFIX "apiname/escape%20spaces.js",
-       FILE_PATH_LITERAL("escape spaces.js")},
-      // Test file does not exist.
-      {URL_PREFIX "apiname/directory/to/file.js", NULL},
-      // Test apiname/../../test.js
-      {URL_PREFIX "apiname/../../test.js", FILE_PATH_LITERAL("test.js")},
-      {URL_PREFIX "apiname/..%2F../test.js", NULL},
-      {URL_PREFIX "apiname/f/../../../test.js", FILE_PATH_LITERAL("test.js")},
-      {URL_PREFIX "apiname/f%2F..%2F..%2F../test.js", NULL},
-      {URL_PREFIX "apiname/..%2f..%2fsimple.html",
-       FILE_PATH_LITERAL("..%2f..%2fsimple.html")},
-  };
-#undef SEP
-#undef URL_PREFIX
-
-  for (size_t i = 0; i < arraysize(test_cases); ++i) {
-    GURL url(test_cases[i].url);
-    base::FilePath expected_path;
-    if (test_cases[i].expected_path)
-      expected_path = root_path.Append(FILE_PATH_LITERAL("apiname")).Append(
-          test_cases[i].expected_path);
-    base::FilePath actual_path =
-        extensions::file_util::ExtensionResourceURLToFilePath(url, root_path);
-    EXPECT_EQ(expected_path.value(), actual_path.value()) <<
-      " For the path " << url;
-  }
-  // Remove temp files.
-  ASSERT_TRUE(base::DeleteFile(root_path, true));
 }
 
 }  // namespace extensions

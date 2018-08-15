@@ -1387,6 +1387,9 @@ static OPJ_BOOL opj_t1_decode_cblk(opj_t1_t *t1,
 	}
 
 	bpno_plus_one = (OPJ_INT32)(roishift + cblk->numbps);
+    if (bpno_plus_one > 30) {
+        return OPJ_FALSE;
+    }
 	passtype = 2;
 
 	opj_mqc_resetstates(mqc);
@@ -1411,7 +1414,7 @@ static OPJ_BOOL opj_t1_decode_cblk(opj_t1_t *t1,
             }
 		}
 
-		for (passno = 0; passno < seg->real_num_passes; ++passno) {
+		for (passno = 0; (passno < seg->real_num_passes) && (bpno_plus_one >= 1); ++passno) {
             switch (passtype) {
                 case 0:
                     if (type == T1_TYPE_RAW) {

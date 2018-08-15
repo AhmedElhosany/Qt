@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.DelayButton {
     id: control
@@ -68,7 +68,7 @@ T.DelayButton {
             text: control.text
             font: control.font
             opacity: enabled ? 1 : 0.3
-            color: control.visualFocus ? Default.focusColor : (control.down ? Default.textDarkColor : Default.textColor)
+            color: control.palette.buttonText
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
@@ -83,7 +83,7 @@ T.DelayButton {
             text: control.text
             font: control.font
             opacity: enabled ? 1 : 0.3
-            color: Default.textLightColor
+            color: control.palette.brightText
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
@@ -93,14 +93,15 @@ T.DelayButton {
     background: Rectangle {
         implicitWidth: 100
         implicitHeight: 40
-        color: control.visualFocus ? (control.down ? Default.focusPressedColor : Default.focusLightColor) : (control.down ? Default.buttonPressedColor : Default.buttonColor)
-        border.color: Default.focusColor
+        color: Color.blend(control.palette.button, control.palette.mid, control.down ? 0.5 : 0.0)
+        border.color: control.palette.highlight
         border.width: control.visualFocus ? 2 : 0
 
-        Rectangle {
+        PaddedRectangle {
+            padding: control.visualFocus ? 2 : 0
             width: control.progress * parent.width
             height: parent.height
-            color: control.visualFocus ? (control.down ? Default.buttonCheckedFocusColor : Default.focusColor) : (control.down ? Default.buttonCheckedPressedColor : Default.textColor)
+            color: Color.blend(control.palette.dark, control.palette.mid, control.down ? 0.5 : 0.0)
         }
     }
 }

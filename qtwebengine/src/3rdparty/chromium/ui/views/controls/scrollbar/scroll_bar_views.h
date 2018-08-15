@@ -35,11 +35,11 @@ class VIEWS_EXPORT ScrollBarViews : public BaseScrollBar,
   // View overrides:
   void Layout() override;
   void OnPaint(gfx::Canvas* canvas) override;
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   const char* GetClassName() const override;
 
   // ScrollBar overrides:
-  int GetLayoutSize() const override;
+  int GetThickness() const override;
 
   // BaseButton::ButtonListener overrides:
   void ButtonPressed(Button* sender, const ui::Event& event) override;

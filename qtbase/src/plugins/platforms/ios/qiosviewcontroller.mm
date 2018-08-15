@@ -77,8 +77,7 @@
     if (!(self = [super init]))
         return nil;
 
-    QIOSIntegration *iosIntegration = QIOSIntegration::instance();
-    if (iosIntegration && iosIntegration->debugWindowManagement()) {
+    if (qEnvironmentVariableIntValue("QT_IOS_DEBUG_WINDOW_MANAGEMENT")) {
         static UIImage *gridPattern = nil;
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
@@ -196,8 +195,8 @@
         return;
 
     // Re-apply window states to update geometry
-    if (window->windowState() & (Qt::WindowFullScreen | Qt::WindowMaximized))
-        window->handle()->setWindowState(window->windowState());
+    if (window->windowStates() & (Qt::WindowFullScreen | Qt::WindowMaximized))
+        window->handle()->setWindowState(window->windowStates());
 }
 
 // Even if the root view controller has both wantsFullScreenLayout and

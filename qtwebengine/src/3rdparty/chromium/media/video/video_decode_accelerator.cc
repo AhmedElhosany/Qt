@@ -20,7 +20,7 @@ VideoDecodeAccelerator::Config::~Config() = default;
 std::string VideoDecodeAccelerator::Config::AsHumanReadableString() const {
   std::ostringstream s;
   s << "profile: " << GetProfileName(profile) << " encrypted? "
-    << (is_encrypted ? "true" : "false");
+    << (is_encrypted() ? "true" : "false");
   return s.str();
 }
 
@@ -45,8 +45,8 @@ void VideoDecodeAccelerator::ImportBufferForPicture(
   NOTREACHED() << "Buffer import not supported.";
 }
 
-void VideoDecodeAccelerator::SetSurface(int32_t surface_id) {
-  NOTREACHED() << "Surfaces are not supported.";
+void VideoDecodeAccelerator::SetOverlayInfo(const OverlayInfo& overlay_info) {
+  NOTREACHED() << "Overlays are not supported.";
 }
 
 GLenum VideoDecodeAccelerator::GetSurfaceInternalFormat() const {

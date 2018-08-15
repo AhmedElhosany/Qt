@@ -4,16 +4,19 @@
 
 #include "base/command_line.h"
 #include "base/strings/stringprintf.h"
+#include "build/build_config.h"
 #include "content/browser/webrtc/webrtc_content_browsertest_base.h"
 #include "content/public/common/content_switches.h"
+#include "media/base/media_switches.h"
 #include "media/base/test_data_util.h"
+#include "media/mojo/features.h"
 
 #if defined(OS_ANDROID)
 #include "base/android/build_info.h"
 #include "base/sys_info.h"
 #endif
 
-#if defined(ENABLE_MOJO_RENDERER)
+#if BUILDFLAG(ENABLE_MOJO_RENDERER)
 // Remote mojo renderer does not send audio/video frames back to the renderer
 // process and hence does not support capture: https://crbug.com/641559.
 #define MAYBE_CaptureFromMediaElement DISABLED_CaptureFromMediaElement
@@ -23,8 +26,9 @@
 
 namespace {
 
-static const char kCanvasTestHtmlPage[] = "/media/canvas_capture_color.html";
-
+static const char kCanvasCaptureTestHtmlFile[] = "/media/canvas_capture.html";
+static const char kCanvasCaptureColorTestHtmlFile[] =
+    "/media/canvas_capture_color.html";
 static const char kVideoAudioHtmlFile[] =
     "/media/video_audio_element_capture_test.html";
 
@@ -61,7 +65,10 @@ class WebRtcCaptureFromElementBrowserTest
 
     // Allow <video>/<audio>.play() when not initiated by user gesture.
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kDisableGestureRequirementForMediaPlayback);
+        switches::kIgnoreAutoplayRestrictionsForTests);
+    // Allow experimental canvas features.
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(
+        switches::kEnableExperimentalCanvasFeatures);
   }
 
  private:
@@ -69,8 +76,49 @@ class WebRtcCaptureFromElementBrowserTest
 };
 
 IN_PROC_BROWSER_TEST_F(WebRtcCaptureFromElementBrowserTest,
-                       VerifyCanvasCaptureColor) {
-  MakeTypicalCall("testCanvasCaptureColors();", kCanvasTestHtmlPage);
+                       VerifyCanvas2DCaptureColor) {
+  MakeTypicalCall("testCanvas2DCaptureColors();",
+                  kCanvasCaptureColorTestHtmlFile);
+}
+
+IN_PROC_BROWSER_TEST_F(WebRtcCaptureFromElementBrowserTest,
+                       VerifyCanvasWebGLCaptureColor) {
+#if !defined(OS_MACOSX)
+  // TODO(crbug.com/706009): Make this test pass on mac.  Behavior is not buggy
+  // (verified manually) on mac, but for some reason this test fails on the mac
+  // bot.
+  MakeTypicalCall("testCanvasWebGLCaptureColors();",
+                  kCanvasCaptureColorTestHtmlFile);
+#endif
+}
+
+IN_PROC_BROWSER_TEST_F(WebRtcCaptureFromElementBrowserTest,
+                       VerifyCanvasCapture2DFrames) {
+  MakeTypicalCall("testCanvasCapture(draw2d);", kCanvasCaptureTestHtmlFile);
+}
+
+IN_PROC_BROWSER_TEST_F(WebRtcCaptureFromElementBrowserTest,
+                       DISABLED_VerifyCanvasCaptureWebGLFrames) {
+  MakeTypicalCall("testCanvasCapture(drawWebGL);", kCanvasCaptureTestHtmlFile);
+}
+
+#if defined(OS_LINUX)
+#define MAYBE_VerifyCanvasCaptureOffscreenCanvasCommitFrames \
+  DISABLED_VerifyCanvasCaptureOffscreenCanvasCommitFrames
+#else
+#define MAYBE_VerifyCanvasCaptureOffscreenCanvasCommitFrames \
+  VerifyCanvasCaptureOffscreenCanvasCommitFrames
+#endif
+IN_PROC_BROWSER_TEST_F(WebRtcCaptureFromElementBrowserTest,
+                       MAYBE_VerifyCanvasCaptureOffscreenCanvasCommitFrames) {
+  MakeTypicalCall("testCanvasCapture(drawOffscreenCanvasCommit);",
+                  kCanvasCaptureTestHtmlFile);
+}
+
+IN_PROC_BROWSER_TEST_F(WebRtcCaptureFromElementBrowserTest,
+                       VerifyCanvasCaptureBitmapRendererFrames) {
+  MakeTypicalCall("testCanvasCapture(drawBitmapRenderer);",
+                  kCanvasCaptureTestHtmlFile);
 }
 
 IN_PROC_BROWSER_TEST_P(WebRtcCaptureFromElementBrowserTest,

@@ -227,13 +227,13 @@ QAttribute *createAttribute(QBuffer *buffer,
     return attribute;
 }
 
-QAttribute *createIndexAttribute(QBuffer *buffer,
-                                 QAttribute::VertexBaseType vertexBaseType,
-                                 uint vertexSize,
-                                 uint count,
-                                 uint byteOffset = 0,
-                                 uint byteStride = 0,
-                                 QNode *parent = nullptr)
+QAttribute *createAttribute(QBuffer *buffer,
+                            QAttribute::VertexBaseType vertexBaseType,
+                            uint vertexSize,
+                            uint count,
+                            uint byteOffset = 0,
+                            uint byteStride = 0,
+                            QNode *parent = nullptr)
 {
     QAttribute *attribute = QAbstractNodeFactory::createNode<QAttribute>("QAttribute");
     attribute->setBuffer(buffer);
@@ -375,17 +375,15 @@ AssimpImporter::~AssimpImporter()
 }
 
 /*!
- *  Returns \c true if the provided \a path has a suffix supported
+ *  Returns \c true if the extensions are supported
  *  by the Assimp Assets importer.
  */
-bool AssimpImporter::isAssimpPath(const QString &path)
+bool AssimpImporter::areAssimpExtensions(const QStringList &extensions)
 {
-    QFileInfo fileInfo(path);
-
-    if (!fileInfo.exists() ||
-            !AssimpImporter::assimpSupportedFormatsList.contains(fileInfo.suffix().toLower()))
-        return false;
-    return true;
+    for (const auto &ext : qAsConst(extensions))
+        if (AssimpImporter::assimpSupportedFormatsList.contains(ext.toLower()))
+            return true;
+    return false;
 }
 
 /*!
@@ -405,13 +403,21 @@ void AssimpImporter::setSource(const QUrl &source)
 }
 
 /*!
- * Returns \c true if the extension of \a source is supported by
+ * Sets the \a basePath used by the parser to load the asset file.
+ * If the file specified in \a data is valid, this will trigger parsing of the file.
+ */
+void AssimpImporter::setData(const QByteArray &data, const QString &basePath)
+{
+    readSceneData(data, basePath);
+}
+
+/*!
+ * Returns \c true if the extension in QStringList \a extensions is supported by
  * the assimp parser.
  */
-bool AssimpImporter::isFileTypeSupported(const QUrl &source) const
+bool AssimpImporter::areFileTypesSupported(const QStringList &extensions) const
 {
-    const QString path = QUrlHelper::urlToLocalFileOrQrc(source);
-    return AssimpImporter::isAssimpPath(path);
+    return AssimpImporter::areAssimpExtensions(extensions);
 }
 
 /*!
@@ -597,8 +603,38 @@ void AssimpImporter::readSceneFile(const QString &path)
                                                        aiProcess_GenSmoothNormals|
                                                        aiProcess_FlipUVs);
     if (m_scene->m_aiScene == nullptr) {
-        qCWarning(AssimpImporterLog) << "Assimp scene import failed" << m_scene->m_importer->GetErrorString();
-        QSceneImporter::logError(QString::fromUtf8(m_scene->m_importer->GetErrorString()));
+        qCWarning(AssimpImporterLog) << "Assimp scene import failed";
+        return ;
+    }
+    parse();
+}
+
+/*!
+ * Reads the scene file pointed by \a path and launches the parsing of
+ * the scene using Assimp, after having cleaned up previously saved values
+ * from eventual previous parsings.
+ */
+void AssimpImporter::readSceneData(const QByteArray& data, const QString &basePath)
+{
+    Q_UNUSED(basePath);
+    cleanup();
+
+    m_scene = new SceneImporter();
+
+    // SET THIS TO REMOVE POINTS AND LINES -> HAVE ONLY TRIANGLES
+    m_scene->m_importer->SetPropertyInteger(AI_CONFIG_PP_SBP_REMOVE, aiPrimitiveType_LINE|aiPrimitiveType_POINT);
+    // SET CUSTOM FILE HANDLER TO HANDLE FILE READING THROUGH QT (RESOURCES, SOCKET ...)
+    m_scene->m_importer->SetIOHandler(new AssimpHelper::AssimpIOSystem());
+
+    // type and aiProcess_Triangulate discompose polygons with more than 3 points in triangles
+    // aiProcess_SortByPType makes sure that meshes data are triangles
+    m_scene->m_aiScene = m_scene->m_importer->ReadFileFromMemory(data.data(), data.size(),
+                                                                 aiProcess_SortByPType|
+                                                                 aiProcess_Triangulate|
+                                                                 aiProcess_GenSmoothNormals|
+                                                                 aiProcess_FlipUVs);
+    if (m_scene->m_aiScene == nullptr) {
+        qCWarning(AssimpImporterLog) << "Assimp scene import failed";
         return ;
     }
     parse();
@@ -792,7 +828,7 @@ QGeometryRenderer *AssimpImporter::loadMesh(uint meshIndex)
     indexBuffer->setData(ibufferContent);
 
     // Add indices attributes
-    QAttribute *indexAttribute = createIndexAttribute(indexBuffer, indiceType, 1, indices);
+    QAttribute *indexAttribute = createAttribute(indexBuffer, indiceType, 1, indices);
     indexAttribute->setAttributeType(QAttribute::IndexAttribute);
 
     meshGeometry->addAttribute(indexAttribute);

@@ -29,20 +29,17 @@
 import functools
 import json
 import optparse
-import tempfile
 import unittest
 
 from webkitpy.common.system.executive import ScriptError
-from webkitpy.common.system import executive_mock
-from webkitpy.common.system.filesystem_mock import MockFileSystem
-from webkitpy.common.system.platforminfo_mock import MockPlatformInfo
-from webkitpy.common.system.outputcapture import OutputCapture
-from webkitpy.common.system.executive_mock import MockExecutive2
-from webkitpy.common.system.systemhost import SystemHost
-from webkitpy.common.system.systemhost_mock import MockSystemHost
-
-from webkitpy.layout_tests.port.base import Port, VirtualTestSuite
+from webkitpy.common.system.executive_mock import MockExecutive
+from webkitpy.common.system.output_capture import OutputCapture
+from webkitpy.common.system.platform_info_mock import MockPlatformInfo
+from webkitpy.common.system.system_host import SystemHost
+from webkitpy.common.system.system_host_mock import MockSystemHost
+from webkitpy.common.path_finder import PathFinder
 from webkitpy.layout_tests.models.test_expectations import TestExpectations
+from webkitpy.layout_tests.port.base import Port, VirtualTestSuite
 from webkitpy.layout_tests.port.test import add_unit_tests_to_mock_filesystem, LAYOUT_TEST_DIR, TestPort
 
 
@@ -57,95 +54,25 @@ class PortTest(unittest.TestCase):
             return TestPort(host, **kwargs)
         return Port(host, port_name or 'baseport', **kwargs)
 
-    def test_format_wdiff_output_as_html(self):
-        output = "OUTPUT %s %s %s" % (Port._WDIFF_DEL, Port._WDIFF_ADD, Port._WDIFF_END)
-        html = self.make_port()._format_wdiff_output_as_html(output)
-        expected_html = ("<head><style>.del { background: #faa; } .add { background: #afa; }</style></head>"
-                         "<pre>OUTPUT <span class=del> <span class=add> </span></pre>")
-        self.assertEqual(html, expected_html)
-
-    def test_wdiff_command(self):
-        port = self.make_port()
-        port._path_to_wdiff = lambda: "/path/to/wdiff"
-        command = port._wdiff_command("/actual/path", "/expected/path")
-        expected_command = [
-            "/path/to/wdiff",
-            "--start-delete=##WDIFF_DEL##",
-            "--end-delete=##WDIFF_END##",
-            "--start-insert=##WDIFF_ADD##",
-            "--end-insert=##WDIFF_END##",
-            "/actual/path",
-            "/expected/path",
-        ]
-        self.assertEqual(command, expected_command)
-
-    def _file_with_contents(self, contents, encoding="utf-8"):
-        new_file = tempfile.NamedTemporaryFile()
-        new_file.write(contents.encode(encoding))
-        new_file.flush()
-        return new_file
-
     def test_pretty_patch_os_error(self):
-        port = self.make_port(executive=executive_mock.MockExecutive2(exception=OSError))
-        oc = OutputCapture()
-        oc.capture_output()
-        self.assertEqual(port.pretty_patch_text("patch.txt"),
+        port = self.make_port(executive=MockExecutive(exception=OSError))
+        self.assertEqual(port.pretty_patch_text('patch.txt'),
                          port._pretty_patch_error_html)
 
         # This tests repeated calls to make sure we cache the result.
-        self.assertEqual(port.pretty_patch_text("patch.txt"),
+        self.assertEqual(port.pretty_patch_text('patch.txt'),
                          port._pretty_patch_error_html)
-        oc.restore_output()
 
     def test_pretty_patch_script_error(self):
         # FIXME: This is some ugly white-box test hacking ...
-        port = self.make_port(executive=executive_mock.MockExecutive2(exception=ScriptError))
+        port = self.make_port(executive=MockExecutive(exception=ScriptError))
         port._pretty_patch_available = True
-        self.assertEqual(port.pretty_patch_text("patch.txt"),
+        self.assertEqual(port.pretty_patch_text('patch.txt'),
                          port._pretty_patch_error_html)
 
         # This tests repeated calls to make sure we cache the result.
-        self.assertEqual(port.pretty_patch_text("patch.txt"),
+        self.assertEqual(port.pretty_patch_text('patch.txt'),
                          port._pretty_patch_error_html)
-
-    def test_wdiff_text(self):
-        port = self.make_port()
-        port.wdiff_available = lambda: True
-        port._run_wdiff = lambda a, b: 'PASS'
-        self.assertEqual('PASS', port.wdiff_text(None, None))
-
-    def test_diff_text(self):
-        port = self.make_port()
-        # Make sure that we don't run into decoding exceptions when the
-        # filenames are unicode, with regular or malformed input (expected or
-        # actual input is always raw bytes, not unicode).
-        port.diff_text('exp', 'act', 'exp.txt', 'act.txt')
-        port.diff_text('exp', 'act', u'exp.txt', 'act.txt')
-        port.diff_text('exp', 'act', u'a\xac\u1234\u20ac\U00008000', 'act.txt')
-
-        port.diff_text('exp' + chr(255), 'act', 'exp.txt', 'act.txt')
-        port.diff_text('exp' + chr(255), 'act', u'exp.txt', 'act.txt')
-
-        # Though expected and actual files should always be read in with no
-        # encoding (and be stored as str objects), test unicode inputs just to
-        # be safe.
-        port.diff_text(u'exp', 'act', 'exp.txt', 'act.txt')
-        port.diff_text(
-            u'a\xac\u1234\u20ac\U00008000', 'act', 'exp.txt', 'act.txt')
-
-        # And make sure we actually get diff output.
-        diff = port.diff_text('foo', 'bar', 'exp.txt', 'act.txt')
-        self.assertIn('foo', diff)
-        self.assertIn('bar', diff)
-        self.assertIn('exp.txt', diff)
-        self.assertIn('act.txt', diff)
-        self.assertNotIn('nosuchthing', diff)
-
-        # Test for missing newline at end of file diff output.
-        content_a = "Hello\n\nWorld"
-        content_b = "Hello\n\nWorld\n\n\n"
-        expected = "--- exp.txt\n+++ act.txt\n@@ -1,3 +1,5 @@\n Hello\n \n-World\n\\ No newline at end of file\n+World\n+\n+\n"
-        self.assertEqual(expected, port.diff_text(content_a, content_b, 'exp.txt', 'act.txt'))
 
     def test_setup_test_run(self):
         port = self.make_port()
@@ -164,7 +91,8 @@ class PortTest(unittest.TestCase):
         port = self.make_port()
 
         def add_text_file(dirname, filename, content='some content'):
-            dirname = port.host.filesystem.join(port.perf_tests_dir(), dirname)
+            dirname = port.host.filesystem.join(
+                PathFinder(port.host.filesystem).perf_tests_dir(), dirname)
             port.host.filesystem.maybe_make_directory(dirname)
             port.host.filesystem.write_text_file(port.host.filesystem.join(dirname, filename), content)
 
@@ -192,14 +120,14 @@ class PortTest(unittest.TestCase):
 
     def test_additional_platform_directory(self):
         port = self.make_port(port_name='foo')
-        port.default_baseline_search_path = lambda: ['LayoutTests/platform/foo']
+        port.FALLBACK_PATHS = {'': ['foo']}
         test_file = 'fast/test.html'
 
         # No additional platform directory
         self.assertEqual(
             port.expected_baselines(test_file, '.txt'),
             [(None, 'fast/test-expected.txt')])
-        self.assertEqual(port.baseline_version_dir(), 'LayoutTests/platform/foo')
+        self.assertEqual(port.baseline_version_dir(), '/mock-checkout/third_party/WebKit/LayoutTests/platform/foo')
 
         # Simple additional platform directory
         port._options.additional_platform_directory = ['/tmp/local-baselines']
@@ -219,7 +147,10 @@ class PortTest(unittest.TestCase):
         # Flag-specific baseline directory
         port._options.additional_platform_directory = []
         port._options.additional_driver_flag = ['--special-flag']
-        self.assertEqual(port.baseline_version_dir(), '/mock-checkout/third_party/WebKit/LayoutTests/flag-specific/special-flag')
+        self.assertEqual(port.baseline_search_path(), [
+            '/mock-checkout/third_party/WebKit/LayoutTests/flag-specific/special-flag/platform/foo',
+            '/mock-checkout/third_party/WebKit/LayoutTests/flag-specific/special-flag',
+            '/mock-checkout/third_party/WebKit/LayoutTests/platform/foo'])
 
     def test_nonexistant_expectations(self):
         port = self.make_port(port_name='foo')
@@ -306,48 +237,115 @@ class PortTest(unittest.TestCase):
 
     @staticmethod
     def _add_manifest_to_mock_file_system(filesystem):
-        filesystem.write_text_file(LAYOUT_TEST_DIR + '/imported/wpt/MANIFEST.json', json.dumps({
-            "local_changes": {
-                "items": {
-                    'testharness': {
-                        'dom/ranges/Range-attributes.html': [{
-                            'path': 'dom/ranges/Range-attributes.html',
-                            'url': '/dom/ranges/Range-attributes.html'
-                        }],
-                        'console/console-is-a-namespace.any.js': [
-                            {
-                                'path': 'console/console-is-a-namespace.any.js',
-                                'url': '/console/console-is-a-namespace.any.html'
-                            },
-                            {
-                                'path': 'console/console-is-a-namespace.any.js',
-                                'url': '/console/console-is-a-namespace.any.worker'
-                            }
-                        ]},
-                    'manual': {},
-                    'reftest': {}
-                }}}))
-        filesystem.write_text_file(LAYOUT_TEST_DIR + '/imported/wpt/dom/ranges/Range-attributes.html', '')
-        filesystem.write_text_file(LAYOUT_TEST_DIR + '/imported/wpt/console/console-is-a-namespace.any.js', '')
-        filesystem.write_text_file(LAYOUT_TEST_DIR + '/imported/wpt/common/blank.html', 'foo')
+        filesystem.write_text_file(LAYOUT_TEST_DIR + '/external/wpt/MANIFEST.json', json.dumps({
+            'items': {
+                'testharness': {
+                    'dom/ranges/Range-attributes.html': [
+                        ['/dom/ranges/Range-attributes.html', {}]
+                    ],
+                    'dom/ranges/Range-attributes-slow.html': [
+                        ['/dom/ranges/Range-attributes.html', {'timeout': 'long'}]
+                    ],
+                    'console/console-is-a-namespace.any.js': [
+                        ['/console/console-is-a-namespace.any.html', {}],
+                        ['/console/console-is-a-namespace.any.worker.html', {}],
+                    ],
+                },
+                'manual': {},
+                'reftest': {
+                    'html/dom/elements/global-attributes/dir_auto-EN-L.html': [
+                        [
+                            '/html/dom/elements/global-attributes/dir_auto-EN-L.html',
+                            [
+                                [
+                                    '/html/dom/elements/global-attributes/dir_auto-EN-L-ref.html',
+                                    '=='
+                                ]
+                            ],
+                            {'timeout': 'long'}
+                        ]
+                    ],
+                },
+            }}))
+        filesystem.write_text_file(LAYOUT_TEST_DIR + '/external/wpt/dom/ranges/Range-attributes.html', '')
+        filesystem.write_text_file(LAYOUT_TEST_DIR + '/external/wpt/console/console-is-a-namespace.any.js', '')
+        filesystem.write_text_file(LAYOUT_TEST_DIR + '/external/wpt/common/blank.html', 'foo')
 
     def test_find_none_if_not_in_manifest(self):
         port = self.make_port(with_tests=True)
         PortTest._add_manifest_to_mock_file_system(port.host.filesystem)
-        self.assertNotIn('imported/wpt/common/blank.html', port.tests([]))
+        self.assertNotIn('external/wpt/common/blank.html', port.tests([]))
 
     def test_find_one_if_in_manifest(self):
         port = self.make_port(with_tests=True)
         PortTest._add_manifest_to_mock_file_system(port.host.filesystem)
-        self.assertIn('imported/wpt/dom/ranges/Range-attributes.html', port.tests([]))
-        self.assertNotIn('imported/wpt/console/console-is-a-namespace.any.js', port.tests([]))
-        self.assertEqual(port.tests(['imported']), ['imported/wpt/dom/ranges/Range-attributes.html'])
-        self.assertEqual(port.tests(['imported/']), ['imported/wpt/dom/ranges/Range-attributes.html'])
-        self.assertEqual(port.tests(['imported/csswg-test']), [])
-        self.assertEqual(port.tests(['imported/wpt']), ['imported/wpt/dom/ranges/Range-attributes.html'])
-        self.assertEqual(port.tests(['imported/wpt/']), ['imported/wpt/dom/ranges/Range-attributes.html'])
-        self.assertEqual(port.tests(['imported/wpt/dom/ranges/Range-attributes.html']),
-                         ['imported/wpt/dom/ranges/Range-attributes.html'])
+        self.assertIn('external/wpt/dom/ranges/Range-attributes.html', port.tests([]))
+        self.assertNotIn('external/wpt/console/console-is-a-namespace.any.js', port.tests([]))
+
+        # test.any.js shows up on the filesystem as one file but it effectively becomes two test files:
+        # test.any.html and test.any.worker.html. We should support running test.any.js by name and
+        # indirectly by specifying a parent directory.
+        self.assertEqual(port.tests(['external']),
+                         ['external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html',
+                          'external/wpt/dom/ranges/Range-attributes.html',
+                          'external/wpt/console/console-is-a-namespace.any.worker.html',
+                          'external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/']),
+                         ['external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html',
+                          'external/wpt/dom/ranges/Range-attributes.html',
+                          'external/wpt/console/console-is-a-namespace.any.worker.html',
+                          'external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/csswg-test']), [])
+        self.assertEqual(port.tests(['external/wpt']),
+                         ['external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html',
+                          'external/wpt/dom/ranges/Range-attributes.html',
+                          'external/wpt/console/console-is-a-namespace.any.worker.html',
+                          'external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/wpt/']),
+                         ['external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html',
+                          'external/wpt/dom/ranges/Range-attributes.html',
+                          'external/wpt/console/console-is-a-namespace.any.worker.html',
+                          'external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/wpt/console']),
+                         ['external/wpt/console/console-is-a-namespace.any.worker.html',
+                          'external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/wpt/console/']),
+                         ['external/wpt/console/console-is-a-namespace.any.worker.html',
+                          'external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/wpt/console/console-is-a-namespace.any.js']),
+                         ['external/wpt/console/console-is-a-namespace.any.worker.html',
+                          'external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/wpt/console/console-is-a-namespace.any.html']),
+                         ['external/wpt/console/console-is-a-namespace.any.html'])
+        self.assertEqual(port.tests(['external/wpt/dom']),
+                         ['external/wpt/dom/ranges/Range-attributes.html'])
+        self.assertEqual(port.tests(['external/wpt/dom/']),
+                         ['external/wpt/dom/ranges/Range-attributes.html'])
+        self.assertEqual(port.tests(['external/wpt/dom/ranges/Range-attributes.html']),
+                         ['external/wpt/dom/ranges/Range-attributes.html'])
+
+    def test_virtual_wpt_tests_paths(self):
+        port = self.make_port(with_tests=True)
+        PortTest._add_manifest_to_mock_file_system(port.host.filesystem)
+        all_wpt = [
+            'virtual/virtual_wpt/external/wpt/console/console-is-a-namespace.any.html',
+            'virtual/virtual_wpt/external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html',
+            'virtual/virtual_wpt/external/wpt/console/console-is-a-namespace.any.worker.html',
+            'virtual/virtual_wpt/external/wpt/dom/ranges/Range-attributes.html',
+        ]
+        dom_wpt = [
+            'virtual/virtual_wpt_dom/external/wpt/dom/ranges/Range-attributes.html',
+        ]
+
+        self.assertEqual(port.tests(['virtual/virtual_wpt/external/']), all_wpt)
+        self.assertEqual(port.tests(['virtual/virtual_wpt/external/wpt/']), all_wpt)
+        self.assertEqual(port.tests(['virtual/virtual_wpt/external/wpt/console']),
+                         ['virtual/virtual_wpt/external/wpt/console/console-is-a-namespace.any.html',
+                          'virtual/virtual_wpt/external/wpt/console/console-is-a-namespace.any.worker.html'])
+
+        self.assertEqual(port.tests(['virtual/virtual_wpt_dom/external/wpt/dom/']), dom_wpt)
+        self.assertEqual(port.tests(['virtual/virtual_wpt_dom/external/wpt/dom/ranges/']), dom_wpt)
+        self.assertEqual(port.tests(['virtual/virtual_wpt_dom/external/wpt/dom/ranges/Range-attributes.html']), dom_wpt)
 
     def test_is_test_file(self):
         port = self.make_port(with_tests=True)
@@ -355,6 +353,9 @@ class PortTest(unittest.TestCase):
         self.assertTrue(is_test_file('', 'foo.html'))
         self.assertTrue(is_test_file('', 'foo.svg'))
         self.assertTrue(is_test_file('', 'test-ref-test.html'))
+        self.assertTrue(is_test_file('inspector-unit', 'trie.js'))
+        self.assertFalse(is_test_file('inspector-unit', 'foo.html'))
+        self.assertFalse(is_test_file('inspector', 'devtools.js'))
         self.assertFalse(is_test_file('', 'foo.png'))
         self.assertFalse(is_test_file('', 'foo-expected.html'))
         self.assertFalse(is_test_file('', 'foo-expected.svg'))
@@ -375,27 +376,47 @@ class PortTest(unittest.TestCase):
         PortTest._add_manifest_to_mock_file_system(filesystem)
 
         # A file not in MANIFEST.json is not a test even if it has .html suffix.
-        self.assertFalse(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/imported/wpt/common', 'blank.html'))
+        self.assertFalse(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/external/wpt/common', 'blank.html'))
 
         # .js is not a test in general, but it is if MANIFEST.json contains an
         # entry for it.
-        self.assertTrue(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/imported/wpt/console', 'console-is-a-namespace.any.js'))
+        self.assertTrue(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/external/wpt/console', 'console-is-a-namespace.any.js'))
 
-        # A file in imported/wpt, not a sub directory.
-        self.assertFalse(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/imported/wpt', 'testharness_runner.html'))
-        # A file in imported/wpt_automation.
-        self.assertTrue(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/imported/wpt_automation', 'foo.html'))
+        # A file in external/wpt, not a sub directory.
+        self.assertFalse(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/external/wpt', 'testharness_runner.html'))
+        # A file in external/wpt_automation.
+        self.assertTrue(port.is_test_file(filesystem, LAYOUT_TEST_DIR + '/external/wpt_automation', 'foo.html'))
+
+    def test_is_wpt_test(self):
+        port = self.make_port(with_tests=True)
+        filesystem = port.host.filesystem
+        PortTest._add_manifest_to_mock_file_system(filesystem)
+
+        self.assertTrue(port.is_wpt_test('external/wpt/dom/ranges/Range-attributes.html'))
+        self.assertTrue(port.is_wpt_test('external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html'))
+        self.assertFalse(port.is_wpt_test('dom/domparsing/namespaces-1.html'))
+        self.assertFalse(port.is_wpt_test('rutabaga'))
+
+    def test_is_slow_wpt_test(self):
+        port = self.make_port(with_tests=True)
+        filesystem = port.host.filesystem
+        PortTest._add_manifest_to_mock_file_system(filesystem)
+
+        self.assertFalse(port.is_slow_wpt_test('external/wpt/dom/ranges/Range-attributes.html'))
+        self.assertFalse(port.is_slow_wpt_test('dom/ranges/Range-attributes.html'))
+        self.assertTrue(port.is_slow_wpt_test('external/wpt/dom/ranges/Range-attributes-slow.html'))
+        self.assertTrue(port.is_slow_wpt_test('external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html'))
 
     def test_parse_reftest_list(self):
         port = self.make_port(with_tests=True)
-        port.host.filesystem.files['bar/reftest.list'] = "\n".join(["== test.html test-ref.html",
-                                                                    "",
-                                                                    "# some comment",
-                                                                    "!= test-2.html test-notref.html # more comments",
-                                                                    "== test-3.html test-ref.html",
-                                                                    "== test-3.html test-ref2.html",
-                                                                    "!= test-3.html test-notref.html",
-                                                                    "fuzzy(80,500) == test-3 test-ref.html"])
+        port.host.filesystem.files['bar/reftest.list'] = '\n'.join(['== test.html test-ref.html',
+                                                                    '',
+                                                                    '# some comment',
+                                                                    '!= test-2.html test-notref.html # more comments',
+                                                                    '== test-3.html test-ref.html',
+                                                                    '== test-3.html test-ref2.html',
+                                                                    '!= test-3.html test-notref.html',
+                                                                    'fuzzy(80,500) == test-3 test-ref.html'])
 
         # Note that we don't support the syntax in the last line; the code should ignore it, rather than crashing.
 
@@ -414,19 +435,45 @@ class PortTest(unittest.TestCase):
         self.assertEqual(port.reference_files('passes/phpreftest.php'),
                          [('!=', port.layout_tests_dir() + '/passes/phpreftest-expected-mismatch.svg')])
 
+    def test_reference_files_from_manifest(self):
+        port = self.make_port(with_tests=True)
+        PortTest._add_manifest_to_mock_file_system(port.host.filesystem)
+
+        self.assertEqual(port.reference_files('external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html'),
+                         [('==', port.layout_tests_dir() +
+                           '/external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L-ref.html')])
+        self.assertEqual(port.reference_files('virtual/layout_ng/' +
+                                              'external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L.html'),
+                         [('==', port.layout_tests_dir() +
+                           '/external/wpt/html/dom/elements/global-attributes/dir_auto-EN-L-ref.html')])
+
     def test_operating_system(self):
         self.assertEqual('mac', self.make_port().operating_system())
 
     def test_http_server_supports_ipv6(self):
         port = self.make_port()
         self.assertTrue(port.http_server_supports_ipv6())
-        port.host.platform.os_name = 'cygwin'
-        self.assertFalse(port.http_server_supports_ipv6())
         port.host.platform.os_name = 'win'
         self.assertFalse(port.http_server_supports_ipv6())
 
+    def test_http_server_requires_http_protocol_options_unsafe(self):
+        port = self.make_port(executive=MockExecutive(stderr=(
+            "Invalid command 'INTENTIONAL_SYNTAX_ERROR', perhaps misspelled or"
+            " defined by a module not included in the server configuration\n")))
+        port.path_to_apache = lambda: '/usr/sbin/httpd'
+        self.assertTrue(
+            port.http_server_requires_http_protocol_options_unsafe())
+
+    def test_http_server_doesnt_require_http_protocol_options_unsafe(self):
+        port = self.make_port(executive=MockExecutive(stderr=(
+            "Invalid command 'HttpProtocolOptions', perhaps misspelled or"
+            " defined by a module not included in the server configuration\n")))
+        port.path_to_apache = lambda: '/usr/sbin/httpd'
+        self.assertFalse(
+            port.http_server_requires_http_protocol_options_unsafe())
+
     def test_check_httpd_success(self):
-        port = self.make_port(executive=MockExecutive2())
+        port = self.make_port(executive=MockExecutive())
         port.path_to_apache = lambda: '/usr/sbin/httpd'
         capture = OutputCapture()
         capture.capture_output()
@@ -435,7 +482,7 @@ class PortTest(unittest.TestCase):
         self.assertEqual('', logs)
 
     def test_httpd_returns_error_code(self):
-        port = self.make_port(executive=MockExecutive2(exit_code=1))
+        port = self.make_port(executive=MockExecutive(exit_code=1))
         port.path_to_apache = lambda: '/usr/sbin/httpd'
         capture = OutputCapture()
         capture.capture_output()
@@ -486,16 +533,28 @@ class PortTest(unittest.TestCase):
         self.assertIn('passes/virtual_passes/test-virtual-passes.html', tests)
         self.assertNotIn('virtual/virtual_passes/passes/text.html', tests)
 
+        tests = port.tests(['virtual/virtual_passes/'])
+        self.assertIn('virtual/virtual_passes/passes/test-virtual-passes.html', tests)
+        self.assertIn('virtual/virtual_passes/passes_two/test-virtual-passes.html', tests)
+
         tests = port.tests(['virtual/virtual_passes/passes'])
         self.assertNotIn('passes/text.html', tests)
         self.assertIn('virtual/virtual_passes/passes/test-virtual-passes.html', tests)
+        self.assertNotIn('virtual/virtual_passes/passes_two/test-virtual-passes.html', tests)
+
         self.assertNotIn('passes/test-virtual-passes.html', tests)
         self.assertNotIn('virtual/virtual_passes/passes/test-virtual-virtual/passes.html', tests)
         self.assertNotIn('virtual/virtual_passes/passes/virtual_passes/passes/test-virtual-passes.html', tests)
 
     def test_build_path(self):
-        port = self.make_port(options=optparse.Values({'build_directory': '/my-build-directory/'}))
-        self.assertEqual(port._build_path(), '/my-build-directory/Release')
+        # Test for a protected method - pylint: disable=protected-access
+        # Test that optional paths are used regardless of whether they exist.
+        options = optparse.Values({'configuration': 'Release', 'build_directory': 'xcodebuild'})
+        self.assertEqual(self.make_port(options=options)._build_path(), '/mock-checkout/xcodebuild/Release')
+
+        # Test that "out" is used as the default.
+        options = optparse.Values({'configuration': 'Release', 'build_directory': None})
+        self.assertEqual(self.make_port(options=options)._build_path(), '/mock-checkout/out/Release')
 
     def test_dont_require_http_server(self):
         port = self.make_port()
@@ -516,6 +575,17 @@ class PortTest(unittest.TestCase):
         # If this call returns successfully, we found and loaded the LayoutTests/VirtualTestSuites.
         _ = port.virtual_test_suites()
 
+    def test_duplicate_virtual_test_suite_in_file(self):
+        port = self.make_port()
+        port.host.filesystem.write_text_file(
+            port.host.filesystem.join(port.layout_tests_dir(), 'VirtualTestSuites'),
+            '['
+            '{"prefix": "bar", "base": "fast/bar", "args": ["--bar"]},'
+            '{"prefix": "bar", "base": "fast/bar", "args": ["--bar"]}'
+            ']')
+
+        self.assertRaises(ValueError, port.virtual_test_suites)
+
     def test_virtual_test_suite_file_is_not_json(self):
         port = self.make_port()
         port.host.filesystem.write_text_file(
@@ -527,10 +597,13 @@ class PortTest(unittest.TestCase):
         port = self.make_port()
         self.assertRaises(AssertionError, port.virtual_test_suites)
 
-    def test_is_wptserve_test(self):
+    def test_is_wpt_test(self):
         port = self.make_port()
-        self.assertTrue(port.is_wptserve_test('imported/wpt/foo/bar.html'))
-        self.assertFalse(port.is_wptserve_test('http/wpt/foo.html'))
+        self.assertTrue(port.is_wpt_test('external/wpt/foo/bar.html'))
+        self.assertTrue(port.is_wpt_test('virtual/a-name/external/wpt/baz/qux.htm'))
+        self.assertFalse(port.is_wpt_test('http/wpt/foo.html'))
+        self.assertFalse(port.is_wpt_test('virtual/external/wpt/baz/qux.htm'))
+        self.assertFalse(port.is_wpt_test('not-virtual/a-name/external/wpt/baz/qux.htm'))
 
     def test_default_results_directory(self):
         port = self.make_port(options=optparse.Values({'target': 'Default', 'configuration': 'Release'}))
@@ -553,9 +626,7 @@ class PortTest(unittest.TestCase):
 
     def test_apache_config_file_name_for_platform(self):
         port = self.make_port()
-        # pylint: disable=protected-access
-        port._apache_version = lambda: '2.2'
-        self._assert_config_file_for_platform(port, 'cygwin', 'cygwin-httpd.conf')
+        port._apache_version = lambda: '2.2'  # pylint: disable=protected-access
         self._assert_config_file_for_platform(port, 'linux', 'apache2-httpd-2.2.conf')
         self._assert_config_file_for_linux_distribution(port, 'arch', 'arch-httpd-2.2.conf')
         self._assert_config_file_for_linux_distribution(port, 'debian', 'debian-httpd-2.2.conf')
@@ -563,7 +634,6 @@ class PortTest(unittest.TestCase):
         self._assert_config_file_for_linux_distribution(port, 'redhat', 'redhat-httpd-2.2.conf')
 
         self._assert_config_file_for_platform(port, 'mac', 'apache2-httpd-2.2.conf')
-        # win32 isn't a supported sys.platform.  AppleWin/WinCairo/WinCE ports all use cygwin.
         self._assert_config_file_for_platform(port, 'win32', 'apache2-httpd-2.2.conf')
         self._assert_config_file_for_platform(port, 'barf', 'apache2-httpd-2.2.conf')
 

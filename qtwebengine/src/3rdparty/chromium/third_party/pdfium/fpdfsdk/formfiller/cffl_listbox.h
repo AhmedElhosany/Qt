@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <set>
+#include <vector>
 
 #include "fpdfsdk/formfiller/cffl_formfiller.h"
 
@@ -16,13 +17,12 @@ class CBA_FontMap;
 
 class CFFL_ListBox : public CFFL_FormFiller {
  public:
-  CFFL_ListBox(CPDFSDK_FormFillEnvironment* pApp, CPDFSDK_Annot* pWidget);
+  CFFL_ListBox(CPDFSDK_FormFillEnvironment* pApp, CPDFSDK_Widget* pWidget);
   ~CFFL_ListBox() override;
 
   // CFFL_FormFiller
   PWL_CREATEPARAM GetCreateParam() override;
-  CPWL_Wnd* NewPDFWindow(const PWL_CREATEPARAM& cp,
-                         CPDFSDK_PageView* pPageView) override;
+  CPWL_Wnd* NewPDFWindow(const PWL_CREATEPARAM& cp) override;
   bool OnChar(CPDFSDK_Annot* pAnnot, uint32_t nChar, uint32_t nFlags) override;
   bool IsDataChanged(CPDFSDK_PageView* pPageView) override;
   void SaveData(CPDFSDK_PageView* pPageView) override;
@@ -37,7 +37,7 @@ class CFFL_ListBox : public CFFL_FormFiller {
  private:
   std::unique_ptr<CBA_FontMap> m_pFontMap;
   std::set<int> m_OriginSelections;
-  CFX_ArrayTemplate<int> m_State;
+  std::vector<int> m_State;
 };
 
 #endif  // FPDFSDK_FORMFILLER_CFFL_LISTBOX_H_

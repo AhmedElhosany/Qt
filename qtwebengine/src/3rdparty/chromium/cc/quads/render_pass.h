@@ -7,19 +7,18 @@
 
 #include <stddef.h>
 
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/callback.h"
 #include "base/hash.h"
 #include "base/macros.h"
-#include "cc/base/cc_export.h"
+#include "cc/base/filter_operations.h"
 #include "cc/base/list_container.h"
+#include "cc/cc_export.h"
 #include "cc/quads/draw_quad.h"
 #include "cc/quads/largest_draw_quad.h"
-#include "cc/quads/render_pass_id.h"
-#include "cc/surfaces/surface_id.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/transform.h"
@@ -54,6 +53,8 @@ class CC_EXPORT QuadList : public ListContainer<DrawQuad> {
 
 typedef ListContainer<SharedQuadState> SharedQuadStateList;
 
+using RenderPassId = uint64_t;
+
 class CC_EXPORT RenderPass {
  public:
   ~RenderPass();
@@ -65,7 +66,7 @@ class CC_EXPORT RenderPass {
 
   // A shallow copy of the render pass, which does not include its quads or copy
   // requests.
-  std::unique_ptr<RenderPass> Copy(RenderPassId new_id) const;
+  std::unique_ptr<RenderPass> Copy(int new_id) const;
 
   // A deep copy of the render pass that includes quads.
   std::unique_ptr<RenderPass> DeepCopy() const;
@@ -83,7 +84,12 @@ class CC_EXPORT RenderPass {
               const gfx::Rect& output_rect,
               const gfx::Rect& damage_rect,
               const gfx::Transform& transform_to_root_target,
-              bool has_transparent_background);
+              const FilterOperations& filters,
+              const FilterOperations& background_filters,
+              const gfx::ColorSpace& color_space,
+              bool has_transparent_background,
+              bool cache_render_pass,
+              bool has_damage_from_contributing_content);
 
   void AsValueInto(base::trace_event::TracedValue* dict) const;
 
@@ -102,7 +108,7 @@ class CC_EXPORT RenderPass {
                                       const SharedQuadState* shared_quad_state);
 
   // Uniquely identifies the render pass in the compositor's current frame.
-  RenderPassId id;
+  RenderPassId id = 0;
 
   // These are in the space of the render pass' physical pixels.
   gfx::Rect output_rect;
@@ -112,8 +118,24 @@ class CC_EXPORT RenderPass {
   // render pass' |output_rect|.
   gfx::Transform transform_to_root_target;
 
+  // Post-processing filters, applied to the pixels in the render pass' texture.
+  FilterOperations filters;
+
+  // Post-processing filters, applied to the pixels showing through the
+  // background of the render pass, from behind it.
+  FilterOperations background_filters;
+
+  // The color space into which content will be rendered for this render pass.
+  gfx::ColorSpace color_space;
+
   // If false, the pixels in the render pass' texture are all opaque.
-  bool has_transparent_background;
+  bool has_transparent_background = true;
+
+  // If true we might reuse the texture if there is no damage.
+  bool cache_render_pass = false;
+  // Indicates whether there is accumulated damage from contributing render
+  // surface or layer or surface quad. Not including property changes on itself.
+  bool has_damage_from_contributing_content = false;
 
   // If non-empty, the renderer should produce a copy of the render pass'
   // contents as a bitmap, and give a copy of the bitmap to each callback in
@@ -139,8 +161,6 @@ class CC_EXPORT RenderPass {
 };
 
 using RenderPassList = std::vector<std::unique_ptr<RenderPass>>;
-using RenderPassIdHashMap =
-    std::unordered_map<RenderPassId, RenderPass*, RenderPassIdHash>;
 
 }  // namespace cc
 

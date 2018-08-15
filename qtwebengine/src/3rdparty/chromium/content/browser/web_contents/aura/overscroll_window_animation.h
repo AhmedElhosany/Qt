@@ -77,12 +77,21 @@ class CONTENT_EXPORT OverscrollWindowAnimation
   // Returns true if we are currently animating.
   bool is_active() const { return !!slide_window_; }
 
+  OverscrollSource overscroll_source() { return overscroll_source_; }
+
+  void SetOverscrollSourceForTesting(OverscrollSource source) {
+    overscroll_source_ = source;
+  }
+
   // OverscrollControllerDelegate:
-  gfx::Rect GetVisibleBounds() const override;
+  gfx::Size GetVisibleSize() const override;
+  gfx::Size GetDisplaySize() const override;
   bool OnOverscrollUpdate(float delta_x, float delta_y) override;
   void OnOverscrollComplete(OverscrollMode overscroll_mode) override;
   void OnOverscrollModeChange(OverscrollMode old_mode,
-                              OverscrollMode new_mode) override;
+                              OverscrollMode new_mode,
+                              OverscrollSource source) override;
+  base::Optional<float> GetMaxOverscrollDelta() const override;
 
  private:
   // Cancels the slide, animating the front and back window to their original
@@ -118,6 +127,11 @@ class CONTENT_EXPORT OverscrollWindowAnimation
 
   // The current animation direction.
   Direction direction_;
+
+  // OverscrollSource of the current overscroll gesture. Updated when the new
+  // overscroll gesture starts, before CreateFront/BackWindow callback is called
+  // on the delegate.
+  OverscrollSource overscroll_source_ = OverscrollSource::NONE;
 
   // Indicates if the current slide has been cancelled. True while the cancel
   // animation is in progress.

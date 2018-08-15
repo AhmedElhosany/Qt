@@ -36,21 +36,29 @@
 
 #include <QtCore/private/qfileselector_p.h>
 #include <QtQuickControls2/qquickstyle.h>
+#include <QtQuickControls2/private/qquickchecklabel_p.h>
+#include <QtQuickControls2/private/qquickcolor_p.h>
+#include <QtQuickControls2/private/qquickcolorimage_p.h>
+#include <QtQuickControls2/private/qquickiconimage_p.h>
+#include <QtQuickControls2/private/qquickmnemoniclabel_p.h>
+#include <QtQuickControls2/private/qquickpaddedrectangle_p.h>
 #include <QtQuickControls2/private/qquickplaceholdertext_p.h>
+#include <QtQuickControls2/private/qquickiconlabel_p.h>
 #include <QtQuickControls2/private/qquickstyle_p.h>
 #include <QtQuickControls2/private/qquickstyleplugin_p.h>
 #include <QtQuickControls2/private/qquickstyleselector_p.h>
-#include <QtQuickControls2/private/qquickcolorimageprovider_p.h>
 #if QT_CONFIG(quick_listview) && QT_CONFIG(quick_pathview)
 #include <QtQuickControls2/private/qquicktumblerview_p.h>
 #endif
+#include <QtQuickTemplates2/private/qquickoverlay_p.h>
 #include <QtQuickControls2/private/qquickclippedtext_p.h>
 #include <QtQuickControls2/private/qquickitemgroup_p.h>
 
 #include "qquickdefaultbusyindicator_p.h"
+#include "qquickdefaultdial_p.h"
 #include "qquickdefaultprogressbar_p.h"
 #include "qquickdefaultstyle_p.h"
-#include "qquickdialring_p.h"
+#include "qquickdefaulttheme_p.h"
 
 static inline void initResources()
 {
@@ -69,8 +77,11 @@ class QtQuickControls2Plugin: public QQuickStylePlugin
 
 public:
     QtQuickControls2Plugin(QObject *parent = nullptr);
-    void registerTypes(const char *uri);
-    void initializeEngine(QQmlEngine *engine, const char *uri);
+    void registerTypes(const char *uri) override;
+    void initializeEngine(QQmlEngine *engine, const char *uri) override;
+
+    QString name() const override;
+    QQuickProxyTheme *createTheme() const override;
 };
 
 QtQuickControls2Plugin::QtQuickControls2Plugin(QObject *parent) : QQuickStylePlugin(parent)
@@ -147,6 +158,13 @@ void QtQuickControls2Plugin::registerTypes(const char *uri)
     // QtQuick.Controls 2.2 (new types in Qt 5.9)
     qmlRegisterType(selector.select(QStringLiteral("DelayButton.qml")), uri, 2, 2, "DelayButton");
     qmlRegisterType(selector.select(QStringLiteral("ScrollView.qml")), uri, 2, 2, "ScrollView");
+
+    // QtQuick.Controls 2.3 (new types in Qt 5.10)
+    qmlRegisterType(selector.select(QStringLiteral("Action.qml")), uri, 2, 3, "Action");
+    qmlRegisterType(selector.select(QStringLiteral("ActionGroup.qml")), uri, 2, 3, "ActionGroup");
+    qmlRegisterType(selector.select(QStringLiteral("MenuBar.qml")), uri, 2, 3, "MenuBar");
+    qmlRegisterType(selector.select(QStringLiteral("MenuBarItem.qml")), uri, 2, 3, "MenuBarItem");
+    qmlRegisterUncreatableType<QQuickOverlay>(uri, 2, 3, "Overlay", QStringLiteral("Overlay is only available as an attached property."));
 }
 
 static QObject *styleSingleton(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -156,28 +174,55 @@ static QObject *styleSingleton(QQmlEngine *engine, QJSEngine *scriptEngine)
     return new QQuickDefaultStyle;
 }
 
+static QObject *colorSingleton(QQmlEngine *engine, QJSEngine *scriptEngine)
+{
+    Q_UNUSED(engine);
+    Q_UNUSED(scriptEngine);
+    return new QQuickColor;
+}
+
 void QtQuickControls2Plugin::initializeEngine(QQmlEngine *engine, const char *uri)
 {
-    Q_UNUSED(uri);
-
-    engine->addImageProvider(QStringLiteral("default"), new QQuickColorImageProvider(QStringLiteral(":/qt-project.org/imports/QtQuick/Controls.2/images")));
+    QQuickStylePlugin::initializeEngine(engine, uri);
 
     const QByteArray import = QByteArray(uri) + ".impl";
     qmlRegisterModule(import, 2, QT_VERSION_MINOR - 7); // Qt 5.7->2.0, 5.8->2.1, 5.9->2.2...
 
+    // QtQuick.Controls.impl 2.0 (Qt 5.7)
     qmlRegisterType<QQuickDefaultBusyIndicator>(import, 2, 0, "BusyIndicatorImpl");
-    qmlRegisterType<QQuickClippedText>(import, 2, 2, "ClippedText");
+    qmlRegisterType<QQuickDefaultDial>(import, 2, 0, "DialImpl");
+    qmlRegisterType<QQuickPaddedRectangle>(import, 2, 0, "PaddedRectangle");
     qmlRegisterType<QQuickDefaultProgressBar>(import, 2, 0, "ProgressBarImpl");
-    qmlRegisterType<QQuickDialRing>(import, 2, 0, "DialRing");
-    qmlRegisterType<QQuickItemGroup>(import, 2, 2, "ItemGroup");
-    qmlRegisterType<QQuickPlaceholderText>(import, 2, 2, "PlaceholderText");
+
+    // QtQuick.Controls.impl 2.1 (Qt 5.8)
 #if QT_CONFIG(quick_listview) && QT_CONFIG(quick_pathview)
     qmlRegisterType<QQuickTumblerView>(import, 2, 1, "TumblerView");
 #endif
     qmlRegisterSingletonType<QQuickDefaultStyle>(import, 2, 1, "Default", styleSingleton);
-    qmlRegisterType(typeUrl(QStringLiteral("CheckIndicator.qml")), import, 2, 0, "CheckIndicator");
-    qmlRegisterType(typeUrl(QStringLiteral("RadioIndicator.qml")), import, 2, 0, "RadioIndicator");
-    qmlRegisterType(typeUrl(QStringLiteral("SwitchIndicator.qml")), import, 2, 0, "SwitchIndicator");
+
+    // QtQuick.Controls.impl 2.2 (Qt 5.9)
+    qmlRegisterType<QQuickClippedText>(import, 2, 2, "ClippedText");
+    qmlRegisterType<QQuickItemGroup>(import, 2, 2, "ItemGroup");
+    qmlRegisterType<QQuickPlaceholderText>(import, 2, 2, "PlaceholderText");
+
+    // QtQuick.Controls.impl 2.3 (Qt 5.10)
+    qmlRegisterType<QQuickColorImage>(import, 2, 3, "ColorImage");
+    qmlRegisterType<QQuickIconImage>(import, 2, 3, "IconImage");
+    qmlRegisterSingletonType<QQuickColor>(import, 2, 3, "Color", colorSingleton);
+    qmlRegisterType<QQuickIconLabel>(import, 2, 3, "IconLabel");
+    qmlRegisterType<QQuickCheckLabel>(import, 2, 3, "CheckLabel");
+    qmlRegisterType<QQuickMnemonicLabel>(import, 2, 3, "MnemonicLabel");
+    qmlRegisterRevision<QQuickText, 6>(import, 2, 3);
+}
+
+QString QtQuickControls2Plugin::name() const
+{
+    return QStringLiteral("default");
+}
+
+QQuickProxyTheme *QtQuickControls2Plugin::createTheme() const
+{
+    return new QQuickDefaultTheme;
 }
 
 QT_END_NAMESPACE

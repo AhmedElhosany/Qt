@@ -14,6 +14,7 @@ UI.ListWidget = class extends UI.VBox {
     this._delegate = delegate;
 
     this._list = this.contentElement.createChild('div', 'list');
+    this.element.tabIndex = -1;
 
     /** @type {?UI.ListWidget.Editor} */
     this._editor = null;
@@ -114,37 +115,37 @@ UI.ListWidget = class extends UI.VBox {
    */
   _createControls(item, element) {
     var controls = createElementWithClass('div', 'controls-container fill');
-    var gradient = controls.createChild('div', 'controls-gradient');
+    controls.createChild('div', 'controls-gradient');
+
     var buttons = controls.createChild('div', 'controls-buttons');
 
-    var editButton = buttons.createChild('div', 'edit-button');
-    editButton.title = Common.UIString('Edit');
-    editButton.addEventListener('click', onEditClicked.bind(this), false);
+    var toolbar = new UI.Toolbar('', buttons);
 
-    var removeButton = buttons.createChild('div', 'remove-button');
-    removeButton.title = Common.UIString('Remove');
-    removeButton.addEventListener('click', onRemoveClicked.bind(this), false);
+    var editButton = new UI.ToolbarButton(Common.UIString('Edit'), 'largeicon-edit');
+    editButton.addEventListener(UI.ToolbarButton.Events.Click, onEditClicked.bind(this));
+    toolbar.appendToolbarItem(editButton);
+
+    var removeButton = new UI.ToolbarButton(Common.UIString('Remove'), 'largeicon-trash-bin');
+    removeButton.addEventListener(UI.ToolbarButton.Events.Click, onRemoveClicked.bind(this));
+    toolbar.appendToolbarItem(removeButton);
 
     return controls;
 
     /**
-     * @param {!Event} event
      * @this {UI.ListWidget}
      */
-    function onEditClicked(event) {
-      event.consume();
+    function onEditClicked() {
       var index = this._elements.indexOf(element);
       var insertionPoint = this._elements[index + 1] || null;
       this._startEditing(item, element, insertionPoint);
     }
 
     /**
-     * @param {!Event} event
      * @this {UI.ListWidget}
      */
-    function onRemoveClicked(event) {
-      event.consume();
+    function onRemoveClicked() {
       var index = this._elements.indexOf(element);
+      this.element.focus();
       this._delegate.removeItemRequested(this._items[index], index);
     }
   }
@@ -177,6 +178,7 @@ UI.ListWidget = class extends UI.VBox {
       return;
 
     this._stopEditing();
+    this._focusRestorer = new UI.ElementFocusRestorer(this.element);
 
     this._list.classList.add('list-editing');
     this._editItem = item;
@@ -203,6 +205,8 @@ UI.ListWidget = class extends UI.VBox {
 
   _stopEditing() {
     this._list.classList.remove('list-editing');
+    if (this._focusRestorer)
+      this._focusRestorer.restore();
     if (this._editElement)
       this._editElement.classList.remove('hidden');
     if (this._editor && this._editor.element.parentElement)
@@ -226,26 +230,26 @@ UI.ListWidget.Delegate.prototype = {
    * @param {boolean} editable
    * @return {!Element}
    */
-  renderItem: function(item, editable) {},
+  renderItem(item, editable) {},
 
   /**
    * @param {*} item
    * @param {number} index
    */
-  removeItemRequested: function(item, index) {},
+  removeItemRequested(item, index) {},
 
   /**
    * @param {*} item
    * @return {!UI.ListWidget.Editor}
    */
-  beginEdit: function(item) {},
+  beginEdit(item) {},
 
   /**
    * @param {*} item
    * @param {!UI.ListWidget.Editor} editor
    * @param {boolean} isNew
    */
-  commitEdit: function(item, editor, isNew) {}
+  commitEdit(item, editor, isNew) {}
 };
 
 /**
@@ -260,9 +264,9 @@ UI.ListWidget.Editor = class {
     this._contentElement = this.element.createChild('div', 'editor-content');
 
     var buttonsRow = this.element.createChild('div', 'editor-buttons');
-    this._commitButton = createTextButton('', this._commitClicked.bind(this));
+    this._commitButton = UI.createTextButton('', this._commitClicked.bind(this), '', true /* primary */);
     buttonsRow.appendChild(this._commitButton);
-    this._cancelButton = createTextButton(Common.UIString('Cancel'), this._cancelClicked.bind(this));
+    this._cancelButton = UI.createTextButton(Common.UIString('Cancel'), this._cancelClicked.bind(this));
     this._cancelButton.addEventListener(
         'keydown', onKeyDown.bind(null, isEnterKey, this._cancelClicked.bind(this)), false);
     buttonsRow.appendChild(this._cancelButton);
@@ -311,8 +315,7 @@ UI.ListWidget.Editor = class {
    * @return {!HTMLInputElement}
    */
   createInput(name, type, title, validator) {
-    var input = /** @type {!HTMLInputElement} */ (createElement('input'));
-    input.type = type;
+    var input = /** @type {!HTMLInputElement} */ (UI.createInput('', type));
     input.placeholder = title;
     input.addEventListener('input', this._validateControls.bind(this, false), false);
     input.addEventListener('blur', this._validateControls.bind(this, false), false);

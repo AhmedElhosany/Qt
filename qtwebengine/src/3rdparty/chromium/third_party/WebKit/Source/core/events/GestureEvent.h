@@ -28,68 +28,28 @@
 
 #include "core/CoreExport.h"
 #include "core/events/EventDispatcher.h"
-#include "core/events/MouseRelatedEvent.h"
-#include "platform/PlatformGestureEvent.h"
+#include "core/events/UIEventWithKeyState.h"
+#include "public/platform/WebGestureEvent.h"
 
 namespace blink {
 
-enum GestureSource {
-  GestureSourceUninitialized,
-  GestureSourceTouchpad,
-  GestureSourceTouchscreen
-};
-
-class CORE_EXPORT GestureEvent final : public MouseRelatedEvent {
+class CORE_EXPORT GestureEvent final : public UIEventWithKeyState {
  public:
+  static GestureEvent* Create(AbstractView*, const WebGestureEvent&);
   ~GestureEvent() override {}
 
-  static GestureEvent* create(AbstractView*, const PlatformGestureEvent&);
+  bool IsGestureEvent() const override;
 
-  bool isGestureEvent() const override;
+  const AtomicString& InterfaceName() const override;
 
-  const AtomicString& interfaceName() const override;
-
-  float deltaX() const { return m_deltaX; }
-  float deltaY() const { return m_deltaY; }
-  float velocityX() const { return m_velocityX; }
-  float velocityY() const { return m_velocityY; }
-  ScrollInertialPhase inertialPhase() const { return m_inertialPhase; }
-
-  GestureSource source() const { return m_source; }
-  int resendingPluginId() const { return m_resendingPluginId; }
-  bool synthetic() const { return m_synthetic; }
-  ScrollGranularity deltaUnits() const { return m_deltaUnits; }
+  const WebGestureEvent& NativeEvent() const { return native_event_; }
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
-  GestureEvent(const AtomicString& type,
-               AbstractView*,
-               int screenX,
-               int screenY,
-               int clientX,
-               int clientY,
-               PlatformEvent::Modifiers,
-               float deltaX,
-               float deltaY,
-               float velocityX,
-               float velocityY,
-               ScrollInertialPhase,
-               bool synthetic,
-               ScrollGranularity deltaUnits,
-               double platformTimeStamp,
-               int resendingPluginId,
-               GestureSource);
+  GestureEvent(const AtomicString&, AbstractView*, const WebGestureEvent&);
 
-  float m_deltaX;
-  float m_deltaY;
-  float m_velocityX;
-  float m_velocityY;
-  ScrollInertialPhase m_inertialPhase;
-  bool m_synthetic;
-  ScrollGranularity m_deltaUnits;
-  GestureSource m_source;
-  int m_resendingPluginId;
+  WebGestureEvent native_event_;
 };
 
 DEFINE_EVENT_TYPE_CASTS(GestureEvent);

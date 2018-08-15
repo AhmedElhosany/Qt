@@ -54,11 +54,18 @@ IPC_STRUCT_TRAITS_END()
 // * 'shortcut' transport the memory up to the IPC limit so the browser can use
 //   it if it's not currently full.
 // See https://bit.ly/BlobStorageRefactor
-IPC_MESSAGE_CONTROL4(BlobStorageMsg_RegisterBlob,
-                     std::string /* uuid */,
-                     std::string /* content_type */,
-                     std::string /* content_disposition */,
-                     std::vector<storage::DataElement> /* item_descriptions */)
+//
+// NOTE: This message is synchronous to ensure that the browser is aware of the
+// UUID before the UUID is passed to another process. This protects against a
+// race condition in which the browser could be asked about a UUID that doesn't
+// yet exist from its perspective. See also https://goo.gl/bfdE64.
+//
+IPC_SYNC_MESSAGE_CONTROL4_0(
+    BlobStorageMsg_RegisterBlob,
+    std::string /* uuid */,
+    std::string /* content_type */,
+    std::string /* content_disposition */,
+    std::vector<storage::DataElement> /* item_descriptions */)
 
 IPC_MESSAGE_CONTROL4(
     BlobStorageMsg_RequestMemoryItem,
@@ -80,47 +87,12 @@ IPC_MESSAGE_CONTROL1(BlobHostMsg_IncrementRefCount,
                      std::string /* uuid */)
 IPC_MESSAGE_CONTROL1(BlobHostMsg_DecrementRefCount,
                      std::string /* uuid */)
-IPC_MESSAGE_CONTROL2(BlobHostMsg_RegisterPublicURL,
-                     GURL,
-                     std::string /* uuid */)
+// NOTE: This message is synchronous to ensure that the browser is aware of the
+// UUID before the UUID is passed to another process. This protects against a
+// race condition in which the browser could be asked about a UUID that doesn't
+// yet exist from its perspective. See also https://goo.gl/bfdE64.
+IPC_SYNC_MESSAGE_CONTROL2_0(BlobHostMsg_RegisterPublicURL,
+                            GURL,
+                            std::string /* uuid */)
 IPC_MESSAGE_CONTROL1(BlobHostMsg_RevokePublicURL,
                      GURL)
-
-// Stream messages sent from the renderer to the browser.
-
-// Registers a stream as being built.
-IPC_MESSAGE_CONTROL2(StreamHostMsg_StartBuilding,
-                     GURL /* url */,
-                     std::string /* content_type */)
-
-// Appends data to a stream being built.
-IPC_MESSAGE_CONTROL2(StreamHostMsg_AppendBlobDataItem,
-                     GURL /* url */,
-                     storage::DataElement)
-
-// Appends data to a stream being built.
-IPC_SYNC_MESSAGE_CONTROL3_0(StreamHostMsg_SyncAppendSharedMemory,
-                            GURL /* url */,
-                            base::SharedMemoryHandle,
-                            uint32_t /* buffer size */)
-
-// Flushes contents buffered in the stream.
-IPC_MESSAGE_CONTROL1(StreamHostMsg_Flush,
-                     GURL /* url */)
-
-// Finishes building a stream.
-IPC_MESSAGE_CONTROL1(StreamHostMsg_FinishBuilding,
-                     GURL /* url */)
-
-// Aborts building a stream.
-IPC_MESSAGE_CONTROL1(StreamHostMsg_AbortBuilding,
-                     GURL /* url */)
-
-// Creates a new stream that's a clone of an existing src stream.
-IPC_MESSAGE_CONTROL2(StreamHostMsg_Clone,
-                     GURL /* url */,
-                     GURL /* src_url */)
-
-// Removes a stream.
-IPC_MESSAGE_CONTROL1(StreamHostMsg_Remove,
-                     GURL /* url */)

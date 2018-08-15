@@ -18,10 +18,15 @@ static const char kMediaRecorderHtmlFile[] = "/media/mediarecorder_test.html";
 
 static struct EncodingParameters {
   bool disable_accelerator;
-  std::string video_codec;
+  std::string mime_type;
 } const kEncodingParameters[] = {
-    {true, "VP8"},  {true, "VP9"},  {true, "H264"},
-    {false, "VP8"}, {false, "VP9"}, {false, "H264"},
+    {true, "video/webm;codecs=VP8"},
+    {true, "video/webm;codecs=VP9"},
+    {true, "video/x-matroska;codecs=AVC1"},
+    {false, ""},  // Instructs the platform to choose any accelerated codec.
+    {false, "video/webm;codecs=VP8"},
+    {false, "video/webm;codecs=VP9"},
+    {false, "video/x-matroska;codecs=AVC1"},
 };
 
 }  // namespace
@@ -71,14 +76,14 @@ IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, StartAndStop) {
 IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, StartAndDataAvailable) {
   MaybeForceDisableEncodeAccelerator(GetParam().disable_accelerator);
   MakeTypicalCall(base::StringPrintf("testStartAndDataAvailable(\"%s\");",
-                                     GetParam().video_codec.c_str()),
+                                     GetParam().mime_type.c_str()),
                   kMediaRecorderHtmlFile);
 }
 
 IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, StartWithTimeSlice) {
   MaybeForceDisableEncodeAccelerator(GetParam().disable_accelerator);
   MakeTypicalCall(base::StringPrintf("testStartWithTimeSlice(\"%s\");",
-                                     GetParam().video_codec.c_str()),
+                                     GetParam().mime_type.c_str()),
                   kMediaRecorderHtmlFile);
 }
 
@@ -93,7 +98,7 @@ IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, NoResumeWhenRecorderInactive) {
 IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, ResumeAndDataAvailable) {
   MaybeForceDisableEncodeAccelerator(GetParam().disable_accelerator);
   MakeTypicalCall(base::StringPrintf("testResumeAndDataAvailable(\"%s\");",
-                                     GetParam().video_codec.c_str()),
+                                     GetParam().mime_type.c_str()),
                   kMediaRecorderHtmlFile);
 }
 
@@ -101,7 +106,13 @@ IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, Pause) {
   MakeTypicalCall("testPauseAndRecorderState();", kMediaRecorderHtmlFile);
 }
 
-IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, PauseStop) {
+// TODO(crbug.com/571389): Flaky on TSAN bots.
+#if defined(OS_LINUX)
+#define MAYBE_PauseStop DISABLED_PauseStop
+#else
+#define MAYBE_PauseStop PauseStop
+#endif
+IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, MAYBE_PauseStop) {
   MakeTypicalCall("testPauseStopAndRecorderState();", kMediaRecorderHtmlFile);
 }
 
@@ -111,12 +122,26 @@ IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest,
                   kMediaRecorderHtmlFile);
 }
 
-IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, IllegalPauseThrowsDOMError) {
+// TODO (crbug.com/736268): Flaky on Linux TSan bots.
+#if defined(OS_LINUX)
+#define MAYBE_IllegalPauseThrowsDOMError DISABLED_IllegalPauseThrowsDOMError
+#else
+#define MAYBE_IllegalPauseThrowsDOMError IllegalPauseThrowsDOMError
+#endif
+IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest,
+                       MAYBE_IllegalPauseThrowsDOMError) {
   MakeTypicalCall("testIllegalPauseThrowsDOMError();", kMediaRecorderHtmlFile);
 }
 
 IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, TwoChannelAudioRecording) {
   MakeTypicalCall("testTwoChannelAudio();", kMediaRecorderHtmlFile);
+}
+
+IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, RecordWithTransparency) {
+  MaybeForceDisableEncodeAccelerator(GetParam().disable_accelerator);
+  MakeTypicalCall(base::StringPrintf("testRecordWithTransparency(\"%s\");",
+                                     GetParam().mime_type.c_str()),
+                  kMediaRecorderHtmlFile);
 }
 
 IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest, IllegalStopThrowsDOMError) {
@@ -135,21 +160,50 @@ IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest,
                   kMediaRecorderHtmlFile);
 }
 
+// Flaky on Linux Tsan (crbug.com/736268)
+#if defined(OS_LINUX)
+#define MAYBE_IllegalRequestDataThrowsDOMError \
+  DISABLED_IllegalRequestDataThrowsDOMError
+#else
+#define MAYBE_IllegalRequestDataThrowsDOMError IllegalRequestDataThrowsDOMError
+#endif
 IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest,
-                       IllegalRequestDataThrowsDOMError) {
+                       MAYBE_IllegalRequestDataThrowsDOMError) {
   MakeTypicalCall("testIllegalRequestDataThrowsDOMError();",
                   kMediaRecorderHtmlFile);
 }
 
-IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, PeerConnection) {
+#if defined(OS_ANDROID)
+// These tests are flakily timing out on emulators (https://crbug.com/716691)
+// and/or under Android ASAN (https://crbug.com/693565);
+#define MAYBE_PeerConnection DISABLED_PeerConnection
+#elif defined(OS_LINUX) && defined(THREAD_SANITIZER)
+// Flaky on Linux TSan, https://crbug.com/694373.
+#define MAYBE_PeerConnection DISABLED_PeerConnection
+#elif defined(OS_WIN) && !defined(NDEBUG)
+// Fails on Win7 debug, https://crbug.com/703844.
+#define MAYBE_PeerConnection DISABLED_PeerConnection
+#else
+#define MAYBE_PeerConnection PeerConnection
+#endif
+
+IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, MAYBE_PeerConnection) {
   MaybeForceDisableEncodeAccelerator(GetParam().disable_accelerator);
   MakeTypicalCall(base::StringPrintf("testRecordRemotePeerConnection(\"%s\");",
-                                     GetParam().video_codec.c_str()),
+                                     GetParam().mime_type.c_str()),
                   kMediaRecorderHtmlFile);
 }
 
+// Flaky on Linux Tsan (crbug.com/736268)
+#if defined(OS_LINUX)
+#define MAYBE_AddingTrackToMediaStreamFiresErrorEvent \
+  DISABLED_AddingTrackToMediaStreamFiresErrorEvent
+#else
+#define MAYBE_AddingTrackToMediaStreamFiresErrorEvent \
+  AddingTrackToMediaStreamFiresErrorEvent
+#endif
 IN_PROC_BROWSER_TEST_F(WebRtcMediaRecorderTest,
-                       AddingTrackToMediaStreamFiresErrorEvent) {
+                       MAYBE_AddingTrackToMediaStreamFiresErrorEvent) {
   MakeTypicalCall("testAddingTrackToMediaStreamFiresErrorEvent();",
                   kMediaRecorderHtmlFile);
 }

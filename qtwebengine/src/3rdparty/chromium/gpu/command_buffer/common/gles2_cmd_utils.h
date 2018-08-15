@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "base/logging.h"
 #include "base/macros.h"
 #include "base/numerics/safe_math.h"
 #include "gpu/command_buffer/common/gles2_utils_export.h"
@@ -139,6 +140,7 @@ class GLES2_UTILS_EXPORT GLES2Util {
   // function is called. If 0 is returned the id is invalid.
   int GLGetNumValuesReturned(int id) const;
 
+  static int ElementsPerGroup(int format, int type);
   // Computes the size of a single group of elements from a format and type pair
   static uint32_t ComputeImageGroupSize(int format, int type);
 
@@ -241,18 +243,22 @@ class GLES2_UTILS_EXPORT GLES2Util {
   static bool IsIntegerFormat(uint32_t internal_format);
   static bool IsFloatFormat(uint32_t internal_format);
   static uint32_t ConvertToSizedFormat(uint32_t format, uint32_t type);
-
   static bool IsSizedColorFormat(uint32_t internal_format);
+
+  // Infer color encoding from internalformat
+  static int GetColorEncodingFromInternalFormat(uint32_t internalformat);
+
   static void GetColorFormatComponentSizes(
       uint32_t internal_format, uint32_t type, int* r, int* g, int* b, int* a);
 
   // Computes the data size for certain gl commands like glUniform.
-  static bool ComputeDataSize(uint32_t count,
-                              size_t size,
-                              unsigned int elements_per_unit,
-                              uint32_t* dst);
+  template <typename VALUE_TYPE, unsigned int ELEMENTS_PER_UNIT>
+  static bool ComputeDataSize(uint32_t count, uint32_t* dst) {
+    constexpr uint32_t element_size = sizeof(VALUE_TYPE) * ELEMENTS_PER_UNIT;
+    return base::CheckMul(count, element_size).AssignIfValid(dst);
+  }
 
-  #include "../common/gles2_cmd_utils_autogen.h"
+#include "gpu/command_buffer/common/gles2_cmd_utils_autogen.h"
 
  private:
   static std::string GetQualifiedEnumString(
@@ -303,6 +309,15 @@ enum ContextType {
   CONTEXT_TYPE_LAST = CONTEXT_TYPE_OPENGLES3
 };
 GLES2_UTILS_EXPORT bool IsWebGLContextType(ContextType context_type);
+GLES2_UTILS_EXPORT bool IsWebGL1OrES2ContextType(ContextType context_type);
+GLES2_UTILS_EXPORT bool IsWebGL2OrES3ContextType(ContextType context_type);
+
+enum ColorSpace {
+  COLOR_SPACE_UNSPECIFIED,
+  COLOR_SPACE_SRGB,
+  COLOR_SPACE_DISPLAY_P3,
+  COLOR_SPACE_LAST = COLOR_SPACE_DISPLAY_P3
+};
 
 struct GLES2_UTILS_EXPORT ContextCreationAttribHelper {
   ContextCreationAttribHelper();
@@ -326,12 +341,14 @@ struct GLES2_UTILS_EXPORT ContextCreationAttribHelper {
   bool fail_if_major_perf_caveat;
   bool lose_context_when_out_of_memory;
   bool should_use_native_gmb_for_backbuffer;
+  bool own_offscreen_surface;
+  bool single_buffer;
 
   ContextType context_type;
+  ColorSpace color_space = COLOR_SPACE_UNSPECIFIED;
 };
 
 }  // namespace gles2
 }  // namespace gpu
 
 #endif  // GPU_COMMAND_BUFFER_COMMON_GLES2_CMD_UTILS_H_
-

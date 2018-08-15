@@ -47,15 +47,14 @@ function Extract-Mesa
         [string]$targetFolder
     )
     Write-Host "Installing Mesa from $downloadUrl to $targetFolder"
-    Write-Host "Downloading $downloadUrl to $package"
-    Invoke-WebRequest -UseBasicParsing $downloadUrl -OutFile $package
-    Verify-Checksum $package $sha1
-    Extract-7Zip $package $targetFolder
-    Write-Host "Removing $package"
-    Remove-Item -Path $package
+    $localArchivePath = "C:\Windows\temp\opengl32sw.7z"
+    Invoke-WebRequest -UseBasicParsing $downloadUrl -OutFile $localArchivePath
+    Verify-Checksum $localArchivePath $sha1
+    Get-ChildItem $package | % {& "C:\Utils\sevenzip\7z.exe" "x" "-y" $_.fullname "-o$targetFolder"}
+    Remove-Item $localArchivePath
 }
 
-if (Is64BitWinHost) {
+if ( Test-Path C:\Windows\SysWOW64 ) {
     Extract-Mesa $mesaOpenglUrl_64 $mesaOpenglSha1_64 "C:\Windows\System32"
     Extract-Mesa $mesaOpenglUrl_32 $mesaOpenglSha1_32 "C:\Windows\SysWOW64"
 } else {

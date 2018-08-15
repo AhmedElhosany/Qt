@@ -131,7 +131,7 @@ def diff_binary(first_filepath, second_filepath, file_len):
   result = '%d out of %d bytes are different (%.2f%%)' % (
         diffs, file_len, 100.0 * diffs / file_len)
   if streams:
-    encode = lambda text: ''.join(i if 31 < ord(i) < 128 else '.' for i in text)
+    encode = lambda text: ''.join(i if 31 < ord(i) < 127 else '.' for i in text)
     for offset, lhs_data, rhs_data in streams:
       lhs_line = '%s \'%s\'' % (lhs_data.encode('hex'), encode(lhs_data))
       rhs_line = '%s \'%s\'' % (rhs_data.encode('hex'), encode(rhs_data))
@@ -209,6 +209,7 @@ def get_deps(build_dir, target):
 
 def compare_deps(first_dir, second_dir, targets):
   """Print difference of dependent files."""
+  diffs = set()
   for target in targets:
     first_deps = get_deps(first_dir, target)
     second_deps = get_deps(second_dir, target)
@@ -226,6 +227,8 @@ def compare_deps(first_dir, second_dir, targets):
       result = compare_files(first_file, second_file)
       if result:
         print('  %-*s: %s' % (max_filepath_len, d, result))
+        diffs.add(d)
+  return list(diffs)
 
 
 def compare_build_artifacts(first_dir, second_dir, target_platform,
@@ -297,13 +300,14 @@ def compare_build_artifacts(first_dir, second_dir, target_platform,
 
   all_diffs = expected_diffs + unexpected_diffs
   diffs_to_investigate = sorted(set(all_diffs).difference(missing_files))
-  compare_deps(first_dir, second_dir, diffs_to_investigate)
+  deps_diff = compare_deps(first_dir, second_dir, diffs_to_investigate)
 
   if json_output:
     try:
       out = {
           'expected_diffs': expected_diffs,
           'unexpected_diffs': unexpected_diffs,
+          'deps_diff': deps_diff,
       }
       with open(json_output, 'w') as f:
         json.dump(out, f)

@@ -48,6 +48,7 @@
 // We mean it.
 //
 
+#include <QtGui/qpalette.h>
 #include <QtQuick/private/qquicktext_p.h>
 #include <QtQuickTemplates2/private/qtquicktemplates2global_p.h>
 
@@ -60,6 +61,8 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickLabel : public QQuickText
     Q_OBJECT
     Q_PROPERTY(QFont font READ font WRITE setFont NOTIFY fontChanged) // override
     Q_PROPERTY(QQuickItem *background READ background WRITE setBackground NOTIFY backgroundChanged FINAL)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(QPalette palette READ palette WRITE setPalette RESET resetPalette NOTIFY paletteChanged FINAL REVISION 3)
     Q_CLASSINFO("DeferredPropertyNames", "background")
 
 public:
@@ -71,9 +74,16 @@ public:
     QQuickItem *background() const;
     void setBackground(QQuickItem *background);
 
+    // 2.3 (Qt 5.10)
+    QPalette palette() const;
+    void setPalette(const QPalette &palette);
+    void resetPalette();
+
 Q_SIGNALS:
     void fontChanged();
     void backgroundChanged();
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void paletteChanged();
 
 protected:
     void classBegin() override;

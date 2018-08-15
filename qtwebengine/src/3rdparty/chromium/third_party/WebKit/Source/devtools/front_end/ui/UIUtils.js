@@ -36,7 +36,7 @@ UI.highlightedCurrentSearchResultClassName = 'current-search-result';
  * @param {?function(!MouseEvent): boolean} elementDragStart
  * @param {function(!MouseEvent)} elementDrag
  * @param {?function(!MouseEvent)} elementDragEnd
- * @param {string} cursor
+ * @param {?string} cursor
  * @param {?string=} hoverCursor
  * @param {number=} startDelay
  */
@@ -66,7 +66,7 @@ UI.installDragHandle = function(
   if (startDelay)
     element.addEventListener('mouseup', onMouseUp, false);
   if (hoverCursor !== null)
-    element.style.cursor = hoverCursor || cursor;
+    element.style.cursor = hoverCursor || cursor || '';
 };
 
 /**
@@ -74,7 +74,7 @@ UI.installDragHandle = function(
  * @param {?function(!MouseEvent):boolean} elementDragStart
  * @param {function(!MouseEvent)} elementDrag
  * @param {?function(!MouseEvent)} elementDragEnd
- * @param {string} cursor
+ * @param {?string} cursor
  * @param {!Event} event
  */
 UI.elementDragStart = function(targetElement, elementDragStart, elementDrag, elementDragEnd, cursor, event) {
@@ -94,8 +94,11 @@ UI.DragHandler = class {
 
   _createGlassPane() {
     this._glassPaneInUse = true;
-    if (!UI.DragHandler._glassPaneUsageCount++)
-      UI.DragHandler._glassPane = new UI.GlassPane(UI.DragHandler._documentForMouseOut);
+    if (!UI.DragHandler._glassPaneUsageCount++) {
+      UI.DragHandler._glassPane = new UI.GlassPane();
+      UI.DragHandler._glassPane.setPointerEventsBehavior(UI.GlassPane.PointerEventsBehavior.BlockedByGlassPane);
+      UI.DragHandler._glassPane.show(UI.DragHandler._documentForMouseOut);
+    }
   }
 
   _disposeGlassPane() {
@@ -104,7 +107,7 @@ UI.DragHandler = class {
     this._glassPaneInUse = false;
     if (--UI.DragHandler._glassPaneUsageCount)
       return;
-    UI.DragHandler._glassPane.dispose();
+    UI.DragHandler._glassPane.hide();
     delete UI.DragHandler._glassPane;
     delete UI.DragHandler._documentForMouseOut;
   }
@@ -114,7 +117,7 @@ UI.DragHandler = class {
    * @param {?function(!MouseEvent):boolean} elementDragStart
    * @param {function(!MouseEvent)} elementDrag
    * @param {?function(!MouseEvent)} elementDragEnd
-   * @param {string} cursor
+   * @param {?string} cursor
    * @param {!Event} event
    */
   elementDragStart(targetElement, elementDragStart, elementDrag, elementDragEnd, cursor, event) {
@@ -223,109 +226,6 @@ UI.DragHandler = class {
 };
 
 UI.DragHandler._glassPaneUsageCount = 0;
-
-/**
- * @param {!Element} element
- * @param {function(number, number, !MouseEvent): boolean} elementDragStart
- * @param {function(number, number)} elementDrag
- * @param {function(number, number)} elementDragEnd
- * @param {string} cursor
- * @param {?string=} hoverCursor
- * @param {number=} startDelay
- * @param {number=} friction
- */
-UI.installInertialDragHandle = function(
-    element, elementDragStart, elementDrag, elementDragEnd, cursor, hoverCursor, startDelay, friction) {
-  UI.installDragHandle(
-      element, drag.bind(null, elementDragStart), drag.bind(null, elementDrag), dragEnd, cursor, hoverCursor,
-      startDelay);
-  if (typeof friction !== 'number')
-    friction = 50;
-  var lastX;
-  var lastY;
-  var lastTime;
-  var velocityX;
-  var velocityY;
-  var holding = false;
-
-  /**
-   * @param {function(number, number, !MouseEvent): boolean} callback
-   * @param {!MouseEvent} event
-   * @return {boolean}
-   */
-  function drag(callback, event) {
-    lastTime = window.performance.now();
-    lastX = event.pageX;
-    lastY = event.pageY;
-    holding = true;
-    return callback(lastX, lastY, event);
-  }
-
-  /**
-   * @param {!MouseEvent} event
-   */
-  function dragEnd(event) {
-    var now = window.performance.now();
-    var duration = now - lastTime || 1;
-    const maxVelocity = 4;  // 4px per millisecond.
-    velocityX = Number.constrain((event.pageX - lastX) / duration, -maxVelocity, maxVelocity);
-    velocityY = Number.constrain((event.pageY - lastY) / duration, -maxVelocity, maxVelocity);
-    lastX = event.pageX;
-    lastY = event.pageY;
-    lastTime = now;
-    holding = false;
-    animationStep();
-  }
-
-  function animationStep() {
-    var v2 = velocityX * velocityX + velocityY * velocityY;
-    if (v2 < 0.001 || holding) {
-      elementDragEnd(lastX, lastY);
-      return;
-    }
-    element.window().requestAnimationFrame(animationStep);
-    var now = window.performance.now();
-    var duration = now - lastTime;
-    if (!duration)
-      return;
-    lastTime = now;
-    lastX += velocityX * duration;
-    lastY += velocityY * duration;
-    var k = Math.pow(1 / (1 + friction), duration / 1000);
-    velocityX *= k;
-    velocityY *= k;
-    elementDrag(lastX, lastY);
-  }
-};
-
-/**
- * @unrestricted
- */
-UI.GlassPane = class {
-  /**
-   * @param {!Document} document
-   * @param {boolean=} dimmed
-   */
-  constructor(document, dimmed) {
-    this.element = createElement('div');
-    var background = dimmed ? 'rgba(255, 255, 255, 0.5)' : 'transparent';
-    this._zIndex = UI._glassPane ? UI._glassPane._zIndex + 1000 :
-                                   3000;  // Deliberately starts with 3000 to hide other z-indexed elements below.
-    this.element.style.cssText = 'position:absolute;top:0;bottom:0;left:0;right:0;background-color:' + background +
-        ';z-index:' + this._zIndex + ';overflow:hidden;';
-    document.body.appendChild(this.element);
-    UI._glassPane = this;
-    // TODO(dgozman): disallow focus outside of glass pane?
-  }
-
-  dispose() {
-    delete UI._glassPane;
-    this.element.remove();
-  }
-};
-
-/** @type {!UI.GlassPane|undefined} */
-UI._glassPane;
 
 /**
  * @param {?Node=} node
@@ -602,30 +502,30 @@ UI.handleElementValueModifications = function(event, element, finishHandler, sug
  */
 Number.preciseMillisToString = function(ms, precision) {
   precision = precision || 0;
-  var format = '%.' + precision + 'f\u2009ms';
+  var format = '%.' + precision + 'f\xa0ms';
   return Common.UIString(format, ms);
 };
 
 /** @type {!Common.UIStringFormat} */
-UI._microsFormat = new Common.UIStringFormat('%.0f\u2009\u03bcs');
+UI._microsFormat = new Common.UIStringFormat('%.0f\xa0\u03bcs');
 
 /** @type {!Common.UIStringFormat} */
-UI._subMillisFormat = new Common.UIStringFormat('%.2f\u2009ms');
+UI._subMillisFormat = new Common.UIStringFormat('%.2f\xa0ms');
 
 /** @type {!Common.UIStringFormat} */
-UI._millisFormat = new Common.UIStringFormat('%.0f\u2009ms');
+UI._millisFormat = new Common.UIStringFormat('%.0f\xa0ms');
 
 /** @type {!Common.UIStringFormat} */
-UI._secondsFormat = new Common.UIStringFormat('%.2f\u2009s');
+UI._secondsFormat = new Common.UIStringFormat('%.2f\xa0s');
 
 /** @type {!Common.UIStringFormat} */
-UI._minutesFormat = new Common.UIStringFormat('%.1f\u2009min');
+UI._minutesFormat = new Common.UIStringFormat('%.1f\xa0min');
 
 /** @type {!Common.UIStringFormat} */
-UI._hoursFormat = new Common.UIStringFormat('%.1f\u2009hrs');
+UI._hoursFormat = new Common.UIStringFormat('%.1f\xa0hrs');
 
 /** @type {!Common.UIStringFormat} */
-UI._daysFormat = new Common.UIStringFormat('%.1f\u2009days');
+UI._daysFormat = new Common.UIStringFormat('%.1f\xa0days');
 
 /**
  * @param {number} ms
@@ -679,19 +579,19 @@ Number.secondsToString = function(seconds, higherResolution) {
  */
 Number.bytesToString = function(bytes) {
   if (bytes < 1024)
-    return Common.UIString('%.0f\u2009B', bytes);
+    return Common.UIString('%.0f\xa0B', bytes);
 
   var kilobytes = bytes / 1024;
   if (kilobytes < 100)
-    return Common.UIString('%.1f\u2009KB', kilobytes);
+    return Common.UIString('%.1f\xa0KB', kilobytes);
   if (kilobytes < 1024)
-    return Common.UIString('%.0f\u2009KB', kilobytes);
+    return Common.UIString('%.0f\xa0KB', kilobytes);
 
   var megabytes = kilobytes / 1024;
   if (megabytes < 100)
-    return Common.UIString('%.1f\u2009MB', megabytes);
+    return Common.UIString('%.1f\xa0MB', megabytes);
   else
-    return Common.UIString('%.0f\u2009MB', megabytes);
+    return Common.UIString('%.0f\xa0MB', megabytes);
 };
 
 /**
@@ -702,7 +602,7 @@ Number.withThousandsSeparator = function(num) {
   var str = num + '';
   var re = /(\d+)(\d{3})/;
   while (str.match(re))
-    str = str.replace(re, '$1\u2009$2');  // \u2009 is a thin space.
+    str = str.replace(re, '$1\xa0$2');  // \xa0 is a non-breaking space
   return str;
 };
 
@@ -730,14 +630,14 @@ UI.formatLocalized = function(format, substitutions) {
  * @return {string}
  */
 UI.openLinkExternallyLabel = function() {
-  return Common.UIString.capitalize('Open ^link in ^new ^tab');
+  return Common.UIString('Open in new tab');
 };
 
 /**
  * @return {string}
  */
 UI.copyLinkAddressLabel = function() {
-  return Common.UIString.capitalize('Copy ^link ^address');
+  return Common.UIString('Copy link address');
 };
 
 /**
@@ -752,8 +652,13 @@ UI.anotherProfilerActiveLabel = function() {
  * @return {string}
  */
 UI.asyncStackTraceLabel = function(description) {
-  if (description)
+  if (description) {
+    if (description === 'Promise.resolve')
+      description = Common.UIString('Promise resolved');
+    else if (description === 'Promise.reject')
+      description = Common.UIString('Promise rejected');
     return description + ' ' + Common.UIString('(async)');
+  }
   return Common.UIString('Async Call');
 };
 
@@ -764,6 +669,24 @@ UI.installComponentRootStyles = function(element) {
   UI.appendStyle(element, 'ui/inspectorCommon.css');
   UI.themeSupport.injectHighlightStyleSheets(element);
   element.classList.add('platform-' + Host.platform());
+
+  /**
+   * Detect overlay scrollbar enable by checking clientWidth and offsetWidth of
+   * overflow: scroll div.
+   * @param {?Document=} document
+   * @return {boolean}
+   */
+  function overlayScrollbarEnabled(document) {
+    var scrollDiv = document.createElement('div');
+    scrollDiv.setAttribute('style', 'width: 100px; height: 100px; overflow: scroll;');
+    document.body.appendChild(scrollDiv);
+    var scrollbarWidth = scrollDiv.offsetWidth - scrollDiv.clientWidth;
+    document.body.removeChild(scrollDiv);
+    return scrollbarWidth === 0;
+  }
+
+  if (!Host.isMac() && overlayScrollbarEnabled(element.ownerDocument))
+    element.classList.add('overlay-scrollbar-enabled');
 };
 
 /**
@@ -788,6 +711,19 @@ UI.createShadowRootWithCoreStyles = function(element, cssFile) {
 UI._windowFocused = function(document, event) {
   if (event.target.document.nodeType === Node.DOCUMENT_NODE)
     document.body.classList.remove('inactive');
+  UI._keyboardFocus = true;
+  var listener = () => {
+    var activeElement = document.deepActiveElement();
+    if (activeElement)
+      activeElement.removeAttribute('data-keyboard-focus');
+    UI._keyboardFocus = false;
+  };
+  document.defaultView.requestAnimationFrame(() => {
+    UI._keyboardFocus = false;
+    document.removeEventListener('mousedown', listener, true);
+  });
+  document.addEventListener('mousedown', listener, true);
+
 };
 
 /**
@@ -806,6 +742,10 @@ UI._focusChanged = function(event) {
   var document = event.target && event.target.ownerDocument;
   var element = document ? document.deepActiveElement() : null;
   UI.Widget.focusWidgetForNode(element);
+  if (!UI._keyboardFocus)
+    return;
+  element.setAttribute('data-keyboard-focus', 'true');
+  element.addEventListener('blur', () => element.removeAttribute('data-keyboard-focus'), {once: true, capture: true});
 };
 
 /**
@@ -839,13 +779,13 @@ UI.ElementFocusRestorer = class {
  * @return {?Element}
  */
 UI.highlightSearchResult = function(element, offset, length, domChanges) {
-  var result = UI.highlightSearchResults(element, [new Common.SourceRange(offset, length)], domChanges);
+  var result = UI.highlightSearchResults(element, [new TextUtils.SourceRange(offset, length)], domChanges);
   return result.length ? result[0] : null;
 };
 
 /**
  * @param {!Element} element
- * @param {!Array.<!Common.SourceRange>} resultRanges
+ * @param {!Array.<!TextUtils.SourceRange>} resultRanges
  * @param {!Array.<!Object>=} changes
  * @return {!Array.<!Element>}
  */
@@ -872,7 +812,7 @@ UI.runCSSAnimationOnce = function(element, className) {
 
 /**
  * @param {!Element} element
- * @param {!Array.<!Common.SourceRange>} resultRanges
+ * @param {!Array.<!TextUtils.SourceRange>} resultRanges
  * @param {string} styleClass
  * @param {!Array.<!Object>=} changes
  * @return {!Array.<!Element>}
@@ -990,7 +930,7 @@ UI.revertDomChanges = function(domChanges) {
 /**
  * @param {!Element} element
  * @param {?Element=} containerElement
- * @return {!Size}
+ * @return {!UI.Size}
  */
 UI.measurePreferredSize = function(element, containerElement) {
   var oldParent = element.parentElement;
@@ -998,14 +938,14 @@ UI.measurePreferredSize = function(element, containerElement) {
   containerElement = containerElement || element.ownerDocument.body;
   containerElement.appendChild(element);
   element.positionAt(0, 0);
-  var result = new Size(element.offsetWidth, element.offsetHeight);
+  var result = element.getBoundingClientRect();
 
   element.positionAt(undefined, undefined);
   if (oldParent)
     oldParent.insertBefore(element, oldNextSibling);
   else
     element.remove();
-  return result;
+  return new UI.Size(result.width, result.height);
 };
 
 /**
@@ -1201,9 +1141,14 @@ UI.LongClickController = class extends Common.Object {
  * @param {!Common.Setting} themeSetting
  */
 UI.initializeUIUtils = function(document, themeSetting) {
+  document.body.classList.toggle('inactive', !document.hasFocus());
   document.defaultView.addEventListener('focus', UI._windowFocused.bind(UI, document), false);
   document.defaultView.addEventListener('blur', UI._windowBlurred.bind(UI, document), false);
   document.addEventListener('focus', UI._focusChanged.bind(UI), true);
+  document.addEventListener('keydown', event => {
+    UI._keyboardFocus = true;
+    document.defaultView.requestAnimationFrame(() => UI._keyboardFocus = false);
+  }, true);
 
   if (!UI.themeSupport)
     UI.themeSupport = new UI.ThemeSupport(themeSetting);
@@ -1211,7 +1156,7 @@ UI.initializeUIUtils = function(document, themeSetting) {
 
   var body = /** @type {!Element} */ (document.body);
   UI.appendStyle(body, 'ui/inspectorStyle.css');
-  UI.appendStyle(body, 'ui/popover.css');
+  UI.GlassPane.setContainer(/** @type {!Element} */ (document.body));
 };
 
 /**
@@ -1230,26 +1175,40 @@ UI.beautifyFunctionName = function(name) {
  * @suppressGlobalPropertiesCheck
  * @template T
  */
-function registerCustomElement(localName, typeExtension, prototype) {
+UI.registerCustomElement = function(localName, typeExtension, prototype) {
   return document.registerElement(typeExtension, {prototype: Object.create(prototype), extends: localName});
-}
+};
 
 /**
  * @param {string} text
  * @param {function(!Event)=} clickHandler
  * @param {string=} className
- * @param {string=} title
+ * @param {boolean=} primary
  * @return {!Element}
  */
-function createTextButton(text, clickHandler, className, title) {
+UI.createTextButton = function(text, clickHandler, className, primary) {
   var element = createElementWithClass('button', className || '', 'text-button');
   element.textContent = text;
+  if (primary)
+    element.classList.add('primary-button');
   if (clickHandler)
     element.addEventListener('click', clickHandler, false);
-  if (title)
-    element.title = title;
   return element;
-}
+};
+
+/**
+ * @param {string=} className
+ * @param {string=} type
+ * @return {!Element}
+ */
+UI.createInput = function(className, type) {
+  var element = createElementWithClass('input', className || '');
+  element.spellcheck = false;
+  element.classList.add('harmony-input');
+  if (type)
+    element.type = type;
+  return element;
+};
 
 /**
  * @param {string} name
@@ -1257,45 +1216,25 @@ function createTextButton(text, clickHandler, className, title) {
  * @param {boolean=} checked
  * @return {!Element}
  */
-function createRadioLabel(name, title, checked) {
+UI.createRadioLabel = function(name, title, checked) {
   var element = createElement('label', 'dt-radio');
   element.radioElement.name = name;
   element.radioElement.checked = !!checked;
   element.createTextChild(title);
   return element;
-}
+};
 
 /**
  * @param {string} title
  * @param {string} iconClass
  * @return {!Element}
  */
-function createLabel(title, iconClass) {
+UI.createLabel = function(title, iconClass) {
   var element = createElement('label', 'dt-icon-label');
   element.createChild('span').textContent = title;
   element.type = iconClass;
   return element;
-}
-
-/**
- * @param {string=} title
- * @param {boolean=} checked
- * @param {string=} subtitle
- * @return {!Element}
- */
-function createCheckboxLabel(title, checked, subtitle) {
-  var element = createElement('label', 'dt-checkbox');
-  element.checkboxElement.checked = !!checked;
-  if (title !== undefined) {
-    element.textElement = element.createChild('div', 'dt-checkbox-text');
-    element.textElement.textContent = title;
-    if (subtitle !== undefined) {
-      element.subtitleElement = element.textElement.createChild('div', 'dt-checkbox-subtitle');
-      element.subtitleElement.textContent = subtitle;
-    }
-  }
-  return element;
-}
+};
 
 /**
  * @return {!Element}
@@ -1303,14 +1242,14 @@ function createCheckboxLabel(title, checked, subtitle) {
  * @param {number} max
  * @param {number} tabIndex
  */
-function createSliderLabel(min, max, tabIndex) {
+UI.createSliderLabel = function(min, max, tabIndex) {
   var element = createElement('label', 'dt-slider');
   element.sliderElement.min = min;
   element.sliderElement.max = max;
   element.sliderElement.step = 1;
   element.sliderElement.tabIndex = tabIndex;
   return element;
-}
+};
 
 /**
  * @param {!Node} node
@@ -1335,8 +1274,87 @@ UI.appendStyle = function(node, cssFile) {
   }
 };
 
+/**
+ * @extends {HTMLLabelElement}
+ */
+UI.CheckboxLabel = class extends HTMLLabelElement {
+  constructor() {
+    super();
+    /** @type {!DocumentFragment} */
+    this._shadowRoot;
+    /** @type {!HTMLInputElement} */
+    this.checkboxElement;
+    /** @type {!Element} */
+    this.textElement;
+    throw new Error('Checkbox must be created via factory method.');
+  }
+
+  /**
+   * @override
+   */
+  createdCallback() {
+    UI.CheckboxLabel._lastId = (UI.CheckboxLabel._lastId || 0) + 1;
+    var id = 'ui-checkbox-label' + UI.CheckboxLabel._lastId;
+    this._shadowRoot = UI.createShadowRootWithCoreStyles(this, 'ui/checkboxTextLabel.css');
+    this.checkboxElement = /** @type {!HTMLInputElement} */ (this._shadowRoot.createChild('input'));
+    this.checkboxElement.type = 'checkbox';
+    this.checkboxElement.setAttribute('id', id);
+    this.textElement = this._shadowRoot.createChild('label', 'dt-checkbox-text');
+    this.textElement.setAttribute('for', id);
+    this._shadowRoot.createChild('content');
+  }
+
+  /**
+   * @param {string=} title
+   * @param {boolean=} checked
+   * @param {string=} subtitle
+   * @return {!UI.CheckboxLabel}
+   */
+  static create(title, checked, subtitle) {
+    if (!UI.CheckboxLabel._constructor)
+      UI.CheckboxLabel._constructor = UI.registerCustomElement('label', 'dt-checkbox', UI.CheckboxLabel.prototype);
+    var element = /** @type {!UI.CheckboxLabel} */ (new UI.CheckboxLabel._constructor());
+    element.checkboxElement.checked = !!checked;
+    if (title !== undefined) {
+      element.textElement.textContent = title;
+      if (subtitle !== undefined)
+        element.textElement.createChild('div', 'dt-checkbox-subtitle').textContent = subtitle;
+    }
+    return element;
+  }
+
+  /**
+   * @param {string} color
+   * @this {Element}
+   */
+  set backgroundColor(color) {
+    this.checkboxElement.classList.add('dt-checkbox-themed');
+    this.checkboxElement.style.backgroundColor = color;
+  }
+
+  /**
+   * @param {string} color
+   * @this {Element}
+   */
+  set checkColor(color) {
+    this.checkboxElement.classList.add('dt-checkbox-themed');
+    var stylesheet = createElement('style');
+    stylesheet.textContent = 'input.dt-checkbox-themed:checked:after { background-color: ' + color + '}';
+    this._shadowRoot.appendChild(stylesheet);
+  }
+
+  /**
+   * @param {string} color
+   * @this {Element}
+   */
+  set borderColor(color) {
+    this.checkboxElement.classList.add('dt-checkbox-themed');
+    this.checkboxElement.style.borderColor = color;
+  }
+};
+
 (function() {
-  registerCustomElement('button', 'text-button', {
+  UI.registerCustomElement('button', 'text-button', {
     /**
      * @this {Element}
      */
@@ -1349,7 +1367,7 @@ UI.appendStyle = function(node, cssFile) {
     __proto__: HTMLButtonElement.prototype
   });
 
-  registerCustomElement('label', 'dt-radio', {
+  UI.registerCustomElement('label', 'dt-radio', {
     /**
      * @this {Element}
      */
@@ -1377,74 +1395,7 @@ UI.appendStyle = function(node, cssFile) {
     this.radioElement.dispatchEvent(new Event('change'));
   }
 
-  registerCustomElement('label', 'dt-checkbox', {
-    /**
-     * @this {Element}
-     */
-    createdCallback: function() {
-      this._root = UI.createShadowRootWithCoreStyles(this, 'ui/checkboxTextLabel.css');
-      var checkboxElement = createElementWithClass('input', 'dt-checkbox-button');
-      checkboxElement.type = 'checkbox';
-      this._root.appendChild(checkboxElement);
-      this.checkboxElement = checkboxElement;
-
-      this.addEventListener('click', toggleCheckbox.bind(this));
-
-      /**
-       * @param {!Event} event
-       * @this {Node}
-       */
-      function toggleCheckbox(event) {
-        if (event.target !== checkboxElement && event.target !== this) {
-          event.consume();
-          checkboxElement.click();
-        }
-      }
-
-      this._root.createChild('content');
-    },
-
-    /**
-     * @param {string} color
-     * @this {Element}
-     */
-    set backgroundColor(color) {
-      this.checkboxElement.classList.add('dt-checkbox-themed');
-      this.checkboxElement.style.backgroundColor = color;
-    },
-
-    /**
-     * @param {string} color
-     * @this {Element}
-     */
-    set checkColor(color) {
-      this.checkboxElement.classList.add('dt-checkbox-themed');
-      var stylesheet = createElement('style');
-      stylesheet.textContent = 'input.dt-checkbox-themed:checked:after { background-color: ' + color + '}';
-      this._root.appendChild(stylesheet);
-    },
-
-    /**
-     * @param {string} color
-     * @this {Element}
-     */
-    set borderColor(color) {
-      this.checkboxElement.classList.add('dt-checkbox-themed');
-      this.checkboxElement.style.borderColor = color;
-    },
-
-    /**
-     * @param {boolean} focus
-     * @this {Element}
-     */
-    set visualizeFocus(focus) {
-      this.checkboxElement.classList.toggle('dt-checkbox-visualize-focus', focus);
-    },
-
-    __proto__: HTMLLabelElement.prototype
-  });
-
-  registerCustomElement('label', 'dt-icon-label', {
+  UI.registerCustomElement('label', 'dt-icon-label', {
     /**
      * @this {Element}
      */
@@ -1467,7 +1418,7 @@ UI.appendStyle = function(node, cssFile) {
     __proto__: HTMLLabelElement.prototype
   });
 
-  registerCustomElement('label', 'dt-slider', {
+  UI.registerCustomElement('label', 'dt-slider', {
     /**
      * @this {Element}
      */
@@ -1496,7 +1447,7 @@ UI.appendStyle = function(node, cssFile) {
     __proto__: HTMLLabelElement.prototype
   });
 
-  registerCustomElement('label', 'dt-small-bubble', {
+  UI.registerCustomElement('label', 'dt-small-bubble', {
     /**
      * @this {Element}
      */
@@ -1518,13 +1469,19 @@ UI.appendStyle = function(node, cssFile) {
     __proto__: HTMLLabelElement.prototype
   });
 
-  registerCustomElement('div', 'dt-close-button', {
+  UI.registerCustomElement('div', 'dt-close-button', {
     /**
      * @this {Element}
      */
     createdCallback: function() {
       var root = UI.createShadowRootWithCoreStyles(this, 'ui/closeButton.css');
       this._buttonElement = root.createChild('div', 'close-button');
+      var regularIcon = UI.Icon.create('smallicon-cross', 'default-icon');
+      this._hoverIcon = UI.Icon.create('mediumicon-red-cross-hover', 'hover-icon');
+      this._activeIcon = UI.Icon.create('mediumicon-red-cross-active', 'active-icon');
+      this._buttonElement.appendChild(regularIcon);
+      this._buttonElement.appendChild(this._hoverIcon);
+      this._buttonElement.appendChild(this._activeIcon);
     },
 
     /**
@@ -1532,7 +1489,13 @@ UI.appendStyle = function(node, cssFile) {
      * @this {Element}
      */
     set gray(gray) {
-      this._buttonElement.className = gray ? 'close-button-gray' : 'close-button';
+      if (gray) {
+        this._hoverIcon.setIconType('mediumicon-gray-cross-hover');
+        this._activeIcon.setIconType('mediumicon-gray-cross-active');
+      } else {
+        this._hoverIcon.setIconType('mediumicon-red-cross-hover');
+        this._activeIcon.setIconType('mediumicon-red-cross-active');
+      }
     },
 
     __proto__: HTMLDivElement.prototype
@@ -1570,6 +1533,7 @@ UI.bindInput = function(input, apply, validate, numeric) {
     if (isEnterKey(event)) {
       if (validate(input.value))
         apply(input.value);
+      event.preventDefault();
       return;
     }
 
@@ -1611,17 +1575,18 @@ UI.bindInput = function(input, apply, validate, numeric) {
 };
 
 /**
-   * @param {!CanvasRenderingContext2D} context
-   * @param {string} text
-   * @param {number} maxWidth
-   * @return {string}
-   */
-UI.trimTextMiddle = function(context, text, maxWidth) {
+ * @param {!CanvasRenderingContext2D} context
+ * @param {string} text
+ * @param {number} maxWidth
+ * @param {function(string, number):string} trimFunction
+ * @return {string}
+ */
+UI.trimText = function(context, text, maxWidth, trimFunction) {
   const maxLength = 200;
   if (maxWidth <= 10)
     return '';
   if (text.length > maxLength)
-    text = text.trimMiddle(maxLength);
+    text = trimFunction(text, maxLength);
   const textWidth = UI.measureTextWidth(context, text);
   if (textWidth <= maxWidth)
     return text;
@@ -1632,7 +1597,7 @@ UI.trimTextMiddle = function(context, text, maxWidth) {
   var rv = textWidth;
   while (l < r && lv !== rv && lv !== maxWidth) {
     const m = Math.ceil(l + (r - l) * (maxWidth - lv) / (rv - lv));
-    const mv = UI.measureTextWidth(context, text.trimMiddle(m));
+    const mv = UI.measureTextWidth(context, trimFunction(text, m));
     if (mv <= maxWidth) {
       l = m;
       lv = mv;
@@ -1641,8 +1606,28 @@ UI.trimTextMiddle = function(context, text, maxWidth) {
       rv = mv;
     }
   }
-  text = text.trimMiddle(l);
+  text = trimFunction(text, l);
   return text !== '\u2026' ? text : '';
+};
+
+/**
+ * @param {!CanvasRenderingContext2D} context
+ * @param {string} text
+ * @param {number} maxWidth
+ * @return {string}
+ */
+UI.trimTextMiddle = function(context, text, maxWidth) {
+  return UI.trimText(context, text, maxWidth, (text, width) => text.trimMiddle(width));
+};
+
+/**
+ * @param {!CanvasRenderingContext2D} context
+ * @param {string} text
+ * @param {number} maxWidth
+ * @return {string}
+ */
+UI.trimTextEnd = function(context, text, maxWidth) {
+  return UI.trimText(context, text, maxWidth, (text, width) => text.trimEnd(width));
 };
 
 /**
@@ -1840,7 +1825,7 @@ UI.ThemeSupport = class {
     output.push(':');
     var items = value.replace(Common.Color.Regex, '\0$1\0').split('\0');
     for (var i = 0; i < items.length; ++i)
-      output.push(this.patchColor(items[i], colorUsage));
+      output.push(this.patchColorText(items[i], colorUsage));
     if (style.getPropertyPriority(name))
       output.push(' !important');
     output.push(';');
@@ -1851,20 +1836,28 @@ UI.ThemeSupport = class {
    * @param {!UI.ThemeSupport.ColorUsage} colorUsage
    * @return {string}
    */
-  patchColor(text, colorUsage) {
+  patchColorText(text, colorUsage) {
     var color = Common.Color.parse(text);
     if (!color)
       return text;
-
-    var hsla = color.hsla();
-    this._patchHSLA(hsla, colorUsage);
-    var rgba = [];
-    Common.Color.hsl2rgb(hsla, rgba);
-    var outColor = new Common.Color(rgba, color.format());
+    var outColor = this.patchColor(color, colorUsage);
     var outText = outColor.asString(null);
     if (!outText)
       outText = outColor.asString(outColor.hasAlpha() ? Common.Color.Format.RGBA : Common.Color.Format.RGB);
     return outText || text;
+  }
+
+  /**
+   * @param {!Common.Color} color
+   * @param {!UI.ThemeSupport.ColorUsage} colorUsage
+   * @return {!Common.Color}
+   */
+  patchColor(color, colorUsage) {
+    var hsla = color.hsla();
+    this._patchHSLA(hsla, colorUsage);
+    var rgba = [];
+    Common.Color.hsl2rgb(hsla, rgba);
+    return new Common.Color(rgba, color.format());
   }
 
   /**
@@ -1912,13 +1905,14 @@ UI.ThemeSupport.ColorUsage = {
  * @param {string} url
  * @param {string=} linkText
  * @param {string=} className
+ * @param {boolean=} preventClick
  * @return {!Element}
  */
-UI.createExternalLink = function(url, linkText, className) {
+UI.createExternalLink = function(url, linkText, className, preventClick) {
   if (!linkText)
     linkText = url;
 
-  var a = createElementWithClass('a', className);
+  var a = createElementWithClass('span', className);
   var href = url;
   if (url.trim().toLowerCase().startsWith('javascript:'))
     href = null;
@@ -1926,15 +1920,49 @@ UI.createExternalLink = function(url, linkText, className) {
     href = null;
   if (href !== null) {
     a.href = href;
-    a.classList.add('webkit-html-external-link');
+    a.classList.add('devtools-link');
+    if (!preventClick) {
+      a.addEventListener('click', event => {
+        event.consume(true);
+        InspectorFrontendHost.openInNewTab(/** @type {string} */ (href));
+      }, false);
+    } else {
+      a.classList.add('devtools-link-prevent-click');
+    }
+    a[UI._externalLinkSymbol] = true;
   }
   if (linkText !== url)
     a.title = url;
-  a.textContent = linkText.trimMiddle(150);
+  a.textContent = linkText.trimMiddle(UI.MaxLengthForDisplayedURLs);
   a.setAttribute('target', '_blank');
 
   return a;
 };
+
+UI._externalLinkSymbol = Symbol('UI._externalLink');
+
+/**
+ * @implements {UI.ContextMenu.Provider}
+ * @unrestricted
+ */
+UI.ExternaLinkContextMenuProvider = class {
+  /**
+   * @override
+   * @param {!Event} event
+   * @param {!UI.ContextMenu} contextMenu
+   * @param {!Object} target
+   */
+  appendApplicableItems(event, contextMenu, target) {
+    var targetNode = /** @type {!Node} */ (target);
+    while (targetNode && !targetNode[UI._externalLinkSymbol])
+      targetNode = targetNode.parentNodeOrShadowHost();
+    if (!targetNode || !targetNode.href)
+      return;
+    contextMenu.appendItem(UI.openLinkExternallyLabel(), () => InspectorFrontendHost.openInNewTab(targetNode.href));
+    contextMenu.appendItem(UI.copyLinkAddressLabel(), () => InspectorFrontendHost.copyText(targetNode.href));
+  }
+};
+
 
 /**
  * @param {string} article
@@ -1958,5 +1986,90 @@ UI.loadImage = function(url) {
   });
 };
 
+/**
+ * @param {?string} data
+ * @return {!Promise<?Image>}
+ */
+UI.loadImageFromData = function(data) {
+  return data ? UI.loadImage('data:image/jpg;base64,' + data) : Promise.resolve(null);
+};
+
 /** @type {!UI.ThemeSupport} */
 UI.themeSupport;
+
+/**
+ * @param {function(!File)} callback
+ * @return {!Node}
+ */
+UI.createFileSelectorElement = function(callback) {
+  var fileSelectorElement = createElement('input');
+  fileSelectorElement.type = 'file';
+  fileSelectorElement.style.display = 'none';
+  fileSelectorElement.setAttribute('tabindex', -1);
+  fileSelectorElement.onchange = onChange;
+  function onChange(event) {
+    callback(fileSelectorElement.files[0]);
+  }
+  return fileSelectorElement;
+};
+
+/**
+ * @const
+ * @type {number}
+ */
+UI.MaxLengthForDisplayedURLs = 150;
+
+/**
+ * @unrestricted
+ */
+UI.ConfirmDialog = class extends UI.VBox {
+  /**
+   * @param {!Document|!Element} where
+   * @param {string} message
+   * @param {!Function} callback
+   */
+  static show(where, message, callback) {
+    var dialog = new UI.Dialog();
+    dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.MeasureContent);
+    dialog.addCloseButton();
+    dialog.setDimmed(true);
+    new UI
+        .ConfirmDialog(
+            message,
+            () => {
+              dialog.hide();
+              callback();
+            },
+            () => dialog.hide())
+        .show(dialog.contentElement);
+    dialog.show(where);
+  }
+
+  /**
+   * @param {string} message
+   * @param {!Function} okCallback
+   * @param {!Function} cancelCallback
+   */
+  constructor(message, okCallback, cancelCallback) {
+    super(true);
+    this.registerRequiredCSS('ui/confirmDialog.css');
+    this.contentElement.createChild('div', 'message').createChild('span').textContent = message;
+    var buttonsBar = this.contentElement.createChild('div', 'button');
+    buttonsBar.appendChild(UI.createTextButton(Common.UIString('Ok'), okCallback));
+    buttonsBar.appendChild(UI.createTextButton(Common.UIString('Cancel'), cancelCallback));
+  }
+};
+
+/**
+ * @param {!UI.ToolbarToggle} toolbarButton
+ * @return {!Element}
+ */
+UI.createInlineButton = function(toolbarButton) {
+  var element = createElement('span');
+  var shadowRoot = UI.createShadowRootWithCoreStyles(element, 'ui/inlineButton.css');
+  element.classList.add('inline-button');
+  var toolbar = new UI.Toolbar('');
+  toolbar.appendToolbarItem(toolbarButton);
+  shadowRoot.appendChild(toolbar.element);
+  return element;
+};

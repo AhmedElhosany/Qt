@@ -46,7 +46,7 @@
 #include "qelapsedtimer.h"
 #include "qnetworkinterface.h"
 
-#if !defined(QT_NO_NETWORKPROXY)
+#if !defined(QT_NO_NETWORKPROXY) && !defined(QT_NO_HTTP)
 #include <qdebug.h>
 
 QT_BEGIN_NAMESPACE
@@ -871,4 +871,4 @@ QAbstractSocketEngine *QHttpSocketEngineHandler::createSocketEngine(qintptr, QOb
 
 QT_END_NAMESPACE
 
-#endif // !QT_NO_NETWORKPROXY
+#endif

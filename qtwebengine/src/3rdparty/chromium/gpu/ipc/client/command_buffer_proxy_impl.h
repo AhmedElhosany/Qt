@@ -16,7 +16,6 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/containers/hash_tables.h"
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -28,13 +27,13 @@
 #include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/command_buffer_shared.h"
 #include "gpu/command_buffer/common/gpu_memory_allocation.h"
+#include "gpu/command_buffer/common/scheduling_priority.h"
 #include "gpu/gpu_export.h"
-#include "gpu/ipc/common/gpu_stream_constants.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "ipc/ipc_listener.h"
-#include "ui/events/latency_info.h"
 #include "ui/gfx/swap_result.h"
 #include "ui/gl/gpu_preference.h"
+#include "ui/latency/latency_info.h"
 
 struct GPUCommandBufferConsoleMessage;
 struct GPUCreateCommandBufferConfig;
@@ -43,10 +42,6 @@ class GURL;
 
 namespace base {
 class SharedMemory;
-}
-
-namespace gfx {
-class Size;
 }
 
 namespace gpu {
@@ -88,7 +83,7 @@ class GPU_EXPORT CommandBufferProxyImpl
       gpu::SurfaceHandle surface_handle,
       CommandBufferProxyImpl* share_group,
       int32_t stream_id,
-      gpu::GpuStreamPriority stream_priority,
+      gpu::SchedulingPriority stream_priority,
       const gpu::gles2::ContextCreationAttribHelper& attribs,
       const GURL& active_url,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
@@ -100,11 +95,12 @@ class GPU_EXPORT CommandBufferProxyImpl
 
   // CommandBuffer implementation:
   State GetLastState() override;
-  int32_t GetLastToken() override;
   void Flush(int32_t put_offset) override;
   void OrderingBarrier(int32_t put_offset) override;
-  void WaitForTokenInRange(int32_t start, int32_t end) override;
-  void WaitForGetOffsetInRange(int32_t start, int32_t end) override;
+  State WaitForTokenInRange(int32_t start, int32_t end) override;
+  State WaitForGetOffsetInRange(uint32_t set_get_buffer_count,
+                                int32_t start,
+                                int32_t end) override;
   void SetGetBuffer(int32_t shm_id) override;
   scoped_refptr<gpu::Buffer> CreateTransferBuffer(size_t size,
                                                   int32_t* id) override;
@@ -118,23 +114,24 @@ class GPU_EXPORT CommandBufferProxyImpl
                       size_t height,
                       unsigned internal_format) override;
   void DestroyImage(int32_t id) override;
-  int32_t CreateGpuMemoryBufferImage(size_t width,
-                                     size_t height,
-                                     unsigned internal_format,
-                                     unsigned usage) override;
   void SignalQuery(uint32_t query, const base::Closure& callback) override;
   void SetLock(base::Lock* lock) override;
   void EnsureWorkVisible() override;
   gpu::CommandBufferNamespace GetNamespaceID() const override;
   gpu::CommandBufferId GetCommandBufferID() const override;
-  int32_t GetExtraCommandBufferData() const override;
+  int32_t GetStreamId() const override;
+  void FlushOrderingBarrierOnStream(int32_t stream_id) override;
   uint64_t GenerateFenceSyncRelease() override;
   bool IsFenceSyncRelease(uint64_t release) override;
   bool IsFenceSyncFlushed(uint64_t release) override;
   bool IsFenceSyncFlushReceived(uint64_t release) override;
+  bool IsFenceSyncReleased(uint64_t release) override;
   void SignalSyncToken(const gpu::SyncToken& sync_token,
                        const base::Closure& callback) override;
-  bool CanWaitUnverifiedSyncToken(const gpu::SyncToken* sync_token) override;
+  void WaitSyncTokenHint(const gpu::SyncToken& sync_token) override;
+  bool CanWaitUnverifiedSyncToken(const gpu::SyncToken& sync_token) override;
+  void AddLatencyInfo(
+      const std::vector<ui::LatencyInfo>& latency_info) override;
 
   void TakeFrontBuffer(const gpu::Mailbox& mailbox);
   void ReturnFrontBuffer(const gpu::Mailbox& mailbox,
@@ -146,9 +143,6 @@ class GPU_EXPORT CommandBufferProxyImpl
 
   bool EnsureBackbuffer();
 
-  void SetOnConsoleMessageCallback(const GpuConsoleMessageCallback& callback);
-
-  void SetLatencyInfo(const std::vector<ui::LatencyInfo>& latency_info);
   using SwapBuffersCompletionCallback = base::Callback<void(
       const std::vector<ui::LatencyInfo>& latency_info,
       gfx::SwapResult result,
@@ -161,11 +155,7 @@ class GPU_EXPORT CommandBufferProxyImpl
   void SetUpdateVSyncParametersCallback(
       const UpdateVSyncParametersCallback& callback);
 
-  // TODO(apatrick): this is a temporary optimization while skia is calling
-  // ContentGLContext::MakeCurrent prior to every GL call. It saves returning 6
-  // ints redundantly when only the error is needed for the
-  // CommandBufferProxyImpl implementation.
-  gpu::error::Error GetLastError() override;
+  void SetNeedsVSync(bool needs_vsync);
 
   int32_t route_id() const { return route_id_; }
 
@@ -215,6 +205,9 @@ class GPU_EXPORT CommandBufferProxyImpl
   // Try to read an updated copy of the state from shared memory, and calls
   // OnGpuStateError() if the new state has an error.
   void TryUpdateState();
+  // Like above but calls the error handler and disconnects channel by posting
+  // a task.
+  void TryUpdateStateThreadSafe();
   // Like the above but does not call the error event handler if the new state
   // has an error.
   void TryUpdateStateDontReportError();
@@ -244,48 +237,55 @@ class GPU_EXPORT CommandBufferProxyImpl
   // The shared memory area used to update state.
   gpu::CommandBufferSharedState* shared_state() const;
 
-  // There should be a lock_ if this is going to be used across multiple
-  // threads, or we guarantee it is used by a single thread by using a thread
-  // checker if no lock_ is set.
-  base::Lock* lock_;
-  base::ThreadChecker lockless_thread_checker_;
-
-  // Client that wants to listen for important events on the GpuControl.
-  gpu::GpuControlClient* gpu_control_client_;
-
-  // Unowned list of DeletionObservers.
-  base::ObserverList<DeletionObserver> deletion_observers_;
+  // The shared memory area used to update state.
+  std::unique_ptr<base::SharedMemory> shared_state_shm_;
 
   // The last cached state received from the service.
   State last_state_;
 
-  // The shared memory area used to update state.
-  std::unique_ptr<base::SharedMemory> shared_state_shm_;
+  // Lock to access shared state e.g. sync token release count across multiple
+  // threads. This allows tracking command buffer progress from another thread.
+  base::Lock last_state_lock_;
+
+  // There should be a lock_ if this is going to be used across multiple
+  // threads, or we guarantee it is used by a single thread by using a thread
+  // checker if no lock_ is set.
+  base::Lock* lock_ = nullptr;
+  base::ThreadChecker lockless_thread_checker_;
+
+  // Client that wants to listen for important events on the GpuControl.
+  gpu::GpuControlClient* gpu_control_client_ = nullptr;
+
+  // Unowned list of DeletionObservers.
+  base::ObserverList<DeletionObserver> deletion_observers_;
 
   scoped_refptr<GpuChannelHost> channel_;
   const gpu::CommandBufferId command_buffer_id_;
+  const int channel_id_;
   const int32_t route_id_;
   const int32_t stream_id_;
-  uint32_t flush_count_;
-  int32_t last_put_offset_;
-  int32_t last_barrier_put_offset_;
+  uint32_t flush_count_ = 0;
+  int32_t last_put_offset_ = -1;
+  int32_t last_barrier_put_offset_ = -1;
 
   // Next generated fence sync.
-  uint64_t next_fence_sync_release_;
+  uint64_t next_fence_sync_release_ = 1;
+
+  std::vector<SyncToken> pending_sync_token_fences_;
 
   // Unverified flushed fence syncs with their corresponding flush id.
   std::queue<std::pair<uint64_t, uint32_t>> flushed_release_flush_id_;
 
   // Last flushed fence sync release, same as last item in queue if not empty.
-  uint64_t flushed_fence_sync_release_;
+  uint64_t flushed_fence_sync_release_ = 0;
 
   // Last verified fence sync.
-  uint64_t verified_fence_sync_release_;
+  uint64_t verified_fence_sync_release_ = 0;
 
   GpuConsoleMessageCallback console_message_callback_;
 
   // Tasks to be invoked in SignalSyncPoint responses.
-  uint32_t next_signal_id_;
+  uint32_t next_signal_id_ = 0;
   SignalTaskMap signal_tasks_;
 
   gpu::Capabilities capabilities_;

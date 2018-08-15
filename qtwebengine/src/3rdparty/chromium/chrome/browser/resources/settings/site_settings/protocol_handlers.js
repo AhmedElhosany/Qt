@@ -54,30 +54,32 @@ Polymer({
      * The targetted object for menu operations.
      * @private {?Object}
      */
-    actionMenuModel_: Object
+    actionMenuModel_: Object,
+
+    /* Labels for the toggle on/off positions. */
+    toggleOffLabel: String,
+    toggleOnLabel: String,
   },
 
+  /** @override */
   ready: function() {
-    this.addWebUIListener('setHandlersEnabled',
-        this.setHandlersEnabled_.bind(this));
-    this.addWebUIListener('setProtocolHandlers',
-        this.setProtocolHandlers_.bind(this));
-    this.addWebUIListener('setIgnoredProtocolHandlers',
+    this.addWebUIListener(
+        'setHandlersEnabled', this.setHandlersEnabled_.bind(this));
+    this.addWebUIListener(
+        'setProtocolHandlers', this.setProtocolHandlers_.bind(this));
+    this.addWebUIListener(
+        'setIgnoredProtocolHandlers',
         this.setIgnoredProtocolHandlers_.bind(this));
-    this.browserProxy.initializeProtocolHandlerList();
+    this.browserProxy.observeProtocolHandlers();
   },
 
   /**
    * Obtains the description for the main toggle.
-   * @param {boolean} categoryEnabled Whether the main toggle is enabled.
    * @return {string} The description to use.
    * @private
    */
-  computeHandlersDescription_: function(categoryEnabled) {
-    var setting = categoryEnabled ?
-        settings.PermissionValues.ALLOW : settings.PermissionValues.BLOCK;
-    return this.computeCategoryDesc(
-        settings.ContentSettingsTypes.PROTOCOL_HANDLERS, setting, true);
+  computeHandlersDescription_: function() {
+    return this.categoryEnabled ? this.toggleOnLabel : this.toggleOffLabel;
   },
 
   /**
@@ -158,8 +160,9 @@ Polymer({
    * @return {boolean} if actionMenuModel_ is default handler of its protocol.
    */
   isModelDefault_: function() {
-    return !!this.actionMenuModel_ && (this.actionMenuModel_.index ==
-        this.actionMenuModel_.protocol.default_handler);
+    return !!this.actionMenuModel_ &&
+        (this.actionMenuModel_.index ==
+         this.actionMenuModel_.protocol.default_handler);
   },
 
   /**
@@ -170,8 +173,8 @@ Polymer({
    */
   showMenu_: function(event) {
     this.actionMenuModel_ = event.model;
-    /** @type {!CrActionMenuElement} */ (
-        this.$$('dialog[is=cr-action-menu]')).showAt(
+    /** @type {!CrActionMenuElement} */ (this.$$('dialog[is=cr-action-menu]'))
+        .showAt(
             /** @type {!Element} */ (
                 Polymer.dom(/** @type {!Event} */ (event)).localTarget));
   }

@@ -222,13 +222,8 @@ bool QScene::hasEntityForComponent(QNodeId componentUuid, QNodeId entityUuid)
 {
     Q_D(QScene);
     QReadLocker lock(&d->m_lock);
-    auto it = d->m_componentToEntities.find(componentUuid);
-    while (it != d->m_componentToEntities.end() && it.key() == componentUuid) {
-        if (it.value() == entityUuid)
-            return true;
-        ++it;
-    }
-    return false;
+    const auto range = d->m_componentToEntities.equal_range(componentUuid);
+    return std::find(range.first, range.second, entityUuid) != range.second;
 }
 
 QScene::NodePropertyTrackData QScene::lookupNodePropertyTrackData(QNodeId id) const

@@ -471,6 +471,8 @@ typedef struct VP8_COMP {
   int zeromv_count;
   int lf_zeromv_pct;
 
+  unsigned char *skin_map;
+
   unsigned char *segmentation_map;
   signed char segment_feature_data[MB_LVL_MAX][MAX_MB_SEGMENTS];
   int segment_encode_breakout[MAX_MB_SEGMENTS];
@@ -511,6 +513,8 @@ typedef struct VP8_COMP {
 
 #if CONFIG_MULTITHREAD
   /* multithread data */
+  pthread_mutex_t *pmutex;
+  pthread_mutex_t mt_mutex; /* mutex for b_multi_threaded */
   int *mt_current_mb_col;
   int mt_sync_range;
   int b_multi_threaded;

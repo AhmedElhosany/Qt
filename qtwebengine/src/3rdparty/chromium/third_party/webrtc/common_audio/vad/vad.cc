@@ -12,7 +12,7 @@
 
 #include <memory>
 
-#include "webrtc/base/checks.h"
+#include "webrtc/rtc_base/checks.h"
 
 namespace webrtc {
 
@@ -37,7 +37,7 @@ class VadImpl final : public Vad {
       case 1:
         return kActive;
       default:
-        RTC_DCHECK(false) << "WebRtcVad_Process returned an error.";
+        RTC_NOTREACHED() << "WebRtcVad_Process returned an error.";
         return kError;
     }
   }

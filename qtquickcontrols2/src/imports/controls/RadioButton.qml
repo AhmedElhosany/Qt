@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.RadioButton {
     id: control
@@ -52,21 +52,36 @@ T.RadioButton {
     padding: 6
     spacing: 6
 
-    indicator: RadioIndicator {
+    // keep in sync with RadioDelegate.qml (shared RadioIndicator.qml was removed for performance reasons)
+    indicator: Rectangle {
+        implicitWidth: 28
+        implicitHeight: 28
+
         x: text ? (control.mirrored ? control.width - width - control.rightPadding : control.leftPadding) : control.leftPadding + (control.availableWidth - width) / 2
         y: control.topPadding + (control.availableHeight - height) / 2
-        control: control
+
+        radius: width / 2
+        color: control.down ? control.palette.light : control.palette.base
+        border.width: control.visualFocus ? 2 : 1
+        border.color: control.visualFocus ? control.palette.highlight : control.palette.mid
+
+        Rectangle {
+            x: (parent.width - width) / 2
+            y: (parent.height - height) / 2
+            width: 20
+            height: 20
+            radius: width / 2
+            color: control.palette.text
+            visible: control.checked
+        }
     }
 
-    contentItem: Text {
+    contentItem: CheckLabel {
         leftPadding: control.indicator && !control.mirrored ? control.indicator.width + control.spacing : 0
         rightPadding: control.indicator && control.mirrored ? control.indicator.width + control.spacing : 0
 
         text: control.text
         font: control.font
-        color: control.down ? Default.textDarkColor : Default.textColor
-        elide: Text.ElideRight
-        verticalAlignment: Text.AlignVCenter
-        opacity: enabled ? 1 : 0.3
+        color: control.palette.windowText
     }
 }

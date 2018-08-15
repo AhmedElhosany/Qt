@@ -30,11 +30,11 @@
 
 #include "core/CoreExport.h"
 #include "platform/LifecycleNotifier.h"
-#include "wtf/Noncopyable.h"
+#include "platform/wtf/Noncopyable.h"
 
 namespace blink {
 
-class ActiveDOMObject;
+class SuspendableObject;
 class ContextLifecycleObserver;
 class ExecutionContext;
 
@@ -43,10 +43,10 @@ class CORE_EXPORT ContextLifecycleNotifier
   WTF_MAKE_NONCOPYABLE(ContextLifecycleNotifier);
 
  public:
-  void notifyResumingActiveDOMObjects();
-  void notifySuspendingActiveDOMObjects();
+  void NotifyResumingSuspendableObjects();
+  void NotifySuspendingSuspendableObjects();
 
-  unsigned activeDOMObjectCount() const;
+  unsigned SuspendableObjectCount() const;
 
  protected:
   // Need a default constructor to link core and modules separately.
@@ -57,7 +57,7 @@ class CORE_EXPORT ContextLifecycleNotifier
   ContextLifecycleNotifier() {}
 
 #if DCHECK_IS_ON()
-  bool contains(ActiveDOMObject*) const;
+  bool Contains(SuspendableObject*) const;
 #endif
 };
 

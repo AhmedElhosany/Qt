@@ -35,7 +35,9 @@
 ****************************************************************************/
 
 #include "qquickmenuitem_p.h"
-#include "qquickabstractbutton_p_p.h"
+#include "qquickmenuitem_p_p.h"
+#include "qquickmenu_p.h"
+#include "qquickdeferredexecute_p_p.h"
 
 #include <QtGui/qpa/qplatformtheme.h>
 #include <QtQuick/private/qquickevents_p_p.h>
@@ -54,6 +56,10 @@ QT_BEGIN_NAMESPACE
     MenuItem is a convenience type that implements the AbstractButton API,
     providing a familiar way to respond to menu items being \l triggered, for
     example.
+
+    MenuItem inherits its API from AbstractButton. For instance, you can set
+    \l {AbstractButton::text}{text} and \l {Icons in Qt Quick Controls 2}{icon}
+    using the AbstractButton API.
 
     \code
     Button {
@@ -80,22 +86,73 @@ QT_BEGIN_NAMESPACE
     }
     \endcode
 
-    \sa {Customizing MenuItem}, {Menu Controls}
+    \sa {Customizing Menu}, Menu, {Menu Controls}
 */
 
-class QQuickMenuItemPrivate : public QQuickAbstractButtonPrivate
-{
-    Q_DECLARE_PUBLIC(QQuickMenuItem)
-
-public:
-    QQuickMenuItemPrivate();
-
-    bool highlighted;
-};
-
 QQuickMenuItemPrivate::QQuickMenuItemPrivate()
-    : highlighted(false)
+    : highlighted(false),
+      arrow(nullptr),
+      menu(nullptr),
+      subMenu(nullptr)
 {
+}
+
+void QQuickMenuItemPrivate::setMenu(QQuickMenu *newMenu)
+{
+    Q_Q(QQuickMenuItem);
+    if (menu == newMenu)
+        return;
+
+    menu = newMenu;
+    emit q->menuChanged();
+}
+
+void QQuickMenuItemPrivate::setSubMenu(QQuickMenu *newSubMenu)
+{
+    Q_Q(QQuickMenuItem);
+    if (subMenu == newSubMenu)
+        return;
+
+    if (subMenu) {
+        QObject::disconnect(subMenu, &QQuickMenu::titleChanged, q, &QQuickAbstractButton::setText);
+        QObjectPrivate::disconnect(subMenu, &QQuickPopup::enabledChanged, this, &QQuickMenuItemPrivate::updateEnabled);
+    }
+
+    if (newSubMenu) {
+        QObject::connect(newSubMenu, &QQuickMenu::titleChanged, q, &QQuickAbstractButton::setText);
+        QObjectPrivate::connect(newSubMenu, &QQuickPopup::enabledChanged, this, &QQuickMenuItemPrivate::updateEnabled);
+        q->setText(newSubMenu->title());
+    }
+
+    subMenu = newSubMenu;
+    updateEnabled();
+    emit q->subMenuChanged();
+}
+
+void QQuickMenuItemPrivate::updateEnabled()
+{
+    Q_Q(QQuickMenuItem);
+    q->setEnabled(subMenu && subMenu->isEnabled());
+}
+
+static inline QString arrowName() { return QStringLiteral("arrow"); }
+
+void QQuickMenuItemPrivate::cancelArrow()
+{
+    Q_Q(QQuickAbstractButton);
+    quickCancelDeferred(q, arrowName());
+}
+
+void QQuickMenuItemPrivate::executeArrow(bool complete)
+{
+    Q_Q(QQuickMenuItem);
+    if (arrow.wasExecuted())
+        return;
+
+    if (!arrow || complete)
+        quickBeginDeferred(q, arrowName(), arrow);
+    if (complete)
+        quickCompleteDeferred(q, arrowName(), arrow);
 }
 
 /*!
@@ -110,20 +167,16 @@ QQuickMenuItem::QQuickMenuItem(QQuickItem *parent)
     connect(this, &QQuickAbstractButton::clicked, this, &QQuickMenuItem::triggered);
 }
 
-QFont QQuickMenuItem::defaultFont() const
-{
-    return QQuickControlPrivate::themeFont(QPlatformTheme::MenuItemFont);
-}
-
 /*!
     \qmlproperty bool QtQuick.Controls::MenuItem::highlighted
 
-    This property holds whether the menu item is highlighted.
+    This property holds whether the menu item is highlighted by the user.
 
-    A menu item can be highlighted in order to draw the user's attention
-    towards it. It has no effect on keyboard interaction.
+    A menu item can be highlighted by mouse hover or keyboard navigation.
 
     The default value is \c false.
+
+    \sa Menu::currentIndex
 */
 bool QQuickMenuItem::isHighlighted() const
 {
@@ -139,6 +192,84 @@ void QQuickMenuItem::setHighlighted(bool highlighted)
 
     d->highlighted = highlighted;
     emit highlightedChanged();
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty Item QtQuick.Controls::MenuItem::arrow
+
+    This property holds the sub-menu arrow item.
+
+    \sa {Customizing Menu}
+*/
+QQuickItem *QQuickMenuItem::arrow() const
+{
+    QQuickMenuItemPrivate *d = const_cast<QQuickMenuItemPrivate *>(d_func());
+    if (!d->arrow)
+        d->executeArrow();
+    return d->arrow;
+}
+
+void QQuickMenuItem::setArrow(QQuickItem *arrow)
+{
+    Q_D(QQuickMenuItem);
+    if (d->arrow == arrow)
+        return;
+
+    if (!d->arrow.isExecuting())
+        d->cancelArrow();
+
+    delete d->arrow;
+    d->arrow = arrow;
+    if (arrow && !arrow->parentItem())
+        arrow->setParentItem(this);
+    if (!d->arrow.isExecuting())
+        emit arrowChanged();
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty Menu QtQuick.Controls::MenuItem::menu
+    \readonly
+
+    This property holds the menu that contains this menu item,
+    or \c null if the item is not in a menu.
+*/
+QQuickMenu *QQuickMenuItem::menu() const
+{
+    Q_D(const QQuickMenuItem);
+    return d->menu;
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty Menu QtQuick.Controls::MenuItem::subMenu
+    \readonly
+
+    This property holds the sub-menu that this item presents in
+    the parent menu, or \c null if this item is not a sub-menu item.
+*/
+QQuickMenu *QQuickMenuItem::subMenu() const
+{
+    Q_D(const QQuickMenuItem);
+    return d->subMenu;
+}
+
+void QQuickMenuItem::componentComplete()
+{
+    Q_D(QQuickMenuItem);
+    d->executeArrow(true);
+    QQuickAbstractButton::componentComplete();
+}
+
+QFont QQuickMenuItem::defaultFont() const
+{
+    return QQuickControlPrivate::themeFont(QPlatformTheme::MenuItemFont);
+}
+
+QPalette QQuickMenuItem::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::MenuPalette);
 }
 
 #if QT_CONFIG(accessibility)

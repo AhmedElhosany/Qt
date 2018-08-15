@@ -4,7 +4,9 @@
 
 #include "src/inspector/string-util.h"
 
+#include "src/conversions.h"
 #include "src/inspector/protocol/Protocol.h"
+#include "src/unicode-cache.h"
 
 namespace v8_inspector {
 
@@ -50,8 +52,7 @@ v8::Local<v8::String> toV8String(v8::Isolate* isolate,
 }
 
 String16 toProtocolString(v8::Local<v8::String> value) {
-  if (value.IsEmpty() || value->IsNull() || value->IsUndefined())
-    return String16();
+  if (value.IsEmpty() || value->IsNullOrUndefined()) return String16();
   std::unique_ptr<UChar[]> buffer(new UChar[value->Length()]);
   value->Write(reinterpret_cast<uint16_t*>(buffer.get()), 0, value->Length());
   return String16(buffer.get(), value->Length());
@@ -93,19 +94,30 @@ bool stringViewStartsWith(const StringView& string, const char* prefix) {
 
 namespace protocol {
 
-std::unique_ptr<protocol::Value> parseJSON(const StringView& string) {
+// static
+double StringUtil::toDouble(const char* s, size_t len, bool* isOk) {
+  v8::internal::UnicodeCache unicode_cache;
+  int flags = v8::internal::ALLOW_HEX | v8::internal::ALLOW_OCTAL |
+              v8::internal::ALLOW_BINARY;
+  double result = StringToDouble(&unicode_cache, s, flags);
+  *isOk = !std::isnan(result);
+  return result;
+}
+
+std::unique_ptr<protocol::Value> StringUtil::parseJSON(
+    const StringView& string) {
   if (!string.length()) return nullptr;
   if (string.is8Bit()) {
-    return protocol::parseJSON(string.characters8(),
+    return parseJSONCharacters(string.characters8(),
                                static_cast<int>(string.length()));
   }
-  return protocol::parseJSON(string.characters16(),
+  return parseJSONCharacters(string.characters16(),
                              static_cast<int>(string.length()));
 }
 
-std::unique_ptr<protocol::Value> parseJSON(const String16& string) {
+std::unique_ptr<protocol::Value> StringUtil::parseJSON(const String16& string) {
   if (!string.length()) return nullptr;
-  return protocol::parseJSON(string.characters16(),
+  return parseJSONCharacters(string.characters16(),
                              static_cast<int>(string.length()));
 }
 
@@ -119,7 +131,7 @@ std::unique_ptr<StringBuffer> StringBuffer::create(const StringView& string) {
 
 // static
 std::unique_ptr<StringBufferImpl> StringBufferImpl::adopt(String16& string) {
-  return wrapUnique(new StringBufferImpl(string));
+  return std::unique_ptr<StringBufferImpl>(new StringBufferImpl(string));
 }
 
 StringBufferImpl::StringBufferImpl(String16& string) {

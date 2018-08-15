@@ -4,12 +4,8 @@
 
 /**
  * @fileoverview
- * 'cr-expand-button' is a chrome-specific wrapper around paper-icon-button that
- * toggles between an opened (expanded) and closed state.
- *
- * Example:
- *
- *    <cr-expand-button expanded="{{sectionIsExpanded}}"></cr-expand-button>
+ * 'cr-expand-button' is a chrome-specific wrapper around a button that toggles
+ * between an opened (expanded) and closed state.
  */
 Polymer({
   is: 'cr-expand-button',
@@ -19,26 +15,28 @@ Polymer({
      * If true, the button is in the expanded state and will show the
      * 'expand-less' icon. If false, the button shows the 'expand-more' icon.
      */
-    expanded: {
-      type: Boolean,
-      value: false,
-      notify: true
-    },
+    expanded: {type: Boolean, value: false, notify: true},
 
     /**
-     * If true, the button will be disabled and greyed out.
+     * If true, the button will be disabled and grayed out.
      */
-    disabled: {
-      type: Boolean,
-      value: false,
-      reflectToAttribute: true
-    },
+    disabled: {type: Boolean, value: false, reflectToAttribute: true},
 
     /** A11y text descriptor for this control. */
     alt: String,
   },
 
+  /** @private */
   iconName_: function(expanded) {
-    return expanded ? 'cr:expand-less' : 'cr:expand-more';
-  }
+    return expanded ? 'icon-expand-less' : 'icon-expand-more';
+  },
+
+  /**
+   * @param {!Event} event
+   * @private
+   */
+  toggleExpand_: function(event) {
+    this.expanded = !this.expanded;
+    event.stopPropagation();
+  },
 });

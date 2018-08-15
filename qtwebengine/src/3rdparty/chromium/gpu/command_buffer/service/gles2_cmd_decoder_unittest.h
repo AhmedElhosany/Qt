@@ -8,7 +8,6 @@
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
-#include "gpu/command_buffer/service/cmd_buffer_engine.h"
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/framebuffer_manager.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
@@ -22,13 +21,8 @@
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "gpu/command_buffer/service/vertex_array_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gl/gl_context_stub_with_extensions.h"
 #include "ui/gl/gl_mock.h"
 #include "ui/gl/gl_surface_stub.h"
-
-namespace base {
-class CommandLine;
-}
 
 namespace gpu {
 namespace gles2 {
@@ -79,6 +73,15 @@ class GLES3DecoderTest : public GLES2DecoderTest {
   GLES3DecoderTest() { shader_language_version_ = 300; }
 
   // Override default setup so ES3 capabilities are enabled by default.
+  void SetUp() override;
+};
+
+class WebGL2DecoderTest : public GLES2DecoderTest {
+ public:
+  WebGL2DecoderTest() { shader_language_version_ = 300; }
+
+  // Override default setup so ES3 capabilities are enabled by default
+  // and WebGL2 specific rules are enforced.
   void SetUp() override;
 };
 

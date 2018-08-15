@@ -5,55 +5,29 @@
 #ifndef InterpolationEnvironment_h
 #define InterpolationEnvironment_h
 
-#include "platform/heap/Handle.h"
-#include "wtf/Allocator.h"
+#include "core/animation/InterpolationTypesMap.h"
+#include "platform/wtf/Allocator.h"
 
 namespace blink {
 
-class StyleResolverState;
-class SVGPropertyBase;
-class SVGElement;
-
 class InterpolationEnvironment {
   STACK_ALLOCATED();
-
  public:
-  explicit InterpolationEnvironment(StyleResolverState& state)
-      : m_state(&state), m_svgElement(nullptr), m_svgBaseValue(nullptr) {}
+  virtual bool IsCSS() const { return false; }
+  virtual bool IsSVG() const { return false; }
 
-  explicit InterpolationEnvironment(SVGElement& svgElement,
-                                    const SVGPropertyBase& svgBaseValue)
-      : m_state(nullptr),
-        m_svgElement(&svgElement),
-        m_svgBaseValue(&svgBaseValue) {}
-
-  StyleResolverState& state() {
-    DCHECK(m_state);
-    return *m_state;
-  }
-  const StyleResolverState& state() const {
-    DCHECK(m_state);
-    return *m_state;
+  const InterpolationTypesMap& GetInterpolationTypesMap() const {
+    return interpolation_types_map_;
   }
 
-  SVGElement& svgElement() {
-    DCHECK(m_svgElement);
-    return *m_svgElement;
-  }
-  const SVGElement& svgElement() const {
-    DCHECK(m_svgElement);
-    return *m_svgElement;
-  }
+ protected:
+  virtual ~InterpolationEnvironment() {}
 
-  const SVGPropertyBase& svgBaseValue() const {
-    DCHECK(m_svgBaseValue);
-    return *m_svgBaseValue;
-  }
+  explicit InterpolationEnvironment(const InterpolationTypesMap& map)
+      : interpolation_types_map_(map) {}
 
  private:
-  StyleResolverState* m_state;
-  Member<SVGElement> m_svgElement;
-  Member<const SVGPropertyBase> m_svgBaseValue;
+  const InterpolationTypesMap& interpolation_types_map_;
 };
 
 }  // namespace blink

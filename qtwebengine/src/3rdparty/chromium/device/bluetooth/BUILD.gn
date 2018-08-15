@@ -22,17 +22,47 @@ config("bluetooth_config") {
 
 source_set("mojo") {
   sources = [
+    "//device/bluetooth/public/interfaces/connect_result_type_converter.h",
+    "//device/bluetooth/public/interfaces/gatt_result_type_converter.h",
     "adapter.cc",
     "adapter.h",
     "adapter_factory.cc",
     "adapter_factory.h",
     "device.cc",
     "device.h",
+    "discovery_session.cc",
+    "discovery_session.h",
   ]
 
   public_deps = [
     ":bluetooth",
     "//device/bluetooth/public/interfaces:experimental_interfaces",
+    "//mojo/public/cpp/bindings",
+  ]
+}
+
+source_set("fake_bluetooth") {
+  sources = [
+    "test/fake_bluetooth.cc",
+    "test/fake_bluetooth.h",
+    "test/fake_central.cc",
+    "test/fake_central.h",
+    "test/fake_peripheral.cc",
+    "test/fake_peripheral.h",
+    "test/fake_read_response.cc",
+    "test/fake_read_response.h",
+    "test/fake_remote_gatt_characteristic.cc",
+    "test/fake_remote_gatt_characteristic.h",
+    "test/fake_remote_gatt_descriptor.cc",
+    "test/fake_remote_gatt_descriptor.h",
+    "test/fake_remote_gatt_service.cc",
+    "test/fake_remote_gatt_service.h",
+  ]
+
+  deps = [
+    ":bluetooth",
+    "//device/bluetooth/public/interfaces:fake_bluetooth_interfaces",
+    "//mojo/public/cpp/bindings",
   ]
 }
 
@@ -78,6 +108,7 @@ component("bluetooth") {
     "bluetooth_discovery_session.cc",
     "bluetooth_discovery_session.h",
     "bluetooth_discovery_session_outcome.h",
+    "bluetooth_export.h",
     "bluetooth_gatt_characteristic.cc",
     "bluetooth_gatt_characteristic.h",
     "bluetooth_gatt_connection.cc",
@@ -122,6 +153,8 @@ component("bluetooth") {
     "bluetooth_remote_gatt_descriptor.h",
     "bluetooth_remote_gatt_descriptor_android.cc",
     "bluetooth_remote_gatt_descriptor_android.h",
+    "bluetooth_remote_gatt_descriptor_mac.h",
+    "bluetooth_remote_gatt_descriptor_mac.mm",
     "bluetooth_remote_gatt_descriptor_win.cc",
     "bluetooth_remote_gatt_descriptor_win.h",
     "bluetooth_remote_gatt_service.cc",
@@ -160,6 +193,7 @@ component("bluetooth") {
 
   deps = [
     "//base",
+    "//components/device_event_log",
     "//crypto",
     "//device/bluetooth/strings",
     "//device/bluetooth/uribeacon",

@@ -17,11 +17,7 @@ class CFWL_ScrollBarTP : public CFWL_WidgetTP {
   ~CFWL_ScrollBarTP() override;
 
   // CFWL_WidgetTP
-  bool IsValidWidget(IFWL_Widget* pWidget) override;
-  uint32_t SetThemeID(IFWL_Widget* pWidget, uint32_t dwThemeID) override;
   void DrawBackground(CFWL_ThemeBackground* pParams) override;
-  void* GetCapacity(CFWL_ThemePart* pThemePart,
-                    CFWL_WidgetCapacity dwCapacity) override;
 
  protected:
   struct SBThemeData {
@@ -33,31 +29,33 @@ class CFWL_ScrollBarTP : public CFWL_WidgetTP {
     FX_ARGB clrTrackBKEnd;
   };
 
-  void DrawThumbBtn(CFX_Graphics* pGraphics,
+  void DrawThumbBtn(CXFA_Graphics* pGraphics,
                     const CFX_RectF* pRect,
                     bool bVert,
                     FWLTHEME_STATE eState,
                     bool bPawButton = true,
                     CFX_Matrix* pMatrix = nullptr);
-  void DrawTrack(CFX_Graphics* pGraphics,
+  void DrawTrack(CXFA_Graphics* pGraphics,
                  const CFX_RectF* pRect,
                  bool bVert,
                  FWLTHEME_STATE eState,
                  bool bLowerTrack,
                  CFX_Matrix* pMatrix = nullptr);
-  void DrawMaxMinBtn(CFX_Graphics* pGraphics,
+  void DrawMaxMinBtn(CXFA_Graphics* pGraphics,
                      const CFX_RectF* pRect,
                      FWLTHEME_DIRECTION eDict,
                      FWLTHEME_STATE eState,
                      CFX_Matrix* pMatrix = nullptr);
-  void DrawPaw(CFX_Graphics* pGraphics,
+  void DrawPaw(CXFA_Graphics* pGraphics,
                const CFX_RectF* pRect,
                bool bVert,
                FWLTHEME_STATE eState,
                CFX_Matrix* pMatrix = nullptr);
-  void SetThemeData(uint32_t dwID);
 
   std::unique_ptr<SBThemeData> m_pThemeData;
+
+ private:
+  void SetThemeData();
 };
 
 #endif  // XFA_FWL_THEME_CFWL_SCROLLBARTP_H_

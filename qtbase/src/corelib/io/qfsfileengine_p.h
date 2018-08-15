@@ -97,6 +97,7 @@ public:
     QString fileName(FileName file) const Q_DECL_OVERRIDE;
     uint ownerId(FileOwner) const Q_DECL_OVERRIDE;
     QString owner(FileOwner) const Q_DECL_OVERRIDE;
+    bool setFileTime(const QDateTime &newDate, FileTime time) Q_DECL_OVERRIDE;
     QDateTime fileTime(FileTime time) const Q_DECL_OVERRIDE;
     void setFileName(const QString &file) Q_DECL_OVERRIDE;
     int handle() const Q_DECL_OVERRIDE;
@@ -109,6 +110,10 @@ public:
     qint64 read(char *data, qint64 maxlen) Q_DECL_OVERRIDE;
     qint64 readLine(char *data, qint64 maxlen) Q_DECL_OVERRIDE;
     qint64 write(const char *data, qint64 len) Q_DECL_OVERRIDE;
+    bool cloneTo(QAbstractFileEngine *target) override;
+
+    virtual bool isUnnamedFile() const
+    { return false; }
 
     bool extension(Extension extension, const ExtensionOption *option = 0, ExtensionReturn *output = 0) Q_DECL_OVERRIDE;
     bool supportsExtension(Extension extension) const Q_DECL_OVERRIDE;

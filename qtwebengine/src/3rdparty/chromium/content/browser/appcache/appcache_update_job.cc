@@ -21,6 +21,7 @@
 #include "net/base/request_priority.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_request_context.h"
 #include "url/origin.h"
 
@@ -69,6 +70,36 @@ bool IsEvictableError(AppCacheUpdateJob::ResultType result,
 
 void EmptyCompletionCallback(int result) {}
 
+constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("appcache_update_job", R"(
+      semantics {
+        sender: "HTML5 AppCache System"
+        description:
+          "Web pages can include a link to a manifest file which lists "
+          "resources to be cached for offline access. The AppCache system"
+          "retrieves those resources in the background."
+        trigger:
+          "User visits a web page containing a <html manifest=manifestUrl> "
+          "tag, or navigates to a document retrieved from an existing appcache "
+          "and some resource should be updated."
+        data: "None"
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: true
+        cookies_store: "user"
+        setting:
+          "Users can control this feature via the 'Cookies' setting under "
+          "'Privacy, Content settings'. If cookies are disabled for a single "
+          "site, appcaches are disabled for the site only. If they are totally "
+          "disabled, all appcache requests will be stopped."
+        chrome_policy {
+            DefaultCookiesSetting {
+              policy_options {mode: MANDATORY}
+              DefaultCookiesSetting: 2
+            }
+          }
+      })");
 }  // namespace
 
 // Helper class for collecting hosts per frontend when sending notifications
@@ -158,12 +189,18 @@ AppCacheUpdateJob::URLFetcher::URLFetcher(const GURL& url,
       fetch_type_(fetch_type),
       retry_503_attempts_(0),
       buffer_(new net::IOBuffer(kBufferSize)),
-      request_(job->service_->request_context()
-                   ->CreateRequest(url, net::DEFAULT_PRIORITY, this)),
+      request_(
+          job->service_->request_context()->CreateRequest(url,
+                                                          net::DEFAULT_PRIORITY,
+                                                          this,
+                                                          kTrafficAnnotation)),
       result_(UPDATE_OK),
       redirect_response_code_(-1) {}
 
 AppCacheUpdateJob::URLFetcher::~URLFetcher() {
+  // To defend against URLRequest calling delegate methods during
+  // destruction, we test for a !request_ in those methods.
+  std::unique_ptr<net::URLRequest> temp = std::move(request_);
 }
 
 void AppCacheUpdateJob::URLFetcher::Start() {
@@ -180,6 +217,8 @@ void AppCacheUpdateJob::URLFetcher::OnReceivedRedirect(
     net::URLRequest* request,
     const net::RedirectInfo& redirect_info,
     bool* defer_redirect) {
+  if (!request_)
+    return;
   DCHECK_EQ(request_.get(), request);
   // Redirect is not allowed by the update process.
   job_->MadeProgress();
@@ -191,6 +230,8 @@ void AppCacheUpdateJob::URLFetcher::OnReceivedRedirect(
 
 void AppCacheUpdateJob::URLFetcher::OnResponseStarted(net::URLRequest* request,
                                                       int net_error) {
+  if (!request_)
+    return;
   DCHECK_EQ(request_.get(), request);
   DCHECK_NE(net::ERR_IO_PENDING, net_error);
 
@@ -252,6 +293,8 @@ void AppCacheUpdateJob::URLFetcher::OnResponseStarted(net::URLRequest* request,
 
 void AppCacheUpdateJob::URLFetcher::OnReadCompleted(
     net::URLRequest* request, int bytes_read) {
+  if (!request_)
+    return;
   DCHECK_NE(net::ERR_IO_PENDING, bytes_read);
   DCHECK_EQ(request_.get(), request);
   bool data_consumed = true;
@@ -384,7 +427,7 @@ bool AppCacheUpdateJob::URLFetcher::MaybeRetryRequest() {
   ++retry_503_attempts_;
   result_ = UPDATE_OK;
   request_ = job_->service_->request_context()->CreateRequest(
-      url_, net::DEFAULT_PRIORITY, this);
+      url_, net::DEFAULT_PRIORITY, this, kTrafficAnnotation);
   Start();
   return true;
 }
@@ -669,9 +712,9 @@ void AppCacheUpdateJob::ContinueHandleManifestFetchCompleted(bool changed) {
   AppCacheManifest manifest;
   if (!ParseManifest(manifest_url_, manifest_data_.data(),
                      manifest_data_.length(),
-                     manifest_has_valid_mime_type_ ?
-                        PARSE_MANIFEST_ALLOWING_INTERCEPTS :
-                        PARSE_MANIFEST_PER_STANDARD,
+                     manifest_has_valid_mime_type_
+                         ? PARSE_MANIFEST_ALLOWING_DANGEROUS_FEATURES
+                         : PARSE_MANIFEST_PER_STANDARD,
                      manifest)) {
     const char kFormatString[] = "Failed to parse manifest %s";
     const std::string message = base::StringPrintf(kFormatString,
@@ -703,11 +746,18 @@ void AppCacheUpdateJob::ContinueHandleManifestFetchCompleted(bool changed) {
     }
   }
 
+  // Warn about dangerous features being ignored due to the wrong content-type
+  // Must be done after associating all pending master hosts.
   if (manifest.did_ignore_intercept_namespaces) {
-    // Must be done after associating all pending master hosts.
     std::string message(
         "Ignoring the INTERCEPT section of the application cache manifest "
         "because the content type is not text/cache-manifest");
+    LogConsoleMessageToAll(message);
+  }
+  if (manifest.did_ignore_fallback_namespaces) {
+    std::string message(
+        "Ignoring out of scope FALLBACK entries of the application cache "
+        "manifest because the content-type is not text/cache-manifest");
     LogConsoleMessageToAll(message);
   }
 

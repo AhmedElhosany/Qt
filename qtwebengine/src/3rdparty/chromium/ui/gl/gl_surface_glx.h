@@ -39,6 +39,8 @@ class GL_EXPORT GLSurfaceGLX : public GLSurface {
   static bool IsCreateContextES2ProfileSupported();
   static bool IsTextureFromPixmapSupported();
   static bool IsOMLSyncControlSupported();
+  static bool IsEXTSwapControlSupported();
+  static bool IsMESASwapControlSupported();
 
   void* GetDisplay() override;
 
@@ -61,7 +63,7 @@ class GL_EXPORT NativeViewGLSurfaceGLX : public GLSurfaceGLX {
   explicit NativeViewGLSurfaceGLX(gfx::AcceleratedWidget window);
 
   // Implement GLSurfaceGLX.
-  bool Initialize(GLSurface::Format format) override;
+  bool Initialize(GLSurfaceFormat format) override;
   void Destroy() override;
   bool Resize(const gfx::Size& size,
               float scale_factor,
@@ -72,9 +74,11 @@ class GL_EXPORT NativeViewGLSurfaceGLX : public GLSurfaceGLX {
   void* GetHandle() override;
   bool SupportsPostSubBuffer() override;
   void* GetConfig() override;
+  GLSurfaceFormat GetFormat() override;
   unsigned long GetCompatibilityKey() override;
   gfx::SwapResult PostSubBuffer(int x, int y, int width, int height) override;
   gfx::VSyncProvider* GetVSyncProvider() override;
+
   VisualID GetVisualID() const { return visual_id_; }
 
  protected:
@@ -91,7 +95,6 @@ class GL_EXPORT NativeViewGLSurfaceGLX : public GLSurfaceGLX {
   bool CanHandleEvent(XEvent* xevent);
 
   gfx::AcceleratedWidget window() const { return window_; }
-
  private:
   // The handle for the drawable to make current or swap.
   GLXDrawable GetDrawableHandle() const;
@@ -120,13 +123,14 @@ class GL_EXPORT UnmappedNativeViewGLSurfaceGLX : public GLSurfaceGLX {
   explicit UnmappedNativeViewGLSurfaceGLX(const gfx::Size& size);
 
   // Implement GLSurfaceGLX.
-  bool Initialize(GLSurface::Format format) override;
+  bool Initialize(GLSurfaceFormat format) override;
   void Destroy() override;
   bool IsOffscreen() override;
   gfx::SwapResult SwapBuffers() override;
   gfx::Size GetSize() override;
   void* GetHandle() override;
   void* GetConfig() override;
+  GLSurfaceFormat GetFormat() override;
   unsigned long GetCompatibilityKey() override;
 
  protected:

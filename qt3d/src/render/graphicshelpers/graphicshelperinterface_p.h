@@ -64,6 +64,7 @@ namespace Qt3DRender {
 namespace Render {
 
 struct Attachment;
+class RenderBuffer;
 
 class GraphicsHelperInterface
 {
@@ -94,7 +95,9 @@ public:
     virtual void    alphaTest(GLenum mode1, GLenum mode2) = 0;
     virtual void    bindBufferBase(GLenum target, GLuint index, GLuint buffer) = 0;
     virtual void    bindFragDataLocation(GLuint shader, const QHash<QString, int> &outputs) = 0;
+    virtual bool    frameBufferNeedsRenderBuffer(const Attachment &attachment) = 0;
     virtual void    bindFrameBufferAttachment(QOpenGLTexture *texture, const Attachment &attachment) = 0;
+    virtual void    bindFrameBufferAttachment(RenderBuffer *renderBuffer, const Attachment &attachment) = 0;
     virtual void    bindFrameBufferObject(GLuint frameBufferId, FBOBindMode mode) = 0;
     virtual void    bindShaderStorageBlock(GLuint programId, GLuint shaderStorageBlockIndex, GLuint shaderStorageBlockBinding) = 0;
     virtual void    bindUniformBlock(GLuint programId, GLuint uniformBlockIndex, GLuint uniformBlockBinding) = 0;
@@ -113,7 +116,7 @@ public:
     virtual void    disablei(GLenum cap, GLuint index) = 0;
     virtual void    disablePrimitiveRestart() = 0;
     virtual void    dispatchCompute(GLuint wx, GLuint wy, GLuint wz) = 0;
-    virtual char   *mapBuffer(GLenum target) = 0;
+    virtual char   *mapBuffer(GLenum target, GLsizeiptr size) = 0;
     virtual GLboolean unmapBuffer(GLenum target) = 0;
     virtual void    drawArrays(GLenum primitiveType, GLint first, GLsizei count) = 0;
     virtual void    drawArraysIndirect(GLenum mode,void *indirect) = 0;
@@ -126,6 +129,7 @@ public:
     virtual void    enableClipPlane(int clipPlane) = 0;
     virtual void    enablei(GLenum cap, GLuint index) = 0;
     virtual void    enablePrimitiveRestart(int primitiveRestartIndex) = 0;
+    virtual void    enableVertexAttributeArray(int location) = 0;
     virtual void    frontFace(GLenum mode) = 0;
     virtual QSize   getRenderBufferDimensions(GLuint renderBufferId) = 0;
     virtual QSize   getTextureDimensions(GLuint textureId, GLenum target, uint level = 0) = 0;
@@ -147,6 +151,9 @@ public:
     virtual uint    uniformByteSize(const ShaderUniform &description) = 0;
     virtual void    useProgram(GLuint programId) = 0;
     virtual void    vertexAttribDivisor(GLuint index, GLuint divisor) = 0;
+    virtual void    vertexAttributePointer(GLenum shaderDataType, GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid *pointer) = 0;
+    virtual void    readBuffer(GLenum mode) = 0;
+    virtual void    drawBuffer(GLenum mode) = 0;
 
     virtual void glUniform1fv(GLint location, GLsizei count, const GLfloat *value) = 0;
     virtual void glUniform2fv(GLint location, GLsizei count, const GLfloat *value) = 0;

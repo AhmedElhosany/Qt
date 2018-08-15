@@ -62,6 +62,9 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickSwipeView : public QQuickContainer
     Q_PROPERTY(bool interactive READ isInteractive WRITE setInteractive NOTIFY interactiveChanged FINAL REVISION 1)
     // 2.2 (Qt 5.9)
     Q_PROPERTY(Qt::Orientation orientation READ orientation WRITE setOrientation NOTIFY orientationChanged FINAL REVISION 2)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(bool horizontal READ isHorizontal NOTIFY orientationChanged FINAL REVISION 3)
+    Q_PROPERTY(bool vertical READ isVertical NOTIFY orientationChanged FINAL REVISION 3)
 
 public:
     explicit QQuickSwipeView(QQuickItem *parent = nullptr);
@@ -76,6 +79,10 @@ public:
     Qt::Orientation orientation() const;
     void setOrientation(Qt::Orientation orientation);
 
+    // 2.3 (Qt 5.10)
+    bool isHorizontal() const;
+    bool isVertical() const;
+
 Q_SIGNALS:
     // 2.1 (Qt 5.8)
     Q_REVISION(1) void interactiveChanged();
@@ -85,6 +92,8 @@ Q_SIGNALS:
 protected:
     void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) override;
     void itemAdded(int index, QQuickItem *item) override;
+    void itemMoved(int index, QQuickItem *item) override;
+    void itemRemoved(int index, QQuickItem *item) override;
 
 #if QT_CONFIG(accessibility)
     QAccessible::Role accessibleRole() const override;
@@ -109,7 +118,6 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickSwipeViewAttached : public QObject
 
 public:
     explicit QQuickSwipeViewAttached(QObject *parent = nullptr);
-    ~QQuickSwipeViewAttached();
 
     int index() const;
     bool isCurrentItem() const;

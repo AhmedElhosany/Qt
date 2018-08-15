@@ -6,6 +6,7 @@
 #define MEDIA_FFMPEG_FFMPEG_COMMON_H_
 
 #include <stdint.h>
+#include <string>
 
 // Used for FFmpeg error codes.
 #include <cerrno>
@@ -19,14 +20,16 @@
 #include "media/base/video_codecs.h"
 #include "media/base/video_frame.h"
 #include "media/ffmpeg/ffmpeg_deleters.h"
+#include "third_party/ffmpeg/ffmpeg_features.h"
 
 // Include FFmpeg header files.
 extern "C" {
+#if !BUILDFLAG(USE_SYSTEM_FFMPEG)
 // Disable deprecated features which result in spammy compile warnings.  This
 // list of defines must mirror those in the 'defines' section of FFmpeg's
 // BUILD.gn file or the headers below will generate different structures!
-#if !defined(USE_SYSTEM_FFMPEG)
 #define FF_API_CONVERGENCE_DURATION 0
+#endif  // !BUILDFLAG(USE_SYSTEM_FFMPEG)
 // Upstream libavcodec/utils.c still uses the deprecated
 // av_dup_packet(), causing deprecation warnings.
 // The normal fix for such things is to disable the feature as below,
@@ -34,16 +37,15 @@ extern "C" {
 // (In this case, the fix is replacing the call with a new function.)
 // In the meantime, we directly disable those warnings in the C file.
 //#define FF_API_AVPACKET_OLD_API 0
-#endif
 
 // Temporarily disable possible loss of data warning.
 // TODO(scherkus): fix and upstream the compiler warnings.
 MSVC_PUSH_DISABLE_WARNING(4244);
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#if !defined(USE_SYSTEM_FFMPEG)
+#if !BUILDFLAG(USE_SYSTEM_FFMPEG)
 #include <libavformat/internal.h>
-#endif
+#endif  // !BUILDFLAG(USE_SYSTEM_FFMPEG)
 #include <libavformat/avio.h>
 #include <libavutil/avutil.h>
 #include <libavutil/imgutils.h>
@@ -153,6 +155,9 @@ AVPixelFormat VideoPixelFormatToAVPixelFormat(VideoPixelFormat video_format);
 
 ColorSpace AVColorSpaceToColorSpace(AVColorSpace color_space,
                                     AVColorRange color_range);
+
+// Converts an AVERROR error number to a description.
+std::string AVErrorToString(int errnum);
 
 // Returns a 32-bit hash for the given codec name.  See the VerifyUmaCodecHashes
 // unit test for more information and code for generating the histogram XML.

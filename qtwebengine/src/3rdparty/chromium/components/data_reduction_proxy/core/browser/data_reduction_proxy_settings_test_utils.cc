@@ -54,7 +54,7 @@ void DataReductionProxySettingsTestBase::SetUp() {
   pref_service->registry()->RegisterDictionaryPref(kProxy);
   pref_service->SetBoolean(prefs::kDataReductionProxyWasEnabledBefore, false);
 
-  ResetSettings(nullptr, true, true, true, false);
+  ResetSettings(nullptr);
 
   ListPrefUpdate original_update(test_context_->pref_service(),
                                  prefs::kDailyHttpOriginalContentLength);
@@ -62,9 +62,9 @@ void DataReductionProxySettingsTestBase::SetUp() {
                                  prefs::kDailyHttpReceivedContentLength);
   for (int64_t i = 0; i < kNumDaysInHistory; i++) {
     original_update->Insert(
-        0, base::MakeUnique<base::StringValue>(base::Int64ToString(2 * i)));
+        0, base::MakeUnique<base::Value>(base::Int64ToString(2 * i)));
     received_update->Insert(
-        0, base::MakeUnique<base::StringValue>(base::Int64ToString(i)));
+        0, base::MakeUnique<base::Value>(base::Int64ToString(i)));
   }
   last_update_time_ = base::Time::Now().LocalMidnight();
   pref_service->SetInt64(prefs::kDailyHttpContentLengthLastUpdateDate,
@@ -73,20 +73,7 @@ void DataReductionProxySettingsTestBase::SetUp() {
 
 template <class C>
 void DataReductionProxySettingsTestBase::ResetSettings(
-    std::unique_ptr<base::Clock> clock,
-    bool allowed,
-    bool fallback_allowed,
-    bool promo_allowed,
-    bool holdback) {
-  int flags = 0;
-  if (allowed)
-    flags |= DataReductionProxyParams::kAllowed;
-  if (fallback_allowed)
-    flags |= DataReductionProxyParams::kFallbackAllowed;
-  if (promo_allowed)
-    flags |= DataReductionProxyParams::kPromoAllowed;
-  if (holdback)
-    flags |= DataReductionProxyParams::kHoldback;
+    std::unique_ptr<base::Clock> clock) {
   MockDataReductionProxySettings<C>* settings =
       new MockDataReductionProxySettings<C>();
   settings->config_ = test_context_->config();
@@ -95,8 +82,6 @@ void DataReductionProxySettingsTestBase::ResetSettings(
       test_context_->CreateDataReductionProxyService(settings);
   if (clock)
     settings->clock_ = std::move(clock);
-  test_context_->config()->ResetParamFlagsForTest(flags);
-  settings->UpdateConfigValues();
   EXPECT_CALL(*settings, GetOriginalProfilePrefs())
       .Times(AnyNumber())
       .WillRepeatedly(Return(test_context_->pref_service()));
@@ -108,11 +93,7 @@ void DataReductionProxySettingsTestBase::ResetSettings(
 
 // Explicitly generate required instantiations.
 template void DataReductionProxySettingsTestBase::ResetSettings<
-    DataReductionProxySettings>(std::unique_ptr<base::Clock> clock,
-                                bool allowed,
-                                bool fallback_allowed,
-                                bool promo_allowed,
-                                bool holdback);
+    DataReductionProxySettings>(std::unique_ptr<base::Clock> clock);
 
 void DataReductionProxySettingsTestBase::ExpectSetProxyPrefs(
     bool expected_enabled,
@@ -132,7 +113,7 @@ void DataReductionProxySettingsTestBase::CheckOnPrefChange(
   if (managed) {
     test_context_->pref_service()->SetManagedPref(
         test_context_->GetDataReductionProxyEnabledPrefName(),
-        new base::FundamentalValue(enabled));
+        base::MakeUnique<base::Value>(enabled));
   } else {
     test_context_->SetDataReductionProxyEnabled(enabled);
   }
@@ -148,10 +129,9 @@ void DataReductionProxySettingsTestBase::InitDataReductionProxy(
       test_context_->CreateDataReductionProxyService(settings_.get()));
   settings_->data_reduction_proxy_service()->SetIOData(
       test_context_->io_data()->GetWeakPtr());
-  settings_->SetCallbackToRegisterSyntheticFieldTrial(
-      base::Bind(&DataReductionProxySettingsTestBase::
-                 SyntheticFieldTrialRegistrationCallback,
-                 base::Unretained(this)));
+  settings_->SetCallbackToRegisterSyntheticFieldTrial(base::Bind(
+      &DataReductionProxySettingsTestBase::OnSyntheticFieldTrialRegistration,
+      base::Unretained(this)));
 
   test_context_->RunUntilIdle();
 }
@@ -160,6 +140,13 @@ void DataReductionProxySettingsTestBase::CheckDataReductionProxySyntheticTrial(
     bool enabled) {
   EXPECT_EQ(enabled ? "Enabled" : "Disabled",
       synthetic_field_trials_["SyntheticDataReductionProxySetting"]);
+}
+
+bool DataReductionProxySettingsTestBase::OnSyntheticFieldTrialRegistration(
+    base::StringPiece trial_name,
+    base::StringPiece group_name) {
+  synthetic_field_trials_[trial_name.as_string()] = group_name.as_string();
+  return true;
 }
 
 }  // namespace data_reduction_proxy

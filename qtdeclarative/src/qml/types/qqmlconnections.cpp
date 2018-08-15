@@ -235,13 +235,12 @@ void QQmlConnectionsParser::verifyBindings(const QV4::CompiledData::Unit *qmlUni
 {
     for (int ii = 0; ii < props.count(); ++ii) {
         const QV4::CompiledData::Binding *binding = props.at(ii);
-        QString propName = qmlUnit->stringAt(binding->propertyNameIndex);
+        const QString &propName = qmlUnit->stringAt(binding->propertyNameIndex);
 
-        if (!propName.startsWith(QLatin1String("on")) || !propName.at(2).isUpper()) {
+        if (!propName.startsWith(QLatin1String("on")) || (propName.length() < 3 || !propName.at(2).isUpper())) {
             error(props.at(ii), QQmlConnections::tr("Cannot assign to non-existent property \"%1\"").arg(propName));
             return;
         }
-
 
         if (binding->type >= QV4::CompiledData::Binding::Type_Object) {
             const QV4::CompiledData::Object *target = qmlUnit->objectAt(binding->value.objectIndex);
@@ -289,10 +288,9 @@ void QQmlConnections::connectSignals()
                 new QQmlBoundSignal(target, signalIndex, this, qmlEngine(this));
             signal->setEnabled(d->enabled);
 
-            auto f = d->compilationUnit->runtimeFunctions[binding->value.compiledScriptIndex];
-            QQmlBoundSignalExpression *expression =
-                    ctxtdata ? new QQmlBoundSignalExpression(target, signalIndex, ctxtdata, this, f)
-                             : nullptr;
+            QQmlBoundSignalExpression *expression = ctxtdata ?
+                new QQmlBoundSignalExpression(target, signalIndex,
+                                              ctxtdata, this, d->compilationUnit->runtimeFunctions[binding->value.compiledScriptIndex]) : 0;
             signal->takeExpression(expression);
             d->boundsignals += signal;
         } else {

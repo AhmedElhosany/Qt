@@ -27,18 +27,28 @@ Polymer({
       type: Object,
       notify: true,
     },
+
+    /** @private {!Map<string, string>} */
+    focusConfig_: {
+      type: Object,
+      value: function() {
+        var map = new Map();
+        // <if expr="chromeos">
+        if (settings.routes.MANAGE_ACCESSIBILITY) {
+          map.set(
+              settings.routes.MANAGE_ACCESSIBILITY.path,
+              '#subpage-trigger .subpage-arrow');
+        }
+        // </if>
+        return map;
+      },
+    },
   },
 
-<if expr="chromeos">
+  // <if expr="chromeos">
   /** @private */
   onManageAccessibilityFeaturesTap_: function() {
-    settings.navigateTo(settings.Route.MANAGE_ACCESSIBILITY);
+    settings.navigateTo(settings.routes.MANAGE_ACCESSIBILITY);
   },
-</if>
-
-  /** @private */
-  onMoreFeaturesTap_: function() {
-    window.open(
-        'https://chrome.google.com/webstore/category/collection/accessibility');
-  },
+  // </if>
 });

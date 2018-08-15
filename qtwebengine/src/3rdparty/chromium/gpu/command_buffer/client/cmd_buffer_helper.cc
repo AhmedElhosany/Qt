@@ -27,12 +27,16 @@ CommandBufferHelper::CommandBufferHelper(CommandBuffer* command_buffer)
     : command_buffer_(command_buffer),
       ring_buffer_id_(-1),
       ring_buffer_size_(0),
-      entries_(NULL),
+      entries_(nullptr),
       total_entry_count_(0),
       immediate_entry_count_(0),
       token_(0),
       put_(0),
       last_put_sent_(0),
+      cached_last_token_read_(0),
+      cached_get_offset_(0),
+      set_get_buffer_count_(0),
+      service_on_old_buffer_(false),
 #if defined(CMD_HELPER_PERIODIC_FLUSH_CHECK)
       commands_issued_(0),
 #endif
@@ -40,13 +44,6 @@ CommandBufferHelper::CommandBufferHelper(CommandBuffer* command_buffer)
       context_lost_(false),
       flush_automatically_(true),
       flush_generation_(0) {
-  // In certain cases, ThreadTaskRunnerHandle isn't set (Android Webview).
-  // Don't register a dump provider in these cases.
-  // TODO(ericrk): Get this working in Android Webview. crbug.com/517156
-  if (base::ThreadTaskRunnerHandle::IsSet()) {
-    base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
-        this, "gpu::CommandBufferHelper", base::ThreadTaskRunnerHandle::Get());
-  }
 }
 
 void CommandBufferHelper::SetAutomaticFlushes(bool enabled) {
@@ -55,9 +52,8 @@ void CommandBufferHelper::SetAutomaticFlushes(bool enabled) {
 }
 
 bool CommandBufferHelper::IsContextLost() {
-  if (!context_lost_) {
-    context_lost_ = error::IsError(command_buffer()->GetLastError());
-  }
+  if (!context_lost_)
+    context_lost_ = error::IsError(command_buffer()->GetLastState().error);
   return context_lost_;
 }
 
@@ -71,7 +67,7 @@ void CommandBufferHelper::CalcImmediateEntries(int waiting_count) {
   }
 
   // Get maximum safe contiguous entries.
-  const int32_t curr_get = get_offset();
+  const int32_t curr_get = cached_get_offset_;
   if (curr_get > put_) {
     immediate_entry_count_ = curr_get - put_ - 1;
   } else {
@@ -116,18 +112,22 @@ bool CommandBufferHelper::AllocateRingBuffer() {
       command_buffer_->CreateTransferBuffer(ring_buffer_size_, &id);
   if (id < 0) {
     ClearUsable();
-    DCHECK(error::IsError(command_buffer()->GetLastError()));
+    DCHECK(context_lost_);
     return false;
   }
 
   ring_buffer_ = buffer;
   ring_buffer_id_ = id;
   command_buffer_->SetGetBuffer(id);
+  ++set_get_buffer_count_;
   entries_ = static_cast<CommandBufferEntry*>(ring_buffer_->memory());
   total_entry_count_ = ring_buffer_size_ / sizeof(CommandBufferEntry);
   // Call to SetGetBuffer(id) above resets get and put offsets to 0.
   // No need to query it through IPC.
   put_ = 0;
+  last_put_sent_ = 0;
+  cached_get_offset_ = 0;
+  service_on_old_buffer_ = true;
   CalcImmediateEntries(0);
   return true;
 }
@@ -143,8 +143,8 @@ void CommandBufferHelper::FreeResources() {
 }
 
 void CommandBufferHelper::FreeRingBuffer() {
-  CHECK((put_ == get_offset()) ||
-      error::IsError(command_buffer_->GetLastState().error));
+  CHECK((put_ == cached_get_offset_) ||
+        error::IsError(command_buffer_->GetLastState().error));
   FreeResources();
 }
 
@@ -154,9 +154,18 @@ bool CommandBufferHelper::Initialize(int32_t ring_buffer_size) {
 }
 
 CommandBufferHelper::~CommandBufferHelper() {
-  base::trace_event::MemoryDumpManager::GetInstance()->UnregisterDumpProvider(
-      this);
   FreeResources();
+}
+
+void CommandBufferHelper::UpdateCachedState(const CommandBuffer::State& state) {
+  // If the service hasn't seen the current get buffer yet (i.e. hasn't
+  // processed the latest SetGetBuffer), it's as if it hadn't processed anything
+  // in it, i.e. get == 0.
+  service_on_old_buffer_ =
+      (state.set_get_buffer_count != set_get_buffer_count_);
+  cached_get_offset_ = service_on_old_buffer_ ? 0 : state.get_offset;
+  cached_last_token_read_ = state.token;
+  context_lost_ = error::IsError(state.error);
 }
 
 bool CommandBufferHelper::WaitForGetOffsetInRange(int32_t start, int32_t end) {
@@ -165,8 +174,10 @@ bool CommandBufferHelper::WaitForGetOffsetInRange(int32_t start, int32_t end) {
   if (!usable()) {
     return false;
   }
-  command_buffer_->WaitForGetOffsetInRange(start, end);
-  return command_buffer_->GetLastError() == gpu::error::kNoError;
+  CommandBuffer::State last_state = command_buffer_->WaitForGetOffsetInRange(
+      set_get_buffer_count_, start, end);
+  UpdateCachedState(last_state);
+  return !context_lost_;
 }
 
 void CommandBufferHelper::Flush() {
@@ -213,15 +224,16 @@ bool CommandBufferHelper::Finish() {
     return false;
   }
   // If there is no work just exit.
-  if (put_ == get_offset()) {
+  if (put_ == cached_get_offset_ && !service_on_old_buffer_) {
     return true;
   }
   DCHECK(HaveRingBuffer() ||
          error::IsError(command_buffer_->GetLastState().error));
-  Flush();
+  if (last_put_sent_ != put_)
+    Flush();
   if (!WaitForGetOffsetInRange(put_, put_))
     return false;
-  DCHECK_EQ(get_offset(), put_);
+  DCHECK_EQ(cached_get_offset_, put_);
 
   CalcImmediateEntries(0);
 
@@ -246,12 +258,23 @@ int32_t CommandBufferHelper::InsertToken() {
     cmd->Init(token_);
     if (token_ == 0) {
       TRACE_EVENT0("gpu", "CommandBufferHelper::InsertToken(wrapped)");
-      // we wrapped
-      Finish();
-      DCHECK_EQ(token_, last_token_read());
+      bool finished = Finish();  // we wrapped
+      DCHECK(!finished || (cached_last_token_read_ == 0));
     }
   }
   return token_;
+}
+
+bool CommandBufferHelper::HasTokenPassed(int32_t token) {
+  // If token_ wrapped around we Finish'd.
+  if (token > token_)
+    return true;
+  // Don't update state if we don't have to.
+  if (token <= cached_last_token_read_)
+    return true;
+  CommandBuffer::State last_state = command_buffer_->GetLastState();
+  UpdateCachedState(last_state);
+  return token <= cached_last_token_read_;
 }
 
 // Waits until the current token value is greater or equal to the value passed
@@ -263,11 +286,17 @@ void CommandBufferHelper::WaitForToken(int32_t token) {
   // Return immediately if corresponding InsertToken failed.
   if (token < 0)
     return;
-  if (token > token_) return;  // we wrapped
-  if (last_token_read() >= token)
+  if (token > token_)
+    return;  // we wrapped
+  if (cached_last_token_read_ >= token)
+    return;
+  UpdateCachedState(command_buffer_->GetLastState());
+  if (cached_last_token_read_ >= token)
     return;
   Flush();
-  command_buffer_->WaitForTokenInRange(token, token_);
+  CommandBuffer::State last_state =
+      command_buffer_->WaitForTokenInRange(token, token_);
+  UpdateCachedState(last_state);
 }
 
 // Waits for available entries, basically waiting until get >= put + count + 1.
@@ -288,13 +317,13 @@ void CommandBufferHelper::WaitForAvailableEntries(int32_t count) {
     // but we need to make sure get wraps first, actually that get is 1 or
     // more (since put will wrap to 0 after we add the noops).
     DCHECK_LE(1, put_);
-    int32_t curr_get = get_offset();
+    int32_t curr_get = cached_get_offset_;
     if (curr_get > put_ || curr_get == 0) {
       TRACE_EVENT0("gpu", "CommandBufferHelper::WaitForAvailableEntries");
       Flush();
       if (!WaitForGetOffsetInRange(1, put_))
         return;
-      curr_get = get_offset();
+      curr_get = cached_get_offset_;
       DCHECK_LE(curr_get, put_);
       DCHECK_NE(0, curr_get);
     }
@@ -328,7 +357,7 @@ void CommandBufferHelper::WaitForAvailableEntries(int32_t count) {
 }
 
 int32_t CommandBufferHelper::GetTotalFreeEntriesNoWaiting() const {
-  int32_t current_get_offset = get_offset();
+  int32_t current_get_offset = cached_get_offset_;
   if (current_get_offset > put_) {
     return current_get_offset - put_ - 1;
   } else {
@@ -359,12 +388,18 @@ bool CommandBufferHelper::OnMemoryDump(
     dump->AddScalar(
         "free_size", MemoryAllocatorDump::kUnitsBytes,
         GetTotalFreeEntriesNoWaiting() * sizeof(CommandBufferEntry));
+    base::UnguessableToken shared_memory_guid =
+        ring_buffer_->backing()->shared_memory_handle().GetGUID();
     auto guid = GetBufferGUIDForTracing(tracing_process_id, ring_buffer_id_);
     const int kImportance = 2;
-    pmd->CreateSharedGlobalAllocatorDump(guid);
-    pmd->AddOwnershipEdge(dump->guid(), guid, kImportance);
+    if (!shared_memory_guid.is_empty()) {
+      pmd->CreateSharedMemoryOwnershipEdge(dump->guid(), guid,
+                                           shared_memory_guid, kImportance);
+    } else {
+      pmd->CreateSharedGlobalAllocatorDump(guid);
+      pmd->AddOwnershipEdge(dump->guid(), guid, kImportance);
+    }
   }
-
   return true;
 }
 

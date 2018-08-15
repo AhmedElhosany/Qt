@@ -9,13 +9,17 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/threading/thread.h"
 #include "base/time/default_clock.h"
 #include "base/time/default_tick_clock.h"
+#include "build/build_config.h"
 #include "components/certificate_reporting/cert_logger.pb.h"
 #include "components/network_time/network_time_test_utils.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/version_info/version_info.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/test/cert_test_util.h"
@@ -23,6 +27,11 @@
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if defined(OS_ANDROID)
+#include "base/test/scoped_feature_list.h"
+#include "net/cert/cert_verify_proc_android.h"
+#endif
 
 using net::SSLInfo;
 using testing::UnorderedElementsAre;
@@ -34,7 +43,7 @@ namespace {
 
 const char kDummyHostname[] = "dummy.hostname.com";
 const char kDummyFailureLog[] = "dummy failure log";
-const char kTestCertFilename[] = "test_mail_google_com.pem";
+const char kTestCertFilename[] = "x509_verify_results.chain.pem";
 
 const net::CertStatus kCertStatus =
     net::CERT_STATUS_COMMON_NAME_INVALID | net::CERT_STATUS_REVOKED;
@@ -69,10 +78,17 @@ void GetTestSSLInfo(UnverifiedCertChainStatus unverified_cert_chain_status,
 }
 
 std::string GetPEMEncodedChain() {
-  base::FilePath cert_path =
-      net::GetTestCertsDirectory().AppendASCII(kTestCertFilename);
   std::string cert_data;
-  EXPECT_TRUE(base::ReadFileToString(cert_path, &cert_data));
+  std::vector<std::string> pem_certs;
+  scoped_refptr<net::X509Certificate> cert =
+      net::ImportCertFromFile(net::GetTestCertsDirectory(), kTestCertFilename);
+  if (!cert || !cert->GetPEMEncodedChain(&pem_certs)) {
+    ADD_FAILURE();
+    return cert_data;
+  }
+  for (const auto& cert : pem_certs) {
+    cert_data += cert;
+  }
   return cert_data;
 }
 
@@ -189,16 +205,16 @@ TEST(ErrorReportTest, CertificateTransparencyError) {
       VerifyErrorReportSerialization(report_known, ssl_info, cert_errors));
 }
 
-// Tests that information about relevant features are included in the
+// Tests that information about network time querying is included in the
 // report.
-TEST(ErrorReportTest, FeatureInfo) {
+TEST(ErrorReportTest, NetworkTimeQueryingFeatureInfo) {
   base::Thread io_thread("IO thread");
   base::Thread::Options thread_options;
   thread_options.message_loop_type = base::MessageLoop::TYPE_IO;
   EXPECT_TRUE(io_thread.StartWithOptions(thread_options));
 
   std::unique_ptr<network_time::FieldTrialTest> field_trial_test(
-      network_time::FieldTrialTest::CreateForUnitTest());
+      new network_time::FieldTrialTest());
   field_trial_test->SetNetworkQueriesWithVariationsService(
       true, 0.0, network_time::NetworkTimeTracker::FETCHES_ON_DEMAND_ONLY);
 
@@ -232,6 +248,76 @@ TEST(ErrorReportTest, FeatureInfo) {
                 .network_time_querying_info()
                 .network_time_query_behavior());
 }
+
+TEST(ErrorReportTest, TestChromeChannelIncluded) {
+  struct ChannelTestCase {
+    version_info::Channel channel;
+    CertLoggerRequest::ChromeChannel expected_channel;
+  } kTestCases[] = {
+      {version_info::Channel::UNKNOWN,
+       CertLoggerRequest::CHROME_CHANNEL_UNKNOWN},
+      {version_info::Channel::DEV, CertLoggerRequest::CHROME_CHANNEL_DEV},
+      {version_info::Channel::CANARY, CertLoggerRequest::CHROME_CHANNEL_CANARY},
+      {version_info::Channel::BETA, CertLoggerRequest::CHROME_CHANNEL_BETA},
+      {version_info::Channel::STABLE,
+       CertLoggerRequest::CHROME_CHANNEL_STABLE}};
+
+  // Create a report, set its channel value and check if we
+  // get back test_case.expected_channel.
+  for (const ChannelTestCase& test_case : kTestCases) {
+    SSLInfo ssl_info;
+    ASSERT_NO_FATAL_FAILURE(
+        GetTestSSLInfo(INCLUDE_UNVERIFIED_CERT_CHAIN, &ssl_info, kCertStatus));
+    ErrorReport report(kDummyHostname, ssl_info);
+
+    report.AddChromeChannel(test_case.channel);
+    std::string serialized_report;
+    ASSERT_TRUE(report.Serialize(&serialized_report));
+
+    CertLoggerRequest parsed;
+    ASSERT_TRUE(parsed.ParseFromString(serialized_report));
+    EXPECT_EQ(test_case.expected_channel, parsed.chrome_channel());
+  }
+}
+
+#if defined(OS_WIN) || defined(OS_CHROMEOS)
+// Tests that the SetIsEnterpriseManaged() function populates
+// is_enterprise_managed correctly on Windows, and that value is correctly
+// extracted from the parsed report.
+// These tests are OS specific because SetIsEnterpriseManaged is called only
+// on the Windows and ChromeOS OS.
+TEST(ErrorReportTest, TestIsEnterpriseManagedPopulatedOnWindows) {
+  SSLInfo ssl_info;
+  ASSERT_NO_FATAL_FAILURE(
+      GetTestSSLInfo(INCLUDE_UNVERIFIED_CERT_CHAIN, &ssl_info, kCertStatus));
+  ErrorReport report(kDummyHostname, ssl_info);
+
+  report.SetIsEnterpriseManaged(true);
+  std::string serialized_report;
+  ASSERT_TRUE(report.Serialize(&serialized_report));
+
+  CertLoggerRequest parsed;
+  ASSERT_TRUE(parsed.ParseFromString(serialized_report));
+  EXPECT_EQ(true, parsed.is_enterprise_managed());
+}
+#endif
+
+#if defined(OS_ANDROID)
+// Tests that information about the Android AIA fetching feature is included in
+// the report.
+TEST(ErrorReportTest, AndroidAIAFetchingFeatureEnabled) {
+  SSLInfo ssl_info;
+  ASSERT_NO_FATAL_FAILURE(
+      GetTestSSLInfo(INCLUDE_UNVERIFIED_CERT_CHAIN, &ssl_info, kCertStatus));
+  ErrorReport report(kDummyHostname, ssl_info);
+  std::string serialized_report;
+  ASSERT_TRUE(report.Serialize(&serialized_report));
+  CertLoggerRequest parsed;
+  ASSERT_TRUE(parsed.ParseFromString(serialized_report));
+  EXPECT_EQ(CertLoggerFeaturesInfo::ANDROID_AIA_FETCHING_ENABLED,
+            parsed.features_info().android_aia_fetching_status());
+}
+#endif
 
 }  // namespace
 

@@ -38,10 +38,11 @@
 $version = "16.04"
 $nonDottedVersion = "1604"
 
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     $arch = "-x64"
     $sha1 = "338A5CC5200E98EDD644FC21807FDBE59910C4D0"
-} else {
+}
+else {
     $arch = ""
     $sha1 = "dd1cb1163c5572951c9cd27f5a8dd550b33c58a4"
 }
@@ -53,11 +54,11 @@ $7zTargetLocation = "C:\Utils\sevenzip\"
 
 Download $url_official $url_cache $7zPackage
 Verify-Checksum $7zPackage $sha1
-Run-Executable $7zPackage "/S","/D=$7zTargetLocation"
+Start-Process -FilePath $7zPackage -ArgumentList "/S","/D=$7zTargetLocation" -Wait
 
-Write-Host "Cleaning $7zPackage.."
-Remove-Item -Recurse -Force -Path "$7zPackage"
+echo "Cleaning $7zPackage.."
+Remove-Item -Recurse -Force "$7zPackage"
 
 Add-Path $7zTargetLocation
 
-Write-Output "7-Zip = $version" >> ~\versions.txt
+echo "7-Zip = $version" >> ~\versions.txt

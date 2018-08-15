@@ -6,6 +6,7 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkCanvas.h"
 #include "SkPath.h"
 #include "SkMakeUnique.h"
@@ -51,7 +52,8 @@ DEF_SIMPLE_GM(dont_clip_to_layer, canvas, 120, 120) {
     canvas->saveLayer(&r, nullptr);
     canvas->drawColor(SK_ColorRED);
 
-    SkRect r0 = SkRect::MakeXYWH(r.left(), r.top(), r.width(), r.height()/2);
+    SkRect r0 = { 20, 20, 100, 55 };
+    SkRect r1 = { 20, 65, 100, 100 };
 
     SkCanvas::SaveLayerRec rec;
     rec.fPaint = nullptr;
@@ -59,7 +61,10 @@ DEF_SIMPLE_GM(dont_clip_to_layer, canvas, 120, 120) {
     rec.fBackdrop = nullptr;
     rec.fSaveLayerFlags = 1 << 31;//SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag;
     canvas->saveLayer(rec);
+    rec.fBounds = &r1;
+    canvas->saveLayer(rec);
     do_draw(canvas, r);
+    canvas->restore();
     canvas->restore();
 
     canvas->restore();  // red-layer
@@ -199,9 +204,10 @@ static void test_image(SkCanvas* canvas, const SkImageInfo& info) {
 
     SkBitmap bm2;
     SkCreateBitmapFromCGImage(&bm2, image);
-    CGImageRelease(image);
-
     canvas->drawBitmap(bm2, 10, 120);
+    canvas->drawImage(SkMakeImageFromCGImage(image), 10, 120 + bm2.height() + 10);
+
+    CGImageRelease(image);
 }
 
 class CGImageGM : public skiagm::GM {
@@ -243,10 +249,7 @@ protected:
 private:
     typedef skiagm::GM INHERITED;
 };
-
-#if 0 // Disabled pending fix from reed@
-DEF_GM( return new CGImageGM; )
-#endif
+//DEF_GM( return new CGImageGM; )
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

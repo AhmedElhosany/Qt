@@ -602,6 +602,15 @@ namespace sw
 		else ASSERT(false);
 	}
 
+	void VertexProcessor::setHighPrecisionFiltering(unsigned int sampler, bool highPrecisionFiltering)
+	{
+		if(sampler < TEXTURE_IMAGE_UNITS)
+		{
+			context->sampler[sampler].setHighPrecisionFiltering(highPrecisionFiltering);
+		}
+		else ASSERT(false);
+	}
+
 	void VertexProcessor::setSwizzleR(unsigned int sampler, SwizzleType swizzleR)
 	{
 		if(sampler < VERTEX_TEXTURE_IMAGE_UNITS)
@@ -1068,7 +1077,7 @@ namespace sw
 
 		if(!routine)   // Create one
 		{
-			VertexRoutine *generator = 0;
+			VertexRoutine *generator = nullptr;
 
 			if(state.fixedFunction)
 			{

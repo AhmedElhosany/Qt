@@ -136,6 +136,9 @@ void AstTraversalVisitor<Subclass>::VisitFunctionDeclaration(
 template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitBlock(Block* stmt) {
   PROCESS_NODE(stmt);
+  if (stmt->scope() != nullptr) {
+    RECURSE_EXPRESSION(VisitDeclarations(stmt->scope()->declarations()));
+  }
   RECURSE(VisitStatements(stmt->statements()));
 }
 
@@ -245,7 +248,6 @@ void AstTraversalVisitor<Subclass>::VisitForStatement(ForStatement* stmt) {
 template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitForInStatement(ForInStatement* stmt) {
   PROCESS_NODE(stmt);
-  RECURSE(Visit(stmt->each()));
   RECURSE(Visit(stmt->enumerable()));
   RECURSE(Visit(stmt->body()));
 }
@@ -289,7 +291,7 @@ void AstTraversalVisitor<Subclass>::VisitFunctionLiteral(
   DeclarationScope* scope = expr->scope();
   RECURSE_EXPRESSION(VisitDeclarations(scope->declarations()));
   // A lazily parsed function literal won't have a body.
-  if (expr->scope()->is_lazily_parsed()) return;
+  if (expr->scope()->was_lazily_parsed()) return;
   RECURSE_EXPRESSION(VisitStatements(expr->body()));
 }
 
@@ -360,7 +362,18 @@ void AstTraversalVisitor<Subclass>::VisitAssignment(Assignment* expr) {
 template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitYield(Yield* expr) {
   PROCESS_EXPRESSION(expr);
-  RECURSE_EXPRESSION(Visit(expr->generator_object()));
+  RECURSE_EXPRESSION(Visit(expr->expression()));
+}
+
+template <class Subclass>
+void AstTraversalVisitor<Subclass>::VisitYieldStar(YieldStar* expr) {
+  PROCESS_EXPRESSION(expr);
+  RECURSE_EXPRESSION(Visit(expr->expression()));
+}
+
+template <class Subclass>
+void AstTraversalVisitor<Subclass>::VisitAwait(Await* expr) {
+  PROCESS_EXPRESSION(expr);
   RECURSE_EXPRESSION(Visit(expr->expression()));
 }
 
@@ -469,6 +482,19 @@ template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitEmptyParentheses(
     EmptyParentheses* expr) {
   PROCESS_EXPRESSION(expr);
+}
+
+template <class Subclass>
+void AstTraversalVisitor<Subclass>::VisitGetIterator(GetIterator* expr) {
+  PROCESS_EXPRESSION(expr);
+  RECURSE_EXPRESSION(Visit(expr->iterable()));
+}
+
+template <class Subclass>
+void AstTraversalVisitor<Subclass>::VisitImportCallExpression(
+    ImportCallExpression* expr) {
+  PROCESS_EXPRESSION(expr);
+  RECURSE_EXPRESSION(Visit(expr->argument()));
 }
 
 template <class Subclass>

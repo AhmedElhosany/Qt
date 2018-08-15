@@ -16,7 +16,7 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/threading/non_thread_safe.h"
+#include "base/threading/thread_checker.h"
 #include "net/base/net_export.h"
 #include "net/base/sdch_manager.h"
 #include "net/url_request/url_fetcher_delegate.h"
@@ -27,15 +27,13 @@ namespace net {
 
 class NetLogWithSource;
 class URLRequest;
-class URLRequestThrottlerEntryInterface;
 
 // This class is used by embedder SDCH policy object to fetch
 // dictionaries. It queues requests for dictionaries and dispatches
 // them serially, implementing the URLRequest::Delegate interface to
 // handle callbacks (but see above TODO). It tracks all requests, only
 // attempting to fetch each dictionary once.
-class NET_EXPORT SdchDictionaryFetcher : public URLRequest::Delegate,
-                                         public base::NonThreadSafe {
+class NET_EXPORT SdchDictionaryFetcher : public URLRequest::Delegate {
  public:
   typedef base::Callback<void(const std::string& dictionary_text,
                               const GURL& dictionary_url,
@@ -121,6 +119,8 @@ class NET_EXPORT SdchDictionaryFetcher : public URLRequest::Delegate,
   // Store the URLRequestContext associated with the owning SdchManager for
   // use while fetching.
   URLRequestContext* const context_;
+
+  THREAD_CHECKER(thread_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(SdchDictionaryFetcher);
 };

@@ -50,15 +50,14 @@ class ChromeRuntimeAPIDelegate : public extensions::RuntimeAPIDelegate,
   // extensions::RuntimeAPIDelegate implementation.
   void AddUpdateObserver(extensions::UpdateObserver* observer) override;
   void RemoveUpdateObserver(extensions::UpdateObserver* observer) override;
-  base::Version GetPreviousExtensionVersion(
-      const extensions::Extension* extension) override;
   void ReloadExtension(const std::string& extension_id) override;
   bool CheckForUpdates(const std::string& extension_id,
                        const UpdateCheckCallback& callback) override;
   void OpenURL(const GURL& uninstall_url) override;
   bool GetPlatformInfo(extensions::api::runtime::PlatformInfo* info) override;
   bool RestartDevice(std::string* error_message) override;
-  bool OpenOptionsPage(const extensions::Extension* extension) override;
+  bool OpenOptionsPage(const extensions::Extension* extension,
+                       content::BrowserContext* browser_context) override;
 
   // content::NotificationObserver implementation.
   void Observe(int type,

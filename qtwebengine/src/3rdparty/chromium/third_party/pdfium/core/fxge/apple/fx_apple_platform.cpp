@@ -4,6 +4,8 @@
 
 // Original code copyright 2014 Foxit Software Inc. http://www.foxitsoftware.com
 
+#include <memory>
+
 #include "core/fxcrt/fx_system.h"
 
 #ifndef _SKIA_SUPPORT_
@@ -11,13 +13,12 @@
 #endif
 
 #include "core/fxge/apple/apple_int.h"
+#include "core/fxge/cfx_cliprgn.h"
 #include "core/fxge/cfx_facecache.h"
 #include "core/fxge/cfx_gemodule.h"
 #include "core/fxge/cfx_renderdevice.h"
-#include "core/fxge/dib/dib_int.h"
 #include "core/fxge/fx_freetype.h"
-#include "core/fxge/ge/cfx_cliprgn.h"
-#include "core/fxge/ge/fx_text_int.h"
+#include "core/fxge/fx_text_int.h"
 
 #ifndef _SKIA_SUPPORT_
 
@@ -30,18 +31,16 @@ bool CGDrawGlyphRun(CGContextRef pContext,
                     const FXTEXT_CHARPOS* pCharPos,
                     CFX_Font* pFont,
                     const CFX_Matrix* pObject2Device,
-                    FX_FLOAT font_size,
+                    float font_size,
                     uint32_t argb) {
   if (nChars == 0)
     return true;
 
-  CFX_Matrix new_matrix;
   bool bNegSize = font_size < 0;
   if (bNegSize)
     font_size = -font_size;
 
-  FX_FLOAT ori_x = pCharPos[0].m_OriginX, ori_y = pCharPos[0].m_OriginY;
-  new_matrix.Transform(ori_x, ori_y);
+  CFX_Matrix new_matrix;
   if (pObject2Device)
     new_matrix.Concat(*pObject2Device);
 
@@ -63,10 +62,10 @@ bool CGDrawGlyphRun(CGContextRef pContext,
     glyph_indices[i] =
         pCharPos[i].m_ExtGID ? pCharPos[i].m_ExtGID : pCharPos[i].m_GlyphIndex;
     if (bNegSize)
-      glyph_positions[i].x = -pCharPos[i].m_OriginX;
+      glyph_positions[i].x = -pCharPos[i].m_Origin.x;
     else
-      glyph_positions[i].x = pCharPos[i].m_OriginX;
-    glyph_positions[i].y = pCharPos[i].m_OriginY;
+      glyph_positions[i].x = pCharPos[i].m_Origin.x;
+    glyph_positions[i].y = pCharPos[i].m_Origin.y;
   }
   if (bNegSize) {
     new_matrix.a = -new_matrix.a;
@@ -104,7 +103,7 @@ bool CFX_AggDeviceDriver::DrawDeviceText(int nChars,
                                          const FXTEXT_CHARPOS* pCharPos,
                                          CFX_Font* pFont,
                                          const CFX_Matrix* pObject2Device,
-                                         FX_FLOAT font_size,
+                                         float font_size,
                                          uint32_t argb) {
   if (!pFont)
     return false;
@@ -131,7 +130,7 @@ bool CFX_AggDeviceDriver::DrawDeviceText(int nChars,
     rect_cg =
         CGRectMake(m_pClipRgn->GetBox().left, m_pClipRgn->GetBox().top,
                    m_pClipRgn->GetBox().Width(), m_pClipRgn->GetBox().Height());
-    const CFX_DIBitmap* pClipMask = m_pClipRgn->GetMask().GetObject();
+    CFX_RetainPtr<CFX_DIBitmap> pClipMask = m_pClipRgn->GetMask();
     if (pClipMask) {
       CGDataProviderRef pClipMaskDataProvider = CGDataProviderCreateWithData(
           nullptr, pClipMask->GetBuffer(),
@@ -165,7 +164,7 @@ void CFX_FaceCache::InitPlatform() {}
 
 void CFX_FaceCache::DestroyPlatform() {}
 
-CFX_GlyphBitmap* CFX_FaceCache::RenderGlyph_Nativetext(
+std::unique_ptr<CFX_GlyphBitmap> CFX_FaceCache::RenderGlyph_Nativetext(
     const CFX_Font* pFont,
     uint32_t glyph_index,
     const CFX_Matrix* pMatrix,

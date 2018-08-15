@@ -100,12 +100,14 @@ struct QKmsOutput
     uint32_t connector_id;
     uint32_t crtc_id;
     QSizeF physical_size;
+    int preferred_mode; // index of preferred mode in list below
     int mode; // index of selected mode in list below
     bool mode_set;
     drmModeCrtcPtr saved_crtc;
     QList<drmModeModeInfo> modes;
     int subpixel;
     drmModePropertyPtr dpms_prop;
+    drmModePropertyBlobPtr edid_blob;
     bool wants_plane;
     uint32_t plane_id;
     bool plane_set;
@@ -153,6 +155,7 @@ protected:
                                               drmModeConnectorPtr connector,
                                               VirtualDesktopInfo *vinfo);
     drmModePropertyPtr connectorProperty(drmModeConnectorPtr connector, const QByteArray &name);
+    drmModePropertyBlobPtr connectorPropertyBlob(drmModeConnectorPtr connector, const QByteArray &name);
 
     QKmsScreenConfig *m_screenConfig;
     QString m_path;

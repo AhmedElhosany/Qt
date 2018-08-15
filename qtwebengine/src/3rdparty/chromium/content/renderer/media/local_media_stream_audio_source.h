@@ -23,7 +23,8 @@ class CONTENT_EXPORT LocalMediaStreamAudioSource
   // audio data. Audio parameters and (optionally) a pre-existing audio session
   // ID are read from |device_info|.
   LocalMediaStreamAudioSource(int consumer_render_frame_id,
-                              const StreamDeviceInfo& device_info);
+                              const StreamDeviceInfo& device_info,
+                              const ConstraintsCallback& started_callback);
 
   ~LocalMediaStreamAudioSource() final;
 
@@ -33,11 +34,13 @@ class CONTENT_EXPORT LocalMediaStreamAudioSource
   void EnsureSourceIsStopped() final;
 
   // media::AudioCapturerSource::CaptureCallback implementation.
+  void OnCaptureStarted() final;
   void Capture(const media::AudioBus* audio_bus,
                int audio_delay_milliseconds,
                double volume,
                bool key_pressed) final;
   void OnCaptureError(const std::string& message) final;
+  void OnCaptureMuted(bool is_muted) final;
 
   // The RenderFrame that will consume the audio data. Used when creating
   // AudioInputDevices via the AudioDeviceFactory.
@@ -45,6 +48,9 @@ class CONTENT_EXPORT LocalMediaStreamAudioSource
 
   // The device created by the AudioDeviceFactory in EnsureSourceIsStarted().
   scoped_refptr<media::AudioCapturerSource> source_;
+
+  // Callback that's called when the audio source has been initialized.
+  ConstraintsCallback started_callback_;
 
   // In debug builds, check that all methods that could cause object graph
   // or data flow changes are being called on the main thread.

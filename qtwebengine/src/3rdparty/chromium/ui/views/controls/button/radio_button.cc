@@ -10,9 +10,8 @@
 #include "ui/events/event_utils.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/gfx/vector_icons_public.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/resources/grit/views_resources.h"
+#include "ui/views/vector_icons.h"
 #include "ui/views/widget/widget.h"
 
 namespace views {
@@ -25,6 +24,7 @@ RadioButton::RadioButton(const base::string16& label, int group_id)
   SetGroup(group_id);
 
   if (!UseMd()) {
+    set_request_focus_on_press(true);
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
     // Unchecked/Unfocused images.
     SetCustomImage(false, false, STATE_NORMAL,
@@ -100,9 +100,6 @@ bool RadioButton::IsGroupFocusTraversable() const {
 void RadioButton::OnFocus() {
   Checkbox::OnFocus();
   SetChecked(true);
-  ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                       ui::EventTimeForNow(), 0, 0);
-  LabelButton::NotifyClick(event);
 }
 
 void RadioButton::NotifyClick(const ui::Event& event) {
@@ -110,7 +107,6 @@ void RadioButton::NotifyClick(const ui::Event& event) {
   // be toggled on and off like a checkbox.
   if (!checked())
     SetChecked(true);
-  RequestFocus();
   LabelButton::NotifyClick(event);
 }
 
@@ -147,14 +143,15 @@ void RadioButton::SetChecked(bool checked) {
   Checkbox::SetChecked(checked);
 }
 
-void RadioButton::PaintFocusRing(gfx::Canvas* canvas, const SkPaint& paint) {
-  canvas->DrawCircle(gfx::RectF(image()->bounds()).CenterPoint(),
-                     image()->width() / 2, paint);
+void RadioButton::PaintFocusRing(View* view,
+                                 gfx::Canvas* canvas,
+                                 const cc::PaintFlags& flags) {
+  canvas->DrawCircle(gfx::RectF(view->GetLocalBounds()).CenterPoint(),
+                     image()->width() / 2, flags);
 }
 
-gfx::VectorIconId RadioButton::GetVectorIconId() const {
-  return checked() ? gfx::VectorIconId::RADIO_BUTTON_ACTIVE
-                   : gfx::VectorIconId::RADIO_BUTTON_NORMAL;
+const gfx::VectorIcon& RadioButton::GetVectorIcon() const {
+  return checked() ? kRadioButtonActiveIcon : kRadioButtonNormalIcon;
 }
 
 }  // namespace views

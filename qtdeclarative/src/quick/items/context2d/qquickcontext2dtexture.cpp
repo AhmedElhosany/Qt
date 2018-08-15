@@ -91,17 +91,6 @@ struct GLAcquireContext {
     }
     QOpenGLContext *ctx;
 };
-
-class QSGPlainTextureWithSubRect : public QSGPlainTexture
-{
-public:
-    QSGPlainTextureWithSubRect(const QRectF &subRect) : m_subRect(subRect) {}
-    QRectF normalizedTextureSubRect() const override { return m_subRect; }
-
-private:
-    QRectF m_subRect;
-};
-
 #endif
 QQuickContext2DTexture::QQuickContext2DTexture()
     : m_context(0)
@@ -465,18 +454,14 @@ QVector2D QQuickContext2DFBOTexture::scaleFactor() const
 
 QSGTexture *QQuickContext2DFBOTexture::textureForNextFrame(QSGTexture *lastTexture, QQuickWindow *)
 {
-    QSGPlainTextureWithSubRect *texture = static_cast<QSGPlainTextureWithSubRect *>(lastTexture);
+    QSGPlainTexture *texture = static_cast<QSGPlainTexture *>(lastTexture);
 
     if (m_onCustomThread)
         m_mutex.lock();
 
     if (m_fbo) {
         if (!texture) {
-            // Since the FBO might be have a POT size, we need to set a sub rect
-            qreal normalizedCanvasWidth = m_canvasDevicePixelRatio * qreal(m_canvasSize.width()) / m_fbo->size().width();
-            qreal normalizedCanvasHeight = m_canvasDevicePixelRatio * qreal(m_canvasSize.height()) / m_fbo->size().height();
-
-            texture = new QSGPlainTextureWithSubRect(QRectF(0, 0, normalizedCanvasWidth, normalizedCanvasHeight));
+            texture = new QSGPlainTexture();
             texture->setHasAlphaChannel(true);
             texture->setOwnsTexture(false);
             m_dirtyTexture = true;

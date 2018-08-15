@@ -769,11 +769,17 @@ QDebug operator<<(QDebug debug, QBluetoothSocket::SocketError error)
     case QBluetoothSocket::HostNotFoundError:
         debug << "QBluetoothSocket::HostNotFoundError";
         break;
+    case QBluetoothSocket::RemoteHostClosedError:
+        debug << "QBluetoothSocket::RemoteHostClosedError";
+        break;
     case QBluetoothSocket::ServiceNotFoundError:
         debug << "QBluetoothSocket::ServiceNotFoundError";
         break;
     case QBluetoothSocket::NetworkError:
         debug << "QBluetoothSocket::NetworkError";
+        break;
+    case QBluetoothSocket::UnsupportedProtocolError:
+        debug << "QBluetoothSocket::UnsupportedProtocolError";
         break;
     default:
         debug << "QBluetoothSocket::SocketError(" << (int)error << ")";

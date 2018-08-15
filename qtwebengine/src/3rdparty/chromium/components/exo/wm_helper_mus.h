@@ -7,46 +7,66 @@
 
 #include "base/macros.h"
 #include "components/exo/wm_helper.h"
-#include "services/ui/public/cpp/window_tree_client_observer.h"
 #include "ui/aura/client/focus_change_observer.h"
+#include "ui/aura/mus/focus_synchronizer_observer.h"
+#include "ui/events/devices/input_device_event_observer.h"
+
+namespace wm {
+class ActivationClient;
+}
 
 namespace exo {
 
 // A helper class for accessing WindowManager related features.
+// This is only used for mash. Mushrome uses WMHelperAsh.
 class WMHelperMus : public WMHelper,
-                    public ui::WindowTreeClientObserver,
+                    public ui::InputDeviceEventObserver,
+                    public aura::FocusSynchronizerObserver,
                     public aura::client::FocusChangeObserver {
  public:
   WMHelperMus();
   ~WMHelperMus() override;
 
-  // Overriden from WMHelper:
-  const display::ManagedDisplayInfo GetDisplayInfo(
+  // Overridden from WMHelper:
+  const display::ManagedDisplayInfo& GetDisplayInfo(
       int64_t display_id) const override;
-  aura::Window* GetContainer(int container_id) override;
+  aura::Window* GetPrimaryDisplayContainer(int container_id) override;
   aura::Window* GetActiveWindow() const override;
   aura::Window* GetFocusedWindow() const override;
-  ui::CursorSetType GetCursorSet() const override;
+  ui::CursorSize GetCursorSize() const override;
+  const display::Display& GetCursorDisplay() const override;
   void AddPreTargetHandler(ui::EventHandler* handler) override;
   void PrependPreTargetHandler(ui::EventHandler* handler) override;
   void RemovePreTargetHandler(ui::EventHandler* handler) override;
   void AddPostTargetHandler(ui::EventHandler* handler) override;
   void RemovePostTargetHandler(ui::EventHandler* handler) override;
-  bool IsMaximizeModeWindowManagerEnabled() const override;
-  bool IsSpokenFeedbackEnabled() const override;
-  void PlayEarcon(int sound_key) const override;
+  bool IsTabletModeWindowManagerEnabled() const override;
 
-  // Overriden from ui::WindowTreeClientObserver:
-  void OnWindowTreeFocusChanged(ui::Window* gained_focus,
-                                ui::Window* lost_focus) override;
+  // Overridden from aura::FocusSynchronizerObserver:
+  void OnActiveFocusClientChanged(aura::client::FocusClient* focus_client,
+                                  aura::Window* focus_client_root) override;
 
-  // Overriden from ui::client::FocusChangeObserver:
+  // Overridden from ui::client::FocusChangeObserver:
   void OnWindowFocused(aura::Window* gained_focus,
                        aura::Window* lost_focus) override;
 
+  // Overridden from ui::InputDeviceEventObserver:
+  void OnKeyboardDeviceConfigurationChanged() override;
+
  private:
-  aura::Window* active_window_;
-  aura::Window* focused_window_;
+  void SetActiveFocusClient(aura::client::FocusClient* focus_client,
+                            aura::Window* window);
+  void SetActiveWindow(aura::Window* window);
+  void SetFocusedWindow(aura::Window* window);
+
+  wm::ActivationClient* GetActivationClient();
+
+  // Current FocusClient.
+  aura::client::FocusClient* active_focus_client_ = nullptr;
+  // This is the window that |active_focus_client_| comes from (may be null).
+  aura::Window* root_with_active_focus_client_ = nullptr;
+  aura::Window* active_window_ = nullptr;
+  aura::Window* focused_window_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(WMHelperMus);
 };

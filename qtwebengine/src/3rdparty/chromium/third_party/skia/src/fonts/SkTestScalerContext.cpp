@@ -13,6 +13,7 @@
 #include "SkGlyph.h"
 #include "SkMakeUnique.h"
 #include "SkMask.h"
+#include "SkPaintPriv.h"
 #include "SkScalerContext.h"
 #include "SkTestScalerContext.h"
 #include "SkTypefaceCache.h"
@@ -145,15 +146,10 @@ void SkTestTypeface::onFilterRec(SkScalerContextRec* rec) const {
     rec->setHinting(SkPaint::kNo_Hinting);
 }
 
-SkAdvancedTypefaceMetrics* SkTestTypeface::onGetAdvancedTypefaceMetrics(
-                                PerGlyphInfo ,
-                                const uint32_t* glyphIDs,
-                                uint32_t glyphIDsCount) const {
-// pdf only
-    SkAdvancedTypefaceMetrics* info = new SkAdvancedTypefaceMetrics;
+std::unique_ptr<SkAdvancedTypefaceMetrics> SkTestTypeface::onGetAdvancedMetrics() const { // pdf only
+    std::unique_ptr<SkAdvancedTypefaceMetrics> info(new SkAdvancedTypefaceMetrics);
     info->fFontName.set(fTestFont->fName);
     int glyphCount = this->onCountGlyphs();
-    info->fLastGlyphID = SkToU16(glyphCount - 1);
 
     SkTDArray<SkUnichar>& toUnicode = info->fGlyphToUnicode;
     toUnicode.setCount(glyphCount);
@@ -171,8 +167,8 @@ void SkTestTypeface::onGetFontDescriptor(SkFontDescriptor* desc, bool* isLocal) 
 }
 
 int SkTestTypeface::onCharsToGlyphs(const void* chars, Encoding encoding,
-                            uint16_t glyphs[], int glyphCount) const {
-    SkASSERT(encoding == kUTF16_Encoding);
+                                    uint16_t glyphs[], int glyphCount) const {
+    SkASSERT(encoding == kUTF32_Encoding);
     for (int index = 0; index < glyphCount; ++index) {
         SkUnichar ch = ((SkUnichar*) chars)[index];
         glyphs[index] = fTestFont->codeToIndex(ch);
@@ -187,7 +183,7 @@ void SkTestTypeface::onGetFamilyName(SkString* familyName) const {
 SkTypeface::LocalizedStrings* SkTestTypeface::onCreateFamilyNameIterator() const {
     SkString familyName(fTestFont->fName);
     SkString language("und"); //undetermined
-SkASSERT(0);  // incomplete
+//SkASSERT(0);  // incomplete
     return nullptr;
 //     return new SkOTUtils::LocalizedStrings_SingleName(familyName, language);
 }
@@ -214,7 +210,7 @@ protected:
     uint16_t generateCharToGlyph(SkUnichar uni) override {
         uint16_t glyph;
         (void) this->getTestTypeface()->onCharsToGlyphs((const void *) &uni,
-                                                        SkTypeface::kUTF16_Encoding, &glyph, 1);
+                                                        SkTypeface::kUTF32_Encoding, &glyph, 1);
         return glyph;
     }
 
@@ -277,18 +273,7 @@ protected:
 
     void generateFontMetrics(SkPaint::FontMetrics* metrics) override {
         this->getTestTypeface()->getFontMetrics(metrics);
-        if (metrics) {
-            SkScalar scale = fMatrix.getScaleY();
-            metrics->fTop = SkScalarMul(metrics->fTop, scale);
-            metrics->fAscent = SkScalarMul(metrics->fAscent, scale);
-            metrics->fDescent = SkScalarMul(metrics->fDescent, scale);
-            metrics->fBottom = SkScalarMul(metrics->fBottom, scale);
-            metrics->fLeading = SkScalarMul(metrics->fLeading, scale);
-            metrics->fAvgCharWidth = SkScalarMul(metrics->fAvgCharWidth, scale);
-            metrics->fXMin = SkScalarMul(metrics->fXMin, scale);
-            metrics->fXMax = SkScalarMul(metrics->fXMax, scale);
-            metrics->fXHeight = SkScalarMul(metrics->fXHeight, scale);
-        }
+        SkPaintPriv::ScaleFontMetrics(metrics, fMatrix.getScaleY());
     }
 
 private:

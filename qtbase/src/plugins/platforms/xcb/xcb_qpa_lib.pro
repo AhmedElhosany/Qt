@@ -5,10 +5,13 @@ DEFINES += QT_NO_FOREACH
 QT += \
     core-private gui-private \
     service_support-private theme_support-private \
-    eventdispatcher_support-private fontdatabase_support-private
+    eventdispatcher_support-private fontdatabase_support-private \
+    edid_support-private
 
 qtHaveModule(linuxaccessibility_support-private): \
     QT += linuxaccessibility_support-private
+
+qtConfig(vulkan): QT += vulkan_support-private
 
 SOURCES = \
         qxcbclipboard.cpp \
@@ -65,6 +68,17 @@ qtConfig(xcb-sm) {
 }
 
 include(gl_integrations/gl_integrations.pri)
+include(nativepainting/nativepainting.pri)
+
+qtConfig(vulkan) {
+    SOURCES += \
+        qxcbvulkaninstance.cpp \
+        qxcbvulkanwindow.cpp
+
+    HEADERS += \
+        qxcbvulkaninstance.h \
+        qxcbvulkanwindow.h
+}
 
 !qtConfig(system-xcb) {
     QMAKE_USE += xcb-static xcb

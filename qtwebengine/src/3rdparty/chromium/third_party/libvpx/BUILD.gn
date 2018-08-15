@@ -44,9 +44,9 @@ if (is_nacl) {
   # vpx_config.asm
   if (is_ios && current_cpu == "arm") {
     os_category = current_os
-  } else if (is_posix) { # Should cover linux, mac, and the ios simulator.
+  } else if (is_posix) {  # Should cover linux, mac, and the ios simulator.
     os_category = "linux"
-  } else { # This should only match windows.
+  } else {  # This should only match windows.
     os_category = current_os
   }
   platform_include_dir =
@@ -77,6 +77,16 @@ config("libvpx_warnings") {
       # libvpx has many static functions in header, which trigger this warning.
       "-Wno-unused-function",
     ]
+
+    # Fixes a mac / ios simulator link error for vpx_scaled_2d:
+    # Undefined symbols for architecture x86_64:
+    # "_vpx_scaled_2d", referenced from:
+    # _vp9_scale_and_extend_frame_c in libvpx.a(vp9_frame_scale.o)
+    # (maybe you meant: _vpx_scaled_2d_ssse3)
+    # ld: symbol(s) not found for architecture x86_64
+    if (is_mac || (is_ios && (current_cpu == "x86" || current_cpu == "x64"))) {
+      cflags += [ "-fno-common" ]
+    }
   } else if (!is_win) {
     cflags = [
       "-Wno-unused-function",

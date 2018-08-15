@@ -7,6 +7,7 @@
 #include "src/external-reference-table.h"
 #include "src/ic/stub-cache.h"
 #include "src/list-inl.h"
+#include "src/objects-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -21,8 +22,13 @@ ExternalReferenceEncoder::ExternalReferenceEncoder(Isolate* isolate) {
   ExternalReferenceTable* table = ExternalReferenceTable::instance(isolate);
   for (uint32_t i = 0; i < table->size(); ++i) {
     Address addr = table->address(i);
-    DCHECK(map_->Get(addr).IsNothing() ||
-           strncmp(table->name(i), "Redirect to ", 12) == 0);
+    // Ignore duplicate API references.
+    if (table->is_api_reference(i) && !map_->Get(addr).IsNothing()) continue;
+#ifndef V8_OS_WIN
+    // TODO(yangguo): On Windows memcpy and memmove can end up at the same
+    // address due to ICF. See http://crbug.com/726896.
+    DCHECK(map_->Get(addr).IsNothing());
+#endif
     map_->Set(addr, i);
     DCHECK(map_->Get(addr).IsJust());
   }
@@ -65,20 +71,29 @@ void SerializedData::AllocateData(int size) {
 //  - during normal GC to keep its content alive.
 //  - not during serialization. The partial serializer adds to it explicitly.
 DISABLE_CFI_PERF
-void SerializerDeserializer::Iterate(Isolate* isolate, ObjectVisitor* visitor) {
+void SerializerDeserializer::Iterate(Isolate* isolate, RootVisitor* visitor) {
   List<Object*>* cache = isolate->partial_snapshot_cache();
   for (int i = 0;; ++i) {
     // Extend the array ready to get a value when deserializing.
     if (cache->length() <= i) cache->Add(Smi::kZero);
     // During deserialization, the visitor populates the partial snapshot cache
     // and eventually terminates the cache with undefined.
-    visitor->VisitPointer(&cache->at(i));
+    visitor->VisitRootPointer(Root::kPartialSnapshotCache, &cache->at(i));
     if (cache->at(i)->IsUndefined(isolate)) break;
   }
 }
 
 bool SerializerDeserializer::CanBeDeferred(HeapObject* o) {
   return !o->IsString() && !o->IsScript();
+}
+
+void SerializerDeserializer::RestoreExternalReferenceRedirectors(
+    List<AccessorInfo*>* accessor_infos) {
+  // Restore wiped accessor infos.
+  for (AccessorInfo* info : *accessor_infos) {
+    Foreign::cast(info->js_getter())
+        ->set_foreign_address(info->redirected_getter());
+  }
 }
 
 }  // namespace internal

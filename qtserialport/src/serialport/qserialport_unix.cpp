@@ -42,10 +42,17 @@
 #include "qserialport_p.h"
 #include "qserialportinfo_p.h"
 
+#include <QtCore/qelapsedtimer.h>
+#include <QtCore/qmap.h>
+#include <QtCore/qsocketnotifier.h>
+#include <QtCore/qstandardpaths.h>
+
+#include <private/qcore_unix_p.h>
+
 #include <errno.h>
-#include <sys/time.h>
-#include <sys/ioctl.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #ifdef Q_OS_OSX
@@ -93,16 +100,6 @@ struct termios2 {
 
 #endif
 
-#include <private/qcore_unix_p.h>
-
-#include <QtCore/qelapsedtimer.h>
-#include <QtCore/qsocketnotifier.h>
-#include <QtCore/qmap.h>
-
-#ifdef Q_OS_OSX
-#include <QtCore/qstandardpaths.h>
-#endif
-
 QT_BEGIN_NAMESPACE
 
 QString serialPortLockFilePath(const QString &portName)
@@ -118,12 +115,8 @@ QString serialPortLockFilePath(const QString &portName)
         << QStringLiteral("/run/lock")
 #ifdef Q_OS_ANDROID
         << QStringLiteral("/data/local/tmp")
-#elif defined(Q_OS_OSX)
-           // This is the workaround to specify a temporary directory
-           // on OSX when running the App Sandbox feature.
-        << QStandardPaths::writableLocation(QStandardPaths::TempLocation);
 #endif
-    ;
+        << QStandardPaths::writableLocation(QStandardPaths::TempLocation);
 
     QString fileName = portName;
     fileName.replace(QLatin1Char('/'), QLatin1Char('_'));
@@ -156,7 +149,7 @@ QString serialPortLockFilePath(const QString &portName)
 class ReadNotifier : public QSocketNotifier
 {
 public:
-    ReadNotifier(QSerialPortPrivate *d, QObject *parent)
+    explicit ReadNotifier(QSerialPortPrivate *d, QObject *parent)
         : QSocketNotifier(d->descriptor, QSocketNotifier::Read, parent)
         , dptr(d)
     {
@@ -173,13 +166,13 @@ protected:
     }
 
 private:
-    QSerialPortPrivate *dptr;
+    QSerialPortPrivate * const dptr;
 };
 
 class WriteNotifier : public QSocketNotifier
 {
 public:
-    WriteNotifier(QSerialPortPrivate *d, QObject *parent)
+    explicit WriteNotifier(QSerialPortPrivate *d, QObject *parent)
         : QSocketNotifier(d->descriptor, QSocketNotifier::Write, parent)
         , dptr(d)
     {
@@ -196,7 +189,7 @@ protected:
     }
 
 private:
-    QSerialPortPrivate *dptr;
+    QSerialPortPrivate * const dptr;
 };
 
 static inline void qt_set_common_props(termios *tio, QIODevice::OpenMode m)
@@ -533,8 +526,7 @@ bool QSerialPortPrivate::waitForBytesWritten(int msecs)
     for (;;) {
         bool readyToRead = false;
         bool readyToWrite = false;
-        const bool checkRead = q_func()->isReadable();
-        if (!waitForReadOrWrite(&readyToRead, &readyToWrite, checkRead, !writeBuffer.isEmpty(),
+        if (!waitForReadOrWrite(&readyToRead, &readyToWrite, true, !writeBuffer.isEmpty(),
                                 qt_subtract_from_timeout(msecs, stopWatch.elapsed()))) {
             return false;
         }
@@ -764,13 +756,19 @@ bool QSerialPortPrivate::setFlowControl(QSerialPort::FlowControl flowControl)
     return setTermios(&tio);
 }
 
+bool QSerialPortPrivate::startAsyncRead()
+{
+    setReadNotificationEnabled(true);
+    return true;
+}
+
 bool QSerialPortPrivate::readNotification()
 {
     Q_Q(QSerialPort);
 
     // Always buffered, read data from the port into the read buffer
     qint64 newBytes = buffer.size();
-    qint64 bytesToRead = ReadChunkSize;
+    qint64 bytesToRead = QSERIALPORT_BUFFERSIZE;
 
     if (readBufferMaxSize && bytesToRead > (readBufferMaxSize - buffer.size())) {
         bytesToRead = readBufferMaxSize - buffer.size();
@@ -798,10 +796,6 @@ bool QSerialPortPrivate::readNotification()
     }
 
     newBytes = buffer.size() - newBytes;
-
-    // If read buffer is full, disable the read port notifier.
-    if (readBufferMaxSize && buffer.size() == readBufferMaxSize)
-        setReadNotificationEnabled(false);
 
     // only emit readyRead() when not recursing, and only if there is data available
     const bool hasData = newBytes > 0;

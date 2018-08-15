@@ -10,15 +10,14 @@
 
 #include <memory>
 
-#include "webrtc/base/checks.h"
-#include "webrtc/base/safe_conversions.h"
 #include "webrtc/modules/audio_coding/codecs/ilbc/audio_encoder_ilbc.h"
 #include "webrtc/modules/audio_coding/neteq/tools/neteq_quality_test.h"
+#include "webrtc/rtc_base/checks.h"
+#include "webrtc/rtc_base/safe_conversions.h"
 #include "webrtc/test/testsupport/fileutils.h"
 
 using google::RegisterFlagValidator;
 using google::ParseCommandLineFlags;
-using std::string;
 using testing::InitGoogleTest;
 
 namespace webrtc {
@@ -52,9 +51,9 @@ class NetEqIlbcQualityTest : public NetEqQualityTest {
 
   void SetUp() override {
     ASSERT_EQ(1u, channels_) << "iLBC supports only mono audio.";
-    AudioEncoderIlbc::Config config;
+    AudioEncoderIlbcConfig config;
     config.frame_size_ms = FLAGS_frame_size_ms;
-    encoder_.reset(new AudioEncoderIlbc(config));
+    encoder_.reset(new AudioEncoderIlbcImpl(config, 102));
     NetEqQualityTest::SetUp();
   }
 
@@ -76,7 +75,7 @@ class NetEqIlbcQualityTest : public NetEqQualityTest {
   }
 
  private:
-  std::unique_ptr<AudioEncoderIlbc> encoder_;
+  std::unique_ptr<AudioEncoderIlbcImpl> encoder_;
 };
 
 TEST_F(NetEqIlbcQualityTest, Test) {

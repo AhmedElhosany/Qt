@@ -27,62 +27,65 @@
 
 #include "core/dom/ContextLifecycleNotifier.h"
 
-#include "core/dom/ActiveDOMObject.h"
-#include "wtf/AutoReset.h"
+#include "core/dom/SuspendableObject.h"
+#include "platform/wtf/AutoReset.h"
 
 namespace blink {
 
-void ContextLifecycleNotifier::notifyResumingActiveDOMObjects() {
-  AutoReset<IterationState> scope(&m_iterationState, AllowingNone);
-  for (ContextLifecycleObserver* observer : m_observers) {
-    if (observer->observerType() !=
-        ContextLifecycleObserver::ActiveDOMObjectType)
+void ContextLifecycleNotifier::NotifyResumingSuspendableObjects() {
+  AutoReset<IterationState> scope(&iteration_state_, kAllowingNone);
+  for (ContextLifecycleObserver* observer : observers_) {
+    if (observer->ObserverType() !=
+        ContextLifecycleObserver::kSuspendableObjectType)
       continue;
-    ActiveDOMObject* activeDOMObject = static_cast<ActiveDOMObject*>(observer);
+    SuspendableObject* suspendable_object =
+        static_cast<SuspendableObject*>(observer);
 #if DCHECK_IS_ON()
-    DCHECK_EQ(activeDOMObject->getExecutionContext(), context());
-    DCHECK(activeDOMObject->suspendIfNeededCalled());
+    DCHECK_EQ(suspendable_object->GetExecutionContext(), Context());
+    DCHECK(suspendable_object->SuspendIfNeededCalled());
 #endif
-    activeDOMObject->resume();
+    suspendable_object->Resume();
   }
 }
 
-void ContextLifecycleNotifier::notifySuspendingActiveDOMObjects() {
-  AutoReset<IterationState> scope(&m_iterationState, AllowingNone);
-  for (ContextLifecycleObserver* observer : m_observers) {
-    if (observer->observerType() !=
-        ContextLifecycleObserver::ActiveDOMObjectType)
+void ContextLifecycleNotifier::NotifySuspendingSuspendableObjects() {
+  AutoReset<IterationState> scope(&iteration_state_, kAllowingNone);
+  for (ContextLifecycleObserver* observer : observers_) {
+    if (observer->ObserverType() !=
+        ContextLifecycleObserver::kSuspendableObjectType)
       continue;
-    ActiveDOMObject* activeDOMObject = static_cast<ActiveDOMObject*>(observer);
+    SuspendableObject* suspendable_object =
+        static_cast<SuspendableObject*>(observer);
 #if DCHECK_IS_ON()
-    DCHECK_EQ(activeDOMObject->getExecutionContext(), context());
-    DCHECK(activeDOMObject->suspendIfNeededCalled());
+    DCHECK_EQ(suspendable_object->GetExecutionContext(), Context());
+    DCHECK(suspendable_object->SuspendIfNeededCalled());
 #endif
-    activeDOMObject->suspend();
+    suspendable_object->Suspend();
   }
 }
 
-unsigned ContextLifecycleNotifier::activeDOMObjectCount() const {
-  DCHECK(!isIteratingOverObservers());
-  unsigned activeDOMObjects = 0;
-  for (ContextLifecycleObserver* observer : m_observers) {
-    if (observer->observerType() !=
-        ContextLifecycleObserver::ActiveDOMObjectType)
+unsigned ContextLifecycleNotifier::SuspendableObjectCount() const {
+  DCHECK(!IsIteratingOverObservers());
+  unsigned suspendable_objects = 0;
+  for (ContextLifecycleObserver* observer : observers_) {
+    if (observer->ObserverType() !=
+        ContextLifecycleObserver::kSuspendableObjectType)
       continue;
-    activeDOMObjects++;
+    suspendable_objects++;
   }
-  return activeDOMObjects;
+  return suspendable_objects;
 }
 
 #if DCHECK_IS_ON()
-bool ContextLifecycleNotifier::contains(ActiveDOMObject* object) const {
-  DCHECK(!isIteratingOverObservers());
-  for (ContextLifecycleObserver* observer : m_observers) {
-    if (observer->observerType() !=
-        ContextLifecycleObserver::ActiveDOMObjectType)
+bool ContextLifecycleNotifier::Contains(SuspendableObject* object) const {
+  DCHECK(!IsIteratingOverObservers());
+  for (ContextLifecycleObserver* observer : observers_) {
+    if (observer->ObserverType() !=
+        ContextLifecycleObserver::kSuspendableObjectType)
       continue;
-    ActiveDOMObject* activeDOMObject = static_cast<ActiveDOMObject*>(observer);
-    if (activeDOMObject == object)
+    SuspendableObject* suspendable_object =
+        static_cast<SuspendableObject*>(observer);
+    if (suspendable_object == object)
       return true;
   }
   return false;

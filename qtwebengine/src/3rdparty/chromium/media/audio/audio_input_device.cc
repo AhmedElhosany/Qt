@@ -8,22 +8,41 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/callback_forward.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
+#include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/audio/audio_manager_base.h"
 #include "media/base/audio_bus.h"
 
 namespace media {
 
+namespace {
+
 // The number of shared memory buffer segments indicated to browser process
 // in order to avoid data overwriting. This number can be any positive number,
 // dependent how fast the renderer process can pick up captured data from
 // shared memory.
-static const int kRequestedSharedMemoryCount = 10;
+const int kRequestedSharedMemoryCount = 10;
+
+// The number of seconds with missing callbacks before we report a capture
+// error. The value is based on that the Mac audio implementation can defer
+// start for 5 seconds when resuming after standby, and has a startup success
+// check 5 seconds after actually starting, where stats is logged. We must allow
+// enough time for this. See AUAudioInputStream::CheckInputStartupSuccess().
+const int kMissingCallbacksTimeBeforeErrorSeconds = 12;
+
+// The interval for checking missing callbacks.
+const int kCheckMissingCallbacksIntervalSeconds = 5;
+
+// How often AudioInputDevice::AudioThreadCallback informs that it has gotten
+// data from the source.
+const int kGotDataCallbackIntervalSeconds = 1;
+
+}  // namespace
 
 // Takes care of invoking the capture callback on the audio thread.
 // An instance of this class is created for each capture stream in
@@ -35,7 +54,8 @@ class AudioInputDevice::AudioThreadCallback
                       base::SharedMemoryHandle memory,
                       int memory_length,
                       int total_segments,
-                      CaptureCallback* capture_callback);
+                      CaptureCallback* capture_callback,
+                      base::RepeatingClosure got_data_callback);
   ~AudioThreadCallback() override;
 
   void MapSharedMemory() override;
@@ -47,8 +67,16 @@ class AudioInputDevice::AudioThreadCallback
   const double bytes_per_ms_;
   int current_segment_id_;
   uint32_t last_buffer_id_;
-  ScopedVector<media::AudioBus> audio_buses_;
+  std::vector<std::unique_ptr<media::AudioBus>> audio_buses_;
   CaptureCallback* capture_callback_;
+
+  // Used for informing AudioInputDevice that we have gotten data, i.e. the
+  // stream is alive. |got_data_callback_| is run every
+  // |got_data_callback_interval_in_frames_| frames, calculated from
+  // kGotDataCallbackIntervalSeconds.
+  const int got_data_callback_interval_in_frames_;
+  int frames_since_last_got_data_callback_;
+  base::RepeatingClosure got_data_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioThreadCallback);
 };
@@ -62,7 +90,8 @@ AudioInputDevice::AudioInputDevice(
       state_(IDLE),
       session_id_(0),
       agc_is_enabled_(false),
-      stopping_hack_(false) {
+      stopping_hack_(false),
+      missing_callbacks_detected_(false) {
   CHECK(ipc_);
 
   // The correctness of the code depends on the relative values assigned in the
@@ -120,11 +149,11 @@ void AudioInputDevice::SetAutomaticGainControl(bool enabled) {
           this, enabled));
 }
 
-void AudioInputDevice::OnStreamCreated(
-    base::SharedMemoryHandle handle,
-    base::SyncSocket::Handle socket_handle,
-    int length,
-    int total_segments) {
+void AudioInputDevice::OnStreamCreated(base::SharedMemoryHandle handle,
+                                       base::SyncSocket::Handle socket_handle,
+                                       int length,
+                                       int total_segments,
+                                       bool initially_muted) {
   DCHECK(task_runner()->BelongsToCurrentThread());
   DCHECK(base::SharedMemory::IsHandleValid(handle));
 #if defined(OS_WIN)
@@ -146,56 +175,66 @@ void AudioInputDevice::OnStreamCreated(
 
   DCHECK(!audio_callback_);
   DCHECK(!audio_thread_);
+
+  if (initially_muted)
+    callback_->OnCaptureMuted(true);
+
   audio_callback_.reset(new AudioInputDevice::AudioThreadCallback(
-      audio_parameters_, handle, length, total_segments, callback_));
+      audio_parameters_, handle, length, total_segments, callback_,
+      base::BindRepeating(&AudioInputDevice::SetLastCallbackTimeToNow, this)));
   audio_thread_.reset(new AudioDeviceThread(audio_callback_.get(),
                                             socket_handle, "AudioInputDevice"));
 
   state_ = RECORDING;
   ipc_->RecordStream();
+
+  // Start detecting missing callbacks.
+  SetLastCallbackTimeToNowOnIOThread();
+  DCHECK(!check_alive_timer_);
+  check_alive_timer_ = base::MakeUnique<base::RepeatingTimer>();
+  check_alive_timer_->Start(
+      FROM_HERE,
+      base::TimeDelta::FromSeconds(kCheckMissingCallbacksIntervalSeconds), this,
+      &AudioInputDevice::CheckIfInputStreamIsAlive);
+  DCHECK(check_alive_timer_->IsRunning());
 }
 
-void AudioInputDevice::OnVolume(double volume) {
-  NOTIMPLEMENTED();
-}
-
-void AudioInputDevice::OnStateChanged(
-    AudioInputIPCDelegateState state) {
+void AudioInputDevice::OnError() {
   DCHECK(task_runner()->BelongsToCurrentThread());
 
   // Do nothing if the stream has been closed.
   if (state_ < CREATING_STREAM)
     return;
 
-  // TODO(miu): Clean-up inconsistent and incomplete handling here.
-  // http://crbug.com/180640
-  switch (state) {
-    case AUDIO_INPUT_IPC_DELEGATE_STATE_STOPPED:
-      ShutDownOnIOThread();
-      break;
-    case AUDIO_INPUT_IPC_DELEGATE_STATE_RECORDING:
-      NOTIMPLEMENTED();
-      break;
-    case AUDIO_INPUT_IPC_DELEGATE_STATE_ERROR:
-      DLOG(WARNING) << "AudioInputDevice::OnStateChanged(ERROR)";
-      // Don't dereference the callback object if the audio thread
-      // is stopped or stopping.  That could mean that the callback
-      // object has been deleted.
-      // TODO(tommi): Add an explicit contract for clearing the callback
-      // object.  Possibly require calling Initialize again or provide
-      // a callback object via Start() and clear it in Stop().
-      {
-        base::AutoLock auto_lock_(audio_thread_lock_);
-        if (audio_thread_) {
-          callback_->OnCaptureError(
-              "AudioInputDevice::OnStateChanged - audio thread still running");
-        }
-      }
-      break;
-    default:
-      NOTREACHED();
-      break;
+  DLOG(WARNING) << "AudioInputDevice::OnStateChanged(ERROR)";
+  if (state_ == CREATING_STREAM) {
+    // At this point, we haven't attempted to start the audio thread.
+    // Accessing the hardware might have failed or we may have reached
+    // the limit of the number of allowed concurrent streams.
+    // We must report the error to the |callback_| so that a potential
+    // audio source object will enter the correct state (e.g. 'ended' for
+    // a local audio source).
+    callback_->OnCaptureError(
+        "Maximum allowed input device limit reached or OS failure.");
+  } else {
+    // Don't dereference the callback object if the audio thread
+    // is stopped or stopping.  That could mean that the callback
+    // object has been deleted.
+    // TODO(tommi): Add an explicit contract for clearing the callback
+    // object.  Possibly require calling Initialize again or provide
+    // a callback object via Start() and clear it in Stop().
+    base::AutoLock auto_lock_(audio_thread_lock_);
+    if (audio_thread_)
+      callback_->OnCaptureError("IPC delegate state error.");
   }
+}
+
+void AudioInputDevice::OnMuted(bool is_muted) {
+  DCHECK(task_runner()->BelongsToCurrentThread());
+  // Do nothing if the stream has been closed.
+  if (state_ < CREATING_STREAM)
+    return;
+  callback_->OnCaptureMuted(is_muted);
 }
 
 void AudioInputDevice::OnIPCClosed() {
@@ -204,7 +243,17 @@ void AudioInputDevice::OnIPCClosed() {
   ipc_.reset();
 }
 
-AudioInputDevice::~AudioInputDevice() {}
+AudioInputDevice::~AudioInputDevice() {
+#if DCHECK_IS_ON()
+  // Make sure we've stopped the stream properly before destructing |this|.
+  DCHECK(audio_thread_lock_.Try());
+  DCHECK_LE(state_, IDLE);
+  DCHECK(!audio_thread_);
+  DCHECK(!audio_callback_);
+  DCHECK(!stopping_hack_);
+  audio_thread_lock_.Release();
+#endif  // DCHECK_IS_ON()
+}
 
 void AudioInputDevice::StartUpOnIOThread() {
   DCHECK(task_runner()->BelongsToCurrentThread());
@@ -225,6 +274,15 @@ void AudioInputDevice::StartUpOnIOThread() {
 
 void AudioInputDevice::ShutDownOnIOThread() {
   DCHECK(task_runner()->BelongsToCurrentThread());
+
+  if (check_alive_timer_) {
+    check_alive_timer_->Stop();
+    check_alive_timer_.reset();
+  }
+
+  UMA_HISTOGRAM_BOOLEAN("Media.Audio.Capture.DetectedMissingCallbacks",
+                        missing_callbacks_detected_);
+  missing_callbacks_detected_ = false;
 
   // Close the stream, if we haven't already.
   if (state_ >= CREATING_STREAM) {
@@ -272,13 +330,34 @@ void AudioInputDevice::WillDestroyCurrentMessageLoop() {
   ShutDownOnIOThread();
 }
 
+void AudioInputDevice::CheckIfInputStreamIsAlive() {
+  DCHECK(task_runner()->BelongsToCurrentThread());
+  if (base::TimeTicks::Now() - last_callback_time_ >
+      base::TimeDelta::FromSeconds(kMissingCallbacksTimeBeforeErrorSeconds)) {
+    callback_->OnCaptureError("No audio received from audio capture device.");
+    missing_callbacks_detected_ = true;
+  }
+}
+
+void AudioInputDevice::SetLastCallbackTimeToNow() {
+  task_runner()->PostTask(
+      FROM_HERE,
+      base::Bind(&AudioInputDevice::SetLastCallbackTimeToNowOnIOThread, this));
+}
+
+void AudioInputDevice::SetLastCallbackTimeToNowOnIOThread() {
+  DCHECK(task_runner()->BelongsToCurrentThread());
+  last_callback_time_ = base::TimeTicks::Now();
+}
+
 // AudioInputDevice::AudioThreadCallback
 AudioInputDevice::AudioThreadCallback::AudioThreadCallback(
     const AudioParameters& audio_parameters,
     base::SharedMemoryHandle memory,
     int memory_length,
     int total_segments,
-    CaptureCallback* capture_callback)
+    CaptureCallback* capture_callback,
+    base::RepeatingClosure got_data_callback_)
     : AudioDeviceThread::Callback(audio_parameters,
                                   memory,
                                   memory_length,
@@ -287,7 +366,11 @@ AudioInputDevice::AudioThreadCallback::AudioThreadCallback(
                     base::Time::kMillisecondsPerSecond),
       current_segment_id_(0),
       last_buffer_id_(UINT32_MAX),
-      capture_callback_(capture_callback) {}
+      capture_callback_(capture_callback),
+      got_data_callback_interval_in_frames_(kGotDataCallbackIntervalSeconds *
+                                            audio_parameters.sample_rate()),
+      frames_since_last_got_data_callback_(0),
+      got_data_callback_(std::move(got_data_callback_)) {}
 
 AudioInputDevice::AudioThreadCallback::~AudioThreadCallback() {
 }
@@ -300,11 +383,16 @@ void AudioInputDevice::AudioThreadCallback::MapSharedMemory() {
   for (int i = 0; i < total_segments_; ++i) {
     media::AudioInputBuffer* buffer =
         reinterpret_cast<media::AudioInputBuffer*>(ptr);
-    std::unique_ptr<media::AudioBus> audio_bus =
-        media::AudioBus::WrapMemory(audio_parameters_, buffer->audio);
-    audio_buses_.push_back(std::move(audio_bus));
+    audio_buses_.push_back(
+        media::AudioBus::WrapMemory(audio_parameters_, buffer->audio));
     ptr += segment_length_;
   }
+
+  // Indicate that browser side capture initialization has succeeded and IPC
+  // channel initialized. This effectively completes the
+  // AudioCapturerSource::Start()' phase as far as the caller of that function
+  // is concerned.
+  capture_callback_->OnCaptureStarted();
 }
 
 void AudioInputDevice::AudioThreadCallback::Process(uint32_t pending_data) {
@@ -338,7 +426,15 @@ void AudioInputDevice::AudioThreadCallback::Process(uint32_t pending_data) {
   last_buffer_id_ = buffer->params.id;
 
   // Use pre-allocated audio bus wrapping existing block of shared memory.
-  media::AudioBus* audio_bus = audio_buses_[current_segment_id_];
+  media::AudioBus* audio_bus = audio_buses_[current_segment_id_].get();
+
+  // Regularly inform that we have gotten data.
+  frames_since_last_got_data_callback_ += audio_bus->frames();
+  if (frames_since_last_got_data_callback_ >=
+      got_data_callback_interval_in_frames_) {
+    got_data_callback_.Run();
+    frames_since_last_got_data_callback_ = 0;
+  }
 
   // Deliver captured data to the client in floating point format and update
   // the audio delay measurement.

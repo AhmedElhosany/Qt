@@ -15,11 +15,11 @@ var browserInspectorTitle;
 (function() {
 var queryParams = window.location.search;
 if (!queryParams)
-    return;
+  return;
 var params = queryParams.substring(1).split('&');
 for (var i = 0; i < params.length; ++i) {
-    var pair = params[i].split('=');
-    queryParamsObject[pair[0]] = pair[1];
+  var pair = params[i].split('=');
+  queryParamsObject[pair[0]] = pair[1];
 }
 
 if ('trace' in queryParamsObject || 'tracing' in queryParamsObject) {
@@ -42,6 +42,20 @@ function sendTargetCommand(command, target) {
 function removeChildren(element_id) {
   var element = $(element_id);
   element.textContent = '';
+}
+
+function removeAdditionalChildren(element_id) {
+  var element = $(element_id);
+  var elements = element.querySelectorAll('.row.additional');
+  for (var i = 0; i != elements.length; i++)
+    element.removeChild(elements[i]);
+}
+
+function removeChildrenExceptAdditional(element_id) {
+  var element = $(element_id);
+  var elements = element.querySelectorAll('.row:not(.additional)');
+  for (var i = 0; i != elements.length; i++)
+    element.removeChild(elements[i]);
 }
 
 function onload() {
@@ -104,13 +118,19 @@ function populateTargets(source, data) {
     console.error('Unknown source type: ' + source);
 }
 
+function populateAdditionalTargets(data) {
+  removeAdditionalChildren('others-list');
+  for (var i = 0; i < data.length; i++)
+    addAdditionalTargetsToOthersList(data[i]);
+}
+
 function populateLocalTargets(data) {
   removeChildren('pages-list');
   removeChildren('extensions-list');
   removeChildren('apps-list');
-  removeChildren('others-list');
   removeChildren('workers-list');
   removeChildren('service-workers-list');
+  removeChildrenExceptAdditional('others-list');
 
   for (var i = 0; i < data.length; i++) {
     if (data[i].type === 'page')
@@ -143,9 +163,8 @@ function alreadyDisplayed(element, data) {
 function updateBrowserVisibility(browserSection) {
   var icon = browserSection.querySelector('.used-for-port-forwarding');
   browserSection.hidden = !browserSection.querySelector('.open') &&
-                          !browserSection.querySelector('.row') &&
-                          !browserInspector &&
-                          (!icon || icon.hidden);
+      !browserSection.querySelector('.row') && !browserInspector &&
+      (!icon || icon.hidden);
 }
 
 function updateUsernameVisibility(deviceSection) {
@@ -187,7 +206,7 @@ function populateRemoteTargets(devices) {
 
   function insertBrowser(browserList, browser) {
     for (var sibling = browserList.firstElementChild; sibling;
-        sibling = sibling.nextElementSibling) {
+         sibling = sibling.nextElementSibling) {
       if (browserCompare(browser, sibling)) {
         browserList.insertBefore(browser, sibling);
         return;
@@ -205,7 +224,9 @@ function populateRemoteTargets(devices) {
       section.remove();
   }
 
-  var newDeviceIds = devices.map(function(d) { return d.id });
+  var newDeviceIds = devices.map(function(d) {
+    return d.id;
+  });
   Array.prototype.forEach.call(
       deviceList.querySelectorAll('.device'),
       removeObsolete.bind(null, newDeviceIds));
@@ -257,12 +278,14 @@ function populateRemoteTargets(devices) {
 
     deviceSection.querySelector('.device-name').textContent = device.adbModel;
     deviceSection.querySelector('.device-auth').textContent =
-        device.adbConnected ? '' : 'Pending authentication: please accept ' +
-          'debugging session on the device.';
+        device.adbConnected ? '' :
+                              'Pending authentication: please accept ' +
+            'debugging session on the device.';
 
     var browserList = deviceSection.querySelector('.browsers');
-    var newBrowserIds =
-        device.browsers.map(function(b) { return b.id });
+    var newBrowserIds = device.browsers.map(function(b) {
+      return b.id;
+    });
     Array.prototype.forEach.call(
         browserList.querySelectorAll('.browser'),
         removeObsolete.bind(null, newBrowserIds));
@@ -339,8 +362,10 @@ function populateRemoteTargets(devices) {
           browserHeader.appendChild(link);
           link.addEventListener(
               'click',
-              sendCommand.bind(null, 'inspect-browser', browser.source,
-                  browser.id, browserInspector), false);
+              sendCommand.bind(
+                  null, 'inspect-browser', browser.source, browser.id,
+                  browserInspector),
+              false);
         }
 
         pageList = document.createElement('div');
@@ -354,24 +379,27 @@ function populateRemoteTargets(devices) {
           var page = browser.pages[p];
           // Attached targets have no unique id until Chrome 26. For such
           // targets it is impossible to activate existing DevTools window.
-          page.hasNoUniqueId = page.attached &&
-              majorChromeVersion && majorChromeVersion < MIN_VERSION_TARGET_ID;
+          page.hasNoUniqueId = page.attached && majorChromeVersion &&
+              majorChromeVersion < MIN_VERSION_TARGET_ID;
           var row = addTargetToList(page, pageList, ['name', 'url']);
           if (page['description'])
             addWebViewDetails(row, page);
           else
             addFavicon(row, page);
           if (majorChromeVersion >= MIN_VERSION_TAB_ACTIVATE) {
-            addActionLink(row, 'focus tab',
+            addActionLink(
+                row, 'focus tab',
                 sendTargetCommand.bind(null, 'activate', page), false);
           }
           if (majorChromeVersion) {
-            addActionLink(row, 'reload',
-                sendTargetCommand.bind(null, 'reload', page), page.attached);
+            addActionLink(
+                row, 'reload', sendTargetCommand.bind(null, 'reload', page),
+                page.attached);
           }
           if (majorChromeVersion >= MIN_VERSION_TAB_CLOSE) {
-            addActionLink(row, 'close',
-                sendTargetCommand.bind(null, 'close', page), false);
+            addActionLink(
+                row, 'close', sendTargetCommand.bind(null, 'close', page),
+                false);
           }
         }
       }
@@ -413,19 +441,23 @@ function addGuestViews(row, guests) {
 function addToWorkersList(data) {
   var row =
       addTargetToList(data, $('workers-list'), ['name', 'description', 'url']);
-  addActionLink(row, 'terminate',
-      sendTargetCommand.bind(null, 'close', data), false);
+  addActionLink(
+      row, 'terminate', sendTargetCommand.bind(null, 'close', data), false);
 }
 
 function addToServiceWorkersList(data) {
-    var row = addTargetToList(
-        data, $('service-workers-list'), ['name', 'description', 'url']);
-    addActionLink(row, 'terminate',
-        sendTargetCommand.bind(null, 'close', data), false);
+  var row = addTargetToList(
+      data, $('service-workers-list'), ['name', 'description', 'url']);
+  addActionLink(
+      row, 'terminate', sendTargetCommand.bind(null, 'close', data), false);
 }
 
 function addToOthersList(data) {
   addTargetToList(data, $('others-list'), ['url']);
+}
+
+function addAdditionalTargetsToOthersList(data) {
+  addTargetToList(data, $('others-list'), ['name', 'url']);
 }
 
 function formatValue(data, property) {
@@ -467,7 +499,7 @@ function addWebViewDetails(row, data) {
 }
 
 function addWebViewDescription(row, webview) {
-  var viewStatus = { visibility: '', position: '', size: '' };
+  var viewStatus = {visibility: '', position: '', size: ''};
   if (!webview.empty) {
     if (webview.attached && !webview.visible)
       viewStatus.visibility = 'hidden';
@@ -478,7 +510,7 @@ function addWebViewDescription(row, webview) {
     viewStatus.visibility = 'empty';
   }
   if (webview.attached) {
-      viewStatus.position =
+    viewStatus.position =
         'at (' + webview.screenX + ', ' + webview.screenY + ')';
   }
 
@@ -567,8 +599,14 @@ function addTargetToList(data, list, properties) {
   actionBox.className = 'actions';
   subrowBox.appendChild(actionBox);
 
-  if (!data.hasCustomInspectAction) {
-    addActionLink(row, 'inspect', sendTargetCommand.bind(null, 'inspect', data),
+  if (data.isAdditional) {
+    addActionLink(
+        row, 'inspect', sendCommand.bind(null, 'inspect-additional', data.url),
+        false);
+    row.classList.add('additional');
+  } else if (!data.hasCustomInspectAction) {
+    addActionLink(
+        row, 'inspect', sendTargetCommand.bind(null, 'inspect', data),
         data.hasNoUniqueId || data.adbAttachedForeign);
   }
 
@@ -598,19 +636,20 @@ function addActionLink(row, text, handler, opt_disabled) {
 }
 
 function initSettings() {
-  checkboxSendsCommand('discover-usb-devices-enable',
-                       'set-discover-usb-devices-enabled');
+  checkboxSendsCommand(
+      'discover-usb-devices-enable', 'set-discover-usb-devices-enabled');
   checkboxSendsCommand('port-forwarding-enable', 'set-port-forwarding-enabled');
-  checkboxSendsCommand('discover-tcp-devices-enable',
-                       'set-discover-tcp-targets-enabled');
+  checkboxSendsCommand(
+      'discover-tcp-devices-enable', 'set-discover-tcp-targets-enabled');
 
-  $('port-forwarding-config-open').addEventListener(
-      'click', openPortForwardingConfig);
-  $('tcp-discovery-config-open').addEventListener(
-      'click', openTargetsConfig);
+  $('port-forwarding-config-open')
+      .addEventListener('click', openPortForwardingConfig);
+  $('tcp-discovery-config-open').addEventListener('click', openTargetsConfig);
   $('config-dialog-close').addEventListener('click', function() {
     $('config-dialog').commit(true);
   });
+  $('node-frontend')
+      .addEventListener('click', sendCommand.bind(null, 'open-node-frontend'));
 }
 
 function checkboxHandler(command, event) {
@@ -683,7 +722,6 @@ function openConfigDialog(dialogClass, commitHandler, lineFactory, data) {
     defaultFocus.focus();
   else
     doneButton.focus();
-
 }
 
 function openPortForwardingConfig() {
@@ -691,8 +729,8 @@ function openPortForwardingConfig() {
     var line = document.createElement('div');
     line.className = 'port-forwarding-pair config-list-row';
 
-    var portInput = createConfigField(port, 'port preselected',
-                                      'Port', validatePort);
+    var portInput =
+        createConfigField(port, 'port preselected', 'Port', validatePort);
     line.appendChild(portInput);
 
     var locationInput = createConfigField(
@@ -710,10 +748,9 @@ function openPortForwardingConfig() {
     sendCommand('set-port-forwarding-config', config);
   }
 
-  openConfigDialog('port-forwarding',
-             commitPortForwardingConfig,
-             createPortForwardingConfigLine,
-             window.portForwardingConfig);
+  openConfigDialog(
+      'port-forwarding', commitPortForwardingConfig,
+      createPortForwardingConfigLine, window.portForwardingConfig);
 }
 
 function openTargetsConfig() {
@@ -737,10 +774,9 @@ function openTargetsConfig() {
     sendCommand('set-tcp-discovery-config', entries);
   }
 
-  openConfigDialog('target-discovery',
-             commitTargetDiscoveryConfig,
-             createTargetDiscoveryConfigLine,
-             window.targetDiscoveryConfig);
+  openConfigDialog(
+      'target-discovery', commitTargetDiscoveryConfig,
+      createTargetDiscoveryConfigLine, window.targetDiscoveryConfig);
 }
 
 function filterList(fieldSelectors, callback) {
@@ -750,9 +786,8 @@ function filterList(fieldSelectors, callback) {
     var values = [];
     for (var selector of fieldSelectors) {
       var input = line.querySelector(selector);
-      var value = input.classList.contains('invalid') ?
-                  input.lastValidValue :
-                  input.value;
+      var value = input.classList.contains('invalid') ? input.lastValidValue :
+                                                        input.value;
       if (!value)
         break;
       values.push(value);
@@ -795,10 +830,8 @@ function updateTCPDiscoveryConfig(config) {
 function appendRow(list, lineFactory, key, value) {
   var line = lineFactory(key, value);
   line.lastElementChild.addEventListener('keydown', function(e) {
-    if (e.key == 'Tab' &&
-        !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey &&
-        line.classList.contains('fresh') &&
-        !line.classList.contains('empty')) {
+    if (e.key == 'Tab' && !hasKeyModifiers(e) &&
+        line.classList.contains('fresh') && !line.classList.contains('empty')) {
       // Tabbing forward on the fresh line, try create a new empty one.
       if (commitFreshLineIfValid(true))
         e.preventDefault();
@@ -815,10 +848,8 @@ function appendRow(list, lineFactory, key, value) {
   });
   line.appendChild(lineDelete);
 
-  line.addEventListener(
-      'click', selectLine.bind(null, line, true));
-  line.addEventListener(
-      'focus', selectLine.bind(null, line, true));
+  line.addEventListener('click', selectLine.bind(null, line, true));
+  line.addEventListener('focus', selectLine.bind(null, line, true));
   checkEmptyLine(line);
 
   if (!key && !value)

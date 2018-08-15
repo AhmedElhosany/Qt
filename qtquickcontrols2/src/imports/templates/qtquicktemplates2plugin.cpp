@@ -35,8 +35,11 @@
 ****************************************************************************/
 
 #include <QtQml/qqmlextensionplugin.h>
+#include <QtQml/private/qqmlglobal_p.h>
 
 #include <QtQuickTemplates2/private/qquickabstractbutton_p.h>
+#include <QtQuickTemplates2/private/qquickaction_p.h>
+#include <QtQuickTemplates2/private/qquickactiongroup_p.h>
 #include <QtQuickTemplates2/private/qquickapplicationwindow_p.h>
 #include <QtQuickTemplates2/private/qquickbusyindicator_p.h>
 #include <QtQuickTemplates2/private/qquickbutton_p.h>
@@ -53,14 +56,18 @@
 #include <QtQuickTemplates2/private/qquickdrawer_p.h>
 #include <QtQuickTemplates2/private/qquickframe_p.h>
 #include <QtQuickTemplates2/private/qquickgroupbox_p.h>
+#include <QtQuickTemplates2/private/qquickicon_p.h>
 #include <QtQuickTemplates2/private/qquickitemdelegate_p.h>
 #include <QtQuickTemplates2/private/qquicklabel_p.h>
 #include <QtQuickTemplates2/private/qquickmenu_p.h>
+#include <QtQuickTemplates2/private/qquickmenubar_p.h>
+#include <QtQuickTemplates2/private/qquickmenubaritem_p.h>
 #include <QtQuickTemplates2/private/qquickmenuitem_p.h>
 #include <QtQuickTemplates2/private/qquickmenuseparator_p.h>
 #include <QtQuickTemplates2/private/qquickoverlay_p.h>
 #include <QtQuickTemplates2/private/qquickpage_p.h>
 #include <QtQuickTemplates2/private/qquickpageindicator_p.h>
+#include <QtQuickTemplates2/private/qquickpaletteprovider_p.h>
 #include <QtQuickTemplates2/private/qquickpane_p.h>
 #include <QtQuickTemplates2/private/qquickpopup_p.h>
 #include <QtQuickTemplates2/private/qquickprogressbar_p.h>
@@ -108,6 +115,16 @@ extern void qt_quick_set_shortcut_context_matcher(ShortcutContextMatcher matcher
 
 QT_BEGIN_NAMESPACE
 
+static void initProviders()
+{
+    QQuickPaletteProvider::init();
+}
+
+static void cleanupProviders()
+{
+    QQuickPaletteProvider::cleanup();
+}
+
 class QtQuickTemplates2Plugin: public QQmlExtensionPlugin
 {
     Q_OBJECT
@@ -117,15 +134,17 @@ public:
     QtQuickTemplates2Plugin(QObject *parent = nullptr);
     ~QtQuickTemplates2Plugin();
 
-    void registerTypes(const char *uri);
+    void registerTypes(const char *uri) override;
 
 private:
+    bool registered;
 #if QT_CONFIG(shortcut)
     ShortcutContextMatcher originalContextMatcher;
 #endif
 };
 
-QtQuickTemplates2Plugin::QtQuickTemplates2Plugin(QObject *parent) : QQmlExtensionPlugin(parent)
+QtQuickTemplates2Plugin::QtQuickTemplates2Plugin(QObject *parent)
+    : QQmlExtensionPlugin(parent), registered(false)
 {
     initResources();
 
@@ -137,6 +156,9 @@ QtQuickTemplates2Plugin::QtQuickTemplates2Plugin(QObject *parent) : QQmlExtensio
 
 QtQuickTemplates2Plugin::~QtQuickTemplates2Plugin()
 {
+    if (registered)
+        cleanupProviders();
+
 #if QT_CONFIG(shortcut)
     qt_quick_set_shortcut_context_matcher(originalContextMatcher);
 #endif
@@ -144,6 +166,9 @@ QtQuickTemplates2Plugin::~QtQuickTemplates2Plugin()
 
 void QtQuickTemplates2Plugin::registerTypes(const char *uri)
 {
+    registered = true;
+    initProviders();
+
     qmlRegisterModule(uri, 2, QT_VERSION_MINOR - 7); // Qt 5.7->2.0, 5.8->2.1, 5.9->2.2...
 
     // QtQuick.Templates 2.0 (originally introduced in Qt 5.7)
@@ -186,21 +211,21 @@ void QtQuickTemplates2Plugin::registerTypes(const char *uri)
     qmlRegisterType<QQuickSpinButton>();
     qmlRegisterType<QQuickStackView>(uri, 2, 0, "StackView");
     qmlRegisterType<QQuickStackViewAttached>();
-    qmlRegisterType<QQuickSwipeDelegate>(uri, 2, 0, "SwipeDelegate");
     qmlRegisterType<QQuickSwipe>();
-    qmlRegisterType<QQuickSwipeViewAttached>();
+    qmlRegisterType<QQuickSwipeDelegate>(uri, 2, 0, "SwipeDelegate");
     qmlRegisterType<QQuickSwipeView>(uri, 2, 0, "SwipeView");
+    qmlRegisterType<QQuickSwipeViewAttached>();
     qmlRegisterType<QQuickSwitch>(uri, 2, 0, "Switch");
     qmlRegisterType<QQuickSwitchDelegate>(uri, 2, 0, "SwitchDelegate");
     qmlRegisterType<QQuickTabBar>(uri, 2, 0, "TabBar");
     qmlRegisterType<QQuickTabButton>(uri, 2, 0, "TabButton");
-    qmlRegisterType<QQuickTextAreaAttached>();
     qmlRegisterType<QQuickTextArea>(uri, 2, 0, "TextArea");
+    qmlRegisterType<QQuickTextAreaAttached>();
     qmlRegisterType<QQuickTextField>(uri, 2, 0, "TextField");
     qmlRegisterType<QQuickToolBar>(uri, 2, 0, "ToolBar");
     qmlRegisterType<QQuickToolButton>(uri, 2, 0, "ToolButton");
-    qmlRegisterType<QQuickToolTipAttached>();
     qmlRegisterType<QQuickToolTip>(uri, 2, 0, "ToolTip");
+    qmlRegisterType<QQuickToolTipAttached>();
 #if QT_CONFIG(quick_listview) && QT_CONFIG(quick_pathview)
     qmlRegisterType<QQuickTumblerAttached>();
     qmlRegisterType<QQuickTumbler>(uri, 2, 0, "Tumbler");
@@ -209,10 +234,10 @@ void QtQuickTemplates2Plugin::registerTypes(const char *uri)
     // NOTE: register the latest revisions of all template/control base classes to
     // make revisioned properties available to their subclasses (synced with Qt 5.7)
     qmlRegisterRevision<QQuickItem, 7>(uri, 2, 0);
-    qmlRegisterRevision<QQuickWindow, 2>(uri, 2, 0);
     qmlRegisterRevision<QQuickText, 6>(uri, 2, 0);
     qmlRegisterRevision<QQuickTextInput, 7>(uri, 2, 0);
     qmlRegisterRevision<QQuickTextEdit, 7>(uri, 2, 0);
+    qmlRegisterRevision<QQuickWindow, 2>(uri, 2, 0);
     qmlRegisterRevision<QWindow, 3>(uri, 2, 0);
 
     // QtQuick.Templates 2.1 (new types and revisions in Qt 5.8)
@@ -262,6 +287,35 @@ void QtQuickTemplates2Plugin::registerTypes(const char *uri)
     qmlRegisterRevision<QQuickText, 9>(uri, 2, 2);
     qmlRegisterRevision<QQuickTextInput, 9>(uri, 2, 2);
     qmlRegisterRevision<QQuickWindowQmlImpl, 2>(uri, 2, 2);
+
+    // QtQuick.Templates 2.3 (new types and revisions in Qt 5.10)
+    qmlRegisterType<QQuickAbstractButton, 3>(uri, 2, 3, "AbstractButton");
+    qmlRegisterType<QQuickAction>(uri, 2, 3, "Action");
+    qmlRegisterType<QQuickActionGroup>(uri, 2, 3, "ActionGroup");
+    qmlRegisterType<QQuickApplicationWindow, 3>(uri, 2, 3, "ApplicationWindow");
+    qmlRegisterType<QQuickButtonGroup, 3>(uri, 2, 3, "ButtonGroup");
+    qmlRegisterType<QQuickControl, 3>(uri, 2, 3, "Control");
+    qmlRegisterType<QQuickContainer, 3>(uri, 2, 3, "Container");
+    qmlRegisterType<QQuickDialog, 3>(uri, 2, 3, "Dialog");
+    qmlRegisterType<QQuickDialogButtonBox, 3>(uri, 2, 3, "DialogButtonBox");
+    qRegisterMetaType<QQuickIcon>();
+    qmlRegisterType<QQuickMenu, 3>(uri, 2, 3, "Menu");
+    qmlRegisterType<QQuickMenuBar>(uri, 2, 3, "MenuBar");
+    qmlRegisterType<QQuickMenuBarItem>(uri, 2, 3, "MenuBarItem");
+    qmlRegisterType<QQuickMenuItem, 3>(uri, 2, 3, "MenuItem");
+    qmlRegisterUncreatableType<QQuickOverlay>(uri, 2, 3, "Overlay", QStringLiteral("Overlay is only available as an attached property."));
+    qmlRegisterType<QQuickOverlayAttached>();
+    qmlRegisterType<QQuickPopup, 3>(uri, 2, 3, "Popup");
+    qmlRegisterType<QQuickRangeSlider, 3>(uri, 2, 3, "RangeSlider");
+    qmlRegisterType<QQuickScrollBar, 3>(uri, 2, 3, "ScrollBar");
+    qmlRegisterType<QQuickScrollIndicator, 3>(uri, 2, 3, "ScrollIndicator");
+    qmlRegisterType<QQuickSlider, 3>(uri, 2, 3, "Slider");
+    qmlRegisterType<QQuickSpinBox, 3>(uri, 2, 3, "SpinBox");
+
+    // NOTE: register the latest revisions of all template/control base classes to
+    // make revisioned properties available to their subclasses (synced with Qt 5.10)
+    qmlRegisterRevision<QQuickText, 10>(uri, 2, 3);
+    qmlRegisterRevision<QQuickTextEdit, 10>(uri, 2, 3);
 }
 
 QT_END_NAMESPACE

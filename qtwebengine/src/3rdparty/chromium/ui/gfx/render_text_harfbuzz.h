@@ -9,9 +9,9 @@
 #include <stdint.h>
 
 #include <memory>
+#include <vector>
 
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "third_party/harfbuzz-ng/src/hb.h"
 #include "third_party/icu/source/common/unicode/ubidi.h"
 #include "third_party/icu/source/common/unicode/uscript.h"
@@ -53,10 +53,13 @@ struct GFX_EXPORT TextRunHarfBuzz {
   void GetClusterAt(size_t pos, Range* chars, Range* glyphs) const;
 
   // Returns the grapheme bounds at |text_index|. Handles multi-grapheme glyphs.
-  RangeF GetGraphemeBounds(RenderTextHarfBuzz* render_text, size_t text_index);
+  RangeF GetGraphemeBounds(RenderTextHarfBuzz* render_text,
+                           size_t text_index) const;
 
-  // Returns whether the given shaped run contains any missing glyphs.
-  bool HasMissingGlyphs() const;
+  // Returns the width of the given |char_range| handling grapheme boundaries
+  // within glyphs.
+  float GetGraphemeWidthForCharRange(RenderTextHarfBuzz* render_text,
+                                     const Range& char_range) const;
 
   // Returns the glyph width for the given character range. |char_range| is in
   // text-space (0 corresponds to |GetDisplayText()[0]|).
@@ -83,7 +86,6 @@ struct GFX_EXPORT TextRunHarfBuzz {
   bool italic;
   Font::Weight weight;
   bool strike;
-  bool diagonal_strike;
   bool underline;
 
  private:
@@ -106,10 +108,14 @@ class TextRunList {
     return logical_to_visual_[index];
   }
 
-  const ScopedVector<TextRunHarfBuzz>& runs() const { return runs_; }
+  const std::vector<std::unique_ptr<TextRunHarfBuzz>>& runs() const {
+    return runs_;
+  }
 
   // Adds the new |run| to the run list.
-  void add(TextRunHarfBuzz* run) { runs_.push_back(run); }
+  void Add(std::unique_ptr<TextRunHarfBuzz> run) {
+    runs_.push_back(std::move(run));
+  }
 
   // Reset the run list.
   void Reset();
@@ -129,7 +135,7 @@ class TextRunList {
 
  private:
   // Text runs in logical order.
-  ScopedVector<TextRunHarfBuzz> runs_;
+  std::vector<std::unique_ptr<TextRunHarfBuzz>> runs_;
 
   // Maps visual run indices to logical run indices and vice versa.
   std::vector<int32_t> visual_to_logical_;
@@ -193,7 +199,6 @@ class GFX_EXPORT RenderTextHarfBuzz : public RenderText {
   // Return the run index that contains the argument; or the length of the
   // |runs_| vector if argument exceeds the text length or width.
   size_t GetRunContainingCaret(const SelectionModel& caret);
-  size_t GetRunContainingXCoord(float x, float* offset) const;
 
   // Given a |run|, returns the SelectionModel that contains the logical first
   // or last caret position inside (not at a boundary of) the run.

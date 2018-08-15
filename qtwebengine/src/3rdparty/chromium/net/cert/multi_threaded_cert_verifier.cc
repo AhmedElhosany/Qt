@@ -24,6 +24,7 @@
 #include "base/values.h"
 #include "net/base/hash_value.h"
 #include "net/base/net_errors.h"
+#include "net/base/trace_constants.h"
 #include "net/cert/cert_verify_proc.h"
 #include "net/cert/cert_verify_result.h"
 #include "net/cert/crl_set.h"
@@ -189,7 +190,7 @@ void DoVerifyOnWorkerThread(const scoped_refptr<CertVerifyProc>& verify_proc,
                             const CertificateList& additional_trust_anchors,
                             int* error,
                             CertVerifyResult* result) {
-  TRACE_EVENT0("net", "DoVerifyOnWorkerThread");
+  TRACE_EVENT0(kNetTracingCategory, "DoVerifyOnWorkerThread");
   *error = verify_proc->Verify(cert.get(), hostname, ocsp_response, flags,
                                crl_set.get(), additional_trust_anchors, result);
 
@@ -308,7 +309,7 @@ class CertVerifierJob {
   }
 
   void OnJobCompleted(std::unique_ptr<ResultHelper> verify_result) {
-    TRACE_EVENT0("net", "CertVerifierJob::OnJobCompleted");
+    TRACE_EVENT0(kNetTracingCategory, "CertVerifierJob::OnJobCompleted");
     std::unique_ptr<CertVerifierJob> keep_alive =
         cert_verifier_->RemoveJob(this);
 
@@ -340,10 +341,11 @@ class CertVerifierJob {
 };
 
 MultiThreadedCertVerifier::MultiThreadedCertVerifier(
-    CertVerifyProc* verify_proc)
+    scoped_refptr<CertVerifyProc> verify_proc)
     : requests_(0), inflight_joins_(0), verify_proc_(verify_proc) {}
 
 MultiThreadedCertVerifier::~MultiThreadedCertVerifier() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 }
 
 int MultiThreadedCertVerifier::Verify(const RequestParams& params,
@@ -354,7 +356,7 @@ int MultiThreadedCertVerifier::Verify(const RequestParams& params,
                                       const NetLogWithSource& net_log) {
   out_req->reset();
 
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   if (callback.is_null() || !verify_result || params.hostname().empty())
     return ERR_INVALID_ARGUMENT;
@@ -403,7 +405,7 @@ bool MultiThreadedCertVerifier::JobComparator::operator()(
 
 std::unique_ptr<CertVerifierJob> MultiThreadedCertVerifier::RemoveJob(
     CertVerifierJob* job) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   auto it = inflight_.find(job);
   DCHECK(it != inflight_.end());
   std::unique_ptr<CertVerifierJob> job_ptr = std::move(it->second);
@@ -420,7 +422,7 @@ struct MultiThreadedCertVerifier::JobToRequestParamsComparator {
 };
 
 CertVerifierJob* MultiThreadedCertVerifier::FindJob(const RequestParams& key) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   // The JobSet is kept in sorted order so items can be found using binary
   // search.

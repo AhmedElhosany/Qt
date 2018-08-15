@@ -6,6 +6,7 @@
 #define NET_NQE_OBSERVATION_BUFFER_H_
 
 #include <float.h>
+#include <stdint.h>
 
 #include <algorithm>
 #include <deque>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/optional.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
@@ -32,13 +34,17 @@ namespace internal {
 template <typename ValueType>
 class NET_EXPORT_PRIVATE ObservationBuffer {
  public:
-  explicit ObservationBuffer(double weight_multiplier_per_second)
+  ObservationBuffer(double weight_multiplier_per_second,
+                    double weight_multiplier_per_signal_level)
       : weight_multiplier_per_second_(weight_multiplier_per_second),
+        weight_multiplier_per_signal_level_(weight_multiplier_per_signal_level),
         tick_clock_(new base::DefaultTickClock()) {
     static_assert(kMaximumObservationsBufferSize > 0U,
                   "Minimum size of observation buffer must be > 0");
-    DCHECK_GE(weight_multiplier_per_second_, 0.0);
-    DCHECK_LE(weight_multiplier_per_second_, 1.0);
+    DCHECK_LE(0.0, weight_multiplier_per_second_);
+    DCHECK_GE(1.0, weight_multiplier_per_second_);
+    DCHECK_LE(0.0, weight_multiplier_per_signal_level_);
+    DCHECK_GE(1.0, weight_multiplier_per_signal_level_);
   }
 
   ~ObservationBuffer() {}
@@ -73,10 +79,11 @@ class NET_EXPORT_PRIVATE ObservationBuffer {
   // value of all observations made on or after |begin_timestamp|. If the
   // value is unavailable, false is returned and |result| is not modified.
   // Percentile value is unavailable if all the values in observation buffer are
-  // older than |begin_timestamp|.
-  // |result| must not be null.
+  // older than |begin_timestamp|. |current_signal_strength| is the current
+  // signal strength. |result| must not be null.
   // TODO(tbansal): Move out param |result| as the last param of the function.
   bool GetPercentile(base::TimeTicks begin_timestamp,
+                     const base::Optional<int32_t>& current_signal_strength,
                      ValueType* result,
                      int percentile,
                      const std::vector<NetworkQualityObservationSource>&
@@ -87,8 +94,9 @@ class NET_EXPORT_PRIVATE ObservationBuffer {
     // Total weight of all observations in |weighted_observations|.
     double total_weight = 0.0;
 
-    ComputeWeightedObservations(begin_timestamp, weighted_observations,
-                                &total_weight, disallowed_observation_sources);
+    ComputeWeightedObservations(begin_timestamp, current_signal_strength,
+                                &weighted_observations, &total_weight,
+                                disallowed_observation_sources);
     if (weighted_observations.empty())
       return false;
 
@@ -118,19 +126,23 @@ class NET_EXPORT_PRIVATE ObservationBuffer {
   // of all observations made on or after |begin_timestamp|. If the value is
   // unavailable, false is returned and |result| is not modified. The unweighted
   // average value is unavailable if all the values in the observation buffer
-  // are older than |begin_timestamp|. |result| must not be null.
-  bool GetWeightedAverage(base::TimeTicks begin_timestamp,
-                          const std::vector<NetworkQualityObservationSource>&
-                              disallowed_observation_sources,
-                          ValueType* result) const {
+  // are older than |begin_timestamp|. |current_signal_strength| is the
+  // current signal strength. |result| must not be null.
+  bool GetWeightedAverage(
+      base::TimeTicks begin_timestamp,
+      const base::Optional<int32_t>& current_signal_strength,
+      const std::vector<NetworkQualityObservationSource>&
+          disallowed_observation_sources,
+      ValueType* result) const {
     // Stores weighted observations in increasing order by value.
     std::vector<WeightedObservation<ValueType>> weighted_observations;
 
     // Total weight of all observations in |weighted_observations|.
     double total_weight = 0.0;
 
-    ComputeWeightedObservations(begin_timestamp, weighted_observations,
-                                &total_weight, disallowed_observation_sources);
+    ComputeWeightedObservations(begin_timestamp, current_signal_strength,
+                                &weighted_observations, &total_weight,
+                                disallowed_observation_sources);
     if (weighted_observations.empty())
       return false;
 
@@ -152,19 +164,23 @@ class NET_EXPORT_PRIVATE ObservationBuffer {
   // all observations made on or after |begin_timestamp|. If the value is
   // unavailable, false is returned and |result| is not modified. The weighted
   // average value is unavailable if all the values in the observation buffer
-  // are older than |begin_timestamp|. |result| must not be null.
-  bool GetUnweightedAverage(base::TimeTicks begin_timestamp,
-                            const std::vector<NetworkQualityObservationSource>&
-                                disallowed_observation_sources,
-                            ValueType* result) const {
+  // are older than |begin_timestamp|. |current_signal_strength| is the
+  // current signal strength. |result| must not be null.
+  bool GetUnweightedAverage(
+      base::TimeTicks begin_timestamp,
+      const base::Optional<int32_t>& current_signal_strength,
+      const std::vector<NetworkQualityObservationSource>&
+          disallowed_observation_sources,
+      ValueType* result) const {
     // Stores weighted observations in increasing order by value.
     std::vector<WeightedObservation<ValueType>> weighted_observations;
 
     // Total weight of all observations in |weighted_observations|.
     double total_weight = 0.0;
 
-    ComputeWeightedObservations(begin_timestamp, weighted_observations,
-                                &total_weight, disallowed_observation_sources);
+    ComputeWeightedObservations(begin_timestamp, current_signal_strength,
+                                &weighted_observations, &total_weight,
+                                disallowed_observation_sources);
     if (weighted_observations.empty())
       return false;
 
@@ -205,18 +221,20 @@ class NET_EXPORT_PRIVATE ObservationBuffer {
   // Computes the weighted observations and stores them in
   // |weighted_observations| sorted by ascending |WeightedObservation.value|.
   // Only the observations with timestamp later than |begin_timestamp| are
-  // considered. Also, sets |total_weight| to the total weight of all
-  // observations. Should be called only when there is at least one
-  // observation in the buffer.
+  // considered. |current_signal_strength| is the current signal strength
+  // when the observation was taken. This method also sets |total_weight| to
+  // the total weight of all observations. Should be called only when there is
+  // at least one observation in the buffer.
   void ComputeWeightedObservations(
       const base::TimeTicks& begin_timestamp,
-      std::vector<WeightedObservation<ValueType>>& weighted_observations,
+      const base::Optional<int32_t>& current_signal_strength,
+      std::vector<WeightedObservation<ValueType>>* weighted_observations,
       double* total_weight,
       const std::vector<NetworkQualityObservationSource>&
           disallowed_observation_sources) const {
     DCHECK_GE(Capacity(), Size());
 
-    weighted_observations.clear();
+    weighted_observations->clear();
     double total_weight_observations = 0.0;
     base::TimeTicks now = tick_clock_->NowTicks();
 
@@ -231,26 +249,38 @@ class NET_EXPORT_PRIVATE ObservationBuffer {
       if (disallowed)
         continue;
       base::TimeDelta time_since_sample_taken = now - observation.timestamp;
-      double weight = pow(weight_multiplier_per_second_,
-                          time_since_sample_taken.InSeconds());
+      double time_weight = pow(weight_multiplier_per_second_,
+                               time_since_sample_taken.InSeconds());
+
+      double signal_strength_weight = 1.0;
+      if (current_signal_strength && observation.signal_strength) {
+        int32_t signal_strength_weight_diff =
+            std::abs(current_signal_strength.value() -
+                     observation.signal_strength.value());
+        signal_strength_weight = pow(weight_multiplier_per_signal_level_,
+                                     signal_strength_weight_diff);
+      }
+
+      double weight = time_weight * signal_strength_weight;
+
       weight = std::max(DBL_MIN, std::min(1.0, weight));
 
-      weighted_observations.push_back(
+      weighted_observations->push_back(
           WeightedObservation<ValueType>(observation.value, weight));
       total_weight_observations += weight;
     }
 
     // Sort the samples by value in ascending order.
-    std::sort(weighted_observations.begin(), weighted_observations.end());
+    std::sort(weighted_observations->begin(), weighted_observations->end());
     *total_weight = total_weight_observations;
 
     DCHECK_LE(0.0, *total_weight);
-    DCHECK(weighted_observations.empty() || 0.0 < *total_weight);
+    DCHECK(weighted_observations->empty() || 0.0 < *total_weight);
 
     // |weighted_observations| may have a smaller size than |observations_|
     // since the former contains only the observations later than
     // |begin_timestamp|.
-    DCHECK_GE(observations_.size(), weighted_observations.size());
+    DCHECK_GE(observations_.size(), weighted_observations->size());
   }
 
   // Holds observations sorted by time, with the oldest observation at the
@@ -263,6 +293,14 @@ class NET_EXPORT_PRIVATE ObservationBuffer {
   // Calculated from |kHalfLifeSeconds| by solving the following equation:
   //     weight_multiplier_per_second_ ^ kHalfLifeSeconds = 0.5
   const double weight_multiplier_per_second_;
+
+  // The factor by which the weight of an observation reduces for every unit
+  // difference in the current signal strength, and the signal strength at
+  // which the observation was taken.
+  // For example, if the observation was taken at 1 unit, and current signal
+  // strength is 4 units, the weight of the observation would be:
+  // |weight_multiplier_per_signal_level_| ^ 3.
+  const double weight_multiplier_per_signal_level_;
 
   std::unique_ptr<base::TickClock> tick_clock_;
 

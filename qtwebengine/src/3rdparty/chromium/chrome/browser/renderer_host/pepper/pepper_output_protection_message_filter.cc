@@ -22,38 +22,38 @@ namespace chrome {
 namespace {
 
 static_assert(static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_NONE) ==
-                  static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_NONE),
+                  static_cast<int>(display::DISPLAY_CONNECTION_TYPE_NONE),
               "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_NONE value mismatch");
 static_assert(
     static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_UNKNOWN) ==
-        static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_UNKNOWN),
+        static_cast<int>(display::DISPLAY_CONNECTION_TYPE_UNKNOWN),
     "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_UNKNOWN value mismatch");
 static_assert(
     static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_INTERNAL) ==
-        static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_INTERNAL),
+        static_cast<int>(display::DISPLAY_CONNECTION_TYPE_INTERNAL),
     "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_INTERNAL value mismatch");
 static_assert(static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_VGA) ==
-                  static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_VGA),
+                  static_cast<int>(display::DISPLAY_CONNECTION_TYPE_VGA),
               "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_VGA value mismatch");
 static_assert(static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_HDMI) ==
-                  static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_HDMI),
+                  static_cast<int>(display::DISPLAY_CONNECTION_TYPE_HDMI),
               "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_HDMI value mismatch");
 static_assert(static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_DVI) ==
-                  static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_DVI),
+                  static_cast<int>(display::DISPLAY_CONNECTION_TYPE_DVI),
               "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_DVI value mismatch");
 static_assert(
     static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_DISPLAYPORT) ==
-        static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_DISPLAYPORT),
+        static_cast<int>(display::DISPLAY_CONNECTION_TYPE_DISPLAYPORT),
     "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_DISPLAYPORT value mismatch");
 static_assert(
     static_cast<int>(PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_NETWORK) ==
-        static_cast<int>(ui::DISPLAY_CONNECTION_TYPE_NETWORK),
+        static_cast<int>(display::DISPLAY_CONNECTION_TYPE_NETWORK),
     "PP_OUTPUT_PROTECTION_LINK_TYPE_PRIVATE_NETWORK value mismatch");
 static_assert(static_cast<int>(PP_OUTPUT_PROTECTION_METHOD_PRIVATE_NONE) ==
-                  static_cast<int>(ui::CONTENT_PROTECTION_METHOD_NONE),
+                  static_cast<int>(display::CONTENT_PROTECTION_METHOD_NONE),
               "PP_OUTPUT_PROTECTION_METHOD_PRIVATE_NONE value mismatch");
 static_assert(static_cast<int>(PP_OUTPUT_PROTECTION_METHOD_PRIVATE_HDCP) ==
-                  static_cast<int>(ui::CONTENT_PROTECTION_METHOD_HDCP),
+                  static_cast<int>(display::CONTENT_PROTECTION_METHOD_HDCP),
               "PP_OUTPUT_PROTECTION_METHOD_PRIVATE_HDCP value mismatch");
 
 }  // namespace
@@ -70,7 +70,9 @@ PepperOutputProtectionMessageFilter::PepperOutputProtectionMessageFilter(
   proxy_.reset(new OutputProtectionProxy(render_process_id, render_frame_id));
 }
 
-PepperOutputProtectionMessageFilter::~PepperOutputProtectionMessageFilter() {}
+PepperOutputProtectionMessageFilter::~PepperOutputProtectionMessageFilter() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+}
 
 scoped_refptr<base::TaskRunner>
 PepperOutputProtectionMessageFilter::OverrideTaskRunnerForMessage(
@@ -114,19 +116,47 @@ int32_t PepperOutputProtectionMessageFilter::OnEnableProtection(
   return PP_OK_COMPLETIONPENDING;
 }
 
+// static
 void PepperOutputProtectionMessageFilter::OnQueryStatusComplete(
+    base::WeakPtr<PepperOutputProtectionMessageFilter> filter,
     ppapi::host::ReplyMessageContext reply_context,
     bool success,
     uint32_t link_mask,
     uint32_t protection_mask) {
+  content::BrowserThread::PostTask(
+      content::BrowserThread::IO, FROM_HERE,
+      base::Bind(
+          &PepperOutputProtectionMessageFilter::OnQueryStatusCompleteOnIOThread,
+          filter, reply_context, success, link_mask, protection_mask));
+}
+
+void PepperOutputProtectionMessageFilter::OnQueryStatusCompleteOnIOThread(
+    ppapi::host::ReplyMessageContext reply_context,
+    bool success,
+    uint32_t link_mask,
+    uint32_t protection_mask) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   reply_context.params.set_result(success ? PP_OK : PP_ERROR_FAILED);
   SendReply(reply_context, PpapiPluginMsg_OutputProtection_QueryStatusReply(
                                link_mask, protection_mask));
 }
 
+// static
 void PepperOutputProtectionMessageFilter::OnEnableProtectionComplete(
+    base::WeakPtr<PepperOutputProtectionMessageFilter> filter,
     ppapi::host::ReplyMessageContext reply_context,
     bool success) {
+  content::BrowserThread::PostTask(
+      content::BrowserThread::IO, FROM_HERE,
+      base::Bind(&PepperOutputProtectionMessageFilter::
+                     OnEnableProtectionCompleteOnIOThread,
+                 filter, reply_context, success));
+}
+
+void PepperOutputProtectionMessageFilter::OnEnableProtectionCompleteOnIOThread(
+    ppapi::host::ReplyMessageContext reply_context,
+    bool success) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   reply_context.params.set_result(success ? PP_OK : PP_ERROR_FAILED);
   SendReply(reply_context,
             PpapiPluginMsg_OutputProtection_EnableProtectionReply());

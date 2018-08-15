@@ -24,6 +24,14 @@ struct StructTraits<cc::mojom::BeginFrameArgsDataView, cc::BeginFrameArgs> {
     return args.interval;
   }
 
+  static uint64_t sequence_number(const cc::BeginFrameArgs& args) {
+    return args.sequence_number;
+  }
+
+  static uint32_t source_id(const cc::BeginFrameArgs& args) {
+    return args.source_id;
+  }
+
   static cc::mojom::BeginFrameArgsType type(const cc::BeginFrameArgs& args) {
     return static_cast<cc::mojom::BeginFrameArgsType>(args.type);
   }
@@ -33,17 +41,21 @@ struct StructTraits<cc::mojom::BeginFrameArgsDataView, cc::BeginFrameArgs> {
   }
 
   static bool Read(cc::mojom::BeginFrameArgsDataView data,
-                   cc::BeginFrameArgs* out) {
-    if (!data.ReadFrameTime(&out->frame_time) ||
-        !data.ReadDeadline(&out->deadline) ||
-        !data.ReadInterval(&out->interval)) {
-      return false;
-    }
-    out->type =
-        static_cast<cc::BeginFrameArgs::BeginFrameArgsType>(data.type());
-    out->on_critical_path = data.on_critical_path();
-    return true;
+                   cc::BeginFrameArgs* out);
+};
+
+template <>
+struct StructTraits<cc::mojom::BeginFrameAckDataView, cc::BeginFrameAck> {
+  static uint64_t sequence_number(const cc::BeginFrameAck& ack) {
+    return ack.sequence_number;
   }
+
+  static uint32_t source_id(const cc::BeginFrameAck& ack) {
+    return ack.source_id;
+  }
+
+  static bool Read(cc::mojom::BeginFrameAckDataView data,
+                   cc::BeginFrameAck* out);
 };
 
 }  // namespace mojo

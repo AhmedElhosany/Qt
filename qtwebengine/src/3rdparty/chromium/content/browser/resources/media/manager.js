@@ -16,6 +16,27 @@ var Manager = (function() {
     this.players_ = {};
     this.audioComponents_ = [];
     this.clientRenderer_ = clientRenderer;
+
+    var copyAllPlayerButton = document.getElementById('copy-all-player-button');
+    var copyAllAudioButton = document.getElementById('copy-all-audio-button');
+    var hidePlayersButton = document.getElementById('hide-players-button');
+
+    // In tests we may not have these buttons.
+    if (copyAllPlayerButton) {
+      copyAllPlayerButton.onclick = function() {
+        this.clientRenderer_.showClipboard(
+          JSON.stringify(this.players_, null, 2));
+      }.bind(this);
+    }
+    if (copyAllAudioButton) {
+      copyAllAudioButton.onclick = function() {
+        this.clientRenderer_.showClipboard(
+          JSON.stringify(this.audioComponents_, null, 2));
+      }.bind(this);
+    }
+    if (hidePlayersButton) {
+      hidePlayersButton.onclick = this.hidePlayers_.bind(this);
+    }
   }
 
   Manager.prototype = {
@@ -76,6 +97,12 @@ var Manager = (function() {
       var playerRemoved = this.players_[id];
       delete this.players_[id];
       this.clientRenderer_.playerRemoved(this.players_, playerRemoved);
+    },
+
+    hidePlayers_: function() {
+      util.object.forEach(this.players_, function(playerInfo, id) {
+        this.removePlayer(id);
+      }, this);
     },
 
     updatePlayerInfoNoRecord: function(id, timestamp, key, value) {

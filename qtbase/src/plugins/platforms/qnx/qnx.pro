@@ -71,14 +71,14 @@ HEADERS =   main.h \
 
 LIBS += -lscreen
 
-qtConfig(egl) {
+qtConfig(opengles2) {
     SOURCES += qqnxglcontext.cpp \
                qqnxeglwindow.cpp
 
     HEADERS += qqnxglcontext.h \
                qqnxeglwindow.h
 
-    QMAKE_USE += egl
+    QMAKE_USE += opengl_es2 egl
 }
 
 qtConfig(qqnx_pps) {

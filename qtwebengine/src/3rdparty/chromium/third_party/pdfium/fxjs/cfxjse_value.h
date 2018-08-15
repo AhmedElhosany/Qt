@@ -7,6 +7,9 @@
 #ifndef FXJS_CFXJSE_VALUE_H_
 #define FXJS_CFXJSE_VALUE_H_
 
+#include <memory>
+#include <vector>
+
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
 #include "fxjs/cfxjse_isolatetracker.h"
@@ -32,7 +35,7 @@ class CFXJSE_Value {
   bool IsFunction() const;
   bool IsDate() const;
   bool ToBoolean() const;
-  FX_FLOAT ToFloat() const;
+  float ToFloat() const;
   double ToDouble() const;
   int32_t ToInteger() const;
   CFX_ByteString ToString() const;
@@ -47,12 +50,12 @@ class CFXJSE_Value {
   void SetInteger(int32_t nInteger);
   void SetDouble(double dDouble);
   void SetString(const CFX_ByteStringC& szString);
-  void SetFloat(FX_FLOAT fFloat);
+  void SetFloat(float fFloat);
   void SetJSObject();
 
   void SetObject(CFXJSE_HostObject* lpObject, CFXJSE_Class* pClass);
   void SetHostObject(CFXJSE_HostObject* lpObject, CFXJSE_Class* lpClass);
-  void SetArray(uint32_t uValueCount, CFXJSE_Value** rgValues);
+  void SetArray(const std::vector<std::unique_ptr<CFXJSE_Value>>& values);
   void SetDate(double dDouble);
 
   bool GetObjectProperty(const CFX_ByteStringC& szPropName,

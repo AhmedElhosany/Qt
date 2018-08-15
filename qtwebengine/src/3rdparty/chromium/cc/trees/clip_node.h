@@ -5,7 +5,11 @@
 #ifndef CC_TREES_CLIP_NODE_H_
 #define CC_TREES_CLIP_NODE_H_
 
-#include "cc/base/cc_export.h"
+#include <memory>
+
+#include "base/containers/stack_container.h"
+#include "cc/cc_export.h"
+#include "cc/trees/clip_expander.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace base {
@@ -20,17 +24,26 @@ struct CC_EXPORT ClipNode {
   ClipNode();
   ClipNode(const ClipNode& other);
 
+  ClipNode& operator=(const ClipNode& other);
+
+  ~ClipNode();
+
+  // The node index of this node in the clip tree node vector.
   int id;
+  // The node index of the parent node in the clip tree node vector.
   int parent_id;
-  int owner_id;
 
   enum class ClipType {
-    // The node doesn't contribute a new clip. It exists only for caching clips
-    // or for resetting clipping state.
-    NONE,
-
     // The node contributes a new clip (that is, |clip| needs to be applied).
-    APPLIES_LOCAL_CLIP
+    APPLIES_LOCAL_CLIP,
+
+    // This node represents a space expansion. When computing visible rects,
+    // the accumulated clip inherited by this node gets expanded. Similarly,
+    // when mapping a rect in descendant space to the rect in ancestor space
+    // that depends on the descendant rect's contents, this node expands the
+    // descendant rect. This is used for effects like pixel-moving filters,
+    // where clipped-out content can affect visible output.
+    EXPANDS_CLIP
   };
 
   ClipType clip_type;
@@ -39,42 +52,24 @@ struct CC_EXPORT ClipNode {
   // transform node.
   gfx::RectF clip;
 
-  // Clip nodes are used for two reasons. First, they are used for determining
-  // which parts of each layer are visible. Second, they are used for
-  // determining whether a clip needs to be applied when drawing a layer, and if
-  // so, the rect that needs to be used. These can be different since not all
-  // clips need to be applied directly to each layer. For example, a layer is
-  // implicitly clipped by the bounds of its target render surface and by clips
-  // applied to this surface. |combined_clip_in_target_space| is used for
-  // computing visible rects, and |clip_in_target_space| is used for computing
-  // clips applied at draw time. Both rects are expressed in the space of the
-  // target transform node, and may include clips contributed by ancestors.
-  gfx::RectF combined_clip_in_target_space;
-  gfx::RectF clip_in_target_space;
+  // Each element of this cache stores the accumulated clip from this clip
+  // node to a particular target.  The number of cached clip rects required
+  // per node is roughly proportional to the number of render targets a
+  // given clip rect participates in.  On many pages with only a root
+  // render target, the number of cached clip rects per node is 1.
+  // Any more than 3, and this will overflow rects onto the heap, so this
+  // number is a tradeoff of ClipNode size on average and access speed.
+  mutable base::StackVector<ClipRectData, 3> cached_clip_rects;
+
+  // This rect accumulates all clips from this node to the root in screen space.
+  // It is used in the computation of layer's visible rect.
+  gfx::RectF cached_accumulated_rect_in_screen_space;
+
+  // For nodes that expand, this represents the amount of expansion.
+  std::unique_ptr<ClipExpander> clip_expander;
 
   // The id of the transform node that defines the clip node's local space.
   int transform_id;
-
-  // The id of the transform node that defines the clip node's target space.
-  int target_transform_id;
-
-  // The id of the effect node that defines the clip node's target space.
-  int target_effect_id;
-
-  // When true, |clip_in_target_space| does not include clips from ancestor
-  // nodes.
-  bool layer_clipping_uses_only_local_clip : 1;
-
-  // True if target surface needs to be drawn with a clip applied.
-  bool target_is_clipped : 1;
-
-  // True if layers with this clip tree node need to be drawn with a clip
-  // applied.
-  bool layers_are_clipped : 1;
-  bool layers_are_clipped_when_surfaces_disabled : 1;
-
-  // Nodes that correspond to unclipped surfaces disregard ancestor clips.
-  bool resets_clip : 1;
 
   bool operator==(const ClipNode& other) const;
 

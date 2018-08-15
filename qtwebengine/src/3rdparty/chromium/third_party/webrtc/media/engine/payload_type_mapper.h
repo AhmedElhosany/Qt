@@ -14,11 +14,13 @@
 #include <map>
 #include <set>
 
-#include "webrtc/base/optional.h"
+#include "webrtc/api/audio_codecs/audio_format.h"
 #include "webrtc/media/base/codec.h"
-#include "webrtc/modules/audio_coding/codecs/audio_format.h"
+#include "webrtc/rtc_base/optional.h"
 
 namespace cricket {
+
+webrtc::SdpAudioFormat AudioCodecToSdpAudioFormat(const AudioCodec& ac);
 
 class PayloadTypeMapper {
  public:

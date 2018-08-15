@@ -11,7 +11,7 @@
 
 namespace content {
 
-class WebContents;
+class RenderWidgetHostImpl;
 class WebContentsImpl;
 class WebContentsViewDelegate;
 
@@ -64,12 +64,14 @@ class WebContentsViewChildFrame : public WebContentsView,
                      const DragEventSourceInfo& event_info,
                      RenderWidgetHostImpl* source_rwh) override;
   void UpdateDragCursor(blink::WebDragOperation operation) override;
-  void GotFocus() override;
+  void GotFocus(RenderWidgetHostImpl* render_widget_host) override;
   void TakeFocus(bool reverse) override;
 
  private:
   WebContentsView* GetOuterView();
   const WebContentsView* GetOuterView() const;
+
+  RenderViewHostDelegateView* GetOuterDelegateView();
 
   // The WebContentsImpl whose contents we display.
   WebContentsImpl* web_contents_;

@@ -33,11 +33,11 @@
 #  include <QtCore/QCoreApplication>
 #endif
 
+#include <QtCore/private/qglobal_p.h>
 #include <QtTest/QtTest>
 
 #include <qtimer.h>
 #include <qthread.h>
-#include <qoperatingsystemversion.h>
 
 #if defined Q_OS_UNIX
 #include <unistd.h>
@@ -500,7 +500,7 @@ void tst_QTimer::moveToThread()
 #if defined(Q_OS_WIN32)
     QSKIP("Does not work reliably on Windows :(");
 #elif defined(Q_OS_MACOS)
-    if (QOperatingSystemVersion::current() >= QOperatingSystemVersion::MacOSSierra)
+    if (__builtin_available(macOS 10.12, *))
         QSKIP("Does not work reliably on macOS 10.12 (QTBUG-59679)");
 #endif
     QTimer ti1;
@@ -836,7 +836,6 @@ void tst_QTimer::singleShotToFunctors()
     QTest::qWait(800);
     QCOMPARE(count, 2);
 
-#if defined(Q_COMPILER_LAMBDA)
     QTimer::singleShot(0, [&count] { ++count; });
     QCoreApplication::processEvents();
     QCOMPARE(count, 3);
@@ -855,7 +854,15 @@ void tst_QTimer::singleShotToFunctors()
 
     thread.quit();
     thread.wait();
-#endif
+
+    struct MoveOnly : CountedStruct {
+        Q_DISABLE_COPY(MoveOnly);
+        MoveOnly(MoveOnly &&o) : CountedStruct(std::move(o)) {};
+        MoveOnly(int *c) : CountedStruct(c) {}
+    };
+    QTimer::singleShot(0, MoveOnly(&count));
+    QCoreApplication::processEvents();
+    QCOMPARE(count, 5);
 
     _e.reset();
     _t = Q_NULLPTR;

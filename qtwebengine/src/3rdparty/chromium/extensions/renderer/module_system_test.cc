@@ -20,10 +20,17 @@
 #include "base/path_service.h"
 #include "base/strings/string_piece.h"
 #include "extensions/common/extension_paths.h"
+#include "extensions/common/feature_switch.h"
+#include "extensions/renderer/ipc_message_sender.h"
 #include "extensions/renderer/logging_native_handler.h"
+#include "extensions/renderer/native_extension_bindings_system.h"
 #include "extensions/renderer/object_backed_native_handler.h"
 #include "extensions/renderer/safe_builtins.h"
+#include "extensions/renderer/script_context_set.h"
+#include "extensions/renderer/string_source_map.h"
+#include "extensions/renderer/test_v8_extension_configuration.h"
 #include "extensions/renderer/utils_native_handler.h"
+#include "gin/converter.h"
 #include "ui/base/resource/resource_bundle.h"
 
 namespace extensions {
@@ -37,29 +44,43 @@ class FailsOnException : public ModuleSystem::ExceptionHandler {
   }
 };
 
-class V8ExtensionConfigurator {
+class GetAPINatives : public ObjectBackedNativeHandler {
  public:
-  V8ExtensionConfigurator()
-      : safe_builtins_(SafeBuiltins::CreateV8Extension()),
-        names_(1, safe_builtins_->name()),
-        configuration_(
-            new v8::ExtensionConfiguration(static_cast<int>(names_.size()),
-                                           names_.data())) {
-    v8::RegisterExtension(safe_builtins_.get());
-  }
+  GetAPINatives(ScriptContext* context,
+                NativeExtensionBindingsSystem* bindings_system)
+      : ObjectBackedNativeHandler(context) {
+    DCHECK_EQ(FeatureSwitch::native_crx_bindings()->IsEnabled(),
+              !!bindings_system);
 
-  v8::ExtensionConfiguration* GetConfiguration() {
-    return configuration_.get();
-  }
+    auto get_api = [](ScriptContext* context,
+                      NativeExtensionBindingsSystem* bindings_system,
+                      const v8::FunctionCallbackInfo<v8::Value>& args) {
+      CHECK_EQ(1, args.Length());
+      CHECK(args[0]->IsString());
+      std::string api_name = gin::V8ToString(args[0]);
+      v8::Local<v8::Object> api;
+      if (bindings_system) {
+        api = bindings_system->GetAPIObjectForTesting(context, api_name);
+      } else {
+        v8::Local<v8::Object> full_binding;
+        CHECK(
+            context->module_system()->Require(api_name).ToLocal(&full_binding))
+            << "Failed to get: " << api_name;
+        v8::Local<v8::Value> api_value;
+        CHECK(full_binding
+                  ->Get(context->v8_context(),
+                        gin::StringToSymbol(context->isolate(), "binding"))
+                  .ToLocal(&api_value))
+            << "Failed to get: " << api_name;
+        CHECK(api_value->IsObject()) << "Failed to get: " << api_name;
+        api = api_value.As<v8::Object>();
+      }
+      args.GetReturnValue().Set(api);
+    };
 
- private:
-  std::unique_ptr<v8::Extension> safe_builtins_;
-  std::vector<const char*> names_;
-  std::unique_ptr<v8::ExtensionConfiguration> configuration_;
+    RouteFunction("get", base::Bind(get_api, context, bindings_system));
+  }
 };
-
-base::LazyInstance<V8ExtensionConfigurator>::Leaky g_v8_extension_configurator =
-    LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
@@ -99,53 +120,38 @@ class ModuleSystemTestEnvironment::AssertNatives
   bool failed_;
 };
 
-// Source map that operates on std::strings.
-class ModuleSystemTestEnvironment::StringSourceMap
-    : public ModuleSystem::SourceMap {
- public:
-  StringSourceMap() {}
-  ~StringSourceMap() override {}
-
-  v8::Local<v8::Value> GetSource(v8::Isolate* isolate,
-                                 const std::string& name) const override {
-    const auto& source_map_iter = source_map_.find(name);
-    if (source_map_iter == source_map_.end())
-      return v8::Undefined(isolate);
-    return v8::String::NewFromUtf8(isolate, source_map_iter->second.c_str());
-  }
-
-  bool Contains(const std::string& name) const override {
-    return source_map_.count(name);
-  }
-
-  void RegisterModule(const std::string& name, const std::string& source) {
-    CHECK_EQ(0u, source_map_.count(name)) << "Module " << name << " not found";
-    source_map_[name] = source;
-  }
-
- private:
-  std::map<std::string, std::string> source_map_;
-};
-
-ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(v8::Isolate* isolate)
+ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(
+    v8::Isolate* isolate,
+    ScriptContextSet* context_set)
     : isolate_(isolate),
       context_holder_(new gin::ContextHolder(isolate_)),
       handle_scope_(isolate_),
+      context_set_(context_set),
       source_map_(new StringSourceMap()) {
   context_holder_->SetContext(v8::Context::New(
-      isolate, g_v8_extension_configurator.Get().GetConfiguration()));
-  context_.reset(new ScriptContext(context_holder_->context(),
-                                   nullptr,  // WebFrame
-                                   nullptr,  // Extension
-                                   Feature::BLESSED_EXTENSION_CONTEXT,
-                                   nullptr,  // Effective Extension
-                                   Feature::BLESSED_EXTENSION_CONTEXT));
+      isolate, TestV8ExtensionConfiguration::GetConfiguration()));
+
+  {
+    auto context =
+        base::MakeUnique<ScriptContext>(context_holder_->context(),
+                                        nullptr,  // WebFrame
+                                        nullptr,  // Extension
+                                        Feature::BLESSED_EXTENSION_CONTEXT,
+                                        nullptr,  // Effective Extension
+                                        Feature::BLESSED_EXTENSION_CONTEXT);
+    context_ = context.get();
+    context_set_->AddForTesting(std::move(context));
+  }
+
   context_->v8_context()->Enter();
-  assert_natives_ = new AssertNatives(context_.get());
+  assert_natives_ = new AssertNatives(context_);
+
+  if (FeatureSwitch::native_crx_bindings()->IsEnabled())
+    bindings_system_ = base::MakeUnique<NativeExtensionBindingsSystem>(nullptr);
 
   {
     std::unique_ptr<ModuleSystem> module_system(
-        new ModuleSystem(context_.get(), source_map_.get()));
+        new ModuleSystem(context_, source_map_.get()));
     context_->set_module_system(std::move(module_system));
   }
   ModuleSystem* module_system = context_->module_system();
@@ -153,16 +159,24 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(v8::Isolate* isolate)
       "assert", std::unique_ptr<NativeHandler>(assert_natives_));
   module_system->RegisterNativeHandler(
       "logging",
-      std::unique_ptr<NativeHandler>(new LoggingNativeHandler(context_.get())));
+      std::unique_ptr<NativeHandler>(new LoggingNativeHandler(context_)));
   module_system->RegisterNativeHandler(
       "utils",
-      std::unique_ptr<NativeHandler>(new UtilsNativeHandler(context_.get())));
+      std::unique_ptr<NativeHandler>(new UtilsNativeHandler(context_)));
+  module_system->RegisterNativeHandler(
+      "apiGetter",
+      base::MakeUnique<GetAPINatives>(context_, bindings_system_.get()));
   module_system->SetExceptionHandlerForTest(
       std::unique_ptr<ModuleSystem::ExceptionHandler>(new FailsOnException));
+
+  if (bindings_system_) {
+    bindings_system_->DidCreateScriptContext(context_);
+    bindings_system_->UpdateBindingsForContext(context_);
+  }
 }
 
 ModuleSystemTestEnvironment::~ModuleSystemTestEnvironment() {
-  if (context_->is_valid())
+  if (context_)
     ShutdownModuleSystem();
 }
 
@@ -204,7 +218,10 @@ void ModuleSystemTestEnvironment::ShutdownGin() {
 void ModuleSystemTestEnvironment::ShutdownModuleSystem() {
   CHECK(context_->is_valid());
   context_->v8_context()->Exit();
-  context_->Invalidate();
+  context_set_->Remove(context_);
+  base::RunLoop().RunUntilIdle();
+  context_ = nullptr;
+  assert_natives_ = nullptr;
 }
 
 v8::Local<v8::Object> ModuleSystemTestEnvironment::CreateGlobal(
@@ -218,8 +235,8 @@ v8::Local<v8::Object> ModuleSystemTestEnvironment::CreateGlobal(
 
 ModuleSystemTest::ModuleSystemTest()
     : isolate_(v8::Isolate::GetCurrent()),
-      should_assertions_be_made_(true) {
-}
+      context_set_(&extension_ids_),
+      should_assertions_be_made_(true) {}
 
 ModuleSystemTest::~ModuleSystemTest() {
 }
@@ -231,9 +248,13 @@ void ModuleSystemTest::SetUp() {
 
 void ModuleSystemTest::TearDown() {
   // All tests must assert at least once unless otherwise specified.
-  EXPECT_EQ(should_assertions_be_made_,
-            env_->assert_natives()->assertion_made());
-  EXPECT_FALSE(env_->assert_natives()->failed());
+  if (env_->assert_natives()) {  // The context may have already been shutdown.
+    EXPECT_EQ(should_assertions_be_made_,
+              env_->assert_natives()->assertion_made());
+    EXPECT_FALSE(env_->assert_natives()->failed());
+  } else {
+    EXPECT_FALSE(should_assertions_be_made_);
+  }
   env_.reset();
   v8::HeapStatistics stats;
   isolate_->GetHeapStatistics(&stats);
@@ -250,7 +271,7 @@ void ModuleSystemTest::TearDown() {
 
 std::unique_ptr<ModuleSystemTestEnvironment>
 ModuleSystemTest::CreateEnvironment() {
-  return base::WrapUnique(new ModuleSystemTestEnvironment(isolate_));
+  return base::MakeUnique<ModuleSystemTestEnvironment>(isolate_, &context_set_);
 }
 
 void ModuleSystemTest::ExpectNoAssertionsMade() {

@@ -9,7 +9,7 @@
 #define SkFixed_DEFINED
 
 #include "SkScalar.h"
-#include "math.h"
+#include "SkSafe_math.h"
 
 #include "SkTypes.h"
 
@@ -102,19 +102,9 @@ inline SkFixed SkFixedMul_longlong(SkFixed a, SkFixed b) {
     */
     SK_ALWAYS_INLINE SkFixed SkFloatToFixed_arm(float x)
     {
-        int32_t y, z;
-        asm("movs    %1, %3, lsl #1         \n"
-            "mov     %2, #0x8E              \n"
-            "sub     %1, %2, %1, lsr #24    \n"
-            "mov     %2, %3, lsl #8         \n"
-            "orr     %2, %2, #0x80000000    \n"
-            "mov     %1, %2, lsr %1         \n"
-            "it cs                          \n"
-            "rsbcs   %1, %1, #0             \n"
-            : "=r"(x), "=&r"(y), "=&r"(z)
-            : "r"(x)
-            : "cc"
-            );
+        int32_t y;
+        asm("vcvt.s32.f32 %0, %0, #16": "+w"(x));
+        memcpy(&y, &x, sizeof(y));
         return y;
     }
     inline SkFixed SkFixedMul_arm(SkFixed x, SkFixed y)
@@ -138,27 +128,22 @@ inline SkFixed SkFixedMul_longlong(SkFixed a, SkFixed b) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#if SK_SCALAR_IS_FLOAT
-
 #define SkFixedToScalar(x)          SkFixedToFloat(x)
 #define SkScalarToFixed(x)          SkFloatToFixed(x)
-
-#else   // SK_SCALAR_IS_DOUBLE
-
-#define SkFixedToScalar(x)          SkFixedToDouble(x)
-#define SkScalarToFixed(x)          SkDoubleToFixed(x)
-
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 
 typedef int64_t SkFixed3232;   // 32.32
+
+#define SkFixed3232Max            (0x7FFFFFFFFFFFFFFFLL)
+#define SkFixed3232Min            (-SkFixed3232Max)
 
 #define SkIntToFixed3232(x)       (SkLeftShift((SkFixed3232)(x), 32))
 #define SkFixed3232ToInt(x)       ((int)((x) >> 32))
 #define SkFixedToFixed3232(x)     (SkLeftShift((SkFixed3232)(x), 16))
 #define SkFixed3232ToFixed(x)     ((SkFixed)((x) >> 16))
 #define SkFloatToFixed3232(x)     ((SkFixed3232)((x) * (65536.0f * 65536.0f)))
+#define SkFixed3232ToFloat(x)     (x * (1 / (65536.0f * 65536.0f)))
 
 #define SkScalarToFixed3232(x)    SkFloatToFixed3232(x)
 

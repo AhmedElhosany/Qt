@@ -231,7 +231,7 @@ QEvdevTouchScreenHandler::QEvdevTouchScreenHandler(const QString &device, const 
 
     if (m_fd >= 0) {
         m_notify = new QSocketNotifier(m_fd, QSocketNotifier::Read, this);
-        connect(m_notify, SIGNAL(activated(int)), this, SLOT(readData()));
+        connect(m_notify, &QSocketNotifier::activated, this, &QEvdevTouchScreenHandler::readData);
     } else {
         qErrnoWarning(errno, "evdevtouch: Cannot open input device %s", qPrintable(device));
         return;
@@ -885,7 +885,7 @@ void QEvdevTouchScreenHandlerThread::filterAndSendTouchPoints()
     }
 
     QList<QWindowSystemInterface::TouchPoint> points = m_handler->d->m_touchPoints;
-    const QList<QWindowSystemInterface::TouchPoint> &lastPoints = m_handler->d->m_lastTouchPoints;
+    QList<QWindowSystemInterface::TouchPoint> lastPoints = m_handler->d->m_lastTouchPoints;
 
     m_handler->d->m_mutex.unlock();
 

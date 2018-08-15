@@ -7,24 +7,33 @@
 
 #include <memory>
 
+#include "core/fxcodec/codec/ccodec_bmpmodule.h"
+#include "core/fxcodec/codec/ccodec_gifmodule.h"
+#include "core/fxcodec/codec/ccodec_pngmodule.h"
 #include "core/fxcodec/codec/ccodec_progressivedecoder.h"
+#include "core/fxcodec/codec/ccodec_tiffmodule.h"
 #include "core/fxcodec/fx_codec.h"
 #include "core/fxcrt/fx_stream.h"
+#include "core/fxge/dib/cfx_dibitmap.h"
+#include "third_party/base/ptr_util.h"
 
 class XFACodecFuzzer {
  public:
   static int Fuzz(const uint8_t* data, size_t size, FXCODEC_IMAGE_TYPE type) {
-    std::unique_ptr<CCodec_ModuleMgr> mgr(new CCodec_ModuleMgr());
-    std::unique_ptr<CCodec_ProgressiveDecoder> decoder(
-        mgr->CreateProgressiveDecoder());
-    Reader source(data, size);
+    auto mgr = pdfium::MakeUnique<CCodec_ModuleMgr>();
+    mgr->SetBmpModule(pdfium::MakeUnique<CCodec_BmpModule>());
+    mgr->SetGifModule(pdfium::MakeUnique<CCodec_GifModule>());
+    mgr->SetPngModule(pdfium::MakeUnique<CCodec_PngModule>());
+    mgr->SetTiffModule(pdfium::MakeUnique<CCodec_TiffModule>());
 
-    FXCODEC_STATUS status =
-        decoder->LoadImageInfo(&source, type, nullptr, true);
+    std::unique_ptr<CCodec_ProgressiveDecoder> decoder =
+        mgr->CreateProgressiveDecoder();
+    CFX_RetainPtr<Reader> source(new Reader(data, size));
+    FXCODEC_STATUS status = decoder->LoadImageInfo(source, type, nullptr, true);
     if (status != FXCODEC_STATUS_FRAME_READY)
       return 0;
 
-    std::unique_ptr<CFX_DIBitmap> bitmap(new CFX_DIBitmap);
+    auto bitmap = pdfium::MakeRetain<CFX_DIBitmap>();
     bitmap->Create(decoder->GetWidth(), decoder->GetHeight(), FXDIB_Argb);
 
     int32_t frames;
@@ -32,7 +41,7 @@ class XFACodecFuzzer {
         frames == 0)
       return 0;
 
-    status = decoder->StartDecode(bitmap.get(), 0, 0, bitmap->GetWidth(),
+    status = decoder->StartDecode(bitmap, 0, 0, bitmap->GetWidth(),
                                   bitmap->GetHeight());
     while (status == FXCODEC_STATUS_DECODE_TOBECONTINUE)
       status = decoder->ContinueDecode();
@@ -45,8 +54,6 @@ class XFACodecFuzzer {
    public:
     Reader(const uint8_t* data, size_t size) : m_data(data), m_size(size) {}
     ~Reader() {}
-
-    void Release() override {}
 
     bool ReadBlock(void* buffer, FX_FILESIZE offset, size_t size) override {
       if (offset < 0 || static_cast<size_t>(offset) >= m_size)

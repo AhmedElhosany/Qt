@@ -97,7 +97,6 @@ Q_SIGNALS:
     void playingChanged();
     void pausedChanged();
     void frameChanged();
-    void sourceSizeChanged();
     void frameCountChanged();
 
 private Q_SLOTS:

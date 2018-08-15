@@ -14,15 +14,15 @@
 #include "cc/layers/layer.h"
 #include "cc/layers/solid_color_layer.h"
 #include "cc/layers/texture_layer.h"
-#include "cc/resources/texture_mailbox.h"
 #include "cc/trees/layer_tree_host.h"
-#include "content/child/child_shared_bitmap_manager.h"
-#include "content/child/child_thread_impl.h"
+#include "components/viz/client/client_shared_bitmap_manager.h"
+#include "components/viz/common/quads/texture_mailbox.h"
 #include "content/public/renderer/renderer_ppapi_host.h"
 #include "content/renderer/pepper/gfx_conversion.h"
 #include "content/renderer/pepper/host_globals.h"
 #include "content/renderer/pepper/pepper_plugin_instance_impl.h"
 #include "content/renderer/pepper/ppb_image_data_impl.h"
+#include "content/renderer/render_thread_impl.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/host/dispatch_host_message.h"
 #include "ppapi/host/ppapi_host.h"
@@ -192,7 +192,7 @@ void PepperCompositorHost::ViewInitiatedPaint() {
 void PepperCompositorHost::ImageReleased(
     int32_t id,
     std::unique_ptr<base::SharedMemory> shared_memory,
-    std::unique_ptr<cc::SharedBitmap> bitmap,
+    std::unique_ptr<viz::SharedBitmap> bitmap,
     const gpu::SyncToken& sync_token,
     bool is_lost) {
   bitmap.reset();
@@ -233,7 +233,7 @@ void PepperCompositorHost::UpdateLayer(
   clip_rect.Scale(dip_to_viewport_scale);
 
   layer->SetIsDrawable(true);
-  layer->SetBlendMode(SkXfermode::kSrcOver_Mode);
+  layer->SetBlendMode(SkBlendMode::kSrcOver);
   layer->SetOpacity(new_layer->common.opacity);
 
   layer->SetBounds(gfx::ToRoundedSize(size));
@@ -281,9 +281,9 @@ void PepperCompositorHost::UpdateLayer(
         static_cast<cc::TextureLayer*>(layer.get()));
     if (!old_layer ||
         new_layer->common.resource_id != old_layer->common.resource_id) {
-      cc::TextureMailbox mailbox(new_layer->texture->mailbox,
-                                 new_layer->texture->sync_token,
-                                 new_layer->texture->target);
+      viz::TextureMailbox mailbox(new_layer->texture->mailbox,
+                                  new_layer->texture->sync_token,
+                                  new_layer->texture->target);
       texture_layer->SetTextureMailbox(mailbox,
           cc::SingleReleaseCallback::Create(
               base::Bind(&PepperCompositorHost::ResourceReleased,
@@ -314,12 +314,12 @@ void PepperCompositorHost::UpdateLayer(
       DCHECK_EQ(rv, PP_TRUE);
       DCHECK_EQ(desc.stride, desc.size.width * 4);
       DCHECK_EQ(desc.format, PP_IMAGEDATAFORMAT_RGBA_PREMUL);
-      std::unique_ptr<cc::SharedBitmap> bitmap =
-          ChildThreadImpl::current()
+      std::unique_ptr<viz::SharedBitmap> bitmap =
+          RenderThreadImpl::current()
               ->shared_bitmap_manager()
               ->GetBitmapForSharedMemory(image_shm.get());
 
-      cc::TextureMailbox mailbox(bitmap.get(), PP_ToGfxSize(desc.size));
+      viz::TextureMailbox mailbox(bitmap.get(), PP_ToGfxSize(desc.size));
       image_layer->SetTextureMailbox(
           mailbox,
           cc::SingleReleaseCallback::Create(base::Bind(
@@ -410,8 +410,8 @@ int32_t PepperCompositorHost::OnHostMsgCommitLayers(
   // We need to force a commit for each CommitLayers() call, even if no layers
   // changed since the last call to CommitLayers(). This is so
   // WiewInitiatedPaint() will always be called.
-  if (layer_->GetLayerTree())
-    layer_->GetLayerTree()->SetNeedsCommit();
+  if (layer_->layer_tree_host())
+    layer_->layer_tree_host()->SetNeedsCommit();
 
   // If the host is not bound to the instance, return PP_OK immediately.
   if (!bound_instance_)

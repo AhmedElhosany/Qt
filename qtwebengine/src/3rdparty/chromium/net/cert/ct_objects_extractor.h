@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/strings/string_piece.h"
 #include "net/base/net_export.h"
 #include "net/cert/x509_certificate.h"
 
@@ -14,7 +15,7 @@ namespace net {
 
 namespace ct {
 
-struct LogEntry;
+struct SignedEntryData;
 
 // Extracts a SignedCertificateTimestampList that has been embedded within a
 // leaf cert as an X.509v3 extension with the OID 1.3.6.1.4.1.11129.2.4.2.
@@ -32,9 +33,10 @@ NET_EXPORT_PRIVATE bool ExtractEmbeddedSCTList(
 // The filled |*result| should be verified using ct::CTLogVerifier::Verify
 // Note: If |leaf| does not contain the required extension, it is treated as
 // a failure.
-NET_EXPORT_PRIVATE bool GetPrecertLogEntry(X509Certificate::OSCertHandle leaf,
-                                           X509Certificate::OSCertHandle issuer,
-                                           LogEntry* result);
+NET_EXPORT_PRIVATE bool GetPrecertSignedEntry(
+    X509Certificate::OSCertHandle leaf,
+    X509Certificate::OSCertHandle issuer,
+    SignedEntryData* result);
 
 // Obtains an X509Chain log entry for |leaf|, an X.509v3 certificate that
 // is not expected to contain an X.509v3 extension with the OID
@@ -42,8 +44,8 @@ NET_EXPORT_PRIVATE bool GetPrecertLogEntry(X509Certificate::OSCertHandle leaf,
 // On success, fills |result| with the data for an X509Chain log entry and
 // returns true.
 // The filled |*result| should be verified using ct::CTLogVerifier::Verify
-NET_EXPORT_PRIVATE bool GetX509LogEntry(X509Certificate::OSCertHandle leaf,
-                                        LogEntry* result);
+NET_EXPORT_PRIVATE bool GetX509SignedEntry(X509Certificate::OSCertHandle leaf,
+                                           SignedEntryData* result);
 
 // Extracts a SignedCertificateTimestampList that has been embedded within
 // an OCSP response as an extension with the OID 1.3.6.1.4.1.11129.2.4.5.
@@ -54,7 +56,7 @@ NET_EXPORT_PRIVATE bool GetX509LogEntry(X509Certificate::OSCertHandle leaf,
 NET_EXPORT_PRIVATE bool ExtractSCTListFromOCSPResponse(
     X509Certificate::OSCertHandle issuer,
     const std::string& cert_serial_number,
-    const std::string& ocsp_response,
+    base::StringPiece ocsp_response,
     std::string* sct_list);
 
 }  // namespace ct

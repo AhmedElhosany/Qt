@@ -9,7 +9,7 @@
 #define SkAndroidCodec_DEFINED
 
 #include "SkCodec.h"
-#include "SkEncodedFormat.h"
+#include "SkEncodedImageFormat.h"
 #include "SkStream.h"
 #include "SkTypes.h"
 
@@ -51,14 +51,18 @@ public:
     /**
      *  Format of the encoded data.
      */
-    SkEncodedFormat getEncodedFormat() const { return fCodec->getEncodedFormat(); }
+    SkEncodedImageFormat getEncodedFormat() const { return fCodec->getEncodedFormat(); }
 
     /**
      *  @param requestedColorType Color type requested by the client
      *
-     *  If it is possible to decode to requestedColorType, this returns
-     *  requestedColorType.  Otherwise, this returns whichever color type
-     *  is suggested by the codec as the best match for the encoded data.
+     *  |requestedColorType| may be overriden.  We will default to kF16
+     *  for high precision images.
+     *
+     *  In the general case, if it is possible to decode to
+     *  |requestedColorType|, this returns |requestedColorType|.
+     *  Otherwise, this returns a color type that is an appropriate
+     *  match for the the encoded data.
      */
     SkColorType computeOutputColorType(SkColorType requestedColorType);
 
@@ -70,6 +74,19 @@ public:
      *  has alpha, the value of requestedUnpremul will be honored.
      */
     SkAlphaType computeOutputAlphaType(bool requestedUnpremul);
+
+    /**
+     *  @param outputColorType Color type that the client will decode to.
+     *  @param prefColorSpace  Preferred color space to decode to.
+     *                         This may not return |prefColorSpace| for a couple reasons.
+     *                         (1) Android Principles: 565 must be sRGB, F16 must be
+     *                             linear sRGB, transfer function must be parametric.
+     *                         (2) Codec Limitations: F16 requires a linear color space.
+     *
+     *  Returns the appropriate color space to decode to.
+     */
+    sk_sp<SkColorSpace> computeOutputColorSpace(SkColorType outputColorType,
+                                                sk_sp<SkColorSpace> prefColorSpace = nullptr);
 
     /**
      *  Returns the dimensions of the scaled output image, for an input
@@ -137,8 +154,6 @@ public:
         AndroidOptions()
             : fZeroInitialized(SkCodec::kNo_ZeroInitialized)
             , fSubset(nullptr)
-            , fColorPtr(nullptr)
-            , fColorCount(nullptr)
             , fSampleSize(1)
         {}
 
@@ -154,28 +169,12 @@ public:
          *
          *  Must be within the bounds returned by getInfo().
          *
-         *  If the EncodedFormat is kWEBP_SkEncodedFormat, the top and left
+         *  If the EncodedFormat is SkEncodedImageFormat::kWEBP, the top and left
          *  values must be even.
          *
          *  The default is NULL, meaning a decode of the entire image.
          */
         SkIRect* fSubset;
-
-        /**
-         *  If the client has requested a decode to kIndex8_SkColorType
-         *  (specified in the SkImageInfo), then the caller must provide
-         *  storage for up to 256 SkPMColor values in fColorPtr.  On success,
-         *  the codec must copy N colors into that storage, (where N is the
-         *  logical number of table entries) and set fColorCount to N.
-         *
-         *  If the client does not request kIndex8_SkColorType, then the last
-         *  two parameters may be NULL. If fColorCount is not null, it will be
-         *  set to 0.
-         *
-         *  The default is NULL for both pointers.
-         */
-        SkPMColor* fColorPtr;
-        int*       fColorCount;
 
         /**
          *  The client may provide an integer downscale factor for the decode.
@@ -207,14 +206,6 @@ public:
      *         to scale or subset. If the codec cannot perform this
      *         scaling or subsetting, it will return an error code.
      *
-     *  If info is kIndex8_SkColorType, then the caller must provide storage for up to 256
-     *  SkPMColor values in options->fColorPtr. On success the codec must copy N colors into
-     *  that storage, (where N is the logical number of table entries) and set
-     *  options->fColorCount to N.
-     *
-     *  If info is not kIndex8_SkColorType, options->fColorPtr and options->fColorCount may
-     *  be nullptr.
-     *
      *  The AndroidOptions object is also used to specify any requested scaling or subsetting
      *  using options->fSampleSize and options->fSubset. If NULL, the defaults (as specified above
      *  for AndroidOptions) are used.
@@ -230,10 +221,7 @@ public:
 
     /**
      *  Simplified version of getAndroidPixels() where we supply the default AndroidOptions as
-     *  specified above for AndroidOptions.
-     *
-     *  This will return an error if the info is kIndex_8_SkColorType and also will not perform
-     *  any scaling or subsetting.
+     *  specified above for AndroidOptions. It will not perform any scaling or subsetting.
      */
     SkCodec::Result getAndroidPixels(const SkImageInfo& info, void* pixels, size_t rowBytes);
 

@@ -15,9 +15,9 @@
 #include "libyuv/cpu_id.h"
 #include "libyuv/planar_functions.h"
 #include "libyuv/rotate.h"
+#include "libyuv/row.h"
 #include "libyuv/scale.h"  // For ScalePlane()
 #include "libyuv/video_common.h"
-#include "libyuv/row.h"
 
 #ifdef __cplusplus
 namespace libyuv {
@@ -708,6 +708,14 @@ int I420ToARGB1555(const uint8* src_y,
     }
   }
 #endif
+#if defined(HAS_I422TOARGB1555ROW_DSPR2)
+  if (TestCpuFlag(kCpuHasDSPR2)) {
+    I422ToARGB1555Row = I422ToARGB1555Row_Any_DSPR2;
+    if (IS_ALIGNED(width, 4)) {
+      I422ToARGB1555Row = I422ToARGB1555Row_DSPR2;
+    }
+  }
+#endif
 #if defined(HAS_I422TOARGB1555ROW_MSA)
   if (TestCpuFlag(kCpuHasMSA)) {
     I422ToARGB1555Row = I422ToARGB1555Row_Any_MSA;
@@ -778,6 +786,14 @@ int I420ToARGB4444(const uint8* src_y,
     I422ToARGB4444Row = I422ToARGB4444Row_Any_NEON;
     if (IS_ALIGNED(width, 8)) {
       I422ToARGB4444Row = I422ToARGB4444Row_NEON;
+    }
+  }
+#endif
+#if defined(HAS_I422TOARGB4444ROW_DSPR2)
+  if (TestCpuFlag(kCpuHasDSPR2)) {
+    I422ToARGB4444Row = I422ToARGB4444Row_Any_DSPR2;
+    if (IS_ALIGNED(width, 4)) {
+      I422ToARGB4444Row = I422ToARGB4444Row_DSPR2;
     }
   }
 #endif
@@ -870,6 +886,75 @@ int I420ToRGB565(const uint8* src_y,
       src_u += src_stride_u;
       src_v += src_stride_v;
     }
+  }
+  return 0;
+}
+
+// Convert I422 to RGB565.
+LIBYUV_API
+int I422ToRGB565(const uint8* src_y,
+                 int src_stride_y,
+                 const uint8* src_u,
+                 int src_stride_u,
+                 const uint8* src_v,
+                 int src_stride_v,
+                 uint8* dst_rgb565,
+                 int dst_stride_rgb565,
+                 int width,
+                 int height) {
+  int y;
+  void (*I422ToRGB565Row)(const uint8* y_buf, const uint8* u_buf,
+                          const uint8* v_buf, uint8* rgb_buf,
+                          const struct YuvConstants* yuvconstants, int width) =
+      I422ToRGB565Row_C;
+  if (!src_y || !src_u || !src_v || !dst_rgb565 || width <= 0 || height == 0) {
+    return -1;
+  }
+  // Negative height means invert the image.
+  if (height < 0) {
+    height = -height;
+    dst_rgb565 = dst_rgb565 + (height - 1) * dst_stride_rgb565;
+    dst_stride_rgb565 = -dst_stride_rgb565;
+  }
+#if defined(HAS_I422TORGB565ROW_SSSE3)
+  if (TestCpuFlag(kCpuHasSSSE3)) {
+    I422ToRGB565Row = I422ToRGB565Row_Any_SSSE3;
+    if (IS_ALIGNED(width, 8)) {
+      I422ToRGB565Row = I422ToRGB565Row_SSSE3;
+    }
+  }
+#endif
+#if defined(HAS_I422TORGB565ROW_AVX2)
+  if (TestCpuFlag(kCpuHasAVX2)) {
+    I422ToRGB565Row = I422ToRGB565Row_Any_AVX2;
+    if (IS_ALIGNED(width, 16)) {
+      I422ToRGB565Row = I422ToRGB565Row_AVX2;
+    }
+  }
+#endif
+#if defined(HAS_I422TORGB565ROW_NEON)
+  if (TestCpuFlag(kCpuHasNEON)) {
+    I422ToRGB565Row = I422ToRGB565Row_Any_NEON;
+    if (IS_ALIGNED(width, 8)) {
+      I422ToRGB565Row = I422ToRGB565Row_NEON;
+    }
+  }
+#endif
+#if defined(HAS_I422TORGB565ROW_MSA)
+  if (TestCpuFlag(kCpuHasMSA)) {
+    I422ToRGB565Row = I422ToRGB565Row_Any_MSA;
+    if (IS_ALIGNED(width, 8)) {
+      I422ToRGB565Row = I422ToRGB565Row_MSA;
+    }
+  }
+#endif
+
+  for (y = 0; y < height; ++y) {
+    I422ToRGB565Row(src_y, src_u, src_v, dst_rgb565, &kYuvI601Constants, width);
+    dst_rgb565 += dst_stride_rgb565;
+    src_y += src_stride_y;
+    src_u += src_stride_u;
+    src_v += src_stride_v;
   }
   return 0;
 }
@@ -973,6 +1058,14 @@ int I420ToRGB565Dither(const uint8* src_y,
     ARGBToRGB565DitherRow = ARGBToRGB565DitherRow_Any_NEON;
     if (IS_ALIGNED(width, 8)) {
       ARGBToRGB565DitherRow = ARGBToRGB565DitherRow_NEON;
+    }
+  }
+#endif
+#if defined(HAS_ARGBTORGB565DITHERROW_MSA)
+  if (TestCpuFlag(kCpuHasMSA)) {
+    ARGBToRGB565DitherRow = ARGBToRGB565DitherRow_Any_MSA;
+    if (IS_ALIGNED(width, 8)) {
+      ARGBToRGB565DitherRow = ARGBToRGB565DitherRow_MSA;
     }
   }
 #endif
@@ -1094,53 +1187,58 @@ int ConvertFromI420(const uint8* y,
     }
     // TODO(fbarchard): Add M420.
     // Triplanar formats
-    // TODO(fbarchard): halfstride instead of halfwidth
     case FOURCC_I420:
     case FOURCC_YV12: {
-      int halfwidth = (width + 1) / 2;
+      dst_sample_stride = dst_sample_stride ? dst_sample_stride : width;
+      int halfstride = (dst_sample_stride + 1) / 2;
       int halfheight = (height + 1) / 2;
       uint8* dst_u;
       uint8* dst_v;
       if (format == FOURCC_YV12) {
-        dst_v = dst_sample + width * height;
-        dst_u = dst_v + halfwidth * halfheight;
+        dst_v = dst_sample + dst_sample_stride * height;
+        dst_u = dst_v + halfstride * halfheight;
       } else {
-        dst_u = dst_sample + width * height;
-        dst_v = dst_u + halfwidth * halfheight;
+        dst_u = dst_sample + dst_sample_stride * height;
+        dst_v = dst_u + halfstride * halfheight;
       }
-      r = I420Copy(y, y_stride, u, u_stride, v, v_stride, dst_sample, width,
-                   dst_u, halfwidth, dst_v, halfwidth, width, height);
+      r = I420Copy(y, y_stride, u, u_stride, v, v_stride, dst_sample,
+                   dst_sample_stride, dst_u, halfstride, dst_v, halfstride,
+                   width, height);
       break;
     }
     case FOURCC_I422:
     case FOURCC_YV16: {
-      int halfwidth = (width + 1) / 2;
+      dst_sample_stride = dst_sample_stride ? dst_sample_stride : width;
+      int halfstride = (dst_sample_stride + 1) / 2;
       uint8* dst_u;
       uint8* dst_v;
       if (format == FOURCC_YV16) {
-        dst_v = dst_sample + width * height;
-        dst_u = dst_v + halfwidth * height;
+        dst_v = dst_sample + dst_sample_stride * height;
+        dst_u = dst_v + halfstride * height;
       } else {
-        dst_u = dst_sample + width * height;
-        dst_v = dst_u + halfwidth * height;
+        dst_u = dst_sample + dst_sample_stride * height;
+        dst_v = dst_u + halfstride * height;
       }
-      r = I420ToI422(y, y_stride, u, u_stride, v, v_stride, dst_sample, width,
-                     dst_u, halfwidth, dst_v, halfwidth, width, height);
+      r = I420ToI422(y, y_stride, u, u_stride, v, v_stride, dst_sample,
+                     dst_sample_stride, dst_u, halfstride, dst_v, halfstride,
+                     width, height);
       break;
     }
     case FOURCC_I444:
     case FOURCC_YV24: {
+      dst_sample_stride = dst_sample_stride ? dst_sample_stride : width;
       uint8* dst_u;
       uint8* dst_v;
       if (format == FOURCC_YV24) {
-        dst_v = dst_sample + width * height;
-        dst_u = dst_v + width * height;
+        dst_v = dst_sample + dst_sample_stride * height;
+        dst_u = dst_v + dst_sample_stride * height;
       } else {
-        dst_u = dst_sample + width * height;
-        dst_v = dst_u + width * height;
+        dst_u = dst_sample + dst_sample_stride * height;
+        dst_v = dst_u + dst_sample_stride * height;
       }
-      r = I420ToI444(y, y_stride, u, u_stride, v, v_stride, dst_sample, width,
-                     dst_u, width, dst_v, width, width, height);
+      r = I420ToI444(y, y_stride, u, u_stride, v, v_stride, dst_sample,
+                     dst_sample_stride, dst_u, dst_sample_stride, dst_v,
+                     dst_sample_stride, width, height);
       break;
     }
     // Formats not supported - MJPG, biplanar, some rgb formats.

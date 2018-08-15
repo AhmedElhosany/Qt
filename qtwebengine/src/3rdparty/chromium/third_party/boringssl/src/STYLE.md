@@ -45,6 +45,16 @@ not
 Rather than `malloc()` and `free()`, use the wrappers `OPENSSL_malloc()`
 and `OPENSSL_free()`. Use the standard C `assert()` function freely.
 
+Use the following wrappers, found in `crypto/internal.h` instead of the
+corresponding C standard library functions. They behave the same but avoid
+confusing undefined behavior.
+
+* `OPENSSL_memchr`
+* `OPENSSL_memcmp`
+* `OPENSSL_memcpy`
+* `OPENSSL_memmove`
+* `OPENSSL_memset`
+
 For new constants, prefer enums when the values are sequential and typed
 constants for flags. If adding values to an existing set of `#define`s,
 continue with `#define`.
@@ -197,3 +207,14 @@ return value patterns in legacy functions.
 
 Document private functions in their `internal.h` header or, if static,
 where defined.
+
+
+## Build logic
+
+BoringSSL is used by many projects with many different build tools.
+Reimplementing and maintaining build logic in each downstream build is
+cumbersome, so build logic should be avoided where possible. Platform-specific
+files should be excluded by wrapping the contents in `#ifdef`s, rather than
+computing platform-specific file lists. Generated source files such as perlasm
+and `err_data.c` may be used in the standalone CMake build but, for downstream
+builds, they should be pre-generated in `generate_build_files.py`.

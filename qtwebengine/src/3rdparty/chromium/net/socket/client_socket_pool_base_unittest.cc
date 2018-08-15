@@ -15,13 +15,13 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/histogram_tester.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
@@ -61,6 +61,7 @@ namespace {
 
 const int kDefaultMaxSockets = 4;
 const int kDefaultMaxSocketsPerGroup = 2;
+const char kIdleSocketFateHistogram[] = "Net.Socket.IdleSocketFate";
 
 // Make sure |handle| sets load times correctly when it has been assigned a
 // reused socket.
@@ -183,7 +184,7 @@ class MockClientSocket : public StreamSocket {
   void SetSubresourceSpeculation() override {}
   void SetOmniboxSpeculation() override {}
   bool WasEverUsed() const override { return was_used_to_convey_data_; }
-  bool WasNpnNegotiated() const override { return false; }
+  bool WasAlpnNegotiated() const override { return false; }
   NextProto GetNegotiatedProtocol() const override { return kProtoUnknown; }
   bool GetSSLInfo(SSLInfo* ssl_info) override { return false; }
   void GetConnectionAttempts(ConnectionAttempts* out) const override {
@@ -288,7 +289,8 @@ class TestConnectJob : public ConnectJob {
             request.priority(),
             request.respect_limits(),
             delegate,
-            NetLogWithSource::Make(net_log, NetLogSourceType::CONNECT_JOB)),
+            NetLogWithSource::Make(net_log,
+                                   NetLogSourceType::TRANSPORT_CONNECT_JOB)),
         job_type_(job_type),
         client_socket_factory_(client_socket_factory),
         load_state_(LOAD_STATE_IDLE),
@@ -529,6 +531,12 @@ class TestClientSocketPool : public ClientSocketPool {
     base_.RequestSockets(group_name, *casted_params, num_sockets, net_log);
   }
 
+  void SetPriority(const std::string& group_name,
+                   ClientSocketHandle* handle,
+                   RequestPriority priority) override {
+    base_.SetPriority(group_name, handle, priority);
+  }
+
   void CancelRequest(const std::string& group_name,
                      ClientSocketHandle* handle) override {
     base_.CancelRequest(group_name, handle);
@@ -545,6 +553,10 @@ class TestClientSocketPool : public ClientSocketPool {
   bool IsStalled() const override { return base_.IsStalled(); }
 
   void CloseIdleSockets() override { base_.CloseIdleSockets(); }
+
+  void CloseIdleSocketsInGroup(const std::string& group_name) override {
+    base_.CloseIdleSocketsInGroup(group_name);
+  }
 
   int IdleSocketCount() const override { return base_.idle_socket_count(); }
 
@@ -731,6 +743,8 @@ class ClientSocketPoolBaseTest : public testing::Test {
   std::vector<std::unique_ptr<TestSocketRequest>>* requests() {
     return test_base_.requests();
   }
+  // Only counts the requests that get sockets asynchronously;
+  // synchronous completions are not registered by this count.
   size_t completion_count() const { return test_base_.completion_count(); }
 
   TestNetLog net_log_;
@@ -868,6 +882,7 @@ TEST_F(ClientSocketPoolBaseTest, InitConnectionFailure) {
 }
 
 TEST_F(ClientSocketPoolBaseTest, TotalLimit) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   // TODO(eroman): Check that the NetLog contains this event.
@@ -887,6 +902,10 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimit) {
 
   ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
 
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 7)));
+
   EXPECT_EQ(static_cast<int>(requests_size()),
             client_socket_factory_.allocation_count());
   EXPECT_EQ(requests_size() - kDefaultMaxSockets, completion_count());
@@ -904,6 +923,7 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimit) {
 }
 
 TEST_F(ClientSocketPoolBaseTest, TotalLimitReachedNewGroup) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   // TODO(eroman): Check that the NetLog contains this event.
@@ -922,6 +942,9 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitReachedNewGroup) {
   EXPECT_THAT(StartRequest("c", DEFAULT_PRIORITY), IsError(ERR_IO_PENDING));
 
   ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 5)));
 
   EXPECT_EQ(static_cast<int>(requests_size()),
             client_socket_factory_.allocation_count());
@@ -938,6 +961,7 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitReachedNewGroup) {
 }
 
 TEST_F(ClientSocketPoolBaseTest, TotalLimitRespectsPriority) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   EXPECT_THAT(StartRequest("b", LOWEST), IsOk());
@@ -953,6 +977,9 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitRespectsPriority) {
   EXPECT_THAT(StartRequest("b", HIGHEST), IsError(ERR_IO_PENDING));
 
   ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 7)));
 
   EXPECT_EQ(requests_size() - kDefaultMaxSockets, completion_count());
 
@@ -972,7 +999,109 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitRespectsPriority) {
   EXPECT_EQ(ClientSocketPoolTest::kIndexOutOfBounds, GetOrderOfRequest(9));
 }
 
+// Test reprioritizing a request before completion doesn't interfere with
+// its completion.
+TEST_F(ClientSocketPoolBaseTest, ReprioritizeOne) {
+  CreatePool(kDefaultMaxSockets, 1);
+
+  EXPECT_THAT(StartRequest("a", LOWEST), IsError(OK));
+  EXPECT_THAT(StartRequest("a", MEDIUM), IsError(ERR_IO_PENDING));
+  EXPECT_TRUE(request(0)->handle()->socket());
+  EXPECT_FALSE(request(1)->handle()->socket());
+
+  request(1)->handle()->SetPriority(MEDIUM);
+
+  ReleaseOneConnection(ClientSocketPoolTest::NO_KEEP_ALIVE);
+
+  EXPECT_TRUE(request(1)->handle()->socket());
+}
+
+// Reprioritize a request up past another one and make sure that changes the
+// completion order.
+TEST_F(ClientSocketPoolBaseTest, ReprioritizeUpReorder) {
+  CreatePool(kDefaultMaxSockets, 1);
+
+  EXPECT_THAT(StartRequest("a", LOWEST), IsError(OK));
+  EXPECT_THAT(StartRequest("a", MEDIUM), IsError(ERR_IO_PENDING));
+  EXPECT_THAT(StartRequest("a", LOWEST), IsError(ERR_IO_PENDING));
+  EXPECT_TRUE(request(0)->handle()->socket());
+  EXPECT_FALSE(request(1)->handle()->socket());
+  EXPECT_FALSE(request(2)->handle()->socket());
+
+  request(2)->handle()->SetPriority(HIGHEST);
+
+  ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+
+  EXPECT_EQ(1, GetOrderOfRequest(1));
+  EXPECT_EQ(3, GetOrderOfRequest(2));
+  EXPECT_EQ(2, GetOrderOfRequest(3));
+}
+
+// Reprioritize a request without changing relative priorities and check
+// that the order doesn't change.
+TEST_F(ClientSocketPoolBaseTest, ReprioritizeUpNoReorder) {
+  CreatePool(kDefaultMaxSockets, 1);
+
+  EXPECT_THAT(StartRequest("a", LOWEST), IsError(OK));
+  EXPECT_THAT(StartRequest("a", MEDIUM), IsError(ERR_IO_PENDING));
+  EXPECT_THAT(StartRequest("a", LOW), IsError(ERR_IO_PENDING));
+  EXPECT_TRUE(request(0)->handle()->socket());
+  EXPECT_FALSE(request(1)->handle()->socket());
+  EXPECT_FALSE(request(2)->handle()->socket());
+
+  request(2)->handle()->SetPriority(MEDIUM);
+
+  ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+
+  EXPECT_EQ(1, GetOrderOfRequest(1));
+  EXPECT_EQ(2, GetOrderOfRequest(2));
+  EXPECT_EQ(3, GetOrderOfRequest(3));
+}
+
+// Reprioritize a request past down another one and make sure that changes the
+// completion order.
+TEST_F(ClientSocketPoolBaseTest, ReprioritizeDownReorder) {
+  CreatePool(kDefaultMaxSockets, 1);
+
+  EXPECT_THAT(StartRequest("a", LOWEST), IsError(OK));
+  EXPECT_THAT(StartRequest("a", HIGHEST), IsError(ERR_IO_PENDING));
+  EXPECT_THAT(StartRequest("a", MEDIUM), IsError(ERR_IO_PENDING));
+  EXPECT_TRUE(request(0)->handle()->socket());
+  EXPECT_FALSE(request(1)->handle()->socket());
+  EXPECT_FALSE(request(2)->handle()->socket());
+
+  request(1)->handle()->SetPriority(LOW);
+
+  ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+
+  EXPECT_EQ(1, GetOrderOfRequest(1));
+  EXPECT_EQ(3, GetOrderOfRequest(2));
+  EXPECT_EQ(2, GetOrderOfRequest(3));
+}
+
+// Reprioritize a request to the same level as another and confirm it is
+// put after the old request.
+TEST_F(ClientSocketPoolBaseTest, ReprioritizeResetFIFO) {
+  CreatePool(kDefaultMaxSockets, 1);
+
+  EXPECT_THAT(StartRequest("a", LOWEST), IsError(OK));
+  EXPECT_THAT(StartRequest("a", HIGHEST), IsError(ERR_IO_PENDING));
+  EXPECT_THAT(StartRequest("a", MEDIUM), IsError(ERR_IO_PENDING));
+  EXPECT_TRUE(request(0)->handle()->socket());
+  EXPECT_FALSE(request(1)->handle()->socket());
+  EXPECT_FALSE(request(2)->handle()->socket());
+
+  request(1)->handle()->SetPriority(MEDIUM);
+
+  ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+
+  EXPECT_EQ(1, GetOrderOfRequest(1));
+  EXPECT_EQ(3, GetOrderOfRequest(2));
+  EXPECT_EQ(2, GetOrderOfRequest(3));
+}
+
 TEST_F(ClientSocketPoolBaseTest, TotalLimitRespectsGroupLimit) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   EXPECT_THAT(StartRequest("a", LOWEST), IsOk());
@@ -988,6 +1117,9 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitRespectsGroupLimit) {
   EXPECT_THAT(StartRequest("b", HIGHEST), IsError(ERR_IO_PENDING));
 
   ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 7)));
 
   EXPECT_EQ(static_cast<int>(requests_size()),
             client_socket_factory_.allocation_count());
@@ -1013,6 +1145,7 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitRespectsGroupLimit) {
 
 // Make sure that we count connecting sockets against the total limit.
 TEST_F(ClientSocketPoolBaseTest, TotalLimitCountsConnectingSockets) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   EXPECT_THAT(StartRequest("a", DEFAULT_PRIORITY), IsOk());
@@ -1035,6 +1168,9 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitCountsConnectingSockets) {
   EXPECT_THAT(StartRequest("e", DEFAULT_PRIORITY), IsError(ERR_IO_PENDING));
 
   ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 5)));
 
   EXPECT_EQ(static_cast<int>(requests_size()),
             client_socket_factory_.allocation_count());
@@ -1050,6 +1186,7 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitCountsConnectingSockets) {
 }
 
 TEST_F(ClientSocketPoolBaseTest, CorrectlyCountStalledGroups) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSockets);
   connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
 
@@ -1068,12 +1205,21 @@ TEST_F(ClientSocketPoolBaseTest, CorrectlyCountStalledGroups) {
   EXPECT_EQ(kDefaultMaxSockets, client_socket_factory_.allocation_count());
 
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::KEEP_ALIVE));
+  EXPECT_THAT(
+      histograms.GetAllSamples(kIdleSocketFateHistogram),
+      testing::ElementsAre(base::Bucket(/*IDLE_SOCKET_FATE_CLOSE_ONE=*/8, 1)));
   EXPECT_EQ(kDefaultMaxSockets + 1, client_socket_factory_.allocation_count());
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::KEEP_ALIVE));
+  EXPECT_THAT(
+      histograms.GetAllSamples(kIdleSocketFateHistogram),
+      testing::ElementsAre(base::Bucket(/*IDLE_SOCKET_FATE_CLOSE_ONE=*/8, 2)));
   EXPECT_EQ(kDefaultMaxSockets + 2, client_socket_factory_.allocation_count());
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::KEEP_ALIVE));
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::KEEP_ALIVE));
   EXPECT_EQ(kDefaultMaxSockets + 2, client_socket_factory_.allocation_count());
+  EXPECT_THAT(
+      histograms.GetAllSamples(kIdleSocketFateHistogram),
+      testing::ElementsAre(base::Bucket(/*IDLE_SOCKET_FATE_CLOSE_ONE=*/8, 2)));
 }
 
 TEST_F(ClientSocketPoolBaseTest, StallAndThenCancelAndTriggerAvailableSocket) {
@@ -1235,6 +1381,7 @@ TEST_F(ClientSocketPoolBaseTest, WaitForStalledSocketAtSocketLimit) {
 
 // Regression test for http://crbug.com/40952.
 TEST_F(ClientSocketPoolBaseTest, CloseIdleSocketAtSocketLimitDeleteGroup) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
   pool_->EnableConnectBackupJobs();
   connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
@@ -1265,11 +1412,15 @@ TEST_F(ClientSocketPoolBaseTest, CloseIdleSocketAtSocketLimitDeleteGroup) {
                         ClientSocketPool::RespectLimits::ENABLED,
                         callback.callback(), pool_.get(), NetLogWithSource()));
 
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_REUSE_UNUSED=*/1, 1)));
   EXPECT_EQ(kDefaultMaxSockets, client_socket_factory_.allocation_count());
   EXPECT_EQ(kDefaultMaxSockets - 1, pool_->IdleSocketCount());
 }
 
 TEST_F(ClientSocketPoolBaseTest, PendingRequests) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   EXPECT_THAT(StartRequest("a", DEFAULT_PRIORITY), IsOk());
@@ -1282,6 +1433,10 @@ TEST_F(ClientSocketPoolBaseTest, PendingRequests) {
   EXPECT_THAT(StartRequest("a", LOWEST), IsError(ERR_IO_PENDING));
 
   ReleaseAllConnections(ClientSocketPoolTest::KEEP_ALIVE);
+  // 2 sockets reused for last 6 requests.
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_REUSE_UNUSED=*/1, 6)));
 
   EXPECT_EQ(kDefaultMaxSocketsPerGroup,
             client_socket_factory_.allocation_count());
@@ -1302,6 +1457,7 @@ TEST_F(ClientSocketPoolBaseTest, PendingRequests) {
 }
 
 TEST_F(ClientSocketPoolBaseTest, PendingRequests_NoKeepAlive) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   EXPECT_THAT(StartRequest("a", DEFAULT_PRIORITY), IsOk());
@@ -1317,6 +1473,9 @@ TEST_F(ClientSocketPoolBaseTest, PendingRequests_NoKeepAlive) {
   for (size_t i = kDefaultMaxSocketsPerGroup; i < requests_size(); ++i)
     EXPECT_THAT(request(i)->WaitForResult(), IsOk());
 
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABE=*/3, 7)));
   EXPECT_EQ(static_cast<int>(requests_size()),
             client_socket_factory_.allocation_count());
   EXPECT_EQ(requests_size() - kDefaultMaxSocketsPerGroup,
@@ -1366,6 +1525,7 @@ TEST_F(ClientSocketPoolBaseTest, ConnectCancelConnect) {
 }
 
 TEST_F(ClientSocketPoolBaseTest, CancelRequest) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   EXPECT_THAT(StartRequest("a", DEFAULT_PRIORITY), IsOk());
@@ -1382,6 +1542,10 @@ TEST_F(ClientSocketPoolBaseTest, CancelRequest) {
   (*requests())[index_to_cancel]->handle()->Reset();
 
   ReleaseAllConnections(ClientSocketPoolTest::KEEP_ALIVE);
+  // 2 sockets reused for 4 requests.
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_REUSE_UNUSED=*/1, 4)));
 
   EXPECT_EQ(kDefaultMaxSocketsPerGroup,
             client_socket_factory_.allocation_count());
@@ -1524,6 +1688,28 @@ TEST_F(ClientSocketPoolBaseTest, FailingActiveRequestWithPendingRequests) {
     EXPECT_THAT(request(i)->WaitForResult(), IsError(ERR_CONNECTION_FAILED));
 }
 
+// Make sure that pending requests that complete synchronously get serviced
+// after active requests fail. See https://crbug.com/723748
+TEST_F(ClientSocketPoolBaseTest, HandleMultipleSyncFailuresAfterAsyncFailure) {
+  const size_t kNumberOfRequests = 10;
+  const size_t kMaxSockets = 1;
+  CreatePool(kMaxSockets, kMaxSockets);
+
+  connect_job_factory_->set_job_type(TestConnectJob::kMockPendingFailingJob);
+
+  EXPECT_THAT(StartRequest("a", DEFAULT_PRIORITY), IsError(ERR_IO_PENDING));
+
+  connect_job_factory_->set_job_type(TestConnectJob::kMockFailingJob);
+
+  // Queue up all the other requests
+  for (size_t i = 1; i < kNumberOfRequests; ++i)
+    EXPECT_THAT(StartRequest("a", DEFAULT_PRIORITY), IsError(ERR_IO_PENDING));
+
+  // Make sure all requests fail, instead of hanging.
+  for (size_t i = 0; i < kNumberOfRequests; ++i)
+    EXPECT_THAT(request(i)->WaitForResult(), IsError(ERR_CONNECTION_FAILED));
+}
+
 TEST_F(ClientSocketPoolBaseTest, CancelActiveRequestThenRequestSocket) {
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
@@ -1550,8 +1736,85 @@ TEST_F(ClientSocketPoolBaseTest, CancelActiveRequestThenRequestSocket) {
   EXPECT_EQ(2, client_socket_factory_.allocation_count());
 }
 
+TEST_F(ClientSocketPoolBaseTest, CloseIdleSocketsForced) {
+  base::HistogramTester histograms;
+  CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
+  ClientSocketHandle handle;
+  TestCompletionCallback callback;
+  BoundTestNetLog log;
+  int rv = handle.Init("a", params_, LOWEST,
+                       ClientSocketPool::RespectLimits::ENABLED,
+                       callback.callback(), pool_.get(), log.bound());
+  EXPECT_THAT(rv, IsOk());
+  handle.Reset();
+  EXPECT_EQ(1, pool_->IdleSocketCount());
+  pool_->CloseIdleSockets();
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_CLEAN_UP_FORCED=*/4, 1)));
+}
+
+TEST_F(ClientSocketPoolBaseTest, CloseIdleSocketsInGroupForced) {
+  base::HistogramTester histograms;
+  CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
+  TestCompletionCallback callback;
+  BoundTestNetLog log;
+  ClientSocketHandle handle1;
+  int rv = handle1.Init("a", params_, LOWEST,
+                        ClientSocketPool::RespectLimits::ENABLED,
+                        callback.callback(), pool_.get(), log.bound());
+  EXPECT_THAT(rv, IsOk());
+  ClientSocketHandle handle2;
+  rv = handle2.Init("a", params_, LOWEST,
+                    ClientSocketPool::RespectLimits::ENABLED,
+                    callback.callback(), pool_.get(), log.bound());
+  ClientSocketHandle handle3;
+  rv = handle3.Init("b", params_, LOWEST,
+                    ClientSocketPool::RespectLimits::ENABLED,
+                    callback.callback(), pool_.get(), log.bound());
+  EXPECT_THAT(rv, IsOk());
+  handle1.Reset();
+  handle2.Reset();
+  handle3.Reset();
+  EXPECT_EQ(3, pool_->IdleSocketCount());
+  pool_->CloseIdleSocketsInGroup("a");
+  EXPECT_EQ(1, pool_->IdleSocketCount());
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_CLEAN_UP_FORCED=*/4, 2)));
+}
+
+TEST_F(ClientSocketPoolBaseTest, CleanUpUnusableIdleSockets) {
+  base::HistogramTester histograms;
+  CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
+  ClientSocketHandle handle;
+  TestCompletionCallback callback;
+  BoundTestNetLog log;
+  int rv = handle.Init("a", params_, LOWEST,
+                       ClientSocketPool::RespectLimits::ENABLED,
+                       callback.callback(), pool_.get(), log.bound());
+  EXPECT_THAT(rv, IsOk());
+  StreamSocket* socket = handle.socket();
+  handle.Reset();
+  EXPECT_EQ(1, pool_->IdleSocketCount());
+
+  // Disconnect socket now to make the socket unusable.
+  socket->Disconnect();
+  ClientSocketHandle handle2;
+  rv = handle2.Init("a", params_, LOWEST,
+                    ClientSocketPool::RespectLimits::ENABLED,
+                    callback.callback(), pool_.get(), log.bound());
+  EXPECT_THAT(rv, IsOk());
+  EXPECT_FALSE(handle2.is_reused());
+
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_CLEAN_UP_UNUSABLE=*/7, 1)));
+}
+
 // Regression test for http://crbug.com/17985.
 TEST_F(ClientSocketPoolBaseTest, GroupWithPendingRequestsIsNotEmpty) {
+  base::HistogramTester histograms;
   const int kMaxSockets = 3;
   const int kMaxSocketsPerGroup = 2;
   CreatePool(kMaxSockets, kMaxSocketsPerGroup);
@@ -1576,7 +1839,14 @@ TEST_F(ClientSocketPoolBaseTest, GroupWithPendingRequestsIsNotEmpty) {
   // second release will unblock a request for "c", becaue it is the next
   // high priority socket.
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::KEEP_ALIVE));
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_REUSE_UNUSED=*/1, 1)));
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::KEEP_ALIVE));
+  EXPECT_THAT(
+      histograms.GetAllSamples(kIdleSocketFateHistogram),
+      testing::ElementsAre(base::Bucket(/*IDLE_SOCKET_FATE_REUSE_UNUSED=*/1, 1),
+                           base::Bucket(/*IDLE_SOCKET_FATE_CLOSE_ONE=*/8, 1)));
 
   // Closing idle sockets should not get us into trouble, but in the bug
   // we were hitting a CHECK here.
@@ -1585,6 +1855,10 @@ TEST_F(ClientSocketPoolBaseTest, GroupWithPendingRequestsIsNotEmpty) {
 
   // Run the released socket wakeups.
   base::RunLoop().RunUntilIdle();
+  EXPECT_THAT(
+      histograms.GetAllSamples(kIdleSocketFateHistogram),
+      testing::ElementsAre(base::Bucket(/*IDLE_SOCKET_FATE_REUSE_UNUSED=*/1, 1),
+                           base::Bucket(/*IDLE_SOCKET_FATE_CLOSE_ONE=*/8, 1)));
 }
 
 TEST_F(ClientSocketPoolBaseTest, BasicAsynchronous) {
@@ -2066,6 +2340,7 @@ TEST_F(ClientSocketPoolBaseTest, AdditionalErrorStateAsynchronous) {
 
 // Make sure we can reuse sockets.
 TEST_F(ClientSocketPoolBaseTest, CleanupTimedOutIdleSocketsReuse) {
+  base::HistogramTester histograms;
   CreatePoolWithIdleTimeouts(
       kDefaultMaxSockets, kDefaultMaxSocketsPerGroup,
       base::TimeDelta(),  // Time out unused sockets immediately.
@@ -2103,6 +2378,9 @@ TEST_F(ClientSocketPoolBaseTest, CleanupTimedOutIdleSocketsReuse) {
   ASSERT_TRUE(pool_->HasGroup("a"));
   EXPECT_EQ(0, pool_->IdleSocketCountInGroup("a"));
   EXPECT_EQ(1, pool_->NumActiveSocketsInGroup("a"));
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_REUSE_REUSED=*/0, 1)));
 
   TestNetLogEntry::List entries;
   log.GetEntries(&entries);
@@ -2120,6 +2398,7 @@ TEST_F(ClientSocketPoolBaseTest, CleanupTimedOutIdleSocketsReuse) {
 #endif
 // Make sure we cleanup old unused sockets.
 TEST_F(ClientSocketPoolBaseTest, MAYBE_CleanupTimedOutIdleSocketsNoReuse) {
+  base::HistogramTester histograms;
   CreatePoolWithIdleTimeouts(
       kDefaultMaxSockets, kDefaultMaxSocketsPerGroup,
       base::TimeDelta(),  // Time out unused sockets immediately
@@ -2176,6 +2455,12 @@ TEST_F(ClientSocketPoolBaseTest, MAYBE_CleanupTimedOutIdleSocketsNoReuse) {
   ASSERT_THAT(rv, IsError(ERR_IO_PENDING));
   ASSERT_THAT(callback3.WaitForResult(), IsOk());
   EXPECT_FALSE(handle.is_reused());
+
+  EXPECT_THAT(
+      histograms.GetAllSamples(kIdleSocketFateHistogram),
+      testing::ElementsAre(
+          base::Bucket(/*IDLE_SOCKET_FATE_CLEAN_UP_TIMED_OUT_REUSED=*/5, 1),
+          base::Bucket(/*IDLE_SOCKET_FATE_CLEAN_UP_TIMED_OUT_UNUSED=*/6, 1)));
 
   // Make sure the idle socket is closed.
   ASSERT_TRUE(pool_->HasGroup("a"));
@@ -2311,6 +2596,7 @@ TEST_F(ClientSocketPoolBaseTest, SocketLimitReleasingSockets) {
 
 TEST_F(ClientSocketPoolBaseTest,
        ReleasingDisconnectedSocketsMaintainsPriorityOrder) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
 
   connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
@@ -2327,10 +2613,16 @@ TEST_F(ClientSocketPoolBaseTest,
   // Releases one connection.
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::NO_KEEP_ALIVE));
   EXPECT_THAT((*requests())[2]->WaitForResult(), IsOk());
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 1)));
 
   EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::NO_KEEP_ALIVE));
   EXPECT_THAT((*requests())[3]->WaitForResult(), IsOk());
   EXPECT_EQ(4u, completion_count());
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 2)));
 
   EXPECT_EQ(1, GetOrderOfRequest(1));
   EXPECT_EQ(2, GetOrderOfRequest(2));
@@ -3532,6 +3824,7 @@ TEST_F(ClientSocketPoolBaseTest, FailToCloseIdleSocketsNotHeldByLayeredPool) {
 }
 
 TEST_F(ClientSocketPoolBaseTest, ForciblyCloseIdleSocketsHeldByLayeredPool) {
+  base::HistogramTester histograms;
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
   connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
 
@@ -3541,6 +3834,9 @@ TEST_F(ClientSocketPoolBaseTest, ForciblyCloseIdleSocketsHeldByLayeredPool) {
       .WillOnce(Invoke(&mock_layered_pool,
                        &MockLayeredPool::ReleaseOneConnection));
   EXPECT_TRUE(pool_->CloseOneIdleConnectionInHigherLayeredPool());
+  EXPECT_THAT(histograms.GetAllSamples(kIdleSocketFateHistogram),
+              testing::ElementsAre(
+                  base::Bucket(/*IDLE_SOCKET_FATE_RELEASE_UNUSABLE=*/3, 1)));
 }
 
 // Tests the basic case of closing an idle socket in a higher layered pool when

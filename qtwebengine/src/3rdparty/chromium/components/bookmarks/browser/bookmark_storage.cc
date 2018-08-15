@@ -18,8 +18,8 @@
 #include "base/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/bookmarks/browser/bookmark_codec.h"
-#include "components/bookmarks/browser/bookmark_index.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/bookmarks/browser/titled_url_index.h"
 #include "components/bookmarks/common/bookmark_constants.h"
 
 using base::TimeTicks;
@@ -124,7 +124,7 @@ BookmarkLoadDetails::BookmarkLoadDetails(
     BookmarkPermanentNode* other_folder_node,
     BookmarkPermanentNode* mobile_folder_node,
     const LoadExtraCallback& load_extra_callback,
-    BookmarkIndex* index,
+    TitledUrlIndex* index,
     int64_t max_id)
     : bb_node_(bb_node),
       other_folder_node_(other_folder_node),
@@ -153,10 +153,10 @@ BookmarkStorage::BookmarkStorage(
     : model_(model),
       writer_(profile_path.Append(kBookmarksFileName),
               sequenced_task_runner,
-              base::TimeDelta::FromMilliseconds(kSaveDelayMS)),
+              base::TimeDelta::FromMilliseconds(kSaveDelayMS),
+              "BookmarkStorage"),
       sequenced_task_runner_(sequenced_task_runner),
-      weak_factory_(this) {
-}
+      weak_factory_(this) {}
 
 BookmarkStorage::~BookmarkStorage() {
   if (writer_.HasPendingWrite())

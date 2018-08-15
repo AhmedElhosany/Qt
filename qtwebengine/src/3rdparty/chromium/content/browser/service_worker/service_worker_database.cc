@@ -18,7 +18,6 @@
 #include "base/strings/stringprintf.h"
 #include "content/browser/service_worker/service_worker_database.pb.h"
 #include "content/browser/service_worker/service_worker_metrics.h"
-#include "content/common/service_worker/service_worker_types.h"
 #include "content/common/service_worker/service_worker_utils.h"
 #include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/leveldatabase/src/helpers/memenv/memenv.h"
@@ -733,6 +732,56 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::UpdateLastCheckTime(
   return WriteBatch(&batch);
 }
 
+ServiceWorkerDatabase::Status
+ServiceWorkerDatabase::UpdateNavigationPreloadEnabled(int64_t registration_id,
+                                                      const GURL& origin,
+                                                      bool enable) {
+  DCHECK(sequence_checker_.CalledOnValidSequence());
+  Status status = LazyOpen(false);
+  if (IsNewOrNonexistentDatabase(status))
+    return STATUS_ERROR_NOT_FOUND;
+  if (status != STATUS_OK)
+    return status;
+  if (!origin.is_valid())
+    return STATUS_ERROR_FAILED;
+
+  RegistrationData registration;
+  status = ReadRegistrationData(registration_id, origin, &registration);
+  if (status != STATUS_OK)
+    return status;
+
+  registration.navigation_preload_state.enabled = enable;
+
+  leveldb::WriteBatch batch;
+  WriteRegistrationDataInBatch(registration, &batch);
+  return WriteBatch(&batch);
+}
+
+ServiceWorkerDatabase::Status
+ServiceWorkerDatabase::UpdateNavigationPreloadHeader(int64_t registration_id,
+                                                     const GURL& origin,
+                                                     const std::string& value) {
+  DCHECK(sequence_checker_.CalledOnValidSequence());
+  Status status = LazyOpen(false);
+  if (IsNewOrNonexistentDatabase(status))
+    return STATUS_ERROR_NOT_FOUND;
+  if (status != STATUS_OK)
+    return status;
+  if (!origin.is_valid())
+    return STATUS_ERROR_FAILED;
+
+  RegistrationData registration;
+  status = ReadRegistrationData(registration_id, origin, &registration);
+  if (status != STATUS_OK)
+    return status;
+
+  registration.navigation_preload_state.header = value;
+
+  leveldb::WriteBatch batch;
+  WriteRegistrationDataInBatch(registration, &batch);
+  return WriteBatch(&batch);
+}
+
 ServiceWorkerDatabase::Status ServiceWorkerDatabase::DeleteRegistration(
     int64_t registration_id,
     const GURL& origin,
@@ -831,6 +880,50 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ReadUserData(
   return status;
 }
 
+ServiceWorkerDatabase::Status ServiceWorkerDatabase::ReadUserDataByKeyPrefix(
+    int64_t registration_id,
+    const std::string key_prefix,
+    std::vector<std::string>* user_data_values) {
+  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_NE(kInvalidServiceWorkerRegistrationId, registration_id);
+  DCHECK(user_data_values);
+
+  Status status = LazyOpen(false);
+  if (IsNewOrNonexistentDatabase(status))
+    return STATUS_ERROR_NOT_FOUND;
+  if (status != STATUS_OK)
+    return status;
+
+  std::string prefix = CreateUserDataKey(registration_id, key_prefix);
+  {
+    std::unique_ptr<leveldb::Iterator> itr(
+        db_->NewIterator(leveldb::ReadOptions()));
+    for (itr->Seek(prefix); itr->Valid(); itr->Next()) {
+      status = LevelDBStatusToStatus(itr->status());
+      if (status != STATUS_OK) {
+        user_data_values->clear();
+        break;
+      }
+
+      if (!itr->key().starts_with(prefix))
+        break;
+
+      std::string user_data_value;
+      status = LevelDBStatusToStatus(
+          db_->Get(leveldb::ReadOptions(), itr->key(), &user_data_value));
+      if (status != STATUS_OK) {
+        user_data_values->clear();
+        break;
+      }
+
+      user_data_values->push_back(user_data_value);
+    }
+  }
+
+  HandleReadResult(FROM_HERE, status);
+  return status;
+}
+
 ServiceWorkerDatabase::Status ServiceWorkerDatabase::WriteUserData(
     int64_t registration_id,
     const GURL& origin,
@@ -923,6 +1016,71 @@ ServiceWorkerDatabase::ReadUserDataForAllRegistrations(
       status = LevelDBStatusToStatus(
           db_->Get(leveldb::ReadOptions(),
                    CreateUserDataKey(registration_id, user_data_name), &value));
+      if (status != STATUS_OK) {
+        user_data->clear();
+        break;
+      }
+      user_data->push_back(std::make_pair(registration_id, value));
+    }
+  }
+
+  HandleReadResult(FROM_HERE, status);
+  return status;
+}
+
+ServiceWorkerDatabase::Status
+ServiceWorkerDatabase::ReadUserDataForAllRegistrationsByKeyPrefix(
+    const std::string& user_data_name_prefix,
+    std::vector<std::pair<int64_t, std::string>>* user_data) {
+  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK(user_data->empty());
+
+  Status status = LazyOpen(false);
+  if (IsNewOrNonexistentDatabase(status))
+    return STATUS_OK;
+  if (status != STATUS_OK)
+    return status;
+
+  std::string key_prefix = kRegHasUserDataKeyPrefix + user_data_name_prefix;
+  {
+    std::unique_ptr<leveldb::Iterator> itr(
+        db_->NewIterator(leveldb::ReadOptions()));
+    for (itr->Seek(key_prefix); itr->Valid(); itr->Next()) {
+      status = LevelDBStatusToStatus(itr->status());
+      if (status != STATUS_OK) {
+        user_data->clear();
+        break;
+      }
+
+      if (!itr->key().starts_with(key_prefix))
+        break;
+
+      std::string user_data_name_with_id;
+      if (!RemovePrefix(itr->key().ToString(), kRegHasUserDataKeyPrefix,
+                        &user_data_name_with_id)) {
+        break;
+      }
+
+      std::vector<std::string> parts = base::SplitString(
+          user_data_name_with_id, base::StringPrintf("%c", kKeySeparator),
+          base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+      if (parts.size() != 2) {
+        status = STATUS_ERROR_CORRUPTED;
+        user_data->clear();
+        break;
+      }
+
+      int64_t registration_id;
+      status = ParseId(parts[1], &registration_id);
+      if (status != STATUS_OK) {
+        user_data->clear();
+        break;
+      }
+
+      std::string value;
+      status = LevelDBStatusToStatus(
+          db_->Get(leveldb::ReadOptions(),
+                   CreateUserDataKey(registration_id, parts[0]), &value));
       if (status != STATUS_OK) {
         user_data->clear();
         break;
@@ -1072,16 +1230,13 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::LazyOpen(
     options.env = g_service_worker_env.Pointer();
   }
 
-  leveldb::DB* db = NULL;
   Status status = LevelDBStatusToStatus(
-      leveldb::DB::Open(options, path_.AsUTF8Unsafe(), &db));
+      leveldb_env::OpenDB(options, path_.AsUTF8Unsafe(), &db_));
   HandleOpenResult(FROM_HERE, status);
   if (status != STATUS_OK) {
-    DCHECK(!db);
     // TODO(nhiroki): Should we retry to open the database?
     return status;
   }
-  db_.reset(db);
 
   int64_t db_version;
   status = ReadDatabaseVersion(&db_version);
@@ -1233,6 +1388,16 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
     }
     out->origin_trial_tokens = origin_trial_tokens;
   }
+  if (data.has_navigation_preload_state()) {
+    const ServiceWorkerNavigationPreloadState& state =
+        data.navigation_preload_state();
+    out->navigation_preload_state.enabled = state.enabled();
+    if (state.has_header())
+      out->navigation_preload_state.header = state.header();
+  }
+
+  for (uint32_t feature : data.used_features())
+    out->used_features.insert(feature);
 
   return ServiceWorkerDatabase::STATUS_OK;
 }
@@ -1275,6 +1440,13 @@ void ServiceWorkerDatabase::WriteRegistrationDataInBatch(
         feature_out->add_tokens(token);
     }
   }
+  ServiceWorkerNavigationPreloadState* state =
+      data.mutable_navigation_preload_state();
+  state->set_enabled(registration.navigation_preload_state.enabled);
+  state->set_header(registration.navigation_preload_state.header);
+
+  for (uint32_t feature : registration.used_features)
+    data.add_used_features(feature);
 
   std::string value;
   bool success = data.SerializeToString(&value);

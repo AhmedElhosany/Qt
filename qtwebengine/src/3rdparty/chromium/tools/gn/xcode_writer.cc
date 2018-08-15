@@ -13,6 +13,7 @@
 
 #include "base/environment.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/sha1.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -31,6 +32,25 @@
 
 namespace {
 
+using TargetToFileList = std::unordered_map<const Target*, Target::FileList>;
+using TargetToTarget = std::unordered_map<const Target*, const Target*>;
+using TargetToPBXTarget = std::unordered_map<const Target*, PBXTarget*>;
+
+const char kEarlGreyFileNameIdentifier[] = "egtest.mm";
+const char kXCTestFileNameIdentifier[] = "xctest.mm";
+const char kXCTestModuleTargetNamePostfix[] = "_module";
+const char kXCUITestRunnerTargetNamePostfix[] = "_runner";
+
+struct SafeEnvironmentVariableInfo {
+  const char* name;
+  bool capture_at_generation;
+};
+
+SafeEnvironmentVariableInfo kSafeEnvironmentVariables[] = {
+    {"HOME", true}, {"LANG", true},    {"PATH", true},
+    {"USER", true}, {"TMPDIR", false},
+};
+
 XcodeWriter::TargetOsType GetTargetOs(const Args& args) {
   const Value* target_os_value = args.GetArgOverride(variables::kTargetOs);
   if (target_os_value) {
@@ -42,33 +62,31 @@ XcodeWriter::TargetOsType GetTargetOs(const Args& args) {
   return XcodeWriter::WRITER_TARGET_OS_MACOS;
 }
 
-std::string GetArchs(const Args& args) {
-  const Value* target_cpu_value = args.GetArgOverride(variables::kTargetCpu);
-  if (target_cpu_value) {
-    if (target_cpu_value->type() == Value::STRING) {
-      if (target_cpu_value->string_value() == "x86")
-        return "i386";
-      if (target_cpu_value->string_value() == "x64")
-        return "x86_64";
-      if (target_cpu_value->string_value() == "arm")
-        return "armv7";
-      if (target_cpu_value->string_value() == "armv7")
-        return "armv7";
-      if (target_cpu_value->string_value() == "arm64")
-        return "armv64";
-    }
-  }
-  return "x86_64";
-}
-
 std::string GetBuildScript(const std::string& target_name,
-                           const std::string& build_path,
-                           const std::string& ninja_extra_args) {
+                           const std::string& ninja_extra_args,
+                           base::Environment* environment) {
   std::stringstream script;
   script << "echo note: \"Compile and copy " << target_name << " via ninja\"\n"
          << "exec ";
-  if (!build_path.empty())
-    script << "env PATH=\"" << build_path << "\" ";
+
+  // Launch ninja with a sanitized environment (Xcode sets many environment
+  // variable overridding settings, including the SDK, thus breaking hermetic
+  // build).
+  script << "env -i ";
+  for (const auto& variable : kSafeEnvironmentVariables) {
+    script << variable.name << "=\"";
+
+    std::string value;
+    if (variable.capture_at_generation)
+      environment->GetVar(variable.name, &value);
+
+    if (!value.empty())
+      script << value;
+    else
+      script << "$" << variable.name;
+    script << "\" ";
+  }
+
   script << "ninja -C .";
   if (!ninja_extra_args.empty())
     script << " " << ninja_extra_args;
@@ -76,6 +94,200 @@ std::string GetBuildScript(const std::string& target_name,
     script << " " << target_name;
   script << "\nexit 1\n";
   return script.str();
+}
+
+bool IsApplicationTarget(const Target* target) {
+  return target->output_type() == Target::CREATE_BUNDLE &&
+         target->bundle_data().product_type() ==
+             "com.apple.product-type.application";
+}
+
+bool IsXCUITestRunnerTarget(const Target* target) {
+  return IsApplicationTarget(target) &&
+         base::EndsWith(target->label().name(),
+                        kXCUITestRunnerTargetNamePostfix,
+                        base::CompareCase::SENSITIVE);
+}
+
+bool IsXCTestModuleTarget(const Target* target) {
+  return target->output_type() == Target::CREATE_BUNDLE &&
+         target->bundle_data().product_type() ==
+             "com.apple.product-type.bundle.unit-test" &&
+         base::EndsWith(target->label().name(), kXCTestModuleTargetNamePostfix,
+                        base::CompareCase::SENSITIVE);
+}
+
+bool IsXCUITestModuleTarget(const Target* target) {
+  return target->output_type() == Target::CREATE_BUNDLE &&
+         target->bundle_data().product_type() ==
+             "com.apple.product-type.bundle.ui-testing" &&
+         base::EndsWith(target->label().name(), kXCTestModuleTargetNamePostfix,
+                        base::CompareCase::SENSITIVE);
+}
+
+bool IsXCTestFile(const SourceFile& file) {
+  return base::EndsWith(file.GetName(), kEarlGreyFileNameIdentifier,
+                        base::CompareCase::SENSITIVE) ||
+         base::EndsWith(file.GetName(), kXCTestFileNameIdentifier,
+                        base::CompareCase::SENSITIVE);
+}
+
+// TODO(crbug.com/741147) Remove this function and switch to use
+// test_application_name once the bug is fixed and GN has rolled past it.
+const Target* FindXCTestApplicationTarget(
+    const Target* xctest_module_target,
+    const std::vector<const Target*>& targets) {
+  DCHECK(IsXCTestModuleTarget(xctest_module_target));
+  DCHECK(base::EndsWith(xctest_module_target->label().name(),
+                        kXCTestModuleTargetNamePostfix,
+                        base::CompareCase::SENSITIVE));
+  std::string application_target_name =
+      xctest_module_target->label().name().substr(
+          0, xctest_module_target->label().name().size() -
+                 strlen(kXCTestModuleTargetNamePostfix));
+  for (const Target* target : targets) {
+    if (target->label().name() == application_target_name) {
+      return target;
+    }
+  }
+  NOTREACHED();
+  return nullptr;
+}
+
+// Adds |base_pbxtarget| as a dependency of |dependent_pbxtarget| in the
+// generated Xcode project.
+void AddPBXTargetDependency(const PBXTarget* base_pbxtarget,
+                            PBXTarget* dependent_pbxtarget,
+                            const PBXProject* project) {
+  auto container_item_proxy =
+      base::MakeUnique<PBXContainerItemProxy>(project, base_pbxtarget);
+  auto dependency = base::MakeUnique<PBXTargetDependency>(
+      base_pbxtarget, std::move(container_item_proxy));
+
+  dependent_pbxtarget->AddDependency(std::move(dependency));
+}
+
+// Adds the corresponding test rig application target as dependency of xctest
+// module target in the generated Xcode project.
+void AddDependencyTargetForXCModuleTargets(
+    const std::vector<const Target*>& targets,
+    const TargetToPBXTarget& bundle_target_to_pbxtarget,
+    const PBXProject* project) {
+  for (const Target* target : targets) {
+    if (!IsXCTestModuleTarget(target))
+      continue;
+
+    const Target* test_application_target =
+        FindXCTestApplicationTarget(target, targets);
+    const PBXTarget* test_application_pbxtarget =
+        bundle_target_to_pbxtarget.at(test_application_target);
+    PBXTarget* module_pbxtarget = bundle_target_to_pbxtarget.at(target);
+    DCHECK(test_application_pbxtarget);
+    DCHECK(module_pbxtarget);
+
+    AddPBXTargetDependency(test_application_pbxtarget, module_pbxtarget,
+                           project);
+  }
+}
+
+// Searches the list of xctest files recursively under |target|.
+void SearchXCTestFilesForTarget(const Target* target,
+                                TargetToFileList* xctest_files_per_target) {
+  // Early return if already visited and processed.
+  if (xctest_files_per_target->find(target) != xctest_files_per_target->end())
+    return;
+
+  Target::FileList xctest_files;
+  for (const SourceFile& file : target->sources()) {
+    if (IsXCTestFile(file)) {
+      xctest_files.push_back(file);
+    }
+  }
+
+  // Call recursively on public and private deps.
+  for (const auto& t : target->public_deps()) {
+    SearchXCTestFilesForTarget(t.ptr, xctest_files_per_target);
+    const Target::FileList& deps_xctest_files =
+        (*xctest_files_per_target)[t.ptr];
+    xctest_files.insert(xctest_files.end(), deps_xctest_files.begin(),
+                        deps_xctest_files.end());
+  }
+
+  for (const auto& t : target->private_deps()) {
+    SearchXCTestFilesForTarget(t.ptr, xctest_files_per_target);
+    const Target::FileList& deps_xctest_files =
+        (*xctest_files_per_target)[t.ptr];
+    xctest_files.insert(xctest_files.end(), deps_xctest_files.begin(),
+                        deps_xctest_files.end());
+  }
+
+  // Sort xctest_files to remove duplicates.
+  std::sort(xctest_files.begin(), xctest_files.end());
+  xctest_files.erase(std::unique(xctest_files.begin(), xctest_files.end()),
+                     xctest_files.end());
+
+  xctest_files_per_target->insert(std::make_pair(target, xctest_files));
+}
+
+// Add all source files for indexing, both private and public.
+void AddSourceFilesToProjectForIndexing(
+    const std::vector<const Target*>& targets,
+    PBXProject* project,
+    SourceDir source_dir,
+    const BuildSettings* build_settings) {
+  std::vector<SourceFile> sources;
+  for (const Target* target : targets) {
+    for (const SourceFile& source : target->sources()) {
+      if (IsStringInOutputDir(build_settings->build_dir(), source.value()))
+        continue;
+
+      sources.push_back(source);
+    }
+
+    if (target->all_headers_public())
+      continue;
+
+    for (const SourceFile& source : target->public_headers()) {
+      if (IsStringInOutputDir(build_settings->build_dir(), source.value()))
+        continue;
+
+      sources.push_back(source);
+    }
+  }
+
+  // Sort sources to ensure determinism of the project file generation and
+  // remove duplicate reference to the source files (can happen due to the
+  // bundle_data targets).
+  std::sort(sources.begin(), sources.end());
+  sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
+
+  for (const SourceFile& source : sources) {
+    std::string source_file = RebasePath(source.value(), source_dir,
+                                         build_settings->root_path_utf8());
+    project->AddSourceFileToIndexingTarget(source_file, source_file,
+                                           CompilerFlags::NONE);
+  }
+}
+
+// Add xctest files to the "Compiler Sources" of corresponding xctest native
+// targets.
+void AddXCTestFilesToXCTestModuleTarget(
+    const Target::FileList& xctest_file_list,
+    PBXNativeTarget* native_target,
+    PBXProject* project,
+    SourceDir source_dir,
+    const BuildSettings* build_settings) {
+  for (const SourceFile& source : xctest_file_list) {
+    std::string source_path = RebasePath(source.value(), source_dir,
+                                         build_settings->root_path_utf8());
+
+    // Test files need to be known to Xcode for proper indexing and for
+    // discovery of tests function for XCTest, but the compilation is done
+    // via ninja and thus must prevent Xcode from compiling the files by
+    // adding '-help' as per file compiler flag.
+    project->AddSourceFile(source_path, source_path, CompilerFlags::HELP,
+                           native_target);
+  }
 }
 
 class CollectPBXObjectsPerClassHelper : public PBXObjectVisitor {
@@ -157,8 +369,7 @@ bool XcodeWriter::RunAndWriteFiles(const std::string& workspace_name,
       attributes["TARGETED_DEVICE_FAMILY"] = "1,2";
       break;
     case XcodeWriter::WRITER_TARGET_OS_MACOS:
-      attributes["ARCHS"] = GetArchs(build_settings->build_args());
-      attributes["SDKROOT"] = "macosx10.11";
+      attributes["SDKROOT"] = "macosx";
       break;
   }
 
@@ -187,13 +398,9 @@ bool XcodeWriter::RunAndWriteFiles(const std::string& workspace_name,
   }
 
   XcodeWriter workspace(workspace_name);
-  workspace.CreateProductsProject(targets, attributes, source_path, config_name,
-                                  root_target_name, ninja_extra_args,
-                                  build_settings, target_os);
-
-  workspace.CreateSourcesProject(
-      all_targets, build_settings->build_dir(), attributes, source_path,
-      build_settings->root_path_utf8(), config_name, target_os);
+  workspace.CreateProductsProject(targets, all_targets, attributes, source_path,
+                                  config_name, root_target_name,
+                                  ninja_extra_args, build_settings, target_os);
 
   return workspace.WriteFiles(build_settings, err);
 }
@@ -261,6 +468,7 @@ bool XcodeWriter::FilterTargets(const BuildSettings* build_settings,
 
 void XcodeWriter::CreateProductsProject(
     const std::vector<const Target*>& targets,
+    const std::vector<const Target*>& all_targets,
     const PBXAttributes& attributes,
     const std::string& source_path,
     const std::string& config_name,
@@ -271,12 +479,21 @@ void XcodeWriter::CreateProductsProject(
   std::unique_ptr<PBXProject> main_project(
       new PBXProject("products", config_name, source_path, attributes));
 
+  std::vector<const Target*> bundle_targets;
+  TargetToPBXTarget bundle_target_to_pbxtarget;
+
   std::string build_path;
   std::unique_ptr<base::Environment> env(base::Environment::Create());
-  env->GetVar("PATH", &build_path);
-
+  SourceDir source_dir("//");
+  AddSourceFilesToProjectForIndexing(all_targets, main_project.get(),
+                                     source_dir, build_settings);
   main_project->AddAggregateTarget(
-      "All", GetBuildScript(root_target, build_path, ninja_extra_args));
+      "All", GetBuildScript(root_target, ninja_extra_args, env.get()));
+
+  // Needs to search for xctest files under the application targets, and this
+  // variable is used to store the results of visited targets, thus making the
+  // search more efficient.
+  TargetToFileList xctest_files_per_target;
 
   for (const Target* target : targets) {
     switch (target->output_type()) {
@@ -289,68 +506,89 @@ void XcodeWriter::CreateProductsProject(
             target->output_name().empty() ? target->label().name()
                                           : target->output_name(),
             "com.apple.product-type.tool",
-            GetBuildScript(target->label().name(), build_path,
-                           ninja_extra_args));
+            GetBuildScript(target->label().name(), ninja_extra_args,
+                           env.get()));
         break;
 
-      case Target::CREATE_BUNDLE:
+      case Target::CREATE_BUNDLE: {
         if (target->bundle_data().product_type().empty())
           continue;
 
-        main_project->AddNativeTarget(
-            target->label().name(), std::string(),
+        // For XCUITest, two CREATE_BUNDLE targets are generated:
+        // ${target_name}_runner and ${target_name}_module, however, Xcode
+        // requires only one target named ${target_name} to run tests.
+        if (IsXCUITestRunnerTarget(target))
+          continue;
+        std::string pbxtarget_name = target->label().name();
+        if (IsXCUITestModuleTarget(target)) {
+          std::string target_name = target->label().name();
+          pbxtarget_name = target_name.substr(
+              0, target_name.rfind(kXCTestModuleTargetNamePostfix));
+        }
+
+        PBXAttributes xcode_extra_attributes =
+            target->bundle_data().xcode_extra_attributes();
+
+        // TODO(crbug.com/740800): Remove the following comment and code once
+        // the bug is fixed and gn has rolled past it.
+        // Test files need to be known to Xcode for proper indexing and for
+        // discovery of tests function for XCTest, but the compilation is done
+        // via ninja and thus must prevent Xcode from linking object files via
+        // this hack.
+        if (IsXCTestModuleTarget(target)) {
+          xcode_extra_attributes["OTHER_LDFLAGS"] = "-help";
+          xcode_extra_attributes["ONLY_ACTIVE_ARCH"] = "YES";
+          xcode_extra_attributes["DEBUG_INFORMATION_FORMAT"] = "dwarf";
+        }
+
+        const std::string& target_output_name =
             RebasePath(target->bundle_data()
                            .GetBundleRootDirOutput(target->settings())
                            .value(),
-                       build_settings->build_dir()),
+                       build_settings->build_dir());
+        PBXNativeTarget* native_target = main_project->AddNativeTarget(
+            pbxtarget_name, std::string(), target_output_name,
             target->bundle_data().product_type(),
-            GetBuildScript(target->label().name(), build_path,
-                           ninja_extra_args));
+            GetBuildScript(pbxtarget_name, ninja_extra_args, env.get()),
+            xcode_extra_attributes);
+
+        bundle_targets.push_back(target);
+        bundle_target_to_pbxtarget.insert(
+            std::make_pair(target, native_target));
+
+        if (!IsXCTestModuleTarget(target))
+          continue;
+
+        // For XCTest, test files are compiled into the application bundle.
+        const Target* test_application_target =
+            FindXCTestApplicationTarget(target, targets);
+        SearchXCTestFilesForTarget(test_application_target,
+                                   &xctest_files_per_target);
+        const Target::FileList& xctest_file_list =
+            xctest_files_per_target[test_application_target];
+
+        // Add xctest files to the "Compiler Sources" of corresponding xctest
+        // native targets for proper indexing and for discovery of tests
+        // function for XCTest.
+        AddXCTestFilesToXCTestModuleTarget(xctest_file_list, native_target,
+                                           main_project.get(), source_dir,
+                                           build_settings);
         break;
+      }
 
       default:
         break;
     }
   }
 
+  // For XCTest, tests are compiled into the application bundle, thus adding
+  // the corresponding test rig application target as a dependency of xctest
+  // module target in the generated Xcode project so that the application target
+  // is re-compiled when compiling the xctest module target.
+  AddDependencyTargetForXCModuleTargets(
+      bundle_targets, bundle_target_to_pbxtarget, main_project.get());
+
   projects_.push_back(std::move(main_project));
-}
-
-void XcodeWriter::CreateSourcesProject(
-    const std::vector<const Target*>& targets,
-    const SourceDir& root_build_dir,
-    const PBXAttributes& attributes,
-    const std::string& source_path,
-    const std::string& absolute_source_path,
-    const std::string& config_name,
-    TargetOsType target_os) {
-  std::vector<SourceFile> sources;
-  for (const Target* target : targets) {
-    for (const SourceFile& source : target->sources()) {
-      if (IsStringInOutputDir(root_build_dir, source.value()))
-        continue;
-
-      sources.push_back(source);
-    }
-  }
-
-  std::unique_ptr<PBXProject> sources_for_indexing(
-      new PBXProject("sources", config_name, source_path, attributes));
-
-  // Sort sources to ensure determinisn of the project file generation and
-  // remove duplicate reference to the source files (can happen due to the
-  // bundle_data targets).
-  std::sort(sources.begin(), sources.end());
-  sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
-
-  SourceDir source_dir("//");
-  for (const SourceFile& source : sources) {
-    std::string source_file =
-        RebasePath(source.value(), source_dir, absolute_source_path);
-    sources_for_indexing->AddSourceFile(source_file);
-  }
-
-  projects_.push_back(std::move(sources_for_indexing));
 }
 
 bool XcodeWriter::WriteFiles(const BuildSettings* build_settings, Err* err) {

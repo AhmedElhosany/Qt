@@ -26,7 +26,7 @@ namespace {
 
 // Generates process-unique IDs to use for tracing a MappedMemoryManager's
 // chunks.
-base::StaticAtomicSequenceNumber g_next_mapped_memory_manager_tracing_id;
+base::AtomicSequenceNumber g_next_mapped_memory_manager_tracing_id;
 
 }  // namespace
 
@@ -47,19 +47,9 @@ MappedMemoryManager::MappedMemoryManager(CommandBufferHelper* helper,
       max_free_bytes_(unused_memory_reclaim_limit),
       max_allocated_bytes_(SharedMemoryLimits::kNoLimit),
       tracing_id_(g_next_mapped_memory_manager_tracing_id.GetNext()) {
-  // In certain cases, ThreadTaskRunnerHandle isn't set (Android Webview).
-  // Don't register a dump provider in these cases.
-  // TODO(ericrk): Get this working in Android Webview. crbug.com/517156
-  if (base::ThreadTaskRunnerHandle::IsSet()) {
-    base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
-        this, "gpu::MappedMemoryManager", base::ThreadTaskRunnerHandle::Get());
-  }
 }
 
 MappedMemoryManager::~MappedMemoryManager() {
-  base::trace_event::MemoryDumpManager::GetInstance()->UnregisterDumpProvider(
-      this);
-
   CommandBuffer* cmd_buf = helper_->command_buffer();
   for (auto& chunk : chunks_) {
     cmd_buf->DestroyTransferBuffer(chunk->shm_id());
@@ -198,9 +188,16 @@ bool MappedMemoryManager::OnMemoryDump(
 
     auto guid = GetBufferGUIDForTracing(tracing_process_id, chunk->shm_id());
 
+    auto shared_memory_guid =
+        chunk->shared_memory()->backing()->shared_memory_handle().GetGUID();
     const int kImportance = 2;
-    pmd->CreateSharedGlobalAllocatorDump(guid);
-    pmd->AddOwnershipEdge(dump->guid(), guid, kImportance);
+    if (!shared_memory_guid.is_empty()) {
+      pmd->CreateSharedMemoryOwnershipEdge(dump->guid(), guid,
+                                           shared_memory_guid, kImportance);
+    } else {
+      pmd->CreateSharedGlobalAllocatorDump(guid);
+      pmd->AddOwnershipEdge(dump->guid(), guid, kImportance);
+    }
   }
 
   return true;

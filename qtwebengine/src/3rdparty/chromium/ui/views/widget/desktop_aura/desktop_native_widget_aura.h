@@ -54,8 +54,8 @@ class WindowReorderer;
 class VIEWS_EXPORT DesktopNativeWidgetAura
     : public internal::NativeWidgetPrivate,
       public aura::WindowDelegate,
-      public aura::client::ActivationDelegate,
-      public aura::client::ActivationChangeObserver,
+      public wm::ActivationDelegate,
+      public wm::ActivationChangeObserver,
       public aura::client::FocusChangeObserver,
       public aura::client::DragDropDelegate,
       public aura::WindowTreeHostObserver {
@@ -91,9 +91,14 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
 
   aura::Window* content_window() { return content_window_; }
 
+  Widget::InitParams::Type widget_type() const { return widget_type_; }
+
   // Ensures that the correct window is activated/deactivated based on whether
   // we are being activated/deactivated.
   void HandleActivationChanged(bool active);
+
+  // Overridden from internal::NativeWidgetPrivate:
+  gfx::NativeWindow GetNativeWindow() const override;
 
  protected:
   // Overridden from internal::NativeWidgetPrivate:
@@ -106,7 +111,6 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   Widget* GetWidget() override;
   const Widget* GetWidget() const override;
   gfx::NativeView GetNativeView() const override;
-  gfx::NativeWindow GetNativeWindow() const override;
   Widget* GetTopLevelWidget() override;
   const ui::Compositor* GetCompositor() const override;
   const ui::Layer* GetLayer() const override;
@@ -177,8 +181,6 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void SetVisibilityAnimationDuration(const base::TimeDelta& duration) override;
   void SetVisibilityAnimationTransition(
       Widget::VisibilityTransition transition) override;
-  ui::NativeTheme* GetNativeTheme() const override;
-  void OnRootViewLayout() override;
   bool IsTranslucentWindowOpacitySupported() const override;
   void OnSizeConstraintsChanged() override;
   void RepostNativeEvent(gfx::NativeEvent native_event) override;
@@ -210,14 +212,13 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void OnScrollEvent(ui::ScrollEvent* event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
 
-  // Overridden from aura::client::ActivationDelegate:
+  // Overridden from wm::ActivationDelegate:
   bool ShouldActivate() const override;
 
-  // Overridden from aura::client::ActivationChangeObserver:
-  void OnWindowActivated(
-      aura::client::ActivationChangeObserver::ActivationReason reason,
-      aura::Window* gained_active,
-      aura::Window* lost_active) override;
+  // Overridden from wm::ActivationChangeObserver:
+  void OnWindowActivated(wm::ActivationChangeObserver::ActivationReason reason,
+                         aura::Window* gained_active,
+                         aura::Window* lost_active) override;
 
   // Overridden from aura::client::FocusChangeObserver:
   void OnWindowFocused(aura::Window* gained_focus,
@@ -233,8 +234,8 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void OnHostCloseRequested(const aura::WindowTreeHost* host) override;
   void OnHostResized(const aura::WindowTreeHost* host) override;
   void OnHostWorkspaceChanged(const aura::WindowTreeHost* host) override;
-  void OnHostMoved(const aura::WindowTreeHost* host,
-                   const gfx::Point& new_origin) override;
+  void OnHostMovedInPixels(const aura::WindowTreeHost* host,
+                           const gfx::Point& new_origin_in_pixels) override;
 
  private:
   friend class RootWindowDestructionObserver;
@@ -256,11 +257,7 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
 
   std::unique_ptr<DesktopCaptureClient> capture_client_;
 
-  // Child of the root, contains |content_window_|.
-  aura::Window* content_window_container_;
-
-  // Child of |content_window_container_|. This is the return value from
-  // GetNativeView().
+  // This is the return value from GetNativeView().
   // WARNING: this may be NULL, in particular during shutdown it becomes NULL.
   aura::Window* content_window_;
 
@@ -307,6 +304,9 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
 
   // See class documentation for Widget in widget.h for a note about type.
   Widget::InitParams::Type widget_type_;
+
+  // See DesktopWindowTreeHost::ShouldUseDesktopNativeCursorManager().
+  bool use_desktop_native_cursor_manager_ = false;
 
   // The following factory is used for calls to close the NativeWidgetAura
   // instance.

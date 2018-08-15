@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_CERT_CT_TEST_UTIL_H_
-#define NET_CERT_CT_TEST_UTIL_H_
+#ifndef NET_TEST_CT_TEST_UTIL_H_
+#define NET_TEST_CT_TEST_UTIL_H_
 
 #include <stddef.h>
 #include <stdint.h>
@@ -20,15 +20,15 @@ namespace net {
 namespace ct {
 
 struct DigitallySigned;
-struct LogEntry;
 struct MerkleTreeLeaf;
+struct SignedEntryData;
 struct SignedTreeHead;
 
 // Note: unless specified otherwise, all test data is taken from Certificate
 // Transparency test data repository.
 
 // Fills |entry| with test data for an X.509 entry.
-void GetX509CertLogEntry(LogEntry* entry);
+void GetX509CertSignedEntry(SignedEntryData* entry);
 
 // Fills |tree_leaf| with test data for an X.509 Merkle tree leaf.
 void GetX509CertTreeLeaf(MerkleTreeLeaf* tree_leaf);
@@ -38,7 +38,7 @@ void GetX509CertTreeLeaf(MerkleTreeLeaf* tree_leaf);
 std::string GetDerEncodedX509Cert();
 
 // Fills |entry| with test data for a Precertificate entry.
-void GetPrecertLogEntry(LogEntry* entry);
+void GetPrecertSignedEntry(SignedEntryData* entry);
 
 // Fills |tree_leaf| with test data for a Precertificate Merkle tree leaf.
 void GetPrecertTreeLeaf(MerkleTreeLeaf* tree_leaf);
@@ -132,4 +132,4 @@ bool CheckForSCTOrigin(const SignedCertificateTimestampAndStatusList& scts,
 
 }  // namespace net
 
-#endif  // NET_CERT_CT_TEST_UTIL_H_
+#endif  // NET_TEST_CT_TEST_UTIL_H_

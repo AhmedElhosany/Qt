@@ -5,8 +5,8 @@
 #include "core/fxcrt/cfx_retain_ptr.h"
 
 #include <utility>
+#include <vector>
 
-#include "testing/fx_string_testhelpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -65,6 +65,8 @@ TEST(fxcrt, RetainPtrMoveCtor) {
     CFX_RetainPtr<PseudoRetainable> ptr1(&obj);
     {
       CFX_RetainPtr<PseudoRetainable> ptr2(std::move(ptr1));
+      EXPECT_EQ(nullptr, ptr1.Get());
+      EXPECT_EQ(&obj, ptr2.Get());
       EXPECT_EQ(1, obj.retain_count());
       EXPECT_EQ(0, obj.release_count());
     }
@@ -128,6 +130,27 @@ TEST(fxcrt, RetainPtrSwap) {
   EXPECT_EQ(1, obj2.release_count());
 }
 
+TEST(fxcrt, RetainPtrLeak) {
+  PseudoRetainable obj;
+  PseudoRetainable* leak;
+  {
+    CFX_RetainPtr<PseudoRetainable> ptr(&obj);
+    leak = ptr.Leak();
+    EXPECT_EQ(1, obj.retain_count());
+    EXPECT_EQ(0, obj.release_count());
+  }
+  EXPECT_EQ(1, obj.retain_count());
+  EXPECT_EQ(0, obj.release_count());
+  {
+    CFX_RetainPtr<PseudoRetainable> ptr;
+    ptr.Unleak(leak);
+    EXPECT_EQ(1, obj.retain_count());
+    EXPECT_EQ(0, obj.release_count());
+  }
+  EXPECT_EQ(1, obj.retain_count());
+  EXPECT_EQ(1, obj.release_count());
+}
+
 TEST(fxcrt, RetainPtrSwapNull) {
   PseudoRetainable obj1;
   {
@@ -162,6 +185,27 @@ TEST(fxcrt, RetainPtrAssign) {
   }
   EXPECT_EQ(2, obj.retain_count());
   EXPECT_EQ(2, obj.release_count());
+}
+
+TEST(fxcrt, RetainPtrMoveAssign) {
+  PseudoRetainable obj;
+  {
+    CFX_RetainPtr<PseudoRetainable> ptr1(&obj);
+    {
+      CFX_RetainPtr<PseudoRetainable> ptr2;
+      EXPECT_EQ(&obj, ptr1.Get());
+      EXPECT_EQ(nullptr, ptr2.Get());
+      ptr2 = std::move(ptr1);
+      EXPECT_EQ(nullptr, ptr1.Get());
+      EXPECT_EQ(&obj, ptr2.Get());
+      EXPECT_EQ(1, obj.retain_count());
+      EXPECT_EQ(0, obj.release_count());
+    }
+    EXPECT_EQ(1, obj.retain_count());
+    EXPECT_EQ(1, obj.release_count());
+  }
+  EXPECT_EQ(1, obj.retain_count());
+  EXPECT_EQ(1, obj.release_count());
 }
 
 TEST(fxcrt, RetainPtrEquals) {
@@ -204,6 +248,14 @@ TEST(fxcrt, RetainPtrNotEquals) {
   EXPECT_TRUE(obj1_ptr1 != obj2_ptr1);
 }
 
+TEST(fxcrt, RetainPtrLessThan) {
+  PseudoRetainable objs[2];
+  CFX_RetainPtr<PseudoRetainable> obj1_ptr(&objs[0]);
+  CFX_RetainPtr<PseudoRetainable> obj2_ptr(&objs[1]);
+  EXPECT_TRUE(obj1_ptr < obj2_ptr);
+  EXPECT_FALSE(obj2_ptr < obj1_ptr);
+}
+
 TEST(fxcrt, RetainPtrBool) {
   PseudoRetainable obj1;
   CFX_RetainPtr<PseudoRetainable> null_ptr;
@@ -212,4 +264,37 @@ TEST(fxcrt, RetainPtrBool) {
   bool obj1_bool = !!obj1_ptr;
   EXPECT_FALSE(null_bool);
   EXPECT_TRUE(obj1_bool);
+}
+
+TEST(fxcrt, RetainPtrMakeRetained) {
+  auto ptr = pdfium::MakeRetain<CFX_Retainable>();
+  EXPECT_TRUE(ptr->HasOneRef());
+  {
+    CFX_RetainPtr<CFX_Retainable> other = ptr;
+    EXPECT_FALSE(ptr->HasOneRef());
+  }
+  EXPECT_TRUE(ptr->HasOneRef());
+}
+
+TEST(fxcrt, RetainPtrVectorMove) {
+  // Proves move ctor is selected by std::vector over copy/delete, this
+  // may require the ctor to be marked "noexcept".
+  PseudoRetainable obj;
+  {
+    CFX_RetainPtr<PseudoRetainable> ptr(&obj);
+    std::vector<CFX_RetainPtr<PseudoRetainable>> vec1;
+    vec1.push_back(std::move(ptr));
+    EXPECT_EQ(1, obj.retain_count());
+    EXPECT_EQ(0, obj.release_count());
+
+    std::vector<CFX_RetainPtr<PseudoRetainable>> vec2 = std::move(vec1);
+    EXPECT_EQ(1, obj.retain_count());
+    EXPECT_EQ(0, obj.release_count());
+
+    vec2.resize(4096);
+    EXPECT_EQ(1, obj.retain_count());
+    EXPECT_EQ(0, obj.release_count());
+  }
+  EXPECT_EQ(1, obj.retain_count());
+  EXPECT_EQ(1, obj.release_count());
 }

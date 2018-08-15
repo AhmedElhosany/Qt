@@ -8,11 +8,8 @@
 
 #include "net/base/ip_address.h"
 #include "net/cert/internal/test_helpers.h"
-#include "net/test/gtest_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-using net::test::IsOk;
 
 namespace net {
 namespace {
@@ -186,7 +183,7 @@ TEST_P(ParseNameConstraints,
   EXPECT_FALSE(name_constraints->IsPermittedDNSName("*.foo.bar.com"));
 }
 
-TEST_P(ParseNameConstraints, DNSNamesWithLeadingDot) {
+TEST_P(ParseNameConstraints, DNSNamesPermittedWithLeadingDot) {
   std::string a;
   ASSERT_TRUE(
       LoadTestNameConstraint("dnsname-permitted_with_leading_dot.pem", &a));
@@ -194,13 +191,44 @@ TEST_P(ParseNameConstraints, DNSNamesWithLeadingDot) {
       NameConstraints::Create(der::Input(&a), is_critical()));
   ASSERT_TRUE(name_constraints);
 
-  // dNSName constraints should be specified as a host. A dNSName constraint
-  // with a leading "." doesn't make sense, though some certs include it
-  // (probably confusing it with the rules for uniformResourceIdentifier
-  // constraints). It should not match anything.
+  // A permitted dNSName constraint of ".bar.com" should only match subdomains
+  // of .bar.com, but not bar.com itself.
   EXPECT_FALSE(name_constraints->IsPermittedDNSName("com"));
   EXPECT_FALSE(name_constraints->IsPermittedDNSName("bar.com"));
+  EXPECT_FALSE(name_constraints->IsPermittedDNSName("foobar.com"));
+  EXPECT_TRUE(name_constraints->IsPermittedDNSName("foo.bar.com"));
+  EXPECT_TRUE(name_constraints->IsPermittedDNSName("*.bar.com"));
+}
+
+TEST_P(ParseNameConstraints, DNSNamesExcludedWithLeadingDot) {
+  std::string a;
+  ASSERT_TRUE(
+      LoadTestNameConstraint("dnsname-excluded_with_leading_dot.pem", &a));
+  std::unique_ptr<NameConstraints> name_constraints(
+      NameConstraints::Create(der::Input(&a), is_critical()));
+  ASSERT_TRUE(name_constraints);
+
+  // An excluded dNSName constraint of ".bar.com" should only match subdomains
+  // of .bar.com, but not bar.com itself.
+  EXPECT_TRUE(name_constraints->IsPermittedDNSName("com"));
+  EXPECT_TRUE(name_constraints->IsPermittedDNSName("bar.com"));
+  EXPECT_TRUE(name_constraints->IsPermittedDNSName("foobar.com"));
   EXPECT_FALSE(name_constraints->IsPermittedDNSName("foo.bar.com"));
+  EXPECT_FALSE(name_constraints->IsPermittedDNSName("*.bar.com"));
+}
+
+TEST_P(ParseNameConstraints, DNSNamesPermittedTwoDot) {
+  std::string a;
+  ASSERT_TRUE(LoadTestNameConstraint("dnsname-permitted_two_dot.pem", &a));
+  std::unique_ptr<NameConstraints> name_constraints(
+      NameConstraints::Create(der::Input(&a), is_critical()));
+  ASSERT_TRUE(name_constraints);
+
+  // A dNSName constraint of ".." isn't meaningful. Shouldn't match anything.
+  EXPECT_FALSE(name_constraints->IsPermittedDNSName("com"));
+  EXPECT_FALSE(name_constraints->IsPermittedDNSName("com."));
+  EXPECT_FALSE(name_constraints->IsPermittedDNSName("foo.com"));
+  EXPECT_FALSE(name_constraints->IsPermittedDNSName("*.com"));
 }
 
 TEST_P(ParseNameConstraints, DNSNamesExcludeOnly) {

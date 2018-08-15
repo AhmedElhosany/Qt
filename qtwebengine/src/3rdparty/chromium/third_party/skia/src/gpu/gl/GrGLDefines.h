@@ -416,6 +416,11 @@
 #define GR_GL_LINE_WIDTH_GRANULARITY         0x0B23
 #define GR_GL_LINE_WIDTH_RANGE               0x0B22
 
+/* PolygonMode */
+#define GR_GL_POINT                          0x1B00
+#define GR_GL_LINE                           0x1B01
+#define GR_GL_FILL                           0x1B02
+
 /* Unsized formats */
 #define GR_GL_STENCIL_INDEX                  0x1901
 #define GR_GL_DEPTH_COMPONENT                0x1902
@@ -432,6 +437,7 @@
 #define GR_GL_RGB_INTEGER                    0x8D98
 #define GR_GL_SRGB                           0x8C40
 #define GR_GL_RGBA                           0x1908
+#define GR_GL_RG                             0x8227
 #define GR_GL_SRGB_ALPHA                     0x8C42
 #define GR_GL_RGBA_INTEGER                   0x8D99
 #define GR_GL_BGRA                           0x80E1
@@ -460,6 +466,9 @@
 #define GR_GL_R16UI                          0x8234
 #define GR_GL_R32I                           0x8235
 #define GR_GL_R32UI                          0x8236
+
+/* Luminance sized formats */
+#define GR_GL_LUMINANCE8                     0x8040
 
 /* Alpha sized formats */
 #define GR_GL_ALPHA8                         0x803C
@@ -506,11 +515,11 @@
 /* RGBA sized formats */
 #define GR_GL_RGBA4                          0x8056
 #define GR_GL_RGB5_A1                        0x8057
-#define GR_GL_PALETTE8_RGBA8                 0x8B96
 #define GR_GL_RGBA8                          0x8058
 #define GR_GL_SRGB8_ALPHA8                   0x8C43
 #define GR_GL_RGBA16F                        0x881A
 #define GR_GL_RGBA32F                        0x8814
+#define GR_GL_RG32F                          0x8230
 
 /* RGBA integer sized formats */
 #define GR_GL_RGBA8I                         0x8D8E
@@ -1051,6 +1060,13 @@
 #define GR_GL_CONDITION_SATISFIED                           0x911C
 #define GR_GL_WAIT_FAILED                                   0x911D
 #define GR_GL_SYNC_FLUSH_COMMANDS_BIT                       0x00000001
+#define GR_GL_TIMEOUT_IGNORED                               0xFFFFFFFFFFFFFFFFull
+
+/* GL_EXT_geometry_shader */
+#define GR_GL_LINES_ADJACENCY                               0x000A
+
+/* GL_ARB_internalformat_query */
+#define GR_GL_NUM_SAMPLE_COUNTS                             0x9380
 
 /* EGL Defines */
 #define GR_EGL_NO_DISPLAY                                   ((GrEGLDisplay)0)

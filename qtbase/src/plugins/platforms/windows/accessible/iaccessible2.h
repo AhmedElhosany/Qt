@@ -39,9 +39,10 @@
 #ifndef IACCESSIBLE2_H
 #define IACCESSIBLE2_H
 
-#include <QtCore/QtConfig>
+#include <QtCore/qglobal.h>
 #ifndef QT_NO_ACCESSIBILITY
 
+#include "qwindowscombase.h"
 #include "qwindowsmsaaaccessible.h"
 #include "comutils.h"
 
@@ -50,6 +51,13 @@
 #include <servprov.h>
 
 QT_BEGIN_NAMESPACE
+
+#ifdef Q_CC_MINGW
+QT_WARNING_DISABLE_GCC("-Wunused-function") // MinGW 7.X claims it is unused
+// MinGW's __uuidof operator does not work for the Accessible2 interfaces
+template <>
+IID qUuidOf<IAccessibleComponent>() { return IID_IAccessibleComponent; }
+#endif // Q_CC_MINGW
 
 class QWindowsIA2Accessible : public QWindowsMsaaAccessible,
         public IAccessibleAction,
@@ -249,7 +257,6 @@ private:
 
     HRESULT getRelationsHelper(IAccessibleRelation **relations, int startIndex, long maxRelations, long *nRelations = 0);
     HRESULT wrapListOfCells(const QList<QAccessibleInterface*> &inputCells, IUnknown ***outputAccessibles, long *nCellCount);
-    QByteArray IIDToString(REFIID id);
     QString textForRange(int startOffset, int endOffset) const;
     void replaceTextFallback(long startOffset, long endOffset, const QString &txt);
 
@@ -258,28 +265,31 @@ private:
 /**************************************************************\
  *                     AccessibleApplication                  *
  **************************************************************/
-class AccessibleApplication : public IAccessibleApplication
+
+#ifdef Q_CC_MINGW
+// MinGW's __uuidof operator does not work for the IAccessible2 interfaces
+template <>
+IID qUuidOf<IAccessibleApplication>() { return IID_IAccessibleApplication; }
+
+template <>
+IID qUuidOf<IAccessible2>() { return IID_IAccessible2; }
+
+template <>
+IID qUuidOf<IAccessibleRelation>() { return IID_IAccessibleRelation; }
+#endif // Q_CC_MINGW
+
+class AccessibleApplication : public QWindowsComBase<IAccessibleApplication>
 {
 public:
-    AccessibleApplication() : m_ref(1)
-    {
-
-    }
+    AccessibleApplication() {}
 
     virtual ~AccessibleApplication() {}
-
-    /* IUnknown */
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, LPVOID *);
-    ULONG STDMETHODCALLTYPE AddRef();
-    ULONG STDMETHODCALLTYPE Release();
 
     /* IAccessibleApplication */
     HRESULT STDMETHODCALLTYPE get_appName(/* [retval][out] */ BSTR *name);
     HRESULT STDMETHODCALLTYPE get_appVersion(/* [retval][out] */ BSTR *version);
     HRESULT STDMETHODCALLTYPE get_toolkitName(/* [retval][out] */ BSTR *name);
     HRESULT STDMETHODCALLTYPE get_toolkitVersion(/* [retval][out] */ BSTR *version);
-private:
-    ULONG m_ref;
 };
 
 
@@ -287,18 +297,16 @@ private:
 /**************************************************************\
  *                     AccessibleRelation                      *
  **************************************************************/
-class AccessibleRelation : public IAccessibleRelation
+
+
+
+class AccessibleRelation : public QWindowsComBase<IAccessibleRelation>
 {
 public:
     AccessibleRelation(const QList<QAccessibleInterface *> &targets,
                        QAccessible::Relation relation);
 
     virtual ~AccessibleRelation() {}
-
-    /* IUnknown */
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, LPVOID *iface);
-    ULONG STDMETHODCALLTYPE AddRef();
-    ULONG STDMETHODCALLTYPE Release();
 
     /* IAccessibleRelation */
     HRESULT STDMETHODCALLTYPE get_relationType(BSTR *relationType);
@@ -341,7 +349,6 @@ private:
 
     QList<QAccessibleInterface *> m_targets;
     QAccessible::Relation m_relation;
-    ULONG m_ref;
 };
 
 QT_END_NAMESPACE

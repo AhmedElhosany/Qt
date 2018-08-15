@@ -51,8 +51,10 @@
 // We mean it.
 //
 
-#include <Qt3DCore/private/qcomponent_p.h>
 #include <Qt3DRender/private/qt3drender_global_p.h>
+#include <Qt3DCore/private/qcomponent_p.h>
+#include <Qt3DCore/private/qnodecommand_p.h>
+
 #include "qcameralens.h"
 
 #include <Qt3DCore/qpropertyupdatedchange.h>
@@ -103,6 +105,9 @@ public:
     mutable QMatrix4x4 m_projectionMatrix;
 
     float m_exposure;
+
+    Qt3DCore::QNodeCommand::CommandId m_pendingViewAllCommand;
+    void processViewAllCommand(Qt3DCore::QNodeCommand::CommandId commandId, const QVariant &data);
 
 private:
     inline void updatePerpectiveProjection()

@@ -85,6 +85,11 @@ class WinTool(object):
     """Simple stamp command."""
     open(path, 'w').close()
 
+  def ExecDeleteFile(self, path):
+    """Simple file delete command."""
+    if os.path.exists(path):
+      os.unlink(path)
+
   def ExecRecursiveMirror(self, source, dest):
     """Emulation of rm -rf out && cp -af in out."""
     if os.path.exists(dest):
@@ -128,13 +133,14 @@ class WinTool(object):
     # non-Windows don't do that there.
     link = subprocess.Popen(args, shell=sys.platform == 'win32', env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, _ = link.communicate()
-    for line in out.splitlines():
+    # Read output one line at a time as it shows up to avoid OOM failures when
+    # GBs of output is produced.
+    for line in link.stdout:
       if (not line.startswith('   Creating library ') and
           not line.startswith('Generating code') and
           not line.startswith('Finished generating code')):
-        print line
-    return link.returncode
+        print line,
+    return link.wait()
 
   def ExecLinkWithManifests(self, arch, embed_manifest, out, ldcmd, resname,
                             mt, rc, intermediate_manifest, *manifests):
@@ -309,16 +315,6 @@ class WinTool(object):
     dirname = dirname[0] if dirname else None
     return subprocess.call(args, shell=True, env=env, cwd=dirname)
 
-  def ExecClCompile(self, project_dir, selected_files):
-    """Executed by msvs-ninja projects when the 'ClCompile' target is used to
-    build selected C/C++ files."""
-    project_dir = os.path.relpath(project_dir, BASE_DIR)
-    selected_files = selected_files.split(';')
-    ninja_targets = [os.path.join(project_dir, filename) + '^^'
-        for filename in selected_files]
-    cmd = ['ninja.exe']
-    cmd.extend(ninja_targets)
-    return subprocess.call(cmd, shell=True, cwd=BASE_DIR)
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv[1:]))

@@ -31,8 +31,7 @@ class ShadowControllerTest : public aura::test::AuraTestBase {
   void SetUp() override {
     AuraTestBase::SetUp();
     new wm::DefaultActivationClient(root_window());
-    aura::client::ActivationClient* activation_client =
-        aura::client::GetActivationClient(root_window());
+    ActivationClient* activation_client = GetActivationClient(root_window());
     shadow_controller_.reset(new ShadowController(activation_client));
   }
   void TearDown() override {
@@ -46,8 +45,7 @@ class ShadowControllerTest : public aura::test::AuraTestBase {
   void ActivateWindow(aura::Window* window) {
     DCHECK(window);
     DCHECK(window->GetRootWindow());
-    aura::client::GetActivationClient(window->GetRootWindow())->ActivateWindow(
-        window);
+    GetActivationClient(window->GetRootWindow())->ActivateWindow(window);
   }
 
  private:
@@ -59,7 +57,7 @@ class ShadowControllerTest : public aura::test::AuraTestBase {
 // Tests that various methods in Window update the Shadow object as expected.
 TEST_F(ShadowControllerTest, Shadow) {
   std::unique_ptr<aura::Window> window(new aura::Window(NULL));
-  window->SetType(ui::wm::WINDOW_TYPE_NORMAL);
+  window->SetType(aura::client::WINDOW_TYPE_NORMAL);
   window->Init(ui::LAYER_TEXTURED);
   ParentWindow(window.get());
 
@@ -76,10 +74,10 @@ TEST_F(ShadowControllerTest, Shadow) {
   EXPECT_TRUE(shadow->layer()->visible());
 
   // If the shadow is disabled, it should be hidden.
-  SetShadowType(window.get(), SHADOW_TYPE_NONE);
+  SetShadowElevation(window.get(), ShadowElevation::NONE);
   window->Show();
   EXPECT_FALSE(shadow->layer()->visible());
-  SetShadowType(window.get(), SHADOW_TYPE_RECTANGULAR);
+  SetShadowElevation(window.get(), ShadowElevation::MEDIUM);
   EXPECT_TRUE(shadow->layer()->visible());
 
   // The shadow's layer should be a child of the window's layer.
@@ -89,7 +87,7 @@ TEST_F(ShadowControllerTest, Shadow) {
 // Tests that the window's shadow's bounds are updated correctly.
 TEST_F(ShadowControllerTest, ShadowBounds) {
   std::unique_ptr<aura::Window> window(new aura::Window(NULL));
-  window->SetType(ui::wm::WINDOW_TYPE_NORMAL);
+  window->SetType(aura::client::WINDOW_TYPE_NORMAL);
   window->Init(ui::LAYER_TEXTURED);
   ParentWindow(window.get());
   window->Show();
@@ -99,7 +97,7 @@ TEST_F(ShadowControllerTest, ShadowBounds) {
 
   // When the shadow is first created, it should use the window's size (but
   // remain at the origin, since it's a child of the window's layer).
-  SetShadowType(window.get(), SHADOW_TYPE_RECTANGULAR);
+  SetShadowElevation(window.get(), ShadowElevation::MEDIUM);
   const Shadow* shadow = ShadowController::GetShadowForWindow(window.get());
   ASSERT_TRUE(shadow != NULL);
   EXPECT_EQ(gfx::Rect(kOldBounds.size()).ToString(),
@@ -115,7 +113,7 @@ TEST_F(ShadowControllerTest, ShadowBounds) {
 // Tests that activating a window changes the shadow style.
 TEST_F(ShadowControllerTest, ShadowStyle) {
   std::unique_ptr<aura::Window> window1(new aura::Window(NULL));
-  window1->SetType(ui::wm::WINDOW_TYPE_NORMAL);
+  window1->SetType(aura::client::WINDOW_TYPE_NORMAL);
   window1->Init(ui::LAYER_TEXTURED);
   ParentWindow(window1.get());
   window1->SetBounds(gfx::Rect(10, 20, 300, 400));
@@ -125,11 +123,11 @@ TEST_F(ShadowControllerTest, ShadowStyle) {
   // window1 is active, so style should have active appearance.
   Shadow* shadow1 = ShadowController::GetShadowForWindow(window1.get());
   ASSERT_TRUE(shadow1 != NULL);
-  EXPECT_EQ(Shadow::STYLE_ACTIVE, shadow1->style());
+  EXPECT_EQ(ShadowElevation::LARGE, shadow1->desired_elevation());
 
   // Create another window and activate it.
   std::unique_ptr<aura::Window> window2(new aura::Window(NULL));
-  window2->SetType(ui::wm::WINDOW_TYPE_NORMAL);
+  window2->SetType(aura::client::WINDOW_TYPE_NORMAL);
   window2->Init(ui::LAYER_TEXTURED);
   ParentWindow(window2.get());
   window2->SetBounds(gfx::Rect(11, 21, 301, 401));
@@ -139,21 +137,21 @@ TEST_F(ShadowControllerTest, ShadowStyle) {
   // window1 is now inactive, so shadow should go inactive.
   Shadow* shadow2 = ShadowController::GetShadowForWindow(window2.get());
   ASSERT_TRUE(shadow2 != NULL);
-  EXPECT_EQ(Shadow::STYLE_INACTIVE, shadow1->style());
-  EXPECT_EQ(Shadow::STYLE_ACTIVE, shadow2->style());
+  EXPECT_EQ(ShadowElevation::MEDIUM, shadow1->desired_elevation());
+  EXPECT_EQ(ShadowElevation::LARGE, shadow2->desired_elevation());
 }
 
 // Tests that shadow gets updated when the window show state changes.
 TEST_F(ShadowControllerTest, ShowState) {
   std::unique_ptr<aura::Window> window(new aura::Window(NULL));
-  window->SetType(ui::wm::WINDOW_TYPE_NORMAL);
+  window->SetType(aura::client::WINDOW_TYPE_NORMAL);
   window->Init(ui::LAYER_TEXTURED);
   ParentWindow(window.get());
   window->Show();
 
   Shadow* shadow = ShadowController::GetShadowForWindow(window.get());
   ASSERT_TRUE(shadow != NULL);
-  EXPECT_EQ(Shadow::STYLE_INACTIVE, shadow->style());
+  EXPECT_EQ(ShadowElevation::MEDIUM, shadow->desired_elevation());
 
   window->SetProperty(aura::client::kShowStateKey, ui::SHOW_STATE_MAXIMIZED);
   EXPECT_FALSE(shadow->layer()->visible());
@@ -168,7 +166,7 @@ TEST_F(ShadowControllerTest, ShowState) {
 // Tests that we use smaller shadows for tooltips and menus.
 TEST_F(ShadowControllerTest, SmallShadowsForTooltipsAndMenus) {
   std::unique_ptr<aura::Window> tooltip_window(new aura::Window(NULL));
-  tooltip_window->SetType(ui::wm::WINDOW_TYPE_TOOLTIP);
+  tooltip_window->SetType(aura::client::WINDOW_TYPE_TOOLTIP);
   tooltip_window->Init(ui::LAYER_TEXTURED);
   ParentWindow(tooltip_window.get());
   tooltip_window->SetBounds(gfx::Rect(10, 20, 300, 400));
@@ -177,10 +175,10 @@ TEST_F(ShadowControllerTest, SmallShadowsForTooltipsAndMenus) {
   Shadow* tooltip_shadow =
       ShadowController::GetShadowForWindow(tooltip_window.get());
   ASSERT_TRUE(tooltip_shadow != NULL);
-  EXPECT_EQ(Shadow::STYLE_SMALL, tooltip_shadow->style());
+  EXPECT_EQ(ShadowElevation::SMALL, tooltip_shadow->desired_elevation());
 
   std::unique_ptr<aura::Window> menu_window(new aura::Window(NULL));
-  menu_window->SetType(ui::wm::WINDOW_TYPE_MENU);
+  menu_window->SetType(aura::client::WINDOW_TYPE_MENU);
   menu_window->Init(ui::LAYER_TEXTURED);
   ParentWindow(menu_window.get());
   menu_window->SetBounds(gfx::Rect(10, 20, 300, 400));
@@ -189,14 +187,14 @@ TEST_F(ShadowControllerTest, SmallShadowsForTooltipsAndMenus) {
   Shadow* menu_shadow =
       ShadowController::GetShadowForWindow(tooltip_window.get());
   ASSERT_TRUE(menu_shadow != NULL);
-  EXPECT_EQ(Shadow::STYLE_SMALL, menu_shadow->style());
+  EXPECT_EQ(ShadowElevation::SMALL, menu_shadow->desired_elevation());
 }
 
 // http://crbug.com/120210 - transient parents of certain types of transients
 // should not lose their shadow when they lose activation to the transient.
 TEST_F(ShadowControllerTest, TransientParentKeepsActiveShadow) {
   std::unique_ptr<aura::Window> window1(new aura::Window(NULL));
-  window1->SetType(ui::wm::WINDOW_TYPE_NORMAL);
+  window1->SetType(aura::client::WINDOW_TYPE_NORMAL);
   window1->Init(ui::LAYER_TEXTURED);
   ParentWindow(window1.get());
   window1->SetBounds(gfx::Rect(10, 20, 300, 400));
@@ -206,23 +204,23 @@ TEST_F(ShadowControllerTest, TransientParentKeepsActiveShadow) {
   // window1 is active, so style should have active appearance.
   Shadow* shadow1 = ShadowController::GetShadowForWindow(window1.get());
   ASSERT_TRUE(shadow1 != NULL);
-  EXPECT_EQ(Shadow::STYLE_ACTIVE, shadow1->style());
+  EXPECT_EQ(ShadowElevation::LARGE, shadow1->desired_elevation());
 
   // Create a window that is transient to window1, and that has the 'hide on
   // deactivate' property set. Upon activation, window1 should still have an
   // active shadow.
   std::unique_ptr<aura::Window> window2(new aura::Window(NULL));
-  window2->SetType(ui::wm::WINDOW_TYPE_NORMAL);
+  window2->SetType(aura::client::WINDOW_TYPE_NORMAL);
   window2->Init(ui::LAYER_TEXTURED);
   ParentWindow(window2.get());
   window2->SetBounds(gfx::Rect(11, 21, 301, 401));
   AddTransientChild(window1.get(), window2.get());
-  aura::client::SetHideOnDeactivate(window2.get(), true);
+  SetHideOnDeactivate(window2.get(), true);
   window2->Show();
   ActivateWindow(window2.get());
 
   // window1 is now inactive, but its shadow should still appear active.
-  EXPECT_EQ(Shadow::STYLE_ACTIVE, shadow1->style());
+  EXPECT_EQ(ShadowElevation::LARGE, shadow1->desired_elevation());
 }
 
 }  // namespace wm

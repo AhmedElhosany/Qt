@@ -42,6 +42,8 @@
 #include <private/qnoncontiguousbytedevice_p.h>
 #include <private/qhttpnetworkconnectionchannel_p.h>
 
+#ifndef QT_NO_HTTP
+
 QT_BEGIN_NAMESPACE
 
 QHttpProtocolHandler::QHttpProtocolHandler(QHttpNetworkConnectionChannel *channel)
@@ -435,3 +437,5 @@ bool QHttpProtocolHandler::sendRequest()
 }
 
 QT_END_NAMESPACE
+
+#endif // QT_NO_HTTP

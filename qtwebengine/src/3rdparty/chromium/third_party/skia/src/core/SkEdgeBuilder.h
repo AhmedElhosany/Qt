@@ -7,7 +7,7 @@
 #ifndef SkEdgeBuilder_DEFINED
 #define SkEdgeBuilder_DEFINED
 
-#include "SkChunkAlloc.h"
+#include "SkArenaAlloc.h"
 #include "SkRect.h"
 #include "SkTDArray.h"
 
@@ -24,6 +24,9 @@ public:
     // is returned from edgeList().
     int build(const SkPath& path, const SkIRect* clip, int shiftUp, bool clipToTheRight,
               bool analyticAA = false);
+
+    int build_edges(const SkPath& path, const SkIRect* shiftedClip,
+            int shiftEdgesUp, bool pathContainedInClip, bool analyticAA = false);
 
     SkEdge** edgeList() { return (SkEdge**)fEdgeList; }
     SkAnalyticEdge** analyticEdgeList() { return (SkAnalyticEdge**)fEdgeList; }
@@ -42,7 +45,7 @@ private:
     bool vertical_line(const SkEdge* edge);
     bool vertical_line(const SkAnalyticEdge* edge);
 
-    SkChunkAlloc        fAlloc;
+    SkSTArenaAlloc<512> fAlloc;
     SkTDArray<void*>    fList;
 
     /*

@@ -48,6 +48,7 @@
 // We mean it.
 //
 
+#include <QtQuickTemplates2/private/qquickcontainer_p.h>
 #include <QtQuickTemplates2/private/qquickcontrol_p_p.h>
 #include <QtQuick/private/qquickitemchangelistener_p.h>
 #include <QtQml/private/qqmlobjectmodel_p.h>
@@ -61,12 +62,17 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickContainerPrivate : public QQuickCon
 public:
     QQuickContainerPrivate();
 
+    static QQuickContainerPrivate *get(QQuickContainer *container)
+    {
+        return container->d_func();
+    }
+
     void init();
     void cleanup();
 
     QQuickItem *itemAt(int index) const;
     void insertItem(int index, QQuickItem *item);
-    void moveItem(int from, int to);
+    void moveItem(int from, int to, QQuickItem *item);
     void removeItem(int index, QQuickItem *item);
     void reorderItems();
 

@@ -57,6 +57,7 @@ public:
     void implicitHeightChanged() override;
 
     void resolveFont() override;
+    void resolvePalette() override;
 
     QQuickItem *getContentItem() override;
 
@@ -97,6 +98,14 @@ void QQuickPopupItemPrivate::resolveFont()
         inheritFont(window->font());
     else
         inheritFont(themeFont(QPlatformTheme::SystemFont));
+}
+
+void QQuickPopupItemPrivate::resolvePalette()
+{
+    if (QQuickApplicationWindow *window = qobject_cast<QQuickApplicationWindow *>(popup->window()))
+        inheritPalette(window->palette());
+    else
+        inheritPalette(themePalette(QPlatformTheme::SystemPalette));
 }
 
 QQuickItem *QQuickPopupItemPrivate::getContentItem()
@@ -323,6 +332,12 @@ void QQuickPopupItem::localeChange(const QLocale &newLocale, const QLocale &oldL
     d->popup->localeChange(newLocale, oldLocale);
 }
 
+void QQuickPopupItem::mirrorChange()
+{
+    Q_D(QQuickPopupItem);
+    emit d->popup->mirroredChanged();
+}
+
 void QQuickPopupItem::itemChange(ItemChange change, const ItemChangeData &data)
 {
     Q_D(QQuickPopupItem);
@@ -337,10 +352,23 @@ void QQuickPopupItem::paddingChange(const QMarginsF &newPadding, const QMarginsF
     d->popup->paddingChange(newPadding, oldPadding);
 }
 
+void QQuickPopupItem::paletteChange(const QPalette &newPalette, const QPalette &oldPalette)
+{
+    Q_D(QQuickPopupItem);
+    QQuickControl::paletteChange(newPalette, oldPalette);
+    d->popup->paletteChange(newPalette, oldPalette);
+}
+
 QFont QQuickPopupItem::defaultFont() const
 {
     Q_D(const QQuickPopupItem);
     return d->popup->defaultFont();
+}
+
+QPalette QQuickPopupItem::defaultPalette() const
+{
+    Q_D(const QQuickPopupItem);
+    return d->popup->defaultPalette();
 }
 
 #if QT_CONFIG(accessibility)

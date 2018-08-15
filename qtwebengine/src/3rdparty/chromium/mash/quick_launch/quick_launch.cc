@@ -7,6 +7,7 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -15,22 +16,18 @@
 #include "services/catalog/public/interfaces/constants.mojom.h"
 #include "services/service_manager/public/c/main.h"
 #include "services/service_manager/public/cpp/connector.h"
-#include "services/service_manager/public/cpp/interface_registry.h"
 #include "services/service_manager/public/cpp/service.h"
 #include "services/service_manager/public/cpp/service_context.h"
 #include "services/service_manager/public/cpp/service_runner.h"
-#include "services/tracing/public/cpp/provider.h"
+#include "ui/aura/window.h"
+#include "ui/aura/window_tree_host.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/mus/aura_init.h"
-#include "ui/views/mus/window_manager_connection.h"
+#include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
-
-namespace views {
-class AuraInit;
-}
 
 namespace mash {
 namespace quick_launch {
@@ -45,7 +42,7 @@ class QuickLaunchUI : public views::WidgetDelegateView,
         connector_(connector),
         prompt_(new views::Textfield),
         catalog_(std::move(catalog)) {
-    set_background(views::Background::CreateStandardPanelBackground());
+    SetBackground(views::CreateStandardPanelBackground());
     prompt_->set_controller(this);
     AddChildView(prompt_);
 
@@ -68,7 +65,7 @@ class QuickLaunchUI : public views::WidgetDelegateView,
     bounds.Inset(5, 5);
     prompt_->SetBoundsRect(bounds);
   }
-  gfx::Size GetPreferredSize() const override {
+  gfx::Size CalculatePreferredSize() const override {
     gfx::Size ps = prompt_->GetPreferredSize();
     ps.Enlarge(500, 10);
     return ps;
@@ -138,11 +135,8 @@ class QuickLaunchUI : public views::WidgetDelegateView,
   }
 
   void Launch(const std::string& name, bool new_window) {
-    std::unique_ptr<service_manager::Connection> connection =
-        connector_->Connect(name);
-    mojom::LaunchablePtr launchable;
-    connection->GetInterface(&launchable);
-    connections_.push_back(std::move(connection));
+    ::mash::mojom::LaunchablePtr launchable;
+    connector_->BindInterface(name, &launchable);
     launchable->Launch(mojom::kWindow,
                        new_window ? mojom::LaunchMode::MAKE_NEW
                                   : mojom::LaunchMode::REUSE);
@@ -151,7 +145,6 @@ class QuickLaunchUI : public views::WidgetDelegateView,
   QuickLaunch* quick_launch_;
   service_manager::Connector* connector_;
   views::Textfield* prompt_;
-  std::vector<std::unique_ptr<service_manager::Connection>> connections_;
   catalog::mojom::CatalogPtr catalog_;
   std::set<base::string16> app_names_;
   bool suggestion_rejected_ = false;
@@ -159,32 +152,44 @@ class QuickLaunchUI : public views::WidgetDelegateView,
   DISALLOW_COPY_AND_ASSIGN(QuickLaunchUI);
 };
 
-QuickLaunch::QuickLaunch() {}
-QuickLaunch::~QuickLaunch() {}
+QuickLaunch::QuickLaunch() {
+  registry_.AddInterface<::mash::mojom::Launchable>(
+      base::Bind(&QuickLaunch::Create, base::Unretained(this)));
+}
+
+QuickLaunch::~QuickLaunch() {
+  while (!windows_.empty())
+    windows_.front()->CloseNow();
+}
 
 void QuickLaunch::RemoveWindow(views::Widget* window) {
   auto it = std::find(windows_.begin(), windows_.end(), window);
   DCHECK(it != windows_.end());
   windows_.erase(it);
-  if (windows_.empty() && base::MessageLoop::current()->is_running())
+  if (windows_.empty() && base::RunLoop::IsRunningOnCurrentThread())
     base::MessageLoop::current()->QuitWhenIdle();
 }
 
 void QuickLaunch::OnStart() {
-  tracing_.Initialize(context()->connector(), context()->identity().name());
-
-  aura_init_ = base::MakeUnique<views::AuraInit>(
-      context()->connector(), context()->identity(), "views_mus_resources.pak");
-  window_manager_connection_ = views::WindowManagerConnection::Create(
-      context()->connector(), context()->identity());
+  // If AuraInit was unable to initialize there is no longer a peer connection.
+  // The ServiceManager is in the process of shutting down, however we haven't
+  // been notified yet. Close our ServiceContext and shutdown.
+  aura_init_ = views::AuraInit::Create(
+      context()->connector(), context()->identity(), "views_mus_resources.pak",
+      std::string(), nullptr, views::AuraInit::Mode::AURA_MUS);
+  if (!aura_init_) {
+    context()->QuitNow();
+    return;
+  }
 
   Launch(mojom::kWindow, mojom::LaunchMode::MAKE_NEW);
 }
 
-bool QuickLaunch::OnConnect(const service_manager::ServiceInfo& remote_info,
-                            service_manager::InterfaceRegistry* registry) {
-  registry->AddInterface<mojom::Launchable>(this);
-  return true;
+void QuickLaunch::OnBindInterface(
+    const service_manager::BindSourceInfo& source_info,
+    const std::string& interface_name,
+    mojo::ScopedMessagePipeHandle interface_pipe) {
+  registry_.BindInterface(interface_name, std::move(interface_pipe));
 }
 
 void QuickLaunch::Launch(uint32_t what, mojom::LaunchMode how) {
@@ -195,18 +200,17 @@ void QuickLaunch::Launch(uint32_t what, mojom::LaunchMode how) {
     return;
   }
   catalog::mojom::CatalogPtr catalog;
-  context()->connector()->ConnectToInterface(catalog::mojom::kServiceName,
-                                             &catalog);
+  context()->connector()->BindInterface(catalog::mojom::kServiceName, &catalog);
 
   views::Widget* window = views::Widget::CreateWindowWithContextAndBounds(
       new QuickLaunchUI(this, context()->connector(), std::move(catalog)),
       nullptr, gfx::Rect(10, 640, 0, 0));
+  window->GetNativeWindow()->GetHost()->window()->SetName("QuickLaunch");
   window->Show();
   windows_.push_back(window);
 }
 
-void QuickLaunch::Create(const service_manager::Identity& remote_identity,
-                         mojom::LaunchableRequest request) {
+void QuickLaunch::Create(::mash::mojom::LaunchableRequest request) {
   bindings_.AddBinding(this, std::move(request));
 }
 

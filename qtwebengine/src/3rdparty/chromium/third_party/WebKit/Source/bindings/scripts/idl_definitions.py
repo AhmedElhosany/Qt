@@ -26,6 +26,8 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# pylint: disable=relative-import
+
 """Blink IDL Intermediate Representation (IR) classes.
 
 Classes are primarily constructors, which build an IdlDefinitions object
@@ -52,8 +54,6 @@ IdlDefinitions
         IdlIterable < IdlIterableOrMaplikeOrSetlike
         IdlMaplike < IdlIterableOrMaplikeOrSetlike
         IdlSetlike < IdlIterableOrMaplikeOrSetlike
-    IdlException < IdlInterface
-        (same contents as IdlInterface)
 
 TypedObject :: Object with one or more attributes that is a type.
 
@@ -64,7 +64,13 @@ Design doc: http://www.chromium.org/developers/design-documents/idl-compiler
 
 import abc
 
-from idl_types import IdlType, IdlUnionType, IdlArrayType, IdlSequenceType, IdlFrozenArrayType, IdlNullableType
+from idl_types import IdlArrayType
+from idl_types import IdlFrozenArrayType
+from idl_types import IdlNullableType
+from idl_types import IdlRecordType
+from idl_types import IdlSequenceType
+from idl_types import IdlType
+from idl_types import IdlUnionType
 
 SPECIAL_KEYWORD_LIST = ['LEGACYCALLER', 'GETTER', 'SETTER', 'DELETER']
 
@@ -107,10 +113,6 @@ class IdlDefinitions(object):
             if child_class == 'Interface':
                 interface = IdlInterface(child)
                 self.interfaces[interface.name] = interface
-            elif child_class == 'Exception':
-                exception = IdlException(child)
-                # For simplicity, treat exceptions as interfaces
-                self.interfaces[exception.name] = exception
             elif child_class == 'Typedef':
                 typedef = IdlTypedef(child)
                 self.typedefs[typedef.name] = typedef
@@ -279,11 +281,11 @@ class IdlTypedef(object):
 
 
 ################################################################################
-# Interfaces and Exceptions
+# Interfaces
 ################################################################################
 
 class IdlInterface(object):
-    def __init__(self, node=None):
+    def __init__(self, node):
         self.attributes = []
         self.constants = []
         self.constructors = []
@@ -299,11 +301,8 @@ class IdlInterface(object):
         self.setlike = None
         self.original_interface = None
         self.partial_interfaces = []
-        if not node:  # Early exit for IdlException.__init__
-            return
 
         self.is_callback = bool(node.GetProperty('CALLBACK'))
-        self.is_exception = False
         # FIXME: uppercase 'Partial' => 'PARTIAL' in base IDL parser
         self.is_partial = bool(node.GetProperty('Partial'))
         self.name = node.GetName()
@@ -312,11 +311,19 @@ class IdlInterface(object):
         has_indexed_property_getter = False
         has_integer_typed_length = False
 
+        def is_blacklisted_attribute_type(idl_type):
+            return idl_type.is_callback_function or \
+                idl_type.is_dictionary or \
+                idl_type.is_record_type or \
+                idl_type.is_sequence_type
+
         children = node.GetChildren()
         for child in children:
             child_class = child.GetClass()
             if child_class == 'Attribute':
                 attr = IdlAttribute(child)
+                if is_blacklisted_attribute_type(attr.idl_type):
+                    raise ValueError('Type "%s" cannot be used as an attribute.' % attr.idl_type)
                 if attr.idl_type.is_integer_type and attr.name == 'length':
                     has_integer_typed_length = True
                 self.attributes.append(attr)
@@ -355,6 +362,10 @@ class IdlInterface(object):
 
         if has_integer_typed_length and has_indexed_property_getter:
             self.has_indexed_elements = True
+        else:
+            if self.iterable is not None and self.iterable.key_type is None:
+                raise ValueError('Value iterators (iterable<V>) must be accompanied by an indexed '
+                                 'property getter and an integer-typed length attribute.')
 
     def accept(self, visitor):
         visitor.visit_interface(self)
@@ -400,64 +411,28 @@ class IdlInterface(object):
             self.stringifier = other.stringifier
 
 
-class IdlException(IdlInterface):
-    # Properly exceptions and interfaces are distinct, and thus should inherit a
-    # common base class (say, "IdlExceptionOrInterface").
-    # However, there is only one exception (DOMException), and new exceptions
-    # are not expected. Thus it is easier to implement exceptions as a
-    # restricted subclass of interfaces.
-    # http://www.w3.org/TR/WebIDL/#idl-exceptions
-    def __init__(self, node):
-        # Exceptions are similar to Interfaces, but simpler
-        IdlInterface.__init__(self)
-        self.is_callback = False
-        self.is_exception = True
-        self.is_partial = False
-        self.name = node.GetName()
-        self.idl_type = IdlType(self.name)
-
-        children = node.GetChildren()
-        for child in children:
-            child_class = child.GetClass()
-            if child_class == 'Attribute':
-                attribute = IdlAttribute(child)
-                self.attributes.append(attribute)
-            elif child_class == 'Const':
-                self.constants.append(IdlConstant(child))
-            elif child_class == 'ExtAttributes':
-                extended_attributes = ext_attributes_node_to_extended_attributes(child)
-                self.constructors, self.custom_constructors = (
-                    extended_attributes_to_constructors(extended_attributes))
-                clear_constructor_attributes(extended_attributes)
-                self.extended_attributes = extended_attributes
-            elif child_class == 'ExceptionOperation':
-                self.operations.append(IdlOperation.from_exception_operation_node(child))
-            else:
-                raise ValueError('Unrecognized node class: %s' % child_class)
-
-
 ################################################################################
 # Attributes
 ################################################################################
 
 class IdlAttribute(TypedObject):
-    def __init__(self, node):
-        self.is_read_only = bool(node.GetProperty('READONLY'))
-        self.is_static = bool(node.GetProperty('STATIC'))
-        self.name = node.GetName()
-        # Defaults, overridden below
+    def __init__(self, node=None):
+        self.is_read_only = bool(node.GetProperty('READONLY')) if node else False
+        self.is_static = bool(node.GetProperty('STATIC')) if node else False
+        self.name = node.GetName() if node else None
         self.idl_type = None
         self.extended_attributes = {}
 
-        children = node.GetChildren()
-        for child in children:
-            child_class = child.GetClass()
-            if child_class == 'Type':
-                self.idl_type = type_node_to_type(child)
-            elif child_class == 'ExtAttributes':
-                self.extended_attributes = ext_attributes_node_to_extended_attributes(child)
-            else:
-                raise ValueError('Unrecognized node class: %s' % child_class)
+        if node:
+            children = node.GetChildren()
+            for child in children:
+                child_class = child.GetClass()
+                if child_class == 'Type':
+                    self.idl_type = type_node_to_type(child)
+                elif child_class == 'ExtAttributes':
+                    self.extended_attributes = ext_attributes_node_to_extended_attributes(child)
+                else:
+                    raise ValueError('Unrecognized node class: %s' % child_class)
 
     def accept(self, visitor):
         visitor.visit_attribute(self)
@@ -513,7 +488,10 @@ class IdlLiteral(object):
 
     def __str__(self):
         if self.idl_type == 'DOMString':
-            return 'String("%s")' % self.value
+            if self.value:
+                return '"%s"' % self.value
+            else:
+                return 'WTF::g_empty_string'
         if self.idl_type == 'integer':
             return '%d' % self.value
         if self.idl_type == 'float':
@@ -592,27 +570,6 @@ class IdlOperation(TypedObject):
                 self.extended_attributes = ext_attributes_node_to_extended_attributes(child)
             else:
                 raise ValueError('Unrecognized node class: %s' % child_class)
-
-    @classmethod
-    def from_exception_operation_node(cls, node):
-        # Needed to handle one case in DOMException.idl:
-        # // Override in a Mozilla compatible format
-        # [NotEnumerable] DOMString toString();
-        # FIXME: can we remove this? replace with a stringifier?
-        operation = cls()
-        operation.name = node.GetName()
-        children = node.GetChildren()
-        if len(children) < 1 or len(children) > 2:
-            raise ValueError('ExceptionOperation node with %s children, expected 1 or 2' % len(children))
-
-        type_node = children[0]
-        operation.idl_type = type_node_to_type(type_node)
-
-        if len(children) > 1:
-            ext_attributes_node = children[1]
-            operation.extended_attributes = ext_attributes_node_to_extended_attributes(ext_attributes_node)
-
-        return operation
 
     @classmethod
     def constructor_from_arguments_node(cls, name, arguments_node):
@@ -858,7 +815,6 @@ def ext_attributes_node_to_extended_attributes(node):
         possible signatures of the custom constructor.
       NamedConstructor: value is a Call node, corresponding to the single
         signature of the named constructor.
-      SetWrapperReferenceTo: value is an Arguments node.
     """
     # Primarily just make a dictionary from the children.
     # The only complexity is handling various types of constructors:
@@ -897,15 +853,6 @@ def ext_attributes_node_to_extended_attributes(node):
             if child_class and child_class != 'Call':
                 raise ValueError('[NamedConstructor] only supports Call as child, but has child of class: %s' % child_class)
             extended_attributes[name] = child
-        elif name == 'SetWrapperReferenceTo':
-            if not child:
-                raise ValueError('[SetWrapperReferenceTo] requires a child, but has none.')
-            children = child.GetChildren()
-            if len(children) != 1:
-                raise ValueError('[SetWrapperReferenceTo] supports only one child.')
-            if child_class != 'Arguments':
-                raise ValueError('[SetWrapperReferenceTo] only supports Arguments as child, but has child of class: %s' % child_class)
-            extended_attributes[name] = IdlArgument(children[0])
         elif name == 'Exposed':
             if child_class and child_class != 'Arguments':
                 raise ValueError('[Exposed] only supports Arguments as child, but has child of class: %s' % child_class)
@@ -1011,7 +958,7 @@ def type_node_inner_to_type(node):
     # Note Type*r*ef, not Typedef, meaning the type is an identifier, thus
     # either a typedef shorthand (but not a Typedef declaration itself) or an
     # interface type. We do not distinguish these, and just use the type name.
-    if node_class in ['PrimitiveType', 'Typeref']:
+    if node_class in ['PrimitiveType', 'StringType', 'Typeref']:
         # unrestricted syntax: unrestricted double | unrestricted float
         is_unrestricted = bool(node.GetProperty('UNRESTRICTED'))
         return IdlType(node.GetName(), is_unrestricted=is_unrestricted)
@@ -1023,7 +970,22 @@ def type_node_inner_to_type(node):
         return union_type_node_to_idl_union_type(node)
     elif node_class == 'Promise':
         return IdlType('Promise')
+    elif node_class == 'Record':
+        return record_node_to_type(node)
     raise ValueError('Unrecognized node class: %s' % node_class)
+
+
+def record_node_to_type(node):
+    children = node.GetChildren()
+    if len(children) != 2:
+        raise ValueError('record<K,V> node expects exactly 2 children, got %d' % (len(children)))
+    key_child = children[0]
+    value_child = children[1]
+    if key_child.GetClass() != 'StringType':
+        raise ValueError('Keys in record<K,V> nodes must be string types.')
+    if value_child.GetClass() != 'Type':
+        raise ValueError('Unrecognized node class for record<K,V> value: %s' % value_child.GetClass())
+    return IdlRecordType(IdlType(key_child.GetName()), type_node_to_type(value_child))
 
 
 def sequence_node_to_type(node):

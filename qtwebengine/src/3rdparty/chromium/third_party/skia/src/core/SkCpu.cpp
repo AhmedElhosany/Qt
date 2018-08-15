@@ -8,6 +8,10 @@
 #include "SkCpu.h"
 #include "SkOnce.h"
 
+#if !defined(__has_include)
+    #define __has_include(x) 0
+#endif
+
 #if defined(SK_CPU_X86)
     #if defined(SK_BUILD_FOR_WIN32)
         #include <intrin.h>
@@ -45,7 +49,8 @@
         if (abcd[2] & (1<<19)) { features |= SkCpu::SSE41; }
         if (abcd[2] & (1<<20)) { features |= SkCpu::SSE42; }
 
-        if ((abcd[2] & (3<<26)) == (3<<26) && (xgetbv(0) & 6) == 6) {  // XSAVE + OSXSAVE
+        if ((abcd[2] & (3<<26)) == (3<<26)         // XSAVE + OSXSAVE
+             && (xgetbv(0) & (3<<1)) == (3<<1)) {  // XMM and YMM state enabled.
             if (abcd[2] & (1<<28)) { features |= SkCpu:: AVX; }
             if (abcd[2] & (1<<29)) { features |= SkCpu::F16C; }
             if (abcd[2] & (1<<12)) { features |= SkCpu:: FMA; }
@@ -54,35 +59,55 @@
             if (abcd[1] & (1<<5)) { features |= SkCpu::AVX2; }
             if (abcd[1] & (1<<3)) { features |= SkCpu::BMI1; }
             if (abcd[1] & (1<<8)) { features |= SkCpu::BMI2; }
+
+            if ((xgetbv(0) & (7<<5)) == (7<<5)) {  // All ZMM state bits enabled too.
+                if (abcd[1] & (1<<16)) { features |= SkCpu::AVX512F; }
+                if (abcd[1] & (1<<17)) { features |= SkCpu::AVX512DQ; }
+                if (abcd[1] & (1<<21)) { features |= SkCpu::AVX512IFMA; }
+                if (abcd[1] & (1<<26)) { features |= SkCpu::AVX512PF; }
+                if (abcd[1] & (1<<27)) { features |= SkCpu::AVX512ER; }
+                if (abcd[1] & (1<<28)) { features |= SkCpu::AVX512CD; }
+                if (abcd[1] & (1<<30)) { features |= SkCpu::AVX512BW; }
+                if (abcd[1] & (1<<31)) { features |= SkCpu::AVX512VL; }
+            }
         }
         return features;
     }
 
-#elif defined(SK_CPU_ARM32)         && \
-      defined(SK_BUILD_FOR_ANDROID) && \
-     !defined(SK_BUILD_FOR_ANDROID_FRAMEWORK)
-    #include "cpu-features.h"
+#elif defined(SK_CPU_ARM64) && __has_include(<sys/auxv.h>)
+    #include <sys/auxv.h>
 
     static uint32_t read_cpu_features() {
-        uint32_t features = 0;
+        const uint32_t kHWCAP_CRC32 = (1<<7);
 
-        uint64_t android_features = android_getCpuFeatures();
-        if (android_features & ANDROID_CPU_ARM_FEATURE_NEON    ) { features |= SkCpu::NEON    ; }
-        if (android_features & ANDROID_CPU_ARM_FEATURE_NEON_FMA) { features |= SkCpu::NEON_FMA; }
-        if (android_features & ANDROID_CPU_ARM_FEATURE_VFP_FP16) { features |= SkCpu::VFP_FP16; }
+        uint32_t features = 0;
+        uint32_t hwcaps = getauxval(AT_HWCAP);
+        if (hwcaps & kHWCAP_CRC32) { features |= SkCpu::CRC32; }
         return features;
     }
 
-#elif defined(SK_CPU_ARM64)         && \
-      defined(SK_BUILD_FOR_ANDROID) && \
-     !defined(SK_BUILD_FOR_ANDROID_FRAMEWORK)
-    #include "cpu-features.h"
+#elif defined(SK_CPU_ARM32) && __has_include(<sys/auxv.h>)
+    // sys/auxv.h won't be present on NDK builds before API v21.
+    #include <sys/auxv.h>
+
+    static uint32_t read_cpu_features() {
+        const uint32_t kHWCAP_VFPv4 = (1<<16);
+
+        uint32_t features = 0;
+        uint32_t hwcaps = getauxval(AT_HWCAP);
+        if (hwcaps & kHWCAP_VFPv4) { features |= SkCpu::NEON|SkCpu::NEON_FMA|SkCpu::VFP_FP16; }
+        return features;
+    }
+
+#elif defined(SK_CPU_ARM32) && __has_include(<cpu-features.h>)
+    #include <cpu-features.h>
 
     static uint32_t read_cpu_features() {
         uint32_t features = 0;
-
-        uint64_t android_features = android_getCpuFeatures();
-        if (android_features & ANDROID_CPU_ARM64_FEATURE_CRC32) { features |= SkCpu::CRC32; }
+        uint64_t cpu_features = android_getCpuFeatures();
+        if (cpu_features & ANDROID_CPU_ARM_FEATURE_NEON)     { features |= SkCpu::NEON; }
+        if (cpu_features & ANDROID_CPU_ARM_FEATURE_NEON_FMA) { features |= SkCpu::NEON_FMA; }
+        if (cpu_features & ANDROID_CPU_ARM_FEATURE_VFP_FP16) { features |= SkCpu::VFP_FP16; }
         return features;
     }
 

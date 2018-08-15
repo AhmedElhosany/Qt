@@ -7,6 +7,7 @@
 #ifndef FPDFSDK_CPDFSDK_WIDGETHANDLER_H_
 #define FPDFSDK_CPDFSDK_WIDGETHANDLER_H_
 
+#include "core/fxcrt/cfx_unowned_ptr.h"
 #include "core/fxcrt/fx_basic.h"
 #include "core/fxcrt/fx_coordinates.h"
 #include "fpdfsdk/ipdfsdk_annothandler.h"
@@ -37,9 +38,10 @@ class CPDFSDK_WidgetHandler : public IPDFSDK_AnnotHandler {
   void ReleaseAnnot(CPDFSDK_Annot* pAnnot) override;
   CFX_FloatRect GetViewBBox(CPDFSDK_PageView* pPageView,
                             CPDFSDK_Annot* pAnnot) override;
+  CFX_WideString GetSelectedText(CPDFSDK_Annot* pAnnot) override;
   bool HitTest(CPDFSDK_PageView* pPageView,
                CPDFSDK_Annot* pAnnot,
-               const CFX_FloatPoint& point) override;
+               const CFX_PointF& point) override;
   void OnDraw(CPDFSDK_PageView* pPageView,
               CPDFSDK_Annot* pAnnot,
               CFX_RenderDevice* pDevice,
@@ -56,36 +58,36 @@ class CPDFSDK_WidgetHandler : public IPDFSDK_AnnotHandler {
   bool OnLButtonDown(CPDFSDK_PageView* pPageView,
                      CPDFSDK_Annot::ObservedPtr* pAnnot,
                      uint32_t nFlags,
-                     const CFX_FloatPoint& point) override;
+                     const CFX_PointF& point) override;
   bool OnLButtonUp(CPDFSDK_PageView* pPageView,
                    CPDFSDK_Annot::ObservedPtr* pAnnot,
                    uint32_t nFlags,
-                   const CFX_FloatPoint& point) override;
+                   const CFX_PointF& point) override;
   bool OnLButtonDblClk(CPDFSDK_PageView* pPageView,
                        CPDFSDK_Annot::ObservedPtr* pAnnot,
                        uint32_t nFlags,
-                       const CFX_FloatPoint& point) override;
+                       const CFX_PointF& point) override;
   bool OnMouseMove(CPDFSDK_PageView* pPageView,
                    CPDFSDK_Annot::ObservedPtr* pAnnot,
                    uint32_t nFlags,
-                   const CFX_FloatPoint& point) override;
+                   const CFX_PointF& point) override;
   bool OnMouseWheel(CPDFSDK_PageView* pPageView,
                     CPDFSDK_Annot::ObservedPtr* pAnnot,
                     uint32_t nFlags,
                     short zDelta,
-                    const CFX_FloatPoint& point) override;
+                    const CFX_PointF& point) override;
   bool OnRButtonDown(CPDFSDK_PageView* pPageView,
                      CPDFSDK_Annot::ObservedPtr* pAnnot,
                      uint32_t nFlags,
-                     const CFX_FloatPoint& point) override;
+                     const CFX_PointF& point) override;
   bool OnRButtonUp(CPDFSDK_PageView* pPageView,
                    CPDFSDK_Annot::ObservedPtr* pAnnot,
                    uint32_t nFlags,
-                   const CFX_FloatPoint& point) override;
+                   const CFX_PointF& point) override;
   bool OnRButtonDblClk(CPDFSDK_PageView* pPageView,
                        CPDFSDK_Annot::ObservedPtr* pAnnot,
                        uint32_t nFlags,
-                       const CFX_FloatPoint& point) override;
+                       const CFX_PointF& point) override;
   bool OnChar(CPDFSDK_Annot* pAnnot, uint32_t nChar, uint32_t nFlags) override;
   bool OnKeyDown(CPDFSDK_Annot* pAnnot, int nKeyCode, int nFlag) override;
   bool OnKeyUp(CPDFSDK_Annot* pAnnot, int nKeyCode, int nFlag) override;
@@ -99,11 +101,13 @@ class CPDFSDK_WidgetHandler : public IPDFSDK_AnnotHandler {
   void SetFormFiller(CFFL_InteractiveFormFiller* pFiller) {
     m_pFormFiller = pFiller;
   }
-  CFFL_InteractiveFormFiller* GetFormFiller() { return m_pFormFiller; }
+  CFFL_InteractiveFormFiller* GetFormFiller() const {
+    return m_pFormFiller.Get();
+  }
 
  private:
-  CPDFSDK_FormFillEnvironment* m_pFormFillEnv;
-  CFFL_InteractiveFormFiller* m_pFormFiller;
+  CFX_UnownedPtr<CPDFSDK_FormFillEnvironment> const m_pFormFillEnv;
+  CFX_UnownedPtr<CFFL_InteractiveFormFiller> m_pFormFiller;
 };
 
 #endif  // FPDFSDK_CPDFSDK_WIDGETHANDLER_H_

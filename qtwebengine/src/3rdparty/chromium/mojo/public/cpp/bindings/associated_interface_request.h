@@ -9,11 +9,6 @@
 #include <utility>
 
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "mojo/public/cpp/bindings/interface_endpoint_client.h"
-#include "mojo/public/cpp/bindings/lib/control_message_proxy.h"
-#include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 
 namespace mojo {
@@ -28,11 +23,15 @@ class AssociatedInterfaceRequest {
   AssociatedInterfaceRequest() {}
   AssociatedInterfaceRequest(decltype(nullptr)) {}
 
+  explicit AssociatedInterfaceRequest(ScopedInterfaceEndpointHandle handle)
+      : handle_(std::move(handle)) {}
+
   // Takes the interface endpoint handle from another
   // AssociatedInterfaceRequest.
   AssociatedInterfaceRequest(AssociatedInterfaceRequest&& other) {
     handle_ = std::move(other.handle_);
   }
+
   AssociatedInterfaceRequest& operator=(AssociatedInterfaceRequest&& other) {
     if (this != &other)
       handle_ = std::move(other.handle_);
@@ -51,13 +50,7 @@ class AssociatedInterfaceRequest {
   // handle.
   bool is_pending() const { return handle_.is_valid(); }
 
-  void Bind(ScopedInterfaceEndpointHandle handle) {
-    handle_ = std::move(handle);
-  }
-
-  ScopedInterfaceEndpointHandle PassHandle() {
-    return std::move(handle_);
-  }
+  ScopedInterfaceEndpointHandle PassHandle() { return std::move(handle_); }
 
   const ScopedInterfaceEndpointHandle& handle() const { return handle_; }
 
@@ -71,25 +64,7 @@ class AssociatedInterfaceRequest {
   }
 
   void ResetWithReason(uint32_t custom_reason, const std::string& description) {
-    if (!handle_.is_valid())
-      return;
-
-    if (!handle_.is_local()) {
-      // This handle is supposed to be sent to the other end of the message
-      // pipe and used there.
-      NOTREACHED();
-      handle_.reset();
-      return;
-    }
-
-    InterfaceEndpointClient client(std::move(handle_), nullptr,
-                                   base::MakeUnique<PassThroughFilter>(), false,
-                                   base::ThreadTaskRunnerHandle::Get(), 0u);
-    Message message =
-        internal::ControlMessageProxy::ConstructDisconnectReasonMessage(
-            custom_reason, description);
-    bool result = client.Accept(&message);
-    DCHECK(result);
+    handle_.ResetWithReason(custom_reason, description);
   }
 
  private:
@@ -97,16 +72,6 @@ class AssociatedInterfaceRequest {
 
   DISALLOW_COPY_AND_ASSIGN(AssociatedInterfaceRequest);
 };
-
-// Makes an AssociatedInterfaceRequest bound to the specified associated
-// endpoint.
-template <typename Interface>
-AssociatedInterfaceRequest<Interface> MakeAssociatedRequest(
-    ScopedInterfaceEndpointHandle handle) {
-  AssociatedInterfaceRequest<Interface> request;
-  request.Bind(std::move(handle));
-  return request;
-}
 
 }  // namespace mojo
 

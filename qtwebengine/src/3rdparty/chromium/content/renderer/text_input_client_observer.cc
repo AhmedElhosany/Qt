@@ -15,15 +15,26 @@
 #include "content/renderer/render_view_impl.h"
 #include "content/renderer/render_widget.h"
 #include "ipc/ipc_message.h"
+#include "ppapi/features/features.h"
 #include "third_party/WebKit/public/platform/WebPoint.h"
 #include "third_party/WebKit/public/platform/WebRect.h"
 #include "third_party/WebKit/public/platform/WebString.h"
 #include "third_party/WebKit/public/web/WebLocalFrame.h"
 #include "third_party/WebKit/public/web/WebView.h"
-#include "third_party/WebKit/public/web/mac/WebSubstringUtil.h"
 #include "ui/gfx/geometry/rect.h"
 
+#if defined(OS_MACOSX)
+#include "third_party/WebKit/public/web/mac/WebSubstringUtil.h"
+#endif
+
 namespace content {
+
+namespace {
+uint32_t GetCurrentCursorPositionInFrame(blink::WebLocalFrame* localFrame) {
+  blink::WebRange range = localFrame->SelectionRange();
+  return range.IsNull() ? 0U : static_cast<uint32_t>(range.StartOffset());
+}
+}
 
 TextInputClientObserver::TextInputClientObserver(RenderWidget* render_widget)
     : render_widget_(render_widget) {}
@@ -52,7 +63,7 @@ bool TextInputClientObserver::Send(IPC::Message* message) {
 
 blink::WebFrameWidget* TextInputClientObserver::GetWebFrameWidget() const {
   blink::WebWidget* widget = render_widget_->GetWebWidget();
-  if (!widget->isWebFrameWidget()) {
+  if (!widget->IsWebFrameWidget()) {
     // When a page navigation occurs, for a brief period
     // RenderViewImpl::GetWebWidget() will return a WebViewImpl instead of a
     // WebViewFrameWidget. Therefore, casting to WebFrameWidget is invalid and
@@ -65,20 +76,20 @@ blink::WebFrameWidget* TextInputClientObserver::GetWebFrameWidget() const {
 
 blink::WebLocalFrame* TextInputClientObserver::GetFocusedFrame() const {
   if (auto* frame_widget = GetWebFrameWidget()) {
-    blink::WebLocalFrame* localRoot = frame_widget->localRoot();
+    blink::WebLocalFrame* localRoot = frame_widget->LocalRoot();
     RenderFrameImpl* render_frame = RenderFrameImpl::FromWebFrame(localRoot);
     if (!render_frame) {
       // TODO(ekaramad): Can this ever be nullptr? (https://crbug.com/664890).
       return nullptr;
     }
     blink::WebLocalFrame* focused =
-        render_frame->render_view()->webview()->focusedFrame();
-    return focused->localRoot() == localRoot ? focused : nullptr;
+        render_frame->render_view()->webview()->FocusedFrame();
+    return focused->LocalRoot() == localRoot ? focused : nullptr;
   }
   return nullptr;
 }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 PepperPluginInstanceImpl* TextInputClientObserver::GetFocusedPepperPlugin()
     const {
   blink::WebLocalFrame* focusedFrame = GetFocusedFrame();
@@ -95,8 +106,8 @@ void TextInputClientObserver::OnStringAtPoint(gfx::Point point) {
   NSAttributedString* string = nil;
 
   if (auto* frame_widget = GetWebFrameWidget()) {
-    string = blink::WebSubstringUtil::attributedWordAtPoint(frame_widget, point,
-                                                   baselinePoint);
+    string = blink::WebSubstringUtil::AttributedWordAtPoint(frame_widget, point,
+                                                            baselinePoint);
   }
 
   std::unique_ptr<const mac::AttributedStringCoder::EncodedString> encoded(
@@ -112,7 +123,7 @@ void TextInputClientObserver::OnCharacterIndexForPoint(gfx::Point point) {
   blink::WebPoint web_point(point);
   uint32_t index = 0U;
   if (auto* frame = GetFocusedFrame())
-    index = static_cast<uint32_t>(frame->characterIndexForPoint(web_point));
+    index = static_cast<uint32_t>(frame->CharacterIndexForPoint(web_point));
 
   Send(new TextInputClientReplyMsg_GotCharacterIndexForPoint(
       render_widget_->routing_id(), index));
@@ -120,7 +131,7 @@ void TextInputClientObserver::OnCharacterIndexForPoint(gfx::Point point) {
 
 void TextInputClientObserver::OnFirstRectForCharacterRange(gfx::Range range) {
   gfx::Rect rect;
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
   PepperPluginInstanceImpl* focused_plugin = GetFocusedPepperPlugin();
   if (focused_plugin) {
     rect = focused_plugin->GetCaretBounds();
@@ -132,8 +143,11 @@ void TextInputClientObserver::OnFirstRectForCharacterRange(gfx::Range range) {
     // See crbug.com/304341
     if (frame) {
       blink::WebRect web_rect;
-      frame->firstRectForCharacterRange(range.start(), range.length(),
-                                        web_rect);
+      // When request range is invalid we will try to obtain it from current
+      // frame selection. The fallback value will be 0.
+      uint32_t start = range.IsValid() ? range.start()
+                                       : GetCurrentCursorPositionInFrame(frame);
+      frame->FirstRectForCharacterRange(start, range.length(), web_rect);
       rect = web_rect;
     }
   }
@@ -149,7 +163,7 @@ void TextInputClientObserver::OnStringForRange(gfx::Range range) {
   // TODO(yabinh): Null check should not be necessary.
   // See crbug.com/304341
   if (frame) {
-    string = blink::WebSubstringUtil::attributedSubstringInRange(
+    string = blink::WebSubstringUtil::AttributedSubstringInRange(
         frame, range.start(), range.length(), &baselinePoint);
   }
   std::unique_ptr<const mac::AttributedStringCoder::EncodedString> encoded(

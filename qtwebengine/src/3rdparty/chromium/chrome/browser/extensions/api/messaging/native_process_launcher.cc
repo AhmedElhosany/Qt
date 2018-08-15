@@ -14,6 +14,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/stringprintf.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/messaging/native_messaging_host_manifest.h"
@@ -106,17 +107,16 @@ void NativeProcessLauncherImpl::Core::Launch(
     const GURL& origin,
     const std::string& native_host_name,
     const LaunchedCallback& callback) {
-  content::BrowserThread::PostBlockingPoolTask(
-      FROM_HERE, base::Bind(&Core::DoLaunchOnThreadPool, this,
-                            origin, native_host_name, callback));
+  base::PostTaskWithTraits(FROM_HERE,
+                           {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+                           base::BindOnce(&Core::DoLaunchOnThreadPool, this,
+                                          origin, native_host_name, callback));
 }
 
 void NativeProcessLauncherImpl::Core::DoLaunchOnThreadPool(
     const GURL& origin,
     const std::string& native_host_name,
     const LaunchedCallback& callback) {
-  DCHECK(content::BrowserThread::GetBlockingPool()->RunsTasksOnCurrentThread());
-
   if (!NativeMessagingHostManifest::IsValidName(native_host_name)) {
     PostErrorResult(callback, RESULT_INVALID_NAME);
     return;
@@ -127,8 +127,8 @@ void NativeProcessLauncherImpl::Core::DoLaunchOnThreadPool(
       FindManifest(native_host_name, allow_user_level_hosts_, &error_message);
 
   if (manifest_path.empty()) {
-    LOG(ERROR) << "Can't find manifest for native messaging host "
-               << native_host_name;
+    LOG(WARNING) << "Can't find manifest for native messaging host "
+                 << native_host_name;
     PostErrorResult(callback, RESULT_NOT_FOUND);
     return;
   }
@@ -137,16 +137,16 @@ void NativeProcessLauncherImpl::Core::DoLaunchOnThreadPool(
       NativeMessagingHostManifest::Load(manifest_path, &error_message);
 
   if (!manifest) {
-    LOG(ERROR) << "Failed to load manifest for native messaging host "
-               << native_host_name << ": " << error_message;
+    LOG(WARNING) << "Failed to load manifest for native messaging host "
+                 << native_host_name << ": " << error_message;
     PostErrorResult(callback, RESULT_NOT_FOUND);
     return;
   }
 
   if (manifest->name() != native_host_name) {
-    LOG(ERROR) << "Failed to load manifest for native messaging host "
-               << native_host_name
-               << ": Invalid name specified in the manifest.";
+    LOG(WARNING) << "Failed to load manifest for native messaging host "
+                 << native_host_name
+                 << ": Invalid name specified in the manifest.";
     PostErrorResult(callback, RESULT_NOT_FOUND);
     return;
   }
@@ -164,8 +164,8 @@ void NativeProcessLauncherImpl::Core::DoLaunchOnThreadPool(
 #if defined(OS_WIN)
     host_path = manifest_path.DirName().Append(host_path);
 #else  // defined(OS_WIN)
-    LOG(ERROR) << "Native messaging host path must be absolute for "
-               << native_host_name;
+    LOG(WARNING) << "Native messaging host path must be absolute for "
+                 << native_host_name;
     PostErrorResult(callback, RESULT_NOT_FOUND);
     return;
 #endif  // !defined(OS_WIN)
@@ -174,7 +174,7 @@ void NativeProcessLauncherImpl::Core::DoLaunchOnThreadPool(
   // In case when the manifest file is there, but the host binary doesn't exist
   // report the NOT_FOUND error.
   if (!base::PathExists(host_path)) {
-    LOG(ERROR)
+    LOG(WARNING)
         << "Found manifest, but not the binary for native messaging host "
         << native_host_name << ". Host path specified in the manifest: "
         << host_path.AsUTF8Unsafe();
@@ -226,9 +226,9 @@ void NativeProcessLauncherImpl::Core::PostErrorResult(
     LaunchResult error) {
   content::BrowserThread::PostTask(
       content::BrowserThread::IO, FROM_HERE,
-      base::Bind(&NativeProcessLauncherImpl::Core::CallCallbackOnIOThread, this,
-                 callback, error, Passed(base::Process()),
-                 Passed(base::File()), Passed(base::File())));
+      base::BindOnce(&NativeProcessLauncherImpl::Core::CallCallbackOnIOThread,
+                     this, callback, error, Passed(base::Process()),
+                     Passed(base::File()), Passed(base::File())));
 }
 
 void NativeProcessLauncherImpl::Core::PostResult(
@@ -238,9 +238,9 @@ void NativeProcessLauncherImpl::Core::PostResult(
     base::File write_file) {
   content::BrowserThread::PostTask(
       content::BrowserThread::IO, FROM_HERE,
-      base::Bind(&NativeProcessLauncherImpl::Core::CallCallbackOnIOThread, this,
-                 callback, RESULT_SUCCESS, Passed(&process),
-                 Passed(&read_file), Passed(&write_file)));
+      base::BindOnce(&NativeProcessLauncherImpl::Core::CallCallbackOnIOThread,
+                     this, callback, RESULT_SUCCESS, Passed(&process),
+                     Passed(&read_file), Passed(&write_file)));
 }
 
 NativeProcessLauncherImpl::NativeProcessLauncherImpl(

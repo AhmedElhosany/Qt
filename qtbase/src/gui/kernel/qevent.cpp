@@ -40,6 +40,7 @@
 #include "qevent.h"
 #include "qcursor.h"
 #include "private/qguiapplication_p.h"
+#include "private/qtouchdevice_p.h"
 #include "qpa/qplatformintegration.h"
 #include "qpa/qplatformdrag.h"
 #include "private/qevent_p.h"
@@ -1526,7 +1527,11 @@ QMoveEvent::~QMoveEvent()
     \ingroup events
 
     Expose events are sent to windows when an area of the window is invalidated
-    or window visibility in the windowing system changes.
+    or window exposure in the windowing system changes.
+
+    A Window with a client area that is completely covered by another window, or
+    is otherwise not visible may be considered obscured by Qt and may in such
+    cases not receive expose events.
 
     The event handler QWindow::exposeEvent() receives expose events.
 */
@@ -2761,20 +2766,55 @@ Qt::MouseButtons QTabletEvent::buttons() const
 */
 
 /*!
-    Constructs a native gesture event of type \a type.
-
-    The points \a localPos, \a windowPos and \a screenPos specify the
-    gesture position relative to the receiving widget or item,
-    window, and screen, respectively.
-
-    \a realValue is the \macos event parameter, \a sequenceId and \a intValue are the Windows event parameters.
+    \deprecated The QTouchDevice parameter is now required
 */
+#if QT_DEPRECATED_SINCE(5, 10)
 QNativeGestureEvent::QNativeGestureEvent(Qt::NativeGestureType type, const QPointF &localPos, const QPointF &windowPos,
                                          const QPointF &screenPos, qreal realValue, ulong sequenceId, quint64 intValue)
     : QInputEvent(QEvent::NativeGesture), mGestureType(type),
       mLocalPos(localPos), mWindowPos(windowPos), mScreenPos(screenPos), mRealValue(realValue),
       mSequenceId(sequenceId), mIntValue(intValue)
 { }
+#endif
+
+typedef QHash<const QNativeGestureEvent*, const QTouchDevice*> NativeGestureEventDataHash;
+// ### Qt6: move this to a member in QNativeGestureEvent
+Q_GLOBAL_STATIC(NativeGestureEventDataHash, g_nativeGestureEventDataHash)
+
+/*!
+    Constructs a native gesture event of type \a type originating from \a device.
+
+    The points \a localPos, \a windowPos and \a screenPos specify the
+    gesture position relative to the receiving widget or item,
+    window, and screen, respectively.
+
+    \a realValue is the \macos event parameter, \a sequenceId and \a intValue are the Windows event parameters.
+    \since 5.10
+*/
+QNativeGestureEvent::QNativeGestureEvent(Qt::NativeGestureType type, const QTouchDevice *device, const QPointF &localPos, const QPointF &windowPos,
+                                         const QPointF &screenPos, qreal realValue, ulong sequenceId, quint64 intValue)
+    : QInputEvent(QEvent::NativeGesture), mGestureType(type),
+      mLocalPos(localPos), mWindowPos(windowPos), mScreenPos(screenPos), mRealValue(realValue),
+      mSequenceId(sequenceId), mIntValue(intValue)
+{
+    g_nativeGestureEventDataHash->insert(this, device);
+}
+
+QNativeGestureEvent::~QNativeGestureEvent()
+{
+    g_nativeGestureEventDataHash->remove(this);
+}
+
+/*!
+    \since 5.10
+
+    Returns the device.
+*/
+
+const QTouchDevice *QNativeGestureEvent::device() const
+{
+    return g_nativeGestureEventDataHash->value(this);
+}
 
 /*!
     \fn QNativeGestureEvent::gestureType() const

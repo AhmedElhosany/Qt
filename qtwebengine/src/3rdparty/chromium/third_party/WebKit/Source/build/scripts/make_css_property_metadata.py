@@ -6,7 +6,7 @@
 import sys
 
 import css_properties
-import in_generator
+import json5_generator
 from name_utilities import lower_first
 import template_expander
 
@@ -16,23 +16,30 @@ class CSSPropertyMetadataWriter(css_properties.CSSProperties):
         'lower_first': lower_first,
     }
 
-    def __init__(self, in_file_path):
-        super(CSSPropertyMetadataWriter, self).__init__(in_file_path)
-        self._outputs = {'CSSPropertyMetadata.cpp': self.generate_css_property_metadata_cpp}
+    def __init__(self, json5_file_path):
+        super(CSSPropertyMetadataWriter, self).__init__(json5_file_path)
+        self._outputs = {
+            'CSSPropertyMetadata.cpp':
+            self.generate_css_property_metadata_cpp
+        }
+        for property_value in self._properties.values():
+            property_value['supports_percentage'] = (
+                'Percent' in property_value['typedom_types'])
 
-    @template_expander.use_jinja('CSSPropertyMetadata.cpp.tmpl', filters=filters)
+    @template_expander.use_jinja('templates/CSSPropertyMetadata.cpp.tmpl', filters=filters)
     def generate_css_property_metadata_cpp(self):
         return {
-            'properties': self._properties,
-            'descriptors': self._descriptors,
-            'switches': [('interpolable', 'isInterpolableProperty'),
-                         ('inherited', 'isInheritedProperty'),
-                         ('supports_percentage', 'propertySupportsPercentage'),
-                         ('supports_multiple', 'propertySupportsMultiple')
+            'input_files': self._input_files,
+            'properties_including_aliases': self._properties_including_aliases,
+            'switches': [('is_descriptor', 'IsDescriptor'),
+                         ('is_property', 'IsProperty'),
+                         ('interpolable', 'IsInterpolableProperty'),
+                         ('inherited', 'IsInheritedProperty'),
+                         ('supports_percentage', 'PropertySupportsPercentage'),
                         ],
             'first_enum_value': self._first_enum_value,
         }
 
 
 if __name__ == '__main__':
-    in_generator.Maker(CSSPropertyMetadataWriter).main(sys.argv)
+    json5_generator.Maker(CSSPropertyMetadataWriter).main()

@@ -31,6 +31,17 @@
       'target_name': 'detailed_build_info',
       'dependencies': [
         'about_page_browser_proxy',
+        '<(DEPTH)/ui/webui/resources/cr_elements/policy/compiled_resources2.gyp:cr_policy_indicator_behavior',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:i18n_behavior',
+        '<(DEPTH)/ui/webui/resources/js/cr/ui/compiled_resources2.gyp:focus_without_ink',
+      ],
+      'includes': ['../../../../../third_party/closure_compiler/compile_js2.gypi'],
+    },
+    {
+      'target_name': 'channel_switcher_dialog',
+      'dependencies': [
+        'about_page_browser_proxy',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:i18n_behavior',
       ],
       'includes': ['../../../../../third_party/closure_compiler/compile_js2.gypi'],

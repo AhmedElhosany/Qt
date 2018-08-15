@@ -27,34 +27,28 @@ import filecmp
 import fnmatch
 import os
 import shutil
-import sys
 import tempfile
 
 from webkitpy.common.system.executive import Executive
 
-# Source/ path is needed both to find input IDL files, and to import other
-# Python modules.
-module_path = os.path.dirname(__file__)
-source_path = os.path.normpath(os.path.join(module_path, os.pardir, os.pardir,
-                                            os.pardir, os.pardir, 'Source'))
-bindings_script_path = os.path.join(source_path, 'bindings', 'scripts')
-sys.path.append(bindings_script_path)  # for Source/bindings imports
+from webkitpy.common import path_finder
+path_finder.add_bindings_scripts_dir_to_sys_path()
 
 from code_generator_v8 import CodeGeneratorDictionaryImpl
 from code_generator_v8 import CodeGeneratorV8
 from code_generator_v8 import CodeGeneratorUnionType
 from code_generator_v8 import CodeGeneratorCallbackFunction
-from code_generator_web_module import CodeGeneratorWebModule
+from code_generator_web_agent_api import CodeGeneratorWebAgentAPI
 from compute_interfaces_info_individual import InterfaceInfoCollector
 from compute_interfaces_info_overall import (compute_interfaces_info_overall,
                                              interfaces_info)
+from generate_conditional_features import generate_conditional_features
 from idl_compiler import (generate_bindings,
                           generate_union_type_containers,
                           generate_dictionary_impl,
                           generate_callback_function_impl)
 from utilities import ComponentInfoProviderCore
 from utilities import ComponentInfoProviderModules
-from utilities import write_file
 
 
 PASS_MESSAGE = 'All tests PASS!'
@@ -82,15 +76,11 @@ DEPENDENCY_IDL_FILES = frozenset([
     'TestInterface2Partial2.idl',
 ])
 
-# core/inspector/InspectorInstrumentation.idl is not a valid Blink IDL.
-NON_BLINK_IDL_FILES = frozenset([
-    'InspectorInstrumentation.idl',
-])
-
 COMPONENT_DIRECTORY = frozenset(['core', 'modules'])
 
-test_input_directory = os.path.join(source_path, 'bindings', 'tests', 'idls')
-reference_directory = os.path.join(source_path, 'bindings', 'tests', 'results')
+SOURCE_PATH = path_finder.get_source_dir()
+TEST_INPUT_DIRECTORY = os.path.join(SOURCE_PATH, 'bindings', 'tests', 'idls')
+REFERENCE_DIRECTORY = os.path.join(SOURCE_PATH, 'bindings', 'tests', 'results')
 
 # component -> ComponentInfoProvider.
 # Note that this dict contains information about testing idl files, which live
@@ -128,15 +118,13 @@ def generate_interface_dependencies():
         """Returns IDL file paths which blink actually uses."""
         idl_paths = []
         for component in COMPONENT_DIRECTORY:
-            directory = os.path.join(source_path, component)
+            directory = os.path.join(SOURCE_PATH, component)
             idl_paths.extend(idl_paths_recursive(directory))
         return idl_paths
 
     def collect_interfaces_info(idl_path_list):
         info_collector = InterfaceInfoCollector()
         for idl_path in idl_path_list:
-            if os.path.basename(idl_path) in NON_BLINK_IDL_FILES:
-                continue
             info_collector.collect_info(idl_path)
         info = info_collector.get_info_as_dict()
         # TestDictionary.{h,cpp} are placed under
@@ -166,7 +154,7 @@ def generate_interface_dependencies():
     test_idl_paths = {}
     for component in COMPONENT_DIRECTORY:
         test_idl_paths[component] = idl_paths_recursive(
-            os.path.join(test_input_directory, component))
+            os.path.join(TEST_INPUT_DIRECTORY, component))
     # 2nd-stage computation: individual, then overall
     #
     # Properly should compute separately by component (currently test
@@ -202,7 +190,8 @@ class IdlCompilerOptions(object):
         self.impl_output_directory = impl_output_directory
         self.target_component = target_component
 
-def bindings_tests(output_directory, verbose):
+
+def bindings_tests(output_directory, verbose, suppress_diff):
     executive = Executive()
 
     def list_files(directory):
@@ -251,7 +240,8 @@ def bindings_tests(output_directory, verbose):
             # cmp is much faster than diff, and usual case is "no difference",
             # so only run diff if cmp detects a difference
             print 'FAIL: %s' % reference_basename
-            print diff(reference_filename, output_filename)
+            if not suppress_diff:
+                print diff(reference_filename, output_filename)
             return False
 
         if verbose:
@@ -259,7 +249,7 @@ def bindings_tests(output_directory, verbose):
         return True
 
     def identical_output_files(output_files):
-        reference_files = [os.path.join(reference_directory,
+        reference_files = [os.path.join(REFERENCE_DIRECTORY,
                                         os.path.relpath(path, output_directory))
                            for path in output_files]
         return all([identical_file(reference_filename, output_filename)
@@ -268,13 +258,9 @@ def bindings_tests(output_directory, verbose):
     def no_excess_files(output_files):
         generated_files = set([os.path.relpath(path, output_directory)
                                for path in output_files])
-        # Add subversion working copy directories in core and modules.
-        for component in COMPONENT_DIRECTORY:
-            generated_files.add(os.path.join(component, '.svn'))
-
         excess_files = []
-        for path in list_files(reference_directory):
-            relpath = os.path.relpath(path, reference_directory)
+        for path in list_files(REFERENCE_DIRECTORY):
+            relpath = os.path.relpath(path, REFERENCE_DIRECTORY)
             if relpath not in generated_files:
                 excess_files.append(relpath)
         if excess_files:
@@ -311,7 +297,7 @@ def bindings_tests(output_directory, verbose):
             idl_filenames = []
             dictionary_impl_filenames = []
             partial_interface_filenames = []
-            input_directory = os.path.join(test_input_directory, component)
+            input_directory = os.path.join(TEST_INPUT_DIRECTORY, component)
             for filename in os.listdir(input_directory):
                 if (filename.endswith('.idl') and
                         # Dependencies aren't built
@@ -343,7 +329,7 @@ def bindings_tests(output_directory, verbose):
                 options,
                 idl_filenames)
             generate_bindings(
-                CodeGeneratorWebModule,
+                CodeGeneratorWebAgentAPI,
                 info_provider,
                 options,
                 idl_filenames)
@@ -357,6 +343,11 @@ def bindings_tests(output_directory, verbose):
                 info_provider,
                 options,
                 dictionary_impl_filenames)
+            generate_conditional_features(
+                info_provider,
+                options,
+                [filename for filename in idl_filenames
+                 if filename not in dictionary_impl_filenames])
 
     finally:
         delete_cache_files()
@@ -376,11 +367,11 @@ def bindings_tests(output_directory, verbose):
     return 1
 
 
-def run_bindings_tests(reset_results, verbose):
+def run_bindings_tests(reset_results, verbose, suppress_diff):
     # Generate output into the reference directory if resetting results, or
     # a temp directory if not.
     if reset_results:
         print 'Resetting results'
-        return bindings_tests(reference_directory, verbose)
+        return bindings_tests(REFERENCE_DIRECTORY, verbose, suppress_diff)
     with TemporaryDirectory() as temp_dir:
-        return bindings_tests(temp_dir, verbose)
+        return bindings_tests(temp_dir, verbose, suppress_diff)

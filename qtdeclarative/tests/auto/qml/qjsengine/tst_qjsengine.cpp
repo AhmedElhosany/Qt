@@ -128,7 +128,6 @@ private slots:
     void JSONparse();
     void arraySort();
     void lookupOnDisappearingProperty();
-    void arrayConcat();
 
     void qRegExpInport_data();
     void qRegExpInport();
@@ -570,10 +569,6 @@ void tst_QJSEngine::newDate()
         QCOMPARE(date.isDate(), true);
         QCOMPARE(date.isObject(), true);
         QVERIFY(!date.isCallable());
-        // prototype should be Date.prototype
-        QVERIFY(!date.prototype().isUndefined());
-        QCOMPARE(date.prototype().isDate(), true);
-        QCOMPARE(date.prototype().strictlyEquals(eng.evaluate("Date.prototype")), true);
     }
 
     {
@@ -582,10 +577,6 @@ void tst_QJSEngine::newDate()
         QVERIFY(!date.isUndefined());
         QCOMPARE(date.isDate(), true);
         QCOMPARE(date.isObject(), true);
-        // prototype should be Date.prototype
-        QVERIFY(!date.prototype().isUndefined());
-        QCOMPARE(date.prototype().isDate(), true);
-        QCOMPARE(date.prototype().strictlyEquals(eng.evaluate("Date.prototype")), true);
 
         QCOMPARE(date.toDateTime(), dt);
     }
@@ -1116,7 +1107,7 @@ void tst_QJSEngine::builtinFunctionNames_data()
     QTest::newRow("Date.prototype.setFullYear") << QString("Date.prototype.setFullYear") << QString("setFullYear");
     QTest::newRow("Date.prototype.setUTCFullYear") << QString("Date.prototype.setUTCFullYear") << QString("setUTCFullYear");
     QTest::newRow("Date.prototype.toUTCString") << QString("Date.prototype.toUTCString") << QString("toUTCString");
-    QTest::newRow("Date.prototype.toGMTString") << QString("Date.prototype.toGMTString") << QString("toGMTString");
+    QTest::newRow("Date.prototype.toGMTString") << QString("Date.prototype.toGMTString") << QString("toUTCString"); // yes, this is per spec
 
     QTest::newRow("Error") << QString("Error") << QString("Error");
 //    QTest::newRow("Error.prototype.backtrace") << QString("Error.prototype.backtrace") << QString("backtrace");
@@ -1194,6 +1185,7 @@ void tst_QJSEngine::builtinFunctionNames_data()
     QTest::newRow("String.prototype.lastIndexOf") << QString("String.prototype.lastIndexOf") << QString("lastIndexOf");
     QTest::newRow("String.prototype.localeCompare") << QString("String.prototype.localeCompare") << QString("localeCompare");
     QTest::newRow("String.prototype.match") << QString("String.prototype.match") << QString("match");
+    QTest::newRow("String.prototype.repeat") << QString("String.prototype.repeat") << QString("repeat");
     QTest::newRow("String.prototype.replace") << QString("String.prototype.replace") << QString("replace");
     QTest::newRow("String.prototype.search") << QString("String.prototype.search") << QString("search");
     QTest::newRow("String.prototype.slice") << QString("String.prototype.slice") << QString("slice");
@@ -3017,19 +3009,6 @@ void tst_QJSEngine::lookupOnDisappearingProperty()
     o = eng.newObject();
     QVERIFY(func.call(QJSValueList()<< o).isUndefined());
     QVERIFY(func.call(QJSValueList()<< o).isUndefined());
-}
-
-void tst_QJSEngine::arrayConcat()
-{
-    QJSEngine eng;
-    QJSValue v = eng.evaluate("var x = [1, 2, 3, 4, 5, 6];"
-                              "var y = [];"
-                              "for (var i = 0; i < 5; ++i)"
-                              "    x.shift();"
-                              "for (var i = 10; i < 13; ++i)"
-                              "   x.push(i);"
-                              "x.toString();");
-    QCOMPARE(v.toString(), QString::fromLatin1("6,10,11,12"));
 }
 
 static QRegExp minimal(QRegExp r) { r.setMinimal(true); return r; }

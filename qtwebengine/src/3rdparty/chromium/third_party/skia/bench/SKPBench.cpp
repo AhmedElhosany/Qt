@@ -50,8 +50,8 @@ const char* SKPBench::onGetUniqueName() {
 }
 
 void SKPBench::onPerCanvasPreDraw(SkCanvas* canvas) {
-    SkIRect bounds;
-    SkAssertResult(canvas->getClipDeviceBounds(&bounds));
+    SkIRect bounds = canvas->getDeviceClipBounds();
+    SkAssertResult(!bounds.isEmpty());
 
     const bool gpu = canvas->getGrContext() != nullptr;
     int tileW = gpu ? FLAGS_GPUbenchTileW : FLAGS_CPUbenchTileW,
@@ -120,7 +120,7 @@ void SKPBench::onDraw(int loops, SkCanvas* canvas) {
             break;
         }
 #if SK_SUPPORT_GPU
-        // Ensure the GrContext doesn't batch across draw loops.
+        // Ensure the GrContext doesn't combine ops across draw loops.
         if (GrContext* context = canvas->getGrContext()) {
             context->flush();
         }

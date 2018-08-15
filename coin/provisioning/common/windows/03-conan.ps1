@@ -2,12 +2,18 @@
 
 $scriptsPath = "C:\Python27\Scripts"
 
-Run-Executable "$scriptsPath\pip.exe" "install --upgrade conan==0.24.0"
+& "$scriptsPath\pip.exe" install --upgrade conan==0.24.0
 
 # Use Qt Project repository by default
-Run-Executable "$scriptsPath\conan.exe" "remote add qtproject https://api.bintray.com/conan/qtproject/conan --insert"
+& "$scriptsPath\conan.exe" remote add qtproject https://api.bintray.com/conan/qtproject/conan --insert
 
-Set-EnvironmentVariable "CI_CONAN_BUILDINFO_DIR" "C:\Utils\conanbuildinfos"
+[Environment]::SetEnvironmentVariable("CI_CONAN_BUILDINFO_DIR", "C:\Utils\conanbuildinfos", "Machine")
+
+function Start-Process-Logged
+{
+    Write-Host "Start-Process", $args
+    Start-Process @args
+}
 
 function Run-Conan-Install
 {
@@ -37,20 +43,18 @@ function Run-Conan-Install
         $outpwd = "C:\Utils\conanbuildinfos\$($BuildinfoDir)\$($_.BaseName)"
         New-Item $outpwd -Type directory -Force
 
-        for ($i = 1; $i -le 5; $i++) {
-            try {
-                Push-Location $outpwd
-                Run-Executable "$scriptsPath\conan.exe" "install -f $conanfile --no-imports --verify $manifestsDir", `
-                    '-s', ('compiler="' + $Compiler + '"'), `
-                    "-s os=Windows -s arch=$Arch -s compiler.version=$CompilerVersion $extraArgs" `
-                break;
-            } catch {
-                if ($i -eq 5) {
-                    throw "Could not install conan content"
-                }
-            } finally {
-                Pop-Location
-            }
+        $process = Start-Process-Logged `
+            "$scriptsPath\conan.exe" `
+            -WorkingDirectory $outpwd `
+            -ArgumentList "install -f $conanfile --no-imports --verify $manifestsDir", `
+                '-s', ('compiler="' + $Compiler + '"'), `
+                "-s os=Windows -s arch=$Arch -s compiler.version=$CompilerVersion $extraArgs" `
+            -NoNewWindow -Wait -Verbose `
+            -PassThru # Return process object
+
+        if ($process.ExitCode -ne 0) {
+            Write-Host "conan exited with code $($process.ExitCode)"
+            Exit(1)
         }
 
         Copy-Item -Path $conanfile -Destination "$outpwd\conanfile.txt"

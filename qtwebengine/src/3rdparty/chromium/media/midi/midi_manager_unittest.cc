@@ -13,11 +13,12 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/system_monitor/system_monitor.h"
 #include "build/build_config.h"
+#include "media/midi/midi_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace midi {
@@ -30,7 +31,9 @@ using mojom::Result;
 class FakeMidiManager : public MidiManager {
  public:
   FakeMidiManager()
-      : start_initialization_is_called_(false), finalize_is_called_(false) {}
+      : MidiManager(nullptr),
+        start_initialization_is_called_(false),
+        finalize_is_called_(false) {}
   ~FakeMidiManager() override {}
 
   // MidiManager implementation.
@@ -111,6 +114,7 @@ class MidiManagerTest : public ::testing::Test {
  public:
   MidiManagerTest()
       : manager_(new FakeMidiManager),
+        service_(new MidiService(base::WrapUnique(manager_))),
         message_loop_(new base::MessageLoop) {}
   ~MidiManagerTest() override {
     manager_->Shutdown();
@@ -163,7 +167,8 @@ class MidiManagerTest : public ::testing::Test {
   }
 
  protected:
-  std::unique_ptr<FakeMidiManager> manager_;
+  FakeMidiManager* manager_;  // Owned by |service_|.
+  std::unique_ptr<MidiService> service_;
 
  private:
   std::unique_ptr<base::MessageLoop> message_loop_;
@@ -216,11 +221,11 @@ TEST_F(MidiManagerTest, StartMultipleSessions) {
 
 TEST_F(MidiManagerTest, TooManyPendingSessions) {
   // Push as many client requests for starting session as possible.
-  ScopedVector<FakeMidiManagerClient> many_existing_clients;
+  std::vector<std::unique_ptr<FakeMidiManagerClient>> many_existing_clients;
   many_existing_clients.resize(MidiManager::kMaxPendingClientCount);
   for (size_t i = 0; i < MidiManager::kMaxPendingClientCount; ++i) {
-    many_existing_clients[i] = new FakeMidiManagerClient;
-    StartTheNthSession(many_existing_clients[i], i + 1);
+    many_existing_clients[i] = base::MakeUnique<FakeMidiManagerClient>();
+    StartTheNthSession(many_existing_clients[i].get(), i + 1);
   }
   EXPECT_TRUE(manager_->start_initialization_is_called_);
 
@@ -246,7 +251,7 @@ TEST_F(MidiManagerTest, TooManyPendingSessions) {
   // Close all successful sessions in FIFO order.
   size_t sessions = many_existing_clients.size();
   for (size_t i = 0; i < many_existing_clients.size(); ++i, --sessions)
-    EndSession(many_existing_clients[i], sessions, sessions - 1);
+    EndSession(many_existing_clients[i].get(), sessions, sessions - 1);
 }
 
 TEST_F(MidiManagerTest, AbortSession) {
@@ -269,11 +274,11 @@ TEST_F(MidiManagerTest, CreateMidiManager) {
   // SystemMonitor is needed on Windows.
   base::SystemMonitor system_monitor;
 
-  std::unique_ptr<FakeMidiManagerClient> client;
-  client.reset(new FakeMidiManagerClient);
+  std::unique_ptr<FakeMidiManagerClient> client(
+      base::MakeUnique<FakeMidiManagerClient>());
 
-  std::unique_ptr<MidiManager> manager(MidiManager::Create());
-  manager->StartSession(client.get());
+  std::unique_ptr<MidiService> service(base::MakeUnique<MidiService>());
+  service->StartSession(client.get());
 
   Result result = client->WaitForResult();
   // This #ifdef needs to be identical to the one in media/midi/midi_manager.cc.
@@ -288,7 +293,7 @@ TEST_F(MidiManagerTest, CreateMidiManager) {
   EXPECT_EQ(Result::OK, result);
 #endif
 
-  manager->Shutdown();
+  service->Shutdown();
   base::RunLoop run_loop;
   run_loop.RunUntilIdle();
 }

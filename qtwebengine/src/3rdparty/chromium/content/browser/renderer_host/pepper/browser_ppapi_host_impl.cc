@@ -92,22 +92,22 @@ const base::Process& BrowserPpapiHostImpl::GetPluginProcess() const {
 }
 
 bool BrowserPpapiHostImpl::IsValidInstance(PP_Instance instance) const {
-  return instance_map_.contains(instance);
+  return instance_map_.find(instance) != instance_map_.end();
 }
 
 bool BrowserPpapiHostImpl::GetRenderFrameIDsForInstance(
     PP_Instance instance,
     int* render_process_id,
     int* render_frame_id) const {
-  auto* data = instance_map_.get(instance);
-  if (data == nullptr) {
+  auto it = instance_map_.find(instance);
+  if (it == instance_map_.end()) {
     *render_process_id = 0;
     *render_frame_id = 0;
     return false;
   }
 
-  *render_process_id = data->renderer_data.render_process_id;
-  *render_frame_id = data->renderer_data.render_frame_id;
+  *render_process_id = it->second->renderer_data.render_process_id;
+  *render_frame_id = it->second->renderer_data.render_frame_id;
   return true;
 }
 
@@ -124,30 +124,25 @@ const base::FilePath& BrowserPpapiHostImpl::GetProfileDataDirectory() {
 }
 
 GURL BrowserPpapiHostImpl::GetDocumentURLForInstance(PP_Instance instance) {
-  auto* data = instance_map_.get(instance);
-  if (data == nullptr)
+  auto it = instance_map_.find(instance);
+  if (it == instance_map_.end())
     return GURL();
-  return data->renderer_data.document_url;
+  return it->second->renderer_data.document_url;
 }
 
 GURL BrowserPpapiHostImpl::GetPluginURLForInstance(PP_Instance instance) {
-  auto* data = instance_map_.get(instance);
-  if (data == nullptr)
+  auto it = instance_map_.find(instance);
+  if (it == instance_map_.end())
     return GURL();
-  return data->renderer_data.plugin_url;
-}
-
-void BrowserPpapiHostImpl::SetOnKeepaliveCallback(
-    const BrowserPpapiHost::OnKeepaliveCallback& callback) {
-  on_keepalive_callback_ = callback;
+  return it->second->renderer_data.plugin_url;
 }
 
 bool BrowserPpapiHostImpl::IsPotentiallySecurePluginContext(
     PP_Instance instance) {
-  auto* data = instance_map_.get(instance);
-  if (data == nullptr)
+  auto it = instance_map_.find(instance);
+  if (it == instance_map_.end())
     return false;
-  return data->renderer_data.is_potentially_secure_plugin_context;
+  return it->second->renderer_data.is_potentially_secure_plugin_context;
 }
 
 void BrowserPpapiHostImpl::AddInstance(
@@ -158,8 +153,8 @@ void BrowserPpapiHostImpl::AddInstance(
   // existing plugin instance.
   // See http://crbug.com/733548.
   if (instance_map_.find(instance) == instance_map_.end()) {
-    instance_map_.add(instance,
-        base::MakeUnique<InstanceData>(renderer_instance_data));
+    instance_map_[instance] =
+        base::MakeUnique<InstanceData>(renderer_instance_data);
   } else {
     NOTREACHED();
   }
@@ -172,6 +167,14 @@ void BrowserPpapiHostImpl::DeleteInstance(PP_Instance instance) {
   // See http://crbug.com/733548.
   auto it = instance_map_.find(instance);
   if (it != instance_map_.end()) {
+    // We need to tell the observers for that instance that we are destroyed
+    // because we won't have the opportunity to once we remove them from the
+    // |instance_map_|. If the instance was deleted, observers for those
+    // instances should never call back into the host anyway, so it is safe to
+    // tell them that the host is destroyed.
+    for (auto& observer : it->second->observer_list)
+      observer.OnHostDestroyed();
+
     instance_map_.erase(it);
   } else {
     NOTREACHED();
@@ -180,30 +183,30 @@ void BrowserPpapiHostImpl::DeleteInstance(PP_Instance instance) {
 
 void BrowserPpapiHostImpl::AddInstanceObserver(PP_Instance instance,
                                                InstanceObserver* observer) {
-  instance_map_.get(instance)->observer_list.AddObserver(observer);
+  instance_map_[instance]->observer_list.AddObserver(observer);
 }
 
 void BrowserPpapiHostImpl::RemoveInstanceObserver(PP_Instance instance,
                                                   InstanceObserver* observer) {
-  auto* data = instance_map_.get(instance);
-  if (data)
-    data->observer_list.RemoveObserver(observer);
+  auto it = instance_map_.find(instance);
+  if (it != instance_map_.end())
+    it->second->observer_list.RemoveObserver(observer);
 }
 
 void BrowserPpapiHostImpl::OnThrottleStateChanged(PP_Instance instance,
                                                   bool is_throttled) {
-  auto* data = instance_map_.get(instance);
-  if (data) {
-    data->is_throttled = is_throttled;
-    for (auto& observer : data->observer_list)
+  auto it = instance_map_.find(instance);
+  if (it != instance_map_.end()) {
+    it->second->is_throttled = is_throttled;
+    for (auto& observer : it->second->observer_list)
       observer.OnThrottleStateChanged(is_throttled);
   }
 }
 
 bool BrowserPpapiHostImpl::IsThrottled(PP_Instance instance) const {
-  auto* data = instance_map_.get(instance);
-  if (data)
-    return data->is_throttled;
+  auto it = instance_map_.find(instance);
+  if (it != instance_map_.end())
+    return it->second->is_throttled;
 
   return false;
 }
@@ -223,7 +226,6 @@ bool BrowserPpapiHostImpl::HostMessageFilter::OnMessageReceived(
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(BrowserPpapiHostImpl::HostMessageFilter, msg)
   // Add necessary message handlers here.
-  IPC_MESSAGE_HANDLER(PpapiHostMsg_Keepalive, OnKeepalive)
   IPC_MESSAGE_HANDLER(PpapiHostMsg_LogInterfaceUsage,
                       OnHostMsgLogInterfaceUsage)
   IPC_MESSAGE_UNHANDLED(handled = ppapi_host_->OnMessageReceived(msg))
@@ -239,11 +241,6 @@ void BrowserPpapiHostImpl::HostMessageFilter::OnHostDestroyed() {
 
 BrowserPpapiHostImpl::HostMessageFilter::~HostMessageFilter() {}
 
-void BrowserPpapiHostImpl::HostMessageFilter::OnKeepalive() {
-  if (browser_ppapi_host_impl_)
-    browser_ppapi_host_impl_->OnKeepalive();
-}
-
 void BrowserPpapiHostImpl::HostMessageFilter::OnHostMsgLogInterfaceUsage(
     int hash) const {
   UMA_HISTOGRAM_SPARSE_SLOWLY("Pepper.InterfaceUsed", hash);
@@ -255,35 +252,6 @@ BrowserPpapiHostImpl::InstanceData::InstanceData(
 }
 
 BrowserPpapiHostImpl::InstanceData::~InstanceData() {
-}
-
-void BrowserPpapiHostImpl::OnKeepalive() {
-  // An instance has been active. The on_keepalive_callback_ will be
-  // used to permit the content embedder to handle this, e.g. by tracking
-  // activity and shutting down processes that go idle.
-  //
-  // Currently embedders do not need to distinguish between instances having
-  // different idle state, and thus this implementation handles all instances
-  // for this module together.
-
-  if (on_keepalive_callback_.is_null())
-    return;
-
-  BrowserPpapiHost::OnKeepaliveInstanceData instance_data(instance_map_.size());
-
-  auto instance = instance_map_.begin();
-  int i = 0;
-  while (instance != instance_map_.end()) {
-    instance_data[i].render_process_id =
-        instance->second->renderer_data.render_process_id;
-    instance_data[i].render_frame_id =
-        instance->second->renderer_data.render_frame_id;
-    instance_data[i].document_url =
-        instance->second->renderer_data.document_url;
-    ++instance;
-    ++i;
-  }
-  on_keepalive_callback_.Run(instance_data, profile_data_directory_);
 }
 
 }  // namespace content

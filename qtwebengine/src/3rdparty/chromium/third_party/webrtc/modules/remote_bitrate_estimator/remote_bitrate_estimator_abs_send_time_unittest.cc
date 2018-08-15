@@ -8,9 +8,9 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/modules/remote_bitrate_estimator/remote_bitrate_estimator_abs_send_time.h"
 #include "webrtc/modules/remote_bitrate_estimator/remote_bitrate_estimator_unittest_helper.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 
@@ -55,7 +55,7 @@ TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropOneStreamWrap) {
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropTwoStreamsWrap) {
-  CapacityDropTestHelper(2, true, 633, 0);
+  CapacityDropTestHelper(2, true, 700, 0);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropThreeStreamsWrap) {

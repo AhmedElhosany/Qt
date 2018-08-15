@@ -10,11 +10,11 @@
 #ifndef WEBRTC_MODULES_REMOTE_BITRATE_ESTIMATOR_OVERUSE_ESTIMATOR_H_
 #define WEBRTC_MODULES_REMOTE_BITRATE_ESTIMATOR_OVERUSE_ESTIMATOR_H_
 
-#include <list>
+#include <deque>
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/common_types.h"
 #include "webrtc/modules/remote_bitrate_estimator/include/bwe_defines.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 
@@ -64,7 +64,7 @@ class OveruseEstimator {
   double process_noise_[2];
   double avg_noise_;
   double var_noise_;
-  std::list<double> ts_delta_hist_;
+  std::deque<double> ts_delta_hist_;
 
   RTC_DISALLOW_COPY_AND_ASSIGN(OveruseEstimator);
 };

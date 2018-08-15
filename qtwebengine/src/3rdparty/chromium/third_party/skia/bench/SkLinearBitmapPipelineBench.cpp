@@ -6,13 +6,16 @@
  */
 
 #include <memory>
-#include "SkColor.h"
-#include "SkLinearBitmapPipeline.h"
-#include "SkBitmapProcShader.h"
-#include "SkPM4f.h"
 #include "Benchmark.h"
-#include "SkShader.h"
+
+#include "SkArenaAlloc.h"
+#include "SkBitmapProcShader.h"
+#include "SkColor.h"
+#include "SkArenaAlloc.h"
 #include "SkImage.h"
+#include "SkLinearBitmapPipeline.h"
+#include "SkPM4f.h"
+#include "SkShaderBase.h"
 
 struct CommonBitmapFPBenchmark : public Benchmark {
     CommonBitmapFPBenchmark(
@@ -90,7 +93,7 @@ struct CommonBitmapFPBenchmark : public Benchmark {
         sk_ignore_unused_variable(trash);
 
         fInfo = SkImageInfo::MakeN32Premul(width, height, fIsSRGB ?
-                                      SkColorSpace::MakeNamed(SkColorSpace::kSRGB_Named) : nullptr);
+                                      SkColorSpace::MakeSRGB() : nullptr);
     }
 
     bool isSuitableFor(Backend backend) override {
@@ -146,8 +149,10 @@ struct SkBitmapFPGeneral final : public CommonBitmapFPBenchmark {
 
         SkPixmap srcPixmap{fInfo, fBitmap.get(), static_cast<size_t>(4 * width)};
 
+
+        SkSTArenaAlloc<600> allocator(512);
         SkLinearBitmapPipeline pipeline{
-            fInvert, filterQuality, fXTile, fYTile, SK_ColorBLACK, srcPixmap};
+            fInvert, filterQuality, fXTile, fYTile, SK_ColorBLACK, srcPixmap, &allocator};
 
         int count = 100;
 
@@ -190,24 +195,25 @@ struct SkBitmapFPOrigShader : public CommonBitmapFPBenchmark {
     }
 
     void onDraw(int loops, SkCanvas*) override {
+        if (as_SB(fPaint.getShader())->isRasterPipelineOnly()) {
+            return;
+        }
         int width = fSrcSize.fWidth;
         int height = fSrcSize.fHeight;
 
         SkAutoTMalloc<SkPMColor> buffer4b(width*height);
 
-        uint32_t storage[kSkBlitterContextSize];
-        const SkShader::ContextRec rec(fPaint, fM, nullptr,
-                                       SkShader::ContextRec::kPMColor_DstType);
-        SkASSERT(fPaint.getShader()->contextSize(rec) <= sizeof(storage));
-        SkShader::Context* ctx = fPaint.getShader()->createContext(rec, storage);
+        SkArenaAlloc alloc{0};
+        const SkShaderBase::ContextRec rec(fPaint, fM, nullptr,
+                                           SkShaderBase::ContextRec::kPMColor_DstType,
+                                           nullptr);
+        SkShaderBase::Context* ctx = as_SB(fPaint.getShader())->makeContext(rec, &alloc);
 
         int count = 100;
 
         for (int n = 0; n < 1000*loops; n++) {
             ctx->shadeSpan(3, 6, buffer4b, count);
         }
-
-        ctx->~Context();
     }
     SkPaint fPaint;
     sk_sp<SkImage> fImage;

@@ -30,6 +30,8 @@
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
+#include "base/trace_event/memory_usage_estimator.h"
+#include "base/trace_event/process_memory_dump.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/cache_util.h"
 #include "net/disk_cache/simple/simple_entry_format.h"
@@ -203,6 +205,13 @@ void RecordIndexLoad(net::CacheType cache_type,
 }
 
 }  // namespace
+
+// Static function which is called by base::trace_event::EstimateMemoryUsage()
+// to estimate the memory of SimpleEntryImpl* type.
+// This needs to be in disk_cache namespace.
+size_t EstimateMemoryUsage(const SimpleEntryImpl* const& entry_impl) {
+  return sizeof(SimpleEntryImpl) + entry_impl->EstimateMemoryUsage();
+}
 
 class SimpleBackendImpl::ActiveEntryProxy
     : public SimpleEntryImpl::ActiveEntryProxy {
@@ -458,6 +467,15 @@ int SimpleBackendImpl::CalculateSizeOfAllEntries(
       &SimpleBackendImpl::IndexReadyForSizeCalculation, AsWeakPtr(), callback));
 }
 
+int SimpleBackendImpl::CalculateSizeOfEntriesBetween(
+    base::Time initial_time,
+    base::Time end_time,
+    const CompletionCallback& callback) {
+  return index_->ExecuteWhenReady(
+      base::Bind(&SimpleBackendImpl::IndexReadyForSizeBetweenCalculation,
+                 AsWeakPtr(), initial_time, end_time, callback));
+}
+
 class SimpleBackendImpl::SimpleIterator final : public Iterator {
  public:
   explicit SimpleIterator(base::WeakPtr<SimpleBackendImpl> backend)
@@ -543,6 +561,21 @@ void SimpleBackendImpl::OnExternalCacheHit(const std::string& key) {
   index_->UseIfExists(simple_util::GetEntryHashKey(key));
 }
 
+size_t SimpleBackendImpl::DumpMemoryStats(
+    base::trace_event::ProcessMemoryDump* pmd,
+    const std::string& parent_absolute_name) const {
+  base::trace_event::MemoryAllocatorDump* dump =
+      pmd->CreateAllocatorDump(parent_absolute_name + "/simple_backend");
+
+  size_t size = base::trace_event::EstimateMemoryUsage(index_) +
+                base::trace_event::EstimateMemoryUsage(active_entries_);
+  // TODO(xunjieli): crbug.com/669108. Track |entries_pending_doom_| once
+  // base::Closure is suppported in memory_usage_estimator.h.
+  dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
+                  base::trace_event::MemoryAllocatorDump::kUnitsBytes, size);
+  return size;
+}
+
 void SimpleBackendImpl::InitializeIndex(const CompletionCallback& callback,
                                         const DiskStatResult& result) {
   if (result.net_error == net::OK) {
@@ -570,6 +603,18 @@ void SimpleBackendImpl::IndexReadyForSizeCalculation(
     int result) {
   if (result == net::OK)
     result = static_cast<int>(index_->GetCacheSize());
+  callback.Run(result);
+}
+
+void SimpleBackendImpl::IndexReadyForSizeBetweenCalculation(
+    base::Time initial_time,
+    base::Time end_time,
+    const CompletionCallback& callback,
+    int result) {
+  if (result == net::OK) {
+    result =
+        static_cast<int>(index_->GetCacheSizeBetween(initial_time, end_time));
+  }
   callback.Run(result);
 }
 

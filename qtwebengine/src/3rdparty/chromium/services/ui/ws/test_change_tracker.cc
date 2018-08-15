@@ -8,11 +8,9 @@
 
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "mojo/common/common_type_converters.h"
+#include "mojo/public/cpp/bindings/map.h"
 #include "services/ui/common/util.h"
-
-using mojo::Array;
-using mojo::String;
+#include "ui/base/cursor/cursor.h"
 
 namespace ui {
 
@@ -56,6 +54,11 @@ std::string ChangeToDescription(const Change& change,
                                 WindowIdToString(change.window_id).c_str(),
                                 WindowIdToString(change.window_id2).c_str());
 
+    case CHANGE_TYPE_FRAME_SINK_ID_ALLOCATED:
+      return base::StringPrintf("OnFrameSinkIdAllocated window=%s %s",
+                                WindowIdToString(change.window_id).c_str(),
+                                change.frame_sink_id.ToString().c_str());
+
     case CHANGE_TYPE_NODE_ADD_TRANSIENT_WINDOW:
       return base::StringPrintf("AddTransientWindow parent = %s child = %s",
                                 WindowIdToString(change.window_id).c_str(),
@@ -63,9 +66,12 @@ std::string ChangeToDescription(const Change& change,
 
     case CHANGE_TYPE_NODE_BOUNDS_CHANGED:
       return base::StringPrintf(
-          "BoundsChanged window=%s old_bounds=%s new_bounds=%s",
+          "BoundsChanged window=%s old_bounds=%s new_bounds=%s "
+          "local_surface_id=%s",
           WindowIdToString(change.window_id).c_str(),
-          change.bounds.ToString().c_str(), change.bounds2.ToString().c_str());
+          change.bounds.ToString().c_str(), change.bounds2.ToString().c_str(),
+          change.local_surface_id ? change.local_surface_id->ToString().c_str()
+                                  : "(none)");
 
     case CHANGE_TYPE_NODE_HIERARCHY_CHANGED:
       return base::StringPrintf(
@@ -125,9 +131,9 @@ std::string ChangeToDescription(const Change& change,
                                 WindowIdToString(change.window_id).c_str());
 
     case CHANGE_TYPE_CURSOR_CHANGED:
-      return base::StringPrintf("CursorChanged id=%s cursor_id=%d",
+      return base::StringPrintf("CursorChanged id=%s cursor_type=%d",
                                 WindowIdToString(change.window_id).c_str(),
-                                change.cursor_id);
+                                static_cast<int>(change.cursor_type));
     case CHANGE_TYPE_ON_CHANGE_COMPLETED:
       return base::StringPrintf("ChangeCompleted id=%d sucess=%s",
                                 change.change_id,
@@ -146,6 +152,9 @@ std::string ChangeToDescription(const Change& change,
       return base::StringPrintf("SurfaceCreated window_id=%s surface_id=%s",
                                 WindowIdToString(change.window_id).c_str(),
                                 change.surface_id.ToString().c_str());
+    case CHANGE_TYPE_TRANSFORM_CHANGED:
+      return base::StringPrintf("TransformChanged window_id=%s",
+                                WindowIdToString(change.window_id).c_str());
   }
   return std::string();
 }
@@ -202,12 +211,11 @@ TestWindow WindowDataToTestWindow(const mojom::WindowDataPtr& data) {
   window.parent_id = data->parent_id;
   window.window_id = data->window_id;
   window.visible = data->visible;
-  window.properties =
-      data->properties.To<std::map<std::string, std::vector<uint8_t>>>();
+  window.properties = mojo::UnorderedMapToMap(data->properties);
   return window;
 }
 
-void WindowDatasToTestWindows(const Array<mojom::WindowDataPtr>& data,
+void WindowDatasToTestWindows(const std::vector<mojom::WindowDataPtr>& data,
                               std::vector<TestWindow>* test_windows) {
   for (size_t i = 0; i < data.size(); ++i)
     test_windows->push_back(WindowDataToTestWindow(data[i]));
@@ -224,7 +232,7 @@ Change::Change()
       direction(mojom::OrderDirection::ABOVE),
       bool_value(false),
       float_value(0.f),
-      cursor_id(0),
+      cursor_type(ui::CursorType::kNull),
       change_id(0u) {}
 
 Change::Change(const Change& other) = default;
@@ -253,14 +261,24 @@ void TestChangeTracker::OnEmbeddedAppDisconnected(Id window_id) {
   AddChange(change);
 }
 
-void TestChangeTracker::OnWindowBoundsChanged(Id window_id,
-                                              const gfx::Rect& old_bounds,
-                                              const gfx::Rect& new_bounds) {
+void TestChangeTracker::OnWindowBoundsChanged(
+    Id window_id,
+    const gfx::Rect& old_bounds,
+    const gfx::Rect& new_bounds,
+    const base::Optional<viz::LocalSurfaceId>& local_surface_id) {
   Change change;
   change.type = CHANGE_TYPE_NODE_BOUNDS_CHANGED;
   change.window_id = window_id;
   change.bounds = old_bounds;
   change.bounds2 = new_bounds;
+  change.local_surface_id = local_surface_id;
+  AddChange(change);
+}
+
+void TestChangeTracker::OnWindowTransformChanged(Id window_id) {
+  Change change;
+  change.type = CHANGE_TYPE_TRANSFORM_CHANGED;
+  change.window_id = window_id;
   AddChange(change);
 }
 
@@ -298,11 +316,21 @@ void TestChangeTracker::OnCaptureChanged(Id new_capture_window_id,
   AddChange(change);
 }
 
+void TestChangeTracker::OnFrameSinkIdAllocated(
+    Id window_id,
+    const viz::FrameSinkId& frame_sink_id) {
+  Change change;
+  change.type = CHANGE_TYPE_FRAME_SINK_ID_ALLOCATED;
+  change.window_id = window_id;
+  change.frame_sink_id = frame_sink_id;
+  AddChange(change);
+}
+
 void TestChangeTracker::OnWindowHierarchyChanged(
     Id window_id,
     Id old_parent_id,
     Id new_parent_id,
-    Array<mojom::WindowDataPtr> windows) {
+    std::vector<mojom::WindowDataPtr> windows) {
   Change change;
   change.type = CHANGE_TYPE_NODE_HIERARCHY_CHANGED;
   change.window_id = window_id;
@@ -363,6 +391,8 @@ void TestChangeTracker::OnWindowInputEvent(Id window_id,
   change.window_id = window_id;
   change.event_action = static_cast<int32_t>(event.type());
   change.matches_pointer_watcher = matches_pointer_watcher;
+  if (event.IsKeyEvent() && event.AsKeyEvent()->properties())
+    change.key_event_properties = *event.AsKeyEvent()->properties();
   AddChange(change);
 }
 
@@ -375,17 +405,18 @@ void TestChangeTracker::OnPointerEventObserved(const ui::Event& event,
   AddChange(change);
 }
 
-void TestChangeTracker::OnWindowSharedPropertyChanged(Id window_id,
-                                                      String name,
-                                                      Array<uint8_t> data) {
+void TestChangeTracker::OnWindowSharedPropertyChanged(
+    Id window_id,
+    const std::string& name,
+    const base::Optional<std::vector<uint8_t>>& data) {
   Change change;
   change.type = CHANGE_TYPE_PROPERTY_CHANGED;
   change.window_id = window_id;
   change.property_key = name;
-  if (data.is_null())
+  if (!data)
     change.property_value = "NULL";
   else
-    change.property_value = data.To<std::string>();
+    change.property_value.assign(data->begin(), data->end());
   AddChange(change);
 }
 
@@ -396,13 +427,12 @@ void TestChangeTracker::OnWindowFocused(Id window_id) {
   AddChange(change);
 }
 
-void TestChangeTracker::OnWindowPredefinedCursorChanged(
-    Id window_id,
-    mojom::Cursor cursor_id) {
+void TestChangeTracker::OnWindowCursorChanged(Id window_id,
+                                              const ui::CursorData& cursor) {
   Change change;
   change.type = CHANGE_TYPE_CURSOR_CHANGED;
   change.window_id = window_id;
-  change.cursor_id = static_cast<int32_t>(cursor_id);
+  change.cursor_type = cursor.cursor_type();
   AddChange(change);
 }
 
@@ -427,15 +457,13 @@ void TestChangeTracker::OnTopLevelCreated(uint32_t change_id,
 
 void TestChangeTracker::OnWindowSurfaceChanged(
     Id window_id,
-    const cc::SurfaceId& surface_id,
-    const gfx::Size& frame_size,
-    float device_scale_factor) {
+    const viz::SurfaceInfo& surface_info) {
   Change change;
   change.type = CHANGE_TYPE_SURFACE_CHANGED;
   change.window_id = window_id;
-  change.surface_id = surface_id;
-  change.frame_size = frame_size;
-  change.device_scale_factor = device_scale_factor;
+  change.surface_id = surface_info.id();
+  change.frame_size = surface_info.size_in_pixels();
+  change.device_scale_factor = surface_info.device_scale_factor();
   AddChange(change);
 }
 

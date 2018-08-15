@@ -8,11 +8,12 @@
 #include "core/css/CSSSelectorList.h"
 #include "core/css/StyleSheetContents.h"
 #include "core/css/parser/CSSParserMode.h"
-#include "wtf/Vector.h"
-#include "wtf/text/WTFString.h"
+#include "platform/wtf/Vector.h"
+#include "platform/wtf/text/WTFString.h"
 
 namespace blink {
 
+class CSSLazyPropertyParserImpl;
 class CSSParserTokenRange;
 
 // This class helps lazy parsing by retaining necessary state. It should not
@@ -21,27 +22,70 @@ class CSSParserTokenRange;
 class CSSLazyParsingState
     : public GarbageCollectedFinalized<CSSLazyParsingState> {
  public:
-  CSSLazyParsingState(const CSSParserContext&,
-                      Vector<String> escapedStrings,
-                      const String& sheetText,
+  CSSLazyParsingState(const CSSParserContext*,
+                      Vector<String> escaped_strings,
+                      const String& sheet_text,
                       StyleSheetContents*);
 
-  const CSSParserContext& context();
+  // Called when all lazy property parsers are initialized. At this point we
+  // know the total number of style rules that deferred parsing.
+  void FinishInitialParsing();
 
-  bool shouldLazilyParseProperties(const CSSSelectorList&,
-                                   const CSSParserTokenRange& block);
+  // Helper method used to bump total_style_rules_.
+  CSSLazyPropertyParserImpl* CreateLazyParser(const CSSParserTokenRange& block);
 
-  DEFINE_INLINE_TRACE() { visitor->trace(m_owningContents); }
+  const CSSParserContext* Context();
+
+  void CountRuleParsed();
+
+  bool ShouldLazilyParseProperties(const CSSSelectorList&,
+                                   const CSSParserTokenRange& block) const;
+
+  DECLARE_TRACE();
+
+  // Exposed for tests. This enum is used to back a histogram, so new values
+  // must be appended to the end, before UsageLastValue.
+  enum CSSRuleUsage {
+    kUsageGe0 = 0,
+    kUsageGt10 = 1,
+    kUsageGt25 = 2,
+    kUsageGt50 = 3,
+    kUsageGt75 = 4,
+    kUsageGt90 = 5,
+    kUsageAll = 6,
+
+    // This value must be last.
+    kUsageLastValue = 7
+  };
 
  private:
-  CSSParserContext m_context;
-  Vector<String> m_escapedStrings;
+  void RecordUsageMetrics();
+
+  Member<const CSSParserContext> context_;
+  Vector<String> escaped_strings_;
   // Also referenced on the css resource.
-  String m_sheetText;
+  String sheet_text_;
 
   // Weak to ensure lazy state will never cause the contents to live longer than
   // it should (we DCHECK this fact).
-  WeakMember<StyleSheetContents> m_owningContents;
+  WeakMember<StyleSheetContents> owning_contents_;
+
+  // Cache the document as a proxy for caching the UseCounter. Grabbing the
+  // UseCounter per every property parse is a bit more expensive.
+  WeakMember<Document> document_;
+
+  // Used for calculating the % of rules that ended up being parsed.
+  int parsed_style_rules_;
+  int total_style_rules_;
+
+  int style_rules_needed_for_next_milestone_;
+
+  int usage_;
+
+  // Whether or not use counting is enabled for parsing. This will usually be
+  // true, except for when stylesheets with @imports are removed from the page.
+  // See StyleRuleImport::setCSSStyleSheet.
+  const bool should_use_count_;
 };
 
 }  // namespace blink

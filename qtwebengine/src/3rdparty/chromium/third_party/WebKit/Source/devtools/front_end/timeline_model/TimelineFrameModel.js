@@ -237,24 +237,6 @@ TimelineModel.TimelineFrameModel = class {
   }
 
   /**
-   * @param {!Array.<string>} types
-   * @param {!TimelineModel.TimelineModel.Record} record
-   * @return {?TimelineModel.TimelineModel.Record} record
-   */
-  _findRecordRecursively(types, record) {
-    if (types.indexOf(record.type()) >= 0)
-      return record;
-    if (!record.children())
-      return null;
-    for (var i = 0; i < record.children().length; ++i) {
-      var result = this._findRecordRecursively(types, record.children()[i]);
-      if (result)
-        return result;
-    }
-    return null;
-  }
-
-  /**
    * @param {?SDK.Target} target
    * @param {!Array.<!SDK.TracingModel.Event>} events
    * @param {string} sessionId
@@ -262,10 +244,6 @@ TimelineModel.TimelineFrameModel = class {
   addTraceEvents(target, events, sessionId) {
     this._target = target;
     this._sessionId = sessionId;
-    if (!events.length)
-      return;
-    if (events[0].startTime < this._minimumRecordTime)
-      this._minimumRecordTime = events[0].startTime;
     for (var i = 0; i < events.length; ++i)
       this._addTraceEvent(events[i]);
   }
@@ -275,6 +253,8 @@ TimelineModel.TimelineFrameModel = class {
    */
   _addTraceEvent(event) {
     var eventNames = TimelineModel.TimelineModel.RecordType;
+    if (event.startTime && event.startTime < this._minimumRecordTime)
+      this._minimumRecordTime = event.startTime;
 
     if (event.name === eventNames.SetLayerTreeId) {
       var sessionId = event.args['sessionId'] || event.args['data']['sessionId'];
@@ -323,8 +303,6 @@ TimelineModel.TimelineFrameModel = class {
    */
   _addMainThreadTraceEvent(event) {
     var eventNames = TimelineModel.TimelineModel.RecordType;
-    var timestamp = event.startTime;
-    var selfTime = event.selfTime || 0;
 
     if (SDK.TracingModel.isTopLevelEvent(event)) {
       this._currentTaskTimeByCategory = {};
@@ -385,20 +363,20 @@ TimelineModel.TracingFrameLayerTree = class {
   /**
    * @return {!Promise<?TimelineModel.TracingLayerTree>}
    */
-  layerTreePromise() {
-    return this._snapshot.objectPromise().then(result => {
-      if (!result)
-        return null;
-      var viewport = result['device_viewport_size'];
-      var tiles = result['active_tiles'];
-      var rootLayer = result['active_tree']['root_layer'];
-      var layers = result['active_tree']['layers'];
-      var layerTree = new TimelineModel.TracingLayerTree(this._target);
-      layerTree.setViewportSize(viewport);
-      layerTree.setTiles(tiles);
-      return new Promise(
-          resolve => layerTree.setLayers(rootLayer, layers, this._paints || [], () => resolve(layerTree)));
-    });
+  async layerTreePromise() {
+    var result = await this._snapshot.objectPromise();
+    if (!result)
+      return null;
+    var viewport = result['device_viewport_size'];
+    var tiles = result['active_tiles'];
+    var rootLayer = result['active_tree']['root_layer'];
+    var layers = result['active_tree']['layers'];
+    var layerTree = new TimelineModel.TracingLayerTree(this._target);
+    layerTree.setViewportSize(viewport);
+    layerTree.setTiles(tiles);
+
+    await layerTree.setLayers(rootLayer, layers, this._paints || []);
+    return layerTree;
   }
 
   /**
@@ -444,8 +422,7 @@ TimelineModel.TimelineFrame = class {
    * @return {boolean}
    */
   hasWarnings() {
-    var /** @const */ longFrameDurationThresholdMs = 22;
-    return !this.idle && this.duration > longFrameDurationThresholdMs;
+    return false;
   }
 
   /**
@@ -526,10 +503,11 @@ TimelineModel.LayerPaintEvent = class {
    * @return !Promise<?{rect: !Array<number>, snapshot: !SDK.PaintProfilerSnapshot}>}
    */
   snapshotPromise() {
+    var paintProfilerModel = this._target && this._target.model(SDK.PaintProfilerModel);
     return this.picturePromise().then(picture => {
-      if (!picture || !this._target)
+      if (!picture || !paintProfilerModel)
         return null;
-      return SDK.PaintProfilerSnapshot.load(this._target, picture.serializedPicture)
+      return paintProfilerModel.loadSnapshot(picture.serializedPicture)
           .then(snapshot => snapshot ? {rect: picture.rect, snapshot: snapshot} : null);
     });
   }

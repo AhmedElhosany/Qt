@@ -7,19 +7,24 @@
 
 #include "public/platform/WebCommon.h"
 #include "public/platform/WebURL.h"
+#include "public/platform/modules/presentation/presentation.mojom-blink.h"
 
 namespace blink {
 
+class WebURL;
+template <typename T>
+class WebVector;
+
 // WebPresentationAvailabilityObserver is an interface that is implemented by
 // objects that wish to be notified when there is a presentation display
-// availability change for a given URL.
+// availability change for given URLs.
 class BLINK_PLATFORM_EXPORT WebPresentationAvailabilityObserver {
  public:
   virtual ~WebPresentationAvailabilityObserver() = default;
 
-  virtual void availabilityChanged(bool) = 0;
+  virtual void AvailabilityChanged(blink::mojom::ScreenAvailability) = 0;
 
-  virtual const WebURL url() const = 0;
+  virtual const WebVector<WebURL>& Urls() const = 0;
 };
 
 }  // namespace blink

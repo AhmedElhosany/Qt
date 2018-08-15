@@ -23,7 +23,6 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/updater/update_service.h"
 #include "extensions/common/constants.h"
-#include "extensions/common/switches.h"
 #include "extensions/shell/browser/shell_browser_context.h"
 #include "extensions/shell/browser/shell_browser_context_keyed_service_factories.h"
 #include "extensions/shell/browser/shell_browser_main_delegate.h"
@@ -47,13 +46,21 @@
 #if defined(OS_CHROMEOS)
 #include "chromeos/audio/audio_devices_pref_handler_impl.h"
 #include "chromeos/audio/cras_audio_handler.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/disks/disk_mount_manager.h"
 #include "chromeos/network/network_handler.h"
-#include "device/bluetooth/bluetooth_adapter_factory.h"
-#include "device/bluetooth/dbus/bluez_dbus_manager.h"
 #include "extensions/shell/browser/shell_audio_controller_chromeos.h"
 #include "extensions/shell/browser/shell_network_controller_chromeos.h"
+#endif
+
+#if defined(OS_CHROMEOS) || defined(OS_LINUX)
+#include "device/bluetooth/bluetooth_adapter_factory.h"
+#include "device/bluetooth/dbus/bluez_dbus_manager.h"
+#endif
+
+#if defined(OS_CHROMEOS)
+#include "chromeos/dbus/dbus_thread_manager.h"
+#elif defined(OS_LINUX)
+#include "device/bluetooth/dbus/dbus_thread_manager_linux.h"
 #endif
 
 #if defined(OS_MACOSX)
@@ -65,6 +72,10 @@
 #include "components/nacl/browser/nacl_process_host.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/shell/browser/shell_nacl_browser_delegate.h"
+#endif
+
+#if defined(USE_AURA) && defined(USE_X11)
+#include "ui/events/devices/x11/touch_factory_x11.h"
 #endif
 
 using base::CommandLine;
@@ -89,7 +100,9 @@ ShellBrowserMainParts::~ShellBrowserMainParts() {
 }
 
 void ShellBrowserMainParts::PreMainMessageLoopStart() {
-  // TODO(jamescook): Initialize touch here?
+#if defined(USE_AURA) && defined(USE_X11)
+  ui::TouchFactory::SetTouchDeviceListFromCommandLine();
+#endif
 #if defined(OS_MACOSX)
   MainPartsPreMainMessageLoopStartMac();
 #endif
@@ -116,8 +129,17 @@ void ShellBrowserMainParts::PostMainMessageLoopStart() {
       switches::kAppShellAllowRoaming)) {
     network_controller_->SetCellularAllowRoaming(true);
   }
+#elif defined(OS_LINUX)
+  // app_shell doesn't need GTK, so the fake input method context can work.
+  // See crbug.com/381852 and revision fb69f142.
+  // TODO(michaelpg): Verify this works for target environments.
+  ui::InitializeInputMethodForTesting();
+
+  bluez::DBusThreadManagerLinux::Initialize();
+  bluez::BluezDBusManager::Initialize(
+      bluez::DBusThreadManagerLinux::Get()->GetSystemBus(),
+      /*use_dbus_fakes=*/false);
 #else
-  // Non-Chrome OS platforms are for developer convenience, so use a test IME.
   ui::InitializeInputMethodForTesting();
 #endif
 }
@@ -130,8 +152,6 @@ int ShellBrowserMainParts::PreCreateThreads() {
 
   content::ChildProcessSecurityPolicy::GetInstance()->RegisterWebSafeScheme(
       kExtensionScheme);
-  content::ChildProcessSecurityPolicy::GetInstance()->RegisterWebSafeScheme(
-      kExtensionResourceScheme);
 
   // Return no error.
   return 0;
@@ -155,6 +175,8 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
 
 #if defined(USE_AURA)
   aura::Env::GetInstance()->set_context_factory(content::GetContextFactory());
+  aura::Env::GetInstance()->set_context_factory_private(
+      content::GetContextFactoryPrivate());
 #endif
 
   storage_monitor::StorageMonitor::Create();
@@ -197,9 +219,8 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
       cmd->GetSwitchValueASCII(switches::kAppShellRefreshToken)));
 
 #if !defined(DISABLE_NACL)
-  // Takes ownership.
   nacl::NaClBrowser::SetDelegate(
-      new ShellNaClBrowserDelegate(browser_context_.get()));
+      base::MakeUnique<ShellNaClBrowserDelegate>(browser_context_.get()));
   // Track the task so it can be canceled if app_shell shuts down very quickly,
   // such as in browser tests.
   task_tracker_.PostTask(
@@ -236,7 +257,6 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
 
 #if !defined(DISABLE_NACL)
   task_tracker_.TryCancelAll();
-  nacl::NaClBrowser::SetDelegate(nullptr);
 #endif
 
   oauth2_token_service_.reset();
@@ -247,9 +267,6 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
   extensions_browser_client_.reset();
 
   desktop_controller_.reset();
-
-  // ShellDeviceClient must be shutdown when the FILE thread is still alive.
-  device_client_->Shutdown();
 
   storage_monitor::StorageMonitor::Destroy();
 
@@ -274,6 +291,10 @@ void ShellBrowserMainParts::PostDestroyThreads() {
   device::BluetoothAdapterFactory::Shutdown();
   bluez::BluezDBusManager::Shutdown();
   chromeos::DBusThreadManager::Shutdown();
+#elif defined(OS_LINUX)
+  device::BluetoothAdapterFactory::Shutdown();
+  bluez::BluezDBusManager::Shutdown();
+  bluez::DBusThreadManagerLinux::Shutdown();
 #endif
 }
 

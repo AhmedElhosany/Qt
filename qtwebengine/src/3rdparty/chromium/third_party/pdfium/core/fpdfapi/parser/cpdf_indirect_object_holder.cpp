@@ -6,8 +6,12 @@
 
 #include "core/fpdfapi/parser/cpdf_indirect_object_holder.h"
 
+#include <algorithm>
+#include <utility>
+
 #include "core/fpdfapi/parser/cpdf_object.h"
 #include "core/fpdfapi/parser/cpdf_parser.h"
+#include "third_party/base/logging.h"
 
 CPDF_IndirectObjectHolder::CPDF_IndirectObjectHolder()
     : m_LastObjNum(0),
@@ -52,7 +56,9 @@ CPDF_Object* CPDF_IndirectObjectHolder::AddIndirectObject(
   CHECK(!pObj->m_ObjNum);
   CPDF_Object* pUnowned = pObj.get();
   pObj->m_ObjNum = ++m_LastObjNum;
-  m_IndirectObjs[m_LastObjNum].release();  // TODO(tsepez): stop this leak.
+  if (m_IndirectObjs[m_LastObjNum])
+    m_OrphanObjs.push_back(std::move(m_IndirectObjs[m_LastObjNum]));
+
   m_IndirectObjs[m_LastObjNum] = std::move(pObj);
   return pUnowned;
 }

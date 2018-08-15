@@ -7,8 +7,10 @@
 
 #include <memory>
 
+#include "base/unguessable_token.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
+#include "media/base/android_overlay_mojo_factory.h"
 #include "media/gpu/ipc/service/gpu_jpeg_decode_accelerator.h"
 #include "media/video/video_decode_accelerator.h"
 
@@ -18,16 +20,18 @@ struct CreateVideoEncoderParams;
 
 namespace gpu {
 class GpuChannel;
-class GpuCommandBufferStub;
 }
 
 namespace media {
 
 class MediaGpuChannelDispatchHelper;
+class MediaGpuChannelFilter;
 
 class MediaGpuChannel : public IPC::Listener, public IPC::Sender {
  public:
-  explicit MediaGpuChannel(gpu::GpuChannel* channel);
+  MediaGpuChannel(gpu::GpuChannel* channel,
+                  const base::UnguessableToken& channel_token,
+                  const AndroidOverlayMojoFactoryCB& overlay_factory_cb);
   ~MediaGpuChannel() override;
 
   // IPC::Sender implementation:
@@ -50,7 +54,10 @@ class MediaGpuChannel : public IPC::Listener, public IPC::Sender {
                             IPC::Message* reply_message);
 
   gpu::GpuChannel* const channel_;
+  scoped_refptr<MediaGpuChannelFilter> filter_;
   std::unique_ptr<GpuJpegDecodeAccelerator> jpeg_decoder_;
+  AndroidOverlayMojoFactoryCB overlay_factory_cb_;
+
   DISALLOW_COPY_AND_ASSIGN(MediaGpuChannel);
 };
 

@@ -6,7 +6,7 @@
 
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "third_party/skia/include/core/SkPaint.h"
+#include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/gfx/canvas.h"
@@ -42,7 +42,7 @@ class MenuScrollButton : public View {
         pref_height_(MenuItemView::pref_menu_height()) {
   }
 
-  gfx::Size GetPreferredSize() const override {
+  gfx::Size CalculatePreferredSize() const override {
     return gfx::Size(MenuConfig::instance().scroll_arrow_height * 2 - 1,
                      pref_height_);
   }
@@ -101,11 +101,11 @@ class MenuScrollButton : public View {
     path.lineTo(SkIntToScalar(x_left), SkIntToScalar(y_bottom));
     path.lineTo(SkIntToScalar(x_right), SkIntToScalar(y_bottom));
     path.lineTo(SkIntToScalar(x), SkIntToScalar(y));
-    SkPaint paint;
-    paint.setStyle(SkPaint::kFill_Style);
-    paint.setAntiAlias(true);
-    paint.setColor(config.arrow_color);
-    canvas->DrawPath(path, paint);
+    cc::PaintFlags flags;
+    flags.setStyle(cc::PaintFlags::kFill_Style);
+    flags.setAntiAlias(true);
+    flags.setColor(config.arrow_color);
+    canvas->DrawPath(path, flags);
   }
 
  private:
@@ -202,7 +202,7 @@ void MenuScrollViewContainer::SetBubbleArrowOffset(int offset) {
   bubble_border_->set_arrow_offset(offset);
 }
 
-gfx::Size MenuScrollViewContainer::GetPreferredSize() const {
+gfx::Size MenuScrollViewContainer::CalculatePreferredSize() const {
   gfx::Size prefsize = scroll_view_->GetContents()->GetPreferredSize();
   gfx::Insets insets = GetInsets();
   prefsize.Enlarge(insets.width(), insets.height());
@@ -304,7 +304,7 @@ void MenuScrollViewContainer::CreateBubbleBorder() {
                                     BubbleBorder::SMALL_SHADOW,
                                     SK_ColorWHITE);
   SetBorder(std::unique_ptr<Border>(bubble_border_));
-  set_background(new BubbleBackground(bubble_border_));
+  SetBackground(base::MakeUnique<BubbleBackground>(bubble_border_));
 }
 
 BubbleBorder::Arrow MenuScrollViewContainer::BubbleBorderTypeFromAnchor(

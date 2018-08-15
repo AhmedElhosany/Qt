@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "base/macros.h"
+#include "components/viz/common/surfaces/local_surface_id_allocator.h"
 
 namespace ui {
 namespace ws {
@@ -19,10 +20,6 @@ class ServerWindow;
 class WindowManagerState;
 class WindowServer;
 
-namespace test {
-class WindowManagerDisplayRootTestApi;
-}
-
 // Owns the root window of a window manager for one display. Each window manager
 // has one WindowManagerDisplayRoot for each Display. The root window is
 // parented to the root of a Display.
@@ -31,8 +28,22 @@ class WindowManagerDisplayRoot {
   explicit WindowManagerDisplayRoot(Display* display);
   ~WindowManagerDisplayRoot();
 
+  // NOTE: this window is not necessarily visible to the window manager. When
+  // the display roots are automatically created this root is visible to the
+  // window manager. When the display roots are not automatically created this
+  // root has a single child that is created by the client. Use
+  // GetClientVisibleRoot() to get the root that is visible to the client.
   ServerWindow* root() { return root_.get(); }
   const ServerWindow* root() const { return root_.get(); }
+
+  // See root() for details of this. This returns null until the client creates
+  // the root.
+  ServerWindow* GetClientVisibleRoot() {
+    return const_cast<ServerWindow*>(
+        const_cast<const WindowManagerDisplayRoot*>(this)
+            ->GetClientVisibleRoot());
+  }
+  const ServerWindow* GetClientVisibleRoot() const;
 
   Display* display() { return display_; }
   const Display* display() const { return display_; }
@@ -53,6 +64,7 @@ class WindowManagerDisplayRoot {
   // the root ServerWindow of the Display.
   std::unique_ptr<ServerWindow> root_;
   WindowManagerState* window_manager_state_ = nullptr;
+  viz::LocalSurfaceIdAllocator allocator_;
 
   DISALLOW_COPY_AND_ASSIGN(WindowManagerDisplayRoot);
 };

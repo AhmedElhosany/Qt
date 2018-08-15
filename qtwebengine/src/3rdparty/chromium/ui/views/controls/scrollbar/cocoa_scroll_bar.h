@@ -59,12 +59,12 @@ class VIEWS_EXPORT CocoaScrollBar : public BaseScrollBar,
   gfx::Rect GetTrackBounds() const override;
 
   // ScrollBar:
-  int GetLayoutSize() const override;
-  int GetContentOverlapSize() const override;
+  int GetThickness() const override;
+  bool OverlapsContent() const override;
 
   // View:
   void Layout() override;
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   void OnPaint(gfx::Canvas* canvas) override;
 
  private:

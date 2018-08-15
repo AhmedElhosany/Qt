@@ -34,8 +34,8 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Templates 2.3 as T
 
 T.TabBar {
     id: control
@@ -46,7 +46,6 @@ T.TabBar {
                              contentHeight + topPadding + bottomPadding)
 
     spacing: 1
-    contentHeight: 40
 
     contentItem: ListView {
         model: control.contentModel
@@ -64,5 +63,7 @@ T.TabBar {
         preferredHighlightEnd: width - 40
     }
 
-    background: Rectangle { }
+    background: Rectangle {
+        color: control.palette.window
+    }
 }

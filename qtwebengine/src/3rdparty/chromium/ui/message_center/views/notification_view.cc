@@ -17,6 +17,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/layout.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/skia_util.h"
 #include "ui/gfx/text_elider.h"
@@ -28,10 +29,10 @@
 #include "ui/message_center/views/constants.h"
 #include "ui/message_center/views/message_center_controller.h"
 #include "ui/message_center/views/notification_button.h"
+#include "ui/message_center/views/notification_control_buttons_view.h"
 #include "ui/message_center/views/padded_button.h"
 #include "ui/message_center/views/proportional_image_view.h"
 #include "ui/native_theme/native_theme.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -103,8 +104,9 @@ class ItemView : public views::View {
 };
 
 ItemView::ItemView(const message_center::NotificationItem& item) {
-  SetLayoutManager(new views::BoxLayout(views::BoxLayout::kHorizontal,
-      0, 0, message_center::kItemTitleToMessagePadding));
+  SetLayoutManager(
+      new views::BoxLayout(views::BoxLayout::kHorizontal, gfx::Insets(),
+                           message_center::kItemTitleToMessagePadding));
 
   views::Label* title = new views::Label(item.title);
   title->set_collapse_when_hidden(true);
@@ -152,10 +154,10 @@ views::View* NotificationView::TargetForRect(views::View* root,
   // called. But buttons are exceptions, they'll have their own event handlings.
   std::vector<views::View*> buttons(action_buttons_.begin(),
                                     action_buttons_.end());
-  if (settings_button_view_)
-    buttons.push_back(settings_button_view_);
-  if (close_button())
-    buttons.push_back(close_button());
+  if (control_buttons_view_->settings_button())
+    buttons.push_back(control_buttons_view_->settings_button());
+  if (control_buttons_view_->close_button())
+    buttons.push_back(control_buttons_view_->close_button());
 
   for (size_t i = 0; i < buttons.size(); ++i) {
     gfx::Point point_in_child = point;
@@ -173,9 +175,9 @@ void NotificationView::CreateOrUpdateViews(const Notification& notification) {
   CreateOrUpdateProgressBarView(notification);
   CreateOrUpdateListItemViews(notification);
   CreateOrUpdateIconView(notification);
+  CreateOrUpdateSmallIconView(notification);
   CreateOrUpdateImageView(notification);
   CreateOrUpdateContextMessageView(notification);
-  CreateOrUpdateSettingsButtonView(notification);
   CreateOrUpdateActionButtonViews(notification);
 }
 
@@ -188,7 +190,7 @@ NotificationView::NotificationView(MessageCenterController* controller,
   // close button.
   top_view_ = new views::View();
   top_view_->SetLayoutManager(
-      new views::BoxLayout(views::BoxLayout::kVertical, 0, 0, 0));
+      new views::BoxLayout(views::BoxLayout::kVertical));
   top_view_->SetBorder(
       MakeEmptyBorder(kTextTopPadding - 8, 0, kTextBottomPadding - 5, 0));
   AddChildView(top_view_);
@@ -196,26 +198,35 @@ NotificationView::NotificationView(MessageCenterController* controller,
   // below the notification icon.
   bottom_view_ = new views::View();
   bottom_view_->SetLayoutManager(
-      new views::BoxLayout(views::BoxLayout::kVertical, 0, 0, 0));
+      new views::BoxLayout(views::BoxLayout::kVertical));
   AddChildView(bottom_view_);
+
+  control_buttons_view_ = new NotificationControlButtonsView(this);
+  AddChildView(control_buttons_view_);
+
+  views::ImageView* small_image_view = new views::ImageView();
+  small_image_view->SetImageSize(gfx::Size(kSmallImageSize, kSmallImageSize));
+  small_image_view->set_owned_by_client();
+  small_image_view_.reset(small_image_view);
 
   CreateOrUpdateViews(notification);
 
   // Put together the different content and control views. Layering those allows
-  // for proper layout logic and it also allows the close button and small
+  // for proper layout logic and it also allows the control buttons and small
   // image to overlap the content as needed to provide large enough click and
   // touch areas (<http://crbug.com/168822> and <http://crbug.com/168856>).
-  AddChildView(small_image());
-  CreateOrUpdateCloseButtonView(notification);
+  AddChildView(small_image_view_.get());
+  UpdateControlButtonsVisibilityWithNotification(notification);
 
   SetEventTargeter(
       std::unique_ptr<views::ViewTargeter>(new views::ViewTargeter(this)));
+  set_notify_enter_exit_on_child(true);
 }
 
 NotificationView::~NotificationView() {
 }
 
-gfx::Size NotificationView::GetPreferredSize() const {
+gfx::Size NotificationView::CalculatePreferredSize() const {
   int top_width = top_view_->GetPreferredSize().width() +
                   icon_view_->GetPreferredSize().width();
   int bottom_width = bottom_view_->GetPreferredSize().width();
@@ -264,6 +275,7 @@ void NotificationView::Layout() {
   MessageView::Layout();
   gfx::Insets insets = GetInsets();
   int content_width = width() - insets.width();
+  gfx::Rect content_bounds = GetContentsBounds();
 
   // Before any resizing, set or adjust the number of message lines.
   int title_lines = 0;
@@ -282,18 +294,30 @@ void NotificationView::Layout() {
   icon_view_->SetBounds(insets.left(), insets.top(), kNotificationIconSize,
                         kNotificationIconSize);
 
-  // Settings & Bottom views.
+  // Control buttons (close and settings buttons).
+  gfx::Rect control_buttons_bounds(content_bounds);
+  int buttons_width = control_buttons_view_->GetPreferredSize().width();
+  int buttons_height = control_buttons_view_->GetPreferredSize().height();
+  control_buttons_bounds.set_x(control_buttons_bounds.right() - buttons_width -
+                               message_center::kControlButtonPadding);
+  control_buttons_bounds.set_y(control_buttons_bounds.y() +
+                               message_center::kControlButtonPadding);
+  control_buttons_bounds.set_width(buttons_width);
+  control_buttons_bounds.set_height(buttons_height);
+  control_buttons_view_->SetBoundsRect(control_buttons_bounds);
+
+  // Small icon.
+  gfx::Size small_image_size(small_image_view_->GetPreferredSize());
+  gfx::Rect small_image_rect(small_image_size);
+  small_image_rect.set_origin(gfx::Point(
+      content_bounds.right() - small_image_size.width() - kSmallImagePadding,
+      content_bounds.bottom() - small_image_size.height() -
+          kSmallImagePadding));
+  small_image_view_->SetBoundsRect(small_image_rect);
+
+  // Bottom views.
   int bottom_y = insets.top() + std::max(top_height, kNotificationIconSize);
   int bottom_height = bottom_view_->GetHeightForWidth(content_width);
-
-  if (settings_button_view_) {
-    gfx::Size settings_size(settings_button_view_->GetPreferredSize());
-    settings_button_view_->SetBounds(content_width - settings_size.width(),
-                                     bottom_y - settings_size.height(),
-                                     settings_size.width(),
-                                     settings_size.height());
-  }
-
   bottom_view_->SetBounds(insets.left(), bottom_y,
                           content_width, bottom_height);
 }
@@ -316,11 +340,27 @@ gfx::NativeCursor NotificationView::GetCursor(const ui::MouseEvent& event) {
   return views::GetNativeHandCursor();
 }
 
+void NotificationView::OnMouseMoved(const ui::MouseEvent& event) {
+  MessageView::OnMouseMoved(event);
+  UpdateControlButtonsVisibility();
+}
+
+void NotificationView::OnMouseEntered(const ui::MouseEvent& event) {
+  MessageView::OnMouseEntered(event);
+  UpdateControlButtonsVisibility();
+}
+
+void NotificationView::OnMouseExited(const ui::MouseEvent& event) {
+  MessageView::OnMouseExited(event);
+  UpdateControlButtonsVisibility();
+}
+
 void NotificationView::UpdateWithNotification(
     const Notification& notification) {
   MessageView::UpdateWithNotification(notification);
 
   CreateOrUpdateViews(notification);
+  UpdateControlButtonsVisibilityWithNotification(notification);
   Layout();
   SchedulePaint();
 }
@@ -332,11 +372,6 @@ void NotificationView::ButtonPressed(views::Button* sender,
   // TODO(dewittj): Remove this hack.
   std::string id(notification_id());
 
-  if (sender == settings_button_view_) {
-    controller()->ClickOnSettingsButton(id);
-    return;
-  }
-
   // See if the button pressed was an action button.
   for (size_t i = 0; i < action_buttons_.size(); ++i) {
     if (sender == action_buttons_[i]) {
@@ -345,10 +380,15 @@ void NotificationView::ButtonPressed(views::Button* sender,
     }
   }
 
-  // Let the superclass handle everything else.
-  // Warning: This may cause the NotificationView itself to be deleted,
-  // so don't do anything afterwards.
-  MessageView::ButtonPressed(sender, event);
+  NOTREACHED();
+}
+
+bool NotificationView::IsCloseButtonFocused() const {
+  return control_buttons_view_->IsCloseButtonFocused();
+}
+
+void NotificationView::RequestFocusOnCloseButton() {
+  control_buttons_view_->RequestFocusOnCloseButton();
 }
 
 void NotificationView::CreateOrUpdateTitleView(
@@ -459,31 +499,6 @@ void NotificationView::CreateOrUpdateContextMessageView(
   }
 }
 
-void NotificationView::CreateOrUpdateSettingsButtonView(
-    const Notification& notification) {
-  delete settings_button_view_;
-  settings_button_view_ = nullptr;
-
-  if (!settings_button_view_ && notification.delegate() &&
-      notification.delegate()->ShouldDisplaySettingsButton()) {
-    PaddedButton* settings = new PaddedButton(this);
-    settings->SetPadding(-kNotificationSettingsPadding,
-                         kNotificationSettingsPadding);
-    settings->SetNormalImage(IDR_NOTIFICATION_SETTINGS_BUTTON_ICON);
-    settings->SetHoveredImage(IDR_NOTIFICATION_SETTINGS_BUTTON_ICON_HOVER);
-    settings->SetPressedImage(IDR_NOTIFICATION_SETTINGS_BUTTON_ICON_PRESSED);
-    settings->set_animate_on_state_change(false);
-    settings->SetAccessibleName(l10n_util::GetStringUTF16(
-        IDS_MESSAGE_NOTIFICATION_SETTINGS_BUTTON_ACCESSIBLE_NAME));
-    settings->SetTooltipText(l10n_util::GetStringUTF16(
-        IDS_MESSAGE_NOTIFICATION_SETTINGS_BUTTON_ACCESSIBLE_NAME));
-    settings->SetFocusPainter(views::Painter::CreateSolidFocusPainter(
-        kFocusBorderColor, gfx::Insets(1, 2, 2, 2)));
-    settings_button_view_ = settings;
-    AddChildView(settings_button_view_);
-  }
-}
-
 void NotificationView::CreateOrUpdateProgressBarView(
     const Notification& notification) {
   if (notification.type() != NOTIFICATION_TYPE_PROGRESS) {
@@ -508,7 +523,7 @@ void NotificationView::CreateOrUpdateProgressBarView(
 
 void NotificationView::CreateOrUpdateListItemViews(
     const Notification& notification) {
-  for (auto item_view : item_views_)
+  for (auto* item_view : item_views_)
     delete item_view;
   item_views_.clear();
 
@@ -540,6 +555,11 @@ void NotificationView::CreateOrUpdateIconView(
   icon_view_->SetImage(icon, icon.size());
 }
 
+void NotificationView::CreateOrUpdateSmallIconView(
+    const Notification& notification) {
+  small_image_view_->SetImage(notification.small_image().AsImageSkia());
+}
+
 void NotificationView::CreateOrUpdateImageView(
     const Notification& notification) {
   // |image_view_| is the view representing the area covered by the
@@ -563,8 +583,8 @@ void NotificationView::CreateOrUpdateImageView(
 
     image_container_ = new views::View();
     image_container_->SetLayoutManager(new views::FillLayout());
-    image_container_->set_background(views::Background::CreateSolidBackground(
-        message_center::kImageBackgroundColor));
+    image_container_->SetBackground(
+        views::CreateSolidBackground(message_center::kImageBackgroundColor));
 
     image_view_ = new message_center::ProportionalImageView(ideal_size);
     image_container_->AddChildView(image_view_);
@@ -589,10 +609,10 @@ void NotificationView::CreateOrUpdateActionButtonViews(
   bool new_buttons = action_buttons_.size() != buttons.size();
 
   if (new_buttons || buttons.size() == 0) {
-    for (auto item : separators_)
+    for (auto* item : separators_)
       delete item;
     separators_.clear();
-    for (auto item : action_buttons_)
+    for (auto* item : action_buttons_)
       delete item;
     action_buttons_.clear();
   }
@@ -628,6 +648,37 @@ void NotificationView::CreateOrUpdateActionButtonViews(
       GetWidget()->SynthesizeMouseMoveEvent();
     }
   }
+}
+
+void NotificationView::UpdateControlButtonsVisibilityWithNotification(
+    const Notification& notification) {
+  control_buttons_view_->ShowSettingsButton(
+      notification.delegate() &&
+      notification.delegate()->ShouldDisplaySettingsButton());
+  control_buttons_view_->ShowCloseButton(!notification.pinned());
+  UpdateControlButtonsVisibility();
+}
+
+void NotificationView::UpdateControlButtonsVisibility() {
+#if defined(OS_CHROMEOS)
+  // On Chrome OS, the settings button and the close button are shown when:
+  // (1) the mouse is hovering on the notification.
+  // (2) the focus is on the control buttons.
+  const bool target_visibility =
+      IsMouseHovered() || control_buttons_view_->IsCloseButtonFocused() ||
+      control_buttons_view_->IsSettingsButtonFocused();
+#else
+  // On non Chrome OS, the settings button and the close button are always
+  // shown.
+  const bool target_visibility = true;
+#endif
+
+  control_buttons_view_->SetVisible(target_visibility);
+}
+
+NotificationControlButtonsView* NotificationView::GetControlButtonsView()
+    const {
+  return control_buttons_view_;
 }
 
 int NotificationView::GetMessageLineLimit(int title_lines, int width) const {

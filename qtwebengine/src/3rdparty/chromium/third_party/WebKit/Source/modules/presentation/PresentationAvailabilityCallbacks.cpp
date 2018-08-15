@@ -8,33 +8,34 @@
 #include "core/dom/DOMException.h"
 #include "modules/presentation/PresentationAvailability.h"
 #include "modules/presentation/PresentationError.h"
+#include "modules/presentation/PresentationRequest.h"
 #include "public/platform/modules/presentation/WebPresentationError.h"
 
 namespace blink {
 
 PresentationAvailabilityCallbacks::PresentationAvailabilityCallbacks(
-    ScriptPromiseResolver* resolver,
-    const KURL& url)
-    : m_resolver(resolver), m_url(url) {
-  ASSERT(m_resolver);
+    PresentationAvailabilityProperty* resolver,
+    const Vector<KURL>& urls)
+    : resolver_(resolver), urls_(urls) {
+  DCHECK(resolver_);
 }
 
 PresentationAvailabilityCallbacks::~PresentationAvailabilityCallbacks() {}
 
-void PresentationAvailabilityCallbacks::onSuccess(bool value) {
-  if (!m_resolver->getExecutionContext() ||
-      m_resolver->getExecutionContext()->activeDOMObjectsAreStopped())
+void PresentationAvailabilityCallbacks::OnSuccess(bool value) {
+  if (!resolver_->GetExecutionContext() ||
+      resolver_->GetExecutionContext()->IsContextDestroyed())
     return;
-  m_resolver->resolve(
-      PresentationAvailability::take(m_resolver.get(), m_url, value));
+  resolver_->Resolve(
+      PresentationAvailability::Take(resolver_.Get(), urls_, value));
 }
 
-void PresentationAvailabilityCallbacks::onError(
+void PresentationAvailabilityCallbacks::OnError(
     const WebPresentationError& error) {
-  if (!m_resolver->getExecutionContext() ||
-      m_resolver->getExecutionContext()->activeDOMObjectsAreStopped())
+  if (!resolver_->GetExecutionContext() ||
+      resolver_->GetExecutionContext()->IsContextDestroyed())
     return;
-  m_resolver->reject(PresentationError::take(m_resolver.get(), error));
+  resolver_->Reject(PresentationError::Take(error));
 }
 
 }  // namespace blink

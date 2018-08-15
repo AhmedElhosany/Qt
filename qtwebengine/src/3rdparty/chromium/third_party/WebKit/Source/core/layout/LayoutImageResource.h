@@ -27,7 +27,7 @@
 #ifndef LayoutImageResource_h
 #define LayoutImageResource_h
 
-#include "core/fetch/ImageResource.h"
+#include "core/loader/resource/ImageResourceContent.h"
 #include "core/style/StyleImage.h"
 
 namespace blink {
@@ -41,37 +41,37 @@ class LayoutImageResource
  public:
   virtual ~LayoutImageResource();
 
-  static LayoutImageResource* create() { return new LayoutImageResource; }
+  static LayoutImageResource* Create() { return new LayoutImageResource; }
 
-  virtual void initialize(LayoutObject*);
-  virtual void shutdown();
+  virtual void Initialize(LayoutObject*);
+  virtual void Shutdown();
 
-  void setImageResource(ImageResource*);
-  ImageResource* cachedImage() const { return m_cachedImage.get(); }
-  virtual bool hasImage() const { return m_cachedImage; }
+  void SetImageResource(ImageResourceContent*);
+  ImageResourceContent* CachedImage() const { return cached_image_.Get(); }
+  virtual bool HasImage() const { return cached_image_; }
 
-  void resetAnimation();
-  bool maybeAnimated() const;
+  void ResetAnimation();
+  bool MaybeAnimated() const;
 
-  virtual PassRefPtr<Image> image(const IntSize&, float) const;
-  virtual bool errorOccurred() const {
-    return m_cachedImage && m_cachedImage->errorOccurred();
+  virtual PassRefPtr<Image> GetImage(const IntSize&) const;
+  virtual bool ErrorOccurred() const {
+    return cached_image_ && cached_image_->ErrorOccurred();
   }
 
-  virtual bool imageHasRelativeSize() const {
-    return m_cachedImage ? m_cachedImage->imageHasRelativeSize() : false;
+  virtual bool ImageHasRelativeSize() const {
+    return cached_image_ ? cached_image_->ImageHasRelativeSize() : false;
   }
 
-  virtual LayoutSize imageSize(float multiplier) const;
+  virtual LayoutSize ImageSize(float multiplier) const;
 
-  virtual WrappedImagePtr imagePtr() const { return m_cachedImage.get(); }
+  virtual WrappedImagePtr ImagePtr() const { return cached_image_.Get(); }
 
-  DEFINE_INLINE_VIRTUAL_TRACE() { visitor->trace(m_cachedImage); }
+  DEFINE_INLINE_VIRTUAL_TRACE() { visitor->Trace(cached_image_); }
 
  protected:
   LayoutImageResource();
-  LayoutObject* m_layoutObject;
-  Member<ImageResource> m_cachedImage;
+  LayoutObject* layout_object_;
+  Member<ImageResourceContent> cached_image_;
 };
 
 }  // namespace blink

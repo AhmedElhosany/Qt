@@ -805,8 +805,8 @@ Peru painamalla ESC</translation>
         <translation>Kohdetiedosto on olemassa</translation>
     </message>
     <message>
-        <source>Error while renaming.</source>
-        <translation>Virhe nimeä muutettaessa.</translation>
+        <source>Error while renaming: %1</source>
+        <translation>Virhe nimeä muutettaessa: %1</translation>
     </message>
     <message>
         <source>Unable to restore from %1: %2</source>
@@ -842,6 +842,10 @@ Peru painamalla ESC</translation>
     <message>
         <source>No file engine available or engine does not support UnMapExtension</source>
         <translation>Tiedostokone ei ole käytettävissä tai kone ei tue UnMapExtension-laajennusta</translation>
+    </message>
+    <message>
+        <source>No file engine available</source>
+        <translation>Tiedostokone ei ole käytettävissä</translation>
     </message>
 </context>
 <context>
@@ -1087,26 +1091,6 @@ Haluatko silti poistaa sen?</translation>
 <context>
     <name>QFileSystemModel</name>
     <message>
-        <source>%1 TB</source>
-        <translation>%1 Tt</translation>
-    </message>
-    <message>
-        <source>%1 GB</source>
-        <translation>%1 Gt</translation>
-    </message>
-    <message>
-        <source>%1 MB</source>
-        <translation>%1 Mt</translation>
-    </message>
-    <message>
-        <source>%1 KB</source>
-        <translation>%1 kt</translation>
-    </message>
-    <message>
-        <source>%1 bytes</source>
-        <translation>%1 tavua</translation>
-    </message>
-    <message>
         <source>Invalid filename</source>
         <translation>Virheellinen tiedostonimi</translation>
     </message>
@@ -1143,10 +1127,6 @@ Haluatko silti poistaa sen?</translation>
     <message>
         <source>Computer</source>
         <translation>Tietokone</translation>
-    </message>
-    <message>
-        <source>%1 byte(s)</source>
-        <translation>%1 tavu(a)</translation>
     </message>
 </context>
 <context>
@@ -1533,10 +1513,6 @@ Haluatko silti poistaa sen?</translation>
         <translation>Konetta ei löydy</translation>
     </message>
     <message>
-        <source>Unknown error</source>
-        <translation>Tuntematon virhe</translation>
-    </message>
-    <message>
         <source>Unknown error (%1)</source>
         <translation>Tuntematon virhe (%1)</translation>
     </message>
@@ -1784,6 +1760,10 @@ Haluatko silti poistaa sen?</translation>
     <message>
         <source>Unsupported image format</source>
         <translation>Kuvamuotoa ei tueta</translation>
+    </message>
+    <message>
+        <source>Image is empty</source>
+        <translation>Kuva on tyhjä</translation>
     </message>
 </context>
 <context>
@@ -4609,6 +4589,10 @@ Poista toinen niistä käytöstä.</translation>
         <translation>Tiedostonimi viittaa kansioon</translation>
     </message>
     <message>
+        <source>QSaveFile cannot open &apos;%1&apos; without direct write fallback enabled: path contains an Alternate Data Stream specifier</source>
+        <translation>QSaveFile ei voi avata polkua ”%1” ilman suoraa kirjoitusta: polku sisältää vaihtoehtoinen tietovirta -tunnisteen</translation>
+    </message>
+    <message>
         <source>Writing canceled by application</source>
         <translation>Ohjelma keskeytti kirjoittamisen</translation>
     </message>
@@ -6224,6 +6208,10 @@ Role of an accessible object</extracomment>
         <translation>Diffie-Hellman-parametrit eivät ole kelvolliset</translation>
     </message>
     <message>
+        <source>OpenSSL version with disabled elliptic curves</source>
+        <translation>OpenSSL:ssä ei ole elliptisten käyrien tukea</translation>
+    </message>
+    <message>
         <source>OpenSSL version too old, need at least v1.0.2</source>
         <translation>OpenSSL-versio on liian vanha; tarvitaan vähintään v1.0.2</translation>
     </message>
@@ -6949,16 +6937,36 @@ Direct2D-version vähimmäisvaatimus on %1.%2.%3.%4. Järjestelmän Direct2D-ver
         <translation>Virheellinen dokumentti.</translation>
     </message>
     <message>
-        <source>Expected </source>
-        <translation>Odotettiin </translation>
+        <source>&apos;%1&apos;</source>
+        <comment>expected</comment>
+        <extracomment>&apos;&lt;first option&gt;&apos;</extracomment>
+        <translation>”%1”</translation>
     </message>
     <message>
-        <source>, but got &apos;</source>
-        <translation>, mutta saatiin &apos;</translation>
+        <source>%1 or &apos;%2&apos;</source>
+        <comment>expected</comment>
+        <extracomment>&lt;first option&gt;, &apos;&lt;second option&gt;&apos;</extracomment>
+        <translation>%1 tai ”%2”</translation>
     </message>
     <message>
-        <source>Unexpected &apos;</source>
-        <translation>Odottamaton &apos;</translation>
+        <source>%1, &apos;%2&apos;</source>
+        <comment>expected</comment>
+        <extracomment>&lt;options so far&gt;, &apos;&lt;next option&gt;&apos;</extracomment>
+        <translation>%1, ”%2”</translation>
+    </message>
+    <message>
+        <source>%1, or &apos;%2&apos;</source>
+        <comment>expected</comment>
+        <extracomment>&lt;options so far&gt;, or &apos;&lt;final option&gt;&apos;</extracomment>
+        <translation>%1 tai ”%2”</translation>
+    </message>
+    <message>
+        <source>Expected %1, but got &apos;%2&apos;.</source>
+        <translation>Odotettiin %1, mutta saatiin ”%2”.</translation>
+    </message>
+    <message>
+        <source>Unexpected &apos;%1&apos;.</source>
+        <translation>Odottamaton ”%1”.</translation>
     </message>
     <message>
         <source>Expected character data.</source>

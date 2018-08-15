@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "base/memory/ptr_util.h"
+#include "components/guest_view/browser/guest_view_base.h"
 #include "components/guest_view/browser/guest_view_manager_delegate.h"
 
 namespace guest_view {
@@ -18,7 +20,8 @@ TestGuestViewManager::TestGuestViewManager(
       num_guests_created_(0),
       expected_num_guests_created_(0),
       num_views_garbage_collected_(0),
-      waiting_for_guests_created_(false) {}
+      waiting_for_guests_created_(false),
+      waiting_for_attach_(nullptr) {}
 
 TestGuestViewManager::~TestGuestViewManager() {
 }
@@ -81,6 +84,19 @@ void TestGuestViewManager::WaitForNumGuestsCreated(size_t count) {
   num_created_message_loop_runner_->Run();
 }
 
+void TestGuestViewManager::WaitUntilAttached(
+    content::WebContents* guest_web_contents) {
+  GuestViewBase* guest = GuestViewBase::FromWebContents(guest_web_contents);
+
+  if (guest->attached())
+    return;
+
+  waiting_for_attach_ = guest;
+
+  attached_message_loop_runner_ = new content::MessageLoopRunner;
+  attached_message_loop_runner_->Run();
+}
+
 void TestGuestViewManager::WaitForViewGarbageCollected() {
   gc_message_loop_runner_ = new content::MessageLoopRunner;
   gc_message_loop_runner_->Run();
@@ -96,8 +112,8 @@ void TestGuestViewManager::AddGuest(int guest_instance_id,
   GuestViewManager::AddGuest(guest_instance_id, guest_web_contents);
 
   guest_web_contents_watchers_.push_back(
-      linked_ptr<content::WebContentsDestroyedWatcher>(
-          new content::WebContentsDestroyedWatcher(guest_web_contents)));
+      base::MakeUnique<content::WebContentsDestroyedWatcher>(
+          guest_web_contents));
 
   if (created_message_loop_runner_.get())
     created_message_loop_runner_->Quit();
@@ -110,6 +126,22 @@ void TestGuestViewManager::AddGuest(int guest_instance_id,
 
   if (num_created_message_loop_runner_.get())
     num_created_message_loop_runner_->Quit();
+}
+
+void TestGuestViewManager::AttachGuest(
+    int embedder_process_id,
+    int element_instance_id,
+    int guest_instance_id,
+    const base::DictionaryValue& attach_params) {
+  GuestViewManager::AttachGuest(embedder_process_id, element_instance_id,
+                                guest_instance_id, attach_params);
+
+  if (waiting_for_attach_ &&
+      (waiting_for_attach_ ==
+       GuestViewBase::From(embedder_process_id, guest_instance_id))) {
+    attached_message_loop_runner_->Quit();
+    waiting_for_attach_ = nullptr;
+  }
 }
 
 void TestGuestViewManager::GetGuestWebContentsList(

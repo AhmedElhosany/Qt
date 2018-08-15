@@ -10,51 +10,58 @@
 #include "base/macros.h"
 
 #include "device/vr/vr_device.h"
-#include "device/vr/vr_display_impl.h"
 #include "device/vr/vr_export.h"
 #include "device/vr/vr_service.mojom.h"
 #include "mojo/public/cpp/bindings/binding.h"
 
 namespace device {
 
+class VRDisplayImpl;
+
+// Browser process representation of a WebVR site session. Instantiated through
+// Mojo once the user loads a page containing WebVR.
+// It instantiates a VRDisplayImpl for each newly connected VRDisplay and sends
+// the display's info to the render process through its connected
+// mojom::VRServiceClient.
 class VRServiceImpl : public mojom::VRService {
  public:
-  DEVICE_VR_EXPORT ~VRServiceImpl() override;
+  DEVICE_VR_EXPORT VRServiceImpl(int render_frame_process_id,
+                                 int render_frame_routing_id);
+  ~VRServiceImpl() override;
 
-  DEVICE_VR_EXPORT static void BindRequest(
-      mojo::InterfaceRequest<mojom::VRService> request);
-
-  mojom::VRServiceClient* client() { return client_.get(); }
-
-  VRDisplayImpl* GetVRDisplayImpl(VRDevice* device);
-
-  bool listening_for_activate() { return listening_for_activate_; }
-
- private:
-  friend class VRServiceTestBinding;
-  friend class VRDeviceManagerTest;
-  friend class VRDisplayImpl;
-
-  DEVICE_VR_EXPORT VRServiceImpl();
-
-  // Mojo connection handling.
-  DEVICE_VR_EXPORT void Bind(mojo::InterfaceRequest<mojom::VRService> request);
-  void RemoveFromDeviceManager();
-  void RemoveDevice(VRDevice* device);
+  DEVICE_VR_EXPORT static void Create(int render_frame_process_id,
+                                      int render_frame_routing_id,
+                                      mojom::VRServiceRequest request);
 
   // mojom::VRService implementation
+  // Adds this service to the VRDeviceManager.
   void SetClient(mojom::VRServiceClientPtr service_client,
-                 const SetClientCallback& callback) override;
-  void SetListeningForActivate(bool listening) override;
+                 SetClientCallback callback) override;
 
-  using DisplayImplMap = std::map<VRDevice*, std::unique_ptr<VRDisplayImpl>>;
-  DisplayImplMap displays_;
+  // Tells the render process that a new VR device is available.
+  void ConnectDevice(VRDevice* device);
+
+ private:
+  friend class VRDisplayImplTest;
+
+  void SetListeningForActivate(bool listening) override;
+  void OnVRDisplayInfoCreated(VRDevice* device,
+                              mojom::VRDisplayInfoPtr display_info);
+
+  std::map<VRDevice*, std::unique_ptr<VRDisplayImpl>> displays_;
 
   mojom::VRServiceClientPtr client_;
 
-  bool listening_for_activate_;
+  bool in_set_client_;
+  unsigned connected_devices_;
+  unsigned handled_devices_;
+  const int render_frame_process_id_;
+  const int render_frame_routing_id_;
 
-  std::unique_ptr<mojo::Binding<mojom::VRService>> binding_;
+  base::WeakPtrFactory<VRServiceImpl> weak_ptr_factory_;
+
+  // Getter for testing.
+  DEVICE_VR_EXPORT VRDisplayImpl* GetVRDisplayImplForTesting(VRDevice* device);
 
   DISALLOW_COPY_AND_ASSIGN(VRServiceImpl);
 };

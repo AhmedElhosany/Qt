@@ -1355,7 +1355,7 @@ void MainWindow::about()
                     "<p>Qt Linguist is a tool for adding translations to Qt "
                     "applications.</p>"
                     "<p>Copyright (C) %2 The Qt Company Ltd."
-                   ).arg(version, QStringLiteral("2018")));
+                   ).arg(version, QStringLiteral("2017")));
 
     box.setWindowTitle(QApplication::translate("AboutDialog", "Qt Linguist"));
     box.setIcon(QMessageBox::NoIcon);
@@ -2590,7 +2590,6 @@ void MainWindow::readConfig()
 {
     QSettings config;
 
-    QRect r(pos(), size());
     restoreGeometry(config.value(settingPath("Geometry/WindowGeometry")).toByteArray());
     restoreState(config.value(settingPath("MainWindowState")).toByteArray());
 

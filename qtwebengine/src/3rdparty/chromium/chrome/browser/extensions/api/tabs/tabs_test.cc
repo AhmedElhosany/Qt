@@ -9,7 +9,9 @@
 #include <memory>
 #include <string>
 
+#include "apps/test/app_window_waiter.h"
 #include "base/memory/ref_counted.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -25,9 +27,9 @@
 #include "chrome/browser/extensions/extension_function_test_utils.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/window_controller.h"
-#include "chrome/browser/memory/tab_manager.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/resource_coordinator/tab_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -38,6 +40,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/notification_service.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/page_zoom.h"
 #include "content/public/common/url_constants.h"
@@ -45,7 +48,6 @@
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
-#include "extensions/browser/app_window/native_app_window.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/test_util.h"
 #include "extensions/test/extension_test_message_listener.h"
@@ -173,7 +175,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, MAYBE_GetWindow) {
 
   // Popup.
   Browser* popup_browser = new Browser(
-      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile()));
+      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile(), true));
   function = new WindowsGetFunction();
   function->set_extension(extension.get());
   result.reset(utils::ToDictionary(
@@ -644,7 +646,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, DontCreateTabInClosingPopupWindow) {
   // a new tab in it. Tab should not be opened in the popup window, but in a
   // tabbed browser window.
   Browser* popup_browser = new Browser(
-      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile()));
+      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile(), true));
   int window_id = ExtensionTabUtil::GetWindowId(popup_browser);
   chrome::CloseWindow(popup_browser);
 
@@ -798,12 +800,12 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, UpdateDevToolsWindow) {
 // TODO(llandwerlin): Activating a browser window and waiting for the
 // action to happen requires views::Widget which is not available on
 // MacOSX. Deactivate for now.
+// TODO(warx): Move ExtensionWindowLastFocusedTest to interactive
+// uitest as it triggers native widget activation.
 #if !defined(OS_MACOSX)
 class ExtensionWindowLastFocusedTest : public ExtensionTabsTest {
  public:
   void SetUpOnMainThread() override;
-
-  void ActivateAppWindow(AppWindow* app_window);
 
   void ActivateBrowserWindow(Browser* browser);
 
@@ -815,44 +817,6 @@ class ExtensionWindowLastFocusedTest : public ExtensionTabsTest {
                            const std::string& params);
 
  private:
-  // A helper class to wait for an AppWindow to become activated. On
-  // window system like X11, for a NativeWidget to be activated, we
-  // need to wait for the round trip communication with the X server.
-  class AppWindowActivatedWaiter : public AppWindowRegistry::Observer {
-   public:
-    AppWindowActivatedWaiter(AppWindow* app_window,
-                             content::BrowserContext* browser_context)
-        : app_window_(app_window),
-          browser_context_(browser_context),
-          waiting_(false) {
-      AppWindowRegistry::Get(browser_context_)->AddObserver(this);
-    }
-    ~AppWindowActivatedWaiter() override {
-      AppWindowRegistry::Get(browser_context_)->RemoveObserver(this);
-    }
-
-    void ActivateAndWait() {
-      app_window_->GetBaseWindow()->Activate();
-      if (!app_window_->GetBaseWindow()->IsActive()) {
-        waiting_ = true;
-        content::RunMessageLoop();
-      }
-    }
-
-    // AppWindowRegistry::Observer:
-    void OnAppWindowActivated(AppWindow* app_window) override {
-      if (app_window_ == app_window && waiting_) {
-        base::MessageLoopForUI::current()->QuitWhenIdle();
-        waiting_ = false;
-      }
-    }
-
-   private:
-    AppWindow* app_window_;
-    content::BrowserContext* browser_context_;
-    bool waiting_;
-  };
-
   // A helper class to wait for an views::Widget to become activated.
   class WidgetActivatedWaiter : public views::WidgetObserver {
    public:
@@ -892,11 +856,6 @@ void ExtensionWindowLastFocusedTest::SetUpOnMainThread() {
   extension_ = test_util::CreateEmptyExtension();
 }
 
-void ExtensionWindowLastFocusedTest::ActivateAppWindow(AppWindow* app_window) {
-  AppWindowActivatedWaiter waiter(app_window, browser()->profile());
-  waiter.ActivateAndWait();
-}
-
 void ExtensionWindowLastFocusedTest::ActivateBrowserWindow(Browser* browser) {
   BrowserView* view = BrowserView::GetBrowserViewForBrowser(browser);
   EXPECT_NE(nullptr, view);
@@ -911,9 +870,10 @@ Browser* ExtensionWindowLastFocusedTest::CreateBrowserWithEmptyTab(
   Browser* new_browser;
   if (as_popup)
     new_browser = new Browser(
-        Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile()));
+        Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile(), true));
   else
-    new_browser = new Browser(Browser::CreateParams(browser()->profile()));
+    new_browser =
+        new Browser(Browser::CreateParams(browser()->profile(), true));
   AddBlankTabAndShow(new_browser);
   return new_browser;
 }
@@ -943,6 +903,34 @@ base::Value* ExtensionWindowLastFocusedTest::RunFunction(
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionWindowLastFocusedTest,
+                       ExtensionAPICannotNavigateDevtools) {
+  std::unique_ptr<base::DictionaryValue> test_extension_value(
+      api_test_utils::ParseDictionary(
+          "{\"name\": \"Test\", \"version\": \"1.0\", \"permissions\": "
+          "[\"tabs\"]}"));
+  scoped_refptr<Extension> extension(
+      api_test_utils::CreateExtension(test_extension_value.get()));
+
+  DevToolsWindow* devtools = DevToolsWindowTesting::OpenDevToolsWindowSync(
+      browser()->tab_strip_model()->GetWebContentsAt(0), false /* is_docked */);
+
+  scoped_refptr<TabsUpdateFunction> function =
+      new TabsUpdateFunction();
+  function->set_extension(extension.get());
+
+  EXPECT_TRUE(base::MatchPattern(
+      utils::RunFunctionAndReturnError(
+          function.get(), base::StringPrintf(
+              "[%d, {\"url\":\"http://example.com\"}]",
+              ExtensionTabUtil::GetTabId(
+                  DevToolsWindowTesting::Get(devtools)->main_web_contents())),
+          DevToolsWindowTesting::Get(devtools)->browser()),
+      tabs_constants::kNoCurrentWindowError));
+
+  DevToolsWindowTesting::CloseDevToolsWindowSync(devtools);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionWindowLastFocusedTest,
                        NoDevtoolsAndAppWindows) {
   DevToolsWindow* devtools = DevToolsWindowTesting::OpenDevToolsWindowSync(
       browser()->tab_strip_model()->GetWebContentsAt(0), false /* is_docked */);
@@ -965,7 +953,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionWindowLastFocusedTest,
       " \"minWidth\": 200, \"minHeight\": 200,"
       " \"maxWidth\": 400, \"maxHeight\": 400}}");
   {
-    ActivateAppWindow(app_window);
+    apps::AppWindowWaiter waiter(AppWindowRegistry::Get(browser()->profile()),
+                                 app_window->extension_id());
+    waiter.WaitForActivated();
 
     scoped_refptr<WindowsGetLastFocusedFunction> get_current_app_function =
         new WindowsGetLastFocusedFunction();
@@ -1037,7 +1027,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionWindowLastFocusedTest,
       " \"minWidth\": 200, \"minHeight\": 200,"
       " \"maxWidth\": 400, \"maxHeight\": 400}}");
   {
-    ActivateAppWindow(app_window);
+    apps::AppWindowWaiter waiter(AppWindowRegistry::Get(browser()->profile()),
+                                 app_window->extension_id());
+    waiter.WaitForActivated();
 
     scoped_refptr<WindowsGetLastFocusedFunction> get_current_app_function =
         new WindowsGetLastFocusedFunction();
@@ -1168,7 +1160,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, DuplicateTab) {
   int duplicate_tab_window_id = GetTabWindowId(duplicate_result.get());
   int duplicate_tab_index =
       api_test_utils::GetInteger(duplicate_result.get(), "index");
-  EXPECT_EQ(base::Value::TYPE_DICTIONARY, duplicate_result->GetType());
+  EXPECT_EQ(base::Value::Type::DICTIONARY, duplicate_result->GetType());
   // Duplicate tab id should be different from the original tab id.
   EXPECT_NE(tab_id, duplicate_tab_id);
   EXPECT_EQ(window_id, duplicate_tab_window_id);
@@ -1205,7 +1197,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, DuplicateTabNoPermission) {
   int duplicate_tab_window_id = GetTabWindowId(duplicate_result.get());
   int duplicate_tab_index =
       api_test_utils::GetInteger(duplicate_result.get(), "index");
-  EXPECT_EQ(base::Value::TYPE_DICTIONARY, duplicate_result->GetType());
+  EXPECT_EQ(base::Value::Type::DICTIONARY, duplicate_result->GetType());
   // Duplicate tab id should be different from the original tab id.
   EXPECT_NE(tab_id, duplicate_tab_id);
   EXPECT_EQ(window_id, duplicate_tab_window_id);
@@ -1252,7 +1244,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, NoTabsAppWindow) {
   CloseAppWindow(app_window);
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, FilteredEvents) {
+// Crashes on Mac/Win only.  http://crbug.com/708996
+#if defined(OS_MACOSX)
+#define MAYBE_FilteredEvents DISABLED_FilteredEvents
+#else
+#define MAYBE_FilteredEvents FilteredEvents
+#endif
+
+IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, MAYBE_FilteredEvents) {
   extensions::ResultCatcher catcher;
   ExtensionTestMessageListener listener("ready", true);
   ASSERT_TRUE(
@@ -1266,7 +1265,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, FilteredEvents) {
       " \"maxWidth\": 400, \"maxHeight\": 400}}");
 
   Browser* browser_window =
-      new Browser(Browser::CreateParams(browser()->profile()));
+      new Browser(Browser::CreateParams(browser()->profile(), true));
   AddBlankTabAndShow(browser_window);
 
   DevToolsWindow* devtools_window =
@@ -1318,7 +1317,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, ExecuteScriptOnDevTools) {
 // TODO(georgesak): change this browsertest to an unittest.
 IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, DiscardedProperty) {
   ASSERT_TRUE(g_browser_process && g_browser_process->GetTabManager());
-  memory::TabManager* tab_manager = g_browser_process->GetTabManager();
+  resource_coordinator::TabManager* tab_manager =
+      g_browser_process->GetTabManager();
 
   // Create two aditional tabs.
   content::OpenURLParams params(GURL(url::kAboutBlankURL), content::Referrer(),
@@ -1460,7 +1460,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, DiscardWithId) {
           discard.get(), base::StringPrintf("[%u]", tab_id), browser())));
 
   // Confirms that TabManager sees the tab as discarded.
-  memory::TabManager* tab_manager = g_browser_process->GetTabManager();
+  resource_coordinator::TabManager* tab_manager =
+      g_browser_process->GetTabManager();
   web_contents = browser()->tab_strip_model()->GetWebContentsAt(1);
   EXPECT_TRUE(tab_manager->IsTabDiscarded(web_contents));
 
@@ -1527,7 +1528,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsTest, DiscardWithoutId) {
   discard->set_extension(extension.get());
 
   // Disable protection time to discard the tab without passing id.
-  memory::TabManager* tab_manager = g_browser_process->GetTabManager();
+  resource_coordinator::TabManager* tab_manager =
+      g_browser_process->GetTabManager();
   tab_manager->set_minimum_protection_time_for_tests(
       base::TimeDelta::FromSeconds(0));
 
@@ -2119,7 +2121,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTabsZoomTest, CannotZoomInvalidTab) {
 }
 
 // Regression test for crbug.com/660498.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Foo) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TemporaryAddressSpoof) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   content::WebContents* first_web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -2145,6 +2147,58 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Foo) {
             browser()->tab_strip_model()->GetActiveWebContents());
 
   EXPECT_EQ(url, second_web_contents->GetVisibleURL());
+}
+
+// Window created by chrome.windows.create should be in the same SiteInstance
+// and BrowsingInstance as the opener - this is a regression test for
+// https://crbug.com/597750.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, WindowsCreateVsSiteInstance) {
+  const extensions::Extension* extension =
+      LoadExtension(test_data_dir_.AppendASCII("../simple_with_file"));
+  ASSERT_TRUE(extension);
+
+  // Navigate a tab to an extension page.
+  GURL extension_url = extension->GetResourceURL("file.html");
+  ui_test_utils::NavigateToURL(browser(), extension_url);
+  content::WebContents* old_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Execute chrome.windows.create and store the new tab in |new_contents|.
+  content::WebContents* new_contents = nullptr;
+  {
+    content::WebContentsAddedObserver observer;
+    ASSERT_TRUE(content::ExecuteScript(old_contents,
+                                       "window.name = 'old-contents';\n"
+                                       "chrome.windows.create({url: '" +
+                                           extension_url.spec() + "'})"));
+    new_contents = observer.GetWebContents();
+    ASSERT_TRUE(content::WaitForLoadStop(new_contents));
+  }
+
+  // Verify that the old and new tab are in the same process and SiteInstance.
+  // Note: both test assertions are important - one observed failure mode was
+  // having the same process, but different SiteInstance.
+  EXPECT_EQ(old_contents->GetMainFrame()->GetProcess(),
+            new_contents->GetMainFrame()->GetProcess());
+  EXPECT_EQ(old_contents->GetMainFrame()->GetSiteInstance(),
+            new_contents->GetMainFrame()->GetSiteInstance());
+
+  // Verify that the |new_contents| doesn't have a |window.opener| set.
+  bool window_opener_cast_to_bool = true;
+  EXPECT_TRUE(ExecuteScriptAndExtractBool(
+      new_contents, "window.domAutomationController.send(!!window.opener)",
+      &window_opener_cast_to_bool));
+  EXPECT_FALSE(window_opener_cast_to_bool);
+
+  // Verify that |new_contents| can find |old_contents| using window.open/name.
+  std::string location_of_other_window;
+  EXPECT_TRUE(ExecuteScriptAndExtractString(
+      new_contents,
+      "var w = window.open('', 'old-contents');\n"
+      "window.domAutomationController.send(w.location.href);",
+      &location_of_other_window));
+  EXPECT_EQ(old_contents->GetMainFrame()->GetLastCommittedURL().spec(),
+            location_of_other_window);
 }
 
 }  // namespace extensions

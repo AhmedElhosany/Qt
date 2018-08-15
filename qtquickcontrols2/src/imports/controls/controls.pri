@@ -1,24 +1,27 @@
 HEADERS += \
-    $$PWD/qquickdialring_p.h \
     $$PWD/qquickdefaultbusyindicator_p.h \
+    $$PWD/qquickdefaultdial_p.h \
     $$PWD/qquickdefaultprogressbar_p.h \
-    $$PWD/qquickdefaultstyle_p.h
+    $$PWD/qquickdefaultstyle_p.h \
+    $$PWD/qquickdefaulttheme_p.h
 
 SOURCES += \
-    $$PWD/qquickdialring.cpp \
     $$PWD/qquickdefaultbusyindicator.cpp \
+    $$PWD/qquickdefaultdial.cpp \
     $$PWD/qquickdefaultprogressbar.cpp \
-    $$PWD/qquickdefaultstyle.cpp
+    $$PWD/qquickdefaultstyle.cpp \
+    $$PWD/qquickdefaulttheme.cpp
 
 QML_CONTROLS = \
     $$PWD/AbstractButton.qml \
+    $$PWD/Action.qml \
+    $$PWD/ActionGroup.qml \
     $$PWD/ApplicationWindow.qml \
     $$PWD/BusyIndicator.qml \
     $$PWD/Button.qml \
     $$PWD/ButtonGroup.qml \
     $$PWD/CheckBox.qml \
     $$PWD/CheckDelegate.qml \
-    $$PWD/CheckIndicator.qml \
     $$PWD/ComboBox.qml \
     $$PWD/Container.qml \
     $$PWD/Control.qml \
@@ -32,6 +35,8 @@ QML_CONTROLS = \
     $$PWD/ItemDelegate.qml \
     $$PWD/Label.qml \
     $$PWD/Menu.qml \
+    $$PWD/MenuBar.qml \
+    $$PWD/MenuBarItem.qml \
     $$PWD/MenuItem.qml \
     $$PWD/MenuSeparator.qml \
     $$PWD/Page.qml \
@@ -41,7 +46,6 @@ QML_CONTROLS = \
     $$PWD/ProgressBar.qml \
     $$PWD/RadioButton.qml \
     $$PWD/RadioDelegate.qml \
-    $$PWD/RadioIndicator.qml \
     $$PWD/RangeSlider.qml \
     $$PWD/RoundButton.qml \
     $$PWD/ScrollBar.qml \
@@ -52,7 +56,6 @@ QML_CONTROLS = \
     $$PWD/StackView.qml \
     $$PWD/SwipeDelegate.qml \
     $$PWD/Switch.qml \
-    $$PWD/SwitchIndicator.qml \
     $$PWD/SwitchDelegate.qml \
     $$PWD/SwipeView.qml \
     $$PWD/TabBar.qml \

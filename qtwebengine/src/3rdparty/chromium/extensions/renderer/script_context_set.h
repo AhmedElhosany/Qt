@@ -20,10 +20,6 @@
 
 class GURL;
 
-namespace base {
-class ListValue;
-}
-
 namespace blink {
 class WebLocalFrame;
 class WebSecurityOrigin;
@@ -44,7 +40,7 @@ class ScriptContext;
 // changing underneath callers.
 class ScriptContextSet {
  public:
-  ScriptContextSet(
+  explicit ScriptContextSet(
       // Set of the IDs of extensions that are active in this process.
       // Must outlive this. TODO(kalman): Combine this and |extensions|.
       ExtensionIdSet* active_extension_ids);
@@ -59,7 +55,6 @@ class ScriptContextSet {
   // Returns a weak reference to the new ScriptContext.
   ScriptContext* Register(blink::WebLocalFrame* frame,
                           const v8::Local<v8::Context>& v8_context,
-                          int extension_group,
                           int world_id);
 
   // If the specified context is contained in this set, remove it, then delete
@@ -80,6 +75,12 @@ class ScriptContextSet {
 
   // Returns the ScriptContext corresponding to the V8 context that created the
   // given |object|.
+  // Note: The provided |object| may belong to a v8::Context in another frame,
+  // as can happen when a parent frame uses an object of an embedded iframe.
+  // In this case, there may be no associated ScriptContext, since the child
+  // frame can be hosted in another process. Thus, callers of this need to
+  // null-check the result (and should also always check whether or not the
+  // context has access to the other context).
   static ScriptContext* GetContextByObject(const v8::Local<v8::Object>& object);
 
   // Synchronously runs |callback| with each ScriptContext that belongs to
@@ -103,32 +104,30 @@ class ScriptContextSet {
   }
 
   // Cleans up contexts belonging to an unloaded extension.
-  //
-  // Returns the set of ScriptContexts that were removed as a result. These
-  // are safe to interact with until the end of the current event loop, since
-  // they're deleted asynchronously.
-  std::set<ScriptContext*> OnExtensionUnloaded(const std::string& extension_id);
+  void OnExtensionUnloaded(const std::string& extension_id);
+
+  void set_is_lock_screen_context(bool is_lock_screen_context) {
+    is_lock_screen_context_ = is_lock_screen_context;
+  }
+
+  // Adds the given |context| for testing purposes.
+  void AddForTesting(std::unique_ptr<ScriptContext> context);
 
  private:
   // Finds the extension for the JavaScript context associated with the
   // specified |frame| and isolated world. If |world_id| is zero, finds the
   // extension ID associated with the main world's JavaScript context. If the
   // JavaScript context isn't from an extension, returns empty string.
-  const Extension* GetExtensionFromFrameAndWorld(
-      const blink::WebLocalFrame* frame,
-      int world_id,
-      bool use_effective_url);
+  const Extension* GetExtensionFromFrameAndWorld(blink::WebLocalFrame* frame,
+                                                 int world_id,
+                                                 bool use_effective_url);
 
   // Returns the Feature::Context type of context for a JavaScript context.
   Feature::Context ClassifyJavaScriptContext(
       const Extension* extension,
-      int extension_group,
+      int world_id,
       const GURL& url,
       const blink::WebSecurityOrigin& origin);
-
-  // Helper for OnExtensionUnloaded().
-  void RecordAndRemove(std::set<ScriptContext*>* removed,
-                       ScriptContext* context);
 
   // Weak reference to all installed Extensions that are also active in this
   // process.
@@ -136,6 +135,10 @@ class ScriptContextSet {
 
   // The set of all ScriptContexts we own.
   std::set<ScriptContext*> contexts_;
+
+  // Whether the script context set is associated with the renderer active on
+  // the Chrome OS lock screen.
+  bool is_lock_screen_context_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(ScriptContextSet);
 };

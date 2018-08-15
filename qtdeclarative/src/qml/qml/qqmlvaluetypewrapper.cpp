@@ -51,9 +51,11 @@
 #include <private/qv4alloca_p.h>
 #include <private/qv4objectiterator_p.h>
 #include <private/qv4qobjectwrapper_p.h>
+#include <QtCore/qloggingcategory.h>
 
 QT_BEGIN_NAMESPACE
 
+Q_DECLARE_LOGGING_CATEGORY(lcBindingRemoval)
 
 DEFINE_OBJECT_VTABLE(QV4::QQmlValueTypeWrapper);
 
@@ -411,13 +413,13 @@ ReturnedValue QQmlValueTypeWrapper::get(const Managed *m, String *name, bool *ha
 #undef VALUE_TYPE_ACCESSOR
 }
 
-void QQmlValueTypeWrapper::put(Managed *m, String *name, const Value &value)
+bool QQmlValueTypeWrapper::put(Managed *m, String *name, const Value &value)
 {
     Q_ASSERT(m->as<QQmlValueTypeWrapper>());
     ExecutionEngine *v4 = static_cast<QQmlValueTypeWrapper *>(m)->engine();
     Scope scope(v4);
     if (scope.hasException())
-        return;
+        return false;
 
     Scoped<QQmlValueTypeWrapper> r(scope, static_cast<QQmlValueTypeWrapper *>(m));
     Scoped<QQmlValueTypeReference> reference(scope, m->d());
@@ -428,7 +430,7 @@ void QQmlValueTypeWrapper::put(Managed *m, String *name, const Value &value)
         QMetaProperty writebackProperty = reference->d()->object->metaObject()->property(reference->d()->property);
 
         if (!writebackProperty.isWritable() || !reference->readReferenceValue())
-            return;
+            return false;
 
         writeBackPropertyType = writebackProperty.userType();
     }
@@ -436,17 +438,20 @@ void QQmlValueTypeWrapper::put(Managed *m, String *name, const Value &value)
     const QMetaObject *metaObject = r->d()->propertyCache()->metaObject();
     const QQmlPropertyData *pd = r->d()->propertyCache()->property(name, 0, 0);
     if (!pd)
-        return;
+        return false;
 
     if (reference) {
         QV4::ScopedFunctionObject f(scope, value);
+        const QQmlQPointer<QObject> &referenceObject = reference->d()->object;
+        const int referencePropertyIndex = reference->d()->property;
+
         if (f) {
             if (!f->isBinding()) {
                 // assigning a JS function to a non-var-property is not allowed.
                 QString error = QStringLiteral("Cannot assign JavaScript function to value-type property");
                 ScopedString e(scope, v4->newString(error));
                 v4->throwError(e);
-                return;
+                return false;
             }
 
             QQmlContextData *context = v4->callingQmlContext();
@@ -454,18 +459,31 @@ void QQmlValueTypeWrapper::put(Managed *m, String *name, const Value &value)
             QQmlPropertyData cacheData;
             cacheData.setWritable(true);
             cacheData.setPropType(writeBackPropertyType);
-            cacheData.setCoreIndex(reference->d()->property);
+            cacheData.setCoreIndex(referencePropertyIndex);
 
             QV4::Scoped<QQmlBindingFunction> bindingFunction(scope, (const Value &)f);
 
             QV4::ScopedContext ctx(scope, bindingFunction->scope());
-            QQmlBinding *newBinding = QQmlBinding::create(&cacheData, bindingFunction->function(), reference->d()->object, context, ctx);
+            QQmlBinding *newBinding = QQmlBinding::create(&cacheData, bindingFunction->function(), referenceObject, context, ctx);
             newBinding->setSourceLocation(bindingFunction->currentLocation());
-            newBinding->setTarget(reference->d()->object, cacheData, pd);
+            newBinding->setTarget(referenceObject, cacheData, pd);
             QQmlPropertyPrivate::setBinding(newBinding);
-            return;
+            return true;
         } else {
-            QQmlPropertyPrivate::removeBinding(reference->d()->object, QQmlPropertyIndex(reference->d()->property, pd->coreIndex()));
+            if (Q_UNLIKELY(lcBindingRemoval().isInfoEnabled())) {
+                if (auto binding = QQmlPropertyPrivate::binding(referenceObject, QQmlPropertyIndex(referencePropertyIndex, pd->coreIndex()))) {
+                    Q_ASSERT(!binding->isValueTypeProxy());
+                    const auto qmlBinding = static_cast<const QQmlBinding*>(binding);
+                    const auto stackFrame = v4->currentStackFrame();
+                    qCInfo(lcBindingRemoval,
+                           "Overwriting binding on %s::%s which was initially bound at %s by setting \"%s\" at %s:%d",
+                           referenceObject->metaObject()->className(), referenceObject->metaObject()->property(referencePropertyIndex).name(),
+                           qPrintable(qmlBinding->expressionIdentifier()),
+                           metaObject->property(pd->coreIndex()).name(),
+                           qPrintable(stackFrame.source), stackFrame.line);
+                }
+            }
+            QQmlPropertyPrivate::removeBinding(referenceObject, QQmlPropertyIndex(referencePropertyIndex, pd->coreIndex()));
         }
     }
 
@@ -497,6 +515,8 @@ void QQmlValueTypeWrapper::put(Managed *m, String *name, const Value &value)
             QMetaObject::metacall(reference->d()->object, QMetaObject::WriteProperty, reference->d()->property, a);
         }
     }
+
+    return true;
 }
 
 QT_END_NAMESPACE

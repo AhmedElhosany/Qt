@@ -105,6 +105,11 @@ Rectangle {
             verify(inputPanel.setLocale(locale))
             if (localeChanged && !(textInput.inputMethodHints & Qt.ImhNoPredictiveText))
                 wait(300)
+            if (data !== undefined && data.hasOwnProperty("initHwrMode") && data.initHwrMode) {
+                if (!inputPanel.setHandwritingMode(true))
+                    expectFail("", "Handwriting not enabled")
+                verify(inputPanel.handwritingMode === true)
+            }
             if (data !== undefined && data.hasOwnProperty("initInputMode")) {
                 var inputMode = inputPanel.mapInputMode(data.initInputMode)
                 if (!inputPanel.isInputModeSupported(inputMode))
@@ -310,19 +315,26 @@ Rectangle {
             return [
                 { initLocale: "ar_AR", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "\u0645\u0631\u062D\u0628\u0627", outputText: "\u0645\u0631\u062D\u0628\u0627" },
                 { initLocale: "fa_FA", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "\u0633\u0644\u0627\u0645", outputText: "\u0633\u0644\u0627\u0645" },
+                { initLocale: "cs_CZ", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "ahoj", outputText: "Ahoj" },
                 { initLocale: "da_DK", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hej", outputText: "Hej" },
                 { initLocale: "de_DE", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hallo", outputText: "Hallo" },
+                { initLocale: "el_GR", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "\u03C7\u03B1\u03AF\u03C1\u03B5\u03C4\u03B5", outputText: "\u03A7\u03B1\u03AF\u03C1\u03B5\u03C4\u03B5" },
                 { initLocale: "en_GB", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hello", outputText: "Hello" },
                 { initLocale: "es_ES", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hola", outputText: "Hola" },
+                { initLocale: "et_EE", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "tere", outputText: "Tere" },
                 { initLocale: "hi_IN", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "\u0928\u092E\u0938\u094D\u0915\u093E\u0930", outputText: "\u0928\u092E\u0938\u094D\u0915\u093E\u0930" },
+                { initLocale: "hr_HR", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "zdravo", outputText: "Zdravo" },
+                { initLocale: "hu_HU", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "helló", outputText: "Helló" },
                 { initLocale: "fi_FI", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hei", outputText: "Hei" },
                 { initLocale: "fr_FR", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "bonjour", outputText: "Bonjour" },
                 { initLocale: "it_IT", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "ciao", outputText: "Ciao" },
                 { initLocale: "ja_JP", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "watashi", outputText: "\u308F\u305F\u3057" },
                 { initLocale: "nb_NO", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hallo", outputText: "Hallo" },
+                { initLocale: "nl_NL", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hallo", outputText: "Hallo" },
                 { initLocale: "pl_PL", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "cze\u015B\u0107", outputText: "Cze\u015B\u0107" },
                 { initLocale: "pt_PT", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "ol\u00E1", outputText: "Ol\u00E1" },
                 { initLocale: "ru_RU", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "\u043F\u0440\u0438\u0432\u0435\u0442", outputText: "\u041F\u0440\u0438\u0432\u0435\u0442" },
+                { initLocale: "sr_SP", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "\u0437\u0434\u0440\u0430\u0432\u043E", outputText: "\u0417\u0434\u0440\u0430\u0432\u043E" },
                 { initLocale: "sv_SE", initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: "hall\u00E5", outputText: "Hall\u00E5" }
             ]
         }
@@ -348,6 +360,12 @@ Rectangle {
                 { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDigitsOnly, inputSequence: "1234567890" + decmialPoint, outputText: "1234567890" + decmialPoint },
                 { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhFormattedNumbersOnly, inputSequence: "1234567890+-,.()", outputText: "1234567890+-,.()" },
                 { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDialableCharactersOnly, inputSequence: "1234567890+*#", outputText: "1234567890+*#" },
+                { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhEmailCharactersOnly, inputSequence: "a@b.c", outputText: "a@b.c" },
+                // Note: Some non-latin keyboards provide a QWERTY layout
+                { initLocale: "el_GR", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhEmailCharactersOnly, inputSequence: "a@b.c", outputText: "a@b.c" },
+                { initLocale: "el_GR", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhLatinOnly, inputSequence: "abc", outputText: "Abc" },
+                { initLocale: "he_IL", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhEmailCharactersOnly, inputSequence: "a@b.c", outputText: "a@b.c" },
+                { initLocale: "he_IL", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhLatinOnly, inputSequence: "abc", outputText: "Abc" },
             ]
         }
 
@@ -1095,18 +1113,24 @@ Rectangle {
 
         function test_hwrInputSequence_data() {
             return [
-                { initInputMethodHints: Qt.ImhNoPredictiveText, toggleShiftCount: 0, inputSequence: "abcdefghij", outputText: "Abcdefghij" },
-                { initInputMethodHints: Qt.ImhNoPredictiveText, toggleShiftCount: 1, inputSequence: "klmnopqrst", outputText: "klmnopqrst" },
-                { initInputMethodHints: Qt.ImhNoPredictiveText, toggleShiftCount: 3, inputSequence: "uvwxyz", outputText: "UVWXYZ" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNoPredictiveText, toggleShiftCount: 0, inputSequence: "abcdefghij", outputText: "Abcdefghij" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNoPredictiveText, toggleShiftCount: 1, inputSequence: "klmnopqrst", outputText: "klmnopqrst" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNoPredictiveText, toggleShiftCount: 3, inputSequence: "uvwxyz", outputText: "UVWXYZ" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "zh_CN", initInputMode: "ChineseHandwriting", inputSequence: "\u4e2d\u6587", outputText: "\u4e2d\u6587" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "zh_TW", initInputMode: "ChineseHandwriting", inputSequence: "\u570b", outputText: "\u570b" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "ja_JP", initInputMode: "JapaneseHandwriting", inputSequence: "\u65E5\u672C\u8A9E", outputText: "\u65E5\u672C\u8A9E" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "ko_KR", initInputMode: "KoreanHandwriting", inputSequence: "\uD55C\uAD6D\uC5B4", outputText: "\uD55C\uAD6D\uC5B4" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "el_GR", initInputMode: "Greek", inputSequence: "\u0395\u03BB\u03BB\u03B7\u03BD\u03B9\u03BA\u03AC", outputText: "\u0395\u03BB\u03BB\u03B7\u03BD\u03B9\u03BA\u03AC" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "bg_BG", initInputMode: "Cyrillic", inputSequence: "\u0431\u044A\u043B\u0433\u0430\u0440\u0441\u043A\u0438", outputText: "\u0411\u044A\u043B\u0433\u0430\u0440\u0441\u043A\u0438" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "cs_CZ", initInputMode: "Latin", inputSequence: "ahoj", outputText: "Ahoj" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "ar_AR", initInputMode: "Arabic", inputSequence: "\u0643\u062A\u0627\u0628", outputText: "\u0643\u062A\u0627\u0628" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "fa_FA", initInputMode: "Arabic", inputSequence: "\u0686\u0627\u06CC", outputText: "\u0686\u0627\u06CC" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "he_IL", initInputMode: "Hebrew", inputSequence: "\u05D0\u05D5\u05D8\u05D5", outputText: "\u05D0\u05D5\u05D8\u05D5" },
             ]
         }
 
         function test_hwrInputSequence(data) {
             prepareTest(data)
-
-            if (!inputPanel.setHandwritingMode(true))
-                expectFail("", "Handwriting not enabled")
-            verify(inputPanel.handwritingMode === true)
 
             for (var i = 0; i < data.toggleShiftCount; i++) {
                 inputPanel.toggleShift()
@@ -1128,19 +1152,19 @@ Rectangle {
 
         function test_hwrNumericInputSequence_data() {
             return [
-                { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhPreferNumbers, modeSwitchAllowed: true, inputSequence: "0123456789", outputText: "0123456789" },
-                { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDigitsOnly, modeSwitchAllowed: false, inputSequence: "1234567890", outputText: "1234567890" },
-                { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhFormattedNumbersOnly, modeSwitchAllowed: false, inputSequence: "1234567890+", outputText: "1234567890+" },
-                { initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDialableCharactersOnly, modeSwitchAllowed: false, inputSequence: "1234567890+", outputText: "1234567890+" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhPreferNumbers, modeSwitchAllowed: true, inputSequence: "0123456789", outputText: "0123456789" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDigitsOnly, modeSwitchAllowed: false, inputSequence: "1234567890", outputText: "1234567890" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhFormattedNumbersOnly, modeSwitchAllowed: false, inputSequence: "1234567890+", outputText: "1234567890+" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDialableCharactersOnly, modeSwitchAllowed: false, inputSequence: "1234567890+", outputText: "1234567890+" },
+                { initHwrMode: true, initLocale: "zh_CN", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhPreferNumbers, modeSwitchAllowed: true, inputSequence: "0123456789", outputText: "0123456789" },
+                { initHwrMode: true, initLocale: "zh_CN", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDigitsOnly, modeSwitchAllowed: false, inputSequence: "1234567890", outputText: "1234567890" },
+                { initHwrMode: true, initLocale: "zh_CN", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhFormattedNumbersOnly, modeSwitchAllowed: false, inputSequence: "1234567890+", outputText: "1234567890+" },
+                { initHwrMode: true, initLocale: "zh_CN", initInputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhDialableCharactersOnly, modeSwitchAllowed: false, inputSequence: "1234567890+", outputText: "1234567890+" },
             ]
         }
 
         function test_hwrNumericInputSequence(data) {
             prepareTest(data)
-
-            if (!inputPanel.setHandwritingMode(true))
-                expectFail("", "Handwriting not enabled")
-            verify(inputPanel.handwritingMode === true)
 
             for (var inputIndex in data.inputSequence) {
                 verify(inputPanel.emulateHandwriting(data.inputSequence.charAt(inputIndex), true))
@@ -1174,6 +1198,10 @@ Rectangle {
         }
 
         function test_hwrSpellCorrectionSuggestions(data) {
+            if (Qt.platform.pluginName === "offscreen") {
+                skip("QTBUG-65507");
+            }
+
             prepareTest(data)
 
             if (!inputPanel.setHandwritingMode(true))
@@ -1267,6 +1295,7 @@ Rectangle {
         function test_hwrFullScreenGestures_data() {
             return [
                 { initInputMethodHints: Qt.ImhNoPredictiveText, inputSequence: ["a","b","c",Qt.Key_Backspace,Qt.Key_Space,"c"], outputText: "Ab c" },
+                { initHwrMode: true, initInputMethodHints: Qt.ImhNone, initLocale: "zh_CN", initInputMode: "ChineseHandwriting", inputSequence: ["\u4e2d", "\u6587", Qt.Key_Backspace], outputText: "\u4e2d" },
             ]
         }
 
@@ -1300,7 +1329,8 @@ Rectangle {
             prepareTest(data)
 
             if (!handwritingInputPanel.enabled)
-                skip("Handwriting not enabled")
+                expectFail("", "Handwriting not enabled")
+            verify(handwritingInputPanel.enabled)
             handwritingInputPanel.available = true
             if (!inputPanel.wordCandidateListVisibleHint)
                 skip("Word candidates not available (spell correction/hwr suggestions)")

@@ -1,428 +1,468 @@
-# Copyright (C) 2013 Adobe Systems Incorporated. All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above
-#    copyright notice, this list of conditions and the following
-#    disclaimer.
-# 2. Redistributions in binary form must reproduce the above
-#    copyright notice, this list of conditions and the following
-#    disclaimer in the documentation and/or other materials
-#    provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER "AS IS" AND ANY
-# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
-# OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
-# TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-# THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# Copyright 2014 The Chromium Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
 
-"""This script imports a directory of W3C tests into Blink.
+"""Fetches a copy of the latest state of a W3C test repository and commits.
 
-This script takes a source repository directory, which it searches for files,
-then converts and copies files over to a destination directory.
-
-Rules for importing:
-
- * By default, only reference tests and JS tests are imported, (because pixel
-   tests take longer to run). This can be overridden with the --all flag.
-
- * By default, if test files by the same name already exist in the destination
-   directory, they are overwritten. This is because this script is used to
-   refresh files periodically. This can be overridden with the --no-overwrite flag.
-
- * All files are converted to work in Blink:
-     1. All CSS properties requiring the -webkit- vendor prefix are prefixed
-        (the list of what needs prefixes is read from Source/core/css/CSSProperties.in).
-     2. Each reftest has its own copy of its reference file following
-        the naming conventions new-run-webkit-tests expects.
-     3. If a reference files lives outside the directory of the test that
-        uses it, it is checked for paths to support files as it will be
-        imported into a different relative position to the test file
-        (in the same directory).
-     4. Any tags with the class "instructions" have style="display:none" added
-        to them. Some w3c tests contain instructions to manual testers which we
-        want to strip out (the test result parser only recognizes pure testharness.js
-        output and not those instructions).
-
- * Upon completion, script outputs the total number tests imported,
-   broken down by test type.
-
- * Also upon completion, if we are not importing the files in place, each
-   directory where files are imported will have a w3c-import.log file written with
-   a timestamp, the list of CSS properties used that require prefixes, the list
-   of imported files, and guidance for future test modification and maintenance.
-   On subsequent imports, this file is read to determine if files have been
-   removed in the newer changesets. The script removes these files accordingly.
+If this script is given the argument --auto-update, it will also:
+ 1. Upload a CL.
+ 2. Trigger try jobs and wait for them to complete.
+ 3. Make any changes that are required for new failing tests.
+ 4. Attempt to land the CL.
 """
 
+import argparse
 import logging
-import mimetypes
-import optparse
-import os
-import sys
 
-from webkitpy.common.host import Host
-from webkitpy.common.webkit_finder import WebKitFinder
-from webkitpy.layout_tests.models.test_expectations import TestExpectationParser
-from webkitpy.w3c.test_parser import TestParser
-from webkitpy.w3c.test_converter import convert_for_webkit
+from webkitpy.common.net.buildbot import current_build_link
+from webkitpy.common.net.git_cl import GitCL, TryJobStatus
+from webkitpy.common.path_finder import PathFinder
+from webkitpy.layout_tests.models.test_expectations import TestExpectations, TestExpectationParser
+from webkitpy.layout_tests.port.base import Port
+from webkitpy.w3c.common import read_credentials, exportable_commits_over_last_n_commits
+from webkitpy.w3c.directory_owners_extractor import DirectoryOwnersExtractor
+from webkitpy.w3c.local_wpt import LocalWPT
+from webkitpy.w3c.test_copier import TestCopier
+from webkitpy.w3c.wpt_expectations_updater import WPTExpectationsUpdater
+from webkitpy.w3c.wpt_github import WPTGitHub
+from webkitpy.w3c.wpt_manifest import WPTManifest
 
+# Settings for how often to check try job results and how long to wait.
+POLL_DELAY_SECONDS = 2 * 60
+TIMEOUT_SECONDS = 180 * 60
 
-# Maximum length of import path starting from top of source repository.
-# This limit is here because the Windows builders cannot create paths that are
-# longer than the Windows max path length (260). See http://crbug.com/609871.
-MAX_PATH_LENGTH = 125
-
-
-_log = logging.getLogger(__name__)
-
-
-def main(_argv, _stdout, _stderr):
-    options, args = parse_args()
-    host = Host()
-    source_repo_path = host.filesystem.normpath(os.path.abspath(args[0]))
-
-    if not host.filesystem.exists(source_repo_path):
-        sys.exit('Repository directory %s not found!' % source_repo_path)
-
-    configure_logging()
-    test_importer = TestImporter(host, source_repo_path, options)
-    test_importer.do_import()
-
-
-def configure_logging():
-    class LogHandler(logging.StreamHandler):
-
-        def format(self, record):
-            if record.levelno > logging.INFO:
-                return "%s: %s" % (record.levelname, record.getMessage())
-            return record.getMessage()
-
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    handler = LogHandler()
-    handler.setLevel(logging.INFO)
-    logger.addHandler(handler)
-    return handler
-
-
-def parse_args():
-    parser = optparse.OptionParser(usage='usage: %prog [options] source_repo_path')
-    parser.add_option('-n', '--no-overwrite', dest='overwrite', action='store_false', default=True,
-                      help=('Flag to prevent duplicate test files from overwriting existing tests. '
-                            'By default, they will be overwritten.'))
-    parser.add_option('-a', '--all', action='store_true', default=False,
-                      help=('Import all tests including reftests, JS tests, and manual/pixel tests. '
-                            'By default, only reftests and JS tests are imported.'))
-    parser.add_option('-d', '--dest-dir', dest='destination', default='w3c',
-                      help=('Import into a specified directory relative to the LayoutTests root. '
-                            'By default, files are imported under LayoutTests/w3c.'))
-    parser.add_option('--ignore-expectations', action='store_true', default=False,
-                      help='Ignore the W3CImportExpectations file and import everything.')
-    parser.add_option('--dry-run', action='store_true', default=False,
-                      help='Dryrun only (don\'t actually write any results).')
-
-    options, args = parser.parse_args()
-    if len(args) != 1:
-        parser.error('Incorrect number of arguments; source repo path is required.')
-    return options, args
+_log = logging.getLogger(__file__)
 
 
 class TestImporter(object):
 
-    def __init__(self, host, source_repo_path, options):
+    def __init__(self, host, wpt_github=None):
         self.host = host
-        self.source_repo_path = source_repo_path
-        self.options = options
+        self.executive = host.executive
+        self.fs = host.filesystem
+        self.finder = PathFinder(self.fs)
+        self.verbose = False
+        self.git_cl = None
+        self.wpt_github = wpt_github
 
-        self.filesystem = self.host.filesystem
-        self.webkit_finder = WebKitFinder(self.filesystem)
-        self._webkit_root = self.webkit_finder.webkit_base()
-        self.layout_tests_dir = self.webkit_finder.path_from_webkit_base('LayoutTests')
-        self.destination_directory = self.filesystem.normpath(
-            self.filesystem.join(
-                self.layout_tests_dir,
-                options.destination,
-                self.filesystem.basename(self.source_repo_path)))
-        self.import_in_place = (self.source_repo_path == self.destination_directory)
-        self.dir_above_repo = self.filesystem.dirname(self.source_repo_path)
+    def main(self, argv=None):
+        options = self.parse_args(argv)
 
-        self.import_list = []
+        self.verbose = options.verbose
+        log_level = logging.DEBUG if self.verbose else logging.INFO
+        logging.basicConfig(level=log_level, format='%(message)s')
 
-    def do_import(self):
-        _log.info("Importing %s into %s", self.source_repo_path, self.destination_directory)
-        self.find_importable_tests()
-        self.import_tests()
+        if not self.checkout_is_okay():
+            return 1
 
-    def find_importable_tests(self):
-        """Walks through the source directory to find what tests should be imported.
+        credentials = read_credentials(self.host, options.credentials_json)
+        gh_user = credentials.get('GH_USER')
+        gh_token = credentials.get('GH_TOKEN')
+        self.wpt_github = self.wpt_github or WPTGitHub(self.host, gh_user, gh_token)
+        local_wpt = LocalWPT(self.host, gh_token=gh_token)
+        self.git_cl = GitCL(self.host, auth_refresh_token_json=options.auth_refresh_token_json)
 
-        This function sets self.import_list, which contains information about how many
-        tests are being imported, and their source and destination paths.
+        _log.debug('Noting the current Chromium commit.')
+        # TODO(qyearsley): Use Git (self.host.git) to run git commands.
+        _, show_ref_output = self.run(['git', 'show-ref', 'HEAD'])
+        chromium_commit = show_ref_output.split()[0]
+
+        local_wpt.fetch()
+
+        if not options.ignore_exportable_commits:
+            commits = self.exportable_but_not_exported_commits(local_wpt)
+            if commits:
+                _log.info('There were exportable but not-yet-exported commits:')
+                for commit in commits:
+                    _log.info('Commit: %s', commit.url())
+                    _log.info('Subject: %s', commit.subject().strip())
+                    pull_request = self.wpt_github.pr_for_chromium_commit(commit)
+                    if pull_request:
+                        _log.info('PR: https://github.com/w3c/web-platform-tests/pull/%d', pull_request.number)
+                    else:
+                        _log.warning('No pull request found.')
+                    _log.info('Modified files in wpt directory in this commit:')
+                    for path in commit.filtered_changed_files():
+                        _log.info('  %s', path)
+                _log.info('Aborting import to prevent clobbering commits.')
+                return 0
+
+        if options.revision is not None:
+            _log.info('Checking out %s', options.revision)
+            self.run(['git', 'checkout', options.revision], cwd=local_wpt.path)
+
+        _log.info('Noting the revision we are importing.')
+        _, show_ref_output = self.run(['git', 'show-ref', 'origin/master'], cwd=local_wpt.path)
+        import_commit = 'wpt@%s' % show_ref_output.split()[0]
+
+        dest_path = self.finder.path_from_layout_tests('external', 'wpt')
+
+        self._clear_out_dest_path(dest_path)
+
+        _log.info('Copying the tests from the temp repo to the destination.')
+        test_copier = TestCopier(self.host, local_wpt.path)
+        test_copier.do_import()
+
+        self.run(['git', 'add', '--all', 'external/wpt'])
+
+        self._delete_orphaned_baselines(dest_path)
+
+        # TODO(qyearsley): Consider updating manifest after adding baselines.
+        self._generate_manifest(dest_path)
+
+        # TODO(qyearsley): Consider running the imported tests with
+        # `run-webkit-tests --reset-results external/wpt` to get some baselines
+        # before the try jobs are started.
+
+        _log.info('Updating TestExpectations for any removed or renamed tests.')
+        self.update_all_test_expectations_files(self._list_deleted_tests(), self._list_renamed_tests())
+
+        has_changes = self._has_changes()
+        if not has_changes:
+            _log.info('Done: no changes to import.')
+            return 0
+
+        commit_message = self._commit_message(chromium_commit, import_commit)
+        self._commit_changes(commit_message)
+        _log.info('Changes imported and committed.')
+
+        if not options.auto_update:
+            return 0
+
+        self._upload_cl()
+        _log.info('Issue: %s', self.git_cl.run(['issue']).strip())
+
+        if not self.update_expectations_for_cl():
+            return 1
+
+        if not self.run_commit_queue_for_cl():
+            return 1
+
+        return 0
+
+    def update_expectations_for_cl(self):
+        """Performs the expectation-updating part of an auto-import job.
+
+        This includes triggering try jobs and waiting; then, if applicable,
+        writing new baselines and TestExpectation lines, committing, and
+        uploading a new patchset.
+
+        This assumes that there is CL associated with the current branch.
+
+        Returns True if everything is OK to continue, or False on failure.
         """
-        paths_to_skip = self.find_paths_to_skip()
+        _log.info('Triggering try jobs for updating expectations.')
+        self.git_cl.trigger_try_jobs()
+        try_results = self.git_cl.wait_for_try_jobs(
+            poll_delay_seconds=POLL_DELAY_SECONDS,
+            timeout_seconds=TIMEOUT_SECONDS)
 
-        for root, dirs, files in self.filesystem.walk(self.source_repo_path):
-            cur_dir = root.replace(self.dir_above_repo + '/', '') + '/'
-            _log.info('  scanning ' + cur_dir + '...')
-            total_tests = 0
-            reftests = 0
-            jstests = 0
+        if not try_results:
+            _log.error('No initial try job results, aborting.')
+            self.git_cl.run(['set-close'])
+            return False
 
-            # Files in 'tools' are not for browser testing, so we skip them.
-            # See: http://testthewebforward.org/docs/test-format-guidelines.html#tools
-            DIRS_TO_SKIP = ('.git', 'test-plan', 'tools')
+        if try_results and self.git_cl.some_failed(try_results):
+            self.fetch_new_expectations_and_baselines()
+            if self.host.git().has_working_directory_changes():
+                message = 'Update test expectations and baselines.'
+                self.check_run(['git', 'commit', '-a', '-m', message])
+                self._upload_patchset(message)
+        return True
 
-            # We copy all files in 'support', including HTML without metadata.
-            # See: http://testthewebforward.org/docs/test-format-guidelines.html#support-files
-            DIRS_TO_INCLUDE = ('resources', 'support')
+    def run_commit_queue_for_cl(self):
+        """Triggers CQ and either commits or aborts; returns True on success."""
+        _log.info('Triggering CQ try jobs.')
+        self.git_cl.run(['try'])
+        try_results = self.git_cl.wait_for_try_jobs(
+            poll_delay_seconds=POLL_DELAY_SECONDS,
+            timeout_seconds=TIMEOUT_SECONDS)
+        try_results = self.git_cl.filter_latest(try_results)
 
-            if dirs:
-                for d in DIRS_TO_SKIP:
-                    if d in dirs:
-                        dirs.remove(d)
+        if not try_results:
+            self.git_cl.run(['set-close'])
+            _log.error('No CQ try job results, aborting.')
+            return False
 
-                for path in paths_to_skip:
-                    path_base = path.replace(self.options.destination + '/', '')
-                    path_base = path_base.replace(cur_dir, '')
-                    path_full = self.filesystem.join(root, path_base)
-                    if path_base in dirs:
-                        dirs.remove(path_base)
-                        if not self.options.dry_run and self.import_in_place:
-                            _log.info("  pruning %s", path_base)
-                            self.filesystem.rmtree(path_full)
-                        else:
-                            _log.info("  skipping %s", path_base)
+        if try_results and self.git_cl.all_success(try_results):
+            _log.info('CQ appears to have passed; trying to commit.')
+            self.git_cl.run(['upload', '-f', '--send-mail'])  # Turn off WIP mode.
+            self.git_cl.run(['set-commit'])
+            _log.info('Update completed.')
+            return True
 
-            copy_list = []
+        self.git_cl.run(['set-close'])
+        _log.error('CQ appears to have failed; aborting.')
+        return False
 
-            for filename in files:
-                path_full = self.filesystem.join(root, filename)
-                path_base = path_full.replace(self.source_repo_path + '/', '')
-                path_base = self.destination_directory.replace(self.layout_tests_dir + '/', '') + '/' + path_base
-                if path_base in paths_to_skip:
-                    if not self.options.dry_run and self.import_in_place:
-                        _log.info("  pruning %s", path_base)
-                        self.filesystem.remove(path_full)
-                        continue
-                    else:
-                        continue
-                # FIXME: This block should really be a separate function, but the early-continues make that difficult.
+    def parse_args(self, argv):
+        parser = argparse.ArgumentParser()
+        parser.description = __doc__
+        parser.add_argument(
+            '-v', '--verbose', action='store_true',
+            help='log extra details that may be helpful when debugging')
+        parser.add_argument(
+            '--ignore-exportable-commits', action='store_true',
+            help='do not check for exportable commits that would be clobbered')
+        parser.add_argument('-r', '--revision', help='target wpt revision')
+        parser.add_argument(
+            '--auto-update', action='store_true',
+            help='upload a CL, update expectations, and trigger CQ')
+        parser.add_argument(
+            '--auth-refresh-token-json',
+            help='authentication refresh token JSON file used for try jobs, '
+                 'generally not necessary on developer machines')
+        parser.add_argument(
+            '--credentials-json',
+            help='A JSON file with GitHub credentials, '
+                 'generally not necessary on developer machines')
 
-                if filename.startswith('.') or filename.endswith('.pl'):
-                    # The w3cs repos may contain perl scripts, which we don't care about.
-                    continue
-                if filename == 'OWNERS' or filename == 'reftest.list':
-                    # These files fail our presubmits.
-                    # See http://crbug.com/584660 and http://crbug.com/582838.
-                    continue
+        return parser.parse_args(argv)
 
-                fullpath = self.filesystem.join(root, filename)
+    def checkout_is_okay(self):
+        git_diff_retcode, _ = self.run(
+            ['git', 'diff', '--quiet', 'HEAD'], exit_on_failure=False)
+        if git_diff_retcode:
+            _log.warning('Checkout is dirty; aborting.')
+            return False
+        _, local_commits = self.run(
+            ['git', 'log', '--oneline', 'origin/master..HEAD'])
+        if local_commits:
+            _log.warning('Checkout has local commits before import.')
+        return True
 
-                mimetype = mimetypes.guess_type(fullpath)
-                if ('html' not in str(mimetype[0]) and
-                        'application/xhtml+xml' not in str(mimetype[0]) and
-                        'application/xml' not in str(mimetype[0])):
-                    copy_list.append({'src': fullpath, 'dest': filename})
-                    continue
+    def exportable_but_not_exported_commits(self, local_wpt):
+        """Returns a list of commits that would be clobbered by importer."""
+        return exportable_commits_over_last_n_commits(self.host, local_wpt, self.wpt_github)
 
-                if self.filesystem.basename(root) in DIRS_TO_INCLUDE:
-                    copy_list.append({'src': fullpath, 'dest': filename})
-                    continue
-
-                test_parser = TestParser(fullpath, self.host)
-                test_info = test_parser.analyze_test()
-                if test_info is None:
-                    copy_list.append({'src': fullpath, 'dest': filename})
-                    continue
-
-                if self.path_too_long(path_full):
-                    _log.warning('%s skipped due to long path. '
-                                 'Max length from repo base %d chars; see http://crbug.com/609871.',
-                                 path_full, MAX_PATH_LENGTH)
-                    continue
-
-                if 'reference' in test_info.keys():
-                    test_basename = self.filesystem.basename(test_info['test'])
-                    # Add the ref file, following WebKit style.
-                    # FIXME: Ideally we'd support reading the metadata
-                    # directly rather than relying on a naming convention.
-                    # Using a naming convention creates duplicate copies of the
-                    # reference files (http://crrev.com/268729).
-                    ref_file = self.filesystem.splitext(test_basename)[0] + '-expected'
-                    # Make sure to use the extension from the *reference*, not
-                    # from the test, because at least flexbox tests use XHTML
-                    # references but HTML tests.
-                    ref_file += self.filesystem.splitext(test_info['reference'])[1]
-
-                    if not self.filesystem.exists(test_info['reference']):
-                        _log.warning('%s skipped because ref file %s was not found.',
-                                     path_full, ref_file)
-                        continue
-
-                    if self.path_too_long(path_full.replace(filename, ref_file)):
-                        _log.warning('%s skipped because path of ref file %s would be too long. '
-                                     'Max length from repo base %d chars; see http://crbug.com/609871.',
-                                     path_full, ref_file, MAX_PATH_LENGTH)
-                        continue
-
-                    reftests += 1
-                    total_tests += 1
-                    copy_list.append({'src': test_info['reference'], 'dest': ref_file,
-                                      'reference_support_info': test_info['reference_support_info']})
-                    copy_list.append({'src': test_info['test'], 'dest': filename})
-
-                elif 'jstest' in test_info.keys():
-                    jstests += 1
-                    total_tests += 1
-                    copy_list.append({'src': fullpath, 'dest': filename, 'is_jstest': True})
-
-                elif self.options.all:
-                    total_tests += 1
-                    copy_list.append({'src': fullpath, 'dest': filename})
-
-            if copy_list:
-                # Only add this directory to the list if there's something to import
-                self.import_list.append({'dirname': root, 'copy_list': copy_list,
-                                         'reftests': reftests, 'jstests': jstests, 'total_tests': total_tests})
-
-    def find_paths_to_skip(self):
-        if self.options.ignore_expectations:
-            return set()
-
-        paths_to_skip = set()
-        port = self.host.port_factory.get()
-        w3c_import_expectations_path = self.webkit_finder.path_from_webkit_base('LayoutTests', 'W3CImportExpectations')
-        w3c_import_expectations = self.filesystem.read_text_file(w3c_import_expectations_path)
-        parser = TestExpectationParser(port, all_tests=(), is_lint_mode=False)
-        expectation_lines = parser.parse(w3c_import_expectations_path, w3c_import_expectations)
-        for line in expectation_lines:
-            if 'SKIP' in line.expectations:
-                if line.specifiers:
-                    _log.warning("W3CImportExpectations:%s should not have any specifiers", line.line_numbers)
-                    continue
-                paths_to_skip.add(line.name)
-        return paths_to_skip
-
-    def import_tests(self):
-        """Reads |self.import_list|, and converts and copies files to their destination."""
-        total_imported_tests = 0
-        total_imported_reftests = 0
-        total_imported_jstests = 0
-        total_prefixed_properties = {}
-
-        for dir_to_copy in self.import_list:
-            total_imported_tests += dir_to_copy['total_tests']
-            total_imported_reftests += dir_to_copy['reftests']
-            total_imported_jstests += dir_to_copy['jstests']
-
-            prefixed_properties = []
-
-            if not dir_to_copy['copy_list']:
-                continue
-
-            orig_path = dir_to_copy['dirname']
-
-            subpath = self.filesystem.relpath(orig_path, self.source_repo_path)
-            new_path = self.filesystem.join(self.destination_directory, subpath)
-
-            if not self.filesystem.exists(new_path):
-                self.filesystem.maybe_make_directory(new_path)
-
-            copied_files = []
-
-            for file_to_copy in dir_to_copy['copy_list']:
-                # FIXME: Split this block into a separate function.
-                orig_filepath = self.filesystem.normpath(file_to_copy['src'])
-
-                if self.filesystem.isdir(orig_filepath):
-                    # FIXME: Figure out what is triggering this and what to do about it.
-                    _log.error('%s refers to a directory', orig_filepath)
-                    continue
-
-                if not self.filesystem.exists(orig_filepath):
-                    _log.error('%s not found. Possible error in the test.', orig_filepath)
-                    continue
-
-                new_filepath = self.filesystem.join(new_path, file_to_copy['dest'])
-                if 'reference_support_info' in file_to_copy.keys() and file_to_copy['reference_support_info'] != {}:
-                    reference_support_info = file_to_copy['reference_support_info']
-                else:
-                    reference_support_info = None
-
-                if not self.filesystem.exists(self.filesystem.dirname(new_filepath)):
-                    if not self.import_in_place and not self.options.dry_run:
-                        self.filesystem.maybe_make_directory(self.filesystem.dirname(new_filepath))
-
-                relpath = self.filesystem.relpath(new_filepath, self.layout_tests_dir)
-                if not self.options.overwrite and self.filesystem.exists(new_filepath):
-                    _log.info('  skipping %s', relpath)
-                else:
-                    # FIXME: Maybe doing a file diff is in order here for existing files?
-                    # In other words, there's no sense in overwriting identical files, but
-                    # there's no harm in copying the identical thing.
-                    _log.info('  %s', relpath)
-
-                # Only HTML, XML, or CSS should be converted.
-                # FIXME: Eventually, so should JS when support is added for this type of conversion.
-                mimetype = mimetypes.guess_type(orig_filepath)
-                if 'is_jstest' not in file_to_copy and (
-                        'html' in str(mimetype[0]) or 'xml' in str(mimetype[0]) or 'css' in str(mimetype[0])):
-                    converted_file = convert_for_webkit(
-                        new_path, filename=orig_filepath,
-                        reference_support_info=reference_support_info,
-                        host=self.host)
-
-                    if not converted_file:
-                        if not self.import_in_place and not self.options.dry_run:
-                            self.filesystem.copyfile(orig_filepath, new_filepath)  # The file was unmodified.
-                    else:
-                        for prefixed_property in converted_file[0]:
-                            total_prefixed_properties.setdefault(prefixed_property, 0)
-                            total_prefixed_properties[prefixed_property] += 1
-
-                        prefixed_properties.extend(set(converted_file[0]) - set(prefixed_properties))
-                        if not self.options.dry_run:
-                            self.filesystem.write_text_file(new_filepath, converted_file[1])
-                else:
-                    if not self.import_in_place and not self.options.dry_run:
-                        self.filesystem.copyfile(orig_filepath, new_filepath)
-                        if self.filesystem.read_binary_file(orig_filepath)[:2] == '#!':
-                            self.filesystem.make_executable(new_filepath)
-
-                copied_files.append(new_filepath.replace(self._webkit_root, ''))
-
-        _log.info('')
-        _log.info('Import complete')
-        _log.info('')
-        _log.info('IMPORTED %d TOTAL TESTS', total_imported_tests)
-        _log.info('Imported %d reftests', total_imported_reftests)
-        _log.info('Imported %d JS tests', total_imported_jstests)
-        _log.info('Imported %d pixel/manual tests', total_imported_tests - total_imported_jstests - total_imported_reftests)
-        _log.info('')
-
-        if total_prefixed_properties:
-            _log.info('Properties needing prefixes (by count):')
-            for prefixed_property in sorted(total_prefixed_properties, key=lambda p: total_prefixed_properties[p]):
-                _log.info('  %s: %s', prefixed_property, total_prefixed_properties[prefixed_property])
-
-    def path_too_long(self, source_path):
-        """Checks whether a source path is too long to import.
+    def _generate_manifest(self, dest_path):
+        """Generates MANIFEST.json for imported tests.
 
         Args:
-            Absolute path of file to be imported.
+            dest_path: Path to the destination WPT directory.
 
-        Returns:
-            True if the path is too long to import, False if it's OK.
+        Runs the (newly-updated) manifest command if it's found, and then
+        stages the generated MANIFEST.json in the git index, ready to commit.
         """
-        path_from_repo_base = os.path.relpath(source_path, self.source_repo_path)
-        return len(path_from_repo_base) > MAX_PATH_LENGTH
+        _log.info('Generating MANIFEST.json')
+        WPTManifest.generate_manifest(self.host, dest_path)
+        manifest_path = self.fs.join(dest_path, 'MANIFEST.json')
+        assert self.fs.exists(manifest_path)
+        manifest_base_path = self.fs.normpath(
+            self.fs.join(dest_path, '..', 'WPT_BASE_MANIFEST.json'))
+        self.copyfile(manifest_path, manifest_base_path)
+        self.run(['git', 'add', manifest_base_path])
+
+    def _clear_out_dest_path(self, dest_path):
+        _log.info('Cleaning out tests from %s.', dest_path)
+        should_remove = lambda fs, dirname, basename: (
+            not self.is_baseline(basename) and
+            # See http://crbug.com/702283 for context.
+            basename != 'OWNERS')
+        files_to_delete = self.fs.files_under(dest_path, file_filter=should_remove)
+        for subpath in files_to_delete:
+            self.remove(self.finder.path_from_layout_tests('external', subpath))
+
+    def _commit_changes(self, commit_message):
+        _log.info('Committing changes.')
+        self.run(['git', 'commit', '--all', '-F', '-'], stdin=commit_message)
+
+    def _has_changes(self):
+        return_code, _ = self.run(['git', 'diff', '--quiet', 'HEAD'], exit_on_failure=False)
+        return return_code == 1
+
+    def _commit_message(self, chromium_commit, import_commit):
+        return ('Import %s\n\n'
+                'Using wpt-import in Chromium %s.\n\n'
+                'No-Export: true' %
+                (import_commit, chromium_commit))
+
+    def _delete_orphaned_baselines(self, dest_path):
+        _log.info('Deleting any orphaned baselines.')
+        is_baseline_filter = lambda fs, dirname, basename: self.is_baseline(basename)
+        previous_baselines = self.fs.files_under(dest_path, file_filter=is_baseline_filter)
+        for sub_path in previous_baselines:
+            full_baseline_path = self.fs.join(dest_path, sub_path)
+            if not self._has_corresponding_test(full_baseline_path):
+                self.fs.remove(full_baseline_path)
+
+    def _has_corresponding_test(self, full_baseline_path):
+        base = full_baseline_path.replace('-expected.txt', '')
+        return any(self.fs.exists(base + ext) for ext in Port.supported_file_extensions)
+
+    @staticmethod
+    def is_baseline(basename):
+        # TODO(qyearsley): Find a better, centralized place for this.
+        # Also, the name for this method should be is_text_baseline.
+        return basename.endswith('-expected.txt')
+
+    def run(self, cmd, exit_on_failure=True, cwd=None, stdin=''):
+        _log.debug('Running command: %s', ' '.join(cmd))
+
+        cwd = cwd or self.finder.path_from_layout_tests()
+        proc = self.executive.popen(cmd, stdout=self.executive.PIPE, stderr=self.executive.PIPE, stdin=self.executive.PIPE, cwd=cwd)
+        out, err = proc.communicate(stdin)
+        if proc.returncode or self.verbose:
+            _log.info('# ret> %d', proc.returncode)
+            if out:
+                for line in out.splitlines():
+                    _log.info('# out> %s', line)
+            if err:
+                for line in err.splitlines():
+                    _log.info('# err> %s', line)
+        if exit_on_failure and proc.returncode:
+            self.host.exit(proc.returncode)
+        return proc.returncode, out
+
+    def check_run(self, command):
+        return_code, out = self.run(command)
+        if return_code:
+            raise Exception('%s failed with exit code %d.' % ' '.join(command), return_code)
+        return out
+
+    def copyfile(self, source, destination):
+        _log.debug('cp %s %s', source, destination)
+        self.fs.copyfile(source, destination)
+
+    def remove(self, dest):
+        _log.debug('rm %s', dest)
+        self.fs.remove(dest)
+
+    def _upload_patchset(self, message):
+        self.git_cl.run(['upload', '-f', '-t', message, '--gerrit'])
+
+    def _upload_cl(self):
+        _log.info('Uploading change list.')
+        directory_owners = self.get_directory_owners()
+        description = self._cl_description(directory_owners)
+        self.git_cl.run([
+            'upload',
+            '-f',
+            '--gerrit',
+            '-m',
+            description,
+            '--tbrs',
+            'qyearsley@chromium.org',
+        ] + self._cc_part(directory_owners))
+
+    @staticmethod
+    def _cc_part(directory_owners):
+        cc_part = []
+        for owner_tuple in sorted(directory_owners):
+            cc_part.extend('--cc=' + owner for owner in owner_tuple)
+        return cc_part
+
+    def get_directory_owners(self):
+        """Returns a mapping of email addresses to owners of changed tests."""
+        _log.info('Gathering directory owners emails to CC.')
+        changed_files = self.host.git().changed_files()
+        extractor = DirectoryOwnersExtractor(self.fs)
+        extractor.read_owner_map()
+        return extractor.list_owners(changed_files)
+
+    def _cl_description(self, directory_owners):
+        """Returns a CL description string.
+
+        Args:
+            directory_owners: A dict of tuples of owner names to lists of directories.
+        """
+        description = self.check_run(['git', 'log', '-1', '--format=%B'])
+        build_link = current_build_link(self.host)
+        if build_link:
+            description += 'Build: %s\n\n' % build_link
+
+        description += (
+            'Note to sheriffs: This CL imports external tests and adds\n'
+            'expectations for those tests; if this CL is large and causes\n'
+            'a few new failures, please fix the failures by adding new\n'
+            'lines to TestExpectations rather than reverting. See:\n'
+            'https://chromium.googlesource.com'
+            '/chromium/src/+/master/docs/testing/web_platform_tests.md\n\n')
+
+        if directory_owners:
+            description += self._format_directory_owners(directory_owners) + '\n\n'
+
+        # Move any No-Export tag to the end of the description.
+        description = description.replace('No-Export: true', '')
+        description = description.replace('\n\n\n\n', '\n\n')
+        description += 'No-Export: true'
+        return description
+
+    @staticmethod
+    def _format_directory_owners(directory_owners):
+        message_lines = ['Directory owners for changes in this CL:']
+        for owner_tuple, directories in sorted(directory_owners.items()):
+            message_lines.append(', '.join(owner_tuple) + ':')
+            message_lines.extend('  ' + d for d in directories)
+        return '\n'.join(message_lines)
+
+    def fetch_new_expectations_and_baselines(self):
+        """Modifies expectation lines and baselines based on try job results.
+
+        Assuming that there are some try job results available, this
+        adds new expectation lines to TestExpectations and downloads new
+        baselines based on the try job results.
+
+        This is the same as invoking the `wpt-update-expectations` script.
+        """
+        _log.info('Adding test expectations lines to LayoutTests/TestExpectations.')
+        expectation_updater = WPTExpectationsUpdater(self.host)
+        expectation_updater.run(args=[])
+
+    def update_all_test_expectations_files(self, deleted_tests, renamed_tests):
+        """Updates all test expectations files for tests that have been deleted or renamed.
+
+        This is only for deleted or renamed tests in the initial import,
+        not for tests that have failures in try jobs.
+        """
+        port = self.host.port_factory.get()
+        for path, file_contents in port.all_expectations_dict().iteritems():
+            parser = TestExpectationParser(port, all_tests=None, is_lint_mode=False)
+            expectation_lines = parser.parse(path, file_contents)
+            self._update_single_test_expectations_file(path, expectation_lines, deleted_tests, renamed_tests)
+
+    def _update_single_test_expectations_file(self, path, expectation_lines, deleted_tests, renamed_tests):
+        """Updates a single test expectations file."""
+        # FIXME: This won't work for removed or renamed directories with test
+        # expectations that are directories rather than individual tests.
+        new_lines = []
+        changed_lines = []
+        for expectation_line in expectation_lines:
+            if expectation_line.name in deleted_tests:
+                continue
+            if expectation_line.name in renamed_tests:
+                expectation_line.name = renamed_tests[expectation_line.name]
+                # Upon parsing the file, a "path does not exist" warning is expected
+                # to be there for tests that have been renamed, and if there are warnings,
+                # then the original string is used. If the warnings are reset, then the
+                # expectation line is re-serialized when output.
+                expectation_line.warnings = []
+                changed_lines.append(expectation_line)
+            new_lines.append(expectation_line)
+        new_file_contents = TestExpectations.list_to_string(new_lines, reconstitute_only_these=changed_lines)
+        self.host.filesystem.write_text_file(path, new_file_contents)
+
+    def _list_deleted_tests(self):
+        """List of layout tests that have been deleted."""
+        out = self.check_run(['git', 'diff', 'origin/master', '-M100%', '--diff-filter=D', '--name-only'])
+        deleted_tests = []
+        for line in out.splitlines():
+            test = self.finder.layout_test_name(line)
+            if test:
+                deleted_tests.append(test)
+        return deleted_tests
+
+    def _list_renamed_tests(self):
+        """Lists tests that have been renamed.
+
+        Returns a dict mapping source name to destination name.
+        """
+        out = self.check_run(['git', 'diff', 'origin/master', '-M100%', '--diff-filter=R', '--name-status'])
+        renamed_tests = {}
+        for line in out.splitlines():
+            _, source_path, dest_path = line.split()
+            source_test = self.finder.layout_test_name(source_path)
+            dest_test = self.finder.layout_test_name(dest_path)
+            if source_test and dest_test:
+                renamed_tests[source_test] = dest_test
+        return renamed_tests

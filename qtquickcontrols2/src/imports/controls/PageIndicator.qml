@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.PageIndicator {
     id: control
@@ -55,7 +55,7 @@ T.PageIndicator {
         implicitHeight: 8
 
         radius: width / 2
-        color: Default.pageIndicatorColor
+        color: control.palette.dark
 
         opacity: index === currentIndex ? 0.95 : pressed ? 0.7 : 0.45
         Behavior on opacity { OpacityAnimator { duration: 100 } }

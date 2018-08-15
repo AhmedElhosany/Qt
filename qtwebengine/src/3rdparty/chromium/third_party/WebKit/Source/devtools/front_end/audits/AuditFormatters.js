@@ -127,8 +127,7 @@ Audits.AuditFormatters.Registry = {
    * @return {!Element}
    */
   resourceLink: function(url, line) {
-    // FIXME: use Components.Linkifier
-    return Components.linkifyResourceAsNode(url, line, undefined, 'resource-url webkit-html-resource-link');
+    return Components.Linkifier.linkifyURL(url, {className: 'resource-url', lineNumber: line});
   }
 };
 

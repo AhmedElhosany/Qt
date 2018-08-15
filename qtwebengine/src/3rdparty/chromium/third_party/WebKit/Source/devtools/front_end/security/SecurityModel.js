@@ -9,7 +9,7 @@ Security.SecurityModel = class extends SDK.SDKModel {
    * @param {!SDK.Target} target
    */
   constructor(target) {
-    super(Security.SecurityModel, target);
+    super(target);
     this._dispatcher = new Security.SecurityDispatcher(this);
     this._securityAgent = target.securityAgent();
     target.registerSecurityDispatcher(this._dispatcher);
@@ -17,14 +17,17 @@ Security.SecurityModel = class extends SDK.SDKModel {
   }
 
   /**
-   * @param {!SDK.Target} target
-   * @return {?Security.SecurityModel}
+   * @return {!SDK.ResourceTreeModel}
    */
-  static fromTarget(target) {
-    var model = /** @type {?Security.SecurityModel} */ (target.model(Security.SecurityModel));
-    if (!model)
-      model = new Security.SecurityModel(target);
-    return model;
+  resourceTreeModel() {
+    return /** @type {!SDK.ResourceTreeModel} */ (this.target().model(SDK.ResourceTreeModel));
+  }
+
+  /**
+   * @return {!SDK.NetworkManager}
+   */
+  networkManager() {
+    return /** @type {!SDK.NetworkManager} */ (this.target().model(SDK.NetworkManager));
   }
 
   /**
@@ -61,6 +64,8 @@ Security.SecurityModel = class extends SDK.SDKModel {
   }
 };
 
+SDK.SDKModel.register(Security.SecurityModel, SDK.Target.Capability.Security, false);
+
 /** @enum {symbol} */
 Security.SecurityModel.Events = {
   SecurityStateChanged: Symbol('SecurityStateChanged')
@@ -73,15 +78,17 @@ Security.SecurityModel.Events = {
 Security.PageSecurityState = class {
   /**
    * @param {!Protocol.Security.SecurityState} securityState
+   * @param {boolean} schemeIsCryptographic
    * @param {!Array<!Protocol.Security.SecurityStateExplanation>} explanations
    * @param {?Protocol.Security.InsecureContentStatus} insecureContentStatus
-   * @param {boolean} schemeIsCryptographic
+   * @param {?string} summary
    */
-  constructor(securityState, explanations, insecureContentStatus, schemeIsCryptographic) {
+  constructor(securityState, schemeIsCryptographic, explanations, insecureContentStatus, summary) {
     this.securityState = securityState;
+    this.schemeIsCryptographic = schemeIsCryptographic;
     this.explanations = explanations;
     this.insecureContentStatus = insecureContentStatus;
-    this.schemeIsCryptographic = schemeIsCryptographic;
+    this.summary = summary;
   }
 };
 
@@ -97,13 +104,24 @@ Security.SecurityDispatcher = class {
   /**
    * @override
    * @param {!Protocol.Security.SecurityState} securityState
-   * @param {!Array<!Protocol.Security.SecurityStateExplanation>=} explanations
-   * @param {!Protocol.Security.InsecureContentStatus=} insecureContentStatus
-   * @param {boolean=} schemeIsCryptographic
+   * @param {boolean} schemeIsCryptographic
+   * @param {!Array<!Protocol.Security.SecurityStateExplanation>} explanations
+   * @param {!Protocol.Security.InsecureContentStatus} insecureContentStatus
+   * @param {?string=} summary
    */
-  securityStateChanged(securityState, explanations, insecureContentStatus, schemeIsCryptographic) {
+  securityStateChanged(securityState, schemeIsCryptographic, explanations, insecureContentStatus, summary) {
     var pageSecurityState = new Security.PageSecurityState(
-        securityState, explanations || [], insecureContentStatus || null, schemeIsCryptographic || false);
+        securityState, schemeIsCryptographic, explanations, insecureContentStatus, summary || null);
     this._model.dispatchEventToListeners(Security.SecurityModel.Events.SecurityStateChanged, pageSecurityState);
+  }
+
+
+  /**
+   * @override
+   * @param {number} eventId
+   * @param {string} errorType
+   * @param {string} requestURL
+   */
+  certificateError(eventId, errorType, requestURL) {
   }
 };

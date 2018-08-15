@@ -19,13 +19,16 @@ namespace {
 
 #if defined(OS_CHROMEOS)
 const int kSystemKeyModifierMask = EF_ALT_DOWN | EF_COMMAND_DOWN;
+#elif defined(OS_MACOSX)
+// Alt modifier is used to input extended characters on Mac.
+const int kSystemKeyModifierMask = EF_COMMAND_DOWN;
 #else
 const int kSystemKeyModifierMask = EF_ALT_DOWN;
-#endif  // defined(OS_CHROMEOS)
+#endif  // !defined(OS_CHROMEOS) && !defined(OS_MACOSX)
 
 }  // namespace
 
-base::StaticAtomicSequenceNumber g_next_event_id;
+base::AtomicSequenceNumber g_next_event_id;
 
 uint32_t GetNextTouchEventId() {
   // Set the first touch event ID to 1 because we set id to 0 for other types
@@ -65,4 +68,3 @@ base::TimeTicks EventTimeStampFromSeconds(double time_stamp_seconds) {
 }
 
 }  // namespace ui
-

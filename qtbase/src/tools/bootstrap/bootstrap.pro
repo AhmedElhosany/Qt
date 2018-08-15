@@ -29,6 +29,7 @@ SOURCES += \
            ../../corelib/global/qmalloc.cpp \
            ../../corelib/global/qnumeric.cpp \
            ../../corelib/global/qoperatingsystemversion.cpp \
+           ../../corelib/global/qrandom.cpp \
            ../../corelib/io/qabstractfileengine.cpp \
            ../../corelib/io/qbuffer.cpp \
            ../../corelib/io/qdatastream.cpp \
@@ -94,7 +95,8 @@ SOURCES += \
            ../../xml/dom/qdom.cpp \
            ../../xml/sax/qxml.cpp
 
-unix:SOURCES += ../../corelib/io/qfilesystemengine_unix.cpp \
+unix:SOURCES += ../../corelib/kernel/qcore_unix.cpp \
+                ../../corelib/io/qfilesystemengine_unix.cpp \
                 ../../corelib/io/qfilesystemiterator_unix.cpp \
                 ../../corelib/io/qfsfileengine_unix.cpp
 
@@ -138,7 +140,7 @@ macx {
 }
 
 win32 {
-    LIBS += -luser32 -lole32 -ladvapi32 -lshell32
+    LIBS += -luser32 -lole32 -ladvapi32 -lshell32 -lnetapi32
     mingw: LIBS += -luuid
 }
 

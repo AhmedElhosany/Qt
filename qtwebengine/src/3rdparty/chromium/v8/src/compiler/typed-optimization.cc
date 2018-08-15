@@ -76,23 +76,36 @@ Reduction TypedOptimization::Reduce(Node* node) {
   switch (node->opcode()) {
     case IrOpcode::kCheckHeapObject:
       return ReduceCheckHeapObject(node);
+    case IrOpcode::kCheckNotTaggedHole:
+      return ReduceCheckNotTaggedHole(node);
     case IrOpcode::kCheckMaps:
       return ReduceCheckMaps(node);
+    case IrOpcode::kCheckNumber:
+      return ReduceCheckNumber(node);
     case IrOpcode::kCheckString:
       return ReduceCheckString(node);
+    case IrOpcode::kCheckSeqString:
+      return ReduceCheckSeqString(node);
+    case IrOpcode::kCheckNonEmptyString:
+      return ReduceCheckNonEmptyString(node);
     case IrOpcode::kLoadField:
       return ReduceLoadField(node);
     case IrOpcode::kNumberCeil:
-    case IrOpcode::kNumberFloor:
     case IrOpcode::kNumberRound:
     case IrOpcode::kNumberTrunc:
       return ReduceNumberRoundop(node);
+    case IrOpcode::kNumberFloor:
+      return ReduceNumberFloor(node);
     case IrOpcode::kNumberToUint8Clamped:
       return ReduceNumberToUint8Clamped(node);
     case IrOpcode::kPhi:
       return ReducePhi(node);
+    case IrOpcode::kReferenceEqual:
+      return ReduceReferenceEqual(node);
     case IrOpcode::kSelect:
       return ReduceSelect(node);
+    case IrOpcode::kSpeculativeToNumber:
+      return ReduceSpeculativeToNumber(node);
     default:
       break;
   }
@@ -115,6 +128,16 @@ Reduction TypedOptimization::ReduceCheckHeapObject(Node* node) {
   Node* const input = NodeProperties::GetValueInput(node, 0);
   Type* const input_type = NodeProperties::GetType(input);
   if (!input_type->Maybe(Type::SignedSmall())) {
+    ReplaceWithValue(node, input);
+    return Replace(input);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceCheckNotTaggedHole(Node* node) {
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type* const input_type = NodeProperties::GetType(input);
+  if (!input_type->Maybe(Type::Hole())) {
     ReplaceWithValue(node, input);
     return Replace(input);
   }
@@ -147,10 +170,40 @@ Reduction TypedOptimization::ReduceCheckMaps(Node* node) {
   return NoChange();
 }
 
+Reduction TypedOptimization::ReduceCheckNumber(Node* node) {
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type* const input_type = NodeProperties::GetType(input);
+  if (input_type->Is(Type::Number())) {
+    ReplaceWithValue(node, input);
+    return Replace(input);
+  }
+  return NoChange();
+}
+
 Reduction TypedOptimization::ReduceCheckString(Node* node) {
   Node* const input = NodeProperties::GetValueInput(node, 0);
   Type* const input_type = NodeProperties::GetType(input);
   if (input_type->Is(Type::String())) {
+    ReplaceWithValue(node, input);
+    return Replace(input);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceCheckSeqString(Node* node) {
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type* const input_type = NodeProperties::GetType(input);
+  if (input_type->Is(Type::SeqString())) {
+    ReplaceWithValue(node, input);
+    return Replace(input);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceCheckNonEmptyString(Node* node) {
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type* const input_type = NodeProperties::GetType(input);
+  if (input_type->Is(Type::NonEmptyString())) {
     ReplaceWithValue(node, input);
     return Replace(input);
   }
@@ -180,6 +233,41 @@ Reduction TypedOptimization::ReduceLoadField(Node* node) {
       Node* const value = jsgraph()->HeapConstant(object_map);
       ReplaceWithValue(node, value);
       return Replace(value);
+    }
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceNumberFloor(Node* node) {
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type* const input_type = NodeProperties::GetType(input);
+  if (input_type->Is(type_cache_.kIntegerOrMinusZeroOrNaN)) {
+    return Replace(input);
+  }
+  if (input_type->Is(Type::PlainNumber()) &&
+      (input->opcode() == IrOpcode::kNumberDivide ||
+       input->opcode() == IrOpcode::kSpeculativeNumberDivide)) {
+    Node* const lhs = NodeProperties::GetValueInput(input, 0);
+    Type* const lhs_type = NodeProperties::GetType(lhs);
+    Node* const rhs = NodeProperties::GetValueInput(input, 1);
+    Type* const rhs_type = NodeProperties::GetType(rhs);
+    if (lhs_type->Is(Type::Unsigned32()) && rhs_type->Is(Type::Unsigned32())) {
+      // We can replace
+      //
+      //   NumberFloor(NumberDivide(lhs: unsigned32,
+      //                            rhs: unsigned32)): plain-number
+      //
+      // with
+      //
+      //   NumberToUint32(NumberDivide(lhs, rhs))
+      //
+      // and just smash the type of the {lhs} on the {node},
+      // as the truncated result must be in the same range as
+      // {lhs} since {rhs} cannot be less than 1 (due to the
+      // plain-number type constraint on the {node}).
+      NodeProperties::ChangeOp(node, simplified()->NumberToUint32());
+      NodeProperties::SetType(node, lhs_type);
+      return Changed(node);
     }
   }
   return NoChange();
@@ -223,6 +311,18 @@ Reduction TypedOptimization::ReducePhi(Node* node) {
   return NoChange();
 }
 
+Reduction TypedOptimization::ReduceReferenceEqual(Node* node) {
+  DCHECK_EQ(IrOpcode::kReferenceEqual, node->opcode());
+  Node* const lhs = NodeProperties::GetValueInput(node, 0);
+  Node* const rhs = NodeProperties::GetValueInput(node, 1);
+  Type* const lhs_type = NodeProperties::GetType(lhs);
+  Type* const rhs_type = NodeProperties::GetType(rhs);
+  if (!lhs_type->Maybe(rhs_type)) {
+    return Replace(jsgraph()->FalseConstant());
+  }
+  return NoChange();
+}
+
 Reduction TypedOptimization::ReduceSelect(Node* node) {
   DCHECK_EQ(IrOpcode::kSelect, node->opcode());
   Node* const condition = NodeProperties::GetValueInput(node, 0);
@@ -257,6 +357,18 @@ Reduction TypedOptimization::ReduceSelect(Node* node) {
     type = Type::Intersect(node_type, type, graph()->zone());
     NodeProperties::SetType(node, type);
     return Changed(node);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceSpeculativeToNumber(Node* node) {
+  DCHECK_EQ(IrOpcode::kSpeculativeToNumber, node->opcode());
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type* const input_type = NodeProperties::GetType(input);
+  if (input_type->Is(Type::Number())) {
+    // SpeculativeToNumber(x:number) => x
+    ReplaceWithValue(node, input);
+    return Replace(input);
   }
   return NoChange();
 }

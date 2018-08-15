@@ -2,10 +2,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//remoting/build/config/remoting_build.gni")
-import("//remoting/host/installer/win/generate_clsids.gni")
 import("//build/toolchain/win/midl.gni")
 import("//build/win/message_compiler.gni")
+import("//media/media_options.gni")
+import("//remoting/build/config/remoting_build.gni")
+import("//remoting/host/installer/win/generate_clsids.gni")
 
 group("all") {
   testonly = true
@@ -77,11 +78,13 @@ windows_manifest("dpi_aware_uiaccess_require_admin_exe_manifest") {
 
 source_set("win") {
   sources = [
+    "audio_volume_filter_win.cc",
+    "audio_volume_filter_win.h",
     "com_imported_mstscax.tlh",
     "com_security.cc",
     "com_security.h",
-    "elevation_helpers.cc",
-    "elevation_helpers.h",
+    "default_audio_device_change_detector.cc",
+    "default_audio_device_change_detector.h",
     "launch_process_with_token.cc",
     "launch_process_with_token.h",
     "omaha.cc",
@@ -110,15 +113,18 @@ source_set("win") {
     "//remoting/build/config:version",
   ]
 
+  if (is_clang) {
+    # TODO(thakis): Remove this once midl.exe no longer produces nonstandard
+    # C++ (see the enums in com_imported_mstscax.tlh).
+    cflags = [ "-Wno-microsoft-enum-forward-reference" ]
+  }
+
   defines = [ "WEBRTC_CHROMIUM_BUILD" ]
 
   deps = [
     "//base:i18n",
     "//components/policy/core/common",
-    "//content/public/common",
     "//crypto",
-    "//device/power_save_blocker",
-    "//google_apis",
     "//ipc",
     "//remoting/base",
     "//remoting/host/security_key",
@@ -126,12 +132,13 @@ source_set("win") {
     "//remoting/host/win:remoting_lib_idl",
     "//remoting/protocol",
     "//remoting/resources",
+    "//services/device/wake_lock/power_save_blocker",
     "//ui/base",
     "//ui/events:dom_keycode_converter",
     "//ui/events/platform",
   ]
 
-  if (enable_configuration_policy) {
+  if (!is_ios) {
     deps += [ "//components/policy:generated" ]
   }
 
@@ -153,6 +160,7 @@ source_set("unit_tests") {
   ]
 
   deps = [
+    "//ipc",
     "//remoting/host",
     "//remoting/host:test_support",
     "//remoting/host/it2me:common",
@@ -262,7 +270,7 @@ message_compiler("messages") {
 executable("remoting_console") {
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
-  defines = host_predefines + [ "BINARY=BINARY_HOST_ME2ME" ]
+  defines = host_predefines + [ "REMOTING_HOST_BINARY=BINARY_HOST_ME2ME" ]
 
   deps = [
     ":dpi_aware_exe_manifest",
@@ -275,10 +283,12 @@ executable("remoting_console") {
     "entry_point.cc",
   ]
 
-  ldflags = [
-    "/ENTRY:HostEntryPoint",
-    # "/NODEFAULTLIB",
-  ]
+  if (!is_asan) {
+    ldflags = [
+      "/ENTRY:HostEntryPoint",
+      # "/NODEFAULTLIB",
+    ]
+  }
 }
 
 executable("remoting_me2me_host") {
@@ -288,7 +298,7 @@ executable("remoting_me2me_host") {
     "//remoting/build/config:remoting_me2me_host",
   ]
 
-  defines = host_predefines + [ "BINARY=BINARY_HOST_ME2ME" ]
+  defines = host_predefines + [ "REMOTING_HOST_BINARY=BINARY_HOST_ME2ME" ]
 
   deps = [
     ":dpi_aware_exe_manifest",
@@ -303,7 +313,12 @@ executable("remoting_me2me_host") {
 
   output_name = "remoting_host"
 
-  ldflags = [ "/ENTRY:HostEntryPoint" ]
+  if (!is_asan) {
+    ldflags = [
+      "/ENTRY:HostEntryPoint",
+      # "/NODEFAULTLIB",
+    ]
+  }
 }
 
 shared_library("remoting_core") {
@@ -314,7 +329,7 @@ shared_library("remoting_core") {
               "_ATL_CSTRING_EXPLICIT_CONSTRUCTORS",
               "_ATL_NO_AUTOMATIC_NAMESPACE",
               "_ATL_NO_EXCEPTIONS",
-              "BINARY=BINARY_CORE",
+              "REMOTING_HOST_BINARY=BINARY_CORE",
               "DAEMON_CONTROLLER_CLSID=\"$daemon_controller_clsid\"",
               "RDP_DESKTOP_SESSION_CLSID=\"$rdp_desktop_session_clsid\"",
               "HOST_IMPLEMENTATION",
@@ -322,6 +337,10 @@ shared_library("remoting_core") {
               "STRICT",
               "VERSION=$chrome_version_full",
             ]
+
+  if (is_chrome_branded && is_official_build) {
+    defines += [ "REMOTING_ENABLE_BREAKPAD" ]
+  }
 
   if (remoting_multi_process != 0 && remoting_rdp_session != 0) {
     defines += [ "REMOTING_RDP_SESSION" ]
@@ -351,6 +370,7 @@ shared_library("remoting_core") {
     "chromoting_module.cc",
     "chromoting_module.h",
     "core.cc",
+    "core.h",
     "core_resource.h",
     "elevated_native_messaging_host.cc",
     "elevated_native_messaging_host.h",
@@ -382,7 +402,6 @@ shared_library("remoting_core") {
     "//net",
     "//remoting/base",
     "//remoting/base:breakpad",
-    "//remoting/codec",
     "//remoting/host:host",
     "//remoting/host:remoting_me2me_host_static",
     "//remoting/host/it2me:common",
@@ -421,7 +440,7 @@ executable("remoting_desktop") {
     "//build/config/win:windowed",
   ]
 
-  defines = host_predefines + [ "BINARY=BINARY_DESKTOP" ]
+  defines = host_predefines + [ "REMOTING_HOST_BINARY=BINARY_DESKTOP" ]
 
   deps = [
     ":remoting_core",
@@ -439,16 +458,19 @@ executable("remoting_desktop") {
     "entry_point.cc",
   ]
 
-  ldflags = [
-    "/ENTRY:HostEntryPoint",
-    # "/NODEFAULTLIB",
-  ]
+  if (!is_asan) {
+    ldflags = [
+      "/ENTRY:HostEntryPoint",
+      # "/NODEFAULTLIB",
+    ]
+  }
 }
 
 executable("remoting_native_messaging_host") {
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
-  defines = host_predefines + [ "BINARY=BINARY_NATIVE_MESSAGING_HOST" ]
+  defines =
+      host_predefines + [ "REMOTING_HOST_BINARY=BINARY_NATIVE_MESSAGING_HOST" ]
 
   deps = [
     ":remoting_core",

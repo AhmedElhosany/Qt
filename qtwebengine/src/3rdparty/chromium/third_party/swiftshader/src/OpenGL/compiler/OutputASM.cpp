@@ -24,6 +24,8 @@
 #include <GLES2/gl2ext.h>
 #include <GLES3/gl3.h>
 
+#include <stdlib.h>
+
 namespace glsl
 {
 	// Integer to TString conversion
@@ -2455,7 +2457,7 @@ namespace glsl
 
 					dst.type = registerType(left);
 					dst.index += fieldOffset;
-					dst.mask = writeMask(right);
+					dst.mask = writeMask(result);
 
 					return 0xE4;
 				}
@@ -2942,9 +2944,19 @@ namespace glsl
 		TIntermSymbol *symbol = sampler->getAsSymbolNode();
 		TIntermBinary *binary = sampler->getAsBinaryNode();
 
-		if(symbol && type.getQualifier() == EvqUniform)
+		if(symbol)
 		{
-			return samplerRegister(symbol);
+			switch(type.getQualifier())
+			{
+			case EvqUniform:
+				return samplerRegister(symbol);
+			case EvqIn:
+			case EvqConstReadOnly:
+				// Function arguments are not (uniform) sampler registers
+				return -1;
+			default:
+				UNREACHABLE(type.getQualifier());
+			}
 		}
 		else if(binary)
 		{
@@ -2990,7 +3002,7 @@ namespace glsl
 		}
 
 		UNREACHABLE(0);
-		return -1;   // Not a sampler register
+		return -1;   // Not a (uniform) sampler register
 	}
 
 	int OutputASM::samplerRegister(TIntermSymbol *sampler)
@@ -3505,11 +3517,11 @@ namespace glsl
 				TIntermSequence &sequence = init->getSequence();
 				TIntermTyped *variable = sequence[0]->getAsTyped();
 
-				if(variable && variable->getQualifier() == EvqTemporary)
+				if(variable && variable->getQualifier() == EvqTemporary && variable->getBasicType() == EbtInt)
 				{
 					TIntermBinary *assign = variable->getAsBinaryNode();
 
-					if(assign->getOp() == EOpInitialize)
+					if(assign && assign->getOp() == EOpInitialize)
 					{
 						TIntermSymbol *symbol = assign->getLeft()->getAsSymbolNode();
 						TIntermConstantUnion *constant = assign->getRight()->getAsConstantUnion();
@@ -3596,14 +3608,32 @@ namespace glsl
 				comparator = EOpLessThan;
 				limit += 1;
 			}
+			else if(comparator == EOpGreaterThanEqual)
+			{
+				comparator = EOpLessThan;
+				limit -= 1;
+				std::swap(initial, limit);
+				increment = -increment;
+			}
+			else if(comparator == EOpGreaterThan)
+			{
+				comparator = EOpLessThan;
+				std::swap(initial, limit);
+				increment = -increment;
+			}
 
 			if(comparator == EOpLessThan)
 			{
-				int iterations = (limit - initial) / increment;
-
-				if(iterations <= 0)
+				if(!(initial < limit))   // Never loops
 				{
-					iterations = 0;
+					return 0;
+				}
+
+				int iterations = (limit - initial + abs(increment) - 1) / increment;   // Ceiling division
+
+				if(iterations < 0)
+				{
+					return ~0u;
 				}
 
 				return iterations;

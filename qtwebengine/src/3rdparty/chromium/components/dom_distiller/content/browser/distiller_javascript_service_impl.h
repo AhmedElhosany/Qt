@@ -8,7 +8,6 @@
 #include "base/macros.h"
 #include "components/dom_distiller/content/browser/distiller_ui_handle.h"
 #include "components/dom_distiller/content/common/distiller_javascript_service.mojom.h"
-#include "mojo/public/cpp/bindings/string.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
 
 namespace dom_distiller {
@@ -22,12 +21,6 @@ class DistillerJavaScriptServiceImpl
   ~DistillerJavaScriptServiceImpl() override;
 
   // Mojo mojom::DistillerJavaScriptService implementation.
-
-  // Send UMA feedback and start the external feedback reporter if one exists.
-  void HandleDistillerFeedbackCall(bool good) override;
-
-  // Make a call into Android to close the overlay panel containing reader mode.
-  void HandleDistillerClosePanelCall(bool animate) override;
 
   // Show the Android view containing Reader Mode settings.
   void HandleDistillerOpenSettingsCall() override;
@@ -43,7 +36,7 @@ class DistillerJavaScriptServiceImpl
 void CreateDistillerJavaScriptService(
     content::RenderFrameHost* render_frame_host,
     DistillerUIHandle* distiller_ui_handle,
-    mojo::InterfaceRequest<mojom::DistillerJavaScriptService> request);
+    mojom::DistillerJavaScriptServiceRequest request);
 
 }  // namespace dom_distiller
 

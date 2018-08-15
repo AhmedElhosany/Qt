@@ -4,13 +4,18 @@
   "interface_provider_specs": {
     "service_manager:connector": {
       "provides": {
-        "browser": [ "IPC::mojom::ChannelBootstrap" ],
+        "browser": [ 
+          "content::mojom::Child",
+          "IPC::mojom::ChannelBootstrap"
+        ],
         "service_manager:service_factory": [
           "service_manager::mojom::ServiceFactory"
         ]
       },
       "requires": {
-        "content_browser": [ "plugin" ]
+        "content_browser": [ "plugin" ],
+        "device": [ "device:power_monitor" ],
+        "ui": [ "discardable_memory" ]
       }
     }
   }

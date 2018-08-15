@@ -33,26 +33,26 @@
 
 namespace blink {
 
-enum WritingMode {
-  TopToBottomWritingMode,
-  RightToLeftWritingMode,
-  LeftToRightWritingMode
-};
+// These values are named to match the CSS keywords they correspond to: namely
+// horizontal-tb, vertical-rl and vertical-lr.
+// Since these names aren't very self-explanatory, where possible use the
+// inline utility functions below.
+enum class WritingMode : unsigned { kHorizontalTb, kVerticalRl, kVerticalLr };
 
 // Lines have horizontal orientation; modes horizontal-tb.
-inline bool isHorizontalWritingMode(WritingMode writingMode) {
-  return writingMode == TopToBottomWritingMode;
+inline bool IsHorizontalWritingMode(WritingMode writing_mode) {
+  return writing_mode == WritingMode::kHorizontalTb;
 }
 
 // Bottom of the line occurs earlier in the block; modes vertical-lr.
-inline bool isFlippedLinesWritingMode(WritingMode writingMode) {
-  return writingMode == LeftToRightWritingMode;
+inline bool IsFlippedLinesWritingMode(WritingMode writing_mode) {
+  return writing_mode == WritingMode::kVerticalLr;
 }
 
 // Block progression increases in the opposite direction to normal; modes
 // vertical-rl.
-inline bool isFlippedBlocksWritingMode(WritingMode writingMode) {
-  return writingMode == RightToLeftWritingMode;
+inline bool IsFlippedBlocksWritingMode(WritingMode writing_mode) {
+  return writing_mode == WritingMode::kVerticalRl;
 }
 
 }  // namespace blink

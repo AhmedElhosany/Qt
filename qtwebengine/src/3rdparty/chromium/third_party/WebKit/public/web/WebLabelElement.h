@@ -33,13 +33,6 @@
 
 #include "WebElement.h"
 
-#if BLINK_IMPLEMENTATION
-namespace WTF {
-template <typename T>
-class PassRefPtr;
-}
-#endif
-
 namespace blink {
 
 class HTMLLabelElement;
@@ -51,13 +44,13 @@ class WebLabelElement final : public WebElement {
   WebLabelElement(const WebLabelElement& element) : WebElement(element) {}
 
   WebLabelElement& operator=(const WebLabelElement& element) {
-    WebElement::assign(element);
+    WebElement::Assign(element);
     return *this;
   }
 
-  void assign(const WebLabelElement& element) { WebElement::assign(element); }
+  void Assign(const WebLabelElement& element) { WebElement::Assign(element); }
 
-  BLINK_EXPORT WebElement correspondingControl();
+  BLINK_EXPORT WebElement CorrespondingControl();
 
 #if BLINK_IMPLEMENTATION
   WebLabelElement(HTMLLabelElement*);

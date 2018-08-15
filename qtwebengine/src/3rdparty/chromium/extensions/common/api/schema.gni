@@ -23,6 +23,7 @@ extensions_api_schema_files_ = [
   "extension_options_internal.idl",
   "extension_view_internal.json",
   "extension_types.json",
+  "file_system.idl",
   "guest_view_internal.json",
   "management.json",
   "hid.idl",
@@ -49,6 +50,7 @@ extensions_api_schema_files_ = [
   "system_storage.idl",
   "test.json",
   "usb.idl",
+  "virtual_keyboard.idl",
   "virtual_keyboard_private.json",
   "web_request.json",
   "web_view_internal.json",
@@ -57,6 +59,8 @@ extensions_api_schema_files_ = [
 if (is_chromeos) {
   extensions_api_schema_files_ += [
     "diagnostics.idl",
+    "lock_screen_data.idl",
+    "media_perception_private.idl",
     "networking_config.idl",
     "vpn_provider.idl",
     "webcam_private.idl",

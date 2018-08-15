@@ -20,25 +20,30 @@ GpuVideoDecodeAcceleratorHost::GpuVideoDecodeAcceleratorHost(
     gpu::CommandBufferProxyImpl* impl)
     : channel_(impl->channel()),
       decoder_route_id_(MSG_ROUTING_NONE),
-      client_(NULL),
+      client_(nullptr),
       impl_(impl),
+      media_task_runner_(base::ThreadTaskRunnerHandle::Get()),
       weak_this_factory_(this) {
   DCHECK(channel_);
   DCHECK(impl_);
+
+  weak_this_ = weak_this_factory_.GetWeakPtr();
   impl_->AddDeletionObserver(this);
 }
 
 GpuVideoDecodeAcceleratorHost::~GpuVideoDecodeAcceleratorHost() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (channel_ && decoder_route_id_ != MSG_ROUTING_NONE)
     channel_->RemoveRoute(decoder_route_id_);
+
+  base::AutoLock lock(impl_lock_);
   if (impl_)
     impl_->RemoveDeletionObserver(this);
 }
 
 bool GpuVideoDecodeAcceleratorHost::OnMessageReceived(const IPC::Message& msg) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(GpuVideoDecodeAcceleratorHost, msg)
     IPC_MESSAGE_HANDLER(AcceleratedVideoDecoderHostMsg_InitializationComplete,
@@ -46,7 +51,7 @@ bool GpuVideoDecodeAcceleratorHost::OnMessageReceived(const IPC::Message& msg) {
     IPC_MESSAGE_HANDLER(AcceleratedVideoDecoderHostMsg_BitstreamBufferProcessed,
                         OnBitstreamBufferProcessed)
     IPC_MESSAGE_HANDLER(AcceleratedVideoDecoderHostMsg_ProvidePictureBuffers,
-                        OnProvidePictureBuffer)
+                        OnProvidePictureBuffers)
     IPC_MESSAGE_HANDLER(AcceleratedVideoDecoderHostMsg_PictureReady,
                         OnPictureReady)
     IPC_MESSAGE_HANDLER(AcceleratedVideoDecoderHostMsg_FlushDone, OnFlushDone)
@@ -64,11 +69,11 @@ bool GpuVideoDecodeAcceleratorHost::OnMessageReceived(const IPC::Message& msg) {
 }
 
 void GpuVideoDecodeAcceleratorHost::OnChannelError() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (channel_) {
     if (decoder_route_id_ != MSG_ROUTING_NONE)
       channel_->RemoveRoute(decoder_route_id_);
-    channel_ = NULL;
+    channel_ = nullptr;
   }
   DLOG(ERROR) << "OnChannelError()";
   PostNotifyError(PLATFORM_FAILURE);
@@ -76,14 +81,15 @@ void GpuVideoDecodeAcceleratorHost::OnChannelError() {
 
 bool GpuVideoDecodeAcceleratorHost::Initialize(const Config& config,
                                                Client* client) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   client_ = client;
 
+  base::AutoLock lock(impl_lock_);
   if (!impl_)
     return false;
 
   int32_t route_id = channel_->GenerateRouteID();
-  channel_->AddRoute(route_id, weak_this_factory_.GetWeakPtr());
+  channel_->AddRoute(route_id, weak_this_);
 
   bool succeeded = false;
   Send(new GpuCommandBufferMsg_CreateVideoDecoder(impl_->route_id(), config,
@@ -101,7 +107,7 @@ bool GpuVideoDecodeAcceleratorHost::Initialize(const Config& config,
 
 void GpuVideoDecodeAcceleratorHost::Decode(
     const BitstreamBuffer& bitstream_buffer) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
   BitstreamBuffer buffer_to_send = bitstream_buffer;
@@ -118,7 +124,7 @@ void GpuVideoDecodeAcceleratorHost::Decode(
 
 void GpuVideoDecodeAcceleratorHost::AssignPictureBuffers(
     const std::vector<PictureBuffer>& buffers) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
   // Rearrange data for IPC command.
@@ -142,7 +148,7 @@ void GpuVideoDecodeAcceleratorHost::AssignPictureBuffers(
 
 void GpuVideoDecodeAcceleratorHost::ReusePictureBuffer(
     int32_t picture_buffer_id) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
   Send(new AcceleratedVideoDecoderMsg_ReusePictureBuffer(decoder_route_id_,
@@ -150,53 +156,56 @@ void GpuVideoDecodeAcceleratorHost::ReusePictureBuffer(
 }
 
 void GpuVideoDecodeAcceleratorHost::Flush() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
   Send(new AcceleratedVideoDecoderMsg_Flush(decoder_route_id_));
 }
 
 void GpuVideoDecodeAcceleratorHost::Reset() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
   Send(new AcceleratedVideoDecoderMsg_Reset(decoder_route_id_));
 }
 
-void GpuVideoDecodeAcceleratorHost::SetSurface(int32_t surface_id) {
-  DCHECK(CalledOnValidThread());
+void GpuVideoDecodeAcceleratorHost::SetOverlayInfo(
+    const OverlayInfo& overlay_info) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
-  Send(
-      new AcceleratedVideoDecoderMsg_SetSurface(decoder_route_id_, surface_id));
+  Send(new AcceleratedVideoDecoderMsg_SetOverlayInfo(decoder_route_id_,
+                                                     overlay_info));
 }
 
 void GpuVideoDecodeAcceleratorHost::Destroy() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (channel_)
     Send(new AcceleratedVideoDecoderMsg_Destroy(decoder_route_id_));
-  client_ = NULL;
+  client_ = nullptr;
   delete this;
 }
 
 void GpuVideoDecodeAcceleratorHost::OnWillDeleteImpl() {
-  DCHECK(CalledOnValidThread());
-  impl_ = NULL;
+  base::AutoLock lock(impl_lock_);
+  impl_ = nullptr;
 
   // The gpu::CommandBufferProxyImpl is going away; error out this VDA.
-  OnChannelError();
+  media_task_runner_->PostTask(
+      FROM_HERE,
+      base::Bind(&GpuVideoDecodeAcceleratorHost::OnChannelError, weak_this_));
 }
 
 void GpuVideoDecodeAcceleratorHost::PostNotifyError(Error error) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(2) << "PostNotifyError(): error=" << error;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  media_task_runner_->PostTask(
       FROM_HERE, base::Bind(&GpuVideoDecodeAcceleratorHost::OnNotifyError,
-                            weak_this_factory_.GetWeakPtr(), error));
+                            weak_this_, error));
 }
 
 void GpuVideoDecodeAcceleratorHost::Send(IPC::Message* message) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   uint32_t message_type = message->type();
   if (!channel_->Send(message)) {
     DLOG(ERROR) << "Send(" << message_type << ") failed";
@@ -205,25 +214,25 @@ void GpuVideoDecodeAcceleratorHost::Send(IPC::Message* message) {
 }
 
 void GpuVideoDecodeAcceleratorHost::OnInitializationComplete(bool success) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (client_)
     client_->NotifyInitializationComplete(success);
 }
 
 void GpuVideoDecodeAcceleratorHost::OnBitstreamBufferProcessed(
     int32_t bitstream_buffer_id) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (client_)
     client_->NotifyEndOfBitstreamBuffer(bitstream_buffer_id);
 }
 
-void GpuVideoDecodeAcceleratorHost::OnProvidePictureBuffer(
+void GpuVideoDecodeAcceleratorHost::OnProvidePictureBuffers(
     uint32_t num_requested_buffers,
     VideoPixelFormat format,
     uint32_t textures_per_buffer,
     const gfx::Size& dimensions,
     uint32_t texture_target) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   picture_buffer_dimensions_ = dimensions;
 
   const int kMaxVideoPlanes = 4;
@@ -241,44 +250,46 @@ void GpuVideoDecodeAcceleratorHost::OnProvidePictureBuffer(
 
 void GpuVideoDecodeAcceleratorHost::OnDismissPictureBuffer(
     int32_t picture_buffer_id) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (client_)
     client_->DismissPictureBuffer(picture_buffer_id);
 }
 
 void GpuVideoDecodeAcceleratorHost::OnPictureReady(
     const AcceleratedVideoDecoderHostMsg_PictureReady_Params& params) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!client_)
     return;
   Picture picture(params.picture_buffer_id, params.bitstream_buffer_id,
                   params.visible_rect, params.color_space,
                   params.allow_overlay);
   picture.set_size_changed(params.size_changed);
+  picture.set_surface_texture(params.surface_texture);
+  picture.set_wants_promotion_hint(params.wants_promotion_hint);
   client_->PictureReady(picture);
 }
 
 void GpuVideoDecodeAcceleratorHost::OnFlushDone() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (client_)
     client_->NotifyFlushDone();
 }
 
 void GpuVideoDecodeAcceleratorHost::OnResetDone() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (client_)
     client_->NotifyResetDone();
 }
 
 void GpuVideoDecodeAcceleratorHost::OnNotifyError(uint32_t error) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!client_)
     return;
   weak_this_factory_.InvalidateWeakPtrs();
 
   // Client::NotifyError() may Destroy() |this|, so calling it needs to be the
   // last thing done on this stack!
-  VideoDecodeAccelerator::Client* client = NULL;
+  VideoDecodeAccelerator::Client* client = nullptr;
   std::swap(client, client_);
   client->NotifyError(static_cast<VideoDecodeAccelerator::Error>(error));
 }

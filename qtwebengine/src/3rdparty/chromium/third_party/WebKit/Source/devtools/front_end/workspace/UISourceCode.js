@@ -56,18 +56,25 @@ Workspace.UISourceCode = class extends Common.Object {
     }
 
     this._contentType = contentType;
-    /** @type {?function(?string)} */
-    this._requestContentCallback = null;
     /** @type {?Promise<?string>} */
     this._requestContentPromise = null;
-    /** @type {!Map<string, !Map<number, !Workspace.UISourceCode.LineMarker>>} */
-    this._lineDecorations = new Map();
-
-    /** @type {!Array.<!Workspace.Revision>} */
-    this.history = [];
-
-    /** @type {!Array<!Workspace.UISourceCode.Message>} */
-    this._messages = [];
+    /** @type {?Multimap<string, !Workspace.UISourceCode.LineMarker>} */
+    this._decorations = null;
+    /** @type {?Array.<!Workspace.Revision>} */
+    this._history = null;
+    /** @type {?Set<!Workspace.UISourceCode.Message>} */
+    this._messages = null;
+    this._contentLoaded = false;
+    /** @type {?string} */
+    this._content = null;
+    this._forceLoadOnCheckContent = false;
+    this._checkingContent = false;
+    /** @type {?string} */
+    this._lastAcceptedContent = null;
+    /** @type {?string} */
+    this._workingCopy = null;
+    /** @type {?function() : string} */
+    this._workingCopyGetter = null;
   }
 
   /**
@@ -82,6 +89,13 @@ Workspace.UISourceCode = class extends Common.Object {
    */
   name() {
     return this._name;
+  }
+
+  /**
+   * @return {string}
+   */
+  mimeType() {
+    return this._project.mimeType(this);
   }
 
   /**
@@ -109,12 +123,7 @@ Workspace.UISourceCode = class extends Common.Object {
    * @return {string}
    */
   fullDisplayName() {
-    var parentPath = this._parentURL.replace(/^(?:https?|file)\:\/\//, '');
-    try {
-      parentPath = decodeURI(parentPath);
-    } catch (e) {
-    }
-    return parentPath + '/' + this.displayName(true);
+    return this._project.fullDisplayName(this);
   }
 
   /**
@@ -135,23 +144,19 @@ Workspace.UISourceCode = class extends Common.Object {
   /**
    * @return {boolean}
    */
-  isFromServiceProject() {
-    return Workspace.Project.isServiceProject(this._project);
-  }
-
-  /**
-   * @return {boolean}
-   */
   canRename() {
     return this._project.canRename();
   }
 
   /**
    * @param {string} newName
-   * @param {function(boolean)} callback
+   * @return {!Promise<boolean>}
    */
-  rename(newName, callback) {
+  rename(newName) {
+    var fulfill;
+    var promise = new Promise(x => fulfill = x);
     this._project.rename(this, newName, innerCallback.bind(this));
+    return promise;
 
     /**
      * @param {boolean} success
@@ -166,12 +171,12 @@ Workspace.UISourceCode = class extends Common.Object {
             /** @type {string} */ (newName), /** @type {string} */ (newURL),
             /** @type {!Common.ResourceType} */ (newContentType));
       }
-      callback(success);
+      fulfill(success);
     }
   }
 
   remove() {
-    this._project.deleteFile(this.url());
+    this._project.deleteFile(this);
   }
 
   /**
@@ -180,14 +185,16 @@ Workspace.UISourceCode = class extends Common.Object {
    * @param {!Common.ResourceType=} contentType
    */
   _updateName(name, url, contentType) {
-    var oldURL = this.url();
+    var oldURL = this._url;
     this._url = this._url.substring(0, this._url.length - this._name.length) + name;
     this._name = name;
     if (url)
       this._url = url;
     if (contentType)
       this._contentType = contentType;
-    this.dispatchEventToListeners(Workspace.UISourceCode.Events.TitleChanged, oldURL);
+    this.dispatchEventToListeners(Workspace.UISourceCode.Events.TitleChanged, this);
+    this.project().workspace().dispatchEventToListeners(
+        Workspace.Workspace.Events.UISourceCodeRenamed, {oldURL: oldURL, uiSourceCode: this});
   }
 
   /**
@@ -218,55 +225,28 @@ Workspace.UISourceCode = class extends Common.Object {
    * @return {!Promise<?string>}
    */
   requestContent() {
-    if (this._content || this._contentLoaded)
-      return Promise.resolve(this._content);
-    var promise = this._requestContentPromise;
-    if (!promise) {
-      promise = new Promise(fulfill => this._requestContentCallback = fulfill);
-      this._requestContentPromise = promise;
-      this._project.requestFileContent(this, this._fireContentAvailable.bind(this));
-    }
-    return promise;
-  }
+    if (this._requestContentPromise)
+      return this._requestContentPromise;
 
-  /**
-   * @param {function()} callback
-   */
-  _pushCheckContentUpdatedCallback(callback) {
-    if (!this._checkContentUpdatedCallbacks)
-      this._checkContentUpdatedCallbacks = [];
-    this._checkContentUpdatedCallbacks.push(callback);
-  }
-
-  _terminateContentCheck() {
-    delete this._checkingContent;
-    if (this._checkContentUpdatedCallbacks) {
-      this._checkContentUpdatedCallbacks.forEach(function(callback) {
-        callback();
+    if (this._contentLoaded) {
+      this._requestContentPromise = Promise.resolve(this._content);
+    } else {
+      var fulfill;
+      this._requestContentPromise = new Promise(x => fulfill = x);
+      this._project.requestFileContent(this, content => {
+        this._contentLoaded = true;
+        this._content = content;
+        fulfill(content);
       });
-      delete this._checkContentUpdatedCallbacks;
     }
+    return this._requestContentPromise;
   }
 
-  /**
-   * @param {boolean=} forceLoad
-   * @param {function()=} callback
-   */
-  checkContentUpdated(forceLoad, callback) {
-    callback = callback || function() {};
-    forceLoad = forceLoad || this._forceLoadOnCheckContent;
-    if (!this.contentLoaded() && !forceLoad) {
-      callback();
+  checkContentUpdated() {
+    if (!this._contentLoaded && !this._forceLoadOnCheckContent)
       return;
-    }
 
-    if (!this._project.canSetFileContent()) {
-      callback();
-      return;
-    }
-    this._pushCheckContentUpdatedCallback(callback);
-
-    if (this._checkingContent)
+    if (!this._project.canSetFileContent() || this._checkingContent)
       return;
 
     this._checkingContent = true;
@@ -277,27 +257,23 @@ Workspace.UISourceCode = class extends Common.Object {
      * @this {Workspace.UISourceCode}
      */
     function contentLoaded(updatedContent) {
+      this._checkingContent = false;
       if (updatedContent === null) {
         var workingCopy = this.workingCopy();
         this._contentCommitted('', false);
         this.setWorkingCopy(workingCopy);
-        this._terminateContentCheck();
         return;
       }
-      if (typeof this._lastAcceptedContent === 'string' && this._lastAcceptedContent === updatedContent) {
-        this._terminateContentCheck();
+      if (this._lastAcceptedContent === updatedContent)
         return;
-      }
 
       if (this._content === updatedContent) {
-        delete this._lastAcceptedContent;
-        this._terminateContentCheck();
+        this._lastAcceptedContent = null;
         return;
       }
 
       if (!this.isDirty() || this._workingCopy === updatedContent) {
         this._contentCommitted(updatedContent, false);
-        this._terminateContentCheck();
         return;
       }
 
@@ -307,7 +283,6 @@ Workspace.UISourceCode = class extends Common.Object {
         this._contentCommitted(updatedContent, false);
       else
         this._lastAcceptedContent = updatedContent;
-      this._terminateContentCheck();
     }
   }
 
@@ -332,7 +307,7 @@ Workspace.UISourceCode = class extends Common.Object {
     if (this._project.canSetFileContent()) {
       this._project.setFileContent(this, content, function() {});
     } else if (this._url && Workspace.fileManager.isURLSaved(this._url)) {
-      Workspace.fileManager.save(this._url, content, false, function() {});
+      Workspace.fileManager.save(this._url, content, false);
       Workspace.fileManager.close(this._url);
     }
     this._contentCommitted(content, true);
@@ -343,18 +318,24 @@ Workspace.UISourceCode = class extends Common.Object {
    * @param {boolean} committedByUser
    */
   _contentCommitted(content, committedByUser) {
-    delete this._lastAcceptedContent;
+    this._lastAcceptedContent = null;
     this._content = content;
     this._contentLoaded = true;
+    this._requestContentPromise = null;
 
-    var lastRevision = this.history.length ? this.history[this.history.length - 1] : null;
+
+    if (!this._history)
+      this._history = [];
+
+    var lastRevision = this._history.length ? this._history[this._history.length - 1] : null;
     if (!lastRevision || lastRevision._content !== this._content) {
       var revision = new Workspace.Revision(this, this._content, new Date());
-      this.history.push(revision);
+      this._history.push(revision);
     }
 
     this._innerResetWorkingCopy();
-    this.dispatchEventToListeners(Workspace.UISourceCode.Events.WorkingCopyCommitted, {content: content});
+    this.dispatchEventToListeners(
+        Workspace.UISourceCode.Events.WorkingCopyCommitted, {uiSourceCode: this, content: content});
     this._project.workspace().dispatchEventToListeners(
         Workspace.Workspace.Events.WorkingCopyCommitted, {uiSourceCode: this, content: content});
     if (committedByUser) {
@@ -364,17 +345,11 @@ Workspace.UISourceCode = class extends Common.Object {
   }
 
   saveAs() {
-    Workspace.fileManager.save(this._url, this.workingCopy(), true, callback.bind(this));
-    Workspace.fileManager.close(this._url);
-
-    /**
-     * @param {boolean} accepted
-     * @this {Workspace.UISourceCode}
-     */
-    function callback(accepted) {
+    Workspace.fileManager.save(this._url, this.workingCopy(), true).then(accepted => {
       if (accepted)
         this._contentCommitted(this.workingCopy(), true);
-    }
+    });
+    Workspace.fileManager.close(this._url);
   }
 
   /**
@@ -416,7 +391,7 @@ Workspace.UISourceCode = class extends Common.Object {
         return;
 
       this.addRevision(content);
-      this.history = [];
+      this._history = null;
       callback(this);
     }
 
@@ -425,26 +400,35 @@ Workspace.UISourceCode = class extends Common.Object {
   }
 
   /**
+   * @return {!Array<!Workspace.Revision>}
+   */
+  history() {
+    if (!this._history)
+      this._history = [];
+    return this._history;
+  }
+
+  /**
    * @return {string}
    */
   workingCopy() {
     if (this._workingCopyGetter) {
       this._workingCopy = this._workingCopyGetter();
-      delete this._workingCopyGetter;
+      this._workingCopyGetter = null;
     }
     if (this.isDirty())
-      return this._workingCopy;
-    return this._content;
+      return /** @type {string} */ (this._workingCopy);
+    return this._content || '';
   }
 
   resetWorkingCopy() {
     this._innerResetWorkingCopy();
-    this.dispatchEventToListeners(Workspace.UISourceCode.Events.WorkingCopyChanged);
+    this._workingCopyChanged();
   }
 
   _innerResetWorkingCopy() {
-    delete this._workingCopy;
-    delete this._workingCopyGetter;
+    this._workingCopy = null;
+    this._workingCopyGetter = null;
   }
 
   /**
@@ -452,15 +436,21 @@ Workspace.UISourceCode = class extends Common.Object {
    */
   setWorkingCopy(newWorkingCopy) {
     this._workingCopy = newWorkingCopy;
-    delete this._workingCopyGetter;
-    this.dispatchEventToListeners(Workspace.UISourceCode.Events.WorkingCopyChanged);
-    this._project.workspace().dispatchEventToListeners(
-        Workspace.Workspace.Events.WorkingCopyChanged, {uiSourceCode: this});
+    this._workingCopyGetter = null;
+    this._workingCopyChanged();
   }
 
+  /**
+  * @param {function(): string } workingCopyGetter
+  */
   setWorkingCopyGetter(workingCopyGetter) {
     this._workingCopyGetter = workingCopyGetter;
-    this.dispatchEventToListeners(Workspace.UISourceCode.Events.WorkingCopyChanged);
+    this._workingCopyChanged();
+  }
+
+  _workingCopyChanged() {
+    this._removeAllMessages();
+    this.dispatchEventToListeners(Workspace.UISourceCode.Events.WorkingCopyChanged, this);
     this._project.workspace().dispatchEventToListeners(
         Workspace.Workspace.Events.WorkingCopyChanged, {uiSourceCode: this});
   }
@@ -469,7 +459,7 @@ Workspace.UISourceCode = class extends Common.Object {
     if (!this._workingCopyGetter)
       return;
     this._workingCopy = this._workingCopyGetter();
-    delete this._workingCopyGetter;
+    this._workingCopyGetter = null;
   }
 
   commitWorkingCopy() {
@@ -481,7 +471,7 @@ Workspace.UISourceCode = class extends Common.Object {
    * @return {boolean}
    */
   isDirty() {
-    return typeof this._workingCopy !== 'undefined' || typeof this._workingCopyGetter !== 'undefined';
+    return this._workingCopy !== null || this._workingCopyGetter !== null;
   }
 
   /**
@@ -503,38 +493,13 @@ Workspace.UISourceCode = class extends Common.Object {
    * @param {string} query
    * @param {boolean} caseSensitive
    * @param {boolean} isRegex
-   * @param {function(!Array.<!Common.ContentProvider.SearchMatch>)} callback
+   * @return {!Promise<!Array<!Common.ContentProvider.SearchMatch>>}
    */
-  searchInContent(query, caseSensitive, isRegex, callback) {
+  searchInContent(query, caseSensitive, isRegex) {
     var content = this.content();
-    if (!content) {
-      this._project.searchInFileContent(this, query, caseSensitive, isRegex, callback);
-      return;
-    }
-
-    // searchInContent should call back later.
-    setTimeout(doSearch.bind(null, content), 0);
-
-    /**
-     * @param {string} content
-     */
-    function doSearch(content) {
-      callback(Common.ContentProvider.performSearchInContent(content, query, caseSensitive, isRegex));
-    }
-  }
-
-  /**
-   * @param {?string} content
-   */
-  _fireContentAvailable(content) {
-    this._contentLoaded = true;
-    this._content = content;
-
-    var callback = this._requestContentCallback;
-    this._requestContentCallback = null;
-    this._requestContentPromise = null;
-
-    callback.call(null, content);
+    if (!content)
+      return this._project.searchInFileContent(this, query, caseSensitive, isRegex);
+    return Promise.resolve(Common.ContentProvider.performSearchInContent(content, query, caseSensitive, isRegex));
   }
 
   /**
@@ -556,10 +521,10 @@ Workspace.UISourceCode = class extends Common.Object {
   }
 
   /**
-   * @return {!Array<!Workspace.UISourceCode.Message>}
+   * @return {!Set<!Workspace.UISourceCode.Message>}
    */
   messages() {
-    return this._messages.slice();
+    return this._messages ? new Set(this._messages) : new Set();
   }
 
   /**
@@ -571,18 +536,20 @@ Workspace.UISourceCode = class extends Common.Object {
    */
   addLineMessage(level, text, lineNumber, columnNumber) {
     return this.addMessage(
-        level, text, new Common.TextRange(lineNumber, columnNumber || 0, lineNumber, columnNumber || 0));
+        level, text, new TextUtils.TextRange(lineNumber, columnNumber || 0, lineNumber, columnNumber || 0));
   }
 
   /**
    * @param {!Workspace.UISourceCode.Message.Level} level
    * @param {string} text
-   * @param {!Common.TextRange} range
+   * @param {!TextUtils.TextRange} range
    * @return {!Workspace.UISourceCode.Message} message
    */
   addMessage(level, text, range) {
     var message = new Workspace.UISourceCode.Message(this, level, text, range);
-    this._messages.push(message);
+    if (!this._messages)
+      this._messages = new Set();
+    this._messages.add(message);
     this.dispatchEventToListeners(Workspace.UISourceCode.Events.MessageAdded, message);
     return message;
   }
@@ -591,15 +558,16 @@ Workspace.UISourceCode = class extends Common.Object {
    * @param {!Workspace.UISourceCode.Message} message
    */
   removeMessage(message) {
-    if (this._messages.remove(message))
+    if (this._messages && this._messages.delete(message))
       this.dispatchEventToListeners(Workspace.UISourceCode.Events.MessageRemoved, message);
   }
 
-  removeAllMessages() {
-    var messages = this._messages;
-    this._messages = [];
-    for (var message of messages)
+  _removeAllMessages() {
+    if (!this._messages)
+      return;
+    for (var message of this._messages)
       this.dispatchEventToListeners(Workspace.UISourceCode.Events.MessageRemoved, message);
+    this._messages = null;
   }
 
   /**
@@ -608,52 +576,57 @@ Workspace.UISourceCode = class extends Common.Object {
    * @param {?} data
    */
   addLineDecoration(lineNumber, type, data) {
-    var markers = this._lineDecorations.get(type);
-    if (!markers) {
-      markers = new Map();
-      this._lineDecorations.set(type, markers);
-    }
-    var marker = new Workspace.UISourceCode.LineMarker(lineNumber, type, data);
-    markers.set(lineNumber, marker);
+    this.addDecoration(TextUtils.TextRange.createFromLocation(lineNumber, 0), type, data);
+  }
+
+  /**
+   * @param {!TextUtils.TextRange} range
+   * @param {string} type
+   * @param {?} data
+   */
+  addDecoration(range, type, data) {
+    var marker = new Workspace.UISourceCode.LineMarker(range, type, data);
+    if (!this._decorations)
+      this._decorations = new Multimap();
+    this._decorations.set(type, marker);
     this.dispatchEventToListeners(Workspace.UISourceCode.Events.LineDecorationAdded, marker);
   }
 
   /**
-   * @param {number} lineNumber
    * @param {string} type
    */
-  removeLineDecoration(lineNumber, type) {
-    var markers = this._lineDecorations.get(type);
-    if (!markers)
+  removeDecorationsForType(type) {
+    if (!this._decorations)
       return;
-    var marker = markers.get(lineNumber);
-    if (!marker)
-      return;
-    markers.delete(lineNumber);
-    this.dispatchEventToListeners(Workspace.UISourceCode.Events.LineDecorationRemoved, marker);
-    if (!markers.size)
-      this._lineDecorations.delete(type);
-  }
-
-  /**
-   * @param {string} type
-   */
-  removeAllLineDecorations(type) {
-    var markers = this._lineDecorations.get(type);
-    if (!markers)
-      return;
-    this._lineDecorations.delete(type);
+    var markers = this._decorations.get(type);
+    this._decorations.deleteAll(type);
     markers.forEach(marker => {
       this.dispatchEventToListeners(Workspace.UISourceCode.Events.LineDecorationRemoved, marker);
     });
   }
 
   /**
-   * @param {string} type
-   * @return {?Map<number, !Workspace.UISourceCode.LineMarker>}
+   * @return {!Array<!Workspace.UISourceCode.LineMarker>}
    */
-  lineDecorations(type) {
-    return this._lineDecorations.get(type) || null;
+  allDecorations() {
+    return this._decorations ? this._decorations.valuesArray() : [];
+  }
+
+  removeAllDecorations() {
+    if (!this._decorations)
+      return;
+    var decorationList = this._decorations.valuesArray();
+    this._decorations.clear();
+    decorationList.forEach(
+        marker => this.dispatchEventToListeners(Workspace.UISourceCode.Events.LineDecorationRemoved, marker));
+  }
+
+  /**
+   * @param {string} type
+   * @return {?Set<!Workspace.UISourceCode.LineMarker>}
+   */
+  decorationsForType(type) {
+    return this._decorations ? this._decorations.get(type) : null;
   }
 };
 
@@ -662,7 +635,6 @@ Workspace.UISourceCode.Events = {
   WorkingCopyChanged: Symbol('WorkingCopyChanged'),
   WorkingCopyCommitted: Symbol('WorkingCopyCommitted'),
   TitleChanged: Symbol('TitleChanged'),
-  SourceMappingChanged: Symbol('SourceMappingChanged'),
   MessageAdded: Symbol('MessageAdded'),
   MessageRemoved: Symbol('MessageRemoved'),
   LineDecorationAdded: Symbol('LineDecorationAdded'),
@@ -685,10 +657,11 @@ Workspace.UILocation = class {
   }
 
   /**
+   * @param {boolean=} skipTrim
    * @return {string}
    */
-  linkText() {
-    var linkText = this.uiSourceCode.displayName();
+  linkText(skipTrim) {
+    var linkText = this.uiSourceCode.displayName(skipTrim);
     if (typeof this.lineNumber === 'number')
       linkText += ':' + (this.lineNumber + 1);
     return linkText;
@@ -813,10 +786,10 @@ Workspace.Revision = class {
    * @param {string} query
    * @param {boolean} caseSensitive
    * @param {boolean} isRegex
-   * @param {function(!Array.<!Common.ContentProvider.SearchMatch>)} callback
+   * @return {!Promise<!Array<!Common.ContentProvider.SearchMatch>>}
    */
-  searchInContent(query, caseSensitive, isRegex, callback) {
-    callback([]);
+  searchInContent(query, caseSensitive, isRegex) {
+    return Promise.resolve([]);
   }
 };
 
@@ -828,7 +801,7 @@ Workspace.UISourceCode.Message = class {
    * @param {!Workspace.UISourceCode} uiSourceCode
    * @param {!Workspace.UISourceCode.Message.Level} level
    * @param {string} text
-   * @param {!Common.TextRange} range
+   * @param {!TextUtils.TextRange} range
    */
   constructor(uiSourceCode, level, text, range) {
     this._uiSourceCode = uiSourceCode;
@@ -859,7 +832,7 @@ Workspace.UISourceCode.Message = class {
   }
 
   /**
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
   range() {
     return this._range;
@@ -906,21 +879,21 @@ Workspace.UISourceCode.Message.Level = {
  */
 Workspace.UISourceCode.LineMarker = class {
   /**
-   * @param {number} line
+   * @param {!TextUtils.TextRange} range
    * @param {string} type
    * @param {?} data
    */
-  constructor(line, type, data) {
-    this._line = line;
+  constructor(range, type, data) {
+    this._range = range;
     this._type = type;
     this._data = data;
   }
 
   /**
-   * @return {number}
+   * @return {!TextUtils.TextRange}
    */
-  line() {
-    return this._line;
+  range() {
+    return this._range;
   }
 
   /**

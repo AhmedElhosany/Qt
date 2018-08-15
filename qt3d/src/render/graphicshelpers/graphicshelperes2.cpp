@@ -41,6 +41,7 @@
 #include <Qt3DRender/private/renderlogging_p.h>
 #include <private/attachmentpack_p.h>
 #include <private/qgraphicsutils_p.h>
+#include <private/renderbuffer_p.h>
 #include <QtGui/private/qopenglextensions_p.h>
 
 QT_BEGIN_NAMESPACE
@@ -260,6 +261,43 @@ void GraphicsHelperES2::vertexAttribDivisor(GLuint index, GLuint divisor)
     Q_UNUSED(divisor);
 }
 
+void GraphicsHelperES2::vertexAttributePointer(GLenum shaderDataType,
+                                               GLuint index,
+                                               GLint size,
+                                               GLenum type,
+                                               GLboolean normalized,
+                                               GLsizei stride,
+                                               const GLvoid *pointer)
+{
+    switch (shaderDataType) {
+    case GL_FLOAT:
+    case GL_FLOAT_VEC2:
+    case GL_FLOAT_VEC3:
+    case GL_FLOAT_VEC4:
+    case GL_FLOAT_MAT2:
+    case GL_FLOAT_MAT3:
+    case GL_FLOAT_MAT4:
+        m_funcs->glVertexAttribPointer(index, size, type, normalized, stride, pointer);
+        break;
+
+    default:
+        qCWarning(Render::Rendering) << "vertexAttribPointer: Unhandled type";
+        Q_UNREACHABLE();
+    }
+}
+
+void GraphicsHelperES2::readBuffer(GLenum mode)
+{
+    Q_UNUSED(mode)
+    qWarning() << "glReadBuffer not supported by OpenGL ES 2.0 (since OpenGL ES 3.0)";
+}
+
+void GraphicsHelperES2::drawBuffer(GLenum mode)
+{
+    Q_UNUSED(mode);
+    qWarning() << "glDrawBuffer is not supported with OpenGL ES 2";
+}
+
 void GraphicsHelperES2::blendEquation(GLenum mode)
 {
     m_funcs->glBlendEquation(mode);
@@ -358,6 +396,13 @@ bool GraphicsHelperES2::checkFrameBufferComplete()
     return (m_funcs->glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
 }
 
+bool GraphicsHelperES2::frameBufferNeedsRenderBuffer(const Attachment &attachment)
+{
+    // Use a renderbuffer for combined depth+stencil attachments since this is
+    // problematic before GLES 3.2. Keep using textures for everything else.
+    return attachment.m_point == QRenderTargetOutput::DepthStencil;
+}
+
 void GraphicsHelperES2::bindFrameBufferAttachment(QOpenGLTexture *texture, const Attachment &attachment)
 {
     GLenum attr = GL_COLOR_ATTACHMENT0;
@@ -386,6 +431,20 @@ void GraphicsHelperES2::bindFrameBufferAttachment(QOpenGLTexture *texture, const
     else
         qCritical() << "Unsupported Texture FBO attachment format";
     texture->release();
+}
+
+void GraphicsHelperES2::bindFrameBufferAttachment(RenderBuffer *renderBuffer, const Attachment &attachment)
+{
+    if (attachment.m_point != QRenderTargetOutput::DepthStencil) {
+        qCritical() << "Renderbuffers only supported for combined depth-stencil, but got attachment point"
+                    << attachment.m_point;
+        return;
+    }
+
+    renderBuffer->bind();
+    m_funcs->glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, renderBuffer->renderBufferId());
+    m_funcs->glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, renderBuffer->renderBufferId());
+    renderBuffer->release();
 }
 
 bool GraphicsHelperES2::supportsFeature(GraphicsHelperInterface::Feature feature) const
@@ -531,6 +590,11 @@ void GraphicsHelperES2::enablePrimitiveRestart(int)
 {
 }
 
+void GraphicsHelperES2::enableVertexAttributeArray(int location)
+{
+    m_funcs->glEnableVertexAttribArray(location);
+}
+
 void GraphicsHelperES2::disablePrimitiveRestart()
 {
 }
@@ -604,9 +668,10 @@ void GraphicsHelperES2::dispatchCompute(GLuint wx, GLuint wy, GLuint wz)
     qWarning() << "Compute Shaders are not supported by ES 2.0 (since ES 3.1)";
 }
 
-char *GraphicsHelperES2::mapBuffer(GLenum target)
+char *GraphicsHelperES2::mapBuffer(GLenum target, GLsizeiptr size)
 {
     Q_UNUSED(target);
+    Q_UNUSED(size);
     qWarning() << "Map buffer is not a core requirement for ES 2.0";
     return nullptr;
 }

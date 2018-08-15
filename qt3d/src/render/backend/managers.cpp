@@ -75,6 +75,42 @@ void FrameGraphManager::releaseNode(Qt3DCore::QNodeId id)
     delete m_nodes.take(id);
 }
 
+void SkeletonManager::addDirtySkeleton(DirtyFlag dirtyFlag, HSkeleton skeletonHandle)
+{
+    switch (dirtyFlag) {
+    case SkeletonDataDirty:
+        m_dirtyDataSkeletons.push_back(skeletonHandle);
+        break;
+
+    case SkeletonTransformsDirty:
+        m_dirtyTransformSkeletons.push_back(skeletonHandle);
+        break;
+    }
+}
+
+QVector<HSkeleton> SkeletonManager::dirtySkeletons(DirtyFlag dirtyFlag)
+{
+    switch (dirtyFlag) {
+    case SkeletonDataDirty:
+        return std::move(m_dirtyDataSkeletons);
+
+    case SkeletonTransformsDirty:
+        return std::move(m_dirtyTransformSkeletons);
+    }
+    return QVector<HSkeleton>();
+}
+
+void JointManager::addDirtyJoint(Qt3DCore::QNodeId jointId)
+{
+    const HJoint jointHandle = lookupHandle(jointId);
+    m_dirtyJoints.push_back(jointHandle);
+}
+
+QVector<HJoint> JointManager::dirtyJoints()
+{
+    return std::move(m_dirtyJoints);
+}
+
 } // namespace Render
 } // namespace Qt3DRender
 

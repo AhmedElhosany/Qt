@@ -6,11 +6,9 @@
 
 #include <algorithm>
 
-#include "base/logging.h"
 #include "net/quic/core/crypto/crypto_protocol.h"
-#include "net/quic/core/quic_bandwidth.h"
-#include "net/quic/core/quic_protocol.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#include "net/quic/core/quic_constants.h"
+#include "net/quic/platform/api/quic_test.h"
 
 namespace net {
 namespace test {
@@ -20,7 +18,7 @@ namespace {
 const QuicByteCount kMaxSegmentSize = kDefaultTCPMSS;
 }  // namespace
 
-class PrrSenderTest : public ::testing::Test {};
+class PrrSenderTest : public QuicTest {};
 
 TEST_F(PrrSenderTest, SingleLossResultsInSendOnEveryOtherAck) {
   PrrSender prr;

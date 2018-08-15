@@ -15,11 +15,16 @@
 #include "base/strings/string16.h"
 #include "base/strings/string_split.h"
 #include "build/build_config.h"
+#include "content/browser/accessibility/accessibility_flags.h"
+#include "content/browser/accessibility/ax_platform_position.h"
 #include "content/common/content_export.h"
 #include "third_party/WebKit/public/web/WebAXEnums.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/accessibility/ax_range.h"
 #include "ui/accessibility/ax_text_utils.h"
+#include "ui/accessibility/platform/ax_platform_node.h"
+#include "ui/accessibility/platform/ax_platform_node_delegate.h"
 
 // Set PLATFORM_HAS_NATIVE_ACCESSIBILITY_IMPL if this platform has
 // a platform-specific subclass of BrowserAccessibility and
@@ -38,7 +43,7 @@
 #elif defined(OS_ANDROID) && !defined(USE_AURA)
 #define PLATFORM_HAS_NATIVE_ACCESSIBILITY_IMPL 1
 
-#elif defined(OS_LINUX) && defined(USE_X11) && !defined(OS_CHROMEOS)
+#elif BUILDFLAG(USE_ATK)
 #define PLATFORM_HAS_NATIVE_ACCESSIBILITY_IMPL 1
 #endif
 
@@ -62,7 +67,7 @@ class BrowserAccessibilityManager;
 // for tests.
 //
 ////////////////////////////////////////////////////////////////////////////////
-class CONTENT_EXPORT BrowserAccessibility {
+class CONTENT_EXPORT BrowserAccessibility : public ui::AXPlatformNodeDelegate {
  public:
   // Creates a platform specific BrowserAccessibility. Ownership passes to the
   // caller.
@@ -94,8 +99,14 @@ class CONTENT_EXPORT BrowserAccessibility {
   // Return true if this object is equal to or a descendant of |ancestor|.
   bool IsDescendantOf(const BrowserAccessibility* ancestor) const;
 
+  bool IsDocument() const;
+
+  bool IsEditField() const;
+
   // Returns true if this object is used only for representing text.
   bool IsTextOnlyObject() const;
+
+  bool IsLineBreakObject() const;
 
   // Returns true if this is a leaf node on this platform, meaning any
   // children should not be exposed to this platform's native accessibility
@@ -145,46 +156,24 @@ class CONTENT_EXPORT BrowserAccessibility {
   // page (specifically, the top-left corner of the topmost web contents).
   gfx::Rect GetPageBoundsRect() const;
 
-  // Returns the bounds of this object in screen coordinates.
-  gfx::Rect GetScreenBoundsRect() const;
-
   // Returns the bounds of the given range in coordinates relative to the
   // top-left corner of the overall web area. Only valid when the
   // role is WebAXRoleStaticText.
   gfx::Rect GetPageBoundsForRange(int start, int len) const;
 
-  // Same as GetPageBoundsForRange, in screen coordinates. Only valid when
-  // the role is WebAXRoleStaticText.
+  // Same as |GetPageBoundsForRange| but in screen coordinates.
   gfx::Rect GetScreenBoundsForRange(int start, int len) const;
 
   // Convert a bounding rectangle from this node's coordinate system
   // (which is relative to its nearest scrollable ancestor) to
   // absolute bounds, either in page coordinates (when |frameOnly| is
   // false), or in frame coordinates (when |frameOnly| is true).
-  gfx::Rect RelativeToAbsoluteBounds(gfx::RectF bounds, bool frame_only) const;
+  virtual gfx::Rect RelativeToAbsoluteBounds(gfx::RectF bounds,
+                                             bool frame_only) const;
 
   // This is to handle the cases such as ARIA textbox, where the value should
   // be calculated from the object's inner text.
   virtual base::string16 GetValue() const;
-
-  // Starting at the given character offset, locates the start of the next or
-  // previous line and returns its character offset.
-  int GetLineStartBoundary(int start,
-                           ui::TextBoundaryDirection direction,
-                           ui::AXTextAffinity affinity) const;
-
-  // Starting at the given character offset, locates the start of the next or
-  // previous word and returns its character offset.
-  // In case there is no word boundary before or after the given offset, it
-  // returns one past the last character.
-  // If the given offset is already at the start of a word, returns the start
-  // of the next word if the search is forwards, and the given offset if it is
-  // backwards.
-  // If the start offset is equal to -1 and the search is in the forwards
-  // direction, returns the start boundary of the first word.
-  // Start offsets that are not in the range -1 to text length are invalid.
-  int GetWordStartBoundary(int start,
-                           ui::TextBoundaryDirection direction) const;
 
   // This is an approximate hit test that only uses the information in
   // the browser process to compute the correct result. It will not return
@@ -228,13 +217,12 @@ class CONTENT_EXPORT BrowserAccessibility {
   BrowserAccessibility* InternalGetChild(uint32_t child_index) const;
   BrowserAccessibility* InternalGetParent() const;
 
-  BrowserAccessibility* GetParent() const;
+  BrowserAccessibility* PlatformGetParent() const;
   int32_t GetIndexInParent() const;
 
   int32_t GetId() const;
-  const ui::AXNodeData& GetData() const;
   gfx::RectF GetLocation() const;
-  int32_t GetRole() const;
+  ui::AXRole GetRole() const;
   int32_t GetState() const;
 
   typedef base::StringPairs HtmlAttributes;
@@ -302,34 +290,17 @@ class CONTENT_EXPORT BrowserAccessibility {
 
   // Retrieve the value of a html attribute from the attribute map and
   // returns true if found.
-  bool GetHtmlAttribute(const char* attr, base::string16* value) const;
   bool GetHtmlAttribute(const char* attr, std::string* value) const;
-
-  // Utility method to handle special cases for ARIA booleans, tristates and
-  // booleans which have a "mixed" state.
-  //
-  // Warning: the term "Tristate" is used loosely by the spec and here,
-  // as some attributes support a 4th state.
-  //
-  // The following attributes are appropriate to use with this method:
-  // aria-selected  (selectable)
-  // aria-grabbed   (grabbable)
-  // aria-expanded  (expandable)
-  // aria-pressed   (toggleable/pressable) -- supports 4th "mixed" state
-  // aria-checked   (checkable) -- supports 4th "mixed state"
-  bool GetAriaTristate(const char* attr_name,
-                       bool* is_defined,
-                       bool* is_mixed) const;
+  bool GetHtmlAttribute(const char* attr, base::string16* value) const;
 
   base::string16 GetFontFamily() const;
   base::string16 GetLanguage() const;
+
   virtual base::string16 GetText() const;
 
-  // Returns true if the bit corresponding to the given state enum is 1.
+  // Returns true if the bit corresponding to the given enum is 1.
   bool HasState(ui::AXState state_enum) const;
-
-  // Returns true if this node is an cell or an table header.
-  bool IsCellOrTableHeaderRole() const;
+  bool HasAction(ui::AXAction action_enum) const;
 
   // Returns true if the caret is active on this object.
   bool HasCaret() const;
@@ -338,21 +309,47 @@ class CONTENT_EXPORT BrowserAccessibility {
   bool IsWebAreaForPresentationalIframe() const;
 
   virtual bool IsClickable() const;
-  bool IsControl() const;
-  bool IsMenuRelated() const;
   bool IsNativeTextControl() const;
   bool IsSimpleTextControl() const;
   // Indicates if this object is at the root of a rich edit text control.
   bool IsRichTextControl() const;
 
+  // Return true if the accessible name was explicitly set to "" by the author
+  bool HasExplicitlyEmptyName() const;
+
   // If an object is focusable but has no accessible name, use this
   // to compute a name from its descendants.
-  std::string ComputeAccessibleNameFromDescendants();
+  std::string ComputeAccessibleNameFromDescendants() const;
+
+  // Creates a text position rooted at this object.
+  AXPlatformPosition::AXPositionInstance CreatePositionAt(
+      int offset,
+      ui::AXTextAffinity affinity = ui::AX_TEXT_AFFINITY_DOWNSTREAM) const;
 
   // Gets the text offsets where new lines start.
   std::vector<int> GetLineStartOffsets() const;
 
+  virtual gfx::NativeViewAccessible GetNativeViewAccessible();
+
+  // AXPlatformNodeDelegate.
+  const ui::AXNodeData& GetData() const override;
+  const ui::AXTreeData& GetTreeData() const override;
+  gfx::NativeWindow GetTopLevelWidget() override;
+  gfx::NativeViewAccessible GetParent() override;
+  int GetChildCount() override;
+  gfx::NativeViewAccessible ChildAtIndex(int index) override;
+  gfx::Rect GetScreenBoundsRect() const override;
+  gfx::NativeViewAccessible HitTestSync(int x, int y) override;
+  gfx::NativeViewAccessible GetFocus() override;
+  ui::AXPlatformNode* GetFromNodeID(int32_t id) override;
+  gfx::AcceleratedWidget GetTargetForNativeAccessibilityEvent() override;
+  bool AccessibilityPerformAction(const ui::AXActionData& data) override;
+  bool ShouldIgnoreHoveredStateForTesting() override;
+
  protected:
+  using AXPlatformPositionInstance = AXPlatformPosition::AXPositionInstance;
+  using AXPlatformRange = ui::AXRange<AXPlatformPositionInstance::element_type>;
+
   BrowserAccessibility();
 
   // The manager of this tree of accessibility objects.
@@ -370,12 +367,6 @@ class CONTENT_EXPORT BrowserAccessibility {
   // special character in the place of every embedded object instead of its
   // text, depending on the platform.
   base::string16 GetInnerText() const;
-
-  // If a bounding rectangle is empty, compute it based on the union of its
-  // children, since most accessibility APIs don't like elements with no
-  // bounds, but "virtual" elements in the accessibility tree that don't
-  // correspond to a layed-out element sometimes don't have bounds.
-  void FixEmptyBounds(gfx::RectF* bounds) const;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserAccessibility);
 };

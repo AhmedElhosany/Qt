@@ -27,8 +27,8 @@
 #include "ui/message_center/views/message_view.h"
 #include "ui/message_center/views/message_view_context_menu_controller.h"
 #include "ui/message_center/views/message_view_factory.h"
+#include "ui/message_center/views/notification_control_buttons_view.h"
 #include "ui/message_center/views/notifier_settings_view.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -62,14 +62,12 @@ void SetViewHierarchyEnabled(views::View* view, bool enabled) {
 MessageCenterView::MessageCenterView(MessageCenter* message_center,
                                      MessageCenterTray* tray,
                                      int max_height,
-                                     bool initially_settings_visible,
-                                     bool top_down)
+                                     bool initially_settings_visible)
     : message_center_(message_center),
       tray_(tray),
       scroller_(NULL),
       settings_view_(NULL),
       button_bar_(NULL),
-      top_down_(top_down),
       settings_visible_(initially_settings_visible),
       source_view_(NULL),
       source_height_(0),
@@ -79,11 +77,11 @@ MessageCenterView::MessageCenterView(MessageCenter* message_center,
       is_locked_(message_center_->IsLockedState()),
       mode_((!initially_settings_visible || is_locked_) ? Mode::BUTTONS_ONLY
                                                         : Mode::SETTINGS),
-      context_menu_controller_(new MessageViewContextMenuController(this)) {
+      context_menu_controller_(new MessageViewContextMenuController(this)),
+      focus_manager_(nullptr) {
   message_center_->AddObserver(this);
   set_notify_enter_exit_on_child(true);
-  set_background(views::Background::CreateSolidBackground(
-      kMessageCenterBackgroundColor));
+  SetBackground(views::CreateSolidBackground(kMessageCenterBackgroundColor));
 
   NotifierSettingsProvider* notifier_settings_provider =
       message_center_->GetNotifierSettingsProvider();
@@ -95,17 +93,15 @@ MessageCenterView::MessageCenterView(MessageCenter* message_center,
   const int button_height = button_bar_->GetPreferredSize().height();
 
   scroller_ = new views::ScrollView();
+  scroller_->SetBackgroundColor(kMessageCenterBackgroundColor);
   scroller_->ClipHeightTo(kMinScrollViewHeight, max_height - button_height);
   scroller_->SetVerticalScrollBar(new views::OverlayScrollBar(false));
-  scroller_->set_background(
-      views::Background::CreateSolidBackground(kMessageCenterBackgroundColor));
+  scroller_->SetHorizontalScrollBar(new views::OverlayScrollBar(true));
 
-  scroller_->SetPaintToLayer(true);
-  scroller_->layer()->SetFillsBoundsOpaquely(false);
-  scroller_->layer()->SetMasksToBounds(true);
-
-  message_list_view_.reset(new MessageListView(this, top_down));
+  message_list_view_.reset(new MessageListView());
+  message_list_view_->set_scroller(scroller_);
   message_list_view_->set_owned_by_client();
+  message_list_view_->AddObserver(this);
 
   // We want to swap the contents of the scroll view between the empty list
   // view and the message list view, without constructing them afresh each
@@ -129,8 +125,19 @@ MessageCenterView::MessageCenterView(MessageCenter* message_center,
 }
 
 MessageCenterView::~MessageCenterView() {
+  message_list_view_->RemoveObserver(this);
+
   if (!is_closing_)
     message_center_->RemoveObserver(this);
+
+  if (focus_manager_)
+    focus_manager_->RemoveFocusChangeListener(this);
+}
+
+void MessageCenterView::Init() {
+  focus_manager_ = GetFocusManager();
+  if (focus_manager_)
+    focus_manager_->AddFocusChangeListener(this);
 }
 
 void MessageCenterView::SetNotifications(
@@ -164,7 +171,7 @@ void MessageCenterView::ClearAllClosableNotifications() {
   if (is_closing_)
     return;
 
-  is_clearing_ = true;
+  is_clearing_all_notifications_ = true;
   UpdateButtonBarStatus();
   SetViewHierarchyEnabled(scroller_, false);
   message_list_view_->ClearAllClosableNotifications(
@@ -172,7 +179,7 @@ void MessageCenterView::ClearAllClosableNotifications() {
 }
 
 void MessageCenterView::OnAllNotificationsCleared() {
-  is_clearing_ = false;
+  is_clearing_all_notifications_ = false;
   SetViewHierarchyEnabled(scroller_, true);
   button_bar_->SetCloseAllButtonEnabled(false);
 
@@ -202,6 +209,21 @@ void MessageCenterView::SetIsClosing(bool is_closing) {
     message_center_->AddObserver(this);
 }
 
+void MessageCenterView::OnDidChangeFocus(views::View* before,
+                                         views::View* now) {
+  // Update the button visibility when the focus state is changed.
+  for (auto pair : notification_views_) {
+    // ControlButtonsView is not in the same view hierarchy on ARC++
+    // notifications, so check it separately.
+    if (pair.second->Contains(before) || pair.second->Contains(now) ||
+        (pair.second->GetControlButtonsView() &&
+         (pair.second->GetControlButtonsView()->Contains(before) ||
+          pair.second->GetControlButtonsView()->Contains(now)))) {
+      pair.second->UpdateControlButtonsVisibility();
+    }
+  }
+}
+
 void MessageCenterView::Layout() {
   if (is_closing_)
     return;
@@ -212,19 +234,16 @@ void MessageCenterView::Layout() {
   bool animating = settings_transition_animation_ &&
                    settings_transition_animation_->is_animating();
   if (animating && settings_transition_animation_->current_part_index() == 0) {
-    if (!top_down_) {
-      button_bar_->SetBounds(
-          0, height() - button_height, width(), button_height);
-    }
+    button_bar_->SetBounds(0, height() - button_height, width(), button_height);
     return;
   }
 
   scroller_->SetBounds(0,
-                       top_down_ ? button_height : 0,
+                       0,
                        width(),
                        height() - button_height);
   settings_view_->SetBounds(0,
-                            top_down_ ? button_height : 0,
+                            0,
                             width(),
                             height() - button_height);
 
@@ -239,22 +258,22 @@ void MessageCenterView::Layout() {
       // Draw separator line on the top of the button bar if it is on the bottom
       // or draw it at the bottom if the bar is on the top.
       button_bar_->SetBorder(views::CreateSolidSidedBorder(
-          top_down_ ? 0 : 1, 0, top_down_ ? 1 : 0, 0, kFooterDelimiterColor));
+          1, 0, 0, 0, kFooterDelimiterColor));
     } else {
       button_bar_->SetBorder(
-          views::CreateEmptyBorder(top_down_ ? 0 : 1, 0, top_down_ ? 1 : 0, 0));
+          views::CreateEmptyBorder(1, 0, 0, 0));
     }
     button_bar_->SchedulePaint();
   }
   button_bar_->SetBounds(0,
-                         top_down_ ? 0 : height() - button_height,
+                         height() - button_height,
                          width(),
                          button_height);
   if (GetWidget())
     GetWidget()->GetRootView()->SchedulePaint();
 }
 
-gfx::Size MessageCenterView::GetPreferredSize() const {
+gfx::Size MessageCenterView::CalculatePreferredSize() const {
   if (settings_transition_animation_ &&
       settings_transition_animation_->is_animating()) {
     int content_width =
@@ -344,8 +363,7 @@ void MessageCenterView::OnNotificationRemoved(const std::string& id,
     // Moves the keyboard focus to the next notification if the removed
     // notification is focused so that the user can dismiss notifications
     // without re-focusing by tab key.
-    if (view->IsCloseButtonFocused() ||
-        view == GetFocusManager()->GetFocusedView()) {
+    if (view->IsCloseButtonFocused() || view->HasFocus()) {
       views::View* next_focused_view = NULL;
       if (message_list_view_->child_count() > index + 1)
         next_focused_view = message_list_view_->child_at(index + 1);
@@ -368,48 +386,36 @@ void MessageCenterView::OnNotificationRemoved(const std::string& id,
   Update(true /* animate */);
 }
 
+// This is a separate function so we can override it in tests.
+bool MessageCenterView::SetRepositionTarget() {
+  // Set the item on the mouse cursor as the reposition target so that it
+  // should stick to the current position over the update.
+  if (message_list_view_->IsMouseHovered()) {
+    for (const auto& hover_id_view : notification_views_) {
+      MessageView* hover_view = hover_id_view.second;
+
+      if (hover_view->IsMouseHovered()) {
+        message_list_view_->SetRepositionTarget(hover_view->bounds());
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void MessageCenterView::OnNotificationUpdated(const std::string& id) {
+  // TODO(edcourtney): We may be able to remove this, since |UpdateNotification|
+  // checks it anyway.
   NotificationViewsMap::const_iterator view_iter = notification_views_.find(id);
   if (view_iter == notification_views_.end())
     return;
 
-  // Set the item on the mouse cursor as the reposition target so that it
-  // should stick to the current position over the update.
-  bool set = false;
-  if (message_list_view_->IsMouseHovered()) {
-    for (const auto& hover_id_view : notification_views_) {
-      MessageView* hover_view = hover_id_view.second;
-      if (hover_view->IsMouseHovered()) {
-        message_list_view_->SetRepositionTarget(hover_view->bounds());
-        set = true;
-        break;
-      }
-    }
-  }
-  if (!set)
+  // If there is no reposition target anymore, make sure to reset the reposition
+  // session.
+  if (!SetRepositionTarget())
     message_list_view_->ResetRepositionSession();
 
-  // TODO(dimich): add MessageCenter::GetVisibleNotificationById(id)
-  MessageView* view = view_iter->second;
-  const NotificationList::Notifications& notifications =
-      message_center_->GetVisibleNotifications();
-  for (NotificationList::Notifications::const_iterator iter =
-           notifications.begin(); iter != notifications.end(); ++iter) {
-    if ((*iter)->id() == id) {
-      int old_width = view->width();
-      int old_height = view->height();
-      bool old_pinned = view->IsPinned();
-      message_list_view_->UpdateNotification(view, **iter);
-      if (view->GetHeightForWidth(old_width) != old_height) {
-        Update(true /* animate */);
-      } else if (view->IsPinned() != old_pinned) {
-        // Animate flag is false, since the pinned flag transition doesn't need
-        // animation.
-        Update(false /* animate */);
-      }
-      break;
-    }
-  }
+  UpdateNotification(id);
 }
 
 void MessageCenterView::OnLockedStateChanged(bool locked) {
@@ -447,6 +453,18 @@ void MessageCenterView::ClickOnNotificationButton(
 void MessageCenterView::ClickOnSettingsButton(
     const std::string& notification_id) {
   message_center_->ClickOnSettingsButton(notification_id);
+}
+
+void MessageCenterView::UpdateNotificationSize(
+    const std::string& notification_id) {
+  // TODO(edcourtney, yoshiki): We don't call OnNotificationUpdated directly
+  // because it resets the reposition session, which can end up deleting
+  // notification items when it cancels animations. This causes problems for
+  // ARC notifications. See crbug.com/714493. OnNotificationUpdated should not
+  // have to consider the reposition session, but OnMouseEntered and
+  // OnMouseExited don't work properly for ARC notifications at the moment.
+  // See crbug.com/714587.
+  UpdateNotification(notification_id);
 }
 
 void MessageCenterView::AnimationEnded(const gfx::Animation* animation) {
@@ -497,7 +515,12 @@ void MessageCenterView::AddNotificationAt(const Notification& notification,
                                           int index) {
   MessageView* view =
       MessageViewFactory::Create(this, notification, false);  // Not top-level.
-  view->set_context_menu_controller(context_menu_controller_.get());
+
+  // TODO(yoshiki): Temporary disable context menu on custom notifications.
+  // See crbug.com/750307 for detail.
+  if (notification.type() != NOTIFICATION_TYPE_CUSTOM)
+    view->set_context_menu_controller(context_menu_controller_.get());
+
   notification_views_[notification.id()] = view;
   view->set_scroller(scroller_);
   message_list_view_->AddNotificationAt(view, index);
@@ -515,15 +538,6 @@ base::string16 MessageCenterView::GetButtonBarTitle() const {
 
 void MessageCenterView::Update(bool animate) {
   bool no_message_views = notification_views_.empty();
-
-  // When the child view is removed from the hierarchy, its focus is cleared.
-  // In this case we want to save which view has focus so that the user can
-  // continue to interact with notifications in the order they were expecting.
-  views::FocusManager* focus_manager = scroller_->GetFocusManager();
-  View* focused_view = NULL;
-  // |focus_manager| can be NULL in tests.
-  if (focus_manager)
-    focused_view = focus_manager->GetFocusedView();
 
   if (is_locked_)
     SetVisibilityMode(Mode::BUTTONS_ONLY, animate);
@@ -545,9 +559,6 @@ void MessageCenterView::Update(bool animate) {
   }
 
   UpdateButtonBarStatus();
-
-  if (focus_manager && focused_view)
-    focus_manager->SetFocusedView(focused_view);
 
   if (scroller_->visible())
     scroller_->InvalidateLayout();
@@ -616,20 +627,25 @@ void MessageCenterView::SetVisibilityMode(Mode mode, bool animate) {
 
 void MessageCenterView::UpdateButtonBarStatus() {
   // Disables all buttons during animation of cleaning of all notifications.
-  if (is_clearing_) {
+  if (is_clearing_all_notifications_) {
     button_bar_->SetSettingsAndQuietModeButtonsEnabled(false);
     button_bar_->SetCloseAllButtonEnabled(false);
     return;
   }
 
   button_bar_->SetBackArrowVisible(mode_ == Mode::SETTINGS);
-  button_bar_->SetSettingsAndQuietModeButtonsEnabled(!is_locked_);
+  button_bar_->SetButtonsVisible(!is_locked_);
   button_bar_->SetTitle(GetButtonBarTitle());
 
+  if (!is_locked_)
+    EnableCloseAllIfAppropriate();
+}
+
+void MessageCenterView::EnableCloseAllIfAppropriate() {
   if (mode_ == Mode::NOTIFICATIONS) {
     bool no_closable_views = true;
     for (const auto& view : notification_views_) {
-      if (!view.second->IsPinned()) {
+      if (!view.second->pinned()) {
         no_closable_views = false;
         break;
       }
@@ -643,6 +659,40 @@ void MessageCenterView::UpdateButtonBarStatus() {
 
 void MessageCenterView::SetNotificationViewForTest(MessageView* view) {
   message_list_view_->AddNotificationAt(view, 0);
+}
+
+void MessageCenterView::UpdateNotification(const std::string& id) {
+  // TODO(edcourtney, yoshiki): This check seems like it should not be needed.
+  // Investigate what circumstances (if any) trigger it.
+  NotificationViewsMap::const_iterator view_iter = notification_views_.find(id);
+  if (view_iter == notification_views_.end())
+    return;
+
+  // TODO(dimich): add MessageCenter::GetVisibleNotificationById(id)
+  MessageView* view = view_iter->second;
+  const NotificationList::Notifications& notifications =
+      message_center_->GetVisibleNotifications();
+  for (NotificationList::Notifications::const_iterator iter =
+           notifications.begin();
+       iter != notifications.end(); ++iter) {
+    if ((*iter)->id() == id) {
+      int old_width = view->width();
+      int old_height = view->height();
+      bool old_pinned = view->pinned();
+      message_list_view_->UpdateNotification(view, **iter);
+      if (view->GetHeightForWidth(old_width) != old_height) {
+        Update(true /* animate */);
+      } else if (view->pinned() != old_pinned) {
+        // Animate flag is false, since the pinned flag transition doesn't need
+        // animation.
+        Update(false /* animate */);
+      }
+      break;
+    }
+  }
+
+  // Notify accessibility that the contents have changed.
+  view->NotifyAccessibilityEvent(ui::AX_EVENT_CHILDREN_CHANGED, false);
 }
 
 }  // namespace message_center

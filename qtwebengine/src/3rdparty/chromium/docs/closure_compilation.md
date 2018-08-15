@@ -44,7 +44,7 @@ tags](https://developers.google.com/closure/compiler/docs/js-for-compiler)
 ```js
 /**
  * @param {string} version A software version number (i.e. "50.0.2661.94").
- * @return {!Array<number>} Numbers corresponing to |version| (i.e. [50, 0, 2661, 94]).
+ * @return {!Array<number>} Numbers corresponding to |version| (i.e. [50, 0, 2661, 94]).
  */
 function versionSplit(version) {
   return version.split('.').map(Number);
@@ -116,7 +116,7 @@ With these contents:
 
 You can locally test that your code compiles on Linux or Mac.  This requires
 [Java](http://www.oracle.com/technetwork/java/javase/downloads/index.html) and a
-[Chrome checkout](http://www.chromium.org/developers/how-tos/get-the-code) (i.e.
+[Chrome checkout](https://www.chromium.org/developers/how-tos/get-the-code) (i.e.
 python, depot_tools). Note: on Ubuntu, you can probably just run `sudo apt-get
 install openjdk-7-jre`.
 
@@ -194,5 +194,23 @@ in `src/third_party/closure_compiler/compiled_resources2.gyp`:
 ```
 
 This file is used by the
-[Closure compiler bot](http://build.chromium.org/p/chromium.fyi/builders/Closure%20Compilation%20Linux)
+[Closure compiler bot](https://build.chromium.org/p/chromium.fyi/builders/Closure%20Compilation%20Linux)
 to automatically compile your code on every commit.
+
+## Externs
+
+[Externs files](https://github.com/google/closure-compiler/wiki/FAQ#how-do-i-write-an-externs-file)
+define APIs external to your JavaScript. They provide the compiler with the type
+information needed to check usage of these APIs in your JavaScript, much like
+forward declarations do in C++.
+
+Third-party libraries like Polymer often provide externs. Chrome must also
+provide externs for its extension APIs. Whenever an extension API's `idl` or
+`json` schema is updated in Chrome, the corresponding externs file must be
+regenerated:
+
+```shell
+./tools/json_schema_compiler/compiler.py -g externs \
+  extensions/common/api/your_api_here.idl \
+  > third_party/closure_compiler/externs/your_api_here.js
+```

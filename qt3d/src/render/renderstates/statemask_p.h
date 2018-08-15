@@ -80,6 +80,7 @@ enum StateMask
     SeamlessCubemapMask     = 1 << 16,
     MSAAEnabledStateMask    = 1 << 17,
     BlendEquationArgumentsMask  = 1 << 18,
+    LineWidthMask           = 1 << 19,
 };
 
 } // namespace Render

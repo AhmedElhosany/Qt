@@ -58,6 +58,7 @@
 #include "QtCore/qpointer.h"
 #include "QtCore/qdatetime.h"
 #include "QtCore/qsharedpointer.h"
+#include "QtCore/qscopedpointer.h"
 #include "qatomic.h"
 
 #include <QtNetwork/QNetworkCacheMetaData>
@@ -71,7 +72,7 @@
 #include <QtNetwork/QSslConfiguration>
 #endif
 
-QT_REQUIRE_CONFIG(http);
+#ifndef QT_NO_HTTP
 
 QT_BEGIN_NAMESPACE
 
@@ -264,7 +265,7 @@ public:
 
 
 #ifndef QT_NO_SSL
-    QSslConfiguration sslConfiguration;
+    QScopedPointer<QSslConfiguration> sslConfiguration;
     bool pendingIgnoreAllSslErrors;
     QList<QSslError> pendingIgnoreSslErrorsList;
 #endif
@@ -294,7 +295,7 @@ public:
 #ifndef QT_NO_SSL
     void replyEncrypted();
     void replySslErrors(const QList<QSslError> &, bool *, QList<QSslError> *);
-    void replySslConfigurationChanged(const QSslConfiguration&);
+    void replySslConfigurationChanged(const QSslConfiguration &newSslConfiguration);
     void replyPreSharedKeyAuthenticationRequiredSlot(QSslPreSharedKeyAuthenticator *);
 #endif
 #ifndef QT_NO_NETWORKPROXY
@@ -313,5 +314,7 @@ public:
 };
 
 QT_END_NAMESPACE
+
+#endif // QT_NO_HTTP
 
 #endif

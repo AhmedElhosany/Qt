@@ -6,32 +6,12 @@
 
 #include "base/logging.h"
 #include "ui/gl/gl_bindings.h"
-#include "ui/gl/gl_egl_api_implementation.h"
 #include "ui/gl/gl_gl_api_implementation.h"
-#include "ui/gl/gl_implementation_osmesa.h"
-#include "ui/gl/gl_osmesa_api_implementation.h"
-#include "ui/gl/gl_surface_egl.h"
+#include "ui/gl/gl_surface.h"
 #include "ui/gl/init/ozone_util.h"
-#include "ui/ozone/public/ozone_platform.h"
-#include "ui/ozone/public/surface_factory_ozone.h"
 
 namespace gl {
 namespace init {
-
-namespace {
-
-bool InitializeStaticEGLInternal() {
-  if (!GetSurfaceFactoryOzone()->LoadEGLGLES2Bindings())
-    return false;
-
-  SetGLImplementation(kGLImplementationEGLGLES2);
-  InitializeStaticGLBindingsGL();
-  InitializeStaticGLBindingsEGL();
-
-  return true;
-}
-
-}  // namespace
 
 #if !defined(TOOLKIT_QT)
 bool InitializeGLOneOffPlatform() {
@@ -39,19 +19,13 @@ bool InitializeGLOneOffPlatform() {
     return GetGLOzone()->InitializeGLOneOffPlatform();
 
   switch (GetGLImplementation()) {
-    case kGLImplementationEGLGLES2:
-      if (!GLSurfaceEGL::InitializeOneOff(
-              GetSurfaceFactoryOzone()->GetNativeDisplay())) {
-        LOG(ERROR) << "GLSurfaceEGL::InitializeOneOff failed.";
-        return false;
-      }
-      return true;
-    case kGLImplementationOSMesaGL:
     case kGLImplementationMockGL:
+    case kGLImplementationStubGL:
       return true;
     default:
-      return false;
+      NOTREACHED();
   }
+  return false;
 }
 #endif
 
@@ -67,12 +41,9 @@ bool InitializeStaticGLBindings(GLImplementation implementation) {
   }
 
   switch (implementation) {
-    case kGLImplementationOSMesaGL:
-      return InitializeStaticGLBindingsOSMesaGL();
-    case kGLImplementationEGLGLES2:
-      return InitializeStaticEGLInternal();
     case kGLImplementationMockGL:
-      SetGLImplementation(kGLImplementationMockGL);
+    case kGLImplementationStubGL:
+      SetGLImplementation(implementation);
       InitializeStaticGLBindingsGL();
       return true;
     default:
@@ -88,20 +59,16 @@ void InitializeDebugGLBindings() {
     return;
   }
 
-  InitializeDebugGLBindingsEGL();
   InitializeDebugGLBindingsGL();
-  InitializeDebugGLBindingsOSMESA();
 }
 
-void ClearGLBindingsPlatform() {
+void ShutdownGLPlatform() {
   if (HasGLOzone()) {
-    GetGLOzone()->ClearGLBindings();
+    GetGLOzone()->ShutdownGL();
     return;
   }
 
-  ClearGLBindingsEGL();
-  ClearGLBindingsGL();
-  ClearGLBindingsOSMESA();
+  ClearBindingsGL();
 }
 
 }  // namespace init

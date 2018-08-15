@@ -14,14 +14,10 @@
 #include "base/memory/ref_counted.h"
 #include "base/strings/string16.h"
 #include "media/blink/media_blink_export.h"
-#include "ppapi/features/features.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModule.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModuleResult.h"
 
 namespace blink {
-#if BUILDFLAG(ENABLE_PEPPER_CDMS)
-class WebLocalFrame;
-#endif
 class WebSecurityOrigin;
 }
 
@@ -30,8 +26,7 @@ namespace media {
 struct CdmConfig;
 class CdmFactory;
 class CdmSessionAdapter;
-class MediaKeys;
-class WebContentDecryptionModuleSessionImpl;
+class ContentDecryptionModule;
 
 class MEDIA_BLINK_EXPORT WebContentDecryptionModuleImpl
     : public blink::WebContentDecryptionModule {
@@ -46,15 +41,20 @@ class MEDIA_BLINK_EXPORT WebContentDecryptionModuleImpl
   ~WebContentDecryptionModuleImpl() override;
 
   // blink::WebContentDecryptionModule implementation.
-  blink::WebContentDecryptionModuleSession* createSession() override;
+  std::unique_ptr<blink::WebContentDecryptionModuleSession> CreateSession()
+      override;
 
-  void setServerCertificate(
+  void SetServerCertificate(
       const uint8_t* server_certificate,
       size_t server_certificate_length,
       blink::WebContentDecryptionModuleResult result) override;
 
+  void GetStatusForPolicy(
+      const blink::WebString& min_hdcp_version_string,
+      blink::WebContentDecryptionModuleResult result) override;
+
   // Returns a reference to the CDM used by |adapter_|.
-  scoped_refptr<MediaKeys> GetCdm();
+  scoped_refptr<ContentDecryptionModule> GetCdm();
 
  private:
   friend CdmSessionAdapter;

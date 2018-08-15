@@ -11,6 +11,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
+#include "base/single_thread_task_runner.h"
 #include "content/renderer/media/webrtc/peer_connection_dependency_factory.h"
 #include "third_party/webrtc/api/mediaconstraintsinterface.h"
 #include "third_party/webrtc/api/mediastreaminterface.h"
@@ -124,7 +125,7 @@ class MockPeerConnectionDependencyFactory
 
   scoped_refptr<webrtc::PeerConnectionInterface> CreatePeerConnection(
       const webrtc::PeerConnectionInterface::RTCConfiguration& config,
-      blink::WebFrame* frame,
+      blink::WebLocalFrame* frame,
       webrtc::PeerConnectionObserver* observer) override;
   scoped_refptr<webrtc::VideoTrackSourceInterface> CreateVideoTrackSourceProxy(
       webrtc::VideoTrackSourceInterface* source) override;
@@ -145,8 +146,14 @@ class MockPeerConnectionDependencyFactory
   scoped_refptr<base::SingleThreadTaskRunner> GetWebRtcSignalingThread()
       const override;
 
+  // If |fail| is true, subsequent calls to CreateSessionDescription will
+  // return nullptr. This can be used to fake a blob of SDP that fails to be
+  // parsed.
+  void SetFailToCreateSessionDescription(bool fail);
+
  private:
   base::Thread signaling_thread_;
+  bool fail_to_create_session_description_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(MockPeerConnectionDependencyFactory);
 };

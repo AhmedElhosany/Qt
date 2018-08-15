@@ -23,6 +23,7 @@
 #include "content/browser/frame_host/frame_navigation_entry.h"
 #include "content/browser/frame_host/navigation_entry_impl.h"
 #include "content/browser/frame_host/navigation_entry_screenshot_manager.h"
+#include "content/browser/frame_host/navigation_handle_impl.h"
 #include "content/browser/frame_host/navigation_request.h"
 #include "content/browser/frame_host/navigator.h"
 #include "content/browser/frame_host/navigator_impl.h"
@@ -32,7 +33,6 @@
 #include "content/common/frame_owner_properties.h"
 #include "content/common/site_isolation_policy.h"
 #include "content/common/view_messages.h"
-#include "content/public/browser/navigation_details.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_view_host.h"
@@ -76,8 +76,6 @@ bool DoImagesMatch(const gfx::Image& a, const gfx::Image& b) {
       a_bitmap.height() != b_bitmap.height()) {
     return false;
   }
-  SkAutoLockPixels a_bitmap_lock(a_bitmap);
-  SkAutoLockPixels b_bitmap_lock(b_bitmap);
   return memcmp(a_bitmap.getPixels(),
                 b_bitmap.getPixels(),
                 a_bitmap.getSize()) == 0;
@@ -114,10 +112,6 @@ class MockScreenshotManager : public content::NavigationEntryScreenshotManager {
   }
 
  private:
-  // Overridden from content::NavigationEntryScreenshotManager:
-  void TakeScreenshotImpl(content::RenderViewHost* host,
-                          content::NavigationEntryImpl* entry) override {}
-
   void OnScreenshotSet(content::NavigationEntryImpl* entry) override {
     encoding_screenshot_in_progress_ = false;
     NavigationEntryScreenshotManager::OnScreenshotSet(entry);
@@ -218,6 +212,7 @@ class NavigationControllerTest
   void DidStartNavigationToPendingEntry(const GURL& url,
                                         ReloadType reload_type) override {
     navigated_url_ = url;
+    last_reload_type_ = reload_type;
   }
 
   void NavigationEntryCommitted(
@@ -262,6 +257,7 @@ class NavigationControllerTest
  protected:
   GURL navigated_url_;
   size_t navigation_entry_committed_counter_;
+  ReloadType last_reload_type_;
 };
 
 void RegisterForAllNavNotifications(TestNotificationTracker* tracker,
@@ -309,18 +305,36 @@ class LoadCommittedDetailsObserver : public WebContentsObserver {
  public:
   // Observes navigation for the specified |web_contents|.
   explicit LoadCommittedDetailsObserver(WebContents* web_contents)
-      : WebContentsObserver(web_contents) {}
+      : WebContentsObserver(web_contents),
+        navigation_type_(NAVIGATION_TYPE_UNKNOWN),
+        is_same_document_(false),
+        is_main_frame_(false),
+        did_replace_entry_(false) {}
 
-  const LoadCommittedDetails& details() { return details_; }
+  NavigationType navigation_type() { return navigation_type_; }
+  const GURL& previous_url() { return previous_url_; }
+  bool is_same_document() { return is_same_document_; }
+  bool is_main_frame() { return is_main_frame_; }
+  bool did_replace_entry() { return did_replace_entry_; }
 
  private:
-  void DidNavigateAnyFrame(RenderFrameHost* render_frame_host,
-                           const LoadCommittedDetails& details,
-                           const FrameNavigateParams& params) override {
-    details_ = details;
+  void DidFinishNavigation(NavigationHandle* navigation_handle) override {
+    if (!navigation_handle->HasCommitted())
+      return;
+
+    navigation_type_ = static_cast<NavigationHandleImpl*>(navigation_handle)
+                           ->navigation_type();
+    previous_url_ = navigation_handle->GetPreviousURL();
+    is_same_document_ = navigation_handle->IsSameDocument();
+    is_main_frame_ = navigation_handle->IsInMainFrame();
+    did_replace_entry_ = navigation_handle->DidReplaceEntry();
   }
 
-  LoadCommittedDetails details_;
+  NavigationType navigation_type_;
+  GURL previous_url_;
+  bool is_same_document_;
+  bool is_main_frame_;
+  bool did_replace_entry_;
 };
 
 // PlzNavigate
@@ -410,7 +424,9 @@ TEST_F(NavigationControllerTest, GoToOffset) {
     // Check that the GoToOffset will land on the expected page.
     EXPECT_EQ(urls[url_index], controller.GetPendingEntry()->GetVirtualURL());
     main_test_rfh()->PrepareForCommit();
-    main_test_rfh()->SendNavigate(entry_id, false, urls[url_index]);
+    main_test_rfh()->SendNavigateWithTransition(
+        entry_id, false, urls[url_index],
+        controller.GetPendingEntry()->GetTransitionType());
     EXPECT_EQ(1U, navigation_entry_committed_counter_);
     navigation_entry_committed_counter_ = 0;
     // Check that we can go to any valid offset into the history.
@@ -699,7 +715,7 @@ TEST_F(NavigationControllerTest, LoadURLWithParams) {
 
   NavigationController::LoadURLParams load_params(GURL("http://foo/2"));
   load_params.referrer =
-      Referrer(GURL("http://referrer"), blink::WebReferrerPolicyDefault);
+      Referrer(GURL("http://referrer"), blink::kWebReferrerPolicyDefault);
   load_params.transition_type = ui::PAGE_TRANSITION_GENERATED;
   load_params.extra_headers = "content-type: text/plain";
   load_params.load_type = NavigationController::LOAD_TYPE_DEFAULT;
@@ -1047,7 +1063,7 @@ TEST_F(NavigationControllerTest, LoadURL_PrivilegedPending) {
       kExistingURL1, Referrer(), ui::PAGE_TRANSITION_TYPED, std::string());
   int entry_id = controller.GetPendingEntry()->GetUniqueID();
   // Pretend it has bindings so we can tell if we incorrectly copy it.
-  main_test_rfh()->GetRenderViewHost()->AllowBindings(2);
+  main_test_rfh()->AllowBindings(2);
   main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigate(entry_id, true, kExistingURL1);
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
@@ -1229,7 +1245,7 @@ TEST_F(NavigationControllerTest, LoadURL_AbortDoesntCancelPending) {
   NavigationEntry* pending_entry = controller.GetPendingEntry();
 
   // Ensure that a reload keeps the same pending entry.
-  controller.Reload(true);
+  controller.Reload(ReloadType::NORMAL, true);
   EXPECT_EQ(-1, controller.GetPendingEntryIndex());
   EXPECT_TRUE(controller.GetPendingEntry());
   EXPECT_EQ(pending_entry, controller.GetPendingEntry());
@@ -1340,7 +1356,7 @@ TEST_F(NavigationControllerTest, LoadURL_WithBindings) {
   int entry_id = controller.GetPendingEntry()->GetUniqueID();
   orig_rfh->PrepareForCommit();
   TestRenderFrameHost* new_rfh = contents()->GetPendingMainFrame();
-  new_rfh->GetRenderViewHost()->AllowBindings(1);
+  new_rfh->AllowBindings(1);
   new_rfh->SendNavigate(entry_id, true, url2);
 
   // The second load should be committed, and bindings should be remembered.
@@ -1352,7 +1368,9 @@ TEST_F(NavigationControllerTest, LoadURL_WithBindings) {
   // Going back, the first entry should still appear unprivileged.
   controller.GoBack();
   new_rfh->PrepareForCommit();
-  contents()->GetPendingMainFrame()->SendNavigate(entry1_id, false, url1);
+  contents()->GetPendingMainFrame()->SendNavigateWithTransition(
+      entry1_id, false, url1,
+      controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(0, controller.GetLastCommittedEntryIndex());
   EXPECT_EQ(0, controller.GetLastCommittedEntry()->bindings());
 }
@@ -1376,7 +1394,7 @@ TEST_F(NavigationControllerTest, Reload) {
   controller.GetVisibleEntry()->SetTitle(base::ASCIIToUTF16("Title"));
   entry_id = controller.GetLastCommittedEntry()->GetUniqueID();
 
-  controller.Reload(true);
+  controller.Reload(ReloadType::NORMAL, true);
   EXPECT_EQ(0U, notifications.size());
 
   const base::Time timestamp = controller.GetVisibleEntry()->GetTimestamp();
@@ -1432,7 +1450,7 @@ TEST_F(NavigationControllerTest, Reload_GeneratesNewPage) {
   navigation_entry_committed_counter_ = 0;
   entry_id = controller.GetLastCommittedEntry()->GetUniqueID();
 
-  controller.Reload(true);
+  controller.Reload(ReloadType::NORMAL, true);
   EXPECT_EQ(0U, notifications.size());
 
   main_test_rfh()->PrepareForCommitWithServerRedirect(url2);
@@ -1470,7 +1488,7 @@ TEST_F(NavigationControllerTest, ReloadWithGuest) {
       entry1->site_instance()->GetProcess())->set_is_for_guests_only(true);
 
   // And reload.
-  controller.Reload(true);
+  controller.Reload(ReloadType::NORMAL, true);
 
   // The reload is pending. Check that the NavigationEntry didn't get replaced
   // because of having the wrong process.
@@ -1519,7 +1537,7 @@ TEST_F(NavigationControllerTest, ReloadOriginalRequestURL) {
 
   // Reload using the original URL.
   controller.GetVisibleEntry()->SetTitle(base::ASCIIToUTF16("Title"));
-  controller.ReloadOriginalRequestURL(false);
+  controller.Reload(ReloadType::ORIGINAL_REQUEST_URL, false);
   EXPECT_EQ(0U, notifications.size());
 
   // The reload is pending.  The request should point to the original URL.
@@ -1645,6 +1663,49 @@ TEST_F(NavigationControllerTest, RedirectsAreNotResetByCommit) {
   EXPECT_EQ(url2, committed_entry->GetRedirectChain()[0]);
 }
 
+// Tests that webkit preferences are updated when user agent override changes.
+TEST_F(NavigationControllerTest, GoBackWithUserAgentOverrideChange) {
+  NavigationControllerImpl& controller = controller_impl();
+
+  // Set up a simple NavigationEntry stack of two pages.
+  const GURL url1("http://foo/1");
+  const GURL url2("http://foo/2");
+
+  controller.LoadURL(url1, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+  int entry_id = controller.GetPendingEntry()->GetUniqueID();
+  EXPECT_FALSE(controller.GetPendingEntry()->GetIsOverridingUserAgent());
+  main_test_rfh()->PrepareForCommit();
+  main_test_rfh()->SendNavigate(entry_id, true, url1);
+
+  controller.LoadURL(url2, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+  entry_id = controller.GetPendingEntry()->GetUniqueID();
+  EXPECT_FALSE(controller.GetPendingEntry()->GetIsOverridingUserAgent());
+  main_test_rfh()->PrepareForCommit();
+  main_test_rfh()->SendNavigate(entry_id, true, url2);
+
+  // Simulate the behavior of "Request Desktop Site" being checked in
+  // NavigationControllerAndroid::SetUseDesktopUserAgent.
+  controller.GetVisibleEntry()->SetIsOverridingUserAgent(true);
+  controller.Reload(ReloadType::ORIGINAL_REQUEST_URL, true);
+  EXPECT_TRUE(controller.GetLastCommittedEntry()->GetIsOverridingUserAgent());
+
+  // Test that OnWebkitPreferencesChanged is called when going back to propagate
+  // change in viewport_meta WebSetting.
+  int change_counter = 0;
+  test_rvh()->set_webkit_preferences_changed_counter(&change_counter);
+
+  controller.GoBack();
+  entry_id = controller.GetPendingEntry()->GetUniqueID();
+  EXPECT_FALSE(controller.GetPendingEntry()->GetIsOverridingUserAgent());
+  main_test_rfh()->PrepareForCommit();
+  main_test_rfh()->SendNavigateWithTransition(
+      entry_id, false, url1, controller.GetPendingEntry()->GetTransitionType());
+
+  EXPECT_EQ(1, change_counter);
+}
+
 // Tests what happens when we navigate back successfully
 TEST_F(NavigationControllerTest, Back) {
   NavigationControllerImpl& controller = controller_impl();
@@ -1745,7 +1806,8 @@ TEST_F(NavigationControllerTest, Back_GeneratesNewPage) {
   EXPECT_TRUE(controller.CanGoForward());
 
   main_test_rfh()->PrepareForCommitWithServerRedirect(url3);
-  main_test_rfh()->SendNavigate(entry1_id, true, url3);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry1_id, true, url3, controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
@@ -1818,7 +1880,9 @@ TEST_F(NavigationControllerTest, Forward) {
 
   controller.GoBack();
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry1->GetUniqueID(), false, url1);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry1->GetUniqueID(), false, url1,
+      controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
@@ -1843,7 +1907,9 @@ TEST_F(NavigationControllerTest, Forward) {
             controller.GetEntryAtIndex(1)->GetTimestamp());
 
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry2->GetUniqueID(), false, url2);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry2->GetUniqueID(), false, url2,
+      controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
@@ -1890,7 +1956,9 @@ TEST_F(NavigationControllerTest, Forward_GeneratesNewPage) {
 
   controller.GoBack();
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry1->GetUniqueID(), false, url1);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry1->GetUniqueID(), false, url1,
+      controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
@@ -1974,7 +2042,7 @@ TEST_F(NavigationControllerTest, Redirect) {
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
-  EXPECT_EQ(NAVIGATION_TYPE_SAME_PAGE, observer.details().type);
+  EXPECT_EQ(NAVIGATION_TYPE_SAME_PAGE, observer.navigation_type());
   EXPECT_EQ(controller.GetEntryCount(), 1);
   EXPECT_EQ(controller.GetLastCommittedEntryIndex(), 0);
   EXPECT_TRUE(controller.GetLastCommittedEntry());
@@ -2042,7 +2110,7 @@ TEST_F(NavigationControllerTest, PostThenRedirect) {
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
-  EXPECT_EQ(NAVIGATION_TYPE_SAME_PAGE, observer.details().type);
+  EXPECT_EQ(NAVIGATION_TYPE_SAME_PAGE, observer.navigation_type());
   EXPECT_EQ(controller.GetEntryCount(), 1);
   EXPECT_EQ(controller.GetLastCommittedEntryIndex(), 0);
   EXPECT_TRUE(controller.GetLastCommittedEntry());
@@ -2093,7 +2161,7 @@ TEST_F(NavigationControllerTest, ImmediateRedirect) {
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
-  EXPECT_EQ(NAVIGATION_TYPE_NEW_PAGE, observer.details().type);
+  EXPECT_EQ(NAVIGATION_TYPE_NEW_PAGE, observer.navigation_type());
   EXPECT_EQ(controller.GetEntryCount(), 1);
   EXPECT_EQ(controller.GetLastCommittedEntryIndex(), 0);
   EXPECT_TRUE(controller.GetLastCommittedEntry());
@@ -2153,7 +2221,7 @@ TEST_F(NavigationControllerTest,
 
   main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&params);
-  EXPECT_EQ(NAVIGATION_TYPE_EXISTING_PAGE, observer.details().type);
+  EXPECT_EQ(NAVIGATION_TYPE_EXISTING_PAGE, observer.navigation_type());
 }
 
 // Tests navigation via link click within a subframe. A new navigation entry
@@ -2171,9 +2239,9 @@ TEST_F(NavigationControllerTest, NewSubframe) {
   // Prereq: add a subframe with an initial auto-subframe navigation.
   std::string unique_name("uniqueName0");
   main_test_rfh()->OnCreateChildFrame(
-      process()->GetNextRoutingID(), blink::WebTreeScopeType::Document,
-      std::string(), unique_name, blink::WebSandboxFlags::None,
-      FrameOwnerProperties());
+      process()->GetNextRoutingID(), blink::WebTreeScopeType::kDocument,
+      std::string(), unique_name, blink::WebSandboxFlags::kNone,
+      ParsedFeaturePolicyHeader(), FrameOwnerProperties());
   TestRenderFrameHost* subframe = static_cast<TestRenderFrameHost*>(
       contents()->GetFrameTree()->root()->child_at(0)->current_frame_host());
   const GURL subframe_url("http://foo1/subframe");
@@ -2194,12 +2262,9 @@ TEST_F(NavigationControllerTest, NewSubframe) {
     subframe->PrepareForCommit();
     subframe->SendNavigateWithParams(&params);
 
-    // In UseSubframeNavigationEntries mode, we notify of a PageState update to
-    // the entry here rather than during UpdateState.
-    if (SiteIsolationPolicy::UseSubframeNavigationEntries())
-      EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
-    else
-      EXPECT_EQ(0U, notifications.size());
+    // We notify of a PageState update here rather than during UpdateState for
+    // auto subframe navigations.
+    EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
   }
 
   // Now do a new navigation in the frame.
@@ -2221,28 +2286,21 @@ TEST_F(NavigationControllerTest, NewSubframe) {
   subframe->SendNavigateWithParams(&params);
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
-  EXPECT_EQ(url1, observer.details().previous_url);
-  EXPECT_FALSE(observer.details().is_in_page);
-  EXPECT_FALSE(observer.details().is_main_frame);
+  EXPECT_EQ(url1, observer.previous_url());
+  EXPECT_FALSE(observer.is_same_document());
+  EXPECT_FALSE(observer.is_main_frame());
 
   // The new entry should be appended.
   NavigationEntryImpl* entry = controller.GetLastCommittedEntry();
   EXPECT_EQ(2, controller.GetEntryCount());
-  EXPECT_EQ(entry, observer.details().entry);
 
   // New entry should refer to the new page, but the old URL (entries only
   // reflect the toplevel URL).
   EXPECT_EQ(url1, entry->GetURL());
 
-  // Verify subframe entries if they're enabled (e.g. in --site-per-process).
-  if (SiteIsolationPolicy::UseSubframeNavigationEntries()) {
-    // The entry should have a subframe FrameNavigationEntry.
-    ASSERT_EQ(1U, entry->root_node()->children.size());
-    EXPECT_EQ(url2, entry->root_node()->children[0]->frame_entry->url());
-  } else {
-    // There are no subframe FrameNavigationEntries by default.
-    EXPECT_EQ(0U, entry->root_node()->children.size());
-  }
+  // The entry should have a subframe FrameNavigationEntry.
+  ASSERT_EQ(1U, entry->root_node()->children.size());
+  EXPECT_EQ(url2, entry->root_node()->children[0]->frame_entry->url());
 }
 
 // Auto subframes are ones the page loads automatically like ads. They should
@@ -2261,9 +2319,9 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
   // Add a subframe and navigate it.
   std::string unique_name0("uniqueName0");
   main_test_rfh()->OnCreateChildFrame(
-      process()->GetNextRoutingID(), blink::WebTreeScopeType::Document,
-      std::string(), unique_name0, blink::WebSandboxFlags::None,
-      FrameOwnerProperties());
+      process()->GetNextRoutingID(), blink::WebTreeScopeType::kDocument,
+      std::string(), unique_name0, blink::WebSandboxFlags::kNone,
+      ParsedFeaturePolicyHeader(), FrameOwnerProperties());
   TestRenderFrameHost* subframe = static_cast<TestRenderFrameHost*>(
       contents()->GetFrameTree()->root()->child_at(0)->current_frame_host());
   const GURL url2("http://foo/2");
@@ -2284,12 +2342,9 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
     subframe->PrepareForCommit();
     subframe->SendNavigateWithParams(&params);
 
-    // In UseSubframeNavigationEntries mode, we notify of a PageState update to
-    // the entry here rather than during UpdateState.
-    if (SiteIsolationPolicy::UseSubframeNavigationEntries())
-      EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
-    else
-      EXPECT_EQ(0U, notifications.size());
+    // We notify of a PageState update here rather than during UpdateState for
+    // auto subframe navigations.
+    EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
   }
 
   // There should still be only one entry.
@@ -2299,24 +2354,18 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
   FrameNavigationEntry* root_entry = entry->root_node()->frame_entry.get();
   EXPECT_EQ(url1, root_entry->url());
 
-  // Verify subframe entries if they're enabled (e.g. in --site-per-process).
-  if (SiteIsolationPolicy::UseSubframeNavigationEntries()) {
-    // The entry should now have a subframe FrameNavigationEntry.
-    ASSERT_EQ(1U, entry->root_node()->children.size());
-    FrameNavigationEntry* frame_entry =
-        entry->root_node()->children[0]->frame_entry.get();
-    EXPECT_EQ(url2, frame_entry->url());
-  } else {
-    // There are no subframe FrameNavigationEntries by default.
-    EXPECT_EQ(0U, entry->root_node()->children.size());
-  }
+  // The entry should now have a subframe FrameNavigationEntry.
+  ASSERT_EQ(1U, entry->root_node()->children.size());
+  FrameNavigationEntry* frame_entry =
+      entry->root_node()->children[0]->frame_entry.get();
+  EXPECT_EQ(url2, frame_entry->url());
 
   // Add a second subframe and navigate.
   std::string unique_name1("uniqueName1");
   main_test_rfh()->OnCreateChildFrame(
-      process()->GetNextRoutingID(), blink::WebTreeScopeType::Document,
-      std::string(), unique_name1, blink::WebSandboxFlags::None,
-      FrameOwnerProperties());
+      process()->GetNextRoutingID(), blink::WebTreeScopeType::kDocument,
+      std::string(), unique_name1, blink::WebSandboxFlags::kNone,
+      ParsedFeaturePolicyHeader(), FrameOwnerProperties());
   TestRenderFrameHost* subframe2 = static_cast<TestRenderFrameHost*>(
       contents()->GetFrameTree()->root()->child_at(1)->current_frame_host());
   const GURL url3("http://foo/3");
@@ -2337,12 +2386,9 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
     subframe2->PrepareForCommit();
     subframe2->SendNavigateWithParams(&params);
 
-    // In UseSubframeNavigationEntries mode, we notify of a PageState update to
-    // the entry here rather than during UpdateState.
-    if (SiteIsolationPolicy::UseSubframeNavigationEntries())
-      EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
-    else
-      EXPECT_EQ(0U, notifications.size());
+    // We notify of a PageState update here rather than during UpdateState for
+    // auto subframe navigations.
+    EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
   }
 
   // There should still be only one entry, mostly unchanged.
@@ -2352,24 +2398,18 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
   EXPECT_EQ(root_entry, entry->root_node()->frame_entry.get());
   EXPECT_EQ(url1, root_entry->url());
 
-  // Verify subframe entries if they're enabled (e.g. in --site-per-process).
-  if (SiteIsolationPolicy::UseSubframeNavigationEntries()) {
-    // The entry should now have 2 subframe FrameNavigationEntries.
-    ASSERT_EQ(2U, entry->root_node()->children.size());
-    FrameNavigationEntry* new_frame_entry =
-        entry->root_node()->children[1]->frame_entry.get();
-    EXPECT_EQ(url3, new_frame_entry->url());
-  } else {
-    // There are no subframe FrameNavigationEntries by default.
-    EXPECT_EQ(0U, entry->root_node()->children.size());
-  }
+  // The entry should now have 2 subframe FrameNavigationEntries.
+  ASSERT_EQ(2U, entry->root_node()->children.size());
+  FrameNavigationEntry* new_frame_entry =
+      entry->root_node()->children[1]->frame_entry.get();
+  EXPECT_EQ(url3, new_frame_entry->url());
 
   // Add a nested subframe and navigate.
   std::string unique_name2("uniqueName2");
-  subframe->OnCreateChildFrame(process()->GetNextRoutingID(),
-                               blink::WebTreeScopeType::Document, std::string(),
-                               unique_name2, blink::WebSandboxFlags::None,
-                               FrameOwnerProperties());
+  subframe->OnCreateChildFrame(
+      process()->GetNextRoutingID(), blink::WebTreeScopeType::kDocument,
+      std::string(), unique_name2, blink::WebSandboxFlags::kNone,
+      ParsedFeaturePolicyHeader(), FrameOwnerProperties());
   TestRenderFrameHost* subframe3 =
       static_cast<TestRenderFrameHost*>(contents()
                                             ->GetFrameTree()
@@ -2395,12 +2435,9 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
     subframe3->PrepareForCommit();
     subframe3->SendNavigateWithParams(&params);
 
-    // In UseSubframeNavigationEntries mode, we notify of a PageState update to
-    // the entry here rather than during UpdateState.
-    if (SiteIsolationPolicy::UseSubframeNavigationEntries())
-      EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
-    else
-      EXPECT_EQ(0U, notifications.size());
+    // We notify of a PageState update here rather than during UpdateState for
+    // auto subframe navigations.
+    EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
   }
 
   // There should still be only one entry, mostly unchanged.
@@ -2410,18 +2447,12 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
   EXPECT_EQ(root_entry, entry->root_node()->frame_entry.get());
   EXPECT_EQ(url1, root_entry->url());
 
-  // Verify subframe entries if they're enabled (e.g. in --site-per-process).
-  if (SiteIsolationPolicy::UseSubframeNavigationEntries()) {
-    // The entry should now have a nested FrameNavigationEntry.
-    EXPECT_EQ(2U, entry->root_node()->children.size());
-    ASSERT_EQ(1U, entry->root_node()->children[0]->children.size());
-    FrameNavigationEntry* new_frame_entry =
-        entry->root_node()->children[0]->children[0]->frame_entry.get();
-    EXPECT_EQ(url4, new_frame_entry->url());
-  } else {
-    // There are no subframe FrameNavigationEntries by default.
-    EXPECT_EQ(0U, entry->root_node()->children.size());
-  }
+  // The entry should now have a nested FrameNavigationEntry.
+  EXPECT_EQ(2U, entry->root_node()->children.size());
+  ASSERT_EQ(1U, entry->root_node()->children[0]->children.size());
+  new_frame_entry =
+      entry->root_node()->children[0]->children[0]->frame_entry.get();
+  EXPECT_EQ(url4, new_frame_entry->url());
 }
 
 // Tests navigation and then going back to a subframe navigation.
@@ -2440,9 +2471,9 @@ TEST_F(NavigationControllerTest, BackSubframe) {
   // Prereq: add a subframe with an initial auto-subframe navigation.
   std::string unique_name("uniqueName0");
   main_test_rfh()->OnCreateChildFrame(
-      process()->GetNextRoutingID(), blink::WebTreeScopeType::Document,
-      std::string(), unique_name, blink::WebSandboxFlags::None,
-      FrameOwnerProperties());
+      process()->GetNextRoutingID(), blink::WebTreeScopeType::kDocument,
+      std::string(), unique_name, blink::WebSandboxFlags::kNone,
+      ParsedFeaturePolicyHeader(), FrameOwnerProperties());
   TestRenderFrameHost* subframe = static_cast<TestRenderFrameHost*>(
       contents()->GetFrameTree()->root()->child_at(0)->current_frame_host());
   const GURL subframe_url("http://foo1/subframe");
@@ -2471,12 +2502,9 @@ TEST_F(NavigationControllerTest, BackSubframe) {
     subframe->PrepareForCommit();
     subframe->SendNavigateWithParams(&params);
 
-    // In UseSubframeNavigationEntries mode, we notify of a PageState update to
-    // the entry here rather than during UpdateState.
-    if (SiteIsolationPolicy::UseSubframeNavigationEntries())
-      EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
-    else
-      EXPECT_EQ(0U, notifications.size());
+    // We notify of a PageState update here rather than during UpdateState for
+    // auto subframe navigations.
+    EXPECT_TRUE(notifications.Check1AndReset(NOTIFICATION_NAV_ENTRY_CHANGED));
   }
 
   // First manual subframe navigation.
@@ -2506,16 +2534,9 @@ TEST_F(NavigationControllerTest, BackSubframe) {
   navigation_entry_committed_counter_ = 0;
   EXPECT_EQ(2, controller.GetEntryCount());
 
-  // Verify subframe entries if they're enabled (e.g. in --site-per-process).
-  if (SiteIsolationPolicy::UseSubframeNavigationEntries()) {
-    // The entry should have a subframe FrameNavigationEntry.
-    ASSERT_EQ(1U, entry2->root_node()->children.size());
-    EXPECT_EQ(url2, entry2->root_node()->children[0]->frame_entry->url());
-  } else {
-    // There are no subframe FrameNavigationEntries by default.
-    EXPECT_EQ(0U, entry2->root_node()->children.size());
-  }
-
+  // The entry should have a subframe FrameNavigationEntry.
+  ASSERT_EQ(1U, entry2->root_node()->children.size());
+  EXPECT_EQ(url2, entry2->root_node()->children[0]->frame_entry->url());
 
   // Second manual subframe navigation should also make a new entry.
   const GURL url3("http://foo3");
@@ -2539,15 +2560,9 @@ TEST_F(NavigationControllerTest, BackSubframe) {
   EXPECT_EQ(3, controller.GetEntryCount());
   EXPECT_EQ(2, controller.GetCurrentEntryIndex());
 
-  // Verify subframe entries if they're enabled (e.g. in --site-per-process).
-  if (SiteIsolationPolicy::UseSubframeNavigationEntries()) {
-    // The entry should have a subframe FrameNavigationEntry.
-    ASSERT_EQ(1U, entry3->root_node()->children.size());
-    EXPECT_EQ(url3, entry3->root_node()->children[0]->frame_entry->url());
-  } else {
-    // There are no subframe FrameNavigationEntries by default.
-    EXPECT_EQ(0U, entry3->root_node()->children.size());
-  }
+  // The entry should have a subframe FrameNavigationEntry.
+  ASSERT_EQ(1U, entry3->root_node()->children.size());
+  EXPECT_EQ(url3, entry3->root_node()->children[0]->frame_entry->url());
 
   // Go back one.
   controller.GoBack();
@@ -2618,7 +2633,7 @@ TEST_F(NavigationControllerTest, LinkClick) {
   EXPECT_FALSE(controller.CanGoForward());
 }
 
-TEST_F(NavigationControllerTest, InPage) {
+TEST_F(NavigationControllerTest, SameDocument) {
   NavigationControllerImpl& controller = controller_impl();
   TestNotificationTracker notifications;
   RegisterForAllNavNotifications(&notifications, &controller);
@@ -2629,8 +2644,8 @@ TEST_F(NavigationControllerTest, InPage) {
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
 
-  // Ensure main page navigation to same url respects the was_within_same_page
-  // hint provided in the params.
+  // Ensure main page navigation to same url respects the
+  // was_within_same_document hint provided in the params.
   FrameHostMsg_DidCommitProvisionalLoad_Params self_params;
   self_params.nav_entry_id = 0;
   self_params.did_create_new_entry = false;
@@ -2639,8 +2654,12 @@ TEST_F(NavigationControllerTest, InPage) {
   self_params.should_update_history = false;
   self_params.gesture = NavigationGestureUser;
   self_params.method = "GET";
-  self_params.page_state = PageState::CreateFromURL(url1);
-  self_params.was_within_same_page = true;
+  self_params.item_sequence_number = GenerateSequenceNumber();
+  self_params.document_sequence_number = GenerateSequenceNumber();
+  self_params.page_state = PageState::CreateForTestingWithSequenceNumbers(
+      url1, self_params.item_sequence_number,
+      self_params.document_sequence_number);
+  self_params.was_within_same_document = true;
 
   LoadCommittedDetailsObserver observer(contents());
   main_test_rfh()->SendRendererInitiatedNavigationRequest(url1, false);
@@ -2649,8 +2668,8 @@ TEST_F(NavigationControllerTest, InPage) {
   NavigationEntry* entry1 = controller.GetLastCommittedEntry();
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
-  EXPECT_TRUE(observer.details().is_in_page);
-  EXPECT_TRUE(observer.details().did_replace_entry);
+  EXPECT_TRUE(observer.is_same_document());
+  EXPECT_TRUE(observer.did_replace_entry());
   EXPECT_EQ(1, controller.GetEntryCount());
 
   // Fragment navigation to a new page.
@@ -2663,31 +2682,30 @@ TEST_F(NavigationControllerTest, InPage) {
   params.should_update_history = false;
   params.gesture = NavigationGestureUser;
   params.method = "GET";
-  params.page_state = PageState::CreateFromURL(url2);
-  params.was_within_same_page = true;
+  params.item_sequence_number = GenerateSequenceNumber();
+  params.document_sequence_number = self_params.document_sequence_number;
+  params.page_state = PageState::CreateForTestingWithSequenceNumbers(
+      url2, params.item_sequence_number, params.document_sequence_number);
+  params.was_within_same_document = true;
 
   // This should generate a new entry.
-  main_test_rfh()->SendRendererInitiatedNavigationRequest(url2, false);
-  main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&params);
   NavigationEntry* entry2 = controller.GetLastCommittedEntry();
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
-  EXPECT_TRUE(observer.details().is_in_page);
-  EXPECT_FALSE(observer.details().did_replace_entry);
+  EXPECT_TRUE(observer.is_same_document());
+  EXPECT_FALSE(observer.did_replace_entry());
   EXPECT_EQ(2, controller.GetEntryCount());
 
   // Go back one.
-  FrameHostMsg_DidCommitProvisionalLoad_Params back_params(params);
+  FrameHostMsg_DidCommitProvisionalLoad_Params back_params(self_params);
   controller.GoBack();
-  back_params.url = url1;
   back_params.nav_entry_id = entry1->GetUniqueID();
   back_params.did_create_new_entry = false;
-  main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&back_params);
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
-  EXPECT_TRUE(observer.details().is_in_page);
+  EXPECT_TRUE(observer.is_same_document());
   EXPECT_EQ(2, controller.GetEntryCount());
   EXPECT_EQ(0, controller.GetCurrentEntryIndex());
   EXPECT_EQ(back_params.url, controller.GetVisibleEntry()->GetURL());
@@ -2695,14 +2713,12 @@ TEST_F(NavigationControllerTest, InPage) {
   // Go forward.
   FrameHostMsg_DidCommitProvisionalLoad_Params forward_params(params);
   controller.GoForward();
-  forward_params.url = url2;
   forward_params.nav_entry_id = entry2->GetUniqueID();
   forward_params.did_create_new_entry = false;
-  main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&forward_params);
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
-  EXPECT_TRUE(observer.details().is_in_page);
+  EXPECT_TRUE(observer.is_same_document());
   EXPECT_EQ(2, controller.GetEntryCount());
   EXPECT_EQ(1, controller.GetCurrentEntryIndex());
   EXPECT_EQ(forward_params.url,
@@ -2713,31 +2729,34 @@ TEST_F(NavigationControllerTest, InPage) {
   // one identified by an existing page ID. This would result in the second URL
   // losing the reference fragment when you navigate away from it and then back.
   controller.GoBack();
-  main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&back_params);
   controller.GoForward();
-  main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&forward_params);
   EXPECT_EQ(forward_params.url,
             controller.GetVisibleEntry()->GetURL());
 
-  // Finally, navigate to an unrelated URL to make sure in_page is not sticky.
+  // Finally, navigate to an unrelated URL to make sure same_document is not
+  // sticky.
   const GURL url3("http://bar");
   params.nav_entry_id = 0;
   params.did_create_new_entry = true;
   params.url = url3;
+  params.item_sequence_number = 0;
+  params.document_sequence_number = 0;
+  params.page_state = PageState::CreateFromURL(url3);
+  params.was_within_same_document = false;
   navigation_entry_committed_counter_ = 0;
   main_test_rfh()->SendRendererInitiatedNavigationRequest(url3, false);
   main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&params);
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
-  EXPECT_FALSE(observer.details().is_in_page);
+  EXPECT_FALSE(observer.is_same_document());
   EXPECT_EQ(3, controller.GetEntryCount());
   EXPECT_EQ(2, controller.GetCurrentEntryIndex());
 }
 
-TEST_F(NavigationControllerTest, InPage_Replace) {
+TEST_F(NavigationControllerTest, SameDocument_Replace) {
   NavigationControllerImpl& controller = controller_impl();
   TestNotificationTracker notifications;
   RegisterForAllNavNotifications(&notifications, &controller);
@@ -2759,17 +2778,15 @@ TEST_F(NavigationControllerTest, InPage_Replace) {
   params.gesture = NavigationGestureUser;
   params.method = "GET";
   params.page_state = PageState::CreateFromURL(url2);
-  params.was_within_same_page = true;
+  params.was_within_same_document = true;
 
   // This should NOT generate a new entry, nor prune the list.
   LoadCommittedDetailsObserver observer(contents());
-  main_test_rfh()->SendRendererInitiatedNavigationRequest(url2, false);
-  main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigateWithParams(&params);
   EXPECT_EQ(1U, navigation_entry_committed_counter_);
   navigation_entry_committed_counter_ = 0;
-  EXPECT_TRUE(observer.details().is_in_page);
-  EXPECT_TRUE(observer.details().did_replace_entry);
+  EXPECT_TRUE(observer.is_same_document());
+  EXPECT_TRUE(observer.did_replace_entry());
   EXPECT_EQ(1, controller.GetEntryCount());
 }
 
@@ -2813,17 +2830,15 @@ TEST_F(NavigationControllerTest, ClientRedirectAfterInPageNavigation) {
     params.gesture = NavigationGestureUnknown;
     params.method = "GET";
     params.page_state = PageState::CreateFromURL(url);
-    params.was_within_same_page = true;
+    params.was_within_same_document = true;
 
     // This should NOT generate a new entry, nor prune the list.
     LoadCommittedDetailsObserver observer(contents());
-    main_test_rfh()->SendRendererInitiatedNavigationRequest(url, false);
-    main_test_rfh()->PrepareForCommit();
     main_test_rfh()->SendNavigateWithParams(&params);
     EXPECT_EQ(1U, navigation_entry_committed_counter_);
     navigation_entry_committed_counter_ = 0;
-    EXPECT_TRUE(observer.details().is_in_page);
-    EXPECT_TRUE(observer.details().did_replace_entry);
+    EXPECT_TRUE(observer.is_same_document());
+    EXPECT_TRUE(observer.did_replace_entry());
     EXPECT_EQ(2, controller.GetEntryCount());
   }
 
@@ -2849,7 +2864,7 @@ TEST_F(NavigationControllerTest, ClientRedirectAfterInPageNavigation) {
     main_test_rfh()->SendNavigateWithParams(&params);
     EXPECT_EQ(1U, navigation_entry_committed_counter_);
     navigation_entry_committed_counter_ = 0;
-    EXPECT_FALSE(observer.details().is_in_page);
+    EXPECT_FALSE(observer.is_same_document());
     EXPECT_EQ(3, controller.GetEntryCount());
   }
 
@@ -2875,7 +2890,7 @@ TEST_F(NavigationControllerTest, PushStateWithoutPreviousEntry)
   params.did_create_new_entry = true;
   params.url = url;
   params.page_state = PageState::CreateFromURL(url);
-  params.was_within_same_page = true;
+  params.was_within_same_document = true;
   main_test_rfh()->SendRendererInitiatedNavigationRequest(url, false);
   main_test_rfh()->PrepareForCommit();
   contents()->GetMainFrame()->SendNavigateWithParams(&params);
@@ -3003,7 +3018,8 @@ TEST_F(NavigationControllerTest, RestoreNavigate) {
   EXPECT_FALSE(our_controller.GetEntryAtIndex(0)->site_instance());
 
   // After navigating, we should have one entry, and it should be "pending".
-  our_controller.GoToIndex(0);
+  EXPECT_TRUE(our_controller.NeedsReload());
+  our_controller.LoadIfNecessary();
   EXPECT_EQ(1, our_controller.GetEntryCount());
   EXPECT_EQ(our_controller.GetEntryAtIndex(0),
             our_controller.GetPendingEntry());
@@ -3073,7 +3089,8 @@ TEST_F(NavigationControllerTest, RestoreNavigateAfterFailure) {
   EXPECT_FALSE(our_controller.GetEntryAtIndex(0)->site_instance());
 
   // After navigating, we should have one entry, and it should be "pending".
-  our_controller.GoToIndex(0);
+  EXPECT_TRUE(our_controller.NeedsReload());
+  our_controller.LoadIfNecessary();
   EXPECT_EQ(1, our_controller.GetEntryCount());
   EXPECT_EQ(our_controller.GetEntryAtIndex(0),
             our_controller.GetPendingEntry());
@@ -3195,7 +3212,8 @@ TEST_F(NavigationControllerTest, RemoveEntry) {
 
   // Now commit and delete the last entry.
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry_id, false, url4);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry_id, false, url4, controller.GetPendingEntry()->GetTransitionType());
   EXPECT_TRUE(controller.RemoveEntryAtIndex(controller.GetEntryCount() - 1));
   EXPECT_EQ(4, controller.GetEntryCount());
   EXPECT_EQ(3, controller.GetLastCommittedEntryIndex());
@@ -3243,6 +3261,8 @@ TEST_F(NavigationControllerTest, RemoveEntryWithPending) {
   // and pending entries.
   controller.GoBack();
   entry_id = controller.GetPendingEntry()->GetUniqueID();
+  ui::PageTransition entry_transition =
+      controller.GetPendingEntry()->GetTransitionType();
   EXPECT_FALSE(controller.RemoveEntryAtIndex(2));
   EXPECT_FALSE(controller.RemoveEntryAtIndex(1));
 
@@ -3257,7 +3277,8 @@ TEST_F(NavigationControllerTest, RemoveEntryWithPending) {
 
   // Now commit and ensure we land on the right entry.
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry_id, false, url2);
+  main_test_rfh()->SendNavigateWithTransition(entry_id, false, url2,
+                                              entry_transition);
   EXPECT_EQ(2, controller.GetEntryCount());
   EXPECT_EQ(0, controller.GetLastCommittedEntryIndex());
   EXPECT_FALSE(controller.GetPendingEntry());
@@ -3360,7 +3381,8 @@ TEST_F(NavigationControllerTest, TransientEntry) {
   controller.GoToOffset(-1);
   entry_id = controller.GetPendingEntry()->GetUniqueID();
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry_id, false, url3);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry_id, false, url3, controller.GetPendingEntry()->GetTransitionType());
 
   // Add a transient and go to an entry before the current one.
   transient_entry.reset(new NavigationEntryImpl);
@@ -3375,7 +3397,8 @@ TEST_F(NavigationControllerTest, TransientEntry) {
   // Visible entry does not update for history navigations until commit.
   EXPECT_EQ(url3, controller.GetVisibleEntry()->GetURL());
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry_id, false, url1);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry_id, false, url1, controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(url1, controller.GetVisibleEntry()->GetURL());
 
   // Add a transient and go to an entry after the current one.
@@ -3391,7 +3414,8 @@ TEST_F(NavigationControllerTest, TransientEntry) {
   EXPECT_EQ(url2, controller.GetPendingEntry()->GetURL());
   EXPECT_EQ(url1, controller.GetVisibleEntry()->GetURL());
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry_id, false, url2);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry_id, false, url2, controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(url2, controller.GetVisibleEntry()->GetURL());
 
   // Add a transient and go forward.
@@ -3407,7 +3431,8 @@ TEST_F(NavigationControllerTest, TransientEntry) {
   EXPECT_EQ(url3, controller.GetPendingEntry()->GetURL());
   EXPECT_EQ(url2, controller.GetVisibleEntry()->GetURL());
   main_test_rfh()->PrepareForCommit();
-  main_test_rfh()->SendNavigate(entry_id, false, url3);
+  main_test_rfh()->SendNavigateWithTransition(
+      entry_id, false, url3, controller.GetPendingEntry()->GetTransitionType());
   EXPECT_EQ(url3, controller.GetVisibleEntry()->GetURL());
 
   // Add a transient and do an in-page navigation, replacing the current entry.
@@ -3416,8 +3441,6 @@ TEST_F(NavigationControllerTest, TransientEntry) {
   controller.SetTransientEntry(std::move(transient_entry));
   EXPECT_EQ(transient_url, controller.GetVisibleEntry()->GetURL());
 
-  main_test_rfh()->SendRendererInitiatedNavigationRequest(url3_ref, false);
-  main_test_rfh()->PrepareForCommit();
   main_test_rfh()->SendNavigate(0, false, url3_ref);
   // Transient entry should be gone.
   EXPECT_FALSE(controller.GetTransientEntry());
@@ -3458,7 +3481,7 @@ TEST_F(NavigationControllerTest, ReloadTransient) {
   // The page is reloaded, which should remove the pending entry for |url1| and
   // the transient entry for |transient_url|, and start a navigation to
   // |transient_url|.
-  controller.Reload(true);
+  controller.Reload(ReloadType::NORMAL, true);
   entry_id = controller.GetPendingEntry()->GetUniqueID();
   EXPECT_FALSE(controller.GetTransientEntry());
   EXPECT_TRUE(controller.GetPendingEntry());
@@ -3490,7 +3513,7 @@ TEST_F(NavigationControllerTest, RendererInitiatedPendingEntries) {
   // can show them in new tabs when it is safe.
   main_test_rfh()->SendRendererInitiatedNavigationRequest(url1, false);
   main_test_rfh()->PrepareForCommit();
-  navigator->DidStartProvisionalLoad(main_test_rfh(), url1,
+  navigator->DidStartProvisionalLoad(main_test_rfh(), url1, std::vector<GURL>(),
                                      base::TimeTicks::Now());
 
   // Simulate what happens if a BrowserURLHandler rewrites the URL, causing
@@ -3505,7 +3528,7 @@ TEST_F(NavigationControllerTest, RendererInitiatedPendingEntries) {
   // If the user clicks another link, we should replace the pending entry.
   main_test_rfh()->SendRendererInitiatedNavigationRequest(url2, false);
   main_test_rfh()->PrepareForCommit();
-  navigator->DidStartProvisionalLoad(main_test_rfh(), url2,
+  navigator->DidStartProvisionalLoad(main_test_rfh(), url2, std::vector<GURL>(),
                                      base::TimeTicks::Now());
   EXPECT_EQ(url2, controller.GetPendingEntry()->GetURL());
   EXPECT_EQ(url2, controller.GetPendingEntry()->GetVirtualURL());
@@ -3516,22 +3539,23 @@ TEST_F(NavigationControllerTest, RendererInitiatedPendingEntries) {
   EXPECT_EQ(url2, controller.GetLastCommittedEntry()->GetVirtualURL());
 
   // We should not replace the pending entry for an error URL.
-  navigator->DidStartProvisionalLoad(main_test_rfh(), url1,
+  navigator->DidStartProvisionalLoad(main_test_rfh(), url1, std::vector<GURL>(),
                                      base::TimeTicks::Now());
   EXPECT_EQ(url1, controller.GetPendingEntry()->GetURL());
   navigator->DidStartProvisionalLoad(
-      main_test_rfh(), GURL(kUnreachableWebDataURL), base::TimeTicks::Now());
+      main_test_rfh(), GURL(kUnreachableWebDataURL), std::vector<GURL>(),
+      base::TimeTicks::Now());
   EXPECT_EQ(url1, controller.GetPendingEntry()->GetURL());
 
   // We should remember if the pending entry will replace the current one.
   // http://crbug.com/308444.
-  navigator->DidStartProvisionalLoad(main_test_rfh(), url1,
+  navigator->DidStartProvisionalLoad(main_test_rfh(), url1, std::vector<GURL>(),
                                      base::TimeTicks::Now());
   controller.GetPendingEntry()->set_should_replace_entry(true);
 
   main_test_rfh()->SendRendererInitiatedNavigationRequest(url2, false);
   main_test_rfh()->PrepareForCommit();
-  navigator->DidStartProvisionalLoad(main_test_rfh(), url2,
+  navigator->DidStartProvisionalLoad(main_test_rfh(), url2, std::vector<GURL>(),
                                      base::TimeTicks::Now());
   EXPECT_TRUE(controller.GetPendingEntry()->should_replace_entry());
   main_test_rfh()->SendNavigateWithReplacement(0, false, url2);
@@ -3649,7 +3673,7 @@ TEST_F(NavigationControllerTest, ShowBrowserURLAfterFailUntilModified) {
   // stop or a new navigation from the user.  The URL should remain visible.
   if (IsBrowserSideNavigationEnabled()) {
     static_cast<NavigatorImpl*>(main_test_rfh()->frame_tree_node()->navigator())
-        ->CancelNavigation(main_test_rfh()->frame_tree_node());
+        ->CancelNavigation(main_test_rfh()->frame_tree_node(), true);
   } else {
     FrameHostMsg_DidFailProvisionalLoadWithError_Params params;
     params.error_code = net::ERR_ABORTED;
@@ -3852,8 +3876,8 @@ TEST_F(NavigationControllerTest, IsInPageNavigationWithUniversalFileAccess) {
   const GURL file_url("file:///foo/index.html");
   const url::Origin file_origin(file_url);
   main_test_rfh()->NavigateAndCommitRendererInitiated(true, file_url);
-  EXPECT_TRUE(file_origin.IsSameOriginWith(
-      main_test_rfh()->frame_tree_node()->current_origin()));
+  EXPECT_TRUE(
+      file_origin.IsSameOriginWith(main_test_rfh()->GetLastCommittedOrigin()));
   EXPECT_EQ(0, rph->bad_msg_count());
   EXPECT_TRUE(controller.IsURLInPageNavigation(
       different_origin_url, url::Origin(different_origin_url), true,
@@ -3869,7 +3893,7 @@ TEST_F(NavigationControllerTest, IsInPageNavigationWithUniversalFileAccess) {
   params.transition = ui::PAGE_TRANSITION_LINK;
   params.gesture = NavigationGestureUser;
   params.page_state = PageState::CreateFromURL(different_origin_url);
-  params.was_within_same_page = true;
+  params.was_within_same_document = true;
   params.method = "GET";
   params.post_id = -1;
   main_test_rfh()->SendRendererInitiatedNavigationRequest(different_origin_url,
@@ -3879,8 +3903,8 @@ TEST_F(NavigationControllerTest, IsInPageNavigationWithUniversalFileAccess) {
 
   // At this point, we should still consider the current origin to be file://,
   // so that a file URL would still be in-page.  See https://crbug.com/553418.
-  EXPECT_TRUE(file_origin.IsSameOriginWith(
-      main_test_rfh()->frame_tree_node()->current_origin()));
+  EXPECT_TRUE(
+      file_origin.IsSameOriginWith(main_test_rfh()->GetLastCommittedOrigin()));
   EXPECT_TRUE(controller.IsURLInPageNavigation(file_url, url::Origin(file_url),
                                                true, main_test_rfh()));
   EXPECT_EQ(0, rph->bad_msg_count());
@@ -3912,9 +3936,9 @@ TEST_F(NavigationControllerTest, SameSubframe) {
   // Add and navigate a subframe that would normally count as in-page.
   std::string unique_name("uniqueName0");
   main_test_rfh()->OnCreateChildFrame(
-      process()->GetNextRoutingID(), blink::WebTreeScopeType::Document,
-      std::string(), unique_name, blink::WebSandboxFlags::None,
-      FrameOwnerProperties());
+      process()->GetNextRoutingID(), blink::WebTreeScopeType::kDocument,
+      std::string(), unique_name, blink::WebSandboxFlags::kNone,
+      ParsedFeaturePolicyHeader(), FrameOwnerProperties());
   TestRenderFrameHost* subframe = static_cast<TestRenderFrameHost*>(
       contents()->GetFrameTree()->root()->child_at(0)->current_frame_host());
   const GURL subframe_url("http://www.google.com/#");
@@ -3980,7 +4004,7 @@ TEST_F(NavigationControllerTest, CloneAndReload) {
   ASSERT_EQ(2, clone->GetController().GetEntryCount());
   EXPECT_EQ(1, clone->GetController().GetPendingEntryIndex());
 
-  clone->GetController().Reload(true);
+  clone->GetController().Reload(ReloadType::NORMAL, true);
   EXPECT_EQ(1, clone->GetController().GetPendingEntryIndex());
 }
 
@@ -4087,9 +4111,9 @@ TEST_F(NavigationControllerTest, SubframeWhilePending) {
   // automatically loaded. Auto subframes don't increment the page ID.
   std::string unique_name("uniqueName0");
   main_test_rfh()->OnCreateChildFrame(
-      process()->GetNextRoutingID(), blink::WebTreeScopeType::Document,
-      std::string(), unique_name, blink::WebSandboxFlags::None,
-      FrameOwnerProperties());
+      process()->GetNextRoutingID(), blink::WebTreeScopeType::kDocument,
+      std::string(), unique_name, blink::WebSandboxFlags::kNone,
+      ParsedFeaturePolicyHeader(), FrameOwnerProperties());
   TestRenderFrameHost* subframe = static_cast<TestRenderFrameHost*>(
       contents()->GetFrameTree()->root()->child_at(0)->current_frame_host());
   const GURL url1_sub("http://foo/subframe");
@@ -4131,7 +4155,7 @@ TEST_F(NavigationControllerTest, CopyStateFrom) {
   std::unique_ptr<TestWebContents> other_contents(
       static_cast<TestWebContents*>(CreateTestWebContents()));
   NavigationControllerImpl& other_controller = other_contents->GetController();
-  other_controller.CopyStateFrom(controller);
+  other_controller.CopyStateFrom(controller, true);
 
   // other_controller should now contain 2 urls.
   ASSERT_EQ(2, other_controller.GetEntryCount());
@@ -4596,7 +4620,7 @@ TEST_F(NavigationControllerTest, HistoryNavigate) {
   process()->sink().ClearMessages();
 
   // Simulate the page calling history.back(). It should create a pending entry.
-  contents()->OnGoToEntryAtOffset(-1);
+  contents()->OnGoToEntryAtOffset(test_rvh(), -1);
   EXPECT_EQ(0, controller.GetPendingEntryIndex());
   // The actual cross-navigation is suspended until the current RVH tells us
   // it unloaded, simulate that.
@@ -4608,7 +4632,7 @@ TEST_F(NavigationControllerTest, HistoryNavigate) {
   process()->sink().ClearMessages();
 
   // Now test history.forward()
-  contents()->OnGoToEntryAtOffset(2);
+  contents()->OnGoToEntryAtOffset(test_rvh(), 2);
   EXPECT_EQ(2, controller.GetPendingEntryIndex());
   // The actual cross-navigation is suspended until the current RVH tells us
   // it unloaded, simulate that.
@@ -4621,7 +4645,7 @@ TEST_F(NavigationControllerTest, HistoryNavigate) {
   controller.DiscardNonCommittedEntries();
 
   // Make sure an extravagant history.go() doesn't break.
-  contents()->OnGoToEntryAtOffset(120);  // Out of bounds.
+  contents()->OnGoToEntryAtOffset(test_rvh(), 120);  // Out of bounds.
   EXPECT_EQ(-1, controller.GetPendingEntryIndex());
   EXPECT_FALSE(HasNavigationRequest());
 }
@@ -4971,9 +4995,7 @@ TEST_F(NavigationControllerTest, PushStateUpdatesTitleAndFavicon) {
   params.did_create_new_entry = true;
   params.url = kUrl2;
   params.page_state = PageState::CreateFromURL(kUrl2);
-  params.was_within_same_page = true;
-  main_test_rfh()->SendRendererInitiatedNavigationRequest(kUrl2, false);
-  main_test_rfh()->PrepareForCommit();
+  params.was_within_same_document = true;
   main_test_rfh()->SendNavigateWithParams(&params);
 
   // The title should immediately be visible on the new NavigationEntry.
@@ -5051,7 +5073,7 @@ TEST_F(NavigationControllerTest, PostThenReplaceStateThenReload) {
   params.transition = ui::PAGE_TRANSITION_FORM_SUBMIT;
   params.gesture = NavigationGestureUser;
   params.page_state = PageState::CreateFromURL(url);
-  params.was_within_same_page = false;
+  params.was_within_same_document = false;
   params.method = "POST";
   params.post_id = 2;
   main_test_rfh()->SendRendererInitiatedNavigationRequest(url, false);
@@ -5066,16 +5088,14 @@ TEST_F(NavigationControllerTest, PostThenReplaceStateThenReload) {
   params.transition = ui::PAGE_TRANSITION_LINK;
   params.gesture = NavigationGestureUser;
   params.page_state = PageState::CreateFromURL(replace_url);
-  params.was_within_same_page = true;
+  params.was_within_same_document = true;
   params.method = "GET";
   params.post_id = -1;
-  main_test_rfh()->SendRendererInitiatedNavigationRequest(replace_url, false);
-  main_test_rfh()->PrepareForCommit();
   contents()->GetMainFrame()->SendNavigateWithParams(&params);
 
   // Now reload. replaceState overrides the POST, so we should not show a
   // repost warning dialog.
-  controller_impl().Reload(true);
+  controller_impl().Reload(ReloadType::NORMAL, true);
   EXPECT_EQ(0, delegate->repost_form_warning_count());
 }
 
@@ -5090,7 +5110,7 @@ TEST_F(NavigationControllerTest, UnreachableURLGivesErrorPage) {
   params.transition = ui::PAGE_TRANSITION_LINK;
   params.gesture = NavigationGestureUser;
   params.page_state = PageState::CreateFromURL(url);
-  params.was_within_same_page = false;
+  params.was_within_same_document = false;
   params.method = "POST";
   params.post_id = 2;
   params.url_is_unreachable = true;
@@ -5103,7 +5123,7 @@ TEST_F(NavigationControllerTest, UnreachableURLGivesErrorPage) {
     main_test_rfh()->SendNavigateWithParams(&params);
     EXPECT_EQ(PAGE_TYPE_ERROR,
               controller_impl().GetLastCommittedEntry()->GetPageType());
-    EXPECT_EQ(NAVIGATION_TYPE_NEW_PAGE, observer.details().type);
+    EXPECT_EQ(NAVIGATION_TYPE_NEW_PAGE, observer.navigation_type());
   }
 
   // Navigate to existing page.
@@ -5115,7 +5135,7 @@ TEST_F(NavigationControllerTest, UnreachableURLGivesErrorPage) {
     main_test_rfh()->SendNavigateWithParams(&params);
     EXPECT_EQ(PAGE_TYPE_ERROR,
               controller_impl().GetLastCommittedEntry()->GetPageType());
-    EXPECT_EQ(NAVIGATION_TYPE_EXISTING_PAGE, observer.details().type);
+    EXPECT_EQ(NAVIGATION_TYPE_EXISTING_PAGE, observer.navigation_type());
   }
 
   // Navigate to same page.
@@ -5131,21 +5151,19 @@ TEST_F(NavigationControllerTest, UnreachableURLGivesErrorPage) {
     main_test_rfh()->SendNavigateWithParams(&params);
     EXPECT_EQ(PAGE_TYPE_ERROR,
               controller_impl().GetLastCommittedEntry()->GetPageType());
-    EXPECT_EQ(NAVIGATION_TYPE_SAME_PAGE, observer.details().type);
+    EXPECT_EQ(NAVIGATION_TYPE_SAME_PAGE, observer.navigation_type());
   }
 
-  // Navigate in page.
+  // Navigate without changing document.
   params.url = GURL("http://foo#foo");
   params.transition = ui::PAGE_TRANSITION_LINK;
-  params.was_within_same_page = true;
+  params.was_within_same_document = true;
   {
     LoadCommittedDetailsObserver observer(contents());
-    main_test_rfh()->SendRendererInitiatedNavigationRequest(params.url, false);
-    main_test_rfh()->PrepareForCommit();
     main_test_rfh()->SendNavigateWithParams(&params);
     EXPECT_EQ(PAGE_TYPE_ERROR,
               controller_impl().GetLastCommittedEntry()->GetPageType());
-    EXPECT_TRUE(observer.details().is_in_page);
+    EXPECT_TRUE(observer.is_same_document());
   }
 }
 
@@ -5208,6 +5226,167 @@ TEST_F(NavigationControllerTest, StaleNavigationsResurrected) {
   EXPECT_EQ(url_a, controller.GetEntryAtIndex(0)->GetURL());
   EXPECT_EQ(url_c, controller.GetEntryAtIndex(1)->GetURL());
   EXPECT_EQ(url_b, controller.GetEntryAtIndex(2)->GetURL());
+}
+
+// Tests that successive navigations with intermittent duplicate navigations
+// are correctly marked as reload in the navigation controller.
+// We test the cases where in a navigation is pending/comitted before the new
+// navigation is initiated.
+// http://crbug.com/664319
+TEST_F(NavigationControllerTest, MultipleNavigationsAndReload) {
+  NavigationControllerImpl& controller = controller_impl();
+  TestNotificationTracker notifications;
+  RegisterForAllNavNotifications(&notifications, &controller);
+
+  GURL initial_url("http://www.google.com");
+  GURL url_1("http://foo.com");
+  GURL url_2("http://foo2.com");
+
+  // Test 1.
+  // A normal navigation to initial_url should not be marked as a reload.
+  controller.LoadURL(initial_url, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+  EXPECT_EQ(initial_url, controller.GetVisibleEntry()->GetURL());
+  main_test_rfh()->SimulateNavigationStart(initial_url);
+  EXPECT_EQ(initial_url, controller.GetVisibleEntry()->GetURL());
+
+  main_test_rfh()->SimulateNavigationCommit(initial_url);
+  EXPECT_EQ(ReloadType::NONE, last_reload_type_);
+
+  // Test 2.
+  // A navigation to initial_url with the navigation commit delayed should be
+  // marked as a reload.
+  controller.LoadURL(initial_url, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+
+  EXPECT_EQ(initial_url, controller.GetVisibleEntry()->GetURL());
+  main_test_rfh()->SimulateNavigationStart(initial_url);
+  EXPECT_EQ(initial_url, controller.GetVisibleEntry()->GetURL());
+  EXPECT_EQ(ReloadType::NORMAL, last_reload_type_);
+
+  // Test 3.
+  // A navigation to url_1 while the navigation to intial_url is still pending
+  // should not be marked as a reload.
+  controller.LoadURL(url_1, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+
+  EXPECT_EQ(url_1, controller.GetVisibleEntry()->GetURL());
+  main_test_rfh()->SimulateNavigationStart(url_1);
+  EXPECT_EQ(url_1, controller.GetVisibleEntry()->GetURL());
+  EXPECT_EQ(ReloadType::NONE, last_reload_type_);
+
+  // Test 4.
+  // A navigation to url_1 while the previous navigation to url_1 is pending
+  // should be marked as reload.
+  controller.LoadURL(url_1, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+
+  EXPECT_EQ(url_1, controller.GetVisibleEntry()->GetURL());
+  main_test_rfh()->SimulateNavigationStart(url_1);
+  EXPECT_EQ(url_1, controller.GetVisibleEntry()->GetURL());
+  EXPECT_EQ(ReloadType::NORMAL, last_reload_type_);
+
+  main_test_rfh()->SimulateNavigationCommit(initial_url);
+
+  // Test 5
+  // A navigation to url_2 followed by a navigation to the previously pending
+  // url_1 should not be marked as a reload.
+  controller.LoadURL(url_2, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+  EXPECT_EQ(url_2, controller.GetVisibleEntry()->GetURL());
+  main_test_rfh()->SimulateNavigationStart(url_2);
+  EXPECT_EQ(url_2, controller.GetVisibleEntry()->GetURL());
+  EXPECT_EQ(ReloadType::NONE, last_reload_type_);
+
+  controller.LoadURL(url_1, Referrer(), ui::PAGE_TRANSITION_TYPED,
+                     std::string());
+
+  EXPECT_EQ(url_1, controller.GetVisibleEntry()->GetURL());
+  main_test_rfh()->SimulateNavigationStart(url_1);
+  EXPECT_EQ(url_1, controller.GetVisibleEntry()->GetURL());
+  EXPECT_EQ(ReloadType::NONE, last_reload_type_);
+
+  main_test_rfh()->SimulateNavigationCommit(url_2);
+  main_test_rfh()->SimulateNavigationCommit(url_1);
+  main_test_rfh()->SimulateNavigationCommit(url_1);
+}
+
+// Test to ensure that the pending entry index is updated when a transient entry
+// is inserted or removed.
+TEST_F(NavigationControllerTest, PendingEntryIndexUpdatedWithTransient) {
+  NavigationControllerImpl& controller = controller_impl();
+  const GURL url_0("http://foo/0");
+  const GURL url_1("http://foo/1");
+  const GURL url_transient_1("http://foo/transient_1");
+  const GURL url_transient_2("http://foo/transient_2");
+
+  NavigateAndCommit(url_0);
+  NavigateAndCommit(url_1);
+  controller.GoBack();
+  contents()->CommitPendingNavigation();
+  controller.GoForward();
+
+  // Check the state before the insertion of the transient entry.
+  // entries[0] = url_0  <- last committed entry.
+  // entries[1] = url_1  <- pending entry.
+  ASSERT_EQ(2, controller.GetEntryCount());
+  EXPECT_EQ(0, controller.GetLastCommittedEntryIndex());
+  EXPECT_EQ(1, controller.GetPendingEntryIndex());
+  EXPECT_EQ(controller.GetEntryAtIndex(1), controller.GetPendingEntry());
+  EXPECT_EQ(url_0, controller.GetEntryAtIndex(0)->GetURL());
+  EXPECT_EQ(url_1, controller.GetEntryAtIndex(1)->GetURL());
+
+  // Insert a transient entry before the pending one. It should increase the
+  // pending entry index by one (1 -> 2).
+  std::unique_ptr<NavigationEntry> transient_entry_1(new NavigationEntryImpl);
+  transient_entry_1->SetURL(url_transient_1);
+  controller.SetTransientEntry(std::move(transient_entry_1));
+
+  // Check the state after the insertion of the transient entry.
+  // entries[0] = url_0           <- last committed entry
+  // entries[1] = url_transient_1 <- transient entry
+  // entries[2] = url_1           <- pending entry
+  ASSERT_EQ(3, controller.GetEntryCount());
+  EXPECT_EQ(0, controller.GetLastCommittedEntryIndex());
+  EXPECT_EQ(2, controller.GetPendingEntryIndex());
+  EXPECT_EQ(controller.GetEntryAtIndex(1), controller.GetTransientEntry());
+  EXPECT_EQ(controller.GetEntryAtIndex(2), controller.GetPendingEntry());
+  EXPECT_EQ(url_0, controller.GetEntryAtIndex(0)->GetURL());
+  EXPECT_EQ(url_transient_1, controller.GetEntryAtIndex(1)->GetURL());
+  EXPECT_EQ(url_1, controller.GetEntryAtIndex(2)->GetURL());
+
+  // Insert another transient entry. It should replace the previous one and this
+  // time the pending entry index should retain its value (i.e. 2).
+  std::unique_ptr<NavigationEntry> transient_entry_2(new NavigationEntryImpl);
+  transient_entry_2->SetURL(url_transient_2);
+  controller.SetTransientEntry(std::move(transient_entry_2));
+
+  // Check the state after the second insertion of a transient entry.
+  // entries[0] = url_0           <- last committed entry
+  // entries[1] = url_transient_2 <- transient entry
+  // entries[2] = url_1           <- pending entry
+  ASSERT_EQ(3, controller.GetEntryCount());
+  EXPECT_EQ(0, controller.GetLastCommittedEntryIndex());
+  EXPECT_EQ(2, controller.GetPendingEntryIndex());
+  EXPECT_EQ(controller.GetEntryAtIndex(1), controller.GetTransientEntry());
+  EXPECT_EQ(controller.GetEntryAtIndex(2), controller.GetPendingEntry());
+  EXPECT_EQ(url_0, controller.GetEntryAtIndex(0)->GetURL());
+  EXPECT_EQ(url_transient_2, controller.GetEntryAtIndex(1)->GetURL());
+  EXPECT_EQ(url_1, controller.GetEntryAtIndex(2)->GetURL());
+
+  // Commit the pending entry.
+  contents()->CommitPendingNavigation();
+
+  // Check the final state.
+  // entries[0] = url_0
+  // entries[1] = url_1  <- last committed entry
+  ASSERT_EQ(2, controller.GetEntryCount());
+  EXPECT_EQ(1, controller.GetLastCommittedEntryIndex());
+  EXPECT_EQ(-1, controller.GetPendingEntryIndex());
+  EXPECT_EQ(nullptr, controller.GetPendingEntry());
+  EXPECT_EQ(nullptr, controller.GetTransientEntry());
+  EXPECT_EQ(url_0, controller.GetEntryAtIndex(0)->GetURL());
+  EXPECT_EQ(url_1, controller.GetEntryAtIndex(1)->GetURL());
 }
 
 }  // namespace content

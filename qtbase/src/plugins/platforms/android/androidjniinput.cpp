@@ -50,7 +50,7 @@
 
 #include <QGuiApplication>
 #include <QDebug>
-#include <math.h>
+#include <QtMath>
 
 QT_BEGIN_NAMESPACE
 
@@ -252,7 +252,7 @@ namespace QtAndroidInput
         QWindowSystemInterface::TouchPoint touchPoint;
         touchPoint.id = id;
         touchPoint.pressure = pressure;
-        touchPoint.rotation = rotation * 180 / M_PI;
+        touchPoint.rotation = qRadiansToDegrees(rotation);
         touchPoint.normalPosition = QPointF(double(x / dw), double(y / dh));
         touchPoint.state = state;
         touchPoint.area = QRectF(x - double(minor),

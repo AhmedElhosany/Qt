@@ -70,13 +70,25 @@ class IdlSchemaTest(unittest.TestCase):
   def testLegalValues(self):
     self.assertEquals({
         'x': {'name': 'x', 'type': 'integer', 'enum': [1,2],
-              'description': 'This comment tests "double-quotes".'},
+              'description': 'This comment tests "double-quotes".',
+              'jsexterns': None},
         'y': {'name': 'y', 'type': 'string'},
         'z': {'name': 'z', 'type': 'string'},
         'a': {'name': 'a', 'type': 'string'},
         'b': {'name': 'b', 'type': 'string'},
         'c': {'name': 'c', 'type': 'string'}},
       getType(self.idl_basics, 'MyType1')['properties'])
+
+  def testIOThreadFunc(self):
+    schema = self.idl_basics
+
+    func = getFunction(schema, 'function32')
+    self.assertTrue(func is not None)
+    self.assertTrue(func['forIOThread'])
+
+    func = getFunction(schema, 'function1')
+    self.assertTrue(func is not None)
+    self.assertTrue('forIOThread' not in func)
 
   def testMemberOrdering(self):
     self.assertEquals(
@@ -402,21 +414,25 @@ class IdlSchemaTest(unittest.TestCase):
     self.assertEquals(OrderedDict([
       ('first', OrderedDict([
         ('description', 'Integer property.'),
+        ('jsexterns', None),
         ('type', 'integer'),
         ('value', 42),
       ])),
       ('second', OrderedDict([
         ('description', 'Double property.'),
+        ('jsexterns', None),
         ('type', 'number'),
         ('value', 42.0),
       ])),
       ('third', OrderedDict([
         ('description', 'String property.'),
+        ('jsexterns', None),
         ('type', 'string'),
         ('value', 'hello world'),
       ])),
       ('fourth', OrderedDict([
         ('description', 'Unvalued property.'),
+        ('jsexterns', None),
         ('type', 'integer'),
       ])),
     ]), schema.get('properties'))

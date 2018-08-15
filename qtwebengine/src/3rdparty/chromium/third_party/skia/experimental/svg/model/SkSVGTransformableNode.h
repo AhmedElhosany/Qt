@@ -13,7 +13,7 @@
 
 class SkSVGTransformableNode : public SkSVGNode {
 public:
-    virtual ~SkSVGTransformableNode() = default;
+    ~SkSVGTransformableNode() override = default;
 
     void setTransform(const SkSVGTransformType& t) { fTransform = t; }
 
@@ -23,6 +23,8 @@ protected:
     bool onPrepareToRender(SkSVGRenderContext*) const override;
 
     void onSetAttribute(SkSVGAttribute, const SkSVGValue&) override;
+
+    void mapToParent(SkPath*) const;
 
 private:
     // FIXME: should be sparse

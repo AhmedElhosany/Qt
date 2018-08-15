@@ -10,4 +10,34 @@ Polymer({
   is: 'settings-toggle-button',
 
   behaviors: [SettingsBooleanControlBehavior],
+
+  properties: {
+    elideLabel: {
+      type: Boolean,
+      reflectToAttribute: true,
+    },
+  },
+
+  /** @override */
+  focus: function() {
+    this.$.control.focus();
+  },
+
+  /** @private */
+  onLabelWrapperTap_: function() {
+    if (this.controlDisabled_())
+      return;
+
+    this.checked = !this.checked;
+    this.notifyChangedByUserInteraction();
+  },
+
+  /**
+   * TODO(scottchen): temporary fix until polymer gesture bug resolved. See:
+   * https://github.com/PolymerElements/paper-slider/issues/186
+   * @private
+   */
+  resetTrackLock_: function() {
+    Polymer.Gestures.gestures.tap.reset();
+  },
 });

@@ -44,10 +44,6 @@
 #include <private/qapplication_p.h>
 #include "qclipboard.h"
 
-#ifdef Q_OS_MAC
-#include <cstdlib> // For the random function.
-#endif
-
 #include <qlineedit.h>
 #include <private/qlineedit_p.h>
 #include <private/qwidgetlinecontrol_p.h>
@@ -1922,7 +1918,7 @@ void tst_QLineEdit::noCursorBlinkWhenReadOnly()
     centerOnScreen(&le);
     le.show();
     le.setFocus();
-    QTest::qWaitForWindowActive(&le);
+    QVERIFY(QTest::qWaitForWindowActive(&le));
     le.updates = 0;
     QTest::qWait(cursorFlashTime);
     QVERIFY(le.updates > 0);
@@ -1941,17 +1937,7 @@ void tst_QLineEdit::noCursorBlinkWhenReadOnly()
 static void figureOutProperKey(Qt::Key &key, Qt::KeyboardModifiers &pressState)
 {
 #ifdef Q_OS_MAC
-    static bool tst_lineedit_randomized = false;
-    // Mac has 3 different ways of accomplishing this (same for moving to the back)
-    // So I guess we should just randomly do this for now. Which may get people mad, but if
-    // we fail at one point, it's just a matter of setting roll to the correct value
-    // instead of random.
-
-    if (!tst_lineedit_randomized) {
-        tst_lineedit_randomized = true;
-        ::srandom(ulong(time(0)));
-    }
-    long roll = ::random() % 3;
+    long roll = QRandomGenerator::global()->bounded(3);
     switch (roll) {
     case 0:
         key = key == Qt::Key_Home ? Qt::Key_Up : Qt::Key_Down;
@@ -1963,9 +1949,8 @@ static void figureOutProperKey(Qt::Key &key, Qt::KeyboardModifiers &pressState)
         break;
     }
 #else
-    // Naively kill the warning.
-    key = key;
-    pressState = pressState;
+    Q_UNUSED(key);
+    Q_UNUSED(pressState);
 #endif
 }
 
@@ -3361,7 +3346,7 @@ void tst_QLineEdit::inlineCompletion()
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     centerOnScreen(testWidget);
     testWidget->show();
-    QTest::qWaitForWindowExposed(testWidget);
+    QVERIFY(QTest::qWaitForWindowExposed(testWidget));
     testWidget->setFocus();
     QTRY_COMPARE(qApp->activeWindow(), (QWidget*)testWidget);
     testWidget->setCompleter(completer);
@@ -3689,7 +3674,7 @@ void tst_QLineEdit::task229938_dontEmitChangedWhenTextIsNotChanged()
     QLineEdit lineEdit;
     lineEdit.setMaxLength(5);
     lineEdit.show();
-    QTest::qWaitForWindowExposed(&lineEdit); // to be safe and avoid failing setFocus with window managers
+    QVERIFY(QTest::qWaitForWindowExposed(&lineEdit)); // to be safe and avoid failing setFocus with window managers
     lineEdit.setFocus();
     QSignalSpy changedSpy(&lineEdit, SIGNAL(textChanged(QString)));
     QTest::qWait(200);
@@ -3979,6 +3964,8 @@ void tst_QLineEdit::QTBUG16850_setSelection()
     le.setText("  1");
     le.setSelection(3, 1);
     QCOMPARE(le.selectionStart(), 3);
+    QCOMPARE(le.selectionEnd(), 4);
+    QCOMPARE(le.selectionLength(), 1);
     QCOMPARE(le.selectedText(), QString("1"));
 }
 
@@ -4173,11 +4160,16 @@ void tst_QLineEdit::inputMethodSelection()
 
     QCOMPARE(selectionSpy.count(), 0);
     QCOMPARE(testWidget->selectionStart(), -1);
+    QCOMPARE(testWidget->selectionEnd(), -1);
+    QCOMPARE(testWidget->selectionLength(), 0);
 
     testWidget->setSelection(0,5);
 
     QCOMPARE(selectionSpy.count(), 1);
     QCOMPARE(testWidget->selectionStart(), 0);
+    QCOMPARE(testWidget->selectionEnd(), 5);
+    QCOMPARE(testWidget->selectionLength(), 5);
+
 
     // selection gained
     {
@@ -4189,6 +4181,8 @@ void tst_QLineEdit::inputMethodSelection()
 
     QCOMPARE(selectionSpy.count(), 2);
     QCOMPARE(testWidget->selectionStart(), 12);
+    QCOMPARE(testWidget->selectionEnd(), 17);
+    QCOMPARE(testWidget->selectionLength(), 5);
 
     // selection removed
     {
@@ -4199,6 +4193,10 @@ void tst_QLineEdit::inputMethodSelection()
     }
 
     QCOMPARE(selectionSpy.count(), 3);
+    QCOMPARE(testWidget->selectionStart(), -1);
+    QCOMPARE(testWidget->selectionEnd(), -1);
+    QCOMPARE(testWidget->selectionLength(), 0);
+
 }
 
 Q_DECLARE_METATYPE(Qt::InputMethodHints)

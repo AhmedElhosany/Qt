@@ -960,7 +960,7 @@ void Generator::generateBody(const Node *node, CodeMarker *marker)
 
     if (node->isDocumentNode()) {
         const DocumentNode *dn = static_cast<const DocumentNode *>(node);
-        if (dn->isExample()) {
+        if (dn->isExample() && !dn->noAutoList()) {
             generateExampleFiles(dn, marker);
         }
         else if (dn->docSubtype() == Node::File) {
@@ -983,8 +983,8 @@ void Generator::generateExampleFiles(const DocumentNode *dn, CodeMarker *marker)
 {
     if (dn->childNodes().isEmpty())
         return;
-    generateFileList(dn, marker, Node::File, QString("Files:"));
-    generateFileList(dn, marker, Node::Image, QString("Images:"));
+    generateFileList(dn, marker, Node::File);
+    generateFileList(dn, marker, Node::Image);
 }
 
 void Generator::generateDocumentNode(DocumentNode* /* dn */, CodeMarker* /* marker */)
@@ -1005,16 +1005,39 @@ void Generator::generateCollectionNode(CollectionNode* , CodeMarker* )
 void Generator::generateFileList(const DocumentNode* dn,
                                  CodeMarker* marker,
                                  Node::DocSubtype subtype,
-                                 const QString& tag)
+                                 const QString& regExp)
 {
     int count = 0;
     Text text;
     OpenedList openedList(OpenedList::Bullet);
+    QString tag;
 
-    text << Atom::ParaLeft << tag << Atom::ParaRight
-         << Atom(Atom::ListLeft, openedList.styleString());
+    NodeList children(dn->childNodes());
+    std::sort(children.begin(), children.end(), Generator::compareNodes);
+    if (!regExp.isEmpty()) {
+        QRegExp re(regExp);
+        QMutableListIterator<Node*> i(children);
+        while (i.hasNext()) {
+            if (!re.exactMatch(i.next()->name()))
+                i.remove();
+        }
+    }
+    if (children.size() > 1) {
+        switch (subtype) {
+        default:
+        case Node::File:
+            tag = "Files:";
+            break;
+        case Node::Image:
+            tag = "Images:";
+            break;
+        }
+        text << Atom::ParaLeft << tag << Atom::ParaRight;
+    }
 
-    foreach (const Node* child, dn->childNodes()) {
+    text << Atom(Atom::ListLeft, openedList.styleString());
+
+    foreach (const Node* child, children) {
         if (child->docSubtype() == subtype) {
             ++count;
             QString file = child->name();
@@ -1609,10 +1632,11 @@ void Generator::generateOverloadedSignal(const Node* node, CodeMarker* marker)
         objectName[0] = objectName[0].toLower();
     }
 
-
-    // We have an overloaded signal, show an example
-    QString code = "connect(" + objectName + ", static_cast<" + func->returnType()
-        + QLatin1Char('(') + func->parent()->name() + "::*)(";
+    // We have an overloaded signal, show an example. Note, for const
+    // overloaded signals one should use Q{Const,NonConst}Overload, but
+    // it is very unlikely that we will ever have public API overloading
+    // signals by const.
+    QString code = "connect(" + objectName + ", QOverload<";
     for (int i = 0; i < func->parameters().size(); ++i) {
         if (i != 0)
             code += ", ";
@@ -1620,10 +1644,7 @@ void Generator::generateOverloadedSignal(const Node* node, CodeMarker* marker)
         code += p.dataType() + p.rightType();
     }
 
-    code += QLatin1Char(')');
-    if (func->isConst())
-        code += " const";
-    code += ">(&" +  func->parent()->name() + "::" + func->name() + "),\n    [=](";
+    code += ">::of(&" + func->parent()->name() + "::" + func->name() + "),\n    [=](";
 
     for (int i = 0; i < func->parameters().size(); ++i) {
         if (i != 0)
@@ -1647,8 +1668,9 @@ void Generator::generateOverloadedSignal(const Node* node, CodeMarker* marker)
          << node->name()
          << Atom(Atom::FormattingRight,ATOM_FORMATTING_ITALIC)
          << " is overloaded in this class. "
-            "To connect to this one using the function pointer syntax, you must "
-            "specify the signal type in a static cast, as shown in this example:"
+            "To connect to this signal by using the function pointer syntax, Qt "
+            "provides a convenient helper for obtaining the function pointer as "
+            "shown in this example:"
           << Atom(Atom::Code, marker->markedUpCode(code, node, func->location()));
 
     generateText(text, node, marker);
@@ -2269,10 +2291,6 @@ QString Generator::typeString(const Node *node)
         return "QML signal handler";
     case Node::QmlMethod:
         return "QML method";
-    case Node::Module:
-        return "module";
-    case Node::QmlModule:
-        return "QML module";
     default:
         return "documentation";
     }

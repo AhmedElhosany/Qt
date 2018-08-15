@@ -2,35 +2,51 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "net/ssl/ssl_platform_key.h"
+#include "net/ssl/ssl_platform_key_mac.h"
 
-#include <Security/cssm.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <Security/SecBase.h>
 #include <Security/SecCertificate.h>
 #include <Security/SecIdentity.h>
 #include <Security/SecKey.h>
+#include <Security/cssm.h>
+#include <dlfcn.h>
 
 #include <memory>
 
+#include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/mac/availability.h"
+#include "base/mac/foundation_util.h"
 #include "base/mac/mac_logging.h"
+#include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_policy.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/synchronization/lock.h"
 #include "crypto/mac_security_services_lock.h"
 #include "crypto/openssl_util.h"
 #include "net/base/net_errors.h"
 #include "net/cert/x509_certificate.h"
+#include "net/cert/x509_util_mac.h"
 #include "net/ssl/ssl_platform_key_util.h"
 #include "net/ssl/ssl_private_key.h"
 #include "net/ssl/threaded_ssl_private_key.h"
 #include "third_party/boringssl/src/include/openssl/ecdsa.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
 #include "third_party/boringssl/src/include/openssl/nid.h"
 #include "third_party/boringssl/src/include/openssl/rsa.h"
+
+#if !defined(MAC_OS_X_VERSION_10_12) || \
+    MAC_OS_X_VERSION_MIN_ALLOWED < MAC_OS_X_VERSION_10_12
+// Redeclare typedefs that only exist in 10.12+ to suppress
+// -Wpartial-availability warnings.
+typedef CFStringRef SecKeyAlgorithm;
+#endif
 
 namespace net {
 
@@ -62,56 +78,87 @@ class ScopedCSSM_CC_HANDLE {
   DISALLOW_COPY_AND_ASSIGN(ScopedCSSM_CC_HANDLE);
 };
 
-// Looks up the private key for |certificate| in KeyChain and returns
-// a SecKeyRef or nullptr on failure. The caller takes ownership of the
-// result.
-SecKeyRef FetchSecKeyRefForCertificate(const X509Certificate* certificate) {
-  OSStatus status;
-  base::ScopedCFTypeRef<SecIdentityRef> identity;
-  {
-    base::AutoLock lock(crypto::GetMacSecurityServicesLock());
-    status = SecIdentityCreateWithCertificate(
-        nullptr, certificate->os_cert_handle(), identity.InitializeInto());
-  }
-  if (status != noErr) {
-    OSSTATUS_LOG(WARNING, status);
-    return nullptr;
+// These symbols were added in the 10.12 SDK, but we currently use an older SDK,
+// so look them up with dlsym.
+//
+// TODO(davidben): After https://crbug.com/669240 is fixed, use the APIs
+// directly.
+
+struct API_AVAILABLE(macosx(10.12)) SecKeyAPIs {
+  SecKeyAPIs() { Init(); }
+
+  void Init() {
+    SecKeyCreateSignature = reinterpret_cast<SecKeyCreateSignatureFunc>(
+        dlsym(RTLD_DEFAULT, "SecKeyCreateSignature"));
+    if (!SecKeyCreateSignature) {
+      NOTREACHED();
+      return;
+    }
+
+#define LOOKUP_ALGORITHM(name)                                          \
+  do {                                                                  \
+    SecKeyAlgorithm* algorithm =                                        \
+        reinterpret_cast<SecKeyAlgorithm*>(dlsym(RTLD_DEFAULT, #name)); \
+    if (!algorithm) {                                                   \
+      NOTREACHED();                                                     \
+      return;                                                           \
+    }                                                                   \
+    name = *algorithm;                                                  \
+  } while (0)
+
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmRSASignatureDigestPKCS1v15Raw);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA1);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA256);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA384);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA512);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmECDSASignatureDigestX962SHA1);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmECDSASignatureDigestX962SHA256);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmECDSASignatureDigestX962SHA384);
+    LOOKUP_ALGORITHM(kSecKeyAlgorithmECDSASignatureDigestX962SHA512);
+
+#undef LOOKUP_ALGORITHM
+
+    valid = true;
   }
 
-  base::ScopedCFTypeRef<SecKeyRef> private_key;
-  status = SecIdentityCopyPrivateKey(identity, private_key.InitializeInto());
-  if (status != noErr) {
-    OSSTATUS_LOG(WARNING, status);
-    return nullptr;
-  }
+  using SecKeyCreateSignatureFunc = CFDataRef (*)(SecKeyRef key,
+                                                  SecKeyAlgorithm algorithm,
+                                                  CFDataRef dataToSign,
+                                                  CFErrorRef* error);
 
-  return private_key.release();
-}
+  bool valid = false;
+  SecKeyCreateSignatureFunc SecKeyCreateSignature = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmRSASignatureDigestPKCS1v15Raw = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA1 = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA256 = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA384 = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA512 = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmECDSASignatureDigestX962SHA1 = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmECDSASignatureDigestX962SHA256 = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmECDSASignatureDigestX962SHA384 = nullptr;
+  SecKeyAlgorithm kSecKeyAlgorithmECDSASignatureDigestX962SHA512 = nullptr;
+};
 
-class SSLPlatformKeyMac : public ThreadedSSLPrivateKey::Delegate {
+base::LazyInstance<SecKeyAPIs>::Leaky API_AVAILABLE(macosx(10.12))
+    g_sec_key_apis = LAZY_INSTANCE_INITIALIZER;
+
+class SSLPlatformKeyCSSM : public ThreadedSSLPrivateKey::Delegate {
  public:
-  SSLPlatformKeyMac(SSLPrivateKey::Type type,
-                    size_t max_length,
-                    SecKeyRef key,
-                    const CSSM_KEY* cssm_key)
-      : type_(type),
-        max_length_(max_length),
+  SSLPlatformKeyCSSM(int type,
+                     size_t max_length,
+                     SecKeyRef key,
+                     const CSSM_KEY* cssm_key)
+      : max_length_(max_length),
         key_(key, base::scoped_policy::RETAIN),
         cssm_key_(cssm_key) {}
 
-  ~SSLPlatformKeyMac() override {}
-
-  SSLPrivateKey::Type GetType() override { return type_; }
+  ~SSLPlatformKeyCSSM() override {}
 
   std::vector<SSLPrivateKey::Hash> GetDigestPreferences() override {
-    static const SSLPrivateKey::Hash kHashes[] = {
+    return std::vector<SSLPrivateKey::Hash>{
         SSLPrivateKey::Hash::SHA512, SSLPrivateKey::Hash::SHA384,
         SSLPrivateKey::Hash::SHA256, SSLPrivateKey::Hash::SHA1};
-    return std::vector<SSLPrivateKey::Hash>(kHashes,
-                                            kHashes + arraysize(kHashes));
   }
-
-  size_t GetMaxSignatureLengthInBytes() override { return max_length_; }
 
   Error SignDigest(SSLPrivateKey::Hash hash,
                    const base::StringPiece& input,
@@ -201,38 +248,147 @@ class SSLPlatformKeyMac : public ThreadedSSLPrivateKey::Delegate {
   }
 
  private:
-  SSLPrivateKey::Type type_;
   size_t max_length_;
   base::ScopedCFTypeRef<SecKeyRef> key_;
   const CSSM_KEY* cssm_key_;
 
-  DISALLOW_COPY_AND_ASSIGN(SSLPlatformKeyMac);
+  DISALLOW_COPY_AND_ASSIGN(SSLPlatformKeyCSSM);
 };
 
-}  // namespace
+class API_AVAILABLE(macosx(10.12)) SSLPlatformKeySecKey
+    : public ThreadedSSLPrivateKey::Delegate {
+ public:
+  SSLPlatformKeySecKey(int type, size_t max_length, SecKeyRef key)
+      : type_(type), key_(key, base::scoped_policy::RETAIN) {}
 
-scoped_refptr<SSLPrivateKey> FetchClientCertPrivateKey(
-    X509Certificate* certificate) {
-  // Look up the private key.
-  base::ScopedCFTypeRef<SecKeyRef> private_key(
-      FetchSecKeyRefForCertificate(certificate));
-  if (!private_key)
-    return nullptr;
+  ~SSLPlatformKeySecKey() override {}
 
-  const CSSM_KEY* cssm_key;
-  OSStatus status = SecKeyGetCSSMKey(private_key.get(), &cssm_key);
-  if (status != noErr)
-    return nullptr;
+  std::vector<SSLPrivateKey::Hash> GetDigestPreferences() override {
+    return std::vector<SSLPrivateKey::Hash>{
+        SSLPrivateKey::Hash::SHA512, SSLPrivateKey::Hash::SHA384,
+        SSLPrivateKey::Hash::SHA256, SSLPrivateKey::Hash::SHA1};
+  }
 
-  SSLPrivateKey::Type key_type;
+  Error SignDigest(SSLPrivateKey::Hash hash,
+                   const base::StringPiece& input,
+                   std::vector<uint8_t>* signature) override {
+    const SecKeyAPIs& apis = g_sec_key_apis.Get();
+    if (!apis.valid) {
+      LOG(ERROR) << "SecKey APIs not found";
+      return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+    }
+
+    SecKeyAlgorithm algorithm = nullptr;
+    if (type_ == EVP_PKEY_RSA) {
+      switch (hash) {
+        case SSLPrivateKey::Hash::SHA512:
+          algorithm = apis.kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA512;
+          break;
+        case SSLPrivateKey::Hash::SHA384:
+          algorithm = apis.kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA384;
+          break;
+        case SSLPrivateKey::Hash::SHA256:
+          algorithm = apis.kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA256;
+          break;
+        case SSLPrivateKey::Hash::SHA1:
+          algorithm = apis.kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA1;
+          break;
+        case SSLPrivateKey::Hash::MD5_SHA1:
+          algorithm = apis.kSecKeyAlgorithmRSASignatureDigestPKCS1v15Raw;
+          break;
+      }
+    } else if (type_ == EVP_PKEY_EC) {
+      switch (hash) {
+        case SSLPrivateKey::Hash::SHA512:
+          algorithm = apis.kSecKeyAlgorithmECDSASignatureDigestX962SHA512;
+          break;
+        case SSLPrivateKey::Hash::SHA384:
+          algorithm = apis.kSecKeyAlgorithmECDSASignatureDigestX962SHA384;
+          break;
+        case SSLPrivateKey::Hash::SHA256:
+          algorithm = apis.kSecKeyAlgorithmECDSASignatureDigestX962SHA256;
+          break;
+        case SSLPrivateKey::Hash::SHA1:
+          algorithm = apis.kSecKeyAlgorithmECDSASignatureDigestX962SHA1;
+          break;
+        case SSLPrivateKey::Hash::MD5_SHA1:
+          // MD5-SHA1 is not used with ECDSA.
+          break;
+      }
+    }
+
+    if (!algorithm) {
+      NOTREACHED();
+      return ERR_FAILED;
+    }
+
+    base::ScopedCFTypeRef<CFDataRef> input_ref(CFDataCreateWithBytesNoCopy(
+        kCFAllocatorDefault, reinterpret_cast<const uint8_t*>(input.data()),
+        base::checked_cast<CFIndex>(input.size()), kCFAllocatorNull));
+
+    base::ScopedCFTypeRef<CFErrorRef> error;
+    base::ScopedCFTypeRef<CFDataRef> signature_ref(apis.SecKeyCreateSignature(
+        key_, algorithm, input_ref, error.InitializeInto()));
+    if (!signature_ref) {
+      LOG(ERROR) << error;
+      return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+    }
+
+    signature->assign(
+        CFDataGetBytePtr(signature_ref),
+        CFDataGetBytePtr(signature_ref) + CFDataGetLength(signature_ref));
+    return OK;
+  }
+
+ private:
+  int type_;
+  base::ScopedCFTypeRef<SecKeyRef> key_;
+
+  DISALLOW_COPY_AND_ASSIGN(SSLPlatformKeySecKey);
+};
+
+scoped_refptr<SSLPrivateKey> CreateSSLPrivateKeyForSecKey(
+    const X509Certificate* certificate,
+    SecKeyRef private_key) {
+  int key_type;
   size_t max_length;
   if (!GetClientCertInfo(certificate, &key_type, &max_length))
     return nullptr;
 
+  if (base::mac::IsAtLeastOS10_12()) {
+    return make_scoped_refptr(
+        new ThreadedSSLPrivateKey(base::MakeUnique<SSLPlatformKeySecKey>(
+                                      key_type, max_length, private_key),
+                                  GetSSLPlatformKeyTaskRunner()));
+  }
+
+  const CSSM_KEY* cssm_key;
+  OSStatus status = SecKeyGetCSSMKey(private_key, &cssm_key);
+  if (status != noErr) {
+    OSSTATUS_LOG(WARNING, status);
+    return nullptr;
+  }
+
   return make_scoped_refptr(new ThreadedSSLPrivateKey(
-      base::MakeUnique<SSLPlatformKeyMac>(key_type, max_length,
-                                          private_key.get(), cssm_key),
+      base::MakeUnique<SSLPlatformKeyCSSM>(key_type, max_length, private_key,
+                                           cssm_key),
       GetSSLPlatformKeyTaskRunner()));
+}
+
+}  // namespace
+
+scoped_refptr<SSLPrivateKey> CreateSSLPrivateKeyForSecIdentity(
+    const X509Certificate* certificate,
+    SecIdentityRef identity) {
+  base::ScopedCFTypeRef<SecKeyRef> private_key;
+  OSStatus status =
+      SecIdentityCopyPrivateKey(identity, private_key.InitializeInto());
+  if (status != noErr) {
+    OSSTATUS_LOG(WARNING, status);
+    return nullptr;
+  }
+
+  return CreateSSLPrivateKeyForSecKey(certificate, private_key.get());
 }
 
 #pragma clang diagnostic pop  // "-Wdeprecated-declarations"

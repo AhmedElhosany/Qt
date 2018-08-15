@@ -4,10 +4,13 @@
 
 #include "net/log/net_log.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
+#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -128,12 +131,16 @@ bool NetLog::IsCapturing() const {
   return base::subtle::NoBarrier_Load(&is_capturing_) != 0;
 }
 
-void NetLog::DeprecatedAddObserver(NetLog::ThreadSafeObserver* observer,
-                                   NetLogCaptureMode capture_mode) {
+void NetLog::AddObserver(NetLog::ThreadSafeObserver* observer,
+                         NetLogCaptureMode capture_mode) {
   base::AutoLock lock(lock_);
 
   DCHECK(!observer->net_log_);
-  observers_.AddObserver(observer);
+  DCHECK(!HasObserver(observer));
+  DCHECK_LT(observers_.size(), 20u);  // Performance sanity check.
+
+  observers_.push_back(observer);
+
   observer->net_log_ = this;
   observer->capture_mode_ = capture_mode;
   UpdateIsCapturing();
@@ -143,17 +150,20 @@ void NetLog::SetObserverCaptureMode(NetLog::ThreadSafeObserver* observer,
                                     NetLogCaptureMode capture_mode) {
   base::AutoLock lock(lock_);
 
-  DCHECK(observers_.HasObserver(observer));
+  DCHECK(HasObserver(observer));
   DCHECK_EQ(this, observer->net_log_);
   observer->capture_mode_ = capture_mode;
 }
 
-void NetLog::DeprecatedRemoveObserver(NetLog::ThreadSafeObserver* observer) {
+void NetLog::RemoveObserver(NetLog::ThreadSafeObserver* observer) {
   base::AutoLock lock(lock_);
 
-  DCHECK(observers_.HasObserver(observer));
   DCHECK_EQ(this, observer->net_log_);
-  observers_.RemoveObserver(observer);
+
+  auto it = std::find(observers_.begin(), observers_.end(), observer);
+  DCHECK(it != observers_.end());
+  observers_.erase(it);
+
   observer->net_log_ = NULL;
   observer->capture_mode_ = NetLogCaptureMode();
   UpdateIsCapturing();
@@ -161,8 +171,12 @@ void NetLog::DeprecatedRemoveObserver(NetLog::ThreadSafeObserver* observer) {
 
 void NetLog::UpdateIsCapturing() {
   lock_.AssertAcquired();
-  base::subtle::NoBarrier_Store(&is_capturing_,
-                                observers_.might_have_observers() ? 1 : 0);
+  base::subtle::NoBarrier_Store(&is_capturing_, observers_.size() ? 1 : 0);
+}
+
+bool NetLog::HasObserver(ThreadSafeObserver* observer) {
+  lock_.AssertAcquired();
+  return base::ContainsValue(observers_, observer);
 }
 
 // static
@@ -186,12 +200,12 @@ const char* NetLog::EventTypeToString(NetLogEventType event) {
 }
 
 // static
-base::Value* NetLog::GetEventTypesAsValue() {
-  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
+std::unique_ptr<base::Value> NetLog::GetEventTypesAsValue() {
+  auto dict = base::MakeUnique<base::DictionaryValue>();
   for (int i = 0; i < static_cast<int>(NetLogEventType::COUNT); ++i) {
     dict->SetInteger(EventTypeToString(static_cast<NetLogEventType>(i)), i);
   }
-  return dict.release();
+  return std::move(dict);
 }
 
 // static
@@ -209,12 +223,12 @@ const char* NetLog::SourceTypeToString(NetLogSourceType source) {
 }
 
 // static
-base::Value* NetLog::GetSourceTypesAsValue() {
-  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
+std::unique_ptr<base::Value> NetLog::GetSourceTypesAsValue() {
+  auto dict = base::MakeUnique<base::DictionaryValue>();
   for (int i = 0; i < static_cast<int>(NetLogSourceType::COUNT); ++i) {
     dict->SetInteger(SourceTypeToString(static_cast<NetLogSourceType>(i)), i);
   }
-  return dict.release();
+  return std::move(dict);
 }
 
 // static
@@ -279,8 +293,8 @@ void NetLog::AddEntry(NetLogEventType type,
 
   // Notify all of the log observers.
   base::AutoLock lock(lock_);
-  for (auto& observer : observers_)
-    observer.OnAddEntryData(entry_data);
+  for (auto* observer : observers_)
+    observer->OnAddEntryData(entry_data);
 }
 
 }  // namespace net

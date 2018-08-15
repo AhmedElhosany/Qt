@@ -48,8 +48,8 @@
 // We mean it.
 //
 
-#include "qquickpopup_p.h"
-#include "qquickcontrol_p.h"
+#include <QtQuickTemplates2/private/qquickpopup_p.h>
+#include <QtQuickTemplates2/private/qquickcontrol_p.h>
 
 #include <QtCore/private/qobject_p.h>
 #include <QtQuick/qquickitem.h>
@@ -115,6 +115,12 @@ public:
 #endif
 
     virtual void reposition();
+
+    void createOverlay();
+    void destroyOverlay();
+    void toggleOverlay();
+    virtual void showOverlay();
+    virtual void hideOverlay();
     virtual void resizeOverlay();
 
     virtual bool prepareEnterTransition();
@@ -157,6 +163,7 @@ public:
     bool allowHorizontalResize;
     bool hadActiveFocusBeforeExitTransition;
     bool interactive;
+    bool hasClosePolicy;
     int touchId;
     qreal x;
     qreal y;

@@ -48,10 +48,6 @@ UI_BASE_X_EXPORT bool IsXInput2Available();
 // Return true iff the display supports Xrender
 UI_BASE_X_EXPORT bool QueryRenderSupport(XDisplay* dpy);
 
-// Returns an X11 Cursor, sharable across the process.
-// |cursor_shape| is an X font cursor shape, see XCreateFontCursor().
-UI_BASE_X_EXPORT::Cursor GetXCursor(int cursor_shape);
-
 // Creates a custom X cursor from the image. This takes ownership of image. The
 // caller must not free/modify the image. The refcount of the newly created
 // cursor is set to 1.
@@ -181,9 +177,6 @@ UI_BASE_X_EXPORT bool SetStringProperty(XID window,
                                         XAtom type,
                                         const std::string& value);
 
-// Gets the X atom for default display corresponding to atom_name.
-UI_BASE_X_EXPORT XAtom GetAtom(const char* atom_name);
-
 // Sets the WM_CLASS attribute for a given X11 window.
 UI_BASE_X_EXPORT void SetWindowClassHint(XDisplay* display,
                                          XID window,
@@ -278,6 +271,9 @@ UI_BASE_X_EXPORT WindowManagerName GuessWindowManager();
 // can't determine it, return "Unknown".
 UI_BASE_X_EXPORT std::string GuessWindowManagerName();
 
+// Returns true if a compositing manager is present.
+UI_BASE_X_EXPORT bool IsCompositingManagerPresent();
+
 // Enable the default X error handlers. These will log the error and abort
 // the process if called. Use SetX11ErrorHandlers() from x11_util_internal.h
 // to set your own error handlers.
@@ -328,9 +324,6 @@ class UI_BASE_X_EXPORT XScopedCursor {
 };
 
 namespace test {
-// Resets the cache used by GetXCursor(). Only useful for tests that may delete
-// the display.
-UI_BASE_X_EXPORT void ResetXCursorCache();
 
 // Returns the cached XcursorImage for |cursor|.
 UI_BASE_X_EXPORT const XcursorImage* GetCachedXcursorImage(::Cursor cursor);

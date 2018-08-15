@@ -20,11 +20,12 @@
 #include "base/trace_event/trace_event.h"
 #include "content/child/child_process.h"
 #include "content/public/child/child_thread.h"
+#include "content/public/common/service_names.mojom.h"
 #include "media/base/bind_to_current_loop.h"
 #include "media/base/limits.h"
 #include "media/base/video_frame.h"
 #include "mojo/public/cpp/system/platform_handle.h"
-#include "services/service_manager/public/cpp/interface_provider.h"
+#include "services/service_manager/public/cpp/connector.h"
 
 namespace content {
 
@@ -75,15 +76,18 @@ VideoCaptureImpl::VideoCaptureImpl(media::VideoCaptureSessionId session_id)
 
   if (ChildThread::Get()) {  // This will be null in unit tests.
     mojom::VideoCaptureHostPtr temp_video_capture_host;
-    ChildThread::Get()->GetRemoteInterfaces()->GetInterface(
-        mojo::GetProxy(&temp_video_capture_host));
+    ChildThread::Get()->GetConnector()->BindInterface(
+        mojom::kBrowserServiceName,
+        mojo::MakeRequest(&temp_video_capture_host));
     video_capture_host_info_ = temp_video_capture_host.PassInterface();
   }
 }
 
 VideoCaptureImpl::~VideoCaptureImpl() {
   DCHECK(io_thread_checker_.CalledOnValidThread());
-  if (state_ == VIDEO_CAPTURE_STATE_STARTED && GetVideoCaptureHost())
+  if ((state_ == VIDEO_CAPTURE_STATE_STARTING ||
+       state_ == VIDEO_CAPTURE_STATE_STARTED) &&
+      GetVideoCaptureHost())
     GetVideoCaptureHost()->Stop(device_id_);
 }
 
@@ -107,29 +111,23 @@ void VideoCaptureImpl::StartCapture(
   client_info.state_update_cb = state_update_cb;
   client_info.deliver_frame_cb = deliver_frame_cb;
 
-  if (state_ == VIDEO_CAPTURE_STATE_ERROR) {
-    state_update_cb.Run(VIDEO_CAPTURE_STATE_ERROR);
-  } else if (clients_pending_on_restart_.count(client_id) ||
-             clients_.count(client_id)) {
-    DLOG(FATAL) << __func__ << " This client has already started.";
-  } else {
-    // Note: |state_| might not be started at this point. But we tell
-    // client that we have started.
-    state_update_cb.Run(VIDEO_CAPTURE_STATE_STARTED);
-    if (state_ == VIDEO_CAPTURE_STATE_STARTED) {
+  switch (state_) {
+    case VIDEO_CAPTURE_STATE_STARTING:
+    case VIDEO_CAPTURE_STATE_STARTED:
       clients_[client_id] = client_info;
       // TODO(sheu): Allowing resolution change will require that all
       // outstanding clients of a capture session support resolution change.
       DCHECK_EQ(params_.resolution_change_policy,
                 params.resolution_change_policy);
-    } else if (state_ == VIDEO_CAPTURE_STATE_STOPPING) {
+      return;
+    case VIDEO_CAPTURE_STATE_STOPPING:
       clients_pending_on_restart_[client_id] = client_info;
       DVLOG(1) << __func__ << " Got new resolution while stopping: "
                << params.requested_format.frame_size.ToString();
-    } else {
+      return;
+    case VIDEO_CAPTURE_STATE_STOPPED:
+    case VIDEO_CAPTURE_STATE_ENDED:
       clients_[client_id] = client_info;
-      if (state_ == VIDEO_CAPTURE_STATE_STARTED)
-        return;
       params_ = params;
       params_.requested_format.frame_rate =
           std::min(params_.requested_format.frame_rate,
@@ -138,7 +136,16 @@ void VideoCaptureImpl::StartCapture(
       DVLOG(1) << "StartCapture: starting with first resolution "
                << params_.requested_format.frame_size.ToString();
       StartCaptureInternal();
-    }
+      return;
+    case VIDEO_CAPTURE_STATE_ERROR:
+      state_update_cb.Run(VIDEO_CAPTURE_STATE_ERROR);
+      return;
+    case VIDEO_CAPTURE_STATE_PAUSED:
+    case VIDEO_CAPTURE_STATE_RESUMED:
+      // The internal |state_| is never set to PAUSED/RESUMED since
+      // VideoCaptureImpl is not modified by those.
+      NOTREACHED();
+      return;
   }
 }
 
@@ -188,8 +195,13 @@ void VideoCaptureImpl::OnStateChanged(mojom::VideoCaptureState state) {
 
   switch (state) {
     case mojom::VideoCaptureState::STARTED:
-      // Capture has started in the browser process. Since we have already
-      // told all clients that we have started there's nothing to do.
+      state_ = VIDEO_CAPTURE_STATE_STARTED;
+      for (const auto& client : clients_)
+        client.second.state_update_cb.Run(VIDEO_CAPTURE_STATE_STARTED);
+      // In case there is any frame dropped before STARTED, always request for
+      // a frame refresh to start the video call with.
+      // Capture device will make a decision if it should refresh a frame.
+      RequestRefreshFrame();
       break;
     case mojom::VideoCaptureState::STOPPED:
       state_ = VIDEO_CAPTURE_STATE_STOPPED;
@@ -228,9 +240,6 @@ void VideoCaptureImpl::OnBufferCreated(int32_t buffer_id,
   DCHECK(io_thread_checker_.CalledOnValidThread());
   DCHECK(handle.is_valid());
 
-  if (state_ != VIDEO_CAPTURE_STATE_STARTED)
-    return;
-
   base::SharedMemoryHandle memory_handle;
   size_t memory_size = 0;
   bool read_only_flag = false;
@@ -255,7 +264,7 @@ void VideoCaptureImpl::OnBufferCreated(int32_t buffer_id,
 }
 
 void VideoCaptureImpl::OnBufferReady(int32_t buffer_id,
-                                     mojom::VideoFrameInfoPtr info) {
+                                     media::mojom::VideoFrameInfoPtr info) {
   DVLOG(1) << __func__ << " buffer_id: " << buffer_id;
   DCHECK(io_thread_checker_.CalledOnValidThread());
 
@@ -269,14 +278,13 @@ void VideoCaptureImpl::OnBufferReady(int32_t buffer_id,
                 << ", storage:" << info->storage_type;
   }
   if (!consume_buffer) {
-    GetVideoCaptureHost()->ReleaseBuffer(device_id_, buffer_id,
-                                         gpu::SyncToken(), -1.0);
+    GetVideoCaptureHost()->ReleaseBuffer(device_id_, buffer_id, -1.0);
     return;
   }
 
   base::TimeTicks reference_time;
   media::VideoFrameMetadata frame_metadata;
-  frame_metadata.MergeInternalValuesFrom(info->metadata);
+  frame_metadata.MergeInternalValuesFrom(*info->metadata);
   const bool success = frame_metadata.GetTimeTicks(
       media::VideoFrameMetadata::REFERENCE_TIME, &reference_time);
   DCHECK(success);
@@ -310,20 +318,18 @@ void VideoCaptureImpl::OnBufferReady(int32_t buffer_id,
           buffer->buffer_size(), buffer->buffer()->handle(),
           0 /* shared_memory_offset */, info->timestamp);
   if (!frame) {
-    GetVideoCaptureHost()->ReleaseBuffer(device_id_, buffer_id,
-                                         gpu::SyncToken(), -1.0);
+    GetVideoCaptureHost()->ReleaseBuffer(device_id_, buffer_id, -1.0);
     return;
   }
 
   BufferFinishedCallback buffer_finished_callback = media::BindToCurrentLoop(
       base::Bind(&VideoCaptureImpl::OnClientBufferFinished,
                  weak_factory_.GetWeakPtr(), buffer_id, buffer));
-  std::unique_ptr<gpu::SyncToken> release_sync_token(new gpu::SyncToken);
   frame->AddDestructionObserver(
       base::Bind(&VideoCaptureImpl::DidFinishConsumingFrame, frame->metadata(),
-                 base::Passed(&release_sync_token), buffer_finished_callback));
+                 buffer_finished_callback));
 
-  frame->metadata()->MergeInternalValuesFrom(info->metadata);
+  frame->metadata()->MergeInternalValuesFrom(*info->metadata);
 
   // TODO(qiangchen): Dive into the full code path to let frame metadata hold
   // reference time rather than using an extra parameter.
@@ -345,16 +351,16 @@ void VideoCaptureImpl::OnBufferDestroyed(int32_t buffer_id) {
 void VideoCaptureImpl::OnClientBufferFinished(
     int buffer_id,
     const scoped_refptr<ClientBuffer>& /* ignored_buffer */,
-    const gpu::SyncToken& release_sync_token,
     double consumer_resource_utilization) {
   DCHECK(io_thread_checker_.CalledOnValidThread());
   GetVideoCaptureHost()->ReleaseBuffer(
-      device_id_, buffer_id, release_sync_token, consumer_resource_utilization);
+      device_id_, buffer_id, consumer_resource_utilization);
 }
 
 void VideoCaptureImpl::StopDevice() {
   DCHECK(io_thread_checker_.CalledOnValidThread());
-  if (state_ != VIDEO_CAPTURE_STATE_STARTED)
+  if (state_ != VIDEO_CAPTURE_STATE_STARTING &&
+      state_ != VIDEO_CAPTURE_STATE_STARTED)
     return;
   state_ = VIDEO_CAPTURE_STATE_STOPPING;
   GetVideoCaptureHost()->Stop(device_id_);
@@ -383,10 +389,12 @@ void VideoCaptureImpl::RestartCapture() {
 
 void VideoCaptureImpl::StartCaptureInternal() {
   DCHECK(io_thread_checker_.CalledOnValidThread());
+  state_ = VIDEO_CAPTURE_STATE_STARTING;
 
+  mojom::VideoCaptureObserverPtr observer;
+  observer_binding_.Bind(mojo::MakeRequest(&observer));
   GetVideoCaptureHost()->Start(device_id_, session_id_, params_,
-                               observer_binding_.CreateInterfacePtrAndBind());
-  state_ = VIDEO_CAPTURE_STATE_STARTED;
+                               std::move(observer));
 }
 
 void VideoCaptureImpl::OnDeviceSupportedFormats(
@@ -428,7 +436,6 @@ mojom::VideoCaptureHost* VideoCaptureImpl::GetVideoCaptureHost() {
 // static
 void VideoCaptureImpl::DidFinishConsumingFrame(
     const media::VideoFrameMetadata* metadata,
-    std::unique_ptr<gpu::SyncToken> release_sync_token,
     const BufferFinishedCallback& callback_to_io_thread) {
   // Note: This function may be called on any thread by the VideoFrame
   // destructor.  |metadata| is still valid for read-access at this point.
@@ -437,8 +444,7 @@ void VideoCaptureImpl::DidFinishConsumingFrame(
                            &consumer_resource_utilization)) {
     consumer_resource_utilization = -1.0;
   }
-
-  callback_to_io_thread.Run(*release_sync_token, consumer_resource_utilization);
+  callback_to_io_thread.Run(consumer_resource_utilization);
 }
 
 }  // namespace content

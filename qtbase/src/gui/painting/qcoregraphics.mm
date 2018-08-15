@@ -66,7 +66,7 @@ CGImageRef qt_mac_toCGImageMask(const QImage &image)
     static const auto deleter = [](void *image, const void *, size_t) { delete static_cast<QImage *>(image); };
     QCFType<CGDataProviderRef> dataProvider =
             CGDataProviderCreateWithData(new QImage(image), image.bits(),
-                                                    image.byteCount(), deleter);
+                                                    image.sizeInBytes(), deleter);
 
     return CGImageMaskCreate(image.width(), image.height(), 8, image.depth(),
                               image.bytesPerLine(), dataProvider, NULL, false);
@@ -110,6 +110,7 @@ NSImage *qt_mac_create_nsimage(const QPixmap &pm)
     QImage image = pm.toImage();
     CGImageRef cgImage = qt_mac_toCGImage(image);
     NSImage *nsImage = qt_mac_cgimage_to_nsimage(cgImage);
+    nsImage.size = (pm.size() / pm.devicePixelRatioF()).toCGSize();
     CGImageRelease(cgImage);
     return nsImage;
 }

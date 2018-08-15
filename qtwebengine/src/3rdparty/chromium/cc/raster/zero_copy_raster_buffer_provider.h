@@ -27,7 +27,7 @@ class CC_EXPORT ZeroCopyRasterBufferProvider : public RasterBufferProvider {
 
   static std::unique_ptr<RasterBufferProvider> Create(
       ResourceProvider* resource_provider,
-      ResourceFormat preferred_tile_format);
+      viz::ResourceFormat preferred_tile_format);
 
   // Overridden from RasterBufferProvider:
   std::unique_ptr<RasterBuffer> AcquireBufferForRaster(
@@ -36,21 +36,27 @@ class CC_EXPORT ZeroCopyRasterBufferProvider : public RasterBufferProvider {
       uint64_t previous_content_id) override;
   void ReleaseBufferForRaster(std::unique_ptr<RasterBuffer> buffer) override;
   void OrderingBarrier() override;
-  ResourceFormat GetResourceFormat(bool must_support_alpha) const override;
+  void Flush() override;
+  viz::ResourceFormat GetResourceFormat(bool must_support_alpha) const override;
   bool IsResourceSwizzleRequired(bool must_support_alpha) const override;
   bool CanPartialRasterIntoProvidedResource() const override;
+  bool IsResourceReadyToDraw(ResourceId id) const override;
+  uint64_t SetReadyToDrawCallback(
+      const ResourceProvider::ResourceIdArray& resource_ids,
+      const base::Closure& callback,
+      uint64_t pending_callback_id) const override;
   void Shutdown() override;
 
  protected:
   ZeroCopyRasterBufferProvider(ResourceProvider* resource_provider,
-                               ResourceFormat preferred_tile_format);
+                               viz::ResourceFormat preferred_tile_format);
 
  private:
   std::unique_ptr<base::trace_event::ConvertableToTraceFormat> StateAsValue()
       const;
 
   ResourceProvider* resource_provider_;
-  ResourceFormat preferred_tile_format_;
+  viz::ResourceFormat preferred_tile_format_;
 
   DISALLOW_COPY_AND_ASSIGN(ZeroCopyRasterBufferProvider);
 };

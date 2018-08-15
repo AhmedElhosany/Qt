@@ -6,6 +6,7 @@ import("//third_party/WebKit/Source/modules/modules.gni")
 
 blink_modules_sources("mediastream") {
   sources = [
+    "DOMWindowMediaStream.h",
     "MediaConstraintsImpl.cpp",
     "MediaConstraintsImpl.h",
     "MediaDeviceInfo.cpp",
@@ -24,6 +25,7 @@ blink_modules_sources("mediastream") {
     "MediaStreamRegistry.h",
     "MediaStreamTrack.cpp",
     "MediaStreamTrack.h",
+    "MediaStreamTrackContentHint.h",
     "MediaStreamTrackEvent.cpp",
     "MediaStreamTrackEvent.h",
     "NavigatorMediaStream.cpp",
@@ -37,6 +39,8 @@ blink_modules_sources("mediastream") {
     "URLMediaStream.cpp",
     "URLMediaStream.h",
     "UserMediaClient.h",
+    "UserMediaClientImpl.cpp",
+    "UserMediaClientImpl.h",
     "UserMediaController.cpp",
     "UserMediaController.h",
     "UserMediaRequest.cpp",

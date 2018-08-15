@@ -116,8 +116,6 @@ public:
 
     void setMinimumZoomLevel(qreal minimumZoomLevel, bool userSet = true);
     qreal minimumZoomLevel() const;
-    qreal implicitMinimumZoomLevel() const;
-    qreal effectiveMinimumZoomLevel() const;
 
     void setMaximumZoomLevel(qreal maximumZoomLevel, bool userSet = true);
     qreal maximumZoomLevel() const;
@@ -158,11 +156,17 @@ public:
 
     QQmlListProperty<QDeclarativeGeoMapType> supportedMapTypes();
 
+    Q_INVOKABLE void setBearing(qreal bearing, const QGeoCoordinate &coordinate);
+    Q_INVOKABLE void alignCoordinateToPoint(const QGeoCoordinate &coordinate, const QPointF &point);
+
     Q_INVOKABLE void removeMapItem(QDeclarativeGeoMapItemBase *item);
     Q_INVOKABLE void addMapItem(QDeclarativeGeoMapItemBase *item);
 
     Q_INVOKABLE void addMapItemGroup(QDeclarativeGeoMapItemGroup *itemGroup);
     Q_INVOKABLE void removeMapItemGroup(QDeclarativeGeoMapItemGroup *itemGroup);
+
+    Q_INVOKABLE void removeMapItemView(QDeclarativeGeoMapItemView *itemView);
+    Q_INVOKABLE void addMapItemView(QDeclarativeGeoMapItemView *itemView);
 
     Q_INVOKABLE void clearMapItems();
     QList<QObject *> mapItems();

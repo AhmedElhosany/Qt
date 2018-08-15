@@ -516,8 +516,9 @@ void QQuickStackView::push(QQmlV4Function *args)
     if (!d->elements.isEmpty())
         exit = d->elements.top();
 
+    int oldDepth = d->elements.count();
     if (d->pushElements(elements)) {
-        emit depthChanged();
+        d->depthChange(d->elements.count(), oldDepth);
         QQuickStackElement *enter = d->elements.top();
         d->startTransition(QQuickStackTransition::pushEnter(operation, enter, this),
                            QQuickStackTransition::pushExit(operation, exit, this),
@@ -574,6 +575,7 @@ void QQuickStackView::pop(QQmlV4Function *args)
         return;
     }
 
+    int oldDepth = d->elements.count();
     QQuickStackElement *exit = d->elements.pop();
     QQuickStackElement *enter = d->elements.top();
 
@@ -612,7 +614,7 @@ void QQuickStackView::pop(QQmlV4Function *args)
             d->removing.insert(exit);
             previousItem = exit->item;
         }
-        emit depthChanged();
+        d->depthChange(d->elements.count(), oldDepth);
         d->startTransition(QQuickStackTransition::popExit(operation, exit, this),
                            QQuickStackTransition::popEnter(operation, enter, this),
                            operation == Immediate);
@@ -752,14 +754,13 @@ void QQuickStackView::replace(QQmlV4Function *args)
         return;
     }
 
-    int depth = d->elements.count();
+    int oldDepth = d->elements.count();
     QQuickStackElement* exit = nullptr;
     if (!d->elements.isEmpty())
         exit = d->elements.pop();
 
     if (exit != target ? d->replaceElements(target, elements) : d->pushElements(elements)) {
-        if (depth != d->elements.count())
-            emit depthChanged();
+        d->depthChange(d->elements.count(), oldDepth);
         if (exit) {
             exit->removal = true;
             d->removing.insert(exit);
@@ -780,20 +781,51 @@ void QQuickStackView::replace(QQmlV4Function *args)
 }
 
 /*!
-    \qmlmethod void QtQuick.Controls::StackView::clear()
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty bool QtQuick.Controls::StackView::empty
+    \readonly
 
-    Removes all items from the stack. No animations are applied.
+    This property holds whether the stack is empty.
+
+    \sa depth
 */
-void QQuickStackView::clear()
+bool QQuickStackView::isEmpty() const
+{
+    Q_D(const QQuickStackView);
+    return d->elements.isEmpty();
+}
+
+/*!
+    \qmlmethod void QtQuick.Controls::StackView::clear(transition)
+
+    Removes all items from the stack.
+
+    Since QtQuick.Controls 2.3, a \a transition can be optionally specified. Supported transitions:
+
+    \value StackView.Immediate Clear the stack immediately without any transition (default).
+    \value StackView.PushTransition Clear the stack with a push transition.
+    \value StackView.ReplaceTransition Clear the stack with a replace transition.
+    \value StackView.PopTransition Clear the stack with a pop transition.
+*/
+void QQuickStackView::clear(Operation operation)
 {
     Q_D(QQuickStackView);
     if (d->elements.isEmpty())
         return;
 
+    if (operation != Immediate) {
+        QQuickStackElement *exit = d->elements.pop();
+        exit->removal = true;
+        d->removing.insert(exit);
+        d->startTransition(QQuickStackTransition::popExit(operation, exit, this),
+                           QQuickStackTransition::popEnter(operation, nullptr, this), false);
+    }
+
+    int oldDepth = d->elements.count();
     d->setCurrentItem(nullptr);
     qDeleteAll(d->elements);
     d->elements.clear();
-    emit depthChanged();
+    d->depthChange(0, oldDepth);
 }
 
 /*!
@@ -990,6 +1022,7 @@ void QQuickStackView::componentComplete()
     QScopedValueRollback<QString> rollback(d->operation, QStringLiteral("initialItem"));
     QQuickStackElement *element = nullptr;
     QString error;
+    int oldDepth = d->elements.count();
     if (QObject *o = d->initialItem.value<QObject *>())
         element = QQuickStackElement::fromObject(o, this, &error);
     else if (d->initialItem.canConvert<QString>())
@@ -998,7 +1031,7 @@ void QQuickStackView::componentComplete()
         d->warn(error);
         delete element;
     } else if (d->pushElement(element)) {
-        emit depthChanged();
+        d->depthChange(d->elements.count(), oldDepth);
         d->setCurrentItem(element);
         element->setStatus(QQuickStackView::Active);
     }

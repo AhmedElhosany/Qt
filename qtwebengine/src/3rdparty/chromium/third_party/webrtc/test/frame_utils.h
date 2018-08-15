@@ -10,8 +10,9 @@
 #ifndef WEBRTC_TEST_FRAME_UTILS_H_
 #define WEBRTC_TEST_FRAME_UTILS_H_
 
-#include "webrtc/base/basictypes.h"
-#include "webrtc/base/scoped_ref_ptr.h"
+#include <stdint.h>
+
+#include "webrtc/rtc_base/scoped_ref_ptr.h"
 
 namespace webrtc {
 class I420Buffer;

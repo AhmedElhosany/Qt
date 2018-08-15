@@ -53,7 +53,7 @@
 #include <stdio.h>
 #include <X11/keysym.h>
 
-#ifdef XCB_USE_XINPUT22
+#if QT_CONFIG(xinput2)
 #include <X11/extensions/XI2proto.h>
 #undef KeyPress
 #undef KeyRelease
@@ -612,23 +612,18 @@ Qt::KeyboardModifiers QXcbKeyboard::translateModifiers(int s) const
 void QXcbKeyboard::readXKBConfig()
 {
     clearXKBConfig();
-    xcb_generic_error_t *error;
-    xcb_get_property_cookie_t cookie;
-    xcb_get_property_reply_t *config_reply;
 
     xcb_connection_t *c = xcb_connection();
     xcb_window_t rootWindow = connection()->rootWindow();
 
-    cookie = xcb_get_property(c, 0, rootWindow,
-                  atom(QXcbAtom::_XKB_RULES_NAMES), XCB_ATOM_STRING, 0, 1024);
-
-    config_reply = xcb_get_property_reply(c, cookie, &error);
+    auto config_reply = Q_XCB_REPLY(xcb_get_property, c, 0, rootWindow,
+                                    atom(QXcbAtom::_XKB_RULES_NAMES), XCB_ATOM_STRING, 0, 1024);
     if (!config_reply) {
         qWarning("Qt: Couldn't interpret the _XKB_RULES_NAMES property");
         return;
     }
-    char *xkb_config = (char *)xcb_get_property_value(config_reply);
-    int length = xcb_get_property_value_length(config_reply);
+    char *xkb_config = (char *)xcb_get_property_value(config_reply.get());
+    int length = xcb_get_property_value_length(config_reply.get());
 
     // on old X servers xkb_config can be 0 even if config_reply indicates a succesfull read
     if (!xkb_config || length == 0)
@@ -653,8 +648,6 @@ void QXcbKeyboard::readXKBConfig()
     xkb_names.layout = qstrdup(names[2]);
     xkb_names.variant = qstrdup(names[3]);
     xkb_names.options = qstrdup(names[4]);
-
-    free(config_reply);
 }
 
 void QXcbKeyboard::clearXKBConfig()
@@ -807,7 +800,7 @@ void QXcbKeyboard::updateXKBStateFromCore(quint16 state)
     }
 }
 
-#ifdef XCB_USE_XINPUT22
+#if QT_CONFIG(xinput2)
 void QXcbKeyboard::updateXKBStateFromXI(void *modInfo, void *groupInfo)
 {
     if (m_config && !connection()->hasXKB()) {
@@ -1172,23 +1165,19 @@ QXcbKeyboard::~QXcbKeyboard()
 void QXcbKeyboard::updateVModMapping()
 {
 #if QT_CONFIG(xkb)
-    xcb_xkb_get_names_cookie_t names_cookie;
-    xcb_xkb_get_names_reply_t *name_reply;
     xcb_xkb_get_names_value_list_t names_list;
 
     memset(&vmod_masks, 0, sizeof(vmod_masks));
 
-    names_cookie = xcb_xkb_get_names(xcb_connection(),
-                               XCB_XKB_ID_USE_CORE_KBD,
-                               XCB_XKB_NAME_DETAIL_VIRTUAL_MOD_NAMES);
-
-    name_reply = xcb_xkb_get_names_reply(xcb_connection(), names_cookie, 0);
+    auto name_reply = Q_XCB_REPLY(xcb_xkb_get_names, xcb_connection(),
+                                  XCB_XKB_ID_USE_CORE_KBD,
+                                  XCB_XKB_NAME_DETAIL_VIRTUAL_MOD_NAMES);
     if (!name_reply) {
         qWarning("Qt: failed to retrieve the virtual modifier names from XKB");
         return;
     }
 
-    const void *buffer = xcb_xkb_get_names_value_list(name_reply);
+    const void *buffer = xcb_xkb_get_names_value_list(name_reply.get());
     xcb_xkb_get_names_value_list_unpack(buffer,
                                         name_reply->nTypes,
                                         name_reply->indicators,
@@ -1233,32 +1222,27 @@ void QXcbKeyboard::updateVModMapping()
         else if (qstrcmp(vmod_name, "Hyper") == 0)
             vmod_masks.hyper = bit;
     }
-
-    free(name_reply);
 #endif
 }
 
 void QXcbKeyboard::updateVModToRModMapping()
 {
 #if QT_CONFIG(xkb)
-    xcb_xkb_get_map_cookie_t map_cookie;
-    xcb_xkb_get_map_reply_t *map_reply;
     xcb_xkb_get_map_map_t map;
 
     memset(&rmod_masks, 0, sizeof(rmod_masks));
 
-    map_cookie = xcb_xkb_get_map(xcb_connection(),
-                             XCB_XKB_ID_USE_CORE_KBD,
-                             XCB_XKB_MAP_PART_VIRTUAL_MODS,
-                             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-
-    map_reply = xcb_xkb_get_map_reply(xcb_connection(), map_cookie, 0);
+    auto map_reply = Q_XCB_REPLY(xcb_xkb_get_map,
+                                 xcb_connection(),
+                                 XCB_XKB_ID_USE_CORE_KBD,
+                                 XCB_XKB_MAP_PART_VIRTUAL_MODS,
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     if (!map_reply) {
         qWarning("Qt: failed to retrieve the virtual modifier map from XKB");
         return;
     }
 
-    const void *buffer = xcb_xkb_get_map_map(map_reply);
+    const void *buffer = xcb_xkb_get_map_map(map_reply.get());
     xcb_xkb_get_map_map_unpack(buffer,
                                map_reply->nTypes,
                                map_reply->nKeySyms,
@@ -1301,7 +1285,6 @@ void QXcbKeyboard::updateVModToRModMapping()
             rmod_masks.hyper = modmap;
     }
 
-    free(map_reply);
     resolveMaskConflicts();
 #endif
 }
@@ -1315,14 +1298,10 @@ void QXcbKeyboard::updateModifiers()
     // process for all modifiers whenever any part of the modifier mapping is changed.
     memset(&rmod_masks, 0, sizeof(rmod_masks));
 
-    xcb_generic_error_t *error = 0;
     xcb_connection_t *conn = xcb_connection();
-    xcb_get_modifier_mapping_cookie_t modMapCookie = xcb_get_modifier_mapping(conn);
-    xcb_get_modifier_mapping_reply_t *modMapReply =
-        xcb_get_modifier_mapping_reply(conn, modMapCookie, &error);
-    if (error) {
+    auto modMapReply = Q_XCB_REPLY(xcb_get_modifier_mapping, conn);
+    if (!modMapReply) {
         qWarning("Qt: failed to get modifier mapping");
-        free(error);
         return;
     }
 
@@ -1338,7 +1317,7 @@ void QXcbKeyboard::updateModifiers()
     for (size_t i = 0; i < numSymbols; ++i)
         modKeyCodes[i] = xcb_key_symbols_get_keycode(m_key_symbols, symbols[i]);
 
-    xcb_keycode_t *modMap = xcb_get_modifier_mapping_keycodes(modMapReply);
+    xcb_keycode_t *modMap = xcb_get_modifier_mapping_keycodes(modMapReply.get());
     const int w = modMapReply->keycodes_per_modifier;
     for (size_t i = 0; i < numSymbols; ++i) {
         for (int bit = 0; bit < 8; ++bit) {
@@ -1366,7 +1345,6 @@ void QXcbKeyboard::updateModifiers()
 
     for (size_t i = 0; i < numSymbols; ++i)
         free(modKeyCodes[i]);
-    free(modMapReply);
     resolveMaskConflicts();
 }
 
@@ -1449,8 +1427,6 @@ private:
 void QXcbKeyboard::handleKeyEvent(xcb_window_t sourceWindow, QEvent::Type type, xcb_keycode_t code,
                                   quint16 state, xcb_timestamp_t time)
 {
-    Q_XCB_NOOP(connection());
-
     if (!m_config)
         return;
 
@@ -1471,30 +1447,6 @@ void QXcbKeyboard::handleKeyEvent(xcb_window_t sourceWindow, QEvent::Type type, 
     updateXKBStateFromState(kb_state, state);
 
     xcb_keysym_t sym = xkb_state_key_get_one_sym(kb_state, code);
-
-    QPlatformInputContext *inputContext = QGuiApplicationPrivate::platformIntegration()->inputContext();
-    QMetaMethod method;
-
-    if (inputContext) {
-        int methodIndex = inputContext->metaObject()->indexOfMethod("x11FilterEvent(uint,uint,uint,bool)");
-        if (methodIndex != -1)
-            method = inputContext->metaObject()->method(methodIndex);
-    }
-
-    if (method.isValid()) {
-        bool retval = false;
-        method.invoke(inputContext, Qt::DirectConnection,
-                      Q_RETURN_ARG(bool, retval),
-                      Q_ARG(uint, sym),
-                      Q_ARG(uint, code),
-                      Q_ARG(uint, state),
-                      Q_ARG(bool, type == QEvent::KeyPress));
-        if (retval) {
-            xkb_state_unref(kb_state);
-            return;
-        }
-    }
-
     QString string = lookupString(kb_state, code);
 
     // Ιf control modifier is set we should prefer latin character, this is
@@ -1526,6 +1478,7 @@ void QXcbKeyboard::handleKeyEvent(xcb_window_t sourceWindow, QEvent::Type type, 
     }
 
     bool filtered = false;
+    QPlatformInputContext *inputContext = QGuiApplicationPrivate::platformIntegration()->inputContext();
     if (inputContext) {
         QKeyEvent event(type, qtcode, modifiers, code, sym, state, string, isAutoRepeat, string.length());
         event.setTimestamp(time);
@@ -1548,16 +1501,7 @@ void QXcbKeyboard::handleKeyEvent(xcb_window_t sourceWindow, QEvent::Type type, 
     if (isAutoRepeat && type == QEvent::KeyRelease) {
         // since we removed it from the event queue using checkEvent we need to send the key press here
         filtered = false;
-        if (method.isValid()) {
-            method.invoke(inputContext, Qt::DirectConnection,
-                          Q_RETURN_ARG(bool, filtered),
-                          Q_ARG(uint, sym),
-                          Q_ARG(uint, code),
-                          Q_ARG(uint, state),
-                          Q_ARG(bool, true));
-        }
-
-        if (!filtered && inputContext) {
+        if (inputContext) {
             QKeyEvent event(QEvent::KeyPress, qtcode, modifiers, code, sym, state, string, isAutoRepeat, string.length());
             event.setTimestamp(time);
             filtered = inputContext->filterEvent(&event);

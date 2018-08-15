@@ -29,9 +29,11 @@ class WorkQueueSets;
 // API subset used by WorkQueueSets pretends the WorkQueue is empty until the
 // fence is removed.  This functionality is a primitive intended for use by
 // throttling mechanisms.
-class BLINK_PLATFORM_EXPORT WorkQueue {
+class PLATFORM_EXPORT WorkQueue {
  public:
-  WorkQueue(TaskQueueImpl* task_queue, const char* name);
+  enum class QueueType { DELAYED, IMMEDIATE };
+
+  WorkQueue(TaskQueueImpl* task_queue, const char* name, QueueType queue_type);
   ~WorkQueue();
 
   // Associates this work queue with the given work queue sets. This must be
@@ -41,7 +43,8 @@ class BLINK_PLATFORM_EXPORT WorkQueue {
   // Assigns the current set index.
   void AssignSetIndex(size_t work_queue_set_index);
 
-  void AsValueInto(base::trace_event::TracedValue* state) const;
+  void AsValueInto(base::TimeTicks now,
+                   base::trace_event::TracedValue* state) const;
 
   // Returns true if the |work_queue_| is empty. This method ignores any fences.
   bool Empty() const { return work_queue_.empty(); }
@@ -63,10 +66,10 @@ class BLINK_PLATFORM_EXPORT WorkQueue {
   // informs the WorkQueueSets if the head changed.
   void Push(TaskQueueImpl::Task task);
 
-  // Swap the |work_queue_| with |incoming_queue| and if a fence hasn't been
-  // reached it informs the WorkQueueSets if the head changed. Assumes
-  // |task_queue_->any_thread_lock_| is locked.
-  void SwapLocked(std::queue<TaskQueueImpl::Task>& incoming_queue);
+  // Reloads the empty |work_queue_| with
+  // |task_queue_->TakeImmediateIncomingQueue| and if a fence hasn't been
+  // reached it informs the WorkQueueSets if the head changed.
+  void ReloadEmptyImmediateQueue();
 
   size_t Size() const { return work_queue_.size(); }
 
@@ -75,7 +78,7 @@ class BLINK_PLATFORM_EXPORT WorkQueue {
   // pretends to be empty as far as the WorkQueueSets is concrned.
   TaskQueueImpl::Task TakeTaskFromWorkQueue();
 
-  const char* name() const { return name_; }
+  const char* GetName() const { return name_; }
 
   TaskQueueImpl* task_queue() const { return task_queue_; }
 
@@ -113,13 +116,14 @@ class BLINK_PLATFORM_EXPORT WorkQueue {
   bool BlockedByFence() const;
 
  private:
-  std::queue<TaskQueueImpl::Task> work_queue_;
-  WorkQueueSets* work_queue_sets_;  // NOT OWNED.
-  TaskQueueImpl* task_queue_;       // NOT OWNED.
+  TaskQueueImpl::TaskDeque work_queue_;
+  WorkQueueSets* work_queue_sets_;   // NOT OWNED.
+  TaskQueueImpl* const task_queue_;  // NOT OWNED.
   size_t work_queue_set_index_;
   HeapHandle heap_handle_;
-  const char* name_;
+  const char* const name_;
   EnqueueOrder fence_;
+  const QueueType queue_type_;
 
   DISALLOW_COPY_AND_ASSIGN(WorkQueue);
 };

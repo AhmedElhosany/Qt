@@ -193,7 +193,7 @@ var Runtime = class {
    * @param {boolean} appendSourceURL
    * @return {!Promise<undefined>}
    */
-  static loadResourceIntoCache(url, appendSourceURL) {
+  static _loadResourceIntoCache(url, appendSourceURL) {
     return Runtime.loadResourcePromise(url).then(
         cacheResource.bind(this, url), cacheResource.bind(this, url, undefined));
 
@@ -285,45 +285,18 @@ var Runtime = class {
   }
 
   /**
-   * @param {string} appName
-   */
-  static startSharedWorker(appName) {
-    var startPromise = Runtime.startApplication(appName);
-
-    /**
-     * @param {!MessageEvent} event
-     */
-    self.onconnect = function(event) {
-      var newPort = /** @type {!MessagePort} */ (event.ports[0]);
-      startPromise.then(sendWorkerReadyAndContinue);
-
-      function sendWorkerReadyAndContinue() {
-        newPort.postMessage('workerReady');
-        if (Runtime._sharedWorkerNewPortCallback)
-          Runtime._sharedWorkerNewPortCallback.call(null, newPort);
-        else
-          Runtime._sharedWorkerConnectedPorts.push(newPort);
-      }
-    };
-  }
-
-  /**
-   * @param {function(!MessagePort)} callback
-   */
-  static setSharedWorkerNewPortCallback(callback) {
-    Runtime._sharedWorkerNewPortCallback = callback;
-    while (Runtime._sharedWorkerConnectedPorts.length) {
-      var port = Runtime._sharedWorkerConnectedPorts.shift();
-      callback.call(null, port);
-    }
-  }
-
-  /**
    * @param {string} name
    * @return {?string}
    */
   static queryParam(name) {
     return Runtime._queryParamsObject[name] || null;
+  }
+
+  /**
+   * @return {string}
+   */
+  static queryParamsString() {
+    return location.search;
   }
 
   /**
@@ -567,10 +540,7 @@ var Runtime = class {
     constructorFunction[Runtime._instanceSymbol] = instance;
     return instance;
   }
-}
-
-;
-
+};
 
 /**
  * @type {!Object.<string, string>}
@@ -580,7 +550,6 @@ Runtime._queryParamsObject = {
 };
 
 Runtime._instanceSymbol = Symbol('instance');
-Runtime._extensionSymbol = Symbol('extension');
 
 /**
  * @type {!Object.<string, string>}
@@ -588,12 +557,6 @@ Runtime._extensionSymbol = Symbol('extension');
 Runtime.cachedResources = {
   __proto__: null
 };
-
-
-/** @type {?function(!MessagePort)} */
-Runtime._sharedWorkerNewPortCallback = null;
-/** @type {!Array<!MessagePort>} */
-Runtime._sharedWorkerConnectedPorts = [];
 
 
 Runtime._console = console;
@@ -753,7 +716,7 @@ Runtime.Module = class {
     var promises = [];
     for (var i = 0; i < resources.length; ++i) {
       var url = this._modularizeURL(resources[i]);
-      promises.push(Runtime.loadResourceIntoCache(url, true));
+      promises.push(Runtime._loadResourceIntoCache(url, true));
     }
     return Promise.all(promises).then(undefined);
   }
@@ -766,15 +729,19 @@ Runtime.Module = class {
       return Promise.resolve();
 
     // Module namespaces.
-    var namespace = this._name.replace('_lazy', '');
-    // the namespace keyword confuses clang-format
+    // NOTE: Update scripts/special_case_namespaces.json if you add a special cased namespace.
+    // The namespace keyword confuses clang-format.
     // clang-format off
-    if (namespace === 'sdk' || namespace === 'ui')
-      namespace = namespace.toUpperCase();
-    // clang-format on
-    namespace = namespace.split('_').map(a => a.substring(0, 1).toUpperCase() + a.substring(1)).join('');
+    const specialCases = {
+      'sdk': 'SDK',
+      'ui': 'UI',
+      'object_ui': 'ObjectUI',
+      'perf_ui': 'PerfUI',
+      'har_importer': 'HARImporter',
+    };
+    var namespace = specialCases[this._name] || this._name.split('_').map(a => a.substring(0, 1).toUpperCase() + a.substring(1)).join('');
     self[namespace] = self[namespace] || {};
-
+    // clang-format on
     return Runtime._loadScriptsPromise(this._descriptor.scripts.map(this._modularizeURL, this), this._remoteBase());
   }
 
@@ -1067,7 +1034,7 @@ Runtime.Experiment = class {
 
 {
   (function parseQueryParameters() {
-    var queryParams = location.search;
+    var queryParams = Runtime.queryParamsString();
     if (!queryParams)
       return;
     var params = queryParams.substring(1).split('&');
@@ -1106,18 +1073,18 @@ ServicePort.prototype = {
    * @param {function(string)} messageHandler
    * @param {function(string)} closeHandler
    */
-  setHandlers: function(messageHandler, closeHandler) {},
+  setHandlers(messageHandler, closeHandler) {},
 
   /**
    * @param {string} message
    * @return {!Promise<boolean>}
    */
-  send: function(message) {},
+  send(message) {},
 
   /**
    * @return {!Promise<boolean>}
    */
-  close: function() {}
+  close() {}
 };
 
 /** @type {!Runtime} */

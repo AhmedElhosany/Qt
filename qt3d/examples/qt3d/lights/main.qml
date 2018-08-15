@@ -183,15 +183,8 @@ Entity
 
         material: NormalDiffuseMapMaterial {
             ambient: Qt.rgba( 0.2, 0.2, 0.2, 1.0 )
-            diffuse: TextureLoader {
-                source: "assets/textures/ceramic_small_diamond/ceramic_small_diamond_basecolor.png"
-                format: Texture.SRGB8_Alpha8
-                generateMipMaps: true
-            }
-            normal: TextureLoader {
-                source: "assets/textures/ceramic_small_diamond/ceramic_small_diamond_normal.png"
-                generateMipMaps: true
-            }
+            diffuse: TextureLoader { source: "assets/textures/pattern_09/diffuse.webp" }
+            normal: TextureLoader { source: "assets/textures/pattern_09/normal.webp" }
             textureScale: 10
             shininess: 10
         }

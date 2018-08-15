@@ -7,9 +7,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/accessibility/browser_accessibility_manager_auralinux.h"
 #include "content/common/accessibility_messages.h"
+#include "ui/accessibility/ax_text_utils.h"
 
 namespace content {
 
@@ -91,9 +93,14 @@ static const gchar* browser_accessibility_get_name(AtkAction* atk_action,
   BrowserAccessibilityAuraLinux* obj =
       ToBrowserAccessibilityAuraLinux(atk_action);
   if (!obj)
-    return 0;
+    return nullptr;
 
-  return obj->GetStringAttribute(ui::AX_ATTR_ACTION).c_str();
+  int action;
+  if (!obj->GetIntAttribute(ui::AX_ATTR_DEFAULT_ACTION_VERB, &action))
+    return nullptr;
+  base::string16 action_verb = ui::ActionVerbToUnlocalizedString(
+      static_cast<ui::AXDefaultActionVerb>(action));
+  return base::UTF16ToUTF8(action_verb).c_str();
 }
 
 static const gchar* browser_accessibility_get_keybinding(AtkAction* atk_action,
@@ -464,6 +471,10 @@ static const gchar* browser_accessibility_get_name(AtkObject* atk_object) {
   if (!obj)
     return NULL;
 
+  if (obj->GetStringAttribute(ui::AX_ATTR_NAME).empty() &&
+      !obj->HasExplicitlyEmptyName())
+    return NULL;
+
   return obj->GetStringAttribute(ui::AX_ATTR_NAME).c_str();
 }
 
@@ -482,8 +493,9 @@ static AtkObject* browser_accessibility_get_parent(AtkObject* atk_object) {
       ToBrowserAccessibilityAuraLinux(atk_object);
   if (!obj)
     return NULL;
-  if (obj->GetParent())
-    return ToBrowserAccessibilityAuraLinux(obj->GetParent())->GetAtkObject();
+  if (obj->PlatformGetParent())
+    return ToBrowserAccessibilityAuraLinux(obj->PlatformGetParent())
+        ->GetAtkObject();
 
   BrowserAccessibilityManagerAuraLinux* manager =
       static_cast<BrowserAccessibilityManagerAuraLinux*>(obj->manager());
@@ -549,8 +561,24 @@ static AtkStateSet* browser_accessibility_ref_state_set(AtkObject* atk_object) {
     atk_state_set_add_state(state_set, ATK_STATE_FOCUSABLE);
   if (obj->manager()->GetFocus() == obj)
     atk_state_set_add_state(state_set, ATK_STATE_FOCUSED);
-  if (!(state & (1 << ui::AX_STATE_DISABLED)))
-    atk_state_set_add_state(state_set, ATK_STATE_ENABLED);
+
+  switch (obj->GetIntAttribute(ui::AX_ATTR_RESTRICTION)) {
+    case ui::AX_RESTRICTION_DISABLED:
+      break;
+    case ui::AX_RESTRICTION_READ_ONLY:
+// The following would require ATK 2.16 or later, which many
+// systems do not have. Since we aren't officially supporting ATK
+// it's best to leave this out rather than break people's builds:
+#if defined(ATK_CHECK_VERSION)
+#if ATK_CHECK_VERSION(2, 16, 0)
+      atk_state_set_add_state(atk_state_set, ATK_STATE_READ_ONLY);
+#endif
+#endif
+      break;
+    default:
+      atk_state_set_add_state(state_set, ATK_STATE_ENABLED);
+      break;
+  }
 
   return state_set;
 }
@@ -777,10 +805,10 @@ void BrowserAccessibilityAuraLinux::OnDataChanged() {
   if (!atk_object_) {
     interface_mask_ = GetInterfaceMaskFromObject(this);
     atk_object_ = ATK_OBJECT(browser_accessibility_new(this));
-    if (this->GetParent()) {
-      atk_object_set_parent(
-          atk_object_,
-          ToBrowserAccessibilityAuraLinux(this->GetParent())->GetAtkObject());
+    if (this->PlatformGetParent()) {
+      atk_object_set_parent(atk_object_, ToBrowserAccessibilityAuraLinux(
+                                             this->PlatformGetParent())
+                                             ->GetAtkObject());
     }
   }
 }
@@ -842,7 +870,7 @@ void BrowserAccessibilityAuraLinux::InitRoleAndState() {
     case ui::AX_ROLE_DIALOG:
       atk_role_ = ATK_ROLE_DIALOG;
       break;
-    case ui::AX_ROLE_DIV:
+    case ui::AX_ROLE_GENERIC_CONTAINER:
     case ui::AX_ROLE_GROUP:
       atk_role_ = ATK_ROLE_SECTION;
       break;
@@ -941,6 +969,9 @@ void BrowserAccessibilityAuraLinux::InitRoleAndState() {
       break;
     case ui::AX_ROLE_TREE_ITEM:
       atk_role_ = ATK_ROLE_TREE_ITEM;
+      break;
+    case ui::AX_ROLE_TREE_GRID:
+      atk_role_ = ATK_ROLE_TREE_TABLE;
       break;
     case ui::AX_ROLE_VIDEO:
 #if defined(ATK_CHECK_VERSION)

@@ -686,14 +686,6 @@ QByteArray qCompress(const uchar* data, int nbytes, int compressionLevel)
     \sa qCompress()
 */
 
-/*! \relates QByteArray
-
-    \overload
-
-    Uncompresses the first \a nbytes of \a data and returns a new byte
-    array with the uncompressed data.
-*/
-
 #ifndef QT_NO_COMPRESS
 namespace {
 struct QByteArrayDataDeleter
@@ -709,6 +701,13 @@ static QByteArray invalidCompressedData()
     return QByteArray();
 }
 
+/*! \relates QByteArray
+
+    \overload
+
+    Uncompresses the first \a nbytes of \a data and returns a new byte
+    array with the uncompressed data.
+*/
 QByteArray qUncompress(const uchar* data, int nbytes)
 {
     if (!data) {
@@ -1134,6 +1133,13 @@ static inline char qToLower(char c)
     Same as prepend(\a ch).
 */
 
+/*! \fn void QByteArray::shrink_to_fit()
+    \since 5.10
+
+    This function is provided for STL compatibility. It is equivalent to
+    squeeze().
+*/
+
 /*! \fn QByteArray::QByteArray(const QByteArray &other)
 
     Constructs a copy of \a other.
@@ -1444,6 +1450,66 @@ QByteArray &QByteArray::operator=(const char *str)
 /*! \fn char QByteArray::operator[](uint i) const
 
     \overload
+*/
+
+/*!
+    \fn char QByteArray::front() const
+    \since 5.10
+
+    Returns the first character in the byte array.
+    Same as \c{at(0)}.
+
+    This function is provided for STL compatibility.
+
+    \warning Calling this function on an empty byte array constitutes
+    undefined behavior.
+
+    \sa back(), at(), operator[]()
+*/
+
+/*!
+    \fn char QByteArray::back() const
+    \since 5.10
+
+    Returns the last character in the byte array.
+    Same as \c{at(size() - 1)}.
+
+    This function is provided for STL compatibility.
+
+    \warning Calling this function on an empty byte array constitutes
+    undefined behavior.
+
+    \sa front(), at(), operator[]()
+*/
+
+/*!
+    \fn QByteRef QByteArray::front()
+    \since 5.10
+
+    Returns a reference to the first character in the byte array.
+    Same as \c{operator[](0)}.
+
+    This function is provided for STL compatibility.
+
+    \warning Calling this function on an empty byte array constitutes
+    undefined behavior.
+
+    \sa back(), at(), operator[]()
+*/
+
+/*!
+    \fn QByteRef QByteArray::back()
+    \since 5.10
+
+    Returns a reference to the last character in the byte array.
+    Same as \c{operator[](size() - 1)}.
+
+    This function is provided for STL compatibility.
+
+    \warning Calling this function on an empty byte array constitutes
+    undefined behavior.
+
+    \sa front(), at(), operator[]()
 */
 
 /*! \fn bool QByteArray::contains(const QByteArray &ba) const
@@ -2905,7 +2971,7 @@ bool QByteArray::endsWith(char ch) const
     Example:
     \snippet code/src_corelib_tools_qbytearray.cpp 27
 
-    \sa right(), mid(), startsWith(), truncate()
+    \sa startsWith(), right(), mid(), chopped(), chop(), truncate()
 */
 
 QByteArray QByteArray::left(int len)  const
@@ -2927,7 +2993,7 @@ QByteArray QByteArray::left(int len)  const
     Example:
     \snippet code/src_corelib_tools_qbytearray.cpp 28
 
-    \sa endsWith(), left(), mid()
+    \sa endsWith(), left(), mid(), chopped(), chop(), truncate()
 */
 
 QByteArray QByteArray::right(int len) const
@@ -2950,7 +3016,7 @@ QByteArray QByteArray::right(int len) const
     Example:
     \snippet code/src_corelib_tools_qbytearray.cpp 29
 
-    \sa left(), right()
+    \sa left(), right(), chopped(), chop(), truncate()
 */
 
 QByteArray QByteArray::mid(int pos, int len) const
@@ -2972,6 +3038,18 @@ QByteArray QByteArray::mid(int pos, int len) const
     Q_UNREACHABLE();
     return QByteArray();
 }
+
+/*!
+    \fn QByteArray::chopped(int len) const
+    \since 5.10
+
+    Returns a byte array that contains the leftmost size() - \a len bytes of
+    this byte array.
+
+    \note The behavior is undefined if \a len is negative or greater than size().
+
+    \sa endsWith(), left(), right(), mid(), chop(), truncate()
+*/
 
 /*!
     \fn QByteArray QByteArray::toLower() const

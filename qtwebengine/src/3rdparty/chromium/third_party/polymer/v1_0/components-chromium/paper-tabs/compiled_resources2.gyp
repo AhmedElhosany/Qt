@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
@@ -22,13 +22,6 @@
         '../iron-resizable-behavior/compiled_resources2.gyp:iron-resizable-behavior-extracted',
         '../paper-icon-button/compiled_resources2.gyp:paper-icon-button-extracted',
         'paper-tab-extracted',
-      ],
-      'includes': ['../../../../closure_compiler/compile_js2.gypi'],
-    },
-    {
-      'target_name': 'paper-tabs-icons-extracted',
-      'dependencies': [
-        '../iron-iconset-svg/compiled_resources2.gyp:iron-iconset-svg-extracted',
       ],
       'includes': ['../../../../closure_compiler/compile_js2.gypi'],
     },

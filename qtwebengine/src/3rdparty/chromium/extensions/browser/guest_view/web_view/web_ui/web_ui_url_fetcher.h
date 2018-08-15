@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef EXTENSIONS_BROWSER_GUEST_VIEW_WEB_VIEW_WEB_UI_URL_FETCHER_H
-#define EXTENSIONS_BROWSER_GUEST_VIEW_WEB_VIEW_WEB_UI_URL_FETCHER_H
+#ifndef EXTENSIONS_BROWSER_GUEST_VIEW_WEB_VIEW_WEB_UI_WEB_UI_URL_FETCHER_H_
+#define EXTENSIONS_BROWSER_GUEST_VIEW_WEB_VIEW_WEB_UI_WEB_UI_URL_FETCHER_H_
 
 #include <memory>
 
@@ -30,13 +30,13 @@ class WebUIURLFetcher : public net::URLFetcherDelegate {
   // - whether the request is success.
   // - If yes, the content of the file.
   using WebUILoadFileCallback =
-      base::Callback<void(bool, std::unique_ptr<std::string>)>;
+      base::OnceCallback<void(bool, std::unique_ptr<std::string>)>;
 
   WebUIURLFetcher(content::BrowserContext* context,
                   int render_process_id,
                   int render_frame_id,
                   const GURL& url,
-                  const WebUILoadFileCallback& callback);
+                  WebUILoadFileCallback callback);
   ~WebUIURLFetcher() override;
 
   void Start();
@@ -55,4 +55,4 @@ class WebUIURLFetcher : public net::URLFetcherDelegate {
   DISALLOW_COPY_AND_ASSIGN(WebUIURLFetcher);
 };
 
-#endif  // EXTENSIONS_BROWSER_GUEST_VIEW_WEB_VIEW_WEB_UI_URL_FETCHER_H
+#endif  // EXTENSIONS_BROWSER_GUEST_VIEW_WEB_VIEW_WEB_UI_WEB_UI_URL_FETCHER_H_

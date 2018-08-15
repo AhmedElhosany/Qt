@@ -12,6 +12,8 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/values.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -91,6 +93,17 @@ class ImeObserverNonChromeOS : public ui::ImeObserver {
         OnCompositionBoundsChanged::kEventName, std::move(args));
   }
 
+  void OnRequestEngineSwitch() override {
+    Browser* browser = chrome::FindLastActive();
+    if (!browser)
+      return;
+    extensions::InputImeEventRouter* router =
+        extensions::GetInputImeEventRouter(browser->profile());
+    if (!router)
+      return;
+    ui::IMEBridge::Get()->SetCurrentEngineHandler(router->active_engine());
+  }
+
  private:
   // ImeObserver overrides.
   void DispatchEventToExtension(
@@ -101,9 +114,8 @@ class ImeObserverNonChromeOS : public ui::ImeObserver {
       return;
     }
 
-    std::unique_ptr<extensions::Event> event(
-        new extensions::Event(histogram_value, event_name, std::move(args)));
-    event->restrict_to_browser_context = profile_;
+    auto event = base::MakeUnique<extensions::Event>(
+        histogram_value, event_name, std::move(args), profile_);
     extensions::EventRouter::Get(profile_)
         ->DispatchEventToExtension(extension_id_, std::move(event));
   }
@@ -138,19 +150,19 @@ void InputImeAPI::OnExtensionLoaded(content::BrowserContext* browser_context,
   Profile* profile = Profile::FromBrowserContext(browser_context);
   ExtensionPrefs::Get(profile)->UpdateExtensionPref(
       extension->id(), kPrefNeverActivatedSinceLoaded,
-      new base::FundamentalValue(true));
+      base::MakeUnique<base::Value>(true));
 }
 
 void InputImeAPI::OnExtensionUnloaded(content::BrowserContext* browser_context,
                                       const Extension* extension,
-                                      UnloadedExtensionInfo::Reason reason) {
+                                      UnloadedExtensionReason reason) {
   InputImeEventRouter* event_router =
       GetInputImeEventRouter(Profile::FromBrowserContext(browser_context));
   if (event_router) {
     // Records the extension is not the last active IME engine.
     ExtensionPrefs::Get(Profile::FromBrowserContext(browser_context))
         ->UpdateExtensionPref(extension->id(), kPrefLastActiveEngine,
-                              new base::FundamentalValue(false));
+                              base::MakeUnique<base::Value>(false));
     event_router->DeleteInputMethodEngine(extension->id());
   }
 }
@@ -178,7 +190,7 @@ void InputImeEventRouter::SetActiveEngine(const std::string& extension_id) {
   // Records the extension is the last active IME engine.
   ExtensionPrefs::Get(GetProfile())
       ->UpdateExtensionPref(extension_id, kPrefLastActiveEngine,
-                            new base::FundamentalValue(true));
+                            base::MakeUnique<base::Value>(true));
   if (active_engine_) {
     if (active_engine_->GetExtensionId() == extension_id) {
       active_engine_->Enable(std::string());
@@ -189,7 +201,7 @@ void InputImeEventRouter::SetActiveEngine(const std::string& extension_id) {
     ExtensionPrefs::Get(GetProfile())
         ->UpdateExtensionPref(active_engine_->GetExtensionId(),
                               kPrefLastActiveEngine,
-                              new base::FundamentalValue(false));
+                              base::MakeUnique<base::Value>(false));
     DeleteInputMethodEngine(active_engine_->GetExtensionId());
   }
 
@@ -241,13 +253,13 @@ ExtensionFunction::ResponseAction InputImeActivateFunction::Run() {
     event_router->SetActiveEngine(extension_id());
     ExtensionPrefs::Get(profile)->UpdateExtensionPref(
         extension_id(), kPrefNeverActivatedSinceLoaded,
-        new base::FundamentalValue(false));
+        base::MakeUnique<base::Value>(false));
     return RespondNow(NoArguments());
   }
   // The API has already been called at least once.
   ExtensionPrefs::Get(profile)->UpdateExtensionPref(
       extension_id(), kPrefNeverActivatedSinceLoaded,
-      new base::FundamentalValue(false));
+      base::MakeUnique<base::Value>(false));
 
   // Otherwise, this API is only allowed to be called from a user action.
   if (!user_gesture())
@@ -309,7 +321,7 @@ void InputImeActivateFunction::OnPermissionBubbleFinished(
     // again' check box. So we can activate the extension directly next time.
     ExtensionPrefs::Get(profile)->UpdateExtensionPref(
         extension_id(), kPrefWarningBubbleNeverShow,
-        new base::FundamentalValue(true));
+        base::MakeUnique<base::Value>(true));
   }
 
   Respond(NoArguments());
@@ -367,7 +379,7 @@ ExtensionFunction::ResponseAction InputImeCreateWindowFunction::Run() {
     return RespondNow(Error(error));
 
   std::unique_ptr<base::DictionaryValue> result(new base::DictionaryValue());
-  result->Set("frameId", new base::FundamentalValue(frame_id));
+  result->Set("frameId", base::MakeUnique<base::Value>(frame_id));
 
   return RespondNow(OneArgument(std::move(result)));
 }

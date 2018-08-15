@@ -72,7 +72,9 @@ public:
     void alphaTest(GLenum mode1, GLenum mode2) Q_DECL_OVERRIDE;
     void bindBufferBase(GLenum target, GLuint index, GLuint buffer) Q_DECL_OVERRIDE;
     void bindFragDataLocation(GLuint shader, const QHash<QString, int> &outputs) Q_DECL_OVERRIDE;
+    bool frameBufferNeedsRenderBuffer(const Attachment &attachment) Q_DECL_OVERRIDE;
     void bindFrameBufferAttachment(QOpenGLTexture *texture, const Attachment &attachment) Q_DECL_OVERRIDE;
+    void bindFrameBufferAttachment(RenderBuffer *renderBuffer, const Attachment &attachment) Q_DECL_OVERRIDE;
     void bindFrameBufferObject(GLuint frameBufferId, FBOBindMode mode) Q_DECL_OVERRIDE;
     void bindShaderStorageBlock(GLuint programId, GLuint shaderStorageBlockIndex, GLuint shaderStorageBlockBinding) Q_DECL_OVERRIDE;
     void bindUniformBlock(GLuint programId, GLuint uniformBlockIndex, GLuint uniformBlockBinding) Q_DECL_OVERRIDE;
@@ -91,7 +93,7 @@ public:
     void disablei(GLenum cap, GLuint index) Q_DECL_OVERRIDE;
     void disablePrimitiveRestart() Q_DECL_OVERRIDE;
     void dispatchCompute(GLuint wx, GLuint wy, GLuint wz) Q_DECL_OVERRIDE;
-    char *mapBuffer(GLenum target) Q_DECL_OVERRIDE;
+    char *mapBuffer(GLenum target, GLsizeiptr size) Q_DECL_OVERRIDE;
     GLboolean unmapBuffer(GLenum target) Q_DECL_OVERRIDE;
     void drawArrays(GLenum primitiveType, GLint first, GLsizei count) Q_DECL_OVERRIDE;
     void drawArraysIndirect(GLenum mode,void *indirect) Q_DECL_OVERRIDE;
@@ -104,6 +106,7 @@ public:
     void enableClipPlane(int clipPlane) Q_DECL_OVERRIDE;
     void enablei(GLenum cap, GLuint index) Q_DECL_OVERRIDE;
     void enablePrimitiveRestart(int primitiveRestartIndex) Q_DECL_OVERRIDE;
+    void enableVertexAttributeArray(int location) Q_DECL_OVERRIDE;
     void frontFace(GLenum mode) Q_DECL_OVERRIDE;
     QSize getRenderBufferDimensions(GLuint renderBufferId) Q_DECL_OVERRIDE;
     QSize getTextureDimensions(GLuint textureId, GLenum target, uint level = 0) Q_DECL_OVERRIDE;
@@ -125,6 +128,9 @@ public:
     uint uniformByteSize(const ShaderUniform &description) Q_DECL_OVERRIDE;
     void useProgram(GLuint programId) Q_DECL_OVERRIDE;
     void vertexAttribDivisor(GLuint index, GLuint divisor) Q_DECL_OVERRIDE;
+    void vertexAttributePointer(GLenum shaderDataType, GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid *pointer) Q_DECL_OVERRIDE;
+    void readBuffer(GLenum mode) Q_DECL_OVERRIDE;
+    void drawBuffer(GLenum mode) Q_DECL_OVERRIDE;
 
     void glUniform1fv(GLint location, GLsizei count, const GLfloat *value) Q_DECL_OVERRIDE;
     void glUniform2fv(GLint location, GLsizei count, const GLfloat *value) Q_DECL_OVERRIDE;

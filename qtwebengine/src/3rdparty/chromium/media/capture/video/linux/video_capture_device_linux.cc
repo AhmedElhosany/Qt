@@ -38,8 +38,8 @@ std::list<uint32_t> VideoCaptureDeviceLinux::GetListOfUsableFourCCs(
 
 VideoCaptureDeviceLinux::VideoCaptureDeviceLinux(
     const VideoCaptureDeviceDescriptor& device_descriptor)
-    : v4l2_thread_("V4L2CaptureThread"),
-      device_descriptor_(device_descriptor) {}
+    : device_descriptor_(device_descriptor),
+      v4l2_thread_("V4L2CaptureThread") {}
 
 VideoCaptureDeviceLinux::~VideoCaptureDeviceLinux() {
   // Check if the thread is running.
@@ -58,7 +58,7 @@ void VideoCaptureDeviceLinux::AllocateAndStart(
 
   const int line_frequency =
       TranslatePowerLineFrequencyToV4L2(GetPowerLineFrequency(params));
-  capture_impl_ = new V4L2CaptureDelegate(
+  capture_impl_ = base::MakeUnique<V4L2CaptureDelegate>(
       device_descriptor_, v4l2_thread_.task_runner(), line_frequency);
   if (!capture_impl_) {
     client->OnError(FROM_HERE, "Failed to create VideoCaptureDelegate");
@@ -66,18 +66,24 @@ void VideoCaptureDeviceLinux::AllocateAndStart(
   }
   v4l2_thread_.task_runner()->PostTask(
       FROM_HERE,
-      base::Bind(&V4L2CaptureDelegate::AllocateAndStart, capture_impl_,
+      base::Bind(&V4L2CaptureDelegate::AllocateAndStart,
+                 capture_impl_->GetWeakPtr(),
                  params.requested_format.frame_size.width(),
                  params.requested_format.frame_size.height(),
                  params.requested_format.frame_rate, base::Passed(&client)));
+
+  for (const auto& request : photo_requests_queue_)
+    v4l2_thread_.task_runner()->PostTask(FROM_HERE, request);
+  photo_requests_queue_.clear();
 }
 
 void VideoCaptureDeviceLinux::StopAndDeAllocate() {
   if (!v4l2_thread_.IsRunning())
     return;  // Wrong state.
   v4l2_thread_.task_runner()->PostTask(
-      FROM_HERE,
-      base::Bind(&V4L2CaptureDelegate::StopAndDeAllocate, capture_impl_));
+      FROM_HERE, base::Bind(&V4L2CaptureDelegate::StopAndDeAllocate,
+                            capture_impl_->GetWeakPtr()));
+  v4l2_thread_.task_runner()->DeleteSoon(FROM_HERE, capture_impl_.release());
   v4l2_thread_.Stop();
 
   capture_impl_ = nullptr;
@@ -85,38 +91,48 @@ void VideoCaptureDeviceLinux::StopAndDeAllocate() {
 
 void VideoCaptureDeviceLinux::TakePhoto(TakePhotoCallback callback) {
   DCHECK(capture_impl_);
-  if (!v4l2_thread_.IsRunning())
+  auto functor =
+      base::Bind(&V4L2CaptureDelegate::TakePhoto, capture_impl_->GetWeakPtr(),
+                 base::Passed(&callback));
+  if (!v4l2_thread_.IsRunning()) {
+    // We have to wait until we get the device AllocateAndStart()ed.
+    photo_requests_queue_.push_back(std::move(functor));
     return;
-  v4l2_thread_.task_runner()->PostTask(
-      FROM_HERE, base::Bind(&V4L2CaptureDelegate::TakePhoto, capture_impl_,
-                            base::Passed(&callback)));
+  }
+  v4l2_thread_.task_runner()->PostTask(FROM_HERE, std::move(functor));
 }
 
-void VideoCaptureDeviceLinux::GetPhotoCapabilities(
-    GetPhotoCapabilitiesCallback callback) {
-  if (!v4l2_thread_.IsRunning())
-    return;  // Wrong state.
-  v4l2_thread_.task_runner()->PostTask(
-      FROM_HERE, base::Bind(&V4L2CaptureDelegate::GetPhotoCapabilities,
-                            capture_impl_, base::Passed(&callback)));
+void VideoCaptureDeviceLinux::GetPhotoState(GetPhotoStateCallback callback) {
+  auto functor =
+      base::Bind(&V4L2CaptureDelegate::GetPhotoState,
+                 capture_impl_->GetWeakPtr(), base::Passed(&callback));
+  if (!v4l2_thread_.IsRunning()) {
+    // We have to wait until we get the device AllocateAndStart()ed.
+    photo_requests_queue_.push_back(std::move(functor));
+    return;
+  }
+  v4l2_thread_.task_runner()->PostTask(FROM_HERE, std::move(functor));
 }
 
 void VideoCaptureDeviceLinux::SetPhotoOptions(
     mojom::PhotoSettingsPtr settings,
     SetPhotoOptionsCallback callback) {
-  if (!v4l2_thread_.IsRunning())
-    return;  // Wrong state.
-  v4l2_thread_.task_runner()->PostTask(
-      FROM_HERE,
-      base::Bind(&V4L2CaptureDelegate::SetPhotoOptions, capture_impl_,
-                 base::Passed(&settings), base::Passed(&callback)));
+  auto functor = base::Bind(&V4L2CaptureDelegate::SetPhotoOptions,
+                            capture_impl_->GetWeakPtr(),
+                            base::Passed(&settings), base::Passed(&callback));
+  if (!v4l2_thread_.IsRunning()) {
+    // We have to wait until we get the device AllocateAndStart()ed.
+    photo_requests_queue_.push_back(std::move(functor));
+    return;
+  }
+  v4l2_thread_.task_runner()->PostTask(FROM_HERE, std::move(functor));
 }
 
 void VideoCaptureDeviceLinux::SetRotation(int rotation) {
   if (v4l2_thread_.IsRunning()) {
     v4l2_thread_.task_runner()->PostTask(
-        FROM_HERE,
-        base::Bind(&V4L2CaptureDelegate::SetRotation, capture_impl_, rotation));
+        FROM_HERE, base::Bind(&V4L2CaptureDelegate::SetRotation,
+                              capture_impl_->GetWeakPtr(), rotation));
   }
 }
 

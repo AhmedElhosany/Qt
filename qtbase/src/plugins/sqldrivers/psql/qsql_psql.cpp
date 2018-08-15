@@ -183,6 +183,7 @@ public:
     void setDatestyle();
     void setByteaOutput();
     void detectBackslashEscape();
+    mutable QHash<int, QString> oidToTable;
 };
 
 void QPSQLDriverPrivate::appendTables(QStringList &tl, QSqlQuery &t, QChar type)
@@ -553,6 +554,16 @@ QSqlRecord QPSQLResult::record() const
             f.setName(QString::fromUtf8(PQfname(d->result, i)));
         else
             f.setName(QString::fromLocal8Bit(PQfname(d->result, i)));
+        const int tableOid = PQftable(d->result, i);
+        auto &tableName = d->drv_d_func()->oidToTable[tableOid];
+        if (tableName.isEmpty()) {
+            QSqlQuery qry(driver()->createResult());
+            if (qry.exec(QStringLiteral("SELECT relname FROM pg_class WHERE pg_class.oid = %1")
+                         .arg(tableOid)) && qry.next()) {
+                tableName = qry.value(0).toString();
+            }
+        }
+        f.setTableName(tableName);
         int ptype = PQftype(d->result, i);
         f.setType(qDecodePSQLType(ptype));
         int len = PQfsize(d->result, i);
@@ -1156,7 +1167,7 @@ QSqlIndex QPSQLDriver::primaryIndex(const QString& tablename) const
 
     i.exec(stmt.arg(tbl));
     while (i.isActive() && i.next()) {
-        QSqlField f(i.value(0).toString(), qDecodePSQLType(i.value(1).toInt()));
+        QSqlField f(i.value(0).toString(), qDecodePSQLType(i.value(1).toInt()), tablename);
         idx.append(f);
         idx.setName(i.value(2).toString());
     }
@@ -1248,7 +1259,7 @@ QSqlRecord QPSQLDriver::record(const QString& tablename) const
             QString defVal = query.value(5).toString();
             if (!defVal.isEmpty() && defVal.at(0) == QLatin1Char('\''))
                 defVal = defVal.mid(1, defVal.length() - 2);
-            QSqlField f(query.value(0).toString(), qDecodePSQLType(query.value(1).toInt()));
+            QSqlField f(query.value(0).toString(), qDecodePSQLType(query.value(1).toInt()), tablename);
             f.setRequired(query.value(2).toBool());
             f.setLength(len);
             f.setPrecision(precision);
@@ -1275,7 +1286,7 @@ QSqlRecord QPSQLDriver::record(const QString& tablename) const
                 len = precision - 4;
                 precision = -1;
             }
-            QSqlField f(query.value(0).toString(), qDecodePSQLType(query.value(1).toInt()));
+            QSqlField f(query.value(0).toString(), qDecodePSQLType(query.value(1).toInt()), tablename);
             f.setRequired(query.value(2).toBool());
             f.setLength(len);
             f.setPrecision(precision);
@@ -1430,6 +1441,7 @@ bool QPSQLDriver::subscribeToNotification(const QString &name)
         QString query = QLatin1String("LISTEN ") + escapeIdentifier(name, QSqlDriver::TableName);
         PGresult *result = d->exec(query);
         if (PQresultStatus(result) != PGRES_COMMAND_OK) {
+            d->seid.removeLast();
             setLastError(qMakeError(tr("Unable to subscribe"), QSqlError::StatementError, d, result));
             PQclear(result);
             return false;

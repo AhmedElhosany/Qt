@@ -80,9 +80,8 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data {
     virtual void OnDownloadCreated(
         DownloadManager* manager, DownloadItem* item) {}
 
-    // A SavePackage has successfully finished.
-    virtual void OnSavePackageSuccessfullyFinished(
-        DownloadManager* manager, DownloadItem* item) {}
+    // Called when the download manager has finished loading the data.
+    virtual void OnManagerInitialized() {}
 
     // Called when the DownloadManager is being destroyed to prevent Observers
     // from calling back to a stale pointer.
@@ -116,10 +115,6 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data {
       base::Time remove_begin,
       base::Time remove_end) = 0;
 
-  // Remove all downloads will delete all downloads. The number of downloads
-  // deleted is returned back to the caller.
-  virtual int RemoveAllDownloads() = 0;
-
   // See DownloadUrlParameters for details about controlling the download.
   virtual void DownloadUrl(
       std::unique_ptr<DownloadUrlParameters> parameters) = 0;
@@ -144,8 +139,8 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data {
       const GURL& tab_referrer_url,
       const std::string& mime_type,
       const std::string& original_mime_type,
-      const base::Time& start_time,
-      const base::Time& end_time,
+      base::Time start_time,
+      base::Time end_time,
       const std::string& etag,
       const std::string& last_modified,
       int64_t received_bytes,
@@ -154,7 +149,16 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data {
       DownloadItem::DownloadState state,
       DownloadDangerType danger_type,
       DownloadInterruptReason interrupt_reason,
-      bool opened) = 0;
+      bool opened,
+      base::Time last_access_time,
+      bool transient,
+      const std::vector<DownloadItem::ReceivedSlice>& received_slices) = 0;
+
+  // Called when download manager has loaded all the data.
+  virtual void PostInitialization() = 0;
+
+  // Returns if the manager has been initialized and loaded all the data.
+  virtual bool IsManagerInitialized() const = 0;
 
   // The number of in progress (including paused) downloads.
   // Performance note: this loops over all items. If profiling finds that this

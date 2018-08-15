@@ -16,7 +16,6 @@
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/shared_memory.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
@@ -60,12 +59,12 @@ static base::LazyInstance<BlobTransportController>::Leaky g_controller =
 // This keeps the process alive while blobs are being transferred.
 // These need to be called on the main thread.
 void IncChildProcessRefCount() {
-  blink::Platform::current()->suddenTerminationChanged(false);
+  blink::Platform::Current()->SuddenTerminationChanged(false);
   ChildProcess::current()->AddRefProcess();
 }
 
 void DecChildProcessRefCount() {
-  blink::Platform::current()->suddenTerminationChanged(true);
+  blink::Platform::Current()->SuddenTerminationChanged(true);
   ChildProcess::current()->ReleaseProcess();
 }
 
@@ -90,27 +89,23 @@ bool WriteSingleChunk(base::File* file, const char* memory, size_t size) {
   return true;
 }
 
-base::Optional<base::Time> WriteSingleRequestToDisk(
-    const BlobConsolidation* consolidation,
-    const BlobItemBytesRequest& request,
-    File* file) {
+bool WriteSingleRequestToDisk(const BlobConsolidation* consolidation,
+                              const BlobItemBytesRequest& request,
+                              File* file) {
   if (!file->IsValid())
-    return base::nullopt;
+    return false;
   int64_t seek_distance = file->Seek(
       File::FROM_BEGIN, base::checked_cast<int64_t>(request.handle_offset));
   bool seek_failed = seek_distance < 0;
   UMA_HISTOGRAM_BOOLEAN("Storage.Blob.RendererFileSeekFailed", seek_failed);
-  if (seek_failed) {
-    return base::nullopt;
-  }
+  if (seek_failed)
+    return false;
   BlobConsolidation::ReadStatus status = consolidation->VisitMemory(
       request.renderer_item_index, request.renderer_item_offset, request.size,
       base::Bind(&WriteSingleChunk, file));
   if (status != BlobConsolidation::ReadStatus::OK)
-    return base::nullopt;
-  File::Info info;
-  file->GetInfo(&info);
-  return base::make_optional(info.last_modified);
+    return false;
+  return true;
 }
 
 base::Optional<std::vector<BlobItemBytesResponse>> WriteDiskRequests(
@@ -118,8 +113,6 @@ base::Optional<std::vector<BlobItemBytesResponse>> WriteDiskRequests(
     std::unique_ptr<std::vector<BlobItemBytesRequest>> requests,
     const std::vector<IPC::PlatformFileForTransit>& file_handles) {
   std::vector<BlobItemBytesResponse> responses;
-  std::vector<base::Time> last_modified_times;
-  last_modified_times.resize(file_handles.size());
   // We grab ownership of the file handles here. When this vector is destroyed
   // it will close the files.
   std::vector<File> files;
@@ -128,13 +121,24 @@ base::Optional<std::vector<BlobItemBytesResponse>> WriteDiskRequests(
     files.emplace_back(IPC::PlatformFileForTransitToFile(file_handle));
   }
   for (const auto& request : *requests) {
-    base::Optional<base::Time> last_modified = WriteSingleRequestToDisk(
-        consolidation.get(), request, &files[request.handle_index]);
-    if (!last_modified) {
+    if (!WriteSingleRequestToDisk(consolidation.get(), request,
+                                  &files[request.handle_index])) {
       return base::nullopt;
     }
-    last_modified_times[request.handle_index] = last_modified.value();
   }
+  // The last modified time needs to be collected after we flush the file.
+  std::vector<base::Time> last_modified_times;
+  last_modified_times.resize(file_handles.size());
+  for (size_t i = 0; i < files.size(); ++i) {
+    auto& file = files[i];
+    if (!file.Flush())
+      return base::nullopt;
+    File::Info info;
+    if (!file.GetInfo(&info))
+      return base::nullopt;
+    last_modified_times[i] = info.last_modified;
+  }
+
   for (const auto& request : *requests) {
     responses.push_back(BlobItemBytesResponse(request.request_number));
     responses.back().time_file_modified =
@@ -176,6 +180,10 @@ void BlobTransportController::InitiateBlobTransfer(
                  base::Unretained(BlobTransportController::GetInstance()), uuid,
                  base::Passed(std::move(consolidation)),
                  base::Passed(std::move(main_runner))));
+
+  // Measure how much jank the following synchronous IPC introduces.
+  SCOPED_UMA_HISTOGRAM_TIMER("Storage.Blob.RegisterBlobTime");
+
   sender->Send(
       new BlobStorageMsg_RegisterBlob(uuid, content_type, "", descriptions));
 }
@@ -201,8 +209,8 @@ void BlobTransportController::OnMemoryRequest(
 
   // Since we can be writing to the same shared memory handle from multiple
   // requests, we keep them in a vector and lazily create them.
-  ScopedVector<SharedMemory> opened_memory;
-  opened_memory.resize(memory_handles->size());
+  std::vector<std::unique_ptr<SharedMemory>> opened_memory(
+      memory_handles->size());
 
   // We need to calculate how much memory we expect to be writing to the memory
   // segments so we can correctly map it the first time.
@@ -243,13 +251,11 @@ void BlobTransportController::OnMemoryRequest(
       }
       case IPCBlobItemRequestStrategy::SHARED_MEMORY: {
         responses.push_back(BlobItemBytesResponse(request.request_number));
-        SharedMemory* memory = opened_memory[request.handle_index];
-        if (!memory) {
+        if (!opened_memory[request.handle_index]) {
           SharedMemoryHandle& handle = (*memory_handles)[request.handle_index];
           size_t size = shared_memory_sizes[request.handle_index];
           DCHECK(SharedMemory::IsHandleValid(handle));
-          std::unique_ptr<SharedMemory> shared_memory(
-              new SharedMemory(handle, false));
+          auto shared_memory = base::MakeUnique<SharedMemory>(handle, false);
 
           if (!shared_memory->Map(size)) {
             // This would happen if the renderer process doesn't have enough
@@ -260,14 +266,15 @@ void BlobTransportController::OnMemoryRequest(
                          << ".";
             return;
           }
-          memory = shared_memory.get();
-          opened_memory[request.handle_index] = shared_memory.release();
+          opened_memory[request.handle_index] = std::move(shared_memory);
         }
-        CHECK(memory->memory()) << "Couldn't map memory for blob transfer.";
+        CHECK(opened_memory[request.handle_index]->memory())
+            << "Couldn't map memory for blob transfer.";
         ReadStatus status = consolidation->ReadMemory(
             request.renderer_item_index, request.renderer_item_offset,
             request.size,
-            static_cast<char*>(memory->memory()) + request.handle_offset);
+            static_cast<char*>(opened_memory[request.handle_index]->memory()) +
+                request.handle_offset);
         DCHECK(status == ReadStatus::OK)
             << "Error reading from consolidated blob: "
             << static_cast<int>(status);

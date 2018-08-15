@@ -12,6 +12,7 @@
 namespace blink {
 
 class Navigator;
+class ScriptState;
 
 // Provides MediaSession as a supplement of Navigator as an attribute.
 class NavigatorMediaSession final
@@ -20,17 +21,17 @@ class NavigatorMediaSession final
   USING_GARBAGE_COLLECTED_MIXIN(NavigatorMediaSession);
 
  public:
-  static NavigatorMediaSession& from(Navigator&);
+  static NavigatorMediaSession& From(Navigator&);
   static MediaSession* mediaSession(ScriptState*, Navigator&);
 
   DECLARE_TRACE();
 
  private:
-  NavigatorMediaSession(Navigator&);
-  static const char* supplementName();
+  explicit NavigatorMediaSession(Navigator&);
+  static const char* SupplementName();
 
   // The MediaSession instance of this Navigator.
-  Member<MediaSession> m_session;
+  Member<MediaSession> session_;
 };
 
 }  // namespace blink

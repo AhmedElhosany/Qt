@@ -5,12 +5,14 @@
 #include "content/browser/download/download_stats.h"
 
 #include "base/macros.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/strings/string_util.h"
 #include "content/browser/download/download_resource_handler.h"
 #include "content/public/browser/download_interrupt_reasons.h"
 #include "net/http/http_content_disposition.h"
+#include "net/http/http_util.h"
 
 namespace content {
 
@@ -337,6 +339,12 @@ const base::FilePath::CharType* kDangerousFileTypes[] = {
   FILE_PATH_LITERAL(".udif"),
 };
 
+// The maximum size in KB for the file size metric, file size larger than this
+// will be kept in overflow bucket.
+const int64_t kMaxFileSizeKb = 4 * 1024 * 1024; /* 4GB. */
+
+const int64_t kHighBandwidthBytesPerSecond = 30 * 1024 * 1024;
+
 // Maps extensions to their matching UMA histogram int value.
 int GetDangerousFileType(const base::FilePath& file_path) {
   for (size_t i = 0; i < arraysize(kDangerousFileTypes); ++i) {
@@ -344,6 +352,20 @@ int GetDangerousFileType(const base::FilePath& file_path) {
       return i + 1;
   }
   return 0;  // Unknown extension.
+}
+
+// Helper method to calculate the bandwidth given the data length and time.
+int64_t CalculateBandwidthBytesPerSecond(size_t length,
+                                         base::TimeDelta elapsed_time) {
+  int64_t elapsed_time_ms = elapsed_time.InMilliseconds();
+  if (0 == elapsed_time_ms)
+    elapsed_time_ms = 1;
+  return 1000 * static_cast<int64_t>(length) / elapsed_time_ms;
+}
+
+// Helper method to record the bandwidth for a given metric.
+void RecordBandwidthMetric(const std::string& metric, int bandwidth) {
+  base::UmaHistogramCustomCounts(metric, bandwidth, 1, 50 * 1000 * 1000, 50);
 }
 
 } // namespace
@@ -373,13 +395,24 @@ void RecordDownloadCompleted(const base::TimeTicks& start,
 
 void RecordDownloadInterrupted(DownloadInterruptReason reason,
                                int64_t received,
-                               int64_t total) {
+                               int64_t total,
+                               bool is_parallelizable,
+                               bool is_parallel_download_enabled) {
   RecordDownloadCount(INTERRUPTED_COUNT);
-  UMA_HISTOGRAM_CUSTOM_ENUMERATION(
-      "Download.InterruptedReason",
-      reason,
+  if (is_parallelizable) {
+    RecordParallelizableDownloadCount(INTERRUPTED_COUNT,
+                                      is_parallel_download_enabled);
+  }
+
+  std::vector<base::HistogramBase::Sample> samples =
       base::CustomHistogram::ArrayToCustomRanges(
-          kAllInterruptReasonCodes, arraysize(kAllInterruptReasonCodes)));
+          kAllInterruptReasonCodes, arraysize(kAllInterruptReasonCodes));
+  UMA_HISTOGRAM_CUSTOM_ENUMERATION("Download.InterruptedReason", reason,
+                                   samples);
+  if (is_parallel_download_enabled) {
+    UMA_HISTOGRAM_CUSTOM_ENUMERATION(
+        "Download.InterruptedReason.ParallelDownload", reason, samples);
+  }
 
   // The maximum should be 2^kBuckets, to have the logarithmic bucket
   // boundaries fall on powers of 2.
@@ -394,32 +427,57 @@ void RecordDownloadInterrupted(DownloadInterruptReason reason,
                               1,
                               kMaxKb,
                               kBuckets);
+  if (is_parallel_download_enabled) {
+    UMA_HISTOGRAM_CUSTOM_COUNTS(
+        "Download.InterruptedReceivedSizeK.ParallelDownload", received_kb, 1,
+        kMaxKb, kBuckets);
+  }
+
   if (!unknown_size) {
     UMA_HISTOGRAM_CUSTOM_COUNTS("Download.InterruptedTotalSizeK",
                                 total_kb,
                                 1,
                                 kMaxKb,
                                 kBuckets);
+    if (is_parallel_download_enabled) {
+      UMA_HISTOGRAM_CUSTOM_COUNTS(
+          "Download.InterruptedTotalSizeK.ParallelDownload", total_kb, 1,
+          kMaxKb, kBuckets);
+    }
     if (delta_bytes == 0) {
       RecordDownloadCount(INTERRUPTED_AT_END_COUNT);
-      UMA_HISTOGRAM_CUSTOM_ENUMERATION(
-          "Download.InterruptedAtEndReason",
-          reason,
-          base::CustomHistogram::ArrayToCustomRanges(
-              kAllInterruptReasonCodes,
-              arraysize(kAllInterruptReasonCodes)));
+      UMA_HISTOGRAM_CUSTOM_ENUMERATION("Download.InterruptedAtEndReason",
+                                       reason, samples);
+
+      if (is_parallelizable) {
+        RecordParallelizableDownloadCount(INTERRUPTED_AT_END_COUNT,
+                                          is_parallel_download_enabled);
+        UMA_HISTOGRAM_CUSTOM_ENUMERATION(
+            "Download.InterruptedAtEndReason.ParallelDownload", reason,
+            samples);
+      }
     } else if (delta_bytes > 0) {
       UMA_HISTOGRAM_CUSTOM_COUNTS("Download.InterruptedOverrunBytes",
                                   delta_bytes,
                                   1,
                                   kMaxKb,
                                   kBuckets);
+      if (is_parallel_download_enabled) {
+        UMA_HISTOGRAM_CUSTOM_COUNTS(
+            "Download.InterruptedOverrunBytes.ParallelDownload", delta_bytes, 1,
+            kMaxKb, kBuckets);
+      }
     } else {
       UMA_HISTOGRAM_CUSTOM_COUNTS("Download.InterruptedUnderrunBytes",
                                   -delta_bytes,
                                   1,
                                   kMaxKb,
                                   kBuckets);
+      if (is_parallel_download_enabled) {
+        UMA_HISTOGRAM_CUSTOM_COUNTS(
+            "Download.InterruptedUnderrunBytes.ParallelDownload", -delta_bytes,
+            1, kMaxKb, kBuckets);
+      }
     }
   }
 
@@ -467,15 +525,6 @@ void RecordDangerousDownloadDiscard(DownloadDiscardReason reason,
     default:
       NOTREACHED();
   }
-}
-
-void RecordDownloadWriteSize(size_t data_len) {
-  int max = 1024 * 1024;  // One Megabyte.
-  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.WriteSize", data_len, 1, max, 256);
-}
-
-void RecordDownloadWriteLoopCount(int count) {
-  UMA_HISTOGRAM_ENUMERATION("Download.WriteLoopCount", count, 20);
 }
 
 void RecordAcceptsRanges(const std::string& accepts_ranges,
@@ -587,14 +636,12 @@ void RecordDownloadImageType(const std::string& mime_type_string) {
     }
   }
 
-  UMA_HISTOGRAM_ENUMERATION("Download.ContentImageType",
-                            download_image,
+  UMA_HISTOGRAM_ENUMERATION("Download.ContentImageType", download_image,
                             DOWNLOAD_IMAGE_MAX);
 }
 
-}  // namespace
-
-void RecordDownloadMimeType(const std::string& mime_type_string) {
+DownloadContent DownloadContentFromMimeType(const std::string& mime_type_string,
+                                            bool record_image_type) {
   DownloadContent download_content = DOWNLOAD_CONTENT_UNRECOGNIZED;
 
   // Look up exact matches.
@@ -614,7 +661,8 @@ void RecordDownloadMimeType(const std::string& mime_type_string) {
     } else if (base::StartsWith(mime_type_string, "image/",
                                 base::CompareCase::SENSITIVE)) {
       download_content = DOWNLOAD_CONTENT_IMAGE;
-      RecordDownloadImageType(mime_type_string);
+      if (record_image_type)
+        RecordDownloadImageType(mime_type_string);
     } else if (base::StartsWith(mime_type_string, "audio/",
                                 base::CompareCase::SENSITIVE)) {
       download_content = DOWNLOAD_CONTENT_AUDIO;
@@ -624,10 +672,23 @@ void RecordDownloadMimeType(const std::string& mime_type_string) {
     }
   }
 
-  // Record the value.
-  UMA_HISTOGRAM_ENUMERATION("Download.ContentType",
-                            download_content,
+  return download_content;
+}
+
+}  // namespace
+
+void RecordDownloadMimeType(const std::string& mime_type_string) {
+  UMA_HISTOGRAM_ENUMERATION("Download.Start.ContentType",
+                            DownloadContentFromMimeType(mime_type_string, true),
                             DOWNLOAD_CONTENT_MAX);
+}
+
+void RecordDownloadMimeTypeForNormalProfile(
+    const std::string& mime_type_string) {
+  UMA_HISTOGRAM_ENUMERATION(
+      "Download.Start.ContentType.NormalProfile",
+      DownloadContentFromMimeType(mime_type_string, false),
+      DOWNLOAD_CONTENT_MAX);
 }
 
 void RecordDownloadContentDisposition(
@@ -673,16 +734,6 @@ void RecordFileThreadReceiveBuffers(size_t num_buffers) {
       100, 100);
 }
 
-void RecordBandwidth(double actual_bandwidth, double potential_bandwidth) {
-  UMA_HISTOGRAM_CUSTOM_COUNTS(
-      "Download.ActualBandwidth", actual_bandwidth, 1, 1000000000, 50);
-  UMA_HISTOGRAM_CUSTOM_COUNTS(
-      "Download.PotentialBandwidth", potential_bandwidth, 1, 1000000000, 50);
-  UMA_HISTOGRAM_PERCENTAGE(
-      "Download.BandwidthUsed",
-      (int) ((actual_bandwidth * 100)/ potential_bandwidth));
-}
-
 void RecordOpen(const base::Time& end, bool first) {
   if (!end.is_null()) {
     UMA_HISTOGRAM_LONG_TIMES("Download.OpenTime", (base::Time::Now() - end));
@@ -691,14 +742,6 @@ void RecordOpen(const base::Time& end, bool first) {
                               (base::Time::Now() - end));
     }
   }
-}
-
-void RecordClearAllSize(int size) {
-  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.ClearAllSize",
-                              size,
-                              1/*min*/,
-                              (1 << 10)/*max*/,
-                              32/*num_buckets*/);
 }
 
 void RecordOpensOutstanding(int size) {
@@ -730,21 +773,136 @@ void RecordNetworkBlockage(base::TimeDelta resource_handler_lifetime,
 void RecordFileBandwidth(size_t length,
                          base::TimeDelta disk_write_time,
                          base::TimeDelta elapsed_time) {
-  size_t elapsed_time_ms = elapsed_time.InMilliseconds();
-  if (0u == elapsed_time_ms)
-    elapsed_time_ms = 1;
-  size_t disk_write_time_ms = disk_write_time.InMilliseconds();
-  if (0u == disk_write_time_ms)
-    disk_write_time_ms = 1;
-
-  UMA_HISTOGRAM_CUSTOM_COUNTS(
-      "Download.BandwidthOverallBytesPerSecond",
-      (1000 * length / elapsed_time_ms), 1, 50000000, 50);
-  UMA_HISTOGRAM_CUSTOM_COUNTS(
+  RecordBandwidthMetric("Download.BandwidthOverallBytesPerSecond",
+                        CalculateBandwidthBytesPerSecond(length, elapsed_time));
+  RecordBandwidthMetric(
       "Download.BandwidthDiskBytesPerSecond",
-      (1000 * length / disk_write_time_ms), 1, 50000000, 50);
-  UMA_HISTOGRAM_COUNTS_100("Download.DiskBandwidthUsedPercentage",
-                           disk_write_time_ms * 100 / elapsed_time_ms);
+      CalculateBandwidthBytesPerSecond(length, disk_write_time));
+}
+
+void RecordParallelizableDownloadCount(DownloadCountTypes type,
+                                       bool is_parallel_download_enabled) {
+  std::string histogram_name = is_parallel_download_enabled
+                                   ? "Download.Counts.ParallelDownload"
+                                   : "Download.Counts.ParallelizableDownload";
+  base::UmaHistogramEnumeration(histogram_name, type,
+                                DOWNLOAD_COUNT_TYPES_LAST_ENTRY);
+}
+
+void RecordParallelDownloadRequestCount(int request_count) {
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.ParallelDownloadRequestCount",
+                              request_count, 1, 10, 11);
+}
+
+void RecordParallelDownloadAddStreamSuccess(bool success) {
+  UMA_HISTOGRAM_BOOLEAN("Download.ParallelDownloadAddStreamSuccess", success);
+}
+
+void RecordParallelizableDownloadStats(
+    size_t bytes_downloaded_with_parallel_streams,
+    base::TimeDelta time_with_parallel_streams,
+    size_t bytes_downloaded_without_parallel_streams,
+    base::TimeDelta time_without_parallel_streams,
+    bool uses_parallel_requests) {
+  RecordParallelizableDownloadAverageStats(
+      bytes_downloaded_with_parallel_streams +
+          bytes_downloaded_without_parallel_streams,
+      time_with_parallel_streams + time_without_parallel_streams);
+
+  int64_t bandwidth_without_parallel_streams = 0;
+  if (bytes_downloaded_without_parallel_streams > 0) {
+    bandwidth_without_parallel_streams = CalculateBandwidthBytesPerSecond(
+        bytes_downloaded_without_parallel_streams,
+        time_without_parallel_streams);
+    if (uses_parallel_requests) {
+      RecordBandwidthMetric(
+          "Download.ParallelizableDownloadBandwidth."
+          "WithParallelRequestsSingleStream",
+          bandwidth_without_parallel_streams);
+    } else {
+      RecordBandwidthMetric(
+          "Download.ParallelizableDownloadBandwidth."
+          "WithoutParallelRequests",
+          bandwidth_without_parallel_streams);
+    }
+  }
+
+  if (!uses_parallel_requests)
+    return;
+
+  base::TimeDelta time_saved;
+  if (bytes_downloaded_with_parallel_streams > 0) {
+    int64_t bandwidth_with_parallel_streams = CalculateBandwidthBytesPerSecond(
+        bytes_downloaded_with_parallel_streams, time_with_parallel_streams);
+    RecordBandwidthMetric(
+        "Download.ParallelizableDownloadBandwidth."
+        "WithParallelRequestsMultipleStreams",
+        bandwidth_with_parallel_streams);
+    if (bandwidth_without_parallel_streams > 0) {
+      time_saved = base::TimeDelta::FromMilliseconds(
+                       1000.0 * bytes_downloaded_with_parallel_streams /
+                       bandwidth_without_parallel_streams) -
+                   time_with_parallel_streams;
+      int bandwidth_ratio_percentage =
+          (100.0 * bandwidth_with_parallel_streams) /
+          bandwidth_without_parallel_streams;
+      UMA_HISTOGRAM_CUSTOM_COUNTS(
+          "Download.ParallelDownload.BandwidthRatioPercentage",
+          bandwidth_ratio_percentage, 0, 400, 101);
+      base::TimeDelta total_time =
+          time_with_parallel_streams + time_without_parallel_streams;
+      size_t total_size = bytes_downloaded_with_parallel_streams +
+                          bytes_downloaded_without_parallel_streams;
+      base::TimeDelta non_parallel_time = base::TimeDelta::FromSecondsD(
+          static_cast<double>(total_size) / bandwidth_without_parallel_streams);
+      int time_ratio_percentage =
+          100.0 * total_time.InSecondsF() / non_parallel_time.InSecondsF();
+      UMA_HISTOGRAM_CUSTOM_COUNTS(
+          "Download.ParallelDownload.TotalTimeRatioPercentage",
+          time_ratio_percentage, 0, 200, 101);
+    }
+  }
+
+  int kMillisecondsPerHour =
+      base::checked_cast<int>(base::Time::kMillisecondsPerSecond * 60 * 60);
+  if (time_saved >= base::TimeDelta()) {
+    UMA_HISTOGRAM_CUSTOM_COUNTS(
+        "Download.EstimatedTimeSavedWithParallelDownload",
+        time_saved.InMilliseconds(), 0, kMillisecondsPerHour, 50);
+  } else {
+    UMA_HISTOGRAM_CUSTOM_COUNTS(
+        "Download.EstimatedTimeWastedWithParallelDownload",
+        -time_saved.InMilliseconds(), 0, kMillisecondsPerHour, 50);
+  }
+}
+
+void RecordParallelizableDownloadAverageStats(
+    int64_t bytes_downloaded,
+    const base::TimeDelta& time_span) {
+  if (time_span.is_zero() || bytes_downloaded <= 0)
+    return;
+
+  int64_t average_bandwidth =
+      CalculateBandwidthBytesPerSecond(bytes_downloaded, time_span);
+  int64_t file_size_kb = bytes_downloaded / 1024;
+  RecordBandwidthMetric("Download.ParallelizableDownloadBandwidth",
+                        average_bandwidth);
+  UMA_HISTOGRAM_LONG_TIMES("Download.Parallelizable.DownloadTime", time_span);
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.Parallelizable.FileSize", file_size_kb,
+                              1, kMaxFileSizeKb, 50);
+  if (average_bandwidth > kHighBandwidthBytesPerSecond) {
+    UMA_HISTOGRAM_LONG_TIMES(
+        "Download.Parallelizable.DownloadTime.HighDownloadBandwidth",
+        time_span);
+    UMA_HISTOGRAM_CUSTOM_COUNTS(
+        "Download.Parallelizable.FileSize.HighDownloadBandwidth", file_size_kb,
+        1, kMaxFileSizeKb, 50);
+  }
+}
+
+void RecordParallelDownloadCreationEvent(ParallelDownloadCreationEvent event) {
+  UMA_HISTOGRAM_ENUMERATION("Download.ParallelDownload.CreationEvent", event,
+                            ParallelDownloadCreationEvent::COUNT);
 }
 
 void RecordDownloadFileRenameResultAfterRetry(
@@ -817,6 +975,24 @@ void RecordDownloadConnectionSecurity(const GURL& download_url,
 
   UMA_HISTOGRAM_ENUMERATION("Download.TargetConnectionSecurity", state,
                             DOWNLOAD_CONNECTION_SECURITY_MAX);
+}
+
+void RecordDownloadSourcePageTransitionType(
+    const base::Optional<ui::PageTransition>& page_transition) {
+  if (!page_transition)
+    return;
+
+  UMA_HISTOGRAM_ENUMERATION(
+      "Download.PageTransition",
+      ui::PageTransitionStripQualifier(page_transition.value()),
+      ui::PAGE_TRANSITION_LAST_CORE + 1);
+}
+
+void RecordDownloadHttpResponseCode(int response_code) {
+  UMA_HISTOGRAM_CUSTOM_ENUMERATION(
+      "Download.HttpResponseCode",
+      net::HttpUtil::MapStatusCodeForHistogram(response_code),
+      net::HttpUtil::GetStatusCodesForHistogram());
 }
 
 }  // namespace content

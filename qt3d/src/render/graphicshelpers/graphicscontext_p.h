@@ -71,6 +71,8 @@
 #include <Qt3DRender/private/shadercache_p.h>
 #include <Qt3DRender/private/uniform_p.h>
 #include <Qt3DRender/private/graphicshelperinterface_p.h>
+#include <Qt3DRender/private/qblitframebuffer_p.h>
+#include <qmath.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -157,16 +159,28 @@ public:
 
     void setRenderer(Renderer *renderer);
 
-    void specifyAttribute(const Attribute *attribute, Buffer *buffer, int attributeLocation);
+    void specifyAttribute(const Attribute *attribute,
+                          Buffer *buffer,
+                          const ShaderAttribute *attributeDescription);
     void specifyIndices(Buffer *buffer);
     void updateBuffer(Buffer *buffer);
     QByteArray downloadBufferContent(Buffer *buffer);
     void releaseBuffer(Qt3DCore::QNodeId bufferId);
     bool hasGLBufferForBuffer(Buffer *buffer);
 
+    void blitFramebuffer(Qt3DCore::QNodeId outputRenderTargetId, Qt3DCore::QNodeId inputRenderTargetId,
+                         QRect inputRect,
+                         QRect outputRect, uint defaultFboId,
+                         QRenderTargetOutput::AttachmentPoint inputAttachmentPoint,
+                         QRenderTargetOutput::AttachmentPoint outputAttachmentPoint,
+                         QBlitFramebuffer::InterpolationMethod interpolationMethod);
+
     void memoryBarrier(QMemoryBarrier::Operations barriers);
 
     bool setParameters(ShaderParameterPack &parameterPack);
+
+    void readBuffer(GLenum mode);
+    void drawBuffer(GLenum mode);
 
     /**
      * @brief glBufferFor - given a client-side (CPU) buffer, provide the
@@ -174,7 +188,7 @@ public:
      * @param buf
      * @return
      */
-    GLBuffer *glBufferForRenderBuffer(Buffer *buf);
+    GLBuffer *glBufferForRenderBuffer(Buffer *buf, GLBuffer::Type type);
 
     /**
      * @brief activateTexture - make a texture active on a hardware unit
@@ -212,7 +226,7 @@ public:
     void    disablei(GLenum cap, GLuint index);
     void    disablePrimitiveRestart();
     void    dispatchCompute(int x, int y, int z);
-    char *  mapBuffer(GLenum target);
+    char *  mapBuffer(GLenum target, GLsizeiptr size);
     GLboolean unmapBuffer(GLenum target);
     void    drawArrays(GLenum primitiveType, GLint first, GLsizei count);
     void    drawArraysIndirect(GLenum mode,void *indirect);
@@ -242,7 +256,7 @@ public:
     bool supportsDrawBuffersBlend() const;
     bool supportsVAO() const { return m_supportsVAO; }
 
-    QImage readFramebuffer(QSize size);
+    QImage readFramebuffer(const QRect &rect);
 
 private:
     void initialize();
@@ -254,9 +268,11 @@ private:
 
     GraphicsHelperInterface *resolveHighestOpenGLFunctions();
 
+    GLuint createRenderTarget(Qt3DCore::QNodeId renderTargetNodeId, const AttachmentPack &attachments);
+    GLuint updateRenderTarget(Qt3DCore::QNodeId renderTargetNodeId, const AttachmentPack &attachments, bool isActiveRenderTarget);
     void bindFrameBufferAttachmentHelper(GLuint fboId, const AttachmentPack &attachments);
     void activateDrawBuffers(const AttachmentPack &attachments);
-    HGLBuffer createGLBufferFor(Buffer *buffer);
+    HGLBuffer createGLBufferFor(Buffer *buffer, GLBuffer::Type type);
     void uploadDataToGLBuffer(Buffer *buffer, GLBuffer *b, bool releaseBuffer = false);
     QByteArray downloadDataFromGLBuffer(Buffer *buffer, GLBuffer *b);
     bool bindGLBuffer(GLBuffer *buffer, GLBuffer::Type type);
@@ -277,6 +293,7 @@ private:
     QHash<Qt3DCore::QNodeId, GLuint> m_renderTargets;
     QHash<GLuint, QSize> m_renderTargetsSize;
     QAbstractTexture::TextureFormat m_renderTargetFormat;
+    QSize m_surfaceSize;
 
     QHash<QSurface *, GraphicsHelperInterface*> m_glHelpers;
 
@@ -317,13 +334,14 @@ private:
     struct VAOVertexAttribute
     {
         HGLBuffer bufferHandle;
-        GLBuffer::Type bufferType;
+        GLBuffer::Type attributeType;
         int location;
         GLint dataType;
         uint byteOffset;
         uint vertexSize;
         uint byteStride;
         uint divisor;
+        GLenum shaderDataType;
     };
 
     using VAOIndexAttribute = HGLBuffer;
@@ -334,7 +352,7 @@ private:
     void applyUniform(const ShaderUniform &description, const UniformValue &v);
 
     template<UniformType>
-    void applyUniformHelper(int, int, const UniformValue &) const
+    void applyUniformHelper(const ShaderUniform &, const UniformValue &) const
     {
         Q_ASSERT_X(false, Q_FUNC_INFO, "Uniform: Didn't provide specialized apply() implementation");
     }
@@ -342,13 +360,14 @@ private:
 
 #define QT3D_UNIFORM_TYPE_PROTO(UniformTypeEnum, BaseType, Func) \
 template<> \
-void GraphicsContext::applyUniformHelper<UniformTypeEnum>(int location, int count, const UniformValue &value) const;
+void GraphicsContext::applyUniformHelper<UniformTypeEnum>(const ShaderUniform &description, const UniformValue &value) const;
 
 #define QT3D_UNIFORM_TYPE_IMPL(UniformTypeEnum, BaseType, Func) \
     template<> \
-    void GraphicsContext::applyUniformHelper<UniformTypeEnum>(int location, int count, const UniformValue &value) const \
+    void GraphicsContext::applyUniformHelper<UniformTypeEnum>(const ShaderUniform &description, const UniformValue &value) const \
 { \
-    m_glHelper->Func(location, count, value.constData<BaseType>()); \
+    const int count = qMin(description.m_size, int(value.byteSize() / description.m_rawByteSize)); \
+    m_glHelper->Func(description.m_location, count, value.constData<BaseType>()); \
 }
 
 

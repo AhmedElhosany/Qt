@@ -21,13 +21,13 @@ class WebState;
 
 namespace autofill {
 
-class AutofillManagerDelegate;
-
 // Class that drives autofill flow on iOS. There is one instance per
 // WebContents.
 class AutofillDriverIOS : public AutofillDriver,
                           public web::WebStateUserData<AutofillDriverIOS> {
  public:
+  ~AutofillDriverIOS() override;
+
   static void CreateForWebStateAndDelegate(
       web::WebState* web_state,
       AutofillClient* client,
@@ -36,7 +36,7 @@ class AutofillDriverIOS : public AutofillDriver,
       AutofillManager::AutofillDownloadManagerState enable_download_manager);
 
   // AutofillDriver:
-  bool IsOffTheRecord() const override;
+  bool IsIncognito() const override;
   net::URLRequestContextGetter* GetURLRequestContext() override;
   bool RendererIsAvailable() override;
   void SendFormDataToRenderer(int query_id,
@@ -50,7 +50,6 @@ class AutofillDriverIOS : public AutofillDriver,
   void RendererShouldClearPreviewedForm() override;
   void RendererShouldAcceptDataListSuggestion(
       const base::string16& value) override;
-  base::SequencedWorkerPool* GetBlockingPool() override;
   void DidInteractWithCreditCardForm() override;
 
   AutofillManager* autofill_manager() { return &autofill_manager_; }
@@ -69,13 +68,12 @@ class AutofillDriverIOS : public AutofillDriver,
       id<AutofillDriverIOSBridge> bridge,
       const std::string& app_locale,
       AutofillManager::AutofillDownloadManagerState enable_download_manager);
-  ~AutofillDriverIOS() override;
 
   // The WebState with which this object is associated.
   web::WebState* web_state_;
 
   // AutofillDriverIOSBridge instance that is passed in.
-  id<AutofillDriverIOSBridge> bridge_;
+  __unsafe_unretained id<AutofillDriverIOSBridge> bridge_;
 
   // AutofillManager instance via which this object drives the shared Autofill
   // code.

@@ -20,7 +20,6 @@ class FocusControllerDelegate;
 class FocusControllerObserver;
 class ServerWindow;
 class ServerWindowDrawnTracker;
-struct WindowId;
 
 // Describes the source of the change.
 enum class FocusControllerChangeSource {
@@ -68,6 +67,10 @@ class FocusController : public ServerWindowDrawnTrackerObserver {
   bool SetFocusedWindowImpl(FocusControllerChangeSource change_source,
                             ServerWindow* window);
 
+  // Called internally when the drawn state or root changes. |ancestor| is
+  // the |ancestor| argument from those two functions, see them for details.
+  void ProcessDrawnOrRootChange(ServerWindow* ancestor, ServerWindow* window);
+
   // ServerWindowDrawnTrackerObserver:
   void OnDrawnStateWillChange(ServerWindow* ancestor,
                               ServerWindow* window,
@@ -75,6 +78,7 @@ class FocusController : public ServerWindowDrawnTrackerObserver {
   void OnDrawnStateChanged(ServerWindow* ancestor,
                            ServerWindow* window,
                            bool is_drawn) override;
+  void OnRootWillChange(ServerWindow* ancestor, ServerWindow* window) override;
 
   FocusControllerDelegate* delegate_;
 

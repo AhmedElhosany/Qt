@@ -74,6 +74,8 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickSpinBox : public QQuickControl
     // 2.2 (Qt 5.9)
     Q_PROPERTY(Qt::InputMethodHints inputMethodHints READ inputMethodHints WRITE setInputMethodHints NOTIFY inputMethodHintsChanged FINAL REVISION 2)
     Q_PROPERTY(bool inputMethodComposing READ isInputMethodComposing NOTIFY inputMethodComposingChanged FINAL REVISION 2)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(bool wrap READ wrap WRITE setWrap NOTIFY wrapChanged FINAL REVISION 3)
 
 public:
     explicit QQuickSpinBox(QQuickItem *parent = nullptr);
@@ -111,6 +113,10 @@ public:
 
     bool isInputMethodComposing() const;
 
+    // 2.3 (Qt 5.10)
+    bool wrap() const;
+    void setWrap(bool wrap);
+
 public Q_SLOTS:
     void increase();
     void decrease();
@@ -128,6 +134,8 @@ Q_SIGNALS:
     Q_REVISION(2) void valueModified();
     Q_REVISION(2) void inputMethodHintsChanged();
     Q_REVISION(2) void inputMethodComposingChanged();
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void wrapChanged();
 
 protected:
     void focusInEvent(QFocusEvent *event) override;
@@ -147,6 +155,7 @@ protected:
     void contentItemChange(QQuickItem *newItem, QQuickItem *oldItem) override;
 
     QFont defaultFont() const override;
+    QPalette defaultPalette() const override;
 
 #if QT_CONFIG(accessibility)
     QAccessible::Role accessibleRole() const override;

@@ -1111,14 +1111,13 @@ decode_intra_mb:
 
         dquant= get_se_golomb(&sl->gb);
 
-        sl->qscale += dquant;
+        sl->qscale += (unsigned)dquant;
 
         if (((unsigned)sl->qscale) > max_qp){
             if (sl->qscale < 0) sl->qscale += max_qp + 1;
             else                sl->qscale -= max_qp+1;
             if (((unsigned)sl->qscale) > max_qp){
                 av_log(h->avctx, AV_LOG_ERROR, "dquant out of range (%d) at %d %d\n", dquant, sl->mb_x, sl->mb_y);
-                sl->qscale = max_qp;
                 return -1;
             }
         }

@@ -81,7 +81,7 @@ struct QQmlImportRef {
 
 class QQmlType;
 class QQmlEngine;
-class QQmlTypeNameCache : public QQmlRefCount
+class Q_QML_PRIVATE_EXPORT QQmlTypeNameCache : public QQmlRefCount
 {
 public:
     QQmlTypeNameCache(const QQmlImports &imports);
@@ -107,7 +107,7 @@ public:
     };
     Result query(const QHashedStringRef &) const;
     Result query(const QHashedStringRef &, const QQmlImportRef *importNamespace) const;
-    Result query(const QV4::String *) const;
+    Result query(const QV4::String *, QQmlImport::RecursionRestriction recursionRestriction = QQmlImport::PreventRecursion) const;
     Result query(const QV4::String *, const QQmlImportRef *importNamespace) const;
 
 private:

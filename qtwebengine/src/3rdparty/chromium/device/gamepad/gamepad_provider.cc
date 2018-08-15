@@ -13,6 +13,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/message_loop/message_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/threading/thread.h"
@@ -22,9 +23,7 @@
 #include "device/gamepad/gamepad_data_fetcher.h"
 #include "device/gamepad/gamepad_data_fetcher_manager.h"
 #include "device/gamepad/gamepad_user_gesture.h"
-
-using blink::WebGamepad;
-using blink::WebGamepads;
+#include "mojo/public/cpp/system/platform_handle.h"
 
 namespace device {
 
@@ -39,20 +38,18 @@ GamepadProvider::ClosureAndThread::ClosureAndThread(
 GamepadProvider::ClosureAndThread::~ClosureAndThread() {}
 
 GamepadProvider::GamepadProvider(
-    std::unique_ptr<GamepadSharedBuffer> buffer,
     GamepadConnectionChangeClient* connection_change_client)
     : is_paused_(true),
       have_scheduled_do_poll_(false),
       devices_changed_(true),
       ever_had_user_gesture_(false),
       sanitize_(true),
-      gamepad_shared_buffer_(std::move(buffer)),
+      gamepad_shared_buffer_(new GamepadSharedBuffer()),
       connection_change_client_(connection_change_client) {
   Initialize(std::unique_ptr<GamepadDataFetcher>());
 }
 
 GamepadProvider::GamepadProvider(
-    std::unique_ptr<GamepadSharedBuffer> buffer,
     GamepadConnectionChangeClient* connection_change_client,
     std::unique_ptr<GamepadDataFetcher> fetcher)
     : is_paused_(true),
@@ -60,7 +57,7 @@ GamepadProvider::GamepadProvider(
       devices_changed_(true),
       ever_had_user_gesture_(false),
       sanitize_(true),
-      gamepad_shared_buffer_(std::move(buffer)),
+      gamepad_shared_buffer_(new GamepadSharedBuffer()),
       connection_change_client_(connection_change_client) {
   Initialize(std::move(fetcher));
 }
@@ -86,16 +83,21 @@ GamepadProvider::~GamepadProvider() {
   DCHECK(data_fetchers_.empty());
 }
 
-base::SharedMemoryHandle GamepadProvider::GetSharedMemoryHandleForProcess(
-    base::ProcessHandle process) {
-  base::SharedMemoryHandle renderer_handle;
-  gamepad_shared_buffer_->shared_memory()->ShareToProcess(process,
-                                                          &renderer_handle);
-  return renderer_handle;
+base::SharedMemoryHandle GamepadProvider::DuplicateSharedMemoryHandle() {
+  return gamepad_shared_buffer_->shared_memory()->handle().Duplicate();
 }
 
-void GamepadProvider::GetCurrentGamepadData(WebGamepads* data) {
-  const WebGamepads* pads = gamepad_shared_buffer_->buffer();
+mojo::ScopedSharedBufferHandle GamepadProvider::GetSharedBufferHandle() {
+  // TODO(heke): Use mojo::SharedBuffer rather than base::SharedMemory in
+  // GamepadSharedBuffer. See crbug.com/670655 for details
+  base::SharedMemoryHandle handle = base::SharedMemory::DuplicateHandle(
+      gamepad_shared_buffer_->shared_memory()->handle());
+  return mojo::WrapSharedMemoryHandle(handle, sizeof(GamepadHardwareBuffer),
+                                      true /* read_only */);
+}
+
+void GamepadProvider::GetCurrentGamepadData(Gamepads* data) {
+  const Gamepads* pads = gamepad_shared_buffer_->buffer();
   base::AutoLock lock(shared_memory_lock_);
   *data = *pads;
 }
@@ -219,8 +221,8 @@ void GamepadProvider::DoPoll() {
 
   bool changed;
 
-  ANNOTATE_BENIGN_RACE_SIZED(gamepad_shared_buffer_->buffer(),
-                             sizeof(WebGamepads), "Racey reads are discarded");
+  ANNOTATE_BENIGN_RACE_SIZED(gamepad_shared_buffer_->buffer(), sizeof(Gamepads),
+                             "Racey reads are discarded");
 
   {
     base::AutoLock lock(devices_changed_lock_);
@@ -236,16 +238,18 @@ void GamepadProvider::DoPoll() {
     it->GetGamepadData(changed);
   }
 
-  blink::WebGamepads* buffer = gamepad_shared_buffer_->buffer();
+  Gamepads* buffer = gamepad_shared_buffer_->buffer();
 
   // Send out disconnect events using the last polled data before we wipe it out
   // in the mapping step.
   if (ever_had_user_gesture_) {
-    for (unsigned i = 0; i < WebGamepads::itemsLengthCap; ++i) {
+    for (unsigned i = 0; i < Gamepads::kItemsLengthCap; ++i) {
       PadState& state = pad_states_.get()[i];
 
       if (!state.active_state && state.source != GAMEPAD_SOURCE_NONE) {
-        OnGamepadConnectionChange(false, i, buffer->items[i]);
+        auto pad = buffer->items[i];
+        pad.connected = false;
+        OnGamepadConnectionChange(false, i, pad);
         ClearPadState(state);
       }
     }
@@ -255,26 +259,25 @@ void GamepadProvider::DoPoll() {
     base::AutoLock lock(shared_memory_lock_);
 
     // Acquire the SeqLock. There is only ever one writer to this data.
-    // See gamepad_hardware_buffer.h.
+    // See gamepad_shared_buffer.h.
     gamepad_shared_buffer_->WriteBegin();
-    buffer->length = 0;
-    for (unsigned i = 0; i < WebGamepads::itemsLengthCap; ++i) {
+    for (unsigned i = 0; i < Gamepads::kItemsLengthCap; ++i) {
       PadState& state = pad_states_.get()[i];
       // Must run through the map+sanitize here or CheckForUserGesture may fail.
       MapAndSanitizeGamepadData(&state, &buffer->items[i], sanitize_);
-      if (state.active_state)
-        buffer->length++;
     }
     gamepad_shared_buffer_->WriteEnd();
   }
 
   if (ever_had_user_gesture_) {
-    for (unsigned i = 0; i < WebGamepads::itemsLengthCap; ++i) {
+    for (unsigned i = 0; i < Gamepads::kItemsLengthCap; ++i) {
       PadState& state = pad_states_.get()[i];
 
       if (state.active_state) {
-        if (state.active_state == GAMEPAD_NEWLY_ACTIVE)
+        if (state.active_state == GAMEPAD_NEWLY_ACTIVE &&
+            buffer->items[i].connected) {
           OnGamepadConnectionChange(true, i, buffer->items[i]);
+        }
         state.active_state = GAMEPAD_INACTIVE;
       }
     }
@@ -305,7 +308,7 @@ void GamepadProvider::ScheduleDoPoll() {
 
 void GamepadProvider::OnGamepadConnectionChange(bool connected,
                                                 int index,
-                                                const WebGamepad& pad) {
+                                                const Gamepad& pad) {
   if (connection_change_client_)
     connection_change_client_->OnGamepadConnectionChange(connected, index, pad);
 }
@@ -315,7 +318,7 @@ void GamepadProvider::CheckForUserGesture() {
   if (user_gesture_observers_.empty() && ever_had_user_gesture_)
     return;
 
-  const WebGamepads* pads = gamepad_shared_buffer_->buffer();
+  const Gamepads* pads = gamepad_shared_buffer_->buffer();
   if (GamepadsHaveUserGesture(*pads)) {
     ever_had_user_gesture_ = true;
     for (size_t i = 0; i < user_gesture_observers_.size(); i++) {

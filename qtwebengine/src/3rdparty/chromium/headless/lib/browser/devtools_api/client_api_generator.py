@@ -4,9 +4,11 @@
 
 import argparse
 import collections
+import functools
 import os.path
 import re
 import sys
+
 try:
   import json
 except ImportError:
@@ -61,10 +63,31 @@ def CamelCaseToHackerStyle(name):
   return name.lower()
 
 
+def Shorten(js_name, domain_name):
+  short_name = domain_name + '.'
+  long_name = 'chromium.DevTools.' + short_name
+  return js_name.replace(long_name, short_name)
+
+
+def ShortForm(domain, js_name):
+  if not 'js_dependencies' in domain:
+    return js_name
+
+  for dependency in domain['js_dependencies']:
+    js_name = Shorten(js_name, dependency)
+  js_name = Shorten(js_name, domain['domain'])
+  return js_name
+  
+
 def SanitizeLiteral(literal):
   return {
       # Rename null enumeration values to avoid a clash with the NULL macro.
       'null': 'none',
+      # Rename literals that clash with Win32 defined macros.
+      'error': 'err',
+      'mouseMoved': 'mouse_ptr_moved',
+      'Strict': 'exact',
+      'getCurrentTime': 'getCurrentAnimationTime',
       # Rename mathematical constants to avoid colliding with C macros.
       'Infinity': 'InfinityValue',
       '-Infinity': 'NegativeInfinityValue',
@@ -115,6 +138,7 @@ def PatchFullQualifiedRefs(json_api):
 def CreateUserTypeDefinition(domain, type):
   namespace = CamelCaseToHackerStyle(domain['domain'])
   return {
+      'js_type': '!chromium.DevTools.%s.%s' % (domain['domain'], type['id']),
       'return_type': 'std::unique_ptr<headless::%s::%s>' % (
           namespace, type['id']),
       'pass_type': 'std::unique_ptr<headless::%s::%s>' % (
@@ -132,6 +156,7 @@ def CreateUserTypeDefinition(domain, type):
 def CreateEnumTypeDefinition(domain_name, type):
   namespace = CamelCaseToHackerStyle(domain_name)
   return {
+      'js_type': '!chromium.DevTools.%s.%s' % (domain_name, type['id']),
       'return_type': 'headless::%s::%s' % (namespace, type['id']),
       'pass_type': 'headless::%s::%s' % (namespace, type['id']),
       'to_raw_type': '%s',
@@ -146,6 +171,7 @@ def CreateEnumTypeDefinition(domain_name, type):
 
 def CreateObjectTypeDefinition():
   return {
+      'js_type': 'Object',
       'return_type': 'std::unique_ptr<base::DictionaryValue>',
       'pass_type': 'std::unique_ptr<base::DictionaryValue>',
       'to_raw_type': '*%s',
@@ -161,6 +187,7 @@ def CreateObjectTypeDefinition():
 def WrapObjectTypeDefinition(type):
   id = type.get('id', 'base::Value')
   return {
+      'js_type': '!Object',
       'return_type': 'std::unique_ptr<%s>' % id,
       'pass_type': 'std::unique_ptr<%s>' % id,
       'to_raw_type': '*%s',
@@ -175,6 +202,7 @@ def WrapObjectTypeDefinition(type):
 
 def CreateAnyTypeDefinition():
   return {
+      'js_type': '*',
       'return_type': 'std::unique_ptr<base::Value>',
       'pass_type': 'std::unique_ptr<base::Value>',
       'to_raw_type': '*%s',
@@ -187,8 +215,9 @@ def CreateAnyTypeDefinition():
   }
 
 
-def CreateStringTypeDefinition(domain):
+def CreateStringTypeDefinition():
   return {
+      'js_type': 'string',
       'return_type': 'std::string',
       'pass_type': 'const std::string&',
       'to_pass_type': '%s',
@@ -206,9 +235,14 @@ def CreatePrimitiveTypeDefinition(type):
       'number': 'double',
       'integer': 'int',
       'boolean': 'bool',
-      'string': 'std::string',
+  }
+  js_typedefs = {
+      'number': 'number',
+      'integer': 'number',
+      'boolean': 'boolean',
   }
   return {
+      'js_type': js_typedefs[type],
       'return_type': typedefs[type],
       'pass_type': typedefs[type],
       'to_pass_type': '%s',
@@ -225,13 +259,14 @@ type_definitions = {}
 type_definitions['number'] = CreatePrimitiveTypeDefinition('number')
 type_definitions['integer'] = CreatePrimitiveTypeDefinition('integer')
 type_definitions['boolean'] = CreatePrimitiveTypeDefinition('boolean')
-type_definitions['string'] = CreatePrimitiveTypeDefinition('string')
+type_definitions['string'] = CreateStringTypeDefinition()
 type_definitions['object'] = CreateObjectTypeDefinition()
 type_definitions['any'] = CreateAnyTypeDefinition()
 
 
 def WrapArrayDefinition(type):
   return {
+      'js_type': '!Array.<%s>' % type['js_type'],
       'return_type': 'std::vector<%s>' % type['type'],
       'pass_type': 'std::vector<%s>' % type['type'],
       'to_raw_type': '%s',
@@ -267,6 +302,9 @@ def CreateTypeDefinitions(json_api):
       elif type['type'] == 'any':
         type_definitions[domain['domain'] + '.' + type['id']] = (
             CreateAnyTypeDefinition())
+      elif type['type'] == 'string':
+        type_definitions[domain['domain'] + '.' + type['id']] = (
+            CreateStringTypeDefinition())
       else:
         type_definitions[domain['domain'] + '.' + type['id']] = (
             CreatePrimitiveTypeDefinition(type['type']))
@@ -321,10 +359,10 @@ def SynthesizeCommandTypes(json_api):
           if 'enum' in parameter and not '$ref' in parameter:
             SynthesizeEnumType(domain, command['name'], parameter)
         parameters_type = {
-            'id': ToTitleCase(command['name']) + 'Params',
+            'id': ToTitleCase(SanitizeLiteral(command['name'])) + 'Params',
             'type': 'object',
             'description': 'Parameters for the %s command.' % ToTitleCase(
-                command['name']),
+                SanitizeLiteral(command['name'])),
             'properties': command['parameters']
         }
         domain['types'].append(parameters_type)
@@ -333,10 +371,10 @@ def SynthesizeCommandTypes(json_api):
           if 'enum' in parameter and not '$ref' in parameter:
             SynthesizeEnumType(domain, command['name'], parameter)
         result_type = {
-            'id': ToTitleCase(command['name']) + 'Result',
+            'id': ToTitleCase(SanitizeLiteral(command['name'])) + 'Result',
             'type': 'object',
             'description': 'Result for the %s command.' % ToTitleCase(
-                command['name']),
+                SanitizeLiteral(command['name'])),
             'properties': command['returns']
         }
         domain['types'].append(result_type)
@@ -370,6 +408,7 @@ def InitializeDomainDependencies(json_api):
   including itself."""
 
   direct_deps = collections.defaultdict(set)
+  types_required = collections.defaultdict(set)
 
   def GetDomainDepsFromRefs(domain_name, json):
     if isinstance(json, list):
@@ -386,9 +425,11 @@ def InitializeDomainDependencies(json_api):
       if '.' in json['$ref']:
         dep = json['$ref'].split('.')[0]
         direct_deps[domain_name].add(dep)
+        types_required[domain_name].add(json['$ref'])
 
   for domain in json_api['domains']:
     direct_deps[domain['domain']] = set(domain.get('dependencies', []))
+    types_required[domain['domain']] = set(domain.get('types_required', []))
     GetDomainDepsFromRefs(domain['domain'], domain)
 
   def TraverseDependencies(domain, deps):
@@ -402,6 +443,15 @@ def InitializeDomainDependencies(json_api):
   for domain in json_api['domains']:
     domain_deps = set()
     TraverseDependencies(domain['domain'], domain_deps)
+    if 'dependencies' in domain:
+      domain['js_dependencies'] = domain['dependencies']
+    else:
+      domain['js_dependencies'] = []
+
+    domain['js_forward_declarations'] = []
+    for type in types_required[domain['domain']]:
+      if not type.split('.')[0] in domain['js_dependencies']:
+        domain['js_forward_declarations'].append(type)
     domain['dependencies'] = sorted(domain_deps)
 
 
@@ -439,25 +489,6 @@ def EnsureCommandsHaveParametersAndReturnTypes(json_api):
         event['parameters'] = []
 
 
-def Generate(jinja_env, output_dirname, json_api,
-             class_name, file_types, file_name=None):
-  if file_name is None:
-    file_name = class_name
-  EnsureDirectoryExists(output_dirname)
-  template_context = {
-      'api': json_api,
-      'join_arrays': JoinArrays,
-      'resolve_type': ResolveType,
-      'type_definition': TypeDefinition,
-  }
-  for file_type in file_types:
-    template = jinja_env.get_template('/%s_%s.template' % (
-        class_name, file_type))
-    output_file = '%s/%s.%s' % (output_dirname, file_name, file_type)
-    with open(output_file, 'w') as f:
-      f.write(template.render(template_context))
-
-
 def GeneratePerDomain(jinja_env, output_dirname, json_api, class_name,
                     file_types, domain_name_to_file_name_func):
   EnsureDirectoryExists(output_dirname)
@@ -468,6 +499,7 @@ def GeneratePerDomain(jinja_env, output_dirname, json_api, class_name,
       template_context = {
           'domain': domain,
           'resolve_type': ResolveType,
+          'short_form': functools.partial(ShortForm, domain),
       }
       domain_name = CamelCaseToHackerStyle(domain['domain'])
       output_file = '%s/%s.%s' % (output_dirname,
@@ -482,30 +514,27 @@ def GenerateDomains(jinja_env, output_dirname, json_api):
       jinja_env, os.path.join(output_dirname, 'devtools', 'domains'), json_api,
       'domain', ['cc', 'h'],
       lambda domain_name: domain_name)
-
-  # TODO(altimin): Remove this in 2017.
-  # Generate DOMAIN.h in the old directory for backwards compatibility.
   GeneratePerDomain(
-      jinja_env, os.path.join(output_dirname, 'domains'), json_api,
-      'deprecated_domain', ['h'], lambda domain_name: domain_name)
+      jinja_env, os.path.join(output_dirname, 'devtools_js'), json_api,
+      'domain', ['js'],
+      lambda domain_name: domain_name)
+  GeneratePerDomain(
+      jinja_env, os.path.join(output_dirname, 'devtools_js', 'externs'),
+      json_api, 'domain_externs', ['js'],
+      lambda domain_name: 'externs_%s' % (domain_name, ))
 
 
 def GenerateTypes(jinja_env, output_dirname, json_api):
   # Generate forward declarations for types.
   GeneratePerDomain(
       jinja_env, os.path.join(output_dirname, 'devtools', 'internal'),
-      json_api, 'domain_types_forward_declaration', ['h'],
-      lambda domain_name: 'types_forward_declaration_%s' % (domain_name, ))
+      json_api, 'domain_types_forward_declarations', ['h'],
+      lambda domain_name: 'types_forward_declarations_%s' % (domain_name, ))
   # Generate types on per-domain basis.
   GeneratePerDomain(
       jinja_env, os.path.join(output_dirname, 'devtools', 'domains'),
       json_api, 'domain_types', ['h', 'cc'],
       lambda domain_name: 'types_%s' % (domain_name, ))
-
-  # TODO(altimin): Remove this in 2017.
-  # Generate types.h for backwards compatibility.
-  Generate(jinja_env, os.path.join(output_dirname, 'domains'), json_api,
-           'deprecated_types', ['h'], 'types')
 
 
 def GenerateTypeConversions(jinja_env, output_dirname, json_api):
@@ -514,11 +543,6 @@ def GenerateTypeConversions(jinja_env, output_dirname, json_api):
       jinja_env, os.path.join(output_dirname, 'devtools', 'internal'),
       json_api, 'domain_type_conversions', ['h'],
       lambda domain_name: 'type_conversions_%s' % (domain_name, ))
-
-  # TODO(altimin): Remove this in 2017.
-  # Generate type_conversions.h for backwards compatibility.
-  Generate(jinja_env, os.path.join(output_dirname, 'domains'), json_api,
-           'deprecated_type_conversions', ['h'], 'type_conversions')
 
 
 if __name__ == '__main__':

@@ -4,12 +4,12 @@
 
 #include "net/quic/core/quic_packet_generator.h"
 
-#include "base/logging.h"
-#include "net/quic/core/quic_bug_tracker.h"
-#include "net/quic/core/quic_flags.h"
-#include "net/quic/core/quic_utils.h"
+#include <cstdint>
 
-using base::StringPiece;
+#include "net/quic/core/crypto/quic_random.h"
+#include "net/quic/core/quic_utils.h"
+#include "net/quic/platform/api/quic_bug_tracker.h"
+#include "net/quic/platform/api/quic_logging.h"
 
 namespace net {
 
@@ -19,17 +19,14 @@ QuicPacketGenerator::QuicPacketGenerator(QuicConnectionId connection_id,
                                          QuicBufferAllocator* buffer_allocator,
                                          DelegateInterface* delegate)
     : delegate_(delegate),
-      packet_creator_(connection_id,
-                      framer,
-                      random_generator,
-                      buffer_allocator,
-                      delegate),
+      packet_creator_(connection_id, framer, buffer_allocator, delegate),
       batch_mode_(false),
       should_send_ack_(false),
-      should_send_stop_waiting_(false) {}
+      should_send_stop_waiting_(false),
+      random_generator_(random_generator) {}
 
 QuicPacketGenerator::~QuicPacketGenerator() {
-  QuicUtils::DeleteFrames(&queued_control_frames_);
+  DeleteFrames(&queued_control_frames_);
 }
 
 void QuicPacketGenerator::SetShouldSendAck(bool also_send_stop_waiting) {
@@ -57,9 +54,10 @@ QuicConsumedData QuicPacketGenerator::ConsumeData(
     QuicStreamId id,
     QuicIOVector iov,
     QuicStreamOffset offset,
-    bool fin,
-    QuicAckListenerInterface* listener) {
+    StreamSendingState state,
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener) {
   bool has_handshake = (id == kCryptoStreamId);
+  bool fin = state != NO_FIN;
   QUIC_BUG_IF(has_handshake && fin)
       << "Handshake packets should never send a fin";
   // To make reasoning about crypto frames easier, we don't combine them with
@@ -94,11 +92,14 @@ QuicConsumedData QuicPacketGenerator::ConsumeData(
 
     // A stream frame is created and added.
     size_t bytes_consumed = frame.stream_frame->data_length;
-    if (listener != nullptr) {
-      packet_creator_.AddAckListener(listener, bytes_consumed);
+    if (ack_listener != nullptr) {
+      packet_creator_.AddAckListener(ack_listener, bytes_consumed);
     }
     total_bytes_consumed += bytes_consumed;
     fin_consumed = fin && total_bytes_consumed == iov.total_length;
+    if (fin_consumed && state == FIN_AND_PADDING) {
+      AddRandomPadding();
+    }
     DCHECK(total_bytes_consumed == iov.total_length ||
            (bytes_consumed > 0 && packet_creator_.HasPendingFrames()));
 
@@ -130,7 +131,7 @@ QuicConsumedData QuicPacketGenerator::ConsumeDataFastPath(
     const QuicIOVector& iov,
     QuicStreamOffset offset,
     bool fin,
-    QuicAckListenerInterface* listener) {
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener) {
   DCHECK_NE(id, kCryptoStreamId);
   size_t total_bytes_consumed = 0;
   while (total_bytes_consumed < iov.total_length &&
@@ -140,7 +141,7 @@ QuicConsumedData QuicPacketGenerator::ConsumeDataFastPath(
     size_t bytes_consumed = 0;
     packet_creator_.CreateAndSerializeStreamFrame(
         id, iov, total_bytes_consumed, offset + total_bytes_consumed, fin,
-        listener, &bytes_consumed);
+        ack_listener, &bytes_consumed);
     total_bytes_consumed += bytes_consumed;
   }
 
@@ -150,7 +151,7 @@ QuicConsumedData QuicPacketGenerator::ConsumeDataFastPath(
 
 void QuicPacketGenerator::GenerateMtuDiscoveryPacket(
     QuicByteCount target_mtu,
-    QuicAckListenerInterface* listener) {
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener) {
   // MTU discovery frames must be sent by themselves.
   if (!packet_creator_.CanSetMaxPacketLength()) {
     QUIC_BUG << "MTU discovery packets should only be sent when no other "
@@ -167,8 +168,8 @@ void QuicPacketGenerator::GenerateMtuDiscoveryPacket(
   // Send the probe packet with the new length.
   SetMaxPacketLength(target_mtu);
   const bool success = packet_creator_.AddPaddedSavedFrame(frame);
-  if (listener != nullptr) {
-    packet_creator_.AddAckListener(listener, 0);
+  if (ack_listener != nullptr) {
+    packet_creator_.AddAckListener(std::move(ack_listener), 0);
   }
   packet_creator_.Flush();
   // The only reason AddFrame can fail is that the packet is too full to fit in
@@ -180,9 +181,10 @@ void QuicPacketGenerator::GenerateMtuDiscoveryPacket(
 }
 
 bool QuicPacketGenerator::CanSendWithNextPendingFrameAddition() const {
-  DCHECK(HasPendingFrames());
+  DCHECK(HasPendingFrames() || packet_creator_.pending_padding_bytes() > 0);
   HasRetransmittableData retransmittable =
-      (should_send_ack_ || should_send_stop_waiting_)
+      (should_send_ack_ || should_send_stop_waiting_ ||
+       packet_creator_.pending_padding_bytes() > 0)
           ? NO_RETRANSMITTABLE_DATA
           : HAS_RETRANSMITTABLE_DATA;
   if (retransmittable == HAS_RETRANSMITTABLE_DATA) {
@@ -204,7 +206,7 @@ void QuicPacketGenerator::SendQueuedFrames(bool flush) {
                << " number of queued_control_frames: "
                << queued_control_frames_.size();
       if (!queued_control_frames_.empty()) {
-        DVLOG(1) << queued_control_frames_[0];
+        QUIC_LOG(INFO) << queued_control_frames_[0];
       }
       delegate_->OnUnrecoverableError(QUIC_FAILED_TO_SERIALIZE_PACKET,
                                       "Single frame cannot fit into a packet",
@@ -228,6 +230,7 @@ void QuicPacketGenerator::StartBatchOperations() {
 void QuicPacketGenerator::FinishBatchOperations() {
   batch_mode_ = false;
   SendQueuedFrames(/*flush=*/false);
+  SendRemainingPendingPadding();
 }
 
 void QuicPacketGenerator::FlushAllQueuedFrames() {
@@ -303,7 +306,7 @@ QuicPacketGenerator::SerializeVersionNegotiationPacket(
 }
 
 void QuicPacketGenerator::ReserializeAllFrames(
-    const PendingRetransmission& retransmission,
+    const QuicPendingRetransmission& retransmission,
     char* buffer,
     size_t buffer_len) {
   packet_creator_.ReserializeAllFrames(retransmission, buffer, buffer_len);
@@ -333,12 +336,21 @@ void QuicPacketGenerator::SetEncrypter(EncryptionLevel level,
   packet_creator_.SetEncrypter(level, encrypter);
 }
 
-void QuicPacketGenerator::SetCurrentPath(
-    QuicPathId path_id,
-    QuicPacketNumber least_packet_awaited_by_peer,
-    QuicPacketCount max_packets_in_flight) {
-  packet_creator_.SetCurrentPath(path_id, least_packet_awaited_by_peer,
-                                 max_packets_in_flight);
+void QuicPacketGenerator::AddRandomPadding() {
+  packet_creator_.AddPendingPadding(
+      random_generator_->RandUint64() % kMaxNumRandomPaddingBytes + 1);
+}
+
+void QuicPacketGenerator::SendRemainingPendingPadding() {
+  while (packet_creator_.pending_padding_bytes() > 0 && !HasQueuedFrames() &&
+         CanSendWithNextPendingFrameAddition()) {
+    packet_creator_.Flush();
+  }
+}
+
+bool QuicPacketGenerator::HasRetransmittableFrames() const {
+  return !queued_control_frames_.empty() ||
+         packet_creator_.HasPendingRetransmittableFrames();
 }
 
 }  // namespace net

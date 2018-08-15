@@ -137,8 +137,8 @@ cr.define('cr.ui', function() {
           if (sm.multiple)
             sm.unselectAll();
       } else {
-        if (sm.multiple && (cr.isMac ? e.metaKey :
-                                       (e.ctrlKey && !e.shiftKey))) {
+        if (sm.multiple &&
+            (cr.isMac ? e.metaKey : (e.ctrlKey && !e.shiftKey))) {
           // Selection is handled at mouseUp on windows/linux, mouseDown on mac.
           if (cr.isMac ? isDown : !isDown) {
             // Toggle the current one and make it anchor index.
@@ -173,6 +173,20 @@ cr.define('cr.ui', function() {
     },
 
     /**
+     * Called by the view when it receives either a touchstart, touchmove,
+     * touchend, or touchcancel event.
+     * Sub-classes may override this function to handle touch events separately
+     * from mouse events, instead of waiting for emulated mouse events sent
+     * after the touch events.
+     * @param {Event} e The event.
+     * @param {number} index The index that was under the touched point, -1 if
+     *     none.
+     */
+    handleTouchEvents: function(e, index) {
+      // Do nothing.
+    },
+
+    /**
      * Called by the view when it receives a keydown event.
      * @param {Event} e The keydown event.
      */
@@ -187,7 +201,8 @@ cr.define('cr.ui', function() {
         if (inputType == 'checkbox' || inputType == 'radio') {
           if (e.key == ' ')
             return;
-        // Protect all but the most basic navigation commands in anything else.
+          // Protect all but the most basic navigation commands in anything
+          // else.
         } else if (e.key != 'ArrowUp' && e.key != 'ArrowDown') {
           return;
         }
@@ -227,22 +242,22 @@ cr.define('cr.ui', function() {
           newIndex = this.getLastIndex();
           break;
         case 'ArrowUp':
-          newIndex = leadIndex == -1 ?
-              this.getLastIndex() : this.getIndexAbove(leadIndex);
+          newIndex = leadIndex == -1 ? this.getLastIndex() :
+                                       this.getIndexAbove(leadIndex);
           break;
         case 'ArrowDown':
-          newIndex = leadIndex == -1 ?
-              this.getFirstIndex() : this.getIndexBelow(leadIndex);
+          newIndex = leadIndex == -1 ? this.getFirstIndex() :
+                                       this.getIndexBelow(leadIndex);
           break;
         case 'ArrowLeft':
         case 'MediaPreviousTrack':
-          newIndex = leadIndex == -1 ?
-              this.getLastIndex() : this.getIndexBefore(leadIndex);
+          newIndex = leadIndex == -1 ? this.getLastIndex() :
+                                       this.getIndexBefore(leadIndex);
           break;
         case 'ArrowRight':
         case 'MediaNextTrack':
-          newIndex = leadIndex == -1 ?
-              this.getFirstIndex() : this.getIndexAfter(leadIndex);
+          newIndex = leadIndex == -1 ? this.getFirstIndex() :
+                                       this.getIndexAfter(leadIndex);
           break;
         default:
           prevent = false;
@@ -280,7 +295,5 @@ cr.define('cr.ui', function() {
     }
   };
 
-  return {
-    ListSelectionController: ListSelectionController
-  };
+  return {ListSelectionController: ListSelectionController};
 });

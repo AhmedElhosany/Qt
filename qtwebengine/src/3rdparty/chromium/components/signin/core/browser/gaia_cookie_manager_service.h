@@ -163,8 +163,6 @@ class GaiaCookieManagerService : public KeyedService,
     ResultMap results_;
     base::Time m_external_cc_result_start_time_;
 
-    base::OneShotTimer gaia_auth_fetcher_timer_;
-
     DISALLOW_COPY_AND_ASSIGN(ExternalCcResultFetcher);
   };
 
@@ -242,8 +240,11 @@ class GaiaCookieManagerService : public KeyedService,
   // Returns the source value to use for GaiaFetcher requests.  This is
   // virtual to allow tests and fake classes to override.
   virtual std::string GetSourceForRequest(
-      const GaiaCookieManagerService::GaiaCookieRequest& request,
-      const std::string& source_default);
+      const GaiaCookieManagerService::GaiaCookieRequest& request);
+
+  // Returns the default source value to use for GaiaFetcher requests.  This is
+  // virtual to allow tests and fake classes to override.
+  virtual std::string GetDefaultSourceForRequest();
 
   // Called when a cookie changes. If the cookie relates to a GAIA APISID
   // cookie, then we call ListAccounts and fire OnGaiaAccountsInCookieUpdated.
@@ -323,6 +324,14 @@ class GaiaCookieManagerService : public KeyedService,
   std::vector<gaia::ListedAccount> signed_out_accounts_;
 
   bool list_accounts_stale_;
+
+  // The time when the profile was loaded and used to compute the time passed
+  // between the moment the profile was loaded and the moment a new list
+  // account request is started.
+  base::Time profile_load_time_;
+
+  // Counter for list account requests.
+  int list_accounts_request_counter_;
 
   DISALLOW_COPY_AND_ASSIGN(GaiaCookieManagerService);
 };

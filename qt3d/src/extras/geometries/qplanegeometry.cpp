@@ -278,6 +278,7 @@ public:
 
 /*!
  * \class Qt3DExtras::QPlaneGeometry
+   \ingroup qt3d-extras-geometries
  * \inheaderfile Qt3DExtras/QPlaneGeometry
  * \inmodule Qt3DExtras
  * \brief The QPlaneGeometry class allows creation of a plane in 3D space.
@@ -509,8 +510,8 @@ void QPlaneGeometryPrivate::init()
     m_texCoordAttribute = new QAttribute(q);
     m_tangentAttribute = new QAttribute(q);
     m_indexAttribute = new QAttribute(q);
-    m_vertexBuffer = new Qt3DRender::QBuffer(Qt3DRender::QBuffer::VertexBuffer, q);
-    m_indexBuffer = new Qt3DRender::QBuffer(Qt3DRender::QBuffer::IndexBuffer, q);
+    m_vertexBuffer = new Qt3DRender::QBuffer(q);
+    m_indexBuffer = new Qt3DRender::QBuffer(q);
 
     const int nVerts = m_meshResolution.width() * m_meshResolution.height();
     const int stride = (3 + 2 + 3 + 4) * sizeof(float);

@@ -3,21 +3,19 @@
 // found in the LICENSE file.
 
 #include "content/common/associated_interface_provider_impl.h"
+#include "base/callback.h"
+#include "base/run_loop.h"
 #include "mojo/public/cpp/bindings/associated_binding.h"
-#include "mojo/public/cpp/bindings/binding.h"
 
 namespace content {
 
 class AssociatedInterfaceProviderImpl::LocalProvider
-    : public mojom::RouteProvider,
-      mojom::AssociatedInterfaceProvider {
+    : public mojom::AssociatedInterfaceProvider {
  public:
   explicit LocalProvider(mojom::AssociatedInterfaceProviderAssociatedPtr* proxy)
-      : route_provider_binding_(this),
-        associated_interface_provider_binding_(this) {
-    route_provider_binding_.Bind(mojo::GetProxy(&route_provider_ptr_));
-    route_provider_ptr_->GetRoute(
-        0, mojo::GetProxy(proxy, route_provider_ptr_.associated_group()));
+      : associated_interface_provider_binding_(this) {
+    associated_interface_provider_binding_.Bind(
+        mojo::MakeIsolatedRequest(proxy));
   }
 
   ~LocalProvider() override {}
@@ -29,14 +27,6 @@ class AssociatedInterfaceProviderImpl::LocalProvider
   }
 
  private:
-  // mojom::RouteProvider:
-  void GetRoute(
-      int32_t routing_id,
-      mojom::AssociatedInterfaceProviderAssociatedRequest request) override {
-    DCHECK(request.is_pending());
-    associated_interface_provider_binding_.Bind(std::move(request));
-  }
-
   // mojom::AssociatedInterfaceProvider:
   void GetAssociatedInterface(
       const std::string& name,
@@ -50,9 +40,6 @@ class AssociatedInterfaceProviderImpl::LocalProvider
       std::map<std::string,
                base::Callback<void(mojo::ScopedInterfaceEndpointHandle)>>;
   BinderMap binders_;
-
-  mojom::RouteProviderPtr route_provider_ptr_;
-  mojo::Binding<mojom::RouteProvider> route_provider_binding_;
 
   mojo::AssociatedBinding<mojom::AssociatedInterfaceProvider>
       associated_interface_provider_binding_;
@@ -72,13 +59,8 @@ AssociatedInterfaceProviderImpl::~AssociatedInterfaceProviderImpl() {}
 void AssociatedInterfaceProviderImpl::GetInterface(
     const std::string& name,
     mojo::ScopedInterfaceEndpointHandle handle) {
-  mojom::AssociatedInterfaceAssociatedRequest request;
-  request.Bind(std::move(handle));
-  return proxy_->GetAssociatedInterface(name, std::move(request));
-}
-
-mojo::AssociatedGroup* AssociatedInterfaceProviderImpl::GetAssociatedGroup() {
-  return proxy_.associated_group();
+  proxy_->GetAssociatedInterface(
+      name, mojom::AssociatedInterfaceAssociatedRequest(std::move(handle)));
 }
 
 void AssociatedInterfaceProviderImpl::OverrideBinderForTesting(

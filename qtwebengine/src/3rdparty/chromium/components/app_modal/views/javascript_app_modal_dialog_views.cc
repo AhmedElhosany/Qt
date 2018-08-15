@@ -6,8 +6,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "components/app_modal/javascript_app_modal_dialog.h"
-#include "components/constrained_window/constrained_window_views.h"
-#include "grit/components_strings.h"
+#include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/controls/message_box_view.h"
@@ -24,8 +23,8 @@ JavaScriptAppModalDialogViews::JavaScriptAppModalDialogViews(
     JavaScriptAppModalDialog* parent)
     : parent_(parent) {
   int options = views::MessageBoxView::DETECT_DIRECTIONALITY;
-  if (parent->javascript_message_type() ==
-          content::JAVASCRIPT_MESSAGE_TYPE_PROMPT)
+  if (parent->javascript_dialog_type() ==
+      content::JAVASCRIPT_DIALOG_TYPE_PROMPT)
     options |= views::MessageBoxView::HAS_PROMPT_FIELD;
 
   views::MessageBoxView::InitParams params(parent->message_text());
@@ -85,8 +84,8 @@ int JavaScriptAppModalDialogViews::GetDefaultDialogButton() const {
 }
 
 int JavaScriptAppModalDialogViews::GetDialogButtons() const {
-  if (parent_->javascript_message_type() ==
-          content::JAVASCRIPT_MESSAGE_TYPE_ALERT)
+  if (parent_->javascript_dialog_type() ==
+      content::JAVASCRIPT_DIALOG_TYPE_ALERT)
     return ui::DIALOG_BUTTON_OK;
 
   return ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL;
@@ -144,6 +143,10 @@ views::View* JavaScriptAppModalDialogViews::GetInitiallyFocusedView() {
   if (message_box_view_->text_box())
     return message_box_view_->text_box();
   return views::DialogDelegate::GetInitiallyFocusedView();
+}
+
+bool JavaScriptAppModalDialogViews::ShouldShowCloseButton() const {
+  return false;
 }
 
 void JavaScriptAppModalDialogViews::WindowClosing() {

@@ -219,8 +219,6 @@ QBackendNode *QAbstractAspectPrivate::createBackendNode(const QNodeCreatedChange
     QBackendNodePrivate *backendPriv = QBackendNodePrivate::get(backend);
     backendPriv->setEnabled(change->isNodeEnabled());
 
-    backend->initializeFromPeer(change);
-
     // TO DO: Find a way to specify the changes to observe
     // Register backendNode with QChangeArbiter
     if (m_arbiter != nullptr) { // Unit tests may not have the arbiter registered
@@ -230,6 +228,9 @@ QBackendNode *QAbstractAspectPrivate::createBackendNode(const QNodeCreatedChange
         if (backend->mode() == QBackendNode::ReadWrite)
             m_arbiter->scene()->addObservable(backendPriv, backend->peerId());
     }
+
+    backend->initializeFromPeer(change);
+
     return backend;
 }
 
@@ -237,7 +238,8 @@ void QAbstractAspectPrivate::clearBackendNode(const QNodeDestroyedChangePtr &cha
 {
     // Each QNodeDestroyedChange may contain info about a whole sub-tree of nodes that
     // are being destroyed. Iterate over them and process each in turn
-    for (const auto &idAndType : change->subtreeIdsAndTypes()) {
+    const auto subTree = change->subtreeIdsAndTypes();
+    for (const auto &idAndType : subTree) {
         const QMetaObject *metaObj = idAndType.type;
         QBackendNodeMapperPtr backendNodeMapper;
 
@@ -290,7 +292,15 @@ QAbstractAspectJobManager *QAbstractAspectPrivate::jobManager() const
 QVector<QAspectJobPtr> QAbstractAspectPrivate::jobsToExecute(qint64 time)
 {
     Q_Q(QAbstractAspect);
-    return q->jobsToExecute(time);
+    auto res = q->jobsToExecute(time);
+
+    {
+        QMutexLocker lock(&m_singleShotMutex);
+        res << m_singleShotJobs;
+        m_singleShotJobs.clear();
+    }
+
+    return res;
 }
 
 /*!
@@ -330,6 +340,13 @@ void QAbstractAspect::onEngineStartup()
  */
 void QAbstractAspect::onEngineShutdown()
 {
+}
+
+void QAbstractAspect::scheduleSingleShotJob(const Qt3DCore::QAspectJobPtr &job)
+{
+    Q_D(QAbstractAspect);
+    QMutexLocker lock(&d->m_singleShotMutex);
+    d->m_singleShotJobs.push_back(job);
 }
 
 namespace Debug {

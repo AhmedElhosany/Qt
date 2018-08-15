@@ -64,7 +64,7 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
   void AllocateAndStart(const VideoCaptureParams& params,
                         std::unique_ptr<Client> client) override;
   void StopAndDeAllocate() override;
-  void GetPhotoCapabilities(GetPhotoCapabilitiesCallback callback) override;
+  void GetPhotoState(GetPhotoStateCallback callback) override;
   void SetPhotoOptions(mojom::PhotoSettingsPtr settings,
                        SetPhotoOptionsCallback callback) override;
   void TakePhoto(TakePhotoCallback callback) override;
@@ -101,6 +101,9 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
                     jlong callback_id,
                     const base::android::JavaParamRef<jbyteArray>& data);
 
+  // Implement org.chromium.media.VideoCapture.nativeOnStarted.
+  void OnStarted(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+
   void ConfigureForTesting();
 
  private:
@@ -114,7 +117,7 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
   void SetErrorState(const tracked_objects::Location& from_here,
                      const std::string& reason);
 
-  void DoGetPhotoCapabilities(GetPhotoCapabilitiesCallback callback);
+  void DoGetPhotoState(GetPhotoStateCallback callback);
   void DoSetPhotoOptions(mojom::PhotoSettingsPtr settings,
                          SetPhotoOptionsCallback callback);
   void DoTakePhoto(TakePhotoCallback callback);

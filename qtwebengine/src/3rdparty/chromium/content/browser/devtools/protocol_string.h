@@ -13,6 +13,10 @@
 #include "base/strings/string_number_conversions.h"
 #include "content/common/content_export.h"
 
+namespace base {
+class Value;
+}
+
 namespace content {
 namespace protocol {
 
@@ -43,14 +47,44 @@ class CONTENT_EXPORT StringUtil {
     return base::IntToString(number);
   }
   static String fromDouble(double number) {
-    return base::DoubleToString(number);
+    String s = base::DoubleToString(number);
+    if (!s.empty() && s[0] == '.')
+      s = "0" + s;
+    return s;
+  }
+  static double toDouble(const char* s, size_t len, bool* ok) {
+    double v = 0.0;
+    *ok = base::StringToDouble(std::string(s, len), &v);
+    return *ok ? v : 0.0;
+  }
+  static size_t find(const String& s, const char* needle) {
+    return s.find(needle);
+  }
+  static size_t find(const String& s, const String& needle) {
+    return s.find(needle);
   }
   static const size_t kNotFound = static_cast<size_t>(-1);
+  static void builderAppend(StringBuilder& builder, const String& s) {
+    builder.append(s);
+  }
+  static void builderAppend(StringBuilder& builder, char c) {
+    builder.append(c);
+  }
+  static void builderAppend(StringBuilder& builder, const char* s, size_t len) {
+    builder.append(s, len);
+  }
   static void builderReserve(StringBuilder& builder, unsigned capacity) {
     builder.reserveCapacity(capacity);
   }
+  static String builderToString(StringBuilder& builder) {
+    return builder.toString();
+  }
   static std::unique_ptr<protocol::Value> parseJSON(const String&);
 };
+
+std::unique_ptr<protocol::Value> toProtocolValue(
+    const base::Value* value, int depth);
+std::unique_ptr<base::Value> toBaseValue(protocol::Value* value, int depth);
 
 }  // namespace protocol
 }  // namespace content

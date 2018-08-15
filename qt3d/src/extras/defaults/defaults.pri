@@ -1,6 +1,8 @@
 INCLUDEPATH += $$PWD
 
 HEADERS += \
+    $$PWD/qdiffusespecularmaterial.h \
+    $$PWD/qdiffusespecularmaterial_p.h \
     $$PWD/qphongmaterial.h \
     $$PWD/qphongmaterial_p.h \
     $$PWD/qdiffusemapmaterial_p.h \
@@ -25,20 +27,29 @@ HEADERS += \
     $$PWD/qphongalphamaterial_p.h \
     $$PWD/qt3dwindow.h \
     $$PWD/qt3dwindow_p.h \
+    $$PWD/qabstractcameracontroller.h \
+    $$PWD/qabstractcameracontroller_p.h \
     $$PWD/qfirstpersoncameracontroller.h \
-    $$PWD/qfirstpersoncameracontroller_p.h \
     $$PWD/qorbitcameracontroller.h \
     $$PWD/qorbitcameracontroller_p.h \
+    $$PWD/qabstractspritesheet.h \
+    $$PWD/qabstractspritesheet_p.h \
+    $$PWD/qspritegrid.h \
+    $$PWD/qspritegrid_p.h \
+    $$PWD/qspritesheet.h \
+    $$PWD/qspritesheet_p.h \
+    $$PWD/qspritesheetitem.h \
+    $$PWD/qspritesheetitem_p.h \
     $$PWD/qtexturematerial.h \
     $$PWD/qtexturematerial_p.h \
     $$PWD/qmetalroughmaterial.h \
     $$PWD/qmetalroughmaterial_p.h \
     $$PWD/qtexturedmetalroughmaterial.h \
-    $$PWD/qtexturedmetalroughmaterial_p.h \
     $$PWD/qmorphphongmaterial.h \
     $$PWD/qmorphphongmaterial_p.h
 
 SOURCES += \
+    $$PWD/qdiffusespecularmaterial.cpp \
     $$PWD/qphongmaterial.cpp \
     $$PWD/qdiffusemapmaterial.cpp \
     $$PWD/qnormaldiffusespecularmapmaterial.cpp \
@@ -51,8 +62,13 @@ SOURCES += \
     $$PWD/qgoochmaterial.cpp \
     $$PWD/qphongalphamaterial.cpp \
     $$PWD/qt3dwindow.cpp \
+    $$PWD/qabstractcameracontroller.cpp \
     $$PWD/qfirstpersoncameracontroller.cpp \
     $$PWD/qorbitcameracontroller.cpp \
+    $$PWD/qabstractspritesheet.cpp \
+    $$PWD/qspritegrid.cpp \
+    $$PWD/qspritesheet.cpp \
+    $$PWD/qspritesheetitem.cpp \
     $$PWD/qtexturematerial.cpp \
     $$PWD/qmetalroughmaterial.cpp \
     $$PWD/qtexturedmetalroughmaterial.cpp \

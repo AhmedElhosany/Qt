@@ -6,14 +6,6 @@
  * @fileoverview
  * 'settings-users-page' is the settings page for managing user accounts on
  * the device.
- *
- * Example:
- *
- *    <neon-animated-pages>
- *      <settings-users-page prefs="{{prefs}}">
- *      </settings-users-page>
- *      ... other pages ...
- *    </neon-animated-pages>
  */
 Polymer({
   is: 'settings-users-page',
@@ -30,18 +22,14 @@ Polymer({
     /** @private */
     isOwner_: {
       type: Boolean,
-      value: true
+      value: true,
     },
 
     /** @private */
     isWhitelistManaged_: {
       type: Boolean,
-      value: false
+      value: false,
     },
-  },
-
-  keyBindings: {
-    'enter': 'addUser_'
   },
 
   /** @override */
@@ -55,9 +43,18 @@ Polymer({
     }.bind(this));
   },
 
-  /** @private */
-  openAddUserDialog_: function() {
+  /**
+   * @param {!Event} e
+   * @private
+   */
+  openAddUserDialog_: function(e) {
+    e.preventDefault();
     this.$.addUserDialog.open();
+  },
+
+  /** @private */
+  onAddUserDialogClose_: function() {
+    cr.ui.focusWithoutInk(assert(this.$$('#add-user-button a')));
   },
 
   /**

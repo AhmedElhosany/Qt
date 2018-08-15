@@ -1,3 +1,6 @@
+include($$QTWEBENGINE_OUT_ROOT/qtwebengine-config.pri)
+QT_FOR_CONFIG += webengine webengine-private
+
 TARGET = QtWebEngine
 
 # For our export macros
@@ -55,18 +58,20 @@ HEADERS = \
         render_widget_host_view_qt_delegate_quickwindow.h \
         ui_delegates_manager.h
 
-isQMLTestSupportApiEnabled() {
+qtConfig(webengine-testsupport) {
+    QT_PRIVATE += testlib
+
     SOURCES += api/qquickwebenginetestsupport.cpp
     HEADERS += api/qquickwebenginetestsupport_p.h
 
     DEFINES += ENABLE_QML_TESTSUPPORT_API
 }
 
-contains(WEBENGINE_CONFIG, use_spellchecker) {
+qtConfig(webengine-spellchecker) {
     DEFINES += ENABLE_SPELLCHECK
 }
 
-use?(pdf) {
+qtConfig(webengine-printing-and-pdf) {
     DEFINES += ENABLE_PDF
 }
 
@@ -77,7 +82,7 @@ use?(pdf) {
         $$python chromium/tools/licenses.py \
         --file-template ../../tools/about_credits.tmpl \
         --entry-template ../../tools/about_credits_entry.tmpl credits \
-        > $$shell_quote($$shell_path($$OUT_PWD/chromium_attributions.qdoc))
+        $$shell_quote($$shell_path($$OUT_PWD/chromium_attributions.qdoc))
     chromium_attributions.CONFIG += phony
 
     QMAKE_EXTRA_TARGETS += chromium_attributions

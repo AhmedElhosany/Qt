@@ -17,9 +17,20 @@
 #include "gpu/config/gpu_util.h"
 #include "gpu/ipc/service/gpu_watchdog_thread.h"
 #include "gpu/ipc/service/switches.h"
+#include "ui/gfx/switches.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_switches.h"
+#include "ui/gl/gl_utils.h"
 #include "ui/gl/init/gl_factory.h"
+
+#if defined(USE_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
+#if defined(OS_WIN) && !defined(TOOLKIT_QT)
+#include "gpu/ipc/service/child_window_surface_win.h"
+#include "gpu/ipc/service/direct_composition_surface_win.h"
+#endif
 
 namespace gpu {
 
@@ -93,6 +104,17 @@ void CollectGraphicsInfo(gpu::GPUInfo& gpu_info) {
     case gpu::kCollectInfoSuccess:
       break;
   }
+
+#if defined(OS_WIN) && !defined(TOOLKIT_QT)
+  if (gl::GetGLImplementation() == gl::kGLImplementationEGLGLES2 &&
+      gl::GLSurfaceEGL::IsDirectCompositionSupported() &&
+      DirectCompositionSurfaceWin::AreOverlaysSupported()) {
+    gpu_info.supports_overlays = true;
+  }
+  if (DirectCompositionSurfaceWin::IsHDRSupported()) {
+    gpu_info.hdr = true;
+  }
+#endif  // defined(OS_WIN)
 }
 #endif  // defined(OS_MACOSX)
 
@@ -127,6 +149,7 @@ bool GpuInit::InitializeAndStartSandbox(const base::CommandLine& command_line) {
   // to run slowly in that case.
   bool enable_watchdog =
       !command_line.HasSwitch(switches::kDisableGpuWatchdog) &&
+      !command_line.HasSwitch(switches::kHeadless) &&
       !RunningOnValgrind();
 
   // Disable the watchdog in debug builds because they tend to only be run by
@@ -145,8 +168,22 @@ bool GpuInit::InitializeAndStartSandbox(const base::CommandLine& command_line) {
 
   // Start the GPU watchdog only after anything that is expected to be time
   // consuming has completed, otherwise the process is liable to be aborted.
-  if (enable_watchdog && !delayed_watchdog_enable)
+  if (enable_watchdog && !delayed_watchdog_enable) {
     watchdog_thread_ = gpu::GpuWatchdogThread::Create();
+#if defined(OS_WIN)
+    // This is a workaround for an occasional deadlock between watchdog and
+    // current thread. Watchdog hangs at thread initialization in
+    // __acrt_thread_attach() and current thread in std::setlocale(...)
+    // (during InitializeGLOneOff()). Source of the deadlock looks like an old
+    // UCRT bug that was supposed to be fixed in 10.0.10586 release of UCRT,
+    // but we might have come accross a not-yet-covered scenario.
+    // References:
+    // https://bugs.python.org/issue26624
+    // http://stackoverflow.com/questions/35572792/setlocale-stuck-on-windows
+    auto watchdog_started = watchdog_thread_->WaitUntilThreadStarted();
+    DCHECK(watchdog_started);
+#endif  // OS_WIN
+  }
 
   // Get vendor_id, device_id, driver_version from browser process through
   // commandline switches.
@@ -158,17 +195,32 @@ bool GpuInit::InitializeAndStartSandbox(const base::CommandLine& command_line) {
 #endif
   gpu_info_.in_process_gpu = false;
 
+  gpu_info_.passthrough_cmd_decoder =
+      gl::UsePassthroughCommandDecoder(&command_line);
+
   sandbox_helper_->PreSandboxStartup();
 
+  bool attempted_startsandbox = false;
 #if defined(OS_LINUX)
   // On Chrome OS ARM Mali, GPU driver userspace creates threads when
   // initializing a GL context, so start the sandbox early.
-  if (command_line.HasSwitch(switches::kGpuSandboxStartEarly))
+  if (command_line.HasSwitch(switches::kGpuSandboxStartEarly)) {
     gpu_info_.sandboxed =
         sandbox_helper_->EnsureSandboxInitialized(watchdog_thread_.get());
+    attempted_startsandbox = true;
+  }
+
 #endif  // defined(OS_LINUX)
 
   base::TimeTicks before_initialize_one_off = base::TimeTicks::Now();
+
+#if defined(USE_OZONE)
+  // Initialize Ozone GPU after the watchdog in case it hangs. The sandbox
+  // may also have started at this point.
+  ui::OzonePlatform::InitParams params;
+  params.single_process = false;
+  ui::OzonePlatform::InitializeForGPU(params);
+#endif
 
   // Load and initialize the GL implementation and locate the GL entry points if
   // needed. This initialization may have already happened if running in the
@@ -208,6 +260,8 @@ bool GpuInit::InitializeAndStartSandbox(const base::CommandLine& command_line) {
   }
 #endif  // !defined(OS_MACOSX)
 
+  gpu_feature_info_ = gpu::GetGpuFeatureInfo(gpu_info_, command_line);
+
   base::TimeDelta collect_context_time =
       base::TimeTicks::Now() - before_collect_context_graphics_info;
   UMA_HISTOGRAM_TIMES("GPU.CollectContextGraphicsInfo", collect_context_time);
@@ -217,9 +271,9 @@ bool GpuInit::InitializeAndStartSandbox(const base::CommandLine& command_line) {
   UMA_HISTOGRAM_MEDIUM_TIMES("GPU.InitializeOneOffMediumTime",
                              initialize_one_off_time);
 
-  // OSMesa is expected to run very slowly, so disable the watchdog in that
-  // case.
-  if (gl::GetGLImplementation() == gl::kGLImplementationOSMesaGL) {
+  // Software GL is expected to run slowly, so disable the watchdog
+  // in that case.
+  if (gl::GetGLImplementation() == gl::GetSoftwareGLImplementation()) {
     if (watchdog_thread_)
       watchdog_thread_->Stop();
     watchdog_thread_ = nullptr;
@@ -227,9 +281,11 @@ bool GpuInit::InitializeAndStartSandbox(const base::CommandLine& command_line) {
     watchdog_thread_ = gpu::GpuWatchdogThread::Create();
   }
 
-  if (!gpu_info_.sandboxed)
+  if (!gpu_info_.sandboxed && !attempted_startsandbox) {
     gpu_info_.sandboxed =
         sandbox_helper_->EnsureSandboxInitialized(watchdog_thread_.get());
+  }
+
   return true;
 }
 

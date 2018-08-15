@@ -62,6 +62,13 @@
 #include <Qt3DRender/qcamera.h>
 #include <QtGui/qopenglcontext.h>
 
+static void initResources()
+{
+#ifdef QT_STATIC
+    Q_INIT_RESOURCE(extras);
+#endif
+}
+
 QT_BEGIN_NAMESPACE
 
 namespace Qt3DExtras {
@@ -85,6 +92,8 @@ Qt3DWindow::Qt3DWindow(QScreen *screen)
     : QWindow(*new Qt3DWindowPrivate(), nullptr)
 {
     Q_D(Qt3DWindow);
+
+    initResources();
 
     if (!d->parentWindow)
         d->connectToScreen(screen ? screen : d->topLevelScreen.data());
@@ -125,6 +134,9 @@ Qt3DWindow::~Qt3DWindow()
     delete d->m_aspectEngine;
 }
 
+/*!
+    Registers the specified \a aspect.
+*/
 void Qt3DWindow::registerAspect(Qt3DCore::QAbstractAspect *aspect)
 {
     Q_ASSERT(!isVisible());
@@ -132,6 +144,9 @@ void Qt3DWindow::registerAspect(Qt3DCore::QAbstractAspect *aspect)
     d->m_aspectEngine->registerAspect(aspect);
 }
 
+/*!
+    Registers the specified aspect \a name.
+*/
 void Qt3DWindow::registerAspect(const QString &name)
 {
     Q_ASSERT(!isVisible());
@@ -139,6 +154,9 @@ void Qt3DWindow::registerAspect(const QString &name)
     d->m_aspectEngine->registerAspect(name);
 }
 
+/*!
+    Sets the specified \a root entity of the scene.
+*/
 void Qt3DWindow::setRootEntity(Qt3DCore::QEntity *root)
 {
     Q_D(Qt3DWindow);
@@ -151,18 +169,27 @@ void Qt3DWindow::setRootEntity(Qt3DCore::QEntity *root)
     }
 }
 
+/*!
+    Activates the specified \a activeFrameGraph.
+*/
 void Qt3DWindow::setActiveFrameGraph(Qt3DRender::QFrameGraphNode *activeFrameGraph)
 {
     Q_D(Qt3DWindow);
     d->m_renderSettings->setActiveFrameGraph(activeFrameGraph);
 }
 
+/*!
+    Returns the node of the active frame graph.
+*/
 Qt3DRender::QFrameGraphNode *Qt3DWindow::activeFrameGraph() const
 {
     Q_D(const Qt3DWindow);
     return d->m_renderSettings->activeFrameGraph();
 }
 
+/*!
+    Returns the node of the default framegraph
+*/
 Qt3DExtras::QForwardRenderer *Qt3DWindow::defaultFrameGraph() const
 {
     Q_D(const Qt3DWindow);
@@ -175,12 +202,18 @@ Qt3DRender::QCamera *Qt3DWindow::camera() const
     return d->m_defaultCamera;
 }
 
+/*!
+    Returns the render settings of the 3D Window.
+*/
 Qt3DRender::QRenderSettings *Qt3DWindow::renderSettings() const
 {
     Q_D(const Qt3DWindow);
     return d->m_renderSettings;
 }
 
+/*!
+    Manages the display events specified in \a e.
+*/
 void Qt3DWindow::showEvent(QShowEvent *e)
 {
     Q_D(Qt3DWindow);
@@ -194,7 +227,9 @@ void Qt3DWindow::showEvent(QShowEvent *e)
 
     QWindow::showEvent(e);
 }
-
+/*!
+    Resets the aspect ratio of the 3D window.
+*/
 void Qt3DWindow::resizeEvent(QResizeEvent *)
 {
     Q_D(Qt3DWindow);

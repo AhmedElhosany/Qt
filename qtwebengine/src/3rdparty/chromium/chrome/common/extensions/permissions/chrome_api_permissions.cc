@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "extensions/common/permissions/api_permission.h"
@@ -49,9 +51,7 @@ ChromeAPIPermissions::GetAllPermissions() const {
       {APIPermission::kGeolocation, "geolocation",
        APIPermissionInfo::kFlagCannotBeOptional},
       {APIPermission::kNotifications, "notifications"},
-      {APIPermission::kGcdPrivate, "gcdPrivate"},
       {APIPermission::kGcm, "gcm"},
-      {APIPermission::kNotificationProvider, "notificationProvider"},
 
       // Register extension permissions.
       {APIPermission::kAccessibilityFeaturesModify,
@@ -130,8 +130,6 @@ ChromeAPIPermissions::GetAllPermissions() const {
        APIPermissionInfo::kFlagCannotBeOptional},
       {APIPermission::kIdentityPrivate, "identityPrivate",
        APIPermissionInfo::kFlagCannotBeOptional},
-      {APIPermission::kLogPrivate, "logPrivate",
-       APIPermissionInfo::kFlagCannotBeOptional},
       {APIPermission::kWebcamPrivate, "webcamPrivate"},
       {APIPermission::kMediaPlayerPrivate, "mediaPlayerPrivate",
        APIPermissionInfo::kFlagCannotBeOptional},
@@ -139,6 +137,7 @@ ChromeAPIPermissions::GetAllPermissions() const {
        APIPermissionInfo::kFlagCannotBeOptional},
       {APIPermission::kMusicManagerPrivate, "musicManagerPrivate",
        APIPermissionInfo::kFlagCannotBeOptional},
+      {APIPermission::kNetworkingCastPrivate, "networking.castPrivate"},
       {APIPermission::kPreferencesPrivate, "preferencesPrivate",
        APIPermissionInfo::kFlagCannotBeOptional},
       {APIPermission::kSystemPrivate, "systemPrivate",
@@ -217,18 +216,7 @@ ChromeAPIPermissions::GetAllPermissions() const {
 
       // Platform-app permissions.
 
-      // The permission string for "fileSystem" is only shown when
-      // "write" or "directory" is present. Read-only access is only
-      // granted after the user has been shown a file or directory
-      // chooser dialog and selected a file or directory. Selecting
-      // the file or directory is considered consent to read it.
-      {APIPermission::kFileSystem, "fileSystem"},
-      {APIPermission::kFileSystemDirectory, "fileSystem.directory"},
       {APIPermission::kFileSystemProvider, "fileSystemProvider"},
-      {APIPermission::kFileSystemRequestFileSystem,
-       "fileSystem.requestFileSystem"},
-      {APIPermission::kFileSystemRetainEntries, "fileSystem.retainEntries"},
-      {APIPermission::kFileSystemWrite, "fileSystem.write"},
       {APIPermission::kMediaGalleries, "mediaGalleries",
        APIPermissionInfo::kFlagNone,
        &CreateAPIPermission<MediaGalleriesPermission>},

@@ -8,74 +8,115 @@
 #include "Benchmark.h"
 #include "Resources.h"
 #include "SkBitmap.h"
-#include "SkData.h"
-#include "SkImageEncoder.h"
+#include "SkJpegEncoder.h"
+#include "SkPngEncoder.h"
+#include "SkWebpEncoder.h"
+#include "SkStream.h"
 
 class EncodeBench : public Benchmark {
 public:
-    EncodeBench(const char* filename, SkImageEncoder::Type type, int quality)
-        : fFilename(filename)
-        , fType(type)
-        , fQuality(quality)
-    {
-        // Set the name of the bench
-        SkString name("Encode_");
-        name.append(filename);
-        name.append("_");
-        switch (type) {
-            case SkImageEncoder::kJPEG_Type:
-                name.append("JPEG");
-                break;
-            case SkImageEncoder::kPNG_Type:
-                name.append("PNG");
-                break;
-            case SkImageEncoder::kWEBP_Type:
-                name.append("WEBP");
-                break;
-            default:
-                name.append("Unknown");
-                break;
-        }
-        
-        fName = name;
-    }
+    using Encoder = bool (*)(SkWStream*, const SkPixmap&);
+    EncodeBench(const char* filename, Encoder encoder, const char* encoderName)
+        : fSourceFilename(filename)
+        , fEncoder(encoder)
+        , fName(SkStringPrintf("Encode_%s_%s", filename, encoderName)) {}
 
     bool isSuitableFor(Backend backend) override { return backend == kNonRendering_Backend; }
-    
+
     const char* onGetName() override { return fName.c_str(); }
-    
+
     void onPreDraw(SkCanvas*) override {
-#ifdef SK_DEBUG
-        bool result =
-#endif
-        GetResourceAsBitmap(fFilename, &fBitmap);
-        SkASSERT(result);
+        SkAssertResult(GetResourceAsBitmap(fSourceFilename, &fBitmap));
     }
 
     void onDraw(int loops, SkCanvas*) override {
-        for (int i = 0; i < loops; i++) {
-            sk_sp<SkData> data(SkImageEncoder::EncodeData(fBitmap, fType, fQuality));
-            SkASSERT(data);
+        while (loops-- > 0) {
+            SkPixmap pixmap;
+            SkAssertResult(fBitmap.peekPixels(&pixmap));
+            SkNullWStream dst;
+            SkAssertResult(fEncoder(&dst, pixmap));
+            SkASSERT(dst.bytesWritten() > 0);
         }
     }
 
 private:
-    const char*                fFilename;
-    const SkImageEncoder::Type fType;
-    const int                  fQuality;
-    SkString                   fName;
-    SkBitmap                   fBitmap;
+    const char* fSourceFilename;
+    Encoder     fEncoder;
+    SkString    fName;
+    SkBitmap    fBitmap;
 };
 
+static bool encode_jpeg(SkWStream* dst, const SkPixmap& src) {
+    SkJpegEncoder::Options opts;
+    opts.fQuality = 90;
+    return SkJpegEncoder::Encode(dst, src, opts);
+}
+
+static bool encode_webp_lossy(SkWStream* dst, const SkPixmap& src) {
+    SkWebpEncoder::Options opts;
+    opts.fCompression = SkWebpEncoder::Compression::kLossy;
+    opts.fQuality = 90;
+    opts.fUnpremulBehavior = SkTransferFunctionBehavior::kIgnore;
+    return SkWebpEncoder::Encode(dst, src, opts);
+}
+
+static bool encode_webp_lossless(SkWStream* dst, const SkPixmap& src) {
+    SkWebpEncoder::Options opts;
+    opts.fCompression = SkWebpEncoder::Compression::kLossless;
+    opts.fQuality = 90;
+    opts.fUnpremulBehavior = SkTransferFunctionBehavior::kIgnore;
+    return SkWebpEncoder::Encode(dst, src, opts);
+}
+
+static bool encode_png(SkWStream* dst,
+                       const SkPixmap& src,
+                       SkPngEncoder::FilterFlag filters,
+                       int zlibLevel) {
+    SkPngEncoder::Options opts;
+    opts.fFilterFlags = filters;
+    opts.fUnpremulBehavior = SkTransferFunctionBehavior::kIgnore;
+    opts.fZLibLevel = zlibLevel;
+    return SkPngEncoder::Encode(dst, src, opts);
+}
+
+#define PNG(FLAG, ZLIBLEVEL) [](SkWStream* d, const SkPixmap& s) { \
+           return encode_png(d, s, SkPngEncoder::FilterFlag::FLAG, ZLIBLEVEL); }
+
+static const char* srcs[2] = {"mandrill_512.png", "color_wheel.jpg"};
 
 // The Android Photos app uses a quality of 90 on JPEG encodes
-DEF_BENCH(return new EncodeBench("mandrill_512.png", SkImageEncoder::kJPEG_Type, 90));
-DEF_BENCH(return new EncodeBench("color_wheel.jpg", SkImageEncoder::kJPEG_Type, 90));
-
-// PNG encodes are lossless so quality should be ignored
-DEF_BENCH(return new EncodeBench("mandrill_512.png", SkImageEncoder::kPNG_Type, 90));
-DEF_BENCH(return new EncodeBench("color_wheel.jpg", SkImageEncoder::kPNG_Type, 90));
+DEF_BENCH(return new EncodeBench(srcs[0], &encode_jpeg, "JPEG"));
+DEF_BENCH(return new EncodeBench(srcs[1], &encode_jpeg, "JPEG"));
 
 // TODO: What is the appropriate quality to use to benchmark WEBP encodes?
-DEF_BENCH(return new EncodeBench("mandrill_512.png", SkImageEncoder::kWEBP_Type, 90));
-DEF_BENCH(return new EncodeBench("color_wheel.jpg", SkImageEncoder::kWEBP_Type, 90));
+DEF_BENCH(return new EncodeBench(srcs[0], encode_webp_lossy, "WEBP"));
+DEF_BENCH(return new EncodeBench(srcs[1], encode_webp_lossy, "WEBP"));
+
+DEF_BENCH(return new EncodeBench(srcs[0], encode_webp_lossless, "WEBP_LL"));
+DEF_BENCH(return new EncodeBench(srcs[1], encode_webp_lossless, "WEBP_LL"));
+
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kAll, 6), "PNG"));
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kAll, 3), "PNG_3"));
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kAll, 1), "PNG_1"));
+
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kSub, 6), "PNG_6s"));
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kSub, 3), "PNG_3s"));
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kSub, 1), "PNG_1s"));
+
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kNone, 6), "PNG_6n"));
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kNone, 3), "PNG_3n"));
+DEF_BENCH(return new EncodeBench(srcs[0], PNG(kNone, 1), "PNG_1n"));
+
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kAll, 6), "PNG"));
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kAll, 3), "PNG_3"));
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kAll, 1), "PNG_1"));
+
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kSub, 6), "PNG_6s"));
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kSub, 3), "PNG_3s"));
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kSub, 1), "PNG_1s"));
+
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kNone, 6), "PNG_6n"));
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kNone, 3), "PNG_3n"));
+DEF_BENCH(return new EncodeBench(srcs[1], PNG(kNone, 1), "PNG_1n"));
+
+#undef PNG

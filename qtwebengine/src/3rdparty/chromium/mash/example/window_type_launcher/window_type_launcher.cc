@@ -12,19 +12,19 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "mash/session/public/interfaces/session.mojom.h"
 #include "services/service_manager/public/c/main.h"
-#include "services/service_manager/public/cpp/connection.h"
 #include "services/service_manager/public/cpp/connector.h"
-#include "services/service_manager/public/cpp/interface_registry.h"
 #include "services/service_manager/public/cpp/service.h"
 #include "services/service_manager/public/cpp/service_context.h"
 #include "services/service_manager/public/cpp/service_runner.h"
+#include "services/ui/public/cpp/property_type_converters.h"
+#include "services/ui/public/interfaces/window_manager.mojom.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
 #include "ui/views/background.h"
+#include "ui/views/border.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -59,7 +59,7 @@ class WindowDelegateView : public views::WidgetDelegateView {
   };
 
   explicit WindowDelegateView(uint32_t traits) : traits_(traits) {
-    set_background(views::Background::CreateSolidBackground(SK_ColorRED));
+    SetBackground(views::CreateSolidBackground(SK_ColorRED));
   }
   ~WindowDelegateView() override {}
 
@@ -71,12 +71,9 @@ class WindowDelegateView : public views::WidgetDelegateView {
         (traits & PANEL) != 0 ? views::Widget::InitParams::TYPE_PANEL
                               : views::Widget::InitParams::TYPE_WINDOW);
     if ((traits & PANEL) != 0) {
-      // TODO(sky): make this work with aura-mus.
-      /*
-      params.mus_properties[ui::mojom::WindowManager::kInitialBounds_Property] =
+      params.mus_properties[ui::mojom::WindowManager::kBounds_InitProperty] =
           mojo::TypeConverter<std::vector<uint8_t>, gfx::Rect>::Convert(
               gfx::Rect(100, 100, 300, 300));
-      */
     }
     params.keep_on_top = (traits & ALWAYS_ON_TOP) != 0;
     // WidgetDelegateView deletes itself when Widget is destroyed.
@@ -95,7 +92,9 @@ class WindowDelegateView : public views::WidgetDelegateView {
   base::string16 GetWindowTitle() const override {
     return base::ASCIIToUTF16("Window");
   }
-  gfx::Size GetPreferredSize() const override { return gfx::Size(300, 300); }
+  gfx::Size CalculatePreferredSize() const override {
+    return gfx::Size(300, 300);
+  }
 
  private:
   const uint32_t traits_;
@@ -126,7 +125,9 @@ class ModalWindow : public views::WidgetDelegateView,
   void OnPaint(gfx::Canvas* canvas) override {
     canvas->FillRect(GetLocalBounds(), color_);
   }
-  gfx::Size GetPreferredSize() const override { return gfx::Size(200, 200); }
+  gfx::Size CalculatePreferredSize() const override {
+    return gfx::Size(200, 200);
+  }
   void Layout() override {
     gfx::Size open_ps = open_button_->GetPreferredSize();
     gfx::Rect local_bounds = GetLocalBounds();
@@ -190,7 +191,9 @@ class NonModalTransient : public views::WidgetDelegateView {
   void OnPaint(gfx::Canvas* canvas) override {
     canvas->FillRect(GetLocalBounds(), color_);
   }
-  gfx::Size GetPreferredSize() const override { return gfx::Size(250, 250); }
+  gfx::Size CalculatePreferredSize() const override {
+    return gfx::Size(250, 250);
+  }
 
   // Overridden from views::WidgetDelegate:
   bool CanResize() const override { return true; }
@@ -231,7 +234,6 @@ class WindowTypeLauncherView : public views::WidgetDelegateView,
   explicit WindowTypeLauncherView(WindowTypeLauncher* window_type_launcher,
                                   service_manager::Connector* connector)
       : window_type_launcher_(window_type_launcher),
-        connector_(connector),
         create_button_(
             MdTextButton::Create(this, base::ASCIIToUTF16("Create Window"))),
         always_on_top_button_(MdTextButton::Create(
@@ -245,12 +247,6 @@ class WindowTypeLauncherView : public views::WidgetDelegateView,
         bubble_button_(
             MdTextButton::Create(this,
                                  base::ASCIIToUTF16("Create Pointy Bubble"))),
-        lock_button_(
-            MdTextButton::Create(this, base::ASCIIToUTF16("Lock Screen"))),
-        logout_button_(
-            MdTextButton::Create(this, base::ASCIIToUTF16("Log Out"))),
-        switch_user_button_(
-            MdTextButton::Create(this, base::ASCIIToUTF16("Switch User"))),
         widgets_button_(
             MdTextButton::Create(this,
                                  base::ASCIIToUTF16("Show Example Widgets"))),
@@ -278,8 +274,8 @@ class WindowTypeLauncherView : public views::WidgetDelegateView,
         jank_button_(
             MdTextButton::Create(this, base::ASCIIToUTF16("Jank for (s):"))),
         jank_duration_field_(new views::Textfield) {
+    SetBorder(views::CreateEmptyBorder(gfx::Insets(5)));
     views::GridLayout* layout = new views::GridLayout(this);
-    layout->SetInsets(5, 5, 5, 5);
     SetLayoutManager(layout);
     views::ColumnSet* column_set = layout->AddColumnSet(0);
     column_set->AddColumn(views::GridLayout::LEADING,
@@ -309,9 +305,6 @@ class WindowTypeLauncherView : public views::WidgetDelegateView,
     AddViewToLayout(layout, panel_button_);
     AddViewToLayout(layout, create_nonresizable_button_);
     AddViewToLayout(layout, bubble_button_);
-    AddViewToLayout(layout, lock_button_);
-    AddViewToLayout(layout, logout_button_);
-    AddViewToLayout(layout, switch_user_button_);
     AddViewToLayout(layout, widgets_button_);
     AddViewToLayout(layout, system_modal_button_);
     AddViewToLayout(layout, window_modal_button_);
@@ -370,18 +363,6 @@ class WindowTypeLauncherView : public views::WidgetDelegateView,
       WindowDelegateView::Create(0u);
     } else if (sender == bubble_button_) {
       NOTIMPLEMENTED();
-    } else if (sender == lock_button_) {
-      mash::session::mojom::SessionPtr session;
-      connector_->ConnectToInterface("mash_session", &session);
-      session->LockScreen();
-    } else if (sender == logout_button_) {
-      mash::session::mojom::SessionPtr session;
-      connector_->ConnectToInterface("mash_session", &session);
-      session->Logout();
-    } else if (sender == switch_user_button_) {
-      mash::session::mojom::SessionPtr session;
-      connector_->ConnectToInterface("mash_session", &session);
-      session->SwitchUser();
     } else if (sender == widgets_button_) {
       NOTIMPLEMENTED();
     }
@@ -429,22 +410,17 @@ class WindowTypeLauncherView : public views::WidgetDelegateView,
                          MenuItemView::NORMAL);
     // MenuRunner takes ownership of root.
     menu_runner_.reset(new MenuRunner(
-        root, MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU |
-                  views::MenuRunner::ASYNC));
+        root, MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU));
     menu_runner_->RunMenuAt(GetWidget(), NULL, gfx::Rect(point, gfx::Size()),
                             views::MENU_ANCHOR_TOPLEFT, source_type);
   }
 
   WindowTypeLauncher* window_type_launcher_;
-  service_manager::Connector* connector_;
   views::Button* create_button_;
   views::Button* always_on_top_button_;
   views::Button* panel_button_;
   views::Button* create_nonresizable_button_;
   views::Button* bubble_button_;
-  views::Button* lock_button_;
-  views::Button* logout_button_;
-  views::Button* switch_user_button_;
   views::Button* widgets_button_;
   views::Button* system_modal_button_;
   views::Button* window_modal_button_;
@@ -462,7 +438,10 @@ class WindowTypeLauncherView : public views::WidgetDelegateView,
 
 }  // namespace
 
-WindowTypeLauncher::WindowTypeLauncher() {}
+WindowTypeLauncher::WindowTypeLauncher() {
+  registry_.AddInterface<mash::mojom::Launchable>(
+      base::Bind(&WindowTypeLauncher::Create, base::Unretained(this)));
+}
 WindowTypeLauncher::~WindowTypeLauncher() {}
 
 void WindowTypeLauncher::RemoveWindow(views::Widget* window) {
@@ -474,16 +453,18 @@ void WindowTypeLauncher::RemoveWindow(views::Widget* window) {
 }
 
 void WindowTypeLauncher::OnStart() {
-  aura_init_ = base::MakeUnique<views::AuraInit>(
+  aura_init_ = views::AuraInit::Create(
       context()->connector(), context()->identity(), "views_mus_resources.pak",
       std::string(), nullptr, views::AuraInit::Mode::AURA_MUS);
+  if (!aura_init_)
+    context()->QuitNow();
 }
 
-bool WindowTypeLauncher::OnConnect(
-    const service_manager::ServiceInfo& remote_info,
-    service_manager::InterfaceRegistry* registry) {
-  registry->AddInterface<mash::mojom::Launchable>(this);
-  return true;
+void WindowTypeLauncher::OnBindInterface(
+    const service_manager::BindSourceInfo& source_info,
+    const std::string& interface_name,
+    mojo::ScopedMessagePipeHandle interface_pipe) {
+  registry_.BindInterface(interface_name, std::move(interface_pipe));
 }
 
 void WindowTypeLauncher::Launch(uint32_t what, mash::mojom::LaunchMode how) {
@@ -501,9 +482,7 @@ void WindowTypeLauncher::Launch(uint32_t what, mash::mojom::LaunchMode how) {
   windows_.push_back(window);
 }
 
-void WindowTypeLauncher::Create(
-    const service_manager::Identity& remote_identity,
-    mash::mojom::LaunchableRequest request) {
+void WindowTypeLauncher::Create(mash::mojom::LaunchableRequest request) {
   bindings_.AddBinding(this, std::move(request));
 }
 

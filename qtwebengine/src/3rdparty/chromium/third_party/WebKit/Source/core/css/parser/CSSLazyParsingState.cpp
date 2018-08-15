@@ -3,31 +3,67 @@
 // found in the LICENSE file.
 
 #include "core/css/parser/CSSLazyParsingState.h"
+#include "core/css/parser/CSSLazyPropertyParserImpl.h"
 #include "core/css/parser/CSSParserTokenRange.h"
+#include "core/dom/Document.h"
 #include "core/frame/UseCounter.h"
+#include "platform/Histogram.h"
 
 namespace blink {
 
-CSSLazyParsingState::CSSLazyParsingState(const CSSParserContext& context,
-                                         Vector<String> escapedStrings,
-                                         const String& sheetText,
+CSSLazyParsingState::CSSLazyParsingState(const CSSParserContext* context,
+                                         Vector<String> escaped_strings,
+                                         const String& sheet_text,
                                          StyleSheetContents* contents)
-    : m_context(context),
-      m_escapedStrings(std::move(escapedStrings)),
-      m_sheetText(sheetText),
-      m_owningContents(contents) {}
+    : context_(context),
+      escaped_strings_(std::move(escaped_strings)),
+      sheet_text_(sheet_text),
+      owning_contents_(contents),
+      parsed_style_rules_(0),
+      total_style_rules_(0),
+      style_rules_needed_for_next_milestone_(0),
+      usage_(kUsageGe0),
+      should_use_count_(context_->IsUseCounterRecordingEnabled()) {}
 
-const CSSParserContext& CSSLazyParsingState::context() {
-  DCHECK(m_owningContents);
-  UseCounter* sheetCounter = UseCounter::getFrom(m_owningContents);
-  if (sheetCounter != m_context.useCounter())
-    m_context = CSSParserContext(m_context, sheetCounter);
-  return m_context;
+void CSSLazyParsingState::FinishInitialParsing() {
+  RecordUsageMetrics();
 }
 
-bool CSSLazyParsingState::shouldLazilyParseProperties(
-    const CSSSelectorList& selectors,
+CSSLazyPropertyParserImpl* CSSLazyParsingState::CreateLazyParser(
     const CSSParserTokenRange& block) {
+  ++total_style_rules_;
+  return new CSSLazyPropertyParserImpl(std::move(block), this);
+}
+
+const CSSParserContext* CSSLazyParsingState::Context() {
+  DCHECK(owning_contents_);
+  if (!should_use_count_) {
+    DCHECK(!context_->IsUseCounterRecordingEnabled());
+    return context_;
+  }
+
+  // Try as best as possible to grab a valid Document if the old Document has
+  // gone away so we can still use UseCounter.
+  if (!document_)
+    document_ = owning_contents_->AnyOwnerDocument();
+
+  if (!context_->IsDocumentHandleEqual(document_))
+    context_ = CSSParserContext::Create(context_, document_);
+  return context_;
+}
+
+void CSSLazyParsingState::CountRuleParsed() {
+  ++parsed_style_rules_;
+  while (parsed_style_rules_ > style_rules_needed_for_next_milestone_) {
+    DCHECK_NE(kUsageAll, usage_);
+    ++usage_;
+    RecordUsageMetrics();
+  }
+}
+
+bool CSSLazyParsingState::ShouldLazilyParseProperties(
+    const CSSSelectorList& selectors,
+    const CSSParserTokenRange& block) const {
   // Simple heuristic for an empty block. Note that |block| here does not
   // include {} brackets. We avoid lazy parsing empty blocks so we can avoid
   // considering them when possible for matching. Lazy blocks must always be
@@ -40,17 +76,60 @@ bool CSSLazyParsingState::shouldLazilyParseProperties(
   //  list. This ensures we don't cause a collectFeatures() when we trigger
   //  parsing for attr() functions which would trigger expensive invalidation
   //  propagation.
-  for (const auto* s = selectors.first(); s; s = CSSSelectorList::next(*s)) {
+  for (const auto* s = selectors.First(); s; s = CSSSelectorList::Next(*s)) {
     for (const CSSSelector* current = s; current;
-         current = current->tagHistory()) {
-      const CSSSelector::PseudoType type(current->getPseudoType());
-      if (type == CSSSelector::PseudoBefore || type == CSSSelector::PseudoAfter)
+         current = current->TagHistory()) {
+      const CSSSelector::PseudoType type(current->GetPseudoType());
+      if (type == CSSSelector::kPseudoBefore ||
+          type == CSSSelector::kPseudoAfter)
         return false;
-      if (current->relation() != CSSSelector::SubSelector)
+      if (current->Relation() != CSSSelector::kSubSelector)
         break;
     }
   }
   return true;
+}
+
+void CSSLazyParsingState::RecordUsageMetrics() {
+  DEFINE_STATIC_LOCAL(EnumerationHistogram, usage_histogram,
+                      ("Style.LazyUsage.Percent", kUsageLastValue));
+  DEFINE_STATIC_LOCAL(CustomCountHistogram, total_rules_histogram,
+                      ("Style.TotalLazyRules", 0, 100000, 50));
+  DEFINE_STATIC_LOCAL(CustomCountHistogram, total_rules_full_usage_histogram,
+                      ("Style.TotalLazyRules.FullUsage", 0, 100000, 50));
+  switch (usage_) {
+    case kUsageGe0:
+      total_rules_histogram.Count(total_style_rules_);
+      style_rules_needed_for_next_milestone_ = total_style_rules_ * .1;
+      break;
+    case kUsageGt10:
+      style_rules_needed_for_next_milestone_ = total_style_rules_ * .25;
+      break;
+    case kUsageGt25:
+      style_rules_needed_for_next_milestone_ = total_style_rules_ * .5;
+      break;
+    case kUsageGt50:
+      style_rules_needed_for_next_milestone_ = total_style_rules_ * .75;
+      break;
+    case kUsageGt75:
+      style_rules_needed_for_next_milestone_ = total_style_rules_ * .9;
+      break;
+    case kUsageGt90:
+      style_rules_needed_for_next_milestone_ = total_style_rules_ - 1;
+      break;
+    case kUsageAll:
+      total_rules_full_usage_histogram.Count(total_style_rules_);
+      style_rules_needed_for_next_milestone_ = total_style_rules_;
+      break;
+  }
+
+  usage_histogram.Count(usage_);
+}
+
+DEFINE_TRACE(CSSLazyParsingState) {
+  visitor->Trace(owning_contents_);
+  visitor->Trace(document_);
+  visitor->Trace(context_);
 }
 
 }  // namespace blink

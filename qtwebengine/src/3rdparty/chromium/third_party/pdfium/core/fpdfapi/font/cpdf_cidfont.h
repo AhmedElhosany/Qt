@@ -8,12 +8,15 @@
 #define CORE_FPDFAPI_FONT_CPDF_CIDFONT_H_
 
 #include <memory>
+#include <vector>
 
 #include "core/fpdfapi/font/cpdf_font.h"
+#include "core/fxcrt/cfx_retain_ptr.h"
+#include "core/fxcrt/cfx_unowned_ptr.h"
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
 
-enum CIDSet {
+enum CIDSet : uint8_t {
   CIDSET_UNKNOWN,
   CIDSET_GB1,
   CIDSET_CNS1,
@@ -34,7 +37,7 @@ class CPDF_CIDFont : public CPDF_Font {
   CPDF_CIDFont();
   ~CPDF_CIDFont() override;
 
-  static FX_FLOAT CIDTransformToFloat(uint8_t ch);
+  static float CIDTransformToFloat(uint8_t ch);
 
   // CPDF_Font:
   bool IsCIDFont() const override;
@@ -43,47 +46,46 @@ class CPDF_CIDFont : public CPDF_Font {
   int GlyphFromCharCode(uint32_t charcode, bool* pVertGlyph) override;
   int GetCharWidthF(uint32_t charcode) override;
   FX_RECT GetCharBBox(uint32_t charcode) override;
-  uint32_t GetNextChar(const FX_CHAR* pString,
+  uint32_t GetNextChar(const char* pString,
                        int nStrLen,
                        int& offset) const override;
-  int CountChar(const FX_CHAR* pString, int size) const override;
-  int AppendChar(FX_CHAR* str, uint32_t charcode) const override;
-  int GetCharSize(uint32_t charcode) const override;
+  int CountChar(const char* pString, int size) const override;
+  int AppendChar(char* str, uint32_t charcode) const override;
   bool IsVertWriting() const override;
   bool IsUnicodeCompatible() const override;
   bool Load() override;
   CFX_WideString UnicodeFromCharCode(uint32_t charcode) const override;
-  uint32_t CharCodeFromUnicode(FX_WCHAR Unicode) const override;
+  uint32_t CharCodeFromUnicode(wchar_t Unicode) const override;
 
   uint16_t CIDFromCharCode(uint32_t charcode) const;
   const uint8_t* GetCIDTransform(uint16_t CID) const;
   short GetVertWidth(uint16_t CID) const;
   void GetVertOrigin(uint16_t CID, short& vx, short& vy) const;
+  int GetCharSize(uint32_t charcode) const;
 
  protected:
   void LoadGB2312();
   int GetGlyphIndex(uint32_t unicodeb, bool* pVertGlyph);
   int GetVerticalGlyph(int index, bool* pVertGlyph);
   void LoadMetricsArray(CPDF_Array* pArray,
-                        CFX_ArrayTemplate<uint32_t>& result,
+                        std::vector<uint32_t>* result,
                         int nElements);
   void LoadSubstFont();
-  FX_WCHAR GetUnicodeFromCharCode(uint32_t charcode) const;
+  wchar_t GetUnicodeFromCharCode(uint32_t charcode) const;
 
-  CPDF_CMap* m_pCMap;
-  std::unique_ptr<CPDF_CMap> m_pAllocatedCMap;
-  CPDF_CID2UnicodeMap* m_pCID2UnicodeMap;
+  CFX_RetainPtr<CPDF_CMap> m_pCMap;
+  CFX_UnownedPtr<CPDF_CID2UnicodeMap> m_pCID2UnicodeMap;
   CIDSet m_Charset;
   bool m_bType1;
   bool m_bCIDIsGID;
   uint16_t m_DefaultWidth;
-  std::unique_ptr<CPDF_StreamAcc> m_pStreamAcc;
+  CFX_RetainPtr<CPDF_StreamAcc> m_pStreamAcc;
   bool m_bAnsiWidthsFixed;
   FX_RECT m_CharBBox[256];
-  CFX_ArrayTemplate<uint32_t> m_WidthList;
+  std::vector<uint32_t> m_WidthList;
   short m_DefaultVY;
   short m_DefaultW1;
-  CFX_ArrayTemplate<uint32_t> m_VertMetrics;
+  std::vector<uint32_t> m_VertMetrics;
   bool m_bAdobeCourierStd;
   std::unique_ptr<CFX_CTTGSUBTable> m_pTTGSUBTable;
 };

@@ -47,21 +47,22 @@ Audits.AuditRules.CacheableResponseCodes = {
  * @return {!Object.<string, !Array.<!SDK.NetworkRequest|string>>}
  */
 Audits.AuditRules.getDomainToResourcesMap = function(requests, types, needFullResources) {
+  /** @type {!Object<string, !Array<!SDK.NetworkRequest|string>>} */
   var domainToResourcesMap = {};
   for (var i = 0, size = requests.length; i < size; ++i) {
     var request = requests[i];
     if (types && types.indexOf(request.resourceType()) === -1)
       continue;
-    var parsedURL = request.url.asParsedURL();
+    var parsedURL = request.url().asParsedURL();
     if (!parsedURL)
       continue;
     var domain = parsedURL.host;
     var domainResources = domainToResourcesMap[domain];
     if (domainResources === undefined) {
-      domainResources = [];
+      domainResources = /** @type {!Array<!SDK.NetworkRequest|string>} */ ([]);
       domainToResourcesMap[domain] = domainResources;
     }
-    domainResources.push(needFullResources ? request : request.url);
+    domainResources.push(needFullResources ? request : request.url());
   }
   return domainToResourcesMap;
 };
@@ -84,8 +85,6 @@ Audits.AuditRules.GzipRule = class extends Audits.AuditRule {
    */
   doRun(target, requests, result, callback, progress) {
     var totalSavings = 0;
-    var compressedSize = 0;
-    var candidateSize = 0;
     var summary = result.addChild('', true);
     for (var i = 0, length = requests.length; i < length; ++i) {
       var request = requests[i];
@@ -93,14 +92,11 @@ Audits.AuditRules.GzipRule = class extends Audits.AuditRule {
         continue;  // Do not test cached resources.
       if (this._shouldCompress(request)) {
         var size = request.resourceSize;
-        candidateSize += size;
-        if (this._isCompressed(request)) {
-          compressedSize += size;
+        if (this._isCompressed(request))
           continue;
-        }
         var savings = 2 * size / 3;
         totalSavings += savings;
-        summary.addFormatted('%r could save ~%s', request.url, Number.bytesToString(savings));
+        summary.addFormatted('%r could save ~%s', request.url(), Number.bytesToString(savings));
         result.violationCount++;
       }
     }
@@ -328,7 +324,7 @@ Audits.AuditRules.ParallelizeDownloadRule = class extends Audits.AuditRule {
             busiestHostResourceCount, hosts[0]),
         true);
     for (var i = 0; i < requestsOnBusiestHost.length; ++i)
-      entry.addURL(requestsOnBusiestHost[i].url);
+      entry.addURL(requestsOnBusiestHost[i].url());
 
     result.violationCount = requestsOnBusiestHost.length;
     callback(result);
@@ -356,8 +352,8 @@ Audits.AuditRules.UnusedCssRule = class extends Audits.AuditRule {
    * @param {!Common.Progress} progress
    */
   doRun(target, requests, result, callback, progress) {
-    var domModel = SDK.DOMModel.fromTarget(target);
-    var cssModel = SDK.CSSModel.fromTarget(target);
+    var domModel = target.model(SDK.DOMModel);
+    var cssModel = target.model(SDK.CSSModel);
     if (!domModel || !cssModel) {
       callback(null);
       return;
@@ -468,14 +464,13 @@ Audits.AuditRules.UnusedCssRule = class extends Audits.AuditRule {
             return;
           }
           var effectiveSelector = selectors[i].replace(pseudoSelectorRegexp, '');
-          domModel.querySelector(
-              document.id, effectiveSelector,
-              queryCallback.bind(
+          domModel.querySelector(document.id, effectiveSelector)
+              .then(queryCallback.bind(
                   null, i === selectors.length - 1 ? selectorsCallback.bind(null, styleSheets) : null, selectors[i]));
         }
       }
 
-      domModel.requestDocument(documentLoaded.bind(null, selectors));
+      domModel.requestDocumentPromise().then(documentLoaded.bind(null, selectors));
     }
 
     var styleSheetInfos = cssModel.allStyleSheets();
@@ -489,7 +484,7 @@ Audits.AuditRules.UnusedCssRule = class extends Audits.AuditRule {
 };
 
 /**
- * @typedef {!{sourceURL: string, rules: !Array.<!SDK.CSSParser.StyleRule>}}
+ * @typedef {!{sourceURL: string, rules: !Array.<!Formatter.FormatterWorkerPool.CSSStyleRule>}}
  */
 Audits.AuditRules.ParsedStyleSheet;
 
@@ -510,37 +505,38 @@ Audits.AuditRules.StyleSheetProcessor = class {
   }
 
   run() {
-    this._parser = new SDK.CSSParser();
     this._processNextStyleSheet();
-  }
-
-  _terminateWorker() {
-    if (this._parser) {
-      this._parser.dispose();
-      delete this._parser;
-    }
-  }
-
-  _finish() {
-    this._terminateWorker();
-    this._styleSheetsParsedCallback(this._styleSheets);
   }
 
   _processNextStyleSheet() {
     if (!this._styleSheetHeaders.length) {
-      this._finish();
+      this._styleSheetsParsedCallback(this._styleSheets);
       return;
     }
     this._currentStyleSheetHeader = this._styleSheetHeaders.shift();
-    this._parser.fetchAndParse(this._currentStyleSheetHeader, this._onStyleSheetParsed.bind(this));
+
+    var allRules = [];
+    this._currentStyleSheetHeader.requestContent().then(
+        content => Formatter.formatterWorkerPool().parseCSS(content || '', onRulesParsed.bind(this)));
+
+    /**
+     * @param {boolean} isLastChunk
+     * @param {!Array<!Formatter.FormatterWorkerPool.CSSRule>} rules
+     * @this {Audits.AuditRules.StyleSheetProcessor}
+     */
+    function onRulesParsed(isLastChunk, rules) {
+      allRules.push(...rules);
+      if (isLastChunk)
+        this._onStyleSheetParsed(allRules);
+    }
   }
 
   /**
-   * @param {!Array.<!SDK.CSSParser.Rule>} rules
+   * @param {!Array.<!Formatter.FormatterWorkerPool.CSSRule>} rules
    */
   _onStyleSheetParsed(rules) {
     if (this._progress.isCanceled()) {
-      this._finish();
+      this._styleSheetsParsedCallback(this._styleSheets);
       return;
     }
 
@@ -602,7 +598,7 @@ Audits.AuditRules.CacheControlRule = class extends Audits.AuditRule {
     var urls = [];
     for (var i = 0; i < requestCount; ++i) {
       if (requestCheckFunction.call(this, requests[i]))
-        urls.push(requests[i].url);
+        urls.push(requests[i].url());
     }
     if (urls.length) {
       var entry = result.addChild(messageText, true);
@@ -679,7 +675,7 @@ Audits.AuditRules.CacheControlRule = class extends Audits.AuditRule {
     if (this.responseHeaderMatch(request, 'Cache-Control', 'public'))
       return true;
 
-    return request.url.indexOf('?') === -1 && !this.responseHeaderMatch(request, 'Cache-Control', 'private');
+    return request.url().indexOf('?') === -1 && !this.responseHeaderMatch(request, 'Cache-Control', 'private');
   }
 
   /**
@@ -708,11 +704,12 @@ Audits.AuditRules.CacheControlRule = class extends Audits.AuditRule {
    */
   _isExplicitlyNonCacheable(request) {
     var hasExplicitExp = this.hasExplicitExpiration(request);
-    return !!this.responseHeaderMatch(request, 'Cache-Control', '(no-cache|no-store)') ||
+    return !!(
+        !!this.responseHeaderMatch(request, 'Cache-Control', '(no-cache|no-store)') ||
         !!this.responseHeaderMatch(request, 'Pragma', 'no-cache') ||
         (hasExplicitExp && !this.freshnessLifetimeGreaterThan(request, 0)) ||
-        (!hasExplicitExp && !!request.url && request.url.indexOf('?') >= 0) ||
-        (!hasExplicitExp && !this.isCacheableResource(request));
+        (!hasExplicitExp && request.url() && request.url().indexOf('?') >= 0) ||
+        (!hasExplicitExp && !this.isCacheableResource(request)));
   }
 
   /**
@@ -745,7 +742,7 @@ Audits.AuditRules.BrowserCacheControlRule = class extends Audits.AuditRules.Cach
           true);
       result.violationCount += requests.length;
       for (var i = 0; i < requests.length; ++i)
-        entry.addURL(requests[i].url);
+        entry.addURL(requests[i].url());
     }
   }
 
@@ -815,8 +812,8 @@ Audits.AuditRules.ImageDimensionsRule = class extends Audits.AuditRule {
    * @param {!Common.Progress} progress
    */
   doRun(target, requests, result, callback, progress) {
-    var domModel = SDK.DOMModel.fromTarget(target);
-    var cssModel = SDK.CSSModel.fromTarget(target);
+    var domModel = target.model(SDK.DOMModel);
+    var cssModel = target.model(SDK.CSSModel);
     if (!domModel || !cssModel) {
       callback(null);
       return;
@@ -882,7 +879,7 @@ Audits.AuditRules.ImageDimensionsRule = class extends Audits.AuditRule {
     }
 
     /**
-     * @param {!Array.<!Protocol.DOM.NodeId>=} nodeIds
+     * @param {?Array<!Protocol.DOM.NodeId>} nodeIds
      */
     function getStyles(nodeIds) {
       if (progress.isCanceled()) {
@@ -927,14 +924,14 @@ Audits.AuditRules.ImageDimensionsRule = class extends Audits.AuditRule {
         callback(null);
         return;
       }
-      domModel.querySelectorAll(root.id, 'img[src]', getStyles);
+      domModel.querySelectorAll(root.id, 'img[src]').then(getStyles);
     }
 
     if (progress.isCanceled()) {
       callback(null);
       return;
     }
-    domModel.requestDocument(onDocumentAvailable);
+    domModel.requestDocumentPromise().then(onDocumentAvailable);
   }
 };
 
@@ -955,7 +952,7 @@ Audits.AuditRules.CssInHeadRule = class extends Audits.AuditRule {
    * @param {!Common.Progress} progress
    */
   doRun(target, requests, result, callback, progress) {
-    var domModel = SDK.DOMModel.fromTarget(target);
+    var domModel = target.model(SDK.DOMModel);
     if (!domModel) {
       callback(null);
       return;
@@ -989,8 +986,8 @@ Audits.AuditRules.CssInHeadRule = class extends Audits.AuditRule {
 
     /**
      * @param {!SDK.DOMNode} root
-     * @param {!Array.<!Protocol.DOM.NodeId>=} inlineStyleNodeIds
-     * @param {!Array.<!Protocol.DOM.NodeId>=} nodeIds
+     * @param {!Array<!Protocol.DOM.NodeId>} inlineStyleNodeIds
+     * @param {?Array<!Protocol.DOM.NodeId>} nodeIds
      */
     function externalStylesheetsReceived(root, inlineStyleNodeIds, nodeIds) {
       if (progress.isCanceled()) {
@@ -1019,7 +1016,7 @@ Audits.AuditRules.CssInHeadRule = class extends Audits.AuditRule {
 
     /**
      * @param {!SDK.DOMNode} root
-     * @param {!Array.<!Protocol.DOM.NodeId>=} nodeIds
+     * @param {?Array<!Protocol.DOM.NodeId>} nodeIds
      */
     function inlineStylesReceived(root, nodeIds) {
       if (progress.isCanceled()) {
@@ -1029,8 +1026,8 @@ Audits.AuditRules.CssInHeadRule = class extends Audits.AuditRule {
 
       if (!nodeIds)
         return;
-      domModel.querySelectorAll(
-          root.id, 'body link[rel~=\'stylesheet\'][href]', externalStylesheetsReceived.bind(null, root, nodeIds));
+      domModel.querySelectorAll(root.id, 'body link[rel~=\'stylesheet\'][href]')
+          .then(externalStylesheetsReceived.bind(null, root, nodeIds));
     }
 
     /**
@@ -1042,10 +1039,10 @@ Audits.AuditRules.CssInHeadRule = class extends Audits.AuditRule {
         return;
       }
 
-      domModel.querySelectorAll(root.id, 'body style', inlineStylesReceived.bind(null, root));
+      domModel.querySelectorAll(root.id, 'body style').then(inlineStylesReceived.bind(null, root));
     }
 
-    domModel.requestDocument(onDocumentAvailable);
+    domModel.requestDocumentPromise().then(onDocumentAvailable);
   }
 };
 
@@ -1066,57 +1063,39 @@ Audits.AuditRules.StylesScriptsOrderRule = class extends Audits.AuditRule {
    * @param {!Common.Progress} progress
    */
   doRun(target, requests, result, callback, progress) {
-    var domModel = SDK.DOMModel.fromTarget(target);
+    var domModel = target.model(SDK.DOMModel);
     if (!domModel) {
       callback(null);
       return;
     }
 
-    function evalCallback(resultValue) {
-      if (progress.isCanceled()) {
-        callback(null);
-        return;
-      }
-
-      if (!resultValue)
-        return callback(null);
-
-      var lateCssUrls = resultValue[0];
-      var cssBeforeInlineCount = resultValue[1];
-
-      if (lateCssUrls.length) {
-        var entry = result.addChild(
-            Common.UIString(
-                'The following external CSS files were included after an external JavaScript file in the document head. To ensure CSS files are downloaded in parallel, always include external CSS before external JavaScript.'),
-            true);
-        entry.addURLs(lateCssUrls);
-        result.violationCount += lateCssUrls.length;
-      }
-
-      if (cssBeforeInlineCount) {
-        result.addChild(Common.UIString(
-            ' %d inline script block%s found in the head between an external CSS file and another resource. To allow parallel downloading, move the inline script before the external CSS file, or after the next resource.',
-            cssBeforeInlineCount, cssBeforeInlineCount > 1 ? 's were' : ' was'));
-        result.violationCount += cssBeforeInlineCount;
-      }
-      callback(result);
-    }
+    domModel.requestDocumentPromise().then(onDocumentAvailable).then(callback);
 
     /**
-     * @param {!Array.<!Protocol.DOM.NodeId>} lateStyleIds
-     * @param {!Array.<!Protocol.DOM.NodeId>=} nodeIds
+     * @param {!SDK.DOMDocument} root
+     * @return {!Promise<?Audits.AuditRuleResult>}
      */
-    function cssBeforeInlineReceived(lateStyleIds, nodeIds) {
-      if (progress.isCanceled()) {
-        callback(null);
-        return;
-      }
+    async function onDocumentAvailable(root) {
+      if (progress.isCanceled())
+        return null;
 
+      var lateStyleIds = await domModel.querySelectorAll(root.id, 'head script[src] ~ link[rel~=\'stylesheet\'][href]');
+
+      if (progress.isCanceled())
+        return null;
+      if (!lateStyleIds)
+        return null;
+
+      var nodeIds =
+          await domModel.querySelectorAll(root.id, 'head link[rel~=\'stylesheet\'][href] ~ script:not([src])');
+
+      if (progress.isCanceled())
+        return null;
       if (!nodeIds)
-        return;
+        return null;
 
       var cssBeforeInlineCount = nodeIds.length;
-      var result = null;
+      var resultValue = null;
       if (lateStyleIds.length || cssBeforeInlineCount) {
         var lateStyleUrls = [];
         for (var i = 0; i < lateStyleIds.length; ++i) {
@@ -1125,44 +1104,38 @@ Audits.AuditRules.StylesScriptsOrderRule = class extends Audits.AuditRule {
               Common.ParsedURL.completeURL(lateStyleNode.ownerDocument.baseURL, lateStyleNode.getAttribute('href'));
           lateStyleUrls.push(completeHref || '<empty>');
         }
-        result = [lateStyleUrls, cssBeforeInlineCount];
+        resultValue = [lateStyleUrls, cssBeforeInlineCount];
       }
 
-      evalCallback(result);
-    }
+      if (progress.isCanceled())
+        return null;
+      if (!resultValue)
+        return null;
 
-    /**
-     * @param {!SDK.DOMDocument} root
-     * @param {!Array.<!Protocol.DOM.NodeId>=} nodeIds
-     */
-    function lateStylesReceived(root, nodeIds) {
-      if (progress.isCanceled()) {
-        callback(null);
-        return;
+      var lateCssUrls = resultValue[0];
+      cssBeforeInlineCount = resultValue[1];
+
+      if (lateCssUrls.length) {
+        var entry = result.addChild(
+            Common.UIString(
+                'The following external CSS files were included after an external JavaScript file in the ' +
+                'document head. To ensure CSS files are downloaded in parallel, always include external CSS ' +
+                'before external JavaScript.'),
+            true);
+        entry.addURLs(lateCssUrls);
+        result.violationCount += lateCssUrls.length;
       }
 
-      if (!nodeIds)
-        return;
-
-      domModel.querySelectorAll(
-          root.id, 'head link[rel~=\'stylesheet\'][href] ~ script:not([src])',
-          cssBeforeInlineReceived.bind(null, nodeIds));
-    }
-
-    /**
-     * @param {!SDK.DOMDocument} root
-     */
-    function onDocumentAvailable(root) {
-      if (progress.isCanceled()) {
-        callback(null);
-        return;
+      if (cssBeforeInlineCount) {
+        result.addChild(Common.UIString(
+            ' %d inline script %s found in the head between an external CSS file and another resource. ' +
+                'To allow parallel downloading, move the inline script before the external CSS file, ' +
+                'or after the next resource.',
+            cssBeforeInlineCount, cssBeforeInlineCount > 1 ? 'blocks were' : 'block was'));
+        result.violationCount += cssBeforeInlineCount;
       }
-
-      domModel.querySelectorAll(
-          root.id, 'head script[src] ~ link[rel~=\'stylesheet\'][href]', lateStylesReceived.bind(null, root));
+      return result;
     }
-
-    domModel.requestDocument(onDocumentAvailable);
   }
 };
 
@@ -1183,7 +1156,7 @@ Audits.AuditRules.CSSRuleBase = class extends Audits.AuditRule {
    * @param {!Common.Progress} progress
    */
   doRun(target, requests, result, callback, progress) {
-    var cssModel = SDK.CSSModel.fromTarget(target);
+    var cssModel = target.model(SDK.CSSModel);
     if (!cssModel) {
       callback(null);
       return;
@@ -1232,7 +1205,7 @@ Audits.AuditRules.CSSRuleBase = class extends Audits.AuditRule {
 
   /**
    * @param {!Audits.AuditRules.ParsedStyleSheet} styleSheet
-   * @param {!SDK.CSSParser.StyleRule} rule
+   * @param {!Formatter.FormatterWorkerPool.CSSStyleRule} rule
    * @param {!Audits.AuditRuleResult} result
    */
   _visitRule(styleSheet, rule, result) {
@@ -1261,7 +1234,7 @@ Audits.AuditRules.CSSRuleBase = class extends Audits.AuditRule {
 
   /**
    * @param {!Audits.AuditRules.ParsedStyleSheet} styleSheet
-   * @param {!SDK.CSSParser.StyleRule} rule
+   * @param {!Formatter.FormatterWorkerPool.CSSStyleRule} rule
    * @param {!Audits.AuditRuleResult} result
    */
   visitRule(styleSheet, rule, result) {
@@ -1270,7 +1243,7 @@ Audits.AuditRules.CSSRuleBase = class extends Audits.AuditRule {
 
   /**
    * @param {!Audits.AuditRules.ParsedStyleSheet} styleSheet
-   * @param {!SDK.CSSParser.StyleRule} rule
+   * @param {!Formatter.FormatterWorkerPool.CSSStyleRule} rule
    * @param {!Audits.AuditRuleResult} result
    */
   didVisitRule(styleSheet, rule, result) {
@@ -1279,8 +1252,8 @@ Audits.AuditRules.CSSRuleBase = class extends Audits.AuditRule {
 
   /**
    * @param {!Audits.AuditRules.ParsedStyleSheet} styleSheet
-   * @param {!SDK.CSSParser.StyleRule} rule
-   * @param {!SDK.CSSParser.Property} property
+   * @param {!Formatter.FormatterWorkerPool.CSSStyleRule} rule
+   * @param {!Formatter.FormatterWorkerPool.CSSProperty} property
    * @param {!Audits.AuditRuleResult} result
    */
   visitProperty(styleSheet, rule, property, result) {
@@ -1316,13 +1289,18 @@ Audits.AuditRules.CookieRuleBase = class extends Audits.AuditRule {
       callback(result);
     }
 
-    SDK.Cookies.getCookiesAsync(resultCallback);
+    const nonDataUrls = requests.map(r => r.url()).filter(url => url && url.asParsedURL());
+    var cookieModel = target.model(SDK.CookieModel);
+    if (cookieModel)
+      cookieModel.getCookies(nonDataUrls).then(resultCallback);
+    else
+      callback(result);
   }
 
   mapResourceCookies(requestsByDomain, allCookies, callback) {
     for (var i = 0; i < allCookies.length; ++i) {
       for (var requestDomain in requestsByDomain) {
-        if (SDK.Cookies.cookieDomainMatchesResourceDomain(allCookies[i].domain(), requestDomain))
+        if (SDK.CookieModel.cookieDomainMatchesResourceDomain(allCookies[i].domain(), requestDomain))
           this._callbackForResourceCookiePairs(requestsByDomain[requestDomain], allCookies[i], callback);
       }
     }
@@ -1332,7 +1310,7 @@ Audits.AuditRules.CookieRuleBase = class extends Audits.AuditRule {
     if (!requests)
       return;
     for (var i = 0; i < requests.length; ++i) {
-      if (SDK.Cookies.cookieMatchesResourceURL(cookie, requests[i].url))
+      if (SDK.CookieModel.cookieMatchesResourceURL(cookie, requests[i].url()))
         callback(requests[i], cookie);
     }
   }
@@ -1460,6 +1438,7 @@ Audits.AuditRules.StaticCookielessRule = class extends Audits.AuditRules.CookieR
       totalStaticResources += domainToResourcesMap[domain].length;
     if (totalStaticResources < this._minResources)
       return;
+    /** @type {!Object<string, number>} */
     var matchingResourceData = {};
     this.mapResourceCookies(domainToResourcesMap, allCookies, this._collectorCallback.bind(this, matchingResourceData));
 
@@ -1481,7 +1460,12 @@ Audits.AuditRules.StaticCookielessRule = class extends Audits.AuditRules.CookieR
     result.violationCount = badUrls.length;
   }
 
+  /**
+   * @param {!Object<string, number>} matchingResourceData
+   * @param {!SDK.NetworkRequest} request
+   * @param {!SDK.Cookie} cookie
+   */
   _collectorCallback(matchingResourceData, request, cookie) {
-    matchingResourceData[request.url] = (matchingResourceData[request.url] || 0) + cookie.size();
+    matchingResourceData[request.url()] = (matchingResourceData[request.url()] || 0) + cookie.size();
   }
 };

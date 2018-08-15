@@ -28,3 +28,14 @@ interface PingReceiver {
 interface IndirectTestDriver {
   GetPingReceiver(associated PingReceiver& request);
 };
+
+interface Reflector {
+  Ping(string value) => (string value);
+  [Sync]
+  SyncPing(string value) => (string response);
+  Quit();
+};
+
+interface AssociatedInterfaceVendor {
+  GetTestInterface(associated SimpleTestDriver& interface_reqest);
+};

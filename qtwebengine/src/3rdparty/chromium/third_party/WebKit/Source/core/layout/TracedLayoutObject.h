@@ -5,7 +5,7 @@
 #ifndef TracedLayoutObject_h
 #define TracedLayoutObject_h
 
-#include "platform/tracing/TracedValue.h"
+#include "platform/instrumentation/tracing/TracedValue.h"
 #include <memory>
 
 namespace blink {
@@ -14,8 +14,8 @@ class LayoutView;
 
 class TracedLayoutObject {
  public:
-  static std::unique_ptr<TracedValue> create(const LayoutView&,
-                                             bool traceGeometry = true);
+  static std::unique_ptr<TracedValue> Create(const LayoutView&,
+                                             bool trace_geometry = true);
 };
 
 }  // namespace blink

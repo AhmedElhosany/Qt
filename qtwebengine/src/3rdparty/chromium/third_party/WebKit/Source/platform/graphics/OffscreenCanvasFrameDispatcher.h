@@ -6,28 +6,48 @@
 #define OffscreenCanvasFrameDispatcher_h
 
 #include "platform/PlatformExport.h"
-#include "wtf/RefPtr.h"
-#include "wtf/WeakPtr.h"
+#include "platform/WebTaskRunner.h"
+#include "platform/geometry/IntRect.h"
+#include "platform/wtf/RefPtr.h"
+#include "platform/wtf/WeakPtr.h"
 
 namespace blink {
 
 class StaticBitmapImage;
 
+class OffscreenCanvasFrameDispatcherClient {
+ public:
+  virtual void BeginFrame() = 0;
+};
+
 class PLATFORM_EXPORT OffscreenCanvasFrameDispatcher {
  public:
-  OffscreenCanvasFrameDispatcher() : m_weakPtrFactory(this) {}
   virtual ~OffscreenCanvasFrameDispatcher() {}
-  virtual void dispatchFrame(RefPtr<StaticBitmapImage>,
-                             double commitStartTime,
-                             bool isWebGLSoftwareRendering = false) = 0;
-  virtual void reclaimResource(unsigned resourceId) = 0;
+  virtual void DispatchFrame(RefPtr<StaticBitmapImage>,
+                             double commit_start_time,
+                             const SkIRect& damage_rect,
+                             bool is_web_gl_software_rendering) = 0;
+  virtual void ReclaimResource(unsigned resource_id) = 0;
+  virtual void SetNeedsBeginFrame(bool) = 0;
+  virtual void SetSuspendAnimation(bool) = 0;
+  virtual bool NeedsBeginFrame() const = 0;
+  virtual bool IsAnimationSuspended() const = 0;
 
-  WeakPtr<OffscreenCanvasFrameDispatcher> createWeakPtr() {
-    return m_weakPtrFactory.createWeakPtr();
+  virtual void Reshape(int width, int height) = 0;
+
+  WeakPtr<OffscreenCanvasFrameDispatcher> CreateWeakPtr() {
+    return weak_ptr_factory_.CreateWeakPtr();
   }
 
+  OffscreenCanvasFrameDispatcherClient* Client() { return client_; }
+
+ protected:
+  OffscreenCanvasFrameDispatcher(OffscreenCanvasFrameDispatcherClient* client)
+      : weak_ptr_factory_(this), client_(client) {}
+
  private:
-  WeakPtrFactory<OffscreenCanvasFrameDispatcher> m_weakPtrFactory;
+  WeakPtrFactory<OffscreenCanvasFrameDispatcher> weak_ptr_factory_;
+  OffscreenCanvasFrameDispatcherClient* client_;
 };
 
 }  // namespace blink

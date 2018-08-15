@@ -116,7 +116,8 @@ QEvdevMouseHandler::QEvdevMouseHandler(const QString &device, int fd, bool abs, 
 
     // socket notifier for events on the mouse device
     m_notify = new QSocketNotifier(m_fd, QSocketNotifier::Read, this);
-    connect(m_notify, SIGNAL(activated(int)), this, SLOT(readMouseData()));
+    connect(m_notify, &QSocketNotifier::activated,
+            this, &QEvdevMouseHandler::readMouseData);
 }
 
 QEvdevMouseHandler::~QEvdevMouseHandler()
@@ -236,6 +237,7 @@ void QEvdevMouseHandler::readMouseData()
                 posChanged = true;
             }
         } else if (data->type == EV_REL) {
+            QPoint delta;
             if (data->code == REL_X) {
                 m_x += data->value;
                 posChanged = true;
@@ -244,12 +246,18 @@ void QEvdevMouseHandler::readMouseData()
                 posChanged = true;
             } else if (data->code == ABS_WHEEL) { // vertical scroll
                 // data->value: 1 == up, -1 == down
-                const int delta = 120 * data->value;
-                emit handleWheelEvent(delta, Qt::Vertical);
+                if (data->value == 1)
+                    delta.setY(120);
+                else
+                    delta.setY(-120);
+                emit handleWheelEvent(delta);
             } else if (data->code == ABS_THROTTLE) { // horizontal scroll
                 // data->value: 1 == right, -1 == left
-                const int delta = 120 * -data->value;
-                emit handleWheelEvent(delta, Qt::Horizontal);
+                if (data->value == 1)
+                    delta.setX(-120);
+                else
+                    delta.setX(120);
+                emit handleWheelEvent(delta);
             }
         } else if (data->type == EV_KEY && data->code == BTN_TOUCH) {
             // We care about touchpads only, not touchscreens -> don't map to button press.

@@ -11,6 +11,7 @@
 #include "../private/SkBitmaskEnum.h"
 #include "../private/SkOnce.h"
 #include "../private/SkWeakRefCnt.h"
+#include "SkFontArguments.h"
 #include "SkFontStyle.h"
 #include "SkRect.h"
 #include "SkString.h"
@@ -19,12 +20,12 @@ class SkDescriptor;
 class SkFontData;
 class SkFontDescriptor;
 class SkScalerContext;
-struct SkScalerContextRec;
-struct SkScalerContextEffects;
 class SkStream;
 class SkStreamAsset;
-class SkAdvancedTypefaceMetrics;
 class SkWStream;
+struct SkAdvancedTypefaceMetrics;
+struct SkScalerContextEffects;
+struct SkScalerContextRec;
 
 typedef uint32_t SkFontID;
 /** Machine endian. */
@@ -77,6 +78,20 @@ public:
      */
     bool isFixedPitch() const { return fIsFixedPitch; }
 
+    /** Copy into 'coordinates' (allocated by the caller) the design variation coordinates.
+     *
+     *  @param coordinates the buffer into which to write the design variation coordinates.
+     *  @param coordinateCount the number of entries available through 'coordinates'.
+     *
+     *  @return The number of axes, or -1 if there is an error.
+     *  If 'coordinates != nullptr' and 'coordinateCount >= numAxes' then 'coordinates' will be
+     *  filled with the variation coordinates describing the position of this typeface in design
+     *  variation space. It is possible the number of axes can be retrieved but actual position
+     *  cannot.
+     */
+    int getVariationDesignPosition(SkFontArguments::VariationPosition::Coordinate coordinates[],
+                                   int coordinateCount) const;
+
     /** Return a 32bit value for this typeface, unique for the underlying font
         data. Will never return 0.
      */
@@ -96,16 +111,16 @@ public:
     /** Returns the default typeface, which is never nullptr. */
     static sk_sp<SkTypeface> MakeDefault(Style style = SkTypeface::kNormal);
 
-  /** Creates a new reference to the typeface that most closely matches the
-      requested familyName and fontStyle. This method allows extended font
-      face specifiers as in the SkFontStyle type. Will never return null.
+    /** Creates a new reference to the typeface that most closely matches the
+        requested familyName and fontStyle. This method allows extended font
+        face specifiers as in the SkFontStyle type. Will never return null.
 
-      @param familyName  May be NULL. The name of the font family.
-      @param fontStyle   The style of the typeface.
-      @return reference to the closest-matching typeface. Call must call
+        @param familyName  May be NULL. The name of the font family.
+        @param fontStyle   The style of the typeface.
+        @return reference to the closest-matching typeface. Call must call
               unref() when they are done.
     */
-  static sk_sp<SkTypeface> MakeFromName(const char familyName[], SkFontStyle fontStyle);
+    static sk_sp<SkTypeface> MakeFromName(const char familyName[], SkFontStyle fontStyle);
 
     /** Return the typeface that most closely matches the requested typeface and style.
         Use this to pick a new style from the same family of the existing typeface.
@@ -306,16 +321,12 @@ public:
     void getFontDescriptor(SkFontDescriptor* desc, bool* isLocal) const {
         this->onGetFontDescriptor(desc, isLocal);
     }
+    // PRIVATE / EXPERIMENTAL -- do not call
+    void* internal_private_getCTFontRef() const {
+        return this->onGetCTFontRef();
+    }
 
 protected:
-    // The type of advance data wanted.
-    enum PerGlyphInfo {
-        kNo_PerGlyphInfo         = 0x0, // Don't populate any per glyph info.
-        kGlyphNames_PerGlyphInfo = 0x1, // Populate glyph names (Type 1 only).
-        kToUnicode_PerGlyphInfo  = 0x2  // Populate ToUnicode table, ignored
-                                        // for Type 1 fonts
-    };
-
     /** uniqueID must be unique and non-zero
     */
     SkTypeface(const SkFontStyle& style, bool isFixedPitch = false);
@@ -332,14 +343,17 @@ protected:
     virtual SkScalerContext* onCreateScalerContext(const SkScalerContextEffects&,
                                                    const SkDescriptor*) const = 0;
     virtual void onFilterRec(SkScalerContextRec*) const = 0;
-    virtual SkAdvancedTypefaceMetrics* onGetAdvancedTypefaceMetrics(
-                        PerGlyphInfo,
-                        const uint32_t* glyphIDs,
-                        uint32_t glyphIDsCount) const = 0;
+
+    //  Subclasses *must* override this method to work with the PDF backend.
+    virtual std::unique_ptr<SkAdvancedTypefaceMetrics> onGetAdvancedMetrics() const;
 
     virtual SkStreamAsset* onOpenStream(int* ttcIndex) const = 0;
     // TODO: make pure virtual.
     virtual std::unique_ptr<SkFontData> onMakeFontData() const;
+
+    virtual int onGetVariationDesignPosition(
+        SkFontArguments::VariationPosition::Coordinate coordinates[],
+        int coordinateCount) const = 0;
 
     virtual void onGetFontDescriptor(SkFontDescriptor*, bool* isLocal) const = 0;
 
@@ -365,27 +379,16 @@ protected:
 
     virtual bool onComputeBounds(SkRect*) const;
 
+    virtual void* onGetCTFontRef() const { return nullptr; }
+
 private:
-    friend class SkGTypeface;
     friend class SkRandomTypeface;
     friend class SkPDFFont;
     friend class GrPathRendering;
     friend class GrGLPathRendering;
 
-    /** Retrieve detailed typeface metrics.  Used by the PDF backend.
-     @param perGlyphInfo Indicate what glyph specific information (advances,
-     names, etc.) should be populated.
-     @param glyphIDs  For per-glyph info, specify subset of the font by
-     giving glyph ids.  Each integer represents a glyph
-     id.  Passing NULL means all glyphs in the font.
-     @param glyphIDsCount Number of elements in subsetGlyphIds. Ignored if
-     glyphIDs is NULL.
-     @return The returned object has already been referenced.
-     */
-    SkAdvancedTypefaceMetrics* getAdvancedTypefaceMetrics(
-                          PerGlyphInfo,
-                          const uint32_t* glyphIDs = NULL,
-                          uint32_t glyphIDsCount = 0) const;
+    /** Retrieve detailed typeface metrics.  Used by the PDF backend.  */
+    std::unique_ptr<SkAdvancedTypefaceMetrics> getAdvancedMetrics() const;
 
 private:
     SkFontID            fUniqueID;
@@ -399,9 +402,4 @@ private:
 
     typedef SkWeakRefCnt INHERITED;
 };
-
-namespace skstd {
-template <> struct is_bitmask_enum<SkTypeface::PerGlyphInfo> : std::true_type {};
-}
-
 #endif

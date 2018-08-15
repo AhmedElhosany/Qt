@@ -78,7 +78,7 @@ class MEDIA_EXPORT AudioOutputStream {
     // destroyed yet. No direct action needed by the AudioStream, but it is
     // a good place to stop accumulating sound data since is is likely that
     // playback will not continue.
-    virtual void OnError(AudioOutputStream* stream) = 0;
+    virtual void OnError() = 0;
   };
 
   virtual ~AudioOutputStream() {}
@@ -94,8 +94,10 @@ class MEDIA_EXPORT AudioOutputStream {
   // The output stream does not take ownership of this callback.
   virtual void Start(AudioSourceCallback* callback) = 0;
 
-  // Stops playing audio. Effect might not be instantaneous as the hardware
-  // might have locked audio data that is processing.
+  // Stops playing audio.  The operation completes synchronously meaning that
+  // once Stop() has completed executing, no further callbacks will be made to
+  // the callback object that was supplied to Start() and it can be safely
+  // deleted.
   virtual void Stop() = 0;
 
   // Sets the relative volume, with range [0.0, 1.0] inclusive.
@@ -104,7 +106,7 @@ class MEDIA_EXPORT AudioOutputStream {
   // Gets the relative volume, with range [0.0, 1.0] inclusive.
   virtual void GetVolume(double* volume) = 0;
 
-  // Close the stream. This also generates AudioSourceCallback::OnClose().
+  // Close the stream.
   // After calling this method, the object should not be used anymore.
   virtual void Close() = 0;
 };
@@ -117,18 +119,10 @@ class MEDIA_EXPORT AudioInputStream {
     // Called by the audio recorder when a full packet of audio data is
     // available. This is called from a special audio thread and the
     // implementation should return as soon as possible.
-    // TODO(henrika): should be pure virtual when old OnData() is phased out.
     virtual void OnData(AudioInputStream* stream,
                         const AudioBus* source,
                         uint32_t hardware_delay_bytes,
-                        double volume) {}
-
-    // TODO(henrika): don't use; to be removed.
-    virtual void OnData(AudioInputStream* stream,
-                        const uint8_t* src,
-                        uint32_t size,
-                        uint32_t hardware_delay_bytes,
-                        double volume) {}
+                        double volume) = 0;
 
     // There was an error while recording audio. The audio sink cannot be
     // destroyed yet. No direct action needed by the AudioInputStream, but it

@@ -12,19 +12,18 @@
 
 #include <list>
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/modules/include/module_common_types.h"
 #include "webrtc/modules/remote_bitrate_estimator/include/bwe_defines.h"
+#include "webrtc/rtc_base/constructormagic.h"
 #include "webrtc/typedefs.h"
 
 namespace webrtc {
-enum RateControlRegion;
 
 bool AdaptiveThresholdExperimentIsDisabled();
 
 class OveruseDetector {
  public:
-  explicit OveruseDetector(const OverUseDetectorOptions& options);
+  OveruseDetector();
   virtual ~OveruseDetector();
 
   // Update the detection state based on the estimated inter-arrival time delta
@@ -49,9 +48,6 @@ class OveruseDetector {
   double k_up_;
   double k_down_;
   double overusing_time_threshold_;
-  // Must be first member variable. Cannot be const because we need to be
-  // copyable.
-  webrtc::OverUseDetectorOptions options_;
   double threshold_;
   int64_t last_update_ms_;
   double prev_offset_;

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_CRYPTO_PROOF_VERIFIER_CHROMIUM_H_
-#define NET_QUIC_CRYPTO_PROOF_VERIFIER_CHROMIUM_H_
+#ifndef NET_QUIC_CHROMIUM_CRYPTO_PROOF_VERIFIER_CHROMIUM_H_
+#define NET_QUIC_CHROMIUM_CRYPTO_PROOF_VERIFIER_CHROMIUM_H_
 
 #include <map>
 #include <memory>
@@ -78,7 +78,7 @@ class NET_EXPORT_PRIVATE ProofVerifierChromium : public ProofVerifier {
       const uint16_t port,
       const std::string& server_config,
       QuicVersion quic_version,
-      base::StringPiece chlo_hash,
+      QuicStringPiece chlo_hash,
       const std::vector<std::string>& certs,
       const std::string& cert_sct,
       const std::string& signature,
@@ -114,4 +114,4 @@ class NET_EXPORT_PRIVATE ProofVerifierChromium : public ProofVerifier {
 
 }  // namespace net
 
-#endif  // NET_QUIC_CRYPTO_PROOF_VERIFIER_CHROMIUM_H_
+#endif  // NET_QUIC_CHROMIUM_CRYPTO_PROOF_VERIFIER_CHROMIUM_H_

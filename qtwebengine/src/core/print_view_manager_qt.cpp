@@ -60,6 +60,7 @@
 #include "content/public/common/web_preferences.h"
 #include "printing/pdf_metafile_skia.h"
 #include "printing/print_job_constants.h"
+#include "printing/units.h"
 
 DEFINE_WEB_CONTENTS_USER_DATA_KEY(QtWebEngineCore::PrintViewManagerQt);
 
@@ -132,6 +133,10 @@ static base::DictionaryValue *createPrintSettings()
 
     printSettings->SetBoolean(printing::kSettingGenerateDraftData, false);
     printSettings->SetBoolean(printing::kSettingPreviewModifiable, false);
+
+    printSettings->SetInteger(printing::kSettingDpiHorizontal, printing::kPointsPerInch);
+    printSettings->SetInteger(printing::kSettingDpiVertical, printing::kPointsPerInch);
+
     printSettings->SetInteger(printing::kSettingDuplexMode, printing::SIMPLEX);
     printSettings->SetInteger(printing::kSettingCopies, 1);
     printSettings->SetBoolean(printing::kSettingCollate, false);
@@ -141,6 +146,7 @@ static base::DictionaryValue *createPrintSettings()
     printSettings->SetBoolean(printing::kSettingShouldPrintSelectionOnly, false);
     printSettings->SetBoolean(printing::kSettingShouldPrintBackgrounds, true);
     printSettings->SetBoolean(printing::kSettingHeaderFooterEnabled, false);
+    printSettings->SetBoolean(printing::kSettingRasterizePdf, false);
     printSettings->SetInteger(printing::kSettingScaleFactor, 100);
     printSettings->SetString(printing::kSettingDeviceName, "");
     printSettings->SetInteger(printing::kPreviewUIID, 12345678);
@@ -148,27 +154,37 @@ static base::DictionaryValue *createPrintSettings()
     return printSettings;
 }
 
-static base::DictionaryValue *createPrintSettingsFromQPageLayout(const QPageLayout &pageLayout)
+static base::DictionaryValue *createPrintSettingsFromQPageLayout(const QPageLayout &pageLayout, bool printToPdf)
 {
     base::DictionaryValue *printSettings = createPrintSettings();
 
     //Set page size attributes, chromium expects these in micrometers
-    QSizeF pageSizeInMilimeter = pageLayout.pageSize().size(QPageSize::Millimeter);
+    QRectF pageSizeInMillimeter = pageLayout.pageSize().rect(QPageSize::Millimeter);
+    if (!printToPdf) {
+        // QPrinter will extend this size with its margins
+        QMarginsF margins = pageLayout.margins(QPageLayout::Millimeter);
+        pageSizeInMillimeter = pageSizeInMillimeter.marginsRemoved(margins);
+    }
     std::unique_ptr<base::DictionaryValue> sizeDict(new base::DictionaryValue);
-    sizeDict->SetInteger(printing::kSettingMediaSizeWidthMicrons, pageSizeInMilimeter.width() * kMicronsToMillimeter);
-    sizeDict->SetInteger(printing::kSettingMediaSizeHeightMicrons, pageSizeInMilimeter.height() * kMicronsToMillimeter);
+    sizeDict->SetInteger(printing::kSettingMediaSizeWidthMicrons, pageSizeInMillimeter.width() * kMicronsToMillimeter);
+    sizeDict->SetInteger(printing::kSettingMediaSizeHeightMicrons, pageSizeInMillimeter.height() * kMicronsToMillimeter);
     printSettings->Set(printing::kSettingMediaSize, std::move(sizeDict));
 
-    // Apply page margins
-    QMargins pageMarginsInPoints = pageLayout.marginsPoints();
-    std::unique_ptr<base::DictionaryValue> marginsDict(new base::DictionaryValue);
-    marginsDict->SetInteger(printing::kSettingMarginTop, pageMarginsInPoints.top());
-    marginsDict->SetInteger(printing::kSettingMarginBottom, pageMarginsInPoints.bottom());
-    marginsDict->SetInteger(printing::kSettingMarginLeft, pageMarginsInPoints.left());
-    marginsDict->SetInteger(printing::kSettingMarginRight, pageMarginsInPoints.right());
+    if (printToPdf) {
+        // Apply page margins when printing to PDF
+        QMargins pageMarginsInPoints = pageLayout.marginsPoints();
+        std::unique_ptr<base::DictionaryValue> marginsDict(new base::DictionaryValue);
+        marginsDict->SetInteger(printing::kSettingMarginTop, pageMarginsInPoints.top());
+        marginsDict->SetInteger(printing::kSettingMarginBottom, pageMarginsInPoints.bottom());
+        marginsDict->SetInteger(printing::kSettingMarginLeft, pageMarginsInPoints.left());
+        marginsDict->SetInteger(printing::kSettingMarginRight, pageMarginsInPoints.right());
 
-    printSettings->Set(printing::kSettingMarginsCustom, std::move(marginsDict));
-    printSettings->SetInteger(printing::kSettingMarginsType, printing::CUSTOM_MARGINS);
+        printSettings->Set(printing::kSettingMarginsCustom, std::move(marginsDict));
+        printSettings->SetInteger(printing::kSettingMarginsType, printing::CUSTOM_MARGINS);
+    } else {
+        // QPrinter will handle margins
+        printSettings->SetInteger(printing::kSettingMarginsType, printing::NO_MARGINS);
+    }
 
     printSettings->SetBoolean(printing::kSettingLandscape, pageLayout.orientation() == QPageLayout::Landscape);
 
@@ -238,7 +254,7 @@ bool PrintViewManagerQt::PrintToPDFInternal(const QPageLayout &pageLayout, bool 
     if (!pageLayout.isValid())
         return false;
 
-    m_printSettings.reset(createPrintSettingsFromQPageLayout(pageLayout));
+    m_printSettings.reset(createPrintSettingsFromQPageLayout(pageLayout, !m_pdfOutputPath.empty()));
     m_printSettings->SetBoolean(printing::kSettingShouldPrintBackgrounds
         , web_contents()->GetRenderViewHost()->GetWebkitPreferences().should_print_backgrounds);
     m_printSettings->SetInteger(printing::kSettingColor,

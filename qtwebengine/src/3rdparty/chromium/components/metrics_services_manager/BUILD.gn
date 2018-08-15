@@ -6,6 +6,7 @@ static_library("metrics_services_manager") {
   sources = [
     "metrics_services_manager.cc",
     "metrics_services_manager.h",
+    "metrics_services_manager_client.cc",
     "metrics_services_manager_client.h",
   ]
 
@@ -13,6 +14,7 @@ static_library("metrics_services_manager") {
     "//base",
     "//components/metrics",
     "//components/rappor",
+    "//components/ukm",
     "//components/variations",
     "//components/variations/service",
   ]

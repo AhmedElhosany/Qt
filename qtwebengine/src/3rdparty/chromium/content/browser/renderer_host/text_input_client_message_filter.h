@@ -13,7 +13,6 @@
 
 namespace gfx {
 class Point;
-class Range;
 class Rect;
 }
 
@@ -29,6 +28,8 @@ class CONTENT_EXPORT TextInputClientMessageFilter
 
   // BrowserMessageFilter override:
   bool OnMessageReceived(const IPC::Message& message) override;
+  void OverrideThreadForMessage(const IPC::Message& message,
+                                BrowserThread::ID* thread) override;
 
  protected:
   ~TextInputClientMessageFilter() override;

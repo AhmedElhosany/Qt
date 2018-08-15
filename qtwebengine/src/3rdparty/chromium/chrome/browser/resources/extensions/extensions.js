@@ -2,23 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-<include src="../../../../ui/webui/resources/js/cr/ui/focus_row.js">
-<include src="../../../../ui/webui/resources/js/cr/ui/focus_grid.js">
-<include src="../uber/uber_utils.js">
-<include src="drag_and_drop_handler.js">
-<include src="extension_code.js">
-<include src="extension_commands_overlay.js">
-<include src="extension_error_overlay.js">
-<include src="extension_focus_manager.js">
-<include src="focus_row.js">
-<include src="extension_list.js">
-<include src="pack_extension_overlay.js">
-<include src="extension_loader.js">
-<include src="extension_options_overlay.js">
+// <include src="../../../../ui/webui/resources/js/cr/ui/focus_row.js">
+// <include src="../../../../ui/webui/resources/js/cr/ui/focus_grid.js">
+// <include src="drag_and_drop_handler.js">
+// <include src="extension_code.js">
+// <include src="extension_commands_overlay.js">
+// <include src="extension_error_overlay.js">
+// <include src="extension_focus_manager.js">
+// <include src="focus_row.js">
+// <include src="extension_list.js">
+// <include src="pack_extension_overlay.js">
+// <include src="extension_loader.js">
+// <include src="extension_options_overlay.js">
 
-<if expr="chromeos">
-<include src="chromeos/kiosk_apps.js">
-</if>
+// <if expr="chromeos">
+// <include src="chromeos/kiosk_apps.js">
+// </if>
 
 // Used for observing function of the backend datasource for this page by
 // tests.
@@ -65,12 +64,8 @@ cr.define('extensions', function() {
      */
     initialize: function() {
       this.setLoading_(true);
-      uber.onContentFrameLoaded();
       cr.ui.FocusOutlineManager.forDocument(document);
       measureCheckboxStrings();
-
-      // Set the title.
-      uber.setTitle(loadTimeData.getString('extensionSettings'));
 
       var extensionList = new ExtensionList(this);
       extensionList.id = 'extension-settings-list';
@@ -110,22 +105,20 @@ cr.define('extensions', function() {
       $('update-extensions-now').addEventListener('click',
           this.handleUpdateExtensionNow_.bind(this));
 
-      if (!loadTimeData.getBoolean('offStoreInstallEnabled')) {
-        var dragTarget = document.documentElement;
-        /** @private {extensions.DragAndDropHandler} */
-        this.dragWrapperHandler_ =
-            new extensions.DragAndDropHandler(true, dragTarget);
-        dragTarget.addEventListener('extension-drag-started', function() {
-          ExtensionSettings.showOverlay($('drop-target-overlay'));
-        });
-        dragTarget.addEventListener('extension-drag-ended', function() {
-          var overlay = ExtensionSettings.getCurrentOverlay();
-          if (overlay && overlay.id === 'drop-target-overlay')
-            ExtensionSettings.showOverlay(null);
-        });
-        this.dragWrapper_ =
-            new cr.ui.DragWrapper(dragTarget, this.dragWrapperHandler_);
-      }
+      var dragTarget = document.documentElement;
+      /** @private {extensions.DragAndDropHandler} */
+      this.dragWrapperHandler_ =
+          new extensions.DragAndDropHandler(true, dragTarget);
+      dragTarget.addEventListener('extension-drag-started', function() {
+        ExtensionSettings.showOverlay($('drop-target-overlay'));
+      });
+      dragTarget.addEventListener('extension-drag-ended', function() {
+        var overlay = ExtensionSettings.getCurrentOverlay();
+        if (overlay && overlay.id === 'drop-target-overlay')
+          ExtensionSettings.showOverlay(null);
+      });
+      this.dragWrapper_ =
+          new cr.ui.DragWrapper(dragTarget, this.dragWrapperHandler_);
 
       extensions.PackExtensionOverlay.getInstance().initializePage();
 
@@ -196,6 +189,8 @@ cr.define('extensions', function() {
 
       /** @const */
       var supervised = profileInfo.isSupervised;
+      var developerModeControlledByPolicy =
+          profileInfo.isDeveloperModeControlledByPolicy;
 
       var pageDiv = $('extension-settings');
       pageDiv.classList.toggle('profile-is-supervised', supervised);
@@ -203,7 +198,13 @@ cr.define('extensions', function() {
 
       var devControlsCheckbox = $('toggle-dev-on');
       devControlsCheckbox.checked = profileInfo.inDeveloperMode;
-      devControlsCheckbox.disabled = supervised;
+      devControlsCheckbox.disabled =
+          supervised || developerModeControlledByPolicy;
+
+      // This is necessary e.g. if developer mode is now disabled by policy
+      // but extension developer tools were visible.
+      this.updateDevControlsVisibility_(false);
+      this.updateDevToggleControlledIndicator_(developerModeControlledByPolicy);
 
       $('load-unpacked').disabled = !profileInfo.canLoadUnpacked;
       var extensionList = $('extension-settings-list');
@@ -216,6 +217,36 @@ cr.define('extensions', function() {
         }
         this.onExtensionCountChanged();
       }.bind(this));
+    },
+
+    /**
+     * Shows or hides the 'controlled by policy' indicator on the dev-toggle
+     * checkbox.
+     * @param {boolean} devModeControlledByPolicy true if the indicator
+     *     should be showing.
+     * @private
+     */
+    updateDevToggleControlledIndicator_: function(devModeControlledByPolicy) {
+      var controlledIndicator = document.querySelector(
+          '#dev-toggle .controlled-setting-indicator');
+
+      if (!(controlledIndicator instanceof cr.ui.ControlledIndicator))
+        cr.ui.ControlledIndicator.decorate(controlledIndicator);
+
+      // We control the visibility of the ControlledIndicator by setting or
+      // removing the 'controlled-by' attribute (see controlled_indicator.css).
+      var isVisible = controlledIndicator.getAttribute('controlled-by');
+      if (devModeControlledByPolicy && !isVisible) {
+        var controlledBy = 'policy';
+        controlledIndicator.setAttribute(
+           'controlled-by', controlledBy);
+        controlledIndicator.setAttribute(
+            'text' + controlledBy,
+            loadTimeData.getString('extensionControlledSettingPolicy'));
+      } else if (!devModeControlledByPolicy && isVisible) {
+        // This hides the element - see above.
+        controlledIndicator.removeAttribute('controlled-by');
+      }
     },
 
     /**
@@ -349,14 +380,15 @@ cr.define('extensions', function() {
           lastFocused.focus();
 
         $('overlay').removeEventListener('cancelOverlay', f);
-        uber.replaceState({}, '');
+        window.history.replaceState({}, '', '/');
       });
       node.classList.add('showing');
     }
 
     var pages = document.querySelectorAll('.page');
     for (var i = 0; i < pages.length; i++) {
-      pages[i].setAttribute('aria-hidden', node ? 'true' : 'false');
+      var hidden = (node != pages[i]) ? 'true' : 'false';
+      pages[i].setAttribute('aria-hidden', hidden);
     }
 
     $('overlay').hidden = !node;
@@ -372,9 +404,6 @@ cr.define('extensions', function() {
       assert(settings.dragWrapperHandler_).dragEnabled =
           !node || node == $('drop-target-overlay');
     }
-
-    uber.invokeMethodOnParent(node ? 'beginInterceptingEvents' :
-                                     'stopInterceptingEvents');
   };
 
   ExtensionSettings.focusOverlay = function() {
@@ -421,7 +450,7 @@ cr.define('extensions', function() {
         '  min-width: ' + pxWidth + 'px;' +
         '}';
     document.querySelector('head').appendChild(style);
-  };
+  }
 
   // Export
   return {

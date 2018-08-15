@@ -269,11 +269,20 @@ class Window : public QWindow
 {
 public:
     Window(const Qt::WindowFlags flags = Qt::Window | Qt::WindowTitleHint | Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint)
+        : QWindow(), lastReceivedWindowState(windowState())
     {
         reset();
         setFlags(flags);
 #if defined(Q_OS_QNX)
         setSurfaceType(QSurface::OpenGLSurface);
+#endif
+
+#if !defined(Q_OS_MACOS)
+        // FIXME: All platforms should send window-state change events, regardless
+        // of the sync/async nature of the the underlying platform, but they don't.
+        connect(this, &QWindow::windowStateChanged, [=]() {
+            lastReceivedWindowState = windowState();
+        });
 #endif
     }
 
@@ -299,6 +308,10 @@ public:
         case QEvent::Move:
             m_framePositionsOnMove << framePosition();
             break;
+
+        case QEvent::WindowStateChange:
+            lastReceivedWindowState = windowState();
+
         default:
             break;
         }
@@ -327,6 +340,8 @@ public:
     }
 
     QVector<QPoint> m_framePositionsOnMove;
+    Qt::WindowStates lastReceivedWindowState;
+
 private:
     QHash<QEvent::Type, int> m_received;
     QVector<QEvent::Type> m_order;
@@ -475,7 +490,7 @@ void tst_QWindow::positioning()
     window.showNormal();
     QCoreApplication::processEvents();
 
-    QTest::qWaitForWindowExposed(&window);
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
 
     QMargins originalMargins = window.frameMargins();
 
@@ -487,17 +502,15 @@ void tst_QWindow::positioning()
 
     window.reset();
     window.setWindowState(Qt::WindowFullScreen);
-    QCoreApplication::processEvents();
+    QTRY_COMPARE(window.lastReceivedWindowState, Qt::WindowFullScreen);
 
     QTRY_VERIFY(window.received(QEvent::Resize) > 0);
-    QTest::qWait(2000);
 
     window.reset();
     window.setWindowState(Qt::WindowNoState);
-    QCoreApplication::processEvents();
+    QTRY_COMPARE(window.lastReceivedWindowState, Qt::WindowNoState);
 
     QTRY_VERIFY(window.received(QEvent::Resize) > 0);
-    QTest::qWait(2000);
 
     QTRY_COMPARE(originalPos, window.position());
     QTRY_COMPARE(originalFramePos, window.framePosition());
@@ -1470,7 +1483,7 @@ void tst_QWindow::activateAndClose()
        window.showNormal();
 #if defined(Q_OS_QNX) // We either need to create a eglSurface or a create a backing store
                       // and then post the window in order for screen to show the window
-       QTest::qWaitForWindowExposed(&window);
+       QVERIFY(QTest::qWaitForWindowExposed(&window));
        QOpenGLContext context;
        context.create();
        context.makeCurrent(&window);
@@ -1753,7 +1766,7 @@ void tst_QWindow::visibility()
 {
     qRegisterMetaType<Qt::WindowModality>("QWindow::Visibility");
 
-    QWindow window;
+    Window window;
     QSignalSpy spy(&window, SIGNAL(visibilityChanged(QWindow::Visibility)));
 
     window.setVisibility(QWindow::AutomaticVisibility);
@@ -1774,11 +1787,13 @@ void tst_QWindow::visibility()
     QCOMPARE(window.windowState(), Qt::WindowFullScreen);
     QCOMPARE(window.visibility(), QWindow::FullScreen);
     QCOMPARE(spy.count(), 1);
+    QTRY_COMPARE(window.lastReceivedWindowState, Qt::WindowFullScreen);
     spy.clear();
 
     window.setWindowState(Qt::WindowNoState);
     QCOMPARE(window.visibility(), QWindow::Windowed);
     QCOMPARE(spy.count(), 1);
+    QTRY_COMPARE(window.lastReceivedWindowState, Qt::WindowNoState);
     spy.clear();
 
     window.setVisible(false);
@@ -1791,16 +1806,27 @@ void tst_QWindow::mask()
 {
     QRegion mask = QRect(10, 10, 800 - 20, 600 - 20);
 
-    QWindow window;
-    window.resize(800, 600);
-    window.setMask(mask);
+    {
+        QWindow window;
+        window.resize(800, 600);
+        QCOMPARE(window.mask(), QRegion());
 
-    QCOMPARE(window.mask(), QRegion());
+        window.create();
+        window.setMask(mask);
+        QCOMPARE(window.mask(), mask);
+    }
 
-    window.create();
-    window.setMask(mask);
+    {
+        QWindow window;
+        window.resize(800, 600);
+        QCOMPARE(window.mask(), QRegion());
 
-    QCOMPARE(window.mask(), mask);
+        window.setMask(mask);
+        QCOMPARE(window.mask(), mask);
+        window.create();
+        QCOMPARE(window.mask(), mask);
+    }
+
 }
 
 void tst_QWindow::initialSize()
@@ -1844,6 +1870,9 @@ void tst_QWindow::modalDialog()
 {
     if (!QGuiApplication::platformName().compare(QLatin1String("wayland"), Qt::CaseInsensitive))
         QSKIP("Wayland: This fails. Figure out why.");
+
+    if (QGuiApplication::platformName() == QLatin1String("cocoa"))
+        QSKIP("Test fails due to QTBUG-61965, and is slow due to QTBUG-61964");
 
     QWindow normalWindow;
     normalWindow.setFramePosition(m_availableTopLeft + QPoint(80, 80));

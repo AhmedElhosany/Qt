@@ -54,6 +54,10 @@ namespace QQuickVisualTestUtil
 
     bool delegateVisible(QQuickItem *item);
 
+    void centerOnScreen(QQuickWindow *window);
+
+    void moveMouseAway(QQuickWindow *window);
+
     /*
        Find an item with the specified objectName.  If index is supplied then the
        item must also evaluate the {index} expression equal to index

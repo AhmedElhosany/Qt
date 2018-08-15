@@ -21,19 +21,18 @@
 #include "core/svg/SVGImageLoader.h"
 
 #include "core/events/Event.h"
-#include "core/fetch/ImageResource.h"
 #include "core/svg/SVGImageElement.h"
 
 namespace blink {
 
 SVGImageLoader::SVGImageLoader(SVGImageElement* node) : ImageLoader(node) {}
 
-void SVGImageLoader::dispatchLoadEvent() {
-  if (image()->errorOccurred()) {
-    element()->dispatchEvent(Event::create(EventTypeNames::error));
+void SVGImageLoader::DispatchLoadEvent() {
+  if (GetImage()->ErrorOccurred()) {
+    GetElement()->DispatchEvent(Event::Create(EventTypeNames::error));
   } else {
-    SVGImageElement* imageElement = toSVGImageElement(element());
-    imageElement->sendSVGLoadEventToSelfAndAncestorChainIfPossible();
+    SVGImageElement* image_element = toSVGImageElement(GetElement());
+    image_element->SendSVGLoadEventToSelfAndAncestorChainIfPossible();
   }
 }
 

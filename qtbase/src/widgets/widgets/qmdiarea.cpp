@@ -158,9 +158,6 @@
 
 #include <QApplication>
 #include <QStyle>
-#if 0 /* Used to be included in Qt4 for Q_WS_MAC */ && QT_CONFIG(style_mac)
-#include <private/qmacstyle_mac_p.h>
-#endif
 #include <QChildEvent>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -169,6 +166,7 @@
 #include <QFontMetrics>
 #include <QStyleOption>
 #include <QDesktopWidget>
+#include <private/qdesktopwidget_p.h>
 #include <QDebug>
 #include <qmath.h>
 #if QT_CONFIG(menu)
@@ -1750,7 +1748,7 @@ QSize QMdiArea::sizeHint() const
     }
     const int scaleFactor = 3 * (nestedCount + 1);
 
-    QSize desktopSize = QApplication::desktop()->size();
+    QSize desktopSize = QDesktopWidgetPrivate::size();
     QSize size(desktopSize.width() * 2 / scaleFactor, desktopSize.height() * 2 / scaleFactor);
     for (QMdiSubWindow *child : d_func()->childWindows) {
         if (!sanityCheck(child, "QMdiArea::sizeHint"))

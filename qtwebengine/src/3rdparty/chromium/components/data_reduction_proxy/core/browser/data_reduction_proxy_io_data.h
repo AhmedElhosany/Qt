@@ -15,15 +15,16 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_data_use_observer.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_delegate.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_metrics.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_network_delegate.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_request_options.h"
-#include "components/data_reduction_proxy/core/browser/data_use_group_provider.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_event_storage_delegate.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_util.h"
 #include "components/data_reduction_proxy/core/common/lofi_decider.h"
 #include "components/data_reduction_proxy/core/common/lofi_ui_service.h"
+#include "components/data_reduction_proxy/core/common/resource_type_provider.h"
 
 namespace base {
 class Value;
@@ -33,6 +34,10 @@ namespace net {
 class NetLog;
 class URLRequestContextGetter;
 class URLRequestInterceptor;
+}
+
+namespace previews {
+class PreviewsDecider;
 }
 
 namespace data_reduction_proxy {
@@ -48,13 +53,10 @@ class DataReductionProxyService;
 // the IO thread.
 class DataReductionProxyIOData : public DataReductionProxyEventStorageDelegate {
  public:
-  // Constructs a DataReductionProxyIOData object. |param_flags| is used to
-  // set information about the DNS names used by the proxy, and allowable
-  // configurations. |enabled| sets the initial state of the Data Reduction
-  // Proxy.
+  // Constructs a DataReductionProxyIOData object. |enabled| sets the initial
+  // state of the Data Reduction Proxy.
   DataReductionProxyIOData(
       Client client,
-      int param_flags,
       net::NetLog* net_log,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
@@ -66,6 +68,9 @@ class DataReductionProxyIOData : public DataReductionProxyEventStorageDelegate {
 
   // Performs UI thread specific shutdown logic.
   void ShutdownOnUIThread();
+
+  void SetDataUseAscriber(
+      data_use_measurement::DataUseAscriber* data_use_ascriber);
 
   // Sets the Data Reduction Proxy service after it has been created.
   // Virtual for testing.
@@ -94,21 +99,34 @@ class DataReductionProxyIOData : public DataReductionProxyEventStorageDelegate {
   // Applies a serialized Data Reduction Proxy configuration.
   void SetDataReductionProxyConfiguration(const std::string& serialized_config);
 
-  // Returns true when Lo-Fi mode should be activated. When Lo-Fi mode is
+  // Returns true when Lo-Fi Previews should be activated. When Lo-Fi is
   // active, URL requests are modified to request low fidelity versions of the
   // resources, except when the user is in the Lo-Fi control group.
-  bool ShouldEnableLoFiMode(const net::URLRequest& request);
+  // |previews_decider| is a non-null object that determines eligibility of
+  // showing the preview based on past opt outs.
+  bool ShouldEnableLoFi(const net::URLRequest& request,
+                        previews::PreviewsDecider* previews_decider);
+
+  // Returns true when Lite Page Previews should be activated. When Lite Pages
+  // are active, a low fidelity transcoded page is requested on the main frame
+  // resource, except when the user is in the control group. |previews_decider|
+  // is a non-null object that determines eligibility of showing the preview
+  // based on past opt outs.
+  bool ShouldEnableLitePages(const net::URLRequest& request,
+                             previews::PreviewsDecider* previews_decider);
 
   // Sets Lo-Fi mode off in |config_|.
   void SetLoFiModeOff();
 
   // Bridge methods to safely call to the UI thread objects.
+  void UpdateDataUseForHost(int64_t network_bytes,
+                            int64_t original_bytes,
+                            const std::string& host);
   void UpdateContentLengths(
       int64_t data_used,
       int64_t original_size,
       bool data_reduction_proxy_enabled,
       DataReductionProxyRequestType request_type,
-      const scoped_refptr<DataUseGroup>& data_usage_source,
       const std::string& mime_type);
   void SetLoFiModeActiveOnMainFrame(bool lo_fi_mode_active);
 
@@ -169,21 +187,25 @@ class DataReductionProxyIOData : public DataReductionProxyEventStorageDelegate {
 
   LoFiDecider* lofi_decider() const { return lofi_decider_.get(); }
 
-  void set_lofi_decider(std::unique_ptr<LoFiDecider> lofi_decider) const {
+  void set_lofi_decider(std::unique_ptr<LoFiDecider> lofi_decider) {
     lofi_decider_ = std::move(lofi_decider);
   }
 
   LoFiUIService* lofi_ui_service() const { return lofi_ui_service_.get(); }
 
   // Takes ownership of |lofi_ui_service|.
-  void set_lofi_ui_service(
-      std::unique_ptr<LoFiUIService> lofi_ui_service) const {
+  void set_lofi_ui_service(std::unique_ptr<LoFiUIService> lofi_ui_service) {
     lofi_ui_service_ = std::move(lofi_ui_service);
   }
 
-  void set_data_usage_source_provider(
-      std::unique_ptr<DataUseGroupProvider> data_usage_source_provider) {
-    data_use_group_provider_ = std::move(data_usage_source_provider);
+  ResourceTypeProvider* resource_type_provider() const {
+    DCHECK(io_task_runner_->BelongsToCurrentThread());
+    return resource_type_provider_.get();
+  }
+
+  void set_resource_type_provider(
+      std::unique_ptr<ResourceTypeProvider> resource_type_provider) {
+    resource_type_provider_ = std::move(resource_type_provider);
   }
 
   // The production channel of this build.
@@ -226,10 +248,13 @@ class DataReductionProxyIOData : public DataReductionProxyEventStorageDelegate {
   std::unique_ptr<DataReductionProxyConfig> config_;
 
   // Handles getting if a request is in Lo-Fi mode.
-  mutable std::unique_ptr<LoFiDecider> lofi_decider_;
+  std::unique_ptr<LoFiDecider> lofi_decider_;
 
   // Handles showing Lo-Fi UI when a Lo-Fi response is received.
-  mutable std::unique_ptr<LoFiUIService> lofi_ui_service_;
+  std::unique_ptr<LoFiUIService> lofi_ui_service_;
+
+  // Handles getting the content type of a request.
+  std::unique_ptr<ResourceTypeProvider> resource_type_provider_;
 
   // Creates Data Reduction Proxy-related events for logging.
   std::unique_ptr<DataReductionProxyEventCreator> event_creator_;
@@ -260,9 +285,8 @@ class DataReductionProxyIOData : public DataReductionProxyEventStorageDelegate {
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 
-  // Manages instances of |DataUsageSource| and maps |URLRequest| instances to
-  // their appropriate |DataUsageSource|.
-  std::unique_ptr<DataUseGroupProvider> data_use_group_provider_;
+  // Observes pageload events and records per host data use.
+  std::unique_ptr<DataReductionProxyDataUseObserver> data_use_observer_;
 
   // Whether the Data Reduction Proxy has been enabled or not by the user. In
   // practice, this can be overridden by the command line.

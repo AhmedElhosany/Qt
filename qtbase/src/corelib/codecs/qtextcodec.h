@@ -79,11 +79,17 @@ public:
     static QTextCodec *codecForUtfText(const QByteArray &ba, QTextCodec *defaultCodec);
 
     bool canEncode(QChar) const;
+#if QT_STRINGVIEW_LEVEL < 2
     bool canEncode(const QString&) const;
+#endif
+    bool canEncode(QStringView) const;
 
     QString toUnicode(const QByteArray&) const;
     QString toUnicode(const char* chars) const;
+#if QT_STRINGVIEW_LEVEL < 2
     QByteArray fromUnicode(const QString& uc) const;
+#endif
+    QByteArray fromUnicode(QStringView uc) const;
     enum ConversionFlag {
         DefaultConversion,
         ConvertInvalidToNull = 0x80000000,
@@ -133,9 +139,12 @@ class Q_CORE_EXPORT QTextEncoder {
     Q_DISABLE_COPY(QTextEncoder)
 public:
     explicit QTextEncoder(const QTextCodec *codec) : c(codec), state() {}
-    QTextEncoder(const QTextCodec *codec, QTextCodec::ConversionFlags flags);
+    explicit QTextEncoder(const QTextCodec *codec, QTextCodec::ConversionFlags flags);
     ~QTextEncoder();
+#if QT_STRINGVIEW_LEVEL < 2
     QByteArray fromUnicode(const QString& str);
+#endif
+    QByteArray fromUnicode(QStringView str);
     QByteArray fromUnicode(const QChar *uc, int len);
     bool hasFailure() const;
 private:
@@ -147,7 +156,7 @@ class Q_CORE_EXPORT QTextDecoder {
     Q_DISABLE_COPY(QTextDecoder)
 public:
     explicit QTextDecoder(const QTextCodec *codec) : c(codec), state() {}
-    QTextDecoder(const QTextCodec *codec, QTextCodec::ConversionFlags flags);
+    explicit QTextDecoder(const QTextCodec *codec, QTextCodec::ConversionFlags flags);
     ~QTextDecoder();
     QString toUnicode(const char* chars, int len);
     QString toUnicode(const QByteArray &ba);

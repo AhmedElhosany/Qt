@@ -6,13 +6,14 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 #if SK_SUPPORT_GPU
 #include "GrContext.h"
 #include "GrRenderTargetContextPriv.h"
 #include "SkRRect.h"
-#include "batches/GrDrawBatch.h"
-#include "batches/GrRectBatchFactory.h"
 #include "effects/GrRRectEffect.h"
+#include "ops/GrDrawOp.h"
+#include "ops/GrRectOpFactory.h"
 
 namespace skiagm {
 
@@ -74,23 +75,22 @@ protected:
                 paint.setColor(SK_ColorWHITE);
                 canvas->drawRect(testBounds, paint);
 
-                GrPaint grPaint;
-                grPaint.setXPFactory(GrPorterDuffXPFactory::Make(SkBlendMode::kSrc));
-
                 SkRRect rrect = fRRect;
                 rrect.offset(SkIntToScalar(x + kGap), SkIntToScalar(y + kGap));
                 sk_sp<GrFragmentProcessor> fp(GrRRectEffect::Make(edgeType, rrect));
                 SkASSERT(fp);
                 if (fp) {
+                    GrPaint grPaint;
+                    grPaint.setColor4f(GrColor4f(0, 0, 0, 1.f));
+                    grPaint.setXPFactory(GrPorterDuffXPFactory::Get(SkBlendMode::kSrc));
                     grPaint.addCoverageFragmentProcessor(std::move(fp));
 
                     SkRect bounds = testBounds;
                     bounds.offset(SkIntToScalar(x), SkIntToScalar(y));
 
-                    sk_sp<GrDrawBatch> batch(
-                            GrRectBatchFactory::CreateNonAAFill(0xff000000, SkMatrix::I(), bounds,
-                                                                nullptr, nullptr));
-                    renderTargetContext->priv().testingOnly_drawBatch(grPaint, batch.get());
+                    renderTargetContext->priv().testingOnly_addDrawOp(
+                            GrRectOpFactory::MakeNonAAFill(std::move(grPaint), SkMatrix::I(),
+                                                           bounds, GrAAType::kNone));
                 }
             canvas->restore();
             x = x + fTestOffsetX;

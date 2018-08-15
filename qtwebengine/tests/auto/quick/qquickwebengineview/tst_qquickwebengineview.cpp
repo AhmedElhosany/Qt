@@ -37,6 +37,7 @@
 #include <QtWebEngine/QQuickWebEngineProfile>
 #include <private/qinputmethod_p.h>
 #include <private/qquickwebengineview_p.h>
+#include <private/qquickwebenginesettings_p.h>
 #include <qpa/qplatforminputcontext.h>
 
 #include <functional>
@@ -387,7 +388,8 @@ void tst_QQuickWebEngineView::titleUpdate()
 
     titleSpy.clear();
 
-    // No titleChanged signal for failed load
+    // No titleChanged signal for failed load (with no error-page)
+    webEngineView()->settings()->setErrorPageEnabled(false);
     webEngineView()->setUrl(urlFromTestPath("html/file_that_does_not_exist.html"));
     QVERIFY(waitForLoadFailed(webEngineView()));
     QCOMPARE(titleSpy.size(), 0);
@@ -439,19 +441,30 @@ void tst_QQuickWebEngineView::transparentWebEngineViews()
 
 void tst_QQuickWebEngineView::inputMethod()
 {
-#if !defined(QQUICKWEBENGINEVIEW_ITEMACCEPTSINPUTMETHOD)
-    QSKIP("QQUICKWEBENGINEVIEW_ITEMACCEPTSINPUTMETHOD");
-#else
+    m_window->show();
+    QTRY_VERIFY(qApp->focusObject());
+    QQuickItem *input;
+
     QQuickWebEngineView *view = webEngineView();
+    view->settings()->setFocusOnNavigationEnabled(true);
     view->setUrl(urlFromTestPath("html/inputmethod.html"));
     QVERIFY(waitForLoadSucceeded(view));
 
+    input = qobject_cast<QQuickItem *>(qApp->focusObject());
+    QVERIFY(!input->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     QVERIFY(!view->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
+
     runJavaScript("document.getElementById('inputField').focus();");
+    QTRY_COMPARE(activeElementId(view), QStringLiteral("inputField"));
+    input = qobject_cast<QQuickItem *>(qApp->focusObject());
+    QTRY_VERIFY(input->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     QVERIFY(view->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
+
     runJavaScript("document.getElementById('inputField').blur();");
+    QTRY_VERIFY(activeElementId(view).isEmpty());
+    input = qobject_cast<QQuickItem *>(qApp->focusObject());
+    QTRY_VERIFY(!input->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     QVERIFY(!view->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
-#endif
 }
 
 class TestInputContext : public QPlatformInputContext
@@ -500,6 +513,7 @@ void tst_QQuickWebEngineView::interruptImeTextComposition()
     QQuickItem *input;
 
     QQuickWebEngineView *view = webEngineView();
+    view->settings()->setFocusOnNavigationEnabled(true);
     view->loadHtml("<html><body>"
                   "  <input type='text' id='input1' /><br>"
                   "  <input type='text' id='input2' />"
@@ -533,7 +547,7 @@ void tst_QQuickWebEngineView::interruptImeTextComposition()
 #ifndef Q_OS_WIN
     QTRY_COMPARE(testContext.commitCallCount, 1);
 #else
-    QTRY_COMPARE(testContext.resetCallCount, 2);
+    QTRY_COMPARE(testContext.resetCallCount, 1);
 #endif
 
     // Check the composition text has been committed
@@ -545,33 +559,43 @@ void tst_QQuickWebEngineView::interruptImeTextComposition()
 
 void tst_QQuickWebEngineView::inputMethodHints()
 {
-#if !defined(QQUICKWEBENGINEVIEW_ITEMACCEPTSINPUTMETHOD)
-    QSKIP("QQUICKWEBENGINEVIEW_ITEMACCEPTSINPUTMETHOD");
-#else
-    QQuickWebEngineView *view = webEngineView();
+    m_window->show();
+    QTRY_VERIFY(qApp->focusObject());
+    QQuickItem *input;
 
+    QQuickWebEngineView *view = webEngineView();
+    view->settings()->setFocusOnNavigationEnabled(true);
     view->setUrl(urlFromTestPath("html/inputmethod.html"));
     QVERIFY(waitForLoadSucceeded(view));
+
+    // Initialize input fields with values to check input method query is being updated.
+    runJavaScript("document.getElementById('emailInputField').value = 'a@b.com';");
+    runJavaScript("document.getElementById('editableDiv').innerText = 'bla';");
 
     // Setting focus on an input element results in an element in its shadow tree becoming the focus node.
     // Input hints should not be set from this shadow tree node but from the input element itself.
     runJavaScript("document.getElementById('emailInputField').focus();");
+    QTRY_COMPARE(activeElementId(view), QStringLiteral("emailInputField"));
+    input = qobject_cast<QQuickItem *>(qApp->focusObject());
+    QTRY_COMPARE(input->inputMethodQuery(Qt::ImSurroundingText).toString(), QString("a@b.com"));
+    QVERIFY(input->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     QVERIFY(view->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     QInputMethodQueryEvent query(Qt::ImHints);
-    QGuiApplication::sendEvent(view, &query);
-    Qt::InputMethodHints hints(query.value(Qt::ImHints).toUInt() & Qt::ImhExclusiveInputMask);
-    QCOMPARE(hints, Qt::ImhEmailCharactersOnly);
+    QGuiApplication::sendEvent(input, &query);
+    QTRY_COMPARE(Qt::InputMethodHints(query.value(Qt::ImHints).toUInt() & Qt::ImhExclusiveInputMask), Qt::ImhEmailCharactersOnly);
 
     // The focus of an editable DIV is given directly to it, so no shadow root element
     // is necessary. This tests the WebPage::editorState() method ability to get the
     // right element without breaking.
     runJavaScript("document.getElementById('editableDiv').focus();");
+    QTRY_COMPARE(activeElementId(view), QStringLiteral("editableDiv"));
+    input = qobject_cast<QQuickItem *>(qApp->focusObject());
+    QTRY_COMPARE(input->inputMethodQuery(Qt::ImSurroundingText).toString(), QString("bla"));
+    QVERIFY(input->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     QVERIFY(view->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     query = QInputMethodQueryEvent(Qt::ImHints);
-    QGuiApplication::sendEvent(view, &query);
-    hints = Qt::InputMethodHints(query.value(Qt::ImHints).toUInt());
-    QCOMPARE(hints, Qt::ImhNone);
-#endif
+    QGuiApplication::sendEvent(input, &query);
+    QTRY_COMPARE(Qt::InputMethodHints(query.value(Qt::ImHints).toUInt()), Qt::ImhPreferLowercase | Qt::ImhMultiLine);
 }
 
 void tst_QQuickWebEngineView::setZoomFactor()
@@ -632,6 +656,7 @@ void tst_QQuickWebEngineView::stopSettingFocusWhenDisabled()
 
     QQuickWebEngineView *view = webEngineView();
     m_window->show();
+    view->settings()->setFocusOnNavigationEnabled(true);
     view->setSize(QSizeF(640, 480));
     view->setEnabled(viewEnabled);
     view->loadHtml("<html><head><title>Title</title></head><body>Hello"

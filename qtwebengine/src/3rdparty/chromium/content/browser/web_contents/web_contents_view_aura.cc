@@ -11,6 +11,8 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
@@ -60,12 +62,12 @@
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
-#include "ui/base/dragdrop/drag_utils.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_factory.h"
 #include "ui/base/hit_test.h"
 #include "ui/compositor/layer.h"
+#include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/blink/web_input_event.h"
 #include "ui/events/event.h"
@@ -88,6 +90,9 @@ WebContentsView* CreateWebContentsView(
 }
 
 namespace {
+
+WebContentsViewAura::RenderWidgetHostViewCreateFunction
+    g_create_render_widget_host_view = nullptr;
 
 bool IsScrollEndEffectEnabled() {
   return base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
@@ -155,17 +160,10 @@ class WebDragSourceAura : public NotificationObserver {
 // necessary.
 void PrepareDragForFileContents(const DropData& drop_data,
                                 ui::OSExchangeData::Provider* provider) {
-  base::FilePath file_name =
-      base::FilePath::FromUTF16Unsafe(drop_data.file_description_filename);
-  // Images without ALT text will only have a file extension so we need to
-  // synthesize one from the provided extension and URL.
-  if (file_name.BaseName().RemoveExtension().empty()) {
-    const base::FilePath::StringType extension = file_name.Extension();
-    // Retrieve the name from the URL.
-    file_name = net::GenerateFileName(drop_data.url, "", "", "", "", "")
-                    .ReplaceExtension(extension);
-  }
-  provider->SetFileContents(file_name, drop_data.file_contents);
+  base::Optional<base::FilePath> filename =
+      drop_data.GetSafeFilenameForImageFileContents();
+  if (filename)
+    provider->SetFileContents(*filename, drop_data.file_contents);
 }
 #endif
 
@@ -368,42 +366,46 @@ void PrepareDropData(DropData* drop_data, const ui::OSExchangeData& data) {
 // ui::DragDropTypes.
 int ConvertFromWeb(blink::WebDragOperationsMask ops) {
   int drag_op = ui::DragDropTypes::DRAG_NONE;
-  if (ops & blink::WebDragOperationCopy)
+  if (ops & blink::kWebDragOperationCopy)
     drag_op |= ui::DragDropTypes::DRAG_COPY;
-  if (ops & blink::WebDragOperationMove)
+  if (ops & blink::kWebDragOperationMove)
     drag_op |= ui::DragDropTypes::DRAG_MOVE;
-  if (ops & blink::WebDragOperationLink)
+  if (ops & blink::kWebDragOperationLink)
     drag_op |= ui::DragDropTypes::DRAG_LINK;
   return drag_op;
 }
 
 blink::WebDragOperationsMask ConvertToWeb(int drag_op) {
-  int web_drag_op = blink::WebDragOperationNone;
+  int web_drag_op = blink::kWebDragOperationNone;
   if (drag_op & ui::DragDropTypes::DRAG_COPY)
-    web_drag_op |= blink::WebDragOperationCopy;
+    web_drag_op |= blink::kWebDragOperationCopy;
   if (drag_op & ui::DragDropTypes::DRAG_MOVE)
-    web_drag_op |= blink::WebDragOperationMove;
+    web_drag_op |= blink::kWebDragOperationMove;
   if (drag_op & ui::DragDropTypes::DRAG_LINK)
-    web_drag_op |= blink::WebDragOperationLink;
+    web_drag_op |= blink::kWebDragOperationLink;
   return (blink::WebDragOperationsMask) web_drag_op;
 }
 
 int ConvertAuraEventFlagsToWebInputEventModifiers(int aura_event_flags) {
   int web_input_event_modifiers = 0;
   if (aura_event_flags & ui::EF_SHIFT_DOWN)
-    web_input_event_modifiers |= blink::WebInputEvent::ShiftKey;
+    web_input_event_modifiers |= blink::WebInputEvent::kShiftKey;
   if (aura_event_flags & ui::EF_CONTROL_DOWN)
-    web_input_event_modifiers |= blink::WebInputEvent::ControlKey;
+    web_input_event_modifiers |= blink::WebInputEvent::kControlKey;
   if (aura_event_flags & ui::EF_ALT_DOWN)
-    web_input_event_modifiers |= blink::WebInputEvent::AltKey;
+    web_input_event_modifiers |= blink::WebInputEvent::kAltKey;
   if (aura_event_flags & ui::EF_COMMAND_DOWN)
-    web_input_event_modifiers |= blink::WebInputEvent::MetaKey;
+    web_input_event_modifiers |= blink::WebInputEvent::kMetaKey;
   if (aura_event_flags & ui::EF_LEFT_MOUSE_BUTTON)
-    web_input_event_modifiers |= blink::WebInputEvent::LeftButtonDown;
+    web_input_event_modifiers |= blink::WebInputEvent::kLeftButtonDown;
   if (aura_event_flags & ui::EF_MIDDLE_MOUSE_BUTTON)
-    web_input_event_modifiers |= blink::WebInputEvent::MiddleButtonDown;
+    web_input_event_modifiers |= blink::WebInputEvent::kMiddleButtonDown;
   if (aura_event_flags & ui::EF_RIGHT_MOUSE_BUTTON)
-    web_input_event_modifiers |= blink::WebInputEvent::RightButtonDown;
+    web_input_event_modifiers |= blink::WebInputEvent::kRightButtonDown;
+  if (aura_event_flags & ui::EF_BACK_MOUSE_BUTTON)
+    web_input_event_modifiers |= blink::WebInputEvent::kBackButtonDown;
+  if (aura_event_flags & ui::EF_FORWARD_MOUSE_BUTTON)
+    web_input_event_modifiers |= blink::WebInputEvent::kForwardButtonDown;
   return web_input_event_modifiers;
 }
 
@@ -495,11 +497,11 @@ class WebContentsViewAura::WindowObserver
   }
 
   // Overridden WindowTreeHostObserver:
-  void OnHostMoved(const aura::WindowTreeHost* host,
-                   const gfx::Point& new_origin) override {
+  void OnHostMovedInPixels(const aura::WindowTreeHost* host,
+                           const gfx::Point& new_origin_in_pixels) override {
     TRACE_EVENT1("ui",
-                 "WebContentsViewAura::WindowObserver::OnHostMoved",
-                 "new_origin", new_origin.ToString());
+                 "WebContentsViewAura::WindowObserver::OnHostMovedInPixels",
+                 "new_origin_in_pixels", new_origin_in_pixels.ToString());
 
     // This is for the desktop case (i.e. Aura desktop).
     SendScreenRects();
@@ -517,6 +519,13 @@ class WebContentsViewAura::WindowObserver
   DISALLOW_COPY_AND_ASSIGN(WindowObserver);
 };
 
+// static
+void WebContentsViewAura::InstallCreateHookForTests(
+    RenderWidgetHostViewCreateFunction create_render_widget_host_view) {
+  CHECK_EQ(nullptr, g_create_render_widget_host_view);
+  g_create_render_widget_host_view = create_render_widget_host_view;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewAura, public:
 
@@ -524,7 +533,7 @@ WebContentsViewAura::WebContentsViewAura(WebContentsImpl* web_contents,
                                          WebContentsViewDelegate* delegate)
     : web_contents_(web_contents),
       delegate_(delegate),
-      current_drag_op_(blink::WebDragOperationNone),
+      current_drag_op_(blink::kWebDragOperationNone),
       drag_dest_delegate_(nullptr),
       current_rvh_for_drag_(ChildProcessHost::kInvalidUniqueID,
                             MSG_ROUTING_NONE),
@@ -581,10 +590,28 @@ void WebContentsViewAura::EndDrag(RenderWidgetHost* source_rwh,
   if (screen_position_client)
     screen_position_client->ConvertPointFromScreen(window, &client_loc);
 
-  // TODO(paulmeyer): In the OOPIF case, should |client_loc| be converted to the
-  // coordinates local to |source_rwh|? See crbug.com/647249.
-  web_contents_->DragSourceEndedAt(client_loc.x(), client_loc.y(),
-                                   screen_loc.x(), screen_loc.y(), ops,
+  // |client_loc| and |screen_loc| are in the root coordinate space, for
+  // non-root RenderWidgetHosts they need to be transformed.
+  gfx::Point transformed_point = client_loc;
+  gfx::Point transformed_screen_point = screen_loc;
+  if (source_rwh && web_contents_->GetRenderWidgetHostView()) {
+    static_cast<RenderWidgetHostViewBase*>(
+        web_contents_->GetRenderWidgetHostView())
+        ->TransformPointToCoordSpaceForView(
+            client_loc,
+            static_cast<RenderWidgetHostViewBase*>(source_rwh->GetView()),
+            &transformed_point);
+    static_cast<RenderWidgetHostViewBase*>(
+        web_contents_->GetRenderWidgetHostView())
+        ->TransformPointToCoordSpaceForView(
+            screen_loc,
+            static_cast<RenderWidgetHostViewBase*>(source_rwh->GetView()),
+            &transformed_screen_point);
+  }
+
+  web_contents_->DragSourceEndedAt(transformed_point.x(), transformed_point.y(),
+                                   transformed_screen_point.x(),
+                                   transformed_screen_point.y(), ops,
                                    source_rwh);
 
   web_contents_->SystemDragEnded(source_rwh);
@@ -681,11 +708,11 @@ void GetScreenInfoForWindow(ScreenInfo* results,
                                        : screen->GetPrimaryDisplay();
   results->rect = display.bounds();
   results->available_rect = display.work_area();
-  // TODO(derat|oshima): Don't hardcode this. Get this from display object.
-  results->depth = 24;
-  results->depth_per_component = 8;
-  results->is_monochrome = false;
+  results->depth = display.color_depth();
+  results->depth_per_component = display.depth_per_component();
+  results->is_monochrome = display.is_monochrome();
   results->device_scale_factor = display.device_scale_factor();
+  results->color_space = display.color_space();
 
   // The Display rotation and the ScreenInfo orientation are not the same
   // angle. The former is the physical display rotation while the later is the
@@ -780,12 +807,13 @@ void WebContentsViewAura::CreateView(
   // value is set shortly after this, so its safe to ignore.
 
   DCHECK(aura::Env::GetInstanceDontCreate());
-  window_.reset(new aura::Window(this));
+  window_ = base::MakeUnique<aura::Window>(this);
   window_->set_owned_by_parent(false);
-  window_->SetType(ui::wm::WINDOW_TYPE_CONTROL);
+  window_->SetType(aura::client::WINDOW_TYPE_CONTROL);
+  window_->SetName("WebContentsViewAura");
   window_->Init(ui::LAYER_NOT_DRAWN);
   window_->AddObserver(this);
-  aura::Window* root_window = context ? context->GetRootWindow() : NULL;
+  aura::Window* root_window = context ? context->GetRootWindow() : nullptr;
   if (root_window) {
     // There are places where there is no context currently because object
     // hierarchies are built before they're attached to a Widget. (See
@@ -799,7 +827,6 @@ void WebContentsViewAura::CreateView(
                                           root_window->GetBoundsInScreen());
   }
   window_->layer()->SetMasksToBounds(true);
-  window_->SetName("WebContentsViewAura");
 
   // WindowObserver is not interesting and is problematic for Browser Plugin
   // guests.
@@ -830,7 +857,11 @@ RenderWidgetHostViewBase* WebContentsViewAura::CreateViewForWidget(
   }
 
   RenderWidgetHostViewAura* view =
-      new RenderWidgetHostViewAura(render_widget_host, is_guest_view_hack);
+      g_create_render_widget_host_view
+          ? g_create_render_widget_host_view(render_widget_host,
+                                             is_guest_view_hack)
+          : new RenderWidgetHostViewAura(render_widget_host,
+                                         is_guest_view_hack);
   view->InitAsChild(GetRenderWidgetHostViewParent());
 
   RenderWidgetHostImpl* host_impl =
@@ -920,7 +951,7 @@ void WebContentsViewAura::StartDragging(
   }
 
   // Grab a weak pointer to the RenderWidgetHost, since it can be destroyed
-  // during the drag and drop nested message loop in StartDragAndDrop.
+  // during the drag and drop nested run loop in StartDragAndDrop.
   // For example, the RenderWidgetHost can be deleted if a cross-process
   // transfer happens while dragging, since the RenderWidgetHost is deleted in
   // that case.
@@ -941,7 +972,7 @@ void WebContentsViewAura::StartDragging(
       std::move(provider));  // takes ownership of |provider|.
 
   if (!image.isNull())
-    drag_utils::SetDragImageOnDataObject(image, image_offset, &data);
+    data.provider().SetDragImage(image, image_offset);
 
   std::unique_ptr<WebDragSourceAura> drag_source(
       new WebDragSourceAura(GetNativeView(), web_contents_));
@@ -979,8 +1010,12 @@ void WebContentsViewAura::UpdateDragCursor(blink::WebDragOperation operation) {
   current_drag_op_ = operation;
 }
 
-void WebContentsViewAura::GotFocus() {
-  web_contents_->NotifyWebContentsFocused();
+void WebContentsViewAura::GotFocus(RenderWidgetHostImpl* render_widget_host) {
+  web_contents_->NotifyWebContentsFocused(render_widget_host);
+}
+
+void WebContentsViewAura::LostFocus(RenderWidgetHostImpl* render_widget_host) {
+  web_contents_->NotifyWebContentsLostFocus(render_widget_host);
 }
 
 void WebContentsViewAura::TakeFocus(bool reverse) {
@@ -994,12 +1029,22 @@ void WebContentsViewAura::TakeFocus(bool reverse) {
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewAura, OverscrollControllerDelegate implementation:
 
-gfx::Rect WebContentsViewAura::GetVisibleBounds() const {
+gfx::Size WebContentsViewAura::GetVisibleSize() const {
   RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
   if (!rwhv || !rwhv->IsShowing())
-    return gfx::Rect();
+    return gfx::Size();
 
-  return rwhv->GetViewBounds();
+  return rwhv->GetViewBounds().size();
+}
+
+gfx::Size WebContentsViewAura::GetDisplaySize() const {
+  RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
+  if (!rwhv)
+    return gfx::Size();
+
+  return display::Screen::GetScreen()
+      ->GetDisplayNearestView(rwhv->GetNativeView())
+      .size();
 }
 
 bool WebContentsViewAura::OnOverscrollUpdate(float delta_x, float delta_y) {
@@ -1025,14 +1070,19 @@ void WebContentsViewAura::OnOverscrollComplete(OverscrollMode mode) {
 }
 
 void WebContentsViewAura::OnOverscrollModeChange(OverscrollMode old_mode,
-                                                 OverscrollMode new_mode) {
+                                                 OverscrollMode new_mode,
+                                                 OverscrollSource source) {
   if (old_mode == OVERSCROLL_NORTH || old_mode == OVERSCROLL_SOUTH)
     OverscrollUpdateForWebContentsDelegate(0);
 
   current_overscroll_gesture_ = new_mode;
-  navigation_overlay_->relay_delegate()->OnOverscrollModeChange(old_mode,
-                                                                new_mode);
+  navigation_overlay_->relay_delegate()->OnOverscrollModeChange(
+      old_mode, new_mode, source);
   completed_overscroll_gesture_ = OVERSCROLL_NONE;
+}
+
+base::Optional<float> WebContentsViewAura::GetMaxOverscrollDelta() const {
+  return navigation_overlay_->relay_delegate()->GetMaxOverscrollDelta();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1202,9 +1252,26 @@ int WebContentsViewAura::OnDragUpdated(const ui::DropTargetEvent& event) {
   if (!IsValidDragTarget(target_rwh))
     return ui::DragDropTypes::DRAG_NONE;
 
+  gfx::Point screen_pt = event.root_location();
   if (target_rwh != current_rwh_for_drag_.get()) {
-    if (current_rwh_for_drag_)
-      current_rwh_for_drag_->DragTargetDragLeave();
+    if (current_rwh_for_drag_) {
+      gfx::Point transformed_leave_point = event.location();
+      gfx::Point transformed_screen_point = screen_pt;
+      static_cast<RenderWidgetHostViewBase*>(
+          web_contents_->GetRenderWidgetHostView())
+          ->TransformPointToCoordSpaceForView(
+              event.location(), static_cast<RenderWidgetHostViewBase*>(
+                                    current_rwh_for_drag_->GetView()),
+              &transformed_leave_point);
+      static_cast<RenderWidgetHostViewBase*>(
+          web_contents_->GetRenderWidgetHostView())
+          ->TransformPointToCoordSpaceForView(
+              screen_pt, static_cast<RenderWidgetHostViewBase*>(
+                             current_rwh_for_drag_->GetView()),
+              &transformed_screen_point);
+      current_rwh_for_drag_->DragTargetDragLeave(transformed_leave_point,
+                                                 transformed_screen_point);
+    }
     OnDragEntered(event);
   }
 
@@ -1212,7 +1279,6 @@ int WebContentsViewAura::OnDragUpdated(const ui::DropTargetEvent& event) {
     return ui::DragDropTypes::DRAG_NONE;
 
   blink::WebDragOperationsMask op = ConvertToWeb(event.source_operations());
-  gfx::Point screen_pt = event.root_location();
   target_rwh->DragTargetDragOver(
       transformed_pt, screen_pt, op,
       ConvertAuraEventFlagsToWebInputEventModifiers(event.flags()));
@@ -1231,7 +1297,7 @@ void WebContentsViewAura::OnDragExited() {
   }
 
   if (current_rwh_for_drag_) {
-    current_rwh_for_drag_->DragTargetDragLeave();
+    current_rwh_for_drag_->DragTargetDragLeave(gfx::Point(), gfx::Point());
     current_rwh_for_drag_.reset();
   }
 
@@ -1251,9 +1317,10 @@ int WebContentsViewAura::OnPerformDrop(const ui::DropTargetEvent& event) {
   if (!IsValidDragTarget(target_rwh))
     return ui::DragDropTypes::DRAG_NONE;
 
+  gfx::Point screen_pt = display::Screen::GetScreen()->GetCursorScreenPoint();
   if (target_rwh != current_rwh_for_drag_.get()) {
     if (current_rwh_for_drag_)
-      current_rwh_for_drag_->DragTargetDragLeave();
+      current_rwh_for_drag_->DragTargetDragLeave(transformed_pt, screen_pt);
     OnDragEntered(event);
   }
 
@@ -1279,7 +1346,7 @@ void WebContentsViewAura::OnWindowVisibilityChanged(aura::Window* window,
   web_contents_->UpdateWebContentsVisibility(visible);
 }
 
-#if defined(USE_EXTERNAL_POPUP_MENU)
+#if BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
 void WebContentsViewAura::ShowPopupMenu(RenderFrameHost* render_frame_host,
                                         const gfx::Rect& bounds,
                                         int item_height,

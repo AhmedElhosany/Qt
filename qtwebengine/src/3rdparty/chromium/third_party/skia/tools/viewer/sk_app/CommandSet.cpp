@@ -12,17 +12,6 @@
 
 namespace sk_app {
 
-static bool on_key_handler(Window::Key key, Window::InputState state, uint32_t modifiers,
-                           void* userData) {
-    CommandSet* cs = reinterpret_cast<CommandSet*>(userData);
-    return cs->onKey(key, state, modifiers);
-}
-
-static bool on_char_handler(SkUnichar c, uint32_t modifiers, void* userData) {
-    CommandSet* cs = reinterpret_cast<CommandSet*>(userData);
-    return cs->onChar(c, modifiers);
-}
-
 CommandSet::CommandSet()
     : fHelpMode(kNone_HelpMode) {
     this->addCommand('h', "Overlays", "Show help screen", [this]() {
@@ -43,8 +32,6 @@ CommandSet::CommandSet()
 
 void CommandSet::attach(Window* window) {
     fWindow = window;
-    window->registerKeyFunc(on_key_handler, this);
-    window->registerCharFunc(on_char_handler, this);
 }
 
 bool CommandSet::onKey(Window::Key key, Window::InputState state, uint32_t modifiers) {
@@ -125,7 +112,6 @@ void CommandSet::drawHelp(SkCanvas* canvas) {
 
     SkPaint groupPaint;
     groupPaint.setTextSize(18);
-    groupPaint.setUnderlineText(true);
     groupPaint.setAntiAlias(true);
     groupPaint.setColor(0xFFFFFFFF);
 
@@ -152,14 +138,14 @@ void CommandSet::drawHelp(SkCanvas* canvas) {
         if (kGrouped_HelpMode == fHelpMode && lastGroup != cmd.fGroup) {
             // Group change. Advance and print header:
             y += paint.getTextSize();
-            canvas->drawText(cmd.fGroup.c_str(), cmd.fGroup.size(), x, y, groupPaint);
+            canvas->drawString(cmd.fGroup, x, y, groupPaint);
             y += groupPaint.getTextSize() + 2;
             lastGroup = cmd.fGroup;
         }
 
-        canvas->drawText(cmd.fKeyName.c_str(), cmd.fKeyName.size(), x, y, paint);
+        canvas->drawString(cmd.fKeyName, x, y, paint);
         SkString text = SkStringPrintf(": %s", cmd.fDescription.c_str());
-        canvas->drawText(text.c_str(), text.size(), x + keyWidth, y, paint);
+        canvas->drawString(text, x + keyWidth, y, paint);
         y += paint.getTextSize() + 2;
     }
 }

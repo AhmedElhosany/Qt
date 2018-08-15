@@ -8,25 +8,26 @@
 #ifndef GrTexureOpList_DEFINED
 #define GrTexureOpList_DEFINED
 
+#include "GrGpuResource.h"
 #include "GrOpList.h"
+#include "GrSurfaceProxy.h"
 
 #include "SkTArray.h"
 
 class GrAuditTrail;
-class GrBatch;
 class GrGpu;
+class GrOp;
 class GrTextureProxy;
 struct SkIPoint;
 struct SkIRect;
 
 class GrTextureOpList final : public GrOpList {
 public:
-    GrTextureOpList(GrTextureProxy*, GrGpu*, GrAuditTrail*);
-
+    GrTextureOpList(GrResourceProvider*, GrTextureProxy*, GrAuditTrail*);
     ~GrTextureOpList() override;
 
     /**
-     * Empties the draw buffer of any queued up draws.
+     * Empties the draw buffer of any queued ops.
      */
     void reset() override;
 
@@ -34,11 +35,11 @@ public:
     void freeGpuResources() override {}
 
     /**
-     * Together these two functions flush all queued up draws to GrCommandBuffer. The return value
-     * of drawBatches() indicates whether any commands were actually issued to the GPU.
+     * Together these two functions flush all queued ops to GrGpuCommandBuffer. The return value
+     * of executeOps() indicates whether any commands were actually issued to the GPU.
      */
-    void prepareBatches(GrBatchFlushState* flushState) override;
-    bool drawBatches(GrBatchFlushState* flushState) override;
+    void prepareOps(GrOpFlushState* flushState) override;
+    bool executeOps(GrOpFlushState* flushState) override;
 
     /**
      * Copies a pixel rectangle from one surface to another. This call may finalize
@@ -50,18 +51,22 @@ public:
      * depending on the type of surface, configs, etc, and the backend-specific
      * limitations.
      */
-    bool copySurface(GrSurface* dst,
-                     GrSurface* src,
+    bool copySurface(const GrCaps& caps,
+                     GrSurfaceProxy* dst,
+                     GrSurfaceProxy* src,
                      const SkIRect& srcRect,
-                     const SkIPoint& dstPoint);
+                     const SkIPoint& dstPoint) override;
+
+    GrTextureOpList* asTextureOpList() override { return this; }
 
     SkDEBUGCODE(void dump() const override;)
 
-private:
-    void recordBatch(GrBatch*);
+    SkDEBUGCODE(int numOps() const override { return fRecordedOps.count(); })
 
-    SkSTArray<2, sk_sp<GrBatch>, true> fRecordedBatches;
-    GrGpu*                             fGpu;
+private:
+    void recordOp(std::unique_ptr<GrOp>);
+
+    SkSTArray<2, std::unique_ptr<GrOp>, true> fRecordedOps;
 
     typedef GrOpList INHERITED;
 };

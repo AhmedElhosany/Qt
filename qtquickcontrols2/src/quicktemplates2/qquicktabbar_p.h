@@ -53,6 +53,8 @@
 QT_BEGIN_NAMESPACE
 
 class QQuickTabBarPrivate;
+class QQuickTabBarAttached;
+class QQuickTabBarAttachedPrivate;
 
 class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickTabBar : public QQuickContainer
 {
@@ -83,6 +85,8 @@ public:
     void setContentHeight(qreal height);
     void resetContentHeight();
 
+    static QQuickTabBarAttached *qmlAttachedProperties(QObject *object);
+
 Q_SIGNALS:
     void positionChanged();
     // 2.2 (Qt 5.9)
@@ -95,7 +99,10 @@ protected:
     void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) override;
     bool isContent(QQuickItem *item) const override;
     void itemAdded(int index, QQuickItem *item) override;
+    void itemMoved(int index, QQuickItem *item) override;
     void itemRemoved(int index, QQuickItem *item) override;
+
+    QPalette defaultPalette() const override;
 
 #if QT_CONFIG(accessibility)
     QAccessible::Role accessibleRole() const override;
@@ -106,8 +113,33 @@ private:
     Q_DECLARE_PRIVATE(QQuickTabBar)
 };
 
+class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickTabBarAttached : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(int index READ index NOTIFY indexChanged FINAL)
+    Q_PROPERTY(QQuickTabBar *tabBar READ tabBar NOTIFY tabBarChanged FINAL)
+    Q_PROPERTY(QQuickTabBar::Position position READ position NOTIFY positionChanged FINAL)
+
+public:
+    explicit QQuickTabBarAttached(QObject *parent = nullptr);
+
+    int index() const;
+    QQuickTabBar *tabBar() const;
+    QQuickTabBar::Position position() const;
+
+Q_SIGNALS:
+    void indexChanged();
+    void tabBarChanged();
+    void positionChanged();
+
+private:
+    Q_DISABLE_COPY(QQuickTabBarAttached)
+    Q_DECLARE_PRIVATE(QQuickTabBarAttached)
+};
+
 QT_END_NAMESPACE
 
 QML_DECLARE_TYPE(QQuickTabBar)
+QML_DECLARE_TYPEINFO(QQuickTabBar, QML_HAS_ATTACHED_PROPERTIES)
 
 #endif // QQUICKTABBAR_P_H

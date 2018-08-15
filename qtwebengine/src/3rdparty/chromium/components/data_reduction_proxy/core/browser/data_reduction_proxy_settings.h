@@ -17,7 +17,6 @@
 #include "base/threading/thread_checker.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_metrics.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_service_observer.h"
-#include "components/data_reduction_proxy/core/common/data_savings_recorder.h"
 #include "components/prefs/pref_member.h"
 #include "url/gurl.h"
 
@@ -34,11 +33,6 @@ class DataReductionProxyEventStore;
 class DataReductionProxyIOData;
 class DataReductionProxyService;
 class DataReductionProxyCompressionStats;
-
-// The header used to request a data reduction proxy pass through. When a
-// request is sent to the data reduction proxy with this header, it will respond
-// with the original uncompressed response.
-extern const char kDataReductionPassThroughHeader[];
 
 // Values of the UMA DataReductionProxy.StartupState histogram.
 // This enum must remain synchronized with DataReductionProxyStartupState
@@ -73,19 +67,13 @@ enum DataReductionSettingsEnabledAction {
 // Central point for configuring the data reduction proxy.
 // This object lives on the UI thread and all of its methods are expected to
 // be called from there.
-class DataReductionProxySettings : public DataReductionProxyServiceObserver,
-                                   public DataSavingsRecorder {
+class DataReductionProxySettings : public DataReductionProxyServiceObserver {
  public:
-  typedef base::Callback<bool(const std::string&, const std::string&)>
-      SyntheticFieldTrialRegistrationCallback;
+  using SyntheticFieldTrialRegistrationCallback =
+      base::Callback<bool(base::StringPiece, base::StringPiece)>;
 
   DataReductionProxySettings();
   virtual ~DataReductionProxySettings();
-
-  // DataSavingsRecorder implementation:
-  bool UpdateDataSavings(const std::string& data_usage_host,
-                         int64_t data_used,
-                         int64_t original_size) override;
 
   // Initializes the Data Reduction Proxy with the name of the preference that
   // controls enabling it, profile prefs and a |DataReductionProxyIOData|. The
@@ -96,8 +84,6 @@ class DataReductionProxySettings : public DataReductionProxyServiceObserver,
       PrefService* prefs,
       DataReductionProxyIOData* io_data,
       std::unique_ptr<DataReductionProxyService> data_reduction_proxy_service);
-
-  base::WeakPtr<DataReductionProxyCompressionStats> compression_stats();
 
   // Sets the |register_synthetic_field_trial_| callback and runs to register
   // the DataReductionProxyEnabled and the DataReductionProxyLoFiEnabled
@@ -130,20 +116,8 @@ class DataReductionProxySettings : public DataReductionProxyServiceObserver,
   // on main frame requests.
   void SetLoFiModeActiveOnMainFrame(bool lo_fi_mode_active);
 
-  // Returns true if Lo-Fi image replacement was active on the main frame
-  // request. Returns false if the user is using lite pages.
-  bool WasLoFiModeActiveOnMainFrame() const;
-
-  // Returns true if a "Load image" context menu request has not been made since
-  // the last main frame request.
-  bool WasLoFiLoadImageRequestedBefore();
-
   // Increments the number of times the Lo-Fi UI has been shown.
   void IncrementLoFiUIShown();
-
-  // Sets |lo_fi_load_image_requested_| to true, which means a "Load image"
-  // context menu request has been made since the last main frame request.
-  void SetLoFiLoadImageRequested();
 
   // Counts the number of requests to reload the page with images from the Lo-Fi
   // UI. If the user requests the page with images a certain number of times,
@@ -157,6 +131,9 @@ class DataReductionProxySettings : public DataReductionProxyServiceObserver,
   // Returns the time in microseconds that the last update was made to the
   // daily original and received content lengths.
   int64_t GetDataReductionLastUpdateTime();
+
+  // Clears all data saving statistics.
+  void ClearDataSavingStatistics();
 
   // Returns the difference between the total original size of all HTTP content
   // received from the network and the actual size of the HTTP content received.
@@ -187,17 +164,6 @@ class DataReductionProxySettings : public DataReductionProxyServiceObserver,
   // InitDataReductionProxySettings has not been called.
   DataReductionProxyEventStore* GetEventStore() const;
 
-  // Returns true if the data reduction proxy configuration may be used.
-  bool Allowed() const {
-    return allowed_;
-  }
-
-  // Returns true if the data reduction proxy promo may be shown.
-  // This is independent of whether the data reduction proxy is allowed.
-  bool PromoAllowed() const {
-    return promo_allowed_;
-  }
-
   DataReductionProxyService* data_reduction_proxy_service() {
     return data_reduction_proxy_service_.get();
   }
@@ -217,19 +183,17 @@ class DataReductionProxySettings : public DataReductionProxyServiceObserver,
  protected:
   void InitPrefMembers();
 
-  void UpdateConfigValues();
-
   // Virtualized for unit test support.
   virtual PrefService* GetOriginalProfilePrefs();
 
   // Metrics method. Subclasses should override if they wish to provide
   // alternatives.
-  virtual void RecordDataReductionInit();
+  virtual void RecordDataReductionInit() const;
 
   // Virtualized for mocking. Records UMA specifying whether the proxy was
   // enabled or disabled at startup.
   virtual void RecordStartupState(
-      data_reduction_proxy::ProxyStartupState state);
+      data_reduction_proxy::ProxyStartupState state) const;
 
  private:
   friend class DataReductionProxySettingsTestBase;
@@ -270,6 +234,8 @@ class DataReductionProxySettings : public DataReductionProxyServiceObserver,
                            TestDaysSinceEnabledWithTestClock);
   FRIEND_TEST_ALL_PREFIXES(DataReductionProxySettingsTest,
                            TestDaysSinceEnabledExistingUser);
+  FRIEND_TEST_ALL_PREFIXES(DataReductionProxySettingsTest,
+                           TestDaysSinceSavingsCleared);
 
   // Override of DataReductionProxyService::Observer.
   void OnServiceInitialized() override;
@@ -301,18 +267,6 @@ class DataReductionProxySettings : public DataReductionProxyServiceObserver,
   // OnServiceInitialized is called, if |deferred_initialization_| is true,
   // IO object calls will be performed at that time.
   bool deferred_initialization_;
-
-  // The following values are cached in order to access the values on the
-  // correct thread.
-  bool allowed_;
-  bool promo_allowed_;
-
-  // True if Lo-Fi is active.
-  bool lo_fi_mode_active_;
-
-  // True if a "Load image" context menu request has not been made since the
-  // last main frame request.
-  bool lo_fi_load_image_requested_;
 
   // The number of requests to reload the page with images from the Lo-Fi
   // UI until Lo-Fi is disabled for the remainder of the session.

@@ -49,6 +49,55 @@
 
 QT_BEGIN_NAMESPACE
 
+/*!
+    \class QOAuth1
+    \inmodule QtNetworkAuth
+    \ingroup oauth
+    \brief The QOAuth1 class provides an implementation of the
+    \l {https://tools.ietf.org/html/rfc5849}{OAuth 1 Protocol}.
+    \since 5.8
+
+    QOAuth1 provides a method for clients to access server resources
+    on behalf of a resource owner (such as a different client or an
+    end-user). It also provides a process for end-users to authorize
+    third-party access to their server resources without sharing
+    their credentials (typically, a username and password pair),
+    using user-agent redirections.
+
+    QOAuth1 uses tokens to represent the authorization granted to the
+    client by the resource owner.  Typically, token credentials are
+    issued by the server at the resource owner's request, after
+    authenticating the resource owner's identity (usually using a
+    username and password).
+
+    When making the temporary credentials request, the client
+    authenticates using only the client credentials. When making the
+    token request, the client authenticates using the client
+    credentials as well as the temporary credentials. Once the
+    client receives and stores the token credentials, it can
+    proceed to access protected resources on behalf of the resource
+    owner by making authenticated requests using the client
+    credentials together with the token credentials received.
+*/
+
+/*!
+    \enum QOAuth1::SignatureMethod
+
+    Indicates the signature method to be used to sign requests.
+
+    \value Hmac_Sha1
+    \l {https://tools.ietf.org/html/rfc5849#section-3.4.2}
+    {HMAC-SHA1} signature method.
+
+    \value Rsa_Sha1
+    \l {https://tools.ietf.org/html/rfc5849#section-3.4.3}
+    {RSA-SHA1} signature method (not supported).
+
+    \value PlainText
+    \l {https://tools.ietf.org/html/rfc5849#section-3.4.4}
+    {PLAINTEXT} signature method.
+*/
+
 using Key = QOAuth1Private::OAuth1KeyString;
 const QString Key::oauthCallback =           QStringLiteral("oauth_callback");
 const QString Key::oauthCallbackConfirmed =  QStringLiteral("oauth_callback_confirmed");
@@ -64,8 +113,11 @@ const QString Key::oauthVersion =            QStringLiteral("oauth_version");
 
 QOAuth1Private::QOAuth1Private(const QPair<QString, QString> &clientCredentials,
                                QNetworkAccessManager *networkAccessManager) :
-    QAbstractOAuthPrivate(networkAccessManager),
-    clientCredentials(clientCredentials)
+    QAbstractOAuthPrivate("qt.networkauth.oauth1",
+                          QUrl(),
+                          clientCredentials.first,
+                          networkAccessManager),
+    clientIdentifierSharedKey(clientCredentials.second)
 {
     qRegisterMetaType<QNetworkReply::NetworkError>("QNetworkReply::NetworkError");
     qRegisterMetaType<QOAuth1::SignatureMethod>("QOAuth1::SignatureMethod");
@@ -76,7 +128,7 @@ void QOAuth1Private::appendCommonHeaders(QVariantMap *headers)
     const auto currentDateTime = QDateTime::currentDateTimeUtc();
 
     headers->insert(Key::oauthNonce, QOAuth1::nonce());
-    headers->insert(Key::oauthConsumerKey, clientCredentials.first);
+    headers->insert(Key::oauthConsumerKey, clientIdentifier);
     headers->insert(Key::oauthTimestamp, QString::number(currentDateTime.toTime_t()));
     headers->insert(Key::oauthVersion, oauthVersion);
     headers->insert(Key::oauthSignatureMethod, signatureMethodString().toUtf8());
@@ -105,16 +157,16 @@ QNetworkReply *QOAuth1Private::requestToken(QNetworkAccessManager::Operation ope
 {
     Q_Q(QOAuth1);
     if (Q_UNLIKELY(!networkAccessManager())) {
-        qWarning("QOAuth1Private::requestToken: QNetworkAccessManager not available");
+        qCWarning(loggingCategory, "QNetworkAccessManager not available");
         return nullptr;
     }
     if (Q_UNLIKELY(url.isEmpty())) {
-        qWarning("QOAuth1Private::requestToken: Request Url not set");
+        qCWarning(loggingCategory, "Request Url not set");
         return nullptr;
     }
     if (Q_UNLIKELY(operation != QNetworkAccessManager::GetOperation &&
                    operation != QNetworkAccessManager::PostOperation)) {
-        qWarning("QOAuth1Private::requestToken: Operation not supported");
+        qCWarning(loggingCategory, "Operation not supported");
         return nullptr;
     }
 
@@ -183,8 +235,8 @@ QByteArray QOAuth1Private::generateSignature(const QVariantMap &parameters,
                                              QNetworkAccessManager::Operation operation) const
 {
     const QOAuth1Signature signature(url,
-                                     clientCredentials.second,
-                                     tokenCredentials.second,
+                                     clientIdentifierSharedKey,
+                                     tokenSecret,
                                      static_cast<QOAuth1Signature::HttpRequestMethod>(operation),
                                      parameters);
 
@@ -192,7 +244,7 @@ QByteArray QOAuth1Private::generateSignature(const QVariantMap &parameters,
     case QOAuth1::SignatureMethod::Hmac_Sha1:
         return signature.hmacSha1().toBase64();
     case QOAuth1::SignatureMethod::PlainText:
-        return signature.plainText(clientCredentials.first);
+        return signature.plainText();
     default:
         qFatal("QOAuth1Private::generateSignature: Signature method not supported");
         return QByteArray();
@@ -231,11 +283,18 @@ void QOAuth1Private::_q_tokensReceived(const QVariantMap &tokens)
     }
 }
 
+/*!
+    Constructs a QOAuth1 object with parent object \a parent.
+*/
 QOAuth1::QOAuth1(QObject *parent) :
     QOAuth1(nullptr,
             parent)
 {}
 
+/*!
+    Constructs a QOAuth1 object with parent object \a parent, using
+    \a manager to access the network.
+*/
 QOAuth1::QOAuth1(QNetworkAccessManager *manager, QObject *parent) :
     QOAuth1(QString(),
             QString(),
@@ -243,6 +302,12 @@ QOAuth1::QOAuth1(QNetworkAccessManager *manager, QObject *parent) :
             parent)
 {}
 
+/*!
+    Constructs a QOAuth1 object with parent object \a parent, using
+    \a manager to access the network.
+    Also sets \a clientIdentifier and \a clientSharedSecret to sign
+    the calls to the web server and identify the application.
+*/
 QOAuth1::QOAuth1(const QString &clientIdentifier,
                  const QString &clientSharedSecret,
                  QNetworkAccessManager *manager,
@@ -252,50 +317,64 @@ QOAuth1::QOAuth1(const QString &clientIdentifier,
                      parent)
 {}
 
-QOAuth1::~QOAuth1()
-{}
+/*!
+    Returns the current shared secret used to sign requests to
+    the web server.
 
-QString QOAuth1::clientIdentifier() const
-{
-    Q_D(const QOAuth1);
-    return d->clientCredentials.first;
-}
-
-void QOAuth1::setClientIdentifier(const QString &clientIdentifier)
-{
-    Q_D(QOAuth1);
-    if (d->clientCredentials.first != clientIdentifier) {
-        d->clientCredentials.first = clientIdentifier;
-        Q_EMIT clientIdentifierChanged(clientIdentifier);
-    }
-}
-
+    \sa setClientSharedSecret(), clientCredentials()
+*/
 QString QOAuth1::clientSharedSecret() const
 {
     Q_D(const QOAuth1);
-    return d->clientCredentials.second;
+    return d->clientIdentifierSharedKey;
 }
 
+/*!
+    Sets \a clientSharedSecret as the string used to sign the
+    requests to the web server.
+
+    \sa clientSharedSecret(), setClientCredentials()
+*/
 void QOAuth1::setClientSharedSecret(const QString &clientSharedSecret)
 {
     Q_D(QOAuth1);
-    if (d->clientCredentials.second != clientSharedSecret) {
-        d->clientCredentials.second = clientSharedSecret;
+    if (d->clientIdentifierSharedKey != clientSharedSecret) {
+        d->clientIdentifierSharedKey = clientSharedSecret;
         Q_EMIT clientSharedSecretChanged(clientSharedSecret);
     }
 }
 
+/*!
+    Returns the pair of QString used to identify the application and
+    sign requests to the web server.
+
+    \sa setClientCredentials()
+*/
 QPair<QString, QString> QOAuth1::clientCredentials() const
 {
     Q_D(const QOAuth1);
-    return d->clientCredentials;
+    return qMakePair(d->clientIdentifier, d->clientIdentifierSharedKey);
 }
 
+/*!
+    Sets \a clientCredentials as the pair of QString used to identify
+    the application and sign requests to the web server.
+
+    \sa clientCredentials()
+*/
 void QOAuth1::setClientCredentials(const QPair<QString, QString> &clientCredentials)
 {
     setClientCredentials(clientCredentials.first, clientCredentials.second);
 }
 
+/*!
+    Sets \a clientIdentifier and \a clientSharedSecret as the pair of
+    QString used to identify the application and sign requests to the
+    web server. \a clientIdentifier identifies the application and
+    \a clientSharedSecret is used to sign requests.
+
+    \sa clientCredentials()
+*/
 void QOAuth1::setClientCredentials(const QString &clientIdentifier,
                                    const QString &clientSharedSecret)
 {
@@ -303,59 +382,89 @@ void QOAuth1::setClientCredentials(const QString &clientIdentifier,
     setClientSharedSecret(clientSharedSecret);
 }
 
-QString QOAuth1::token() const
-{
-    Q_D(const QOAuth1);
-    return d->tokenCredentials.first;
-}
+/*!
+    Returns the current token secret used to sign authenticated
+    requests to the web server.
 
-void QOAuth1::setToken(const QString &token)
-{
-    Q_D(QOAuth1);
-    if (d->tokenCredentials.first != token) {
-        d->tokenCredentials.first = token;
-        Q_EMIT tokenChanged(token);
-    }
-}
-
+    \sa setTokenSecret(), tokenCredentials()
+*/
 QString QOAuth1::tokenSecret() const
 {
     Q_D(const QOAuth1);
-    return d->tokenCredentials.second;
+    return d->tokenSecret;
 }
+/*!
+    Sets \a tokenSecret as the current token secret used to sign
+    authenticated calls to the web server.
 
+    \sa tokenSecret(), setTokenCredentials()
+*/
 void QOAuth1::setTokenSecret(const QString &tokenSecret)
 {
     Q_D(QOAuth1);
-    if (d->tokenCredentials.second != tokenSecret) {
-        d->tokenCredentials.second = tokenSecret;
+    if (d->tokenSecret != tokenSecret) {
+        d->tokenSecret = tokenSecret;
         Q_EMIT tokenSecretChanged(tokenSecret);
     }
 }
 
+/*!
+    Returns the pair of QString used to identify and sign
+    authenticated requests to the web server.
+
+    \sa setTokenCredentials()
+*/
 QPair<QString, QString> QOAuth1::tokenCredentials() const
 {
     Q_D(const QOAuth1);
-    return d->tokenCredentials;
+    return qMakePair(d->token, d->tokenSecret);
 }
 
+/*!
+    Sets \a tokenCredentials as the pair of QString used to identify
+    and sign authenticated requests to the web server.
+
+    \sa tokenCredentials()
+*/
 void QOAuth1::setTokenCredentials(const QPair<QString, QString> &tokenCredentials)
 {
     setTokenCredentials(tokenCredentials.first, tokenCredentials.second);
 }
 
+/*!
+    Sets \a token and \a tokenSecret as the pair of QString used to
+    identify and sign authenticated requests to the web server.
+    Once the client receives and stores the token credentials, it can
+    proceed to access protected resources on behalf of the resource
+    owner by making authenticated requests using the client
+    credentials together with the token credentials received.
+
+    \sa tokenCredentials()
+*/
 void QOAuth1::setTokenCredentials(const QString &token, const QString &tokenSecret)
 {
     setToken(token);
     setTokenSecret(tokenSecret);
 }
 
+/*!
+    Returns the url used to request temporary credentials to
+    start the authentication process.
+
+    \sa setTemporaryCredentialsUrl()
+*/
 QUrl QOAuth1::temporaryCredentialsUrl() const
 {
     Q_D(const QOAuth1);
     return d->temporaryCredentialsUrl;
 }
 
+/*!
+    Sets \a url as the URL to request temporary credentials to
+    start the authentication process.
+
+    \sa temporaryCredentialsUrl()
+*/
 void QOAuth1::setTemporaryCredentialsUrl(const QUrl &url)
 {
     Q_D(QOAuth1);
@@ -365,12 +474,24 @@ void QOAuth1::setTemporaryCredentialsUrl(const QUrl &url)
     }
 }
 
+/*!
+    Returns the url used to request token credentials to continue
+    the authentication process.
+
+    \sa setTokenCredentialsUrl()
+*/
 QUrl QOAuth1::tokenCredentialsUrl() const
 {
     Q_D(const QOAuth1);
     return d->tokenCredentialsUrl;
 }
 
+/*!
+    Sets \a url as the URL to request the token credentials to
+    continue the authentication process.
+
+    \sa tokenCredentialsUrl()
+*/
 void QOAuth1::setTokenCredentialsUrl(const QUrl &url)
 {
     Q_D(QOAuth1);
@@ -380,12 +501,23 @@ void QOAuth1::setTokenCredentialsUrl(const QUrl &url)
     }
 }
 
+/*!
+    Returns the method used to sign the request to the web server.
+
+    \sa setSignatureMethod()
+*/
 QOAuth1::SignatureMethod QOAuth1::signatureMethod() const
 {
     Q_D(const QOAuth1);
     return d->signatureMethod;
 }
 
+/*!
+    Sets \a value as the method used to sign requests to the web
+    server.
+
+    \sa signatureMethod()
+*/
 void QOAuth1::setSignatureMethod(QOAuth1::SignatureMethod value)
 {
     Q_D(QOAuth1);
@@ -395,11 +527,19 @@ void QOAuth1::setSignatureMethod(QOAuth1::SignatureMethod value)
     }
 }
 
+/*!
+    Sends an authenticated HEAD request and returns a new
+    QNetworkReply. The \a url and \a parameters are used to create
+    the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc2616#section-9.4}
+    {Hypertext Transfer Protocol -- HTTP/1.1: HEAD}
+*/
 QNetworkReply *QOAuth1::head(const QUrl &url, const QVariantMap &parameters)
 {
     Q_D(QOAuth1);
     if (!d->networkAccessManager()) {
-        qWarning("QOAuth1::head: QNetworkAccessManager not available");
+        qCWarning(d->loggingCategory, "QNetworkAccessManager not available");
         return nullptr;
     }
     QNetworkRequest request(url);
@@ -407,11 +547,19 @@ QNetworkReply *QOAuth1::head(const QUrl &url, const QVariantMap &parameters)
     return d->networkAccessManager()->head(request);
 }
 
+/*!
+    Sends an authenticated GET request and returns a new
+    QNetworkReply. The \a url and \a parameters are used to create
+    the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc2616#section-9.3}
+    {Hypertext Transfer Protocol -- HTTP/1.1: GET}
+*/
 QNetworkReply *QOAuth1::get(const QUrl &url, const QVariantMap &parameters)
 {
     Q_D(QOAuth1);
     if (!d->networkAccessManager()) {
-        qWarning("QOAuth1::get: QNetworkAccessManager not available");
+        qCWarning(d->loggingCategory, "QNetworkAccessManager not available");
         return nullptr;
     }
     QNetworkRequest request(url);
@@ -421,11 +569,19 @@ QNetworkReply *QOAuth1::get(const QUrl &url, const QVariantMap &parameters)
     return reply;
 }
 
+/*!
+    Sends an authenticated POST request and returns a new
+    QNetworkReply. The \a url and \a parameters are used to create
+    the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc2616#section-9.5}
+    {Hypertext Transfer Protocol -- HTTP/1.1: POST}
+*/
 QNetworkReply *QOAuth1::post(const QUrl &url, const QVariantMap &parameters)
 {
     Q_D(QOAuth1);
     if (!d->networkAccessManager()) {
-        qWarning("QOAuth1::post: QNetworkAccessManager not available");
+        qCWarning(d->loggingCategory, "QNetworkAccessManager not available");
         return nullptr;
     }
     QNetworkRequest request(url);
@@ -438,11 +594,44 @@ QNetworkReply *QOAuth1::post(const QUrl &url, const QVariantMap &parameters)
     return reply;
 }
 
+/*!
+    Sends an authenticated PUT request and returns a new
+    QNetworkReply. The \a url and \a parameters are used to create
+    the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc2616#section-9.6}
+    {Hypertext Transfer Protocol -- HTTP/1.1: PUT}
+*/
+QNetworkReply *QOAuth1::put(const QUrl &url, const QVariantMap &parameters)
+{
+    Q_D(QOAuth1);
+    if (!d->networkAccessManager()) {
+        qCWarning(d->loggingCategory, "QNetworkAccessManager not available");
+        return nullptr;
+    }
+    QNetworkRequest request(url);
+    setup(&request, parameters, QNetworkAccessManager::PutOperation);
+    d->addContentTypeHeaders(&request);
+
+    const QByteArray data = d->convertParameters(parameters);
+    QNetworkReply *reply = d->networkAccessManager()->put(request, data);
+    connect(reply, &QNetworkReply::finished, std::bind(&QAbstractOAuth::finished, this, reply));
+    return reply;
+}
+
+/*!
+    Sends an authenticated DELETE request and returns a new
+    QNetworkReply. The \a url and \a parameters are used to create
+    the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc2616#section-9.7}
+    {Hypertext Transfer Protocol -- HTTP/1.1: DELETE}
+*/
 QNetworkReply *QOAuth1::deleteResource(const QUrl &url, const QVariantMap &parameters)
 {
     Q_D(QOAuth1);
     if (!d->networkAccessManager()) {
-        qWarning("QOAuth1::deleteResource: QNetworkAccessManager not available");
+        qCWarning(d->loggingCategory, "QNetworkAccessManager not available");
         return nullptr;
     }
     QNetworkRequest request(url);
@@ -452,16 +641,34 @@ QNetworkReply *QOAuth1::deleteResource(const QUrl &url, const QVariantMap &param
     return reply;
 }
 
+/*!
+    Starts the a request for temporary credentials using the request
+    method \a operation. The request URL is \a url and the
+    \a parameters shall encoded and sent during the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc5849#section-2.1}
+    {The OAuth 1.0 Protocol: Temporary Credentials}
+*/
 QNetworkReply *QOAuth1::requestTemporaryCredentials(QNetworkAccessManager::Operation operation,
                                                     const QUrl &url,
                                                     const QVariantMap &parameters)
 {
-    // https://tools.ietf.org/html/rfc5849#section-2.1
     Q_D(QOAuth1);
-    d->tokenCredentials = QPair<QString, QString>();
-    return d->requestToken(operation, url, d->tokenCredentials, parameters);
+    d->token.clear();
+    d->tokenSecret.clear();
+    return d->requestToken(operation, url, qMakePair(d->token, d->tokenSecret), parameters);
 }
 
+/*!
+    Starts a request for token credentials using the request
+    method \a operation. The request URL is \a url and the
+    \a parameters shall be encoded and sent during the
+    request. The \a temporaryToken pair of string is used to identify
+    and sign the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc5849#section-2.3}
+    {The OAuth 1.0 Protocol: Token Credentials}
+*/
 QNetworkReply *QOAuth1::requestTokenCredentials(QNetworkAccessManager::Operation operation,
                                                 const QUrl &url,
                                                 const QPair<QString, QString> &temporaryToken,
@@ -471,6 +678,9 @@ QNetworkReply *QOAuth1::requestTokenCredentials(QNetworkAccessManager::Operation
     return d->requestToken(operation, url, temporaryToken, parameters);
 }
 
+/*!
+    Signs the \a request using \a signingParameters and \a operation.
+*/
 void QOAuth1::setup(QNetworkRequest *request,
                     const QVariantMap &signingParameters,
                     QNetworkAccessManager::Operation operation)
@@ -478,19 +688,12 @@ void QOAuth1::setup(QNetworkRequest *request,
     Q_D(const QOAuth1);
 
     QVariantMap oauthParams;
-    QVariantMap otherParams = signingParameters;
-    // Adding parameters located in the query
-    {
-        auto queryItems = QUrlQuery(request->url().query()).queryItems();
-        for (auto it = queryItems.begin(), end = queryItems.end(); it != end; ++it)
-            otherParams.insert(it->first, it->second);
-    }
 
     const auto currentDateTime = QDateTime::currentDateTimeUtc();
 
-    oauthParams.insert(Key::oauthConsumerKey, d->clientCredentials.first);
+    oauthParams.insert(Key::oauthConsumerKey, d->clientIdentifier);
     oauthParams.insert(Key::oauthVersion, QStringLiteral("1.0"));
-    oauthParams.insert(Key::oauthToken, d->tokenCredentials.first);
+    oauthParams.insert(Key::oauthToken, d->token);
     oauthParams.insert(Key::oauthSignatureMethod, d->signatureMethodString());
     oauthParams.insert(Key::oauthNonce, QOAuth1::nonce());
     oauthParams.insert(Key::oauthTimestamp, QString::number(currentDateTime.toTime_t()));
@@ -516,31 +719,31 @@ void QOAuth1::setup(QNetworkRequest *request,
 
     request->setRawHeader("Authorization", generateAuthorizationHeader(oauthParams));
 
-    if (operation == QNetworkAccessManager::PostOperation)
+    if (operation == QNetworkAccessManager::PostOperation
+            || operation == QNetworkAccessManager::PutOperation)
         request->setHeader(QNetworkRequest::ContentTypeHeader,
                            QStringLiteral("application/x-www-form-urlencoded"));
 }
 
+/*!
+    Generates a nonce.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc5849#section-3.3}
+    {The OAuth 1.0 Protocol: Nonce and Timestamp}
+*/
 QByteArray QOAuth1::nonce()
 {
-    // https://tools.ietf.org/html/rfc5849#section-3.3
     return QAbstractOAuth::generateRandomString(8);
 }
 
-QByteArray QOAuth1::signature(const QVariantMap &parameters,
-                              const QUrl &url,
-                              QNetworkAccessManager::Operation op,
-                              const QString &clientSharedSecret,
-                              const QString &tokenSecret)
-{
-    auto method = static_cast<QOAuth1Signature::HttpRequestMethod>(op);
-    QOAuth1Signature signature(url, clientSharedSecret, tokenSecret, method, parameters);
-    return signature.hmacSha1().toBase64();
-}
+/*!
+    Generates an authorization header using \a oauthParams.
 
+    \b {See also}: \l {https://tools.ietf.org/html/rfc5849#section-3.5.1}
+    {The OAuth 1.0 Protocol: Authorization Header}
+*/
 QByteArray QOAuth1::generateAuthorizationHeader(const QVariantMap &oauthParams)
 {
-    // https://tools.ietf.org/html/rfc5849#section-3.5.1
     // TODO Add realm parameter support
     bool first = true;
     QString ret(QStringLiteral("OAuth "));
@@ -558,22 +761,33 @@ QByteArray QOAuth1::generateAuthorizationHeader(const QVariantMap &oauthParams)
     return ret.toUtf8();
 }
 
+/*!
+    Starts the Redirection-Based Authorization flow.
+
+    \note For an out-of-band reply handler, a verifier string is
+    received after the call to this function; pass that to
+    continueGrantWithVerifier() to continue the grant process.
+
+    \sa continueGrantWithVerifier()
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc5849#section-2}
+    {The OAuth 1.0 Protocol: Redirection-Based Authorization}
+*/
 void QOAuth1::grant()
 {
-    // https://tools.ietf.org/html/rfc5849#section-2
     Q_D(QOAuth1);
     using Key = QOAuth1Private::OAuth1KeyString;
 
     if (d->temporaryCredentialsUrl.isEmpty()) {
-        qWarning("QOAuth1::grant: requestTokenUrl is empty");
+        qCWarning(d->loggingCategory, "requestTokenUrl is empty");
         return;
     }
     if (d->tokenCredentialsUrl.isEmpty()) {
-        qWarning("QOAuth1::grant: authorizationGrantUrl is empty");
+        qCWarning(d->loggingCategory, "authorizationGrantUrl is empty");
         return;
     }
-    if (!d->tokenCredentials.first.isEmpty()) {
-        qWarning("QOAuth1::grant: Already authenticated");
+    if (!d->token.isEmpty()) {
+        qCWarning(d->loggingCategory, "Already authenticated");
         return;
     }
 
@@ -586,11 +800,11 @@ void QOAuth1::grant()
                 // try upgrading token without verifier
                 auto reply = requestTokenCredentials(QNetworkAccessManager::PostOperation,
                                                      d->tokenCredentialsUrl,
-                                                     d->tokenCredentials);
+                                                     qMakePair(d->token, d->tokenSecret));
                 connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
             } else {
                 QVariantMap parameters;
-                parameters.insert(Key::oauthToken, d->tokenCredentials.first);
+                parameters.insert(Key::oauthToken, d->token);
                 if (d->modifyParametersFunction)
                     d->modifyParametersFunction(Stage::RequestingAuthorization, &parameters);
 
@@ -610,7 +824,8 @@ void QOAuth1::grant()
                 const QVariantMap &values) {
             QString verifier = values.value(Key::oauthVerifier).toString();
             if (verifier.isEmpty()) {
-                qWarning("%s not found in the callback", qPrintable(Key::oauthVerifier));
+                qCWarning(d->loggingCategory, "%s not found in the callback",
+                          qPrintable(Key::oauthVerifier));
                 return;
             }
             continueGrantWithVerifier(verifier);
@@ -623,6 +838,11 @@ void QOAuth1::grant()
     connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
 }
 
+/*!
+    Continues the Redirection-Based Authorization flow using
+    \a verifier. Call this function when using an Out-of-band reply
+    handler to supply the verifier provided by the web server.
+*/
 void QOAuth1::continueGrantWithVerifier(const QString &verifier)
 {
     // https://tools.ietf.org/html/rfc5849#section-2.3
@@ -632,7 +852,7 @@ void QOAuth1::continueGrantWithVerifier(const QString &verifier)
     parameters.insert(Key::oauthVerifier, verifier);
     auto reply = requestTokenCredentials(QNetworkAccessManager::PostOperation,
                                          d->tokenCredentialsUrl,
-                                         d->tokenCredentials,
+                                         qMakePair(d->token, d->tokenSecret),
                                          parameters);
     connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
 }

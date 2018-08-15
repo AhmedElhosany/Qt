@@ -89,6 +89,16 @@ QWaylandDisplay * QWaylandScreen::display() const
     return mWaylandDisplay;
 }
 
+QString QWaylandScreen::manufacturer() const
+{
+    return mManufacturer;
+}
+
+QString QWaylandScreen::model() const
+{
+    return mModel;
+}
+
 QRect QWaylandScreen::geometry() const
 {
     // Scale geometry for QScreen. This makes window and screen
@@ -128,10 +138,8 @@ QList<QPlatformScreen *> QWaylandScreen::virtualSiblings() const
     QList<QPlatformScreen *> list;
     const QList<QWaylandScreen*> screens = mWaylandDisplay->screens();
     list.reserve(screens.count());
-    for (QWaylandScreen *screen : qAsConst(screens)) {
-        if (screen->screen())
-            list << screen;
-    }
+    foreach (QWaylandScreen *screen, screens)
+        list << screen;
     return list;
 }
 
@@ -205,12 +213,11 @@ void QWaylandScreen::output_geometry(int32_t x, int32_t y,
                                      int32_t transform)
 {
     Q_UNUSED(subpixel);
-    Q_UNUSED(make);
+
+    mManufacturer = make;
+    mModel = model;
 
     mTransform = transform;
-
-    if (!model.isEmpty())
-        mOutputName = model;
 
     mPhysicalSize = QSize(width, height);
     mGeometry.moveTopLeft(QPoint(x, y));

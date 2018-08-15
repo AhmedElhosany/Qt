@@ -63,22 +63,20 @@ class CC_EXPORT PictureLayerTilingSet {
       scoped_refptr<RasterSource> raster_source,
       const PictureLayerTilingSet* pending_twin_set,
       const Region& layer_invalidation,
-      float minimum_contents_scale_key,
-      float maximum_contents_scale_key);
+      float minimum_contents_scale,
+      float maximum_contents_scale);
 
   // This function is called on the sync tree during commit.
   void UpdateTilingsToCurrentRasterSourceForCommit(
       scoped_refptr<RasterSource> raster_source,
       const Region& layer_invalidation,
-      float minimum_contents_scale_key,
-      float maximum_contents_scale_key);
+      float minimum_contents_scale,
+      float maximum_contents_scale);
 
-  // This function is called on the sync tree right after commit.
-  void UpdateRasterSourceDueToLCDChange(
-      scoped_refptr<RasterSource> raster_source,
-      const Region& layer_invalidation);
+  // Invalidates the region on all tilings and recreates the tiles as needed.
+  void Invalidate(const Region& layer_invalidation);
 
-  PictureLayerTiling* AddTiling(float contents_scale_key,
+  PictureLayerTiling* AddTiling(const gfx::AxisTransform2d& raster_transform,
                                 scoped_refptr<RasterSource> raster_source);
   size_t num_tilings() const { return tilings_.size(); }
   int NumHighResTilings() const;
@@ -105,6 +103,9 @@ class CC_EXPORT PictureLayerTilingSet {
   // the aspect ratio.
   float GetMaximumContentsScale() const;
 
+  // Remove one tiling.
+  void Remove(PictureLayerTiling* tiling);
+
   // Removes all tilings with a contents scale key < |minimum_scale_key|.
   void RemoveTilingsBelowScaleKey(float minimum_scale_key);
 
@@ -124,9 +125,6 @@ class CC_EXPORT PictureLayerTilingSet {
                             double current_frame_time_in_seconds,
                             const Occlusion& occlusion_in_layer_space,
                             bool can_require_tiles_for_activation);
-
-  void SetAspectRatio(float ratio);
-  float aspect_ratio() const { return aspect_ratio_; }
 
   void GetAllPrioritizedTilesForTracing(
       std::vector<PrioritizedTile>* prioritized_tiles) const;
@@ -227,8 +225,6 @@ class CC_EXPORT PictureLayerTilingSet {
       scoped_refptr<RasterSource> raster_source,
       const Region& layer_invalidation);
 
-  // Remove one tiling.
-  void Remove(PictureLayerTiling* tiling);
   void VerifyTilings(const PictureLayerTilingSet* pending_twin_set) const;
 
   bool TilingsNeedUpdate(const gfx::Rect& required_rect_in_layer_space,
@@ -261,8 +257,6 @@ class CC_EXPORT PictureLayerTilingSet {
   gfx::Rect skewport_in_layer_space_;
   gfx::Rect soon_border_rect_in_layer_space_;
   gfx::Rect eventually_rect_in_layer_space_;
-
-  float aspect_ratio_ = 1.f;
 
   friend class Iterator;
 

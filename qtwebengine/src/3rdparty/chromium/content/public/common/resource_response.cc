@@ -43,19 +43,27 @@ scoped_refptr<ResourceResponse> ResourceResponse::DeepCopy() const {
       head.was_fetched_via_foreign_fetch;
   new_response->head.was_fallback_required_by_service_worker =
       head.was_fallback_required_by_service_worker;
-  new_response->head.original_url_via_service_worker =
-      head.original_url_via_service_worker;
+  new_response->head.url_list_via_service_worker =
+      head.url_list_via_service_worker;
   new_response->head.response_type_via_service_worker =
       head.response_type_via_service_worker;
   new_response->head.service_worker_start_time =
       head.service_worker_start_time;
   new_response->head.service_worker_ready_time =
       head.service_worker_ready_time;
-  new_response->head.is_using_lofi = head.is_using_lofi;
+  new_response->head.is_in_cache_storage = head.is_in_cache_storage;
+  new_response->head.cache_storage_cache_name = head.cache_storage_cache_name;
+  new_response->head.previews_state = head.previews_state;
   new_response->head.effective_connection_type = head.effective_connection_type;
+  new_response->head.certificate = head.certificate;
+  new_response->head.cert_status = head.cert_status;
+  new_response->head.ssl_connection_status = head.ssl_connection_status;
+  new_response->head.ssl_key_exchange_group = head.ssl_key_exchange_group;
   new_response->head.signed_certificate_timestamps =
       head.signed_certificate_timestamps;
   new_response->head.cors_exposed_header_names = head.cors_exposed_header_names;
+  new_response->head.did_service_worker_navigation_preload =
+      head.did_service_worker_navigation_preload;
   return new_response;
 }
 

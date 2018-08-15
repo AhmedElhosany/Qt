@@ -67,10 +67,7 @@ NetworkConfigWatcherMacThread::~NetworkConfigWatcherMacThread() {
 }
 
 void NetworkConfigWatcherMacThread::Init() {
-  // Disallow IO to make sure NetworkConfigWatcherMacThread's helper thread does
-  // not perform blocking operations.
-  base::ThreadRestrictions::SetIOAllowed(false);
-
+  base::ThreadRestrictions::SetIOAllowed(true);
   delegate_->Init();
 
   // TODO(willchan): Look to see if there's a better signal for when it's ok to
@@ -124,7 +121,7 @@ NetworkConfigWatcherMac::NetworkConfigWatcherMac(Delegate* delegate)
   // We create this notifier thread because the notification implementation
   // needs a thread with a CFRunLoop, and there's no guarantee that
   // MessageLoop::current() meets that criterion.
-  base::Thread::Options thread_options(base::MessageLoop::TYPE_UI, 0);
+  base::Thread::Options thread_options(base::MessageLoop::TYPE_DEFAULT, 0);
   notifier_thread_->StartWithOptions(thread_options);
 }
 

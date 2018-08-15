@@ -15,7 +15,7 @@
 namespace content {
 
 bool RenderFrameHostDelegate::OnMessageReceived(
-    RenderFrameHost* render_view_host,
+    RenderFrameHostImpl* render_frame_host,
     const IPC::Message& message) {
   return false;
 }
@@ -57,8 +57,13 @@ bool RenderFrameHostDelegate::CheckMediaAccessPermission(
   return false;
 }
 
+std::string RenderFrameHostDelegate::GetDefaultMediaDeviceID(
+    MediaStreamType type) {
+  return std::string();
+}
+
 AccessibilityMode RenderFrameHostDelegate::GetAccessibilityMode() const {
-  return AccessibilityModeOff;
+  return AccessibilityMode();
 }
 
 RenderFrameHost* RenderFrameHostDelegate::GetGuestByInstanceID(
@@ -67,15 +72,17 @@ RenderFrameHost* RenderFrameHostDelegate::GetGuestByInstanceID(
   return NULL;
 }
 
-device::GeolocationServiceContext*
-RenderFrameHostDelegate::GetGeolocationServiceContext() {
+device::GeolocationContext* RenderFrameHostDelegate::GetGeolocationContext() {
   return nullptr;
 }
 
-device::WakeLockServiceContext*
-RenderFrameHostDelegate::GetWakeLockServiceContext() {
+device::mojom::WakeLock* RenderFrameHostDelegate::GetRendererWakeLock() {
   return nullptr;
 }
+
+#if defined(OS_ANDROID)
+void RenderFrameHostDelegate::GetNFC(device::mojom::NFCRequest request) {}
+#endif
 
 bool RenderFrameHostDelegate::ShouldRouteMessageEvent(
     RenderFrameHost* target_rfh,
@@ -83,9 +90,33 @@ bool RenderFrameHostDelegate::ShouldRouteMessageEvent(
   return false;
 }
 
+RenderFrameHost*
+RenderFrameHostDelegate::GetFocusedFrameIncludingInnerWebContents() {
+  return nullptr;
+}
+
 std::unique_ptr<WebUIImpl>
 RenderFrameHostDelegate::CreateWebUIForRenderFrameHost(const GURL& url) {
   return nullptr;
+}
+
+bool RenderFrameHostDelegate::ShouldAllowRunningInsecureContent(
+    WebContents* web_contents,
+    bool allowed_per_prefs,
+    const url::Origin& origin,
+    const GURL& resource_url) {
+  return false;
+}
+
+#if defined(OS_ANDROID)
+base::android::ScopedJavaLocalRef<jobject>
+RenderFrameHostDelegate::GetJavaRenderFrameHostDelegate() {
+  return nullptr;
+}
+#endif
+
+bool RenderFrameHostDelegate::IsBeingDestroyed() const {
+  return false;
 }
 
 }  // namespace content

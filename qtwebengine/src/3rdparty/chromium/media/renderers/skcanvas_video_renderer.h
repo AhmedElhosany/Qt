@@ -13,6 +13,9 @@
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "cc/paint/paint_canvas.h"
+#include "cc/paint/paint_flags.h"
+#include "cc/paint/paint_image.h"
 #include "media/base/media_export.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/video_frame.h"
@@ -20,18 +23,20 @@
 #include "media/filters/context_3d.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
-#include "third_party/skia/include/core/SkXfermode.h"
 
-class SkCanvas;
 
 namespace gfx {
 class RectF;
 }
 
-namespace media {
-class VideoImageGenerator;
+namespace gpu {
+struct Capabilities;
+}
 
-// Handles rendering of VideoFrames to SkCanvases.
+namespace media {
+
+// TODO(enne): rename to PaintCanvasVideoRenderer
+// Handles rendering of VideoFrames to PaintCanvases.
 class MEDIA_EXPORT SkCanvasVideoRenderer {
  public:
   SkCanvasVideoRenderer();
@@ -44,9 +49,9 @@ class MEDIA_EXPORT SkCanvasVideoRenderer {
   //
   // Black will be painted on |canvas| if |video_frame| is null.
   void Paint(const scoped_refptr<VideoFrame>& video_frame,
-             SkCanvas* canvas,
+             cc::PaintCanvas* canvas,
              const gfx::RectF& dest_rect,
-             SkPaint& paint,
+             cc::PaintFlags& flags,
              VideoRotation video_rotation,
              const Context3D& context_3d);
 
@@ -54,7 +59,7 @@ class MEDIA_EXPORT SkCanvasVideoRenderer {
   // If the format of |video_frame| is PIXEL_FORMAT_NATIVE_TEXTURE, |context_3d|
   // must be provided.
   void Copy(const scoped_refptr<VideoFrame>& video_frame,
-            SkCanvas* canvas,
+            cc::PaintCanvas* canvas,
             const Context3D& context_3d);
 
   // Convert the contents of |video_frame| to raw RGB pixels. |rgb_pixels|
@@ -67,12 +72,18 @@ class MEDIA_EXPORT SkCanvasVideoRenderer {
   // Copy the contents of texture of |video_frame| to texture |texture|.
   // |level|, |internal_format|, |type| specify target texture |texture|.
   // The format of |video_frame| must be VideoFrame::NATIVE_TEXTURE.
+  // |copy_mode| alters how the copy is done, and takes into consideration
+  // whether the caller will clip the texture to the frame's |visible_rect|,
+  // or expects this to be done internally.
   static void CopyVideoFrameSingleTextureToGLTexture(
       gpu::gles2::GLES2Interface* gl,
       VideoFrame* video_frame,
+      unsigned int target,
       unsigned int texture,
       unsigned int internal_format,
+      unsigned int format,
       unsigned int type,
+      int level,
       bool premultiply_alpha,
       bool flip_y);
 
@@ -86,11 +97,54 @@ class MEDIA_EXPORT SkCanvasVideoRenderer {
       const Context3D& context_3d,
       gpu::gles2::GLES2Interface* destination_gl,
       const scoped_refptr<VideoFrame>& video_frame,
+      unsigned int target,
       unsigned int texture,
       unsigned int internal_format,
+      unsigned int format,
       unsigned int type,
+      int level,
       bool premultiply_alpha,
       bool flip_y);
+
+  // Calls texImage2D where the texture image data source is the contents of
+  // |video_frame|. Texture |texture| needs to be created and bound to |target|
+  // before this call and the binding is active upon return.
+  // This is an optimization of WebGL |video_frame| TexImage2D implementation
+  // for specific combinations of |video_frame| and |texture| formats; e.g. if
+  // |frame format| is Y16, optimizes conversion of normalized 16-bit content
+  // and calls texImage2D to |texture|. |level|, |internal_format|, |format| and
+  // |type| are WebGL texImage2D parameters.
+  // Returns false if there is no implementation for given parameters.
+  static bool TexImage2D(unsigned target,
+                         unsigned texture,
+                         gpu::gles2::GLES2Interface* gl,
+                         const gpu::Capabilities& gpu_capabilities,
+                         VideoFrame* video_frame,
+                         int level,
+                         int internalformat,
+                         unsigned format,
+                         unsigned type,
+                         bool flip_y,
+                         bool premultiply_alpha);
+
+  // Calls texSubImage2D where the texture image data source is the contents of
+  // |video_frame|.
+  // This is an optimization of WebGL |video_frame| TexSubImage2D implementation
+  // for specific combinations of |video_frame| and texture |format| and |type|;
+  // e.g. if |frame format| is Y16, converts unsigned 16-bit value to target
+  // |format| and calls WebGL texSubImage2D. |level|, |format|, |type|,
+  // |xoffset| and |yoffset| are texSubImage2D parameters.
+  // Returns false if there is no implementation for given parameters.
+  static bool TexSubImage2D(unsigned target,
+                            gpu::gles2::GLES2Interface* gl,
+                            VideoFrame* video_frame,
+                            int level,
+                            unsigned format,
+                            unsigned type,
+                            int xoffset,
+                            int yoffset,
+                            bool flip_y,
+                            bool premultiply_alpha);
 
   // In general, We hold the most recently painted frame to increase the
   // performance for the case that the same frame needs to be painted
@@ -115,6 +169,8 @@ class MEDIA_EXPORT SkCanvasVideoRenderer {
   base::TimeDelta last_timestamp_ = media::kNoTimestamp;
   // If |last_image_| is not used for a while, it's deleted to save memory.
   base::DelayTimer last_image_deleting_timer_;
+  // Stable paint image id to provide to draw image calls.
+  cc::PaintImage::Id renderer_stable_id_;
 
   // Used for DCHECKs to ensure method calls executed in the correct thread.
   base::ThreadChecker thread_checker_;

@@ -32,6 +32,7 @@
 #include <Qt3DRender/qgeometry.h>
 #include <Qt3DRender/qmesh.h>
 #include <Qt3DRender/private/qmesh_p.h>
+#include <Qt3DCore/qaspectengine.h>
 
 class MeshFunctorA : public Qt3DRender::QGeometryFactory
 {
@@ -99,6 +100,24 @@ class tst_MeshFunctors : public QObject
 {
     Q_OBJECT
 private Q_SLOTS:
+
+    void checkInitialState()
+    {
+        // GIVEN
+        Qt3DRender::QMesh mesh;
+        mesh.setSource(QUrl(QStringLiteral("./some_path.obj")));
+
+        // WHEN
+        const Qt3DRender::MeshLoaderFunctor functor(&mesh);
+
+        // THEN
+        QVERIFY(functor.nodeManagers() == nullptr);
+        QVERIFY(functor.downloaderService() == nullptr);
+        QVERIFY(functor.sourceData().isEmpty());
+        QCOMPARE(functor.mesh(), mesh.id());
+        QCOMPARE(functor.sourcePath(), mesh.source());
+    }
+
     void functorComparison()
     {
         // GIVEN
@@ -124,14 +143,26 @@ private Q_SLOTS:
     void checkMeshFunctorEquality()
     {
         // GIVEN
-        const Qt3DRender::MeshFunctor functorA(QUrl::fromLocalFile(QLatin1String("/foo")),
-                                               QLatin1String("bar"));
-        const Qt3DRender::MeshFunctor functorB(QUrl::fromLocalFile(QLatin1String("/foo")),
-                                               QLatin1String("baz"));
-        const Qt3DRender::MeshFunctor functorC(QUrl::fromLocalFile(QLatin1String("/baz")),
-                                               QLatin1String("bar"));
-        const Qt3DRender::MeshFunctor functorD(QUrl::fromLocalFile(QLatin1String("/foo")),
-                                               QLatin1String("bar"));
+        auto meshA = new Qt3DRender::QMesh();
+        meshA->setSource(QUrl::fromLocalFile(QLatin1String("/foo")));
+        meshA->setMeshName(QLatin1String("bar"));
+
+        auto meshB = new Qt3DRender::QMesh();
+        meshB->setSource(QUrl::fromLocalFile(QLatin1String("/foo")));
+        meshB->setMeshName(QLatin1String("baz"));
+
+        auto meshC = new Qt3DRender::QMesh();
+        meshC->setSource(QUrl::fromLocalFile(QLatin1String("/baz")));
+        meshC->setMeshName(QLatin1String("bar"));
+
+        auto meshD = new Qt3DRender::QMesh();
+        meshD->setSource(QUrl::fromLocalFile(QLatin1String("/foo")));
+        meshD->setMeshName(QLatin1String("bar"));
+
+        const Qt3DRender::MeshLoaderFunctor functorA(meshA);
+        const Qt3DRender::MeshLoaderFunctor functorB(meshB);
+        const Qt3DRender::MeshLoaderFunctor functorC(meshC);
+        const Qt3DRender::MeshLoaderFunctor functorD(meshD);
 
         // WHEN
         const bool selfEquality = (functorA == functorA);
@@ -145,8 +176,49 @@ private Q_SLOTS:
         QCOMPARE(sameMeshName, false);
         QCOMPARE(perfectMatch, true);
     }
+
+    void checkExecution()
+    {
+        {
+            // GIVEN
+            Qt3DRender::QMesh mesh;
+            Qt3DRender::MeshLoaderFunctor functor(&mesh);
+
+            // WHEN
+            const Qt3DRender::QGeometry *g = functor();
+
+            // THEN
+            QVERIFY(g == nullptr);
+        }
+
+        {
+            // GIVEN
+            Qt3DRender::QMesh mesh;
+            mesh.setSource(QUrl(QStringLiteral("./non_existing.obj")));
+            Qt3DRender::MeshLoaderFunctor functor(&mesh);
+
+            // WHEN
+            const Qt3DRender::QGeometry *g = functor();
+
+            // THEN
+            QVERIFY(g == nullptr);
+        }
+
+        {
+            // GIVEN
+            Qt3DRender::QMesh mesh;
+            mesh.setSource(QUrl(QStringLiteral("http://www.somedomain.org/non_exisiting.obj")));
+            Qt3DRender::MeshLoaderFunctor functor(&mesh);
+
+            // WHEN
+            const Qt3DRender::QGeometry *g = functor();
+
+            // THEN
+            QVERIFY(g == nullptr);
+        }
+    }
 };
 
-QTEST_APPLESS_MAIN(tst_MeshFunctors)
+QTEST_MAIN(tst_MeshFunctors)
 
 #include "tst_meshfunctors.moc"

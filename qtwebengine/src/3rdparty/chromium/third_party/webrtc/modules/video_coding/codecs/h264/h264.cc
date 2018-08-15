@@ -16,8 +16,8 @@
 #include "webrtc/modules/video_coding/codecs/h264/h264_encoder_impl.h"
 #endif
 
-#include "webrtc/base/checks.h"
-#include "webrtc/base/logging.h"
+#include "webrtc/rtc_base/checks.h"
+#include "webrtc/rtc_base/logging.h"
 
 namespace webrtc {
 
@@ -44,12 +44,12 @@ bool IsH264CodecSupported() {
 #endif
 }
 
-H264Encoder* H264Encoder::Create() {
+H264Encoder* H264Encoder::Create(const cricket::VideoCodec& codec) {
   RTC_DCHECK(H264Encoder::IsSupported());
 #if defined(WEBRTC_USE_H264)
   RTC_CHECK(g_rtc_use_h264);
   LOG(LS_INFO) << "Creating H264EncoderImpl.";
-  return new H264EncoderImpl();
+  return new H264EncoderImpl(codec);
 #else
   RTC_NOTREACHED();
   return nullptr;

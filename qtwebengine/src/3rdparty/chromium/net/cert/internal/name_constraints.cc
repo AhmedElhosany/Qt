@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "net/cert/internal/verify_name_match.h"
 #include "net/der/input.h"
@@ -87,6 +88,11 @@ bool DNSNameMatches(base::StringPiece name,
   // Exact match.
   if (name.size() == dns_constraint.size())
     return true;
+  // If dNSName constraint starts with a dot, only subdomains should match.
+  // (e.g., "foo.bar.com" matches constraint ".bar.com", but "bar.com" doesn't.)
+  // RFC 5280 is ambiguous, but this matches the behavior of other platforms.
+  if (!dns_constraint.empty() && dns_constraint[0] == '.')
+    dns_constraint.remove_prefix(1);
   // Subtree match.
   if (name.size() > dns_constraint.size() &&
       name[name.size() - dns_constraint.size() - 1] == '.') {
@@ -99,7 +105,7 @@ bool DNSNameMatches(base::StringPiece name,
 
 // Return true if the bitmask |mask| contains only zeros after the first
 // |prefix_length| bits.
-bool IsSuffixZero(const std::vector<uint8_t>& mask, unsigned prefix_length) {
+bool IsSuffixZero(const IPAddressBytes& mask, unsigned prefix_length) {
   size_t zero_bits = mask.size() * CHAR_BIT - prefix_length;
   size_t zero_bytes = zero_bits / CHAR_BIT;
   std::vector<uint8_t> zeros(zero_bytes, 0);

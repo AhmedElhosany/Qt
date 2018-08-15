@@ -120,7 +120,7 @@ SkImageGenerator* SkImageGeneratorWIC::NewFromEncodedWIC(SkData* data) {
 
     // FIXME: If we change the implementation to handle swizzling ourselves,
     //        we can support more output formats.
-    SkImageInfo info = SkImageInfo::MakeN32(width, height, alphaType);
+    SkImageInfo info = SkImageInfo::MakeS32(width, height, alphaType);
     return new SkImageGeneratorWIC(info, imagingFactory.release(), imageSource.release(), data);
 }
 
@@ -132,12 +132,12 @@ SkImageGeneratorWIC::SkImageGeneratorWIC(const SkImageInfo& info,
     , fData(SkRef(data))
 {}
 
-SkData* SkImageGeneratorWIC::onRefEncodedData(SK_REFENCODEDDATA_CTXPARAM) {
+SkData* SkImageGeneratorWIC::onRefEncodedData() {
     return SkRef(fData.get());
 }
 
 bool SkImageGeneratorWIC::onGetPixels(const SkImageInfo& info, void* pixels, size_t rowBytes,
-        SkPMColor ctable[], int* ctableCount) {
+        const Options&) {
     if (kN32_SkColorType != info.colorType()) {
         return false;
     }

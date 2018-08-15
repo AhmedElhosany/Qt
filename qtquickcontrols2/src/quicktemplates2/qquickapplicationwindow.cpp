@@ -62,7 +62,7 @@ QT_BEGIN_NAMESPACE
     \brief Styled top-level window with support for a header and footer.
 
     ApplicationWindow is a \l Window which makes it convenient to add
-    a \l header and \l footer item to the window.
+    a \l {menuBar}{menu bar}, \l header and \l footer item to the window.
 
     You can declare ApplicationWindow as the root item of your application,
     and run it by using \l QQmlApplicationEngine.  In this way you can control
@@ -71,10 +71,14 @@ QT_BEGIN_NAMESPACE
     \image qtquickcontrols2-applicationwindow-wireframe.png
 
     \qml
-    import QtQuick.Controls 2.1
+    import QtQuick.Controls 2.3
 
     ApplicationWindow {
         visible: true
+
+        menuBar: MenuBar {
+            // ...
+        }
 
         header: ToolBar {
             // ...
@@ -90,11 +94,6 @@ QT_BEGIN_NAMESPACE
     }
     \endqml
 
-    ApplicationWindow supports popups via its \l overlay property, which
-    ensures that popups are displayed above other content and that the
-    background is dimmed when a \l {Popup::}{modal} or \l {Popup::dim}
-    {dimmed} popup is visible.
-
     \note By default, an ApplicationWindow is not visible.
 
     \section2 Attached ApplicationWindow Properties
@@ -109,30 +108,13 @@ QT_BEGIN_NAMESPACE
     to access the window and its building blocks from places where no direct
     access to the window is available, without creating a dependency to a
     certain window \c id. A QML component that uses the ApplicationWindow
-    attached properties works in any window regardless of its \c id. The
-    following example uses the attached \c overlay property to position the
-    popup to the center of the window, despite the position of the button
-    that opens the popup.
+    attached properties works in any window regardless of its \c id.
 
-    \code
-    Button {
-        onClicked: popup.open()
-
-        Popup {
-            id: popup
-
-            parent: ApplicationWindow.overlay
-
-            x: (parent.width - width) / 2
-            y: (parent.height - height) / 2
-            width: 100
-            height: 100
-        }
-    }
-    \endcode
-
-    \sa {Customizing ApplicationWindow}, Page, {Container Controls}
+    \sa {Customizing ApplicationWindow}, Overlay, Page, {Container Controls}
 */
+
+static const QQuickItemPrivate::ChangeTypes ItemChanges = QQuickItemPrivate::Visibility
+        | QQuickItemPrivate::Geometry | QQuickItemPrivate::ImplicitWidth | QQuickItemPrivate::ImplicitHeight;
 
 class QQuickApplicationWindowPrivate : public QQuickItemChangeListener
 {
@@ -143,6 +125,7 @@ public:
         : complete(true),
           background(nullptr),
           contentItem(nullptr),
+          menuBar(nullptr),
           header(nullptr),
           footer(nullptr),
           overlay(nullptr),
@@ -170,6 +153,14 @@ public:
     }
     void resolveFont();
 
+    void updatePalette(const QPalette &p);
+    inline void setPalette_helper(const QPalette &p) {
+        if (palette.resolve() == p.resolve() && palette == p)
+            return;
+        updatePalette(p);
+    }
+    void resolvePalette();
+
     void _q_updateActiveFocus();
     void setActiveFocusControl(QQuickItem *item);
 
@@ -181,43 +172,48 @@ public:
     bool complete;
     QQuickDeferredPointer<QQuickItem> background;
     QQuickItem *contentItem;
+    QQuickItem *menuBar;
     QQuickItem *header;
     QQuickItem *footer;
     QQuickOverlay *overlay;
     QFont font;
     QLocale locale;
+    QPalette palette;
     QQuickItem *activeFocusControl;
     QQuickApplicationWindow *q_ptr;
 };
 
+static void layoutItem(QQuickItem *item, qreal y, qreal width)
+{
+    if (!item)
+        return;
+
+    item->setY(y);
+    QQuickItemPrivate *p = QQuickItemPrivate::get(item);
+    if (!p->widthValid) {
+        item->setWidth(width);
+        p->widthValid = false;
+    }
+}
+
 void QQuickApplicationWindowPrivate::relayout()
 {
     Q_Q(QQuickApplicationWindow);
+    if (!complete)
+        return;
+
     QQuickItem *content = q->contentItem();
     qreal hh = header && header->isVisible() ? header->height() : 0;
     qreal fh = footer && footer->isVisible() ? footer->height() : 0;
+    qreal mbh = menuBar && menuBar->isVisible() ? menuBar->height() : 0;
 
-    content->setY(hh);
+    content->setY(mbh + hh);
     content->setWidth(q->width());
-    content->setHeight(q->height() - hh - fh);
+    content->setHeight(q->height() - mbh - hh - fh);
 
-    if (header) {
-        header->setY(-hh);
-        QQuickItemPrivate *p = QQuickItemPrivate::get(header);
-        if (!p->widthValid) {
-            header->setWidth(q->width());
-            p->widthValid = false;
-        }
-    }
-
-    if (footer) {
-        footer->setY(content->height());
-        QQuickItemPrivate *p = QQuickItemPrivate::get(footer);
-        if (!p->widthValid) {
-            footer->setWidth(q->width());
-            p->widthValid = false;
-        }
-    }
+    layoutItem(menuBar, -mbh - hh, q->width());
+    layoutItem(header, -hh, q->width());
+    layoutItem(footer, content->height(), q->width());
 
     if (background) {
         QQuickItemPrivate *p = QQuickItemPrivate::get(background);
@@ -258,28 +254,65 @@ void QQuickApplicationWindowPrivate::itemImplicitHeightChanged(QQuickItem *item)
     relayout();
 }
 
+void QQuickApplicationWindowPrivate::updateFont(const QFont &f)
+{
+    Q_Q(QQuickApplicationWindow);
+    const bool changed = font != f;
+    font = f;
+
+    QQuickControlPrivate::updateFontRecur(q->QQuickWindow::contentItem(), f);
+
+    const QList<QQuickPopup *> popups = q->findChildren<QQuickPopup *>();
+    for (QQuickPopup *popup : popups)
+        QQuickControlPrivate::get(static_cast<QQuickControl *>(popup->popupItem()))->inheritFont(f);
+
+    if (changed)
+        emit q->fontChanged();
+}
+
+void QQuickApplicationWindowPrivate::resolveFont()
+{
+    QFont resolvedFont = font.resolve(QQuickControlPrivate::themeFont(QPlatformTheme::SystemFont));
+    setFont_helper(resolvedFont);
+}
+
+void QQuickApplicationWindowPrivate::updatePalette(const QPalette &p)
+{
+    Q_Q(QQuickApplicationWindow);
+    const bool changed = palette != p;
+    palette = p;
+
+    QQuickControlPrivate::updatePaletteRecur(q->QQuickWindow::contentItem(), p);
+
+    const QList<QQuickPopup *> popups = q->findChildren<QQuickPopup *>();
+    for (QQuickPopup *popup : popups)
+        QQuickControlPrivate::get(static_cast<QQuickControl *>(popup->popupItem()))->inheritPalette(p);
+
+    if (changed)
+        emit q->paletteChanged();
+}
+
+void QQuickApplicationWindowPrivate::resolvePalette()
+{
+    QPalette resolvedPalette = palette.resolve(QQuickControlPrivate::themePalette(QPlatformTheme::SystemPalette));
+    setPalette_helper(resolvedPalette);
+}
+
+static QQuickItem *findActiveFocusControl(QQuickWindow *window)
+{
+    QQuickItem *item = window->activeFocusItem();
+    while (item) {
+        if (qobject_cast<QQuickControl *>(item) || qobject_cast<QQuickTextField *>(item) || qobject_cast<QQuickTextArea *>(item))
+            return item;
+        item = item->parentItem();
+    }
+    return item;
+}
+
 void QQuickApplicationWindowPrivate::_q_updateActiveFocus()
 {
     Q_Q(QQuickApplicationWindow);
-    QQuickItem *item = q->activeFocusItem();
-    while (item) {
-        QQuickControl *control = qobject_cast<QQuickControl *>(item);
-        if (control) {
-            setActiveFocusControl(control);
-            break;
-        }
-        QQuickTextField *textField = qobject_cast<QQuickTextField *>(item);
-        if (textField) {
-            setActiveFocusControl(textField);
-            break;
-        }
-        QQuickTextArea *textArea = qobject_cast<QQuickTextArea *>(item);
-        if (textArea) {
-            setActiveFocusControl(textArea);
-            break;
-        }
-        item = item->parentItem();
-    }
+    setActiveFocusControl(findActiveFocusControl(q));
 }
 
 void QQuickApplicationWindowPrivate::setActiveFocusControl(QQuickItem *control)
@@ -332,13 +365,18 @@ QQuickApplicationWindow::~QQuickApplicationWindow()
     Q_D(QQuickApplicationWindow);
     d->setActiveFocusControl(nullptr);
     disconnect(this, SIGNAL(activeFocusItemChanged()), this, SLOT(_q_updateActiveFocus()));
+    if (d->menuBar)
+        QQuickItemPrivate::get(d->menuBar)->removeItemChangeListener(d, ItemChanges);
     if (d->header)
-        QQuickItemPrivate::get(d->header)->removeItemChangeListener(d, QQuickItemPrivate::Geometry | QQuickItemPrivate::Visibility |
-                                                                    QQuickItemPrivate::ImplicitWidth | QQuickItemPrivate::ImplicitHeight);
+        QQuickItemPrivate::get(d->header)->removeItemChangeListener(d, ItemChanges);
     if (d->footer)
-        QQuickItemPrivate::get(d->footer)->removeItemChangeListener(d, QQuickItemPrivate::Geometry | QQuickItemPrivate::Visibility |
-                                                                    QQuickItemPrivate::ImplicitWidth | QQuickItemPrivate::ImplicitHeight);
+        QQuickItemPrivate::get(d->footer)->removeItemChangeListener(d, ItemChanges);
     d_ptr.reset(); // QTBUG-52731
+}
+
+QQuickApplicationWindowAttached *QQuickApplicationWindow::qmlAttachedProperties(QObject *object)
+{
+    return new QQuickApplicationWindowAttached(object);
 }
 
 /*!
@@ -357,7 +395,7 @@ QQuickApplicationWindow::~QQuickApplicationWindow()
           follows the control's size. In most cases, there is no need to specify
           width or height for a background item.
 
-    \sa {Customizing ApplicationWindow}, contentItem, header, footer, overlay
+    \sa {Customizing ApplicationWindow}, contentItem, header, footer
 */
 QQuickItem *QQuickApplicationWindow::background() const
 {
@@ -392,8 +430,9 @@ void QQuickApplicationWindow::setBackground(QQuickItem *background)
 /*!
     \qmlproperty Item QtQuick.Controls::ApplicationWindow::header
 
-    This property holds the window header item. The header item is positioned to
-    the top, and resized to the width of the window. The default value is \c null.
+    This property holds the window header item. The header item is positioned at the
+    top of the window, below the menu bar, and resized to the width of the window.
+    The default value is \c null.
 
     \code
     ApplicationWindow {
@@ -407,7 +446,7 @@ void QQuickApplicationWindow::setBackground(QQuickItem *background)
     automatically sets the respective \l ToolBar::position, \l TabBar::position,
     or \l DialogButtonBox::position property to \c Header.
 
-    \sa footer, Page::header
+    \sa menuBar, footer, Page::header
 */
 QQuickItem *QQuickApplicationWindow::header() const
 {
@@ -422,16 +461,14 @@ void QQuickApplicationWindow::setHeader(QQuickItem *header)
         return;
 
     if (d->header) {
-        QQuickItemPrivate::get(d->header)->removeItemChangeListener(d, QQuickItemPrivate::Geometry | QQuickItemPrivate::Visibility |
-                                                                    QQuickItemPrivate::ImplicitWidth | QQuickItemPrivate::ImplicitHeight);
+        QQuickItemPrivate::get(d->header)->removeItemChangeListener(d, ItemChanges);
         d->header->setParentItem(nullptr);
     }
     d->header = header;
     if (header) {
         header->setParentItem(contentItem());
         QQuickItemPrivate *p = QQuickItemPrivate::get(header);
-        p->addItemChangeListener(d, QQuickItemPrivate::Geometry | QQuickItemPrivate::Visibility |
-                                 QQuickItemPrivate::ImplicitWidth | QQuickItemPrivate::ImplicitHeight);
+        p->addItemChangeListener(d, ItemChanges);
         if (qFuzzyIsNull(header->z()))
             header->setZ(1);
         if (QQuickToolBar *toolBar = qobject_cast<QQuickToolBar *>(header))
@@ -464,7 +501,7 @@ void QQuickApplicationWindow::setHeader(QQuickItem *header)
     automatically sets the respective \l ToolBar::position, \l TabBar::position,
     or \l DialogButtonBox::position property to \c Footer.
 
-    \sa header, Page::footer
+    \sa menuBar, header, Page::footer
 */
 QQuickItem *QQuickApplicationWindow::footer() const
 {
@@ -479,16 +516,14 @@ void QQuickApplicationWindow::setFooter(QQuickItem *footer)
         return;
 
     if (d->footer) {
-        QQuickItemPrivate::get(d->footer)->removeItemChangeListener(d, QQuickItemPrivate::Geometry | QQuickItemPrivate::Visibility |
-                                                                    QQuickItemPrivate::ImplicitWidth | QQuickItemPrivate::ImplicitHeight);
+        QQuickItemPrivate::get(d->footer)->removeItemChangeListener(d, ItemChanges);
         d->footer->setParentItem(nullptr);
     }
     d->footer = footer;
     if (footer) {
         footer->setParentItem(contentItem());
         QQuickItemPrivate *p = QQuickItemPrivate::get(footer);
-        p->addItemChangeListener(d, QQuickItemPrivate::Geometry | QQuickItemPrivate::Visibility |
-                                 QQuickItemPrivate::ImplicitWidth | QQuickItemPrivate::ImplicitHeight);
+        p->addItemChangeListener(d, ItemChanges);
         if (qFuzzyIsNull(footer->z()))
             footer->setZ(1);
         if (QQuickToolBar *toolBar = qobject_cast<QQuickToolBar *>(footer))
@@ -539,9 +574,9 @@ QQmlListProperty<QObject> QQuickApplicationWindow::contentData()
     This property holds the window content item.
 
     The content item is stacked above the \l background item, and under the
-    \l header, \l footer, and \l overlay items.
+    \l menuBar, \l header, and \l footer items.
 
-    \sa background, header, footer, overlay
+    \sa background, menuBar, header, footer
 */
 QQuickItem *QQuickApplicationWindow::contentItem() const
 {
@@ -576,10 +611,13 @@ QQuickItem *QQuickApplicationWindow::activeFocusControl() const
 }
 
 /*!
+    \deprecated
     \qmlpropertygroup QtQuick.Controls::ApplicationWindow::overlay
     \qmlproperty Item QtQuick.Controls::ApplicationWindow::overlay
     \qmlproperty Component QtQuick.Controls::ApplicationWindow::overlay.modal
     \qmlproperty Component QtQuick.Controls::ApplicationWindow::overlay.modeless
+
+    Use the \l Overlay attached properties and signals instead.
 
     This property holds the window overlay item. Popups are automatically
     reparented to the overlay.
@@ -660,28 +698,6 @@ void QQuickApplicationWindow::resetFont()
     setFont(QFont());
 }
 
-void QQuickApplicationWindowPrivate::resolveFont()
-{
-    QFont resolvedFont = font.resolve(QQuickControlPrivate::themeFont(QPlatformTheme::SystemFont));
-    setFont_helper(resolvedFont);
-}
-
-void QQuickApplicationWindowPrivate::updateFont(const QFont &f)
-{
-    Q_Q(QQuickApplicationWindow);
-    const bool changed = font != f;
-    font = f;
-
-    QQuickControlPrivate::updateFontRecur(q->QQuickWindow::contentItem(), f);
-
-    const QList<QQuickPopup *> popups = q->findChildren<QQuickPopup *>();
-    for (QQuickPopup *popup : popups)
-        QQuickControlPrivate::get(static_cast<QQuickControl *>(popup->popupItem()))->inheritFont(f);
-
-    if (changed)
-        emit q->fontChanged();
-}
-
 /*!
     \qmlproperty Locale QtQuick.Controls::ApplicationWindow::locale
 
@@ -724,9 +740,88 @@ void QQuickApplicationWindow::resetLocale()
     setLocale(QLocale());
 }
 
-QQuickApplicationWindowAttached *QQuickApplicationWindow::qmlAttachedProperties(QObject *object)
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty palette QtQuick.Controls::ApplicationWindow::palette
+
+    This property holds the palette currently set for the window.
+
+    The default palette depends on the system environment. QGuiApplication maintains a system/theme
+    palette which serves as a default for all application windows. You can also set the default palette
+    for windows by passing a custom palette to QGuiApplication::setPalette(), before loading any QML.
+
+    ApplicationWindow propagates explicit palette properties to child controls. If you change a specific
+    property on the window's palette, that property propagates to all child controls in the window,
+    overriding any system defaults for that property.
+
+    \sa Control::palette, Popup::palette, {qtquickcontrols2-palette}{palette QML Basic Type}
+*/
+QPalette QQuickApplicationWindow::palette() const
 {
-    return new QQuickApplicationWindowAttached(object);
+    Q_D(const QQuickApplicationWindow);
+    return d->palette;
+}
+
+void QQuickApplicationWindow::setPalette(const QPalette &palette)
+{
+    Q_D(QQuickApplicationWindow);
+    if (d->palette.resolve() == palette.resolve() && d->palette == palette)
+        return;
+
+    QPalette resolvedPalette = palette.resolve(QQuickControlPrivate::themePalette(QPlatformTheme::SystemPalette));
+    d->setPalette_helper(resolvedPalette);
+}
+
+void QQuickApplicationWindow::resetPalette()
+{
+    setPalette(QPalette());
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty Item QtQuick.Controls::ApplicationWindow::menuBar
+
+    This property holds the window menu bar. The menu bar is positioned at the
+    top of the window, above the header, and resized to the width of the window.
+    The default value is \c null.
+
+    \code
+    ApplicationWindow {
+        menuBar: MenuBar {
+            // ...
+        }
+    }
+    \endcode
+
+    \sa header, footer, MenuBar
+*/
+QQuickItem *QQuickApplicationWindow::menuBar() const
+{
+    Q_D(const QQuickApplicationWindow);
+    return d->menuBar;
+}
+
+void QQuickApplicationWindow::setMenuBar(QQuickItem *menuBar)
+{
+    Q_D(QQuickApplicationWindow);
+    if (d->menuBar == menuBar)
+        return;
+
+    if (d->menuBar) {
+        QQuickItemPrivate::get(d->menuBar)->removeItemChangeListener(d, ItemChanges);
+        d->menuBar->setParentItem(nullptr);
+    }
+    d->menuBar = menuBar;
+    if (menuBar) {
+        menuBar->setParentItem(contentItem());
+        QQuickItemPrivate *p = QQuickItemPrivate::get(menuBar);
+        p->addItemChangeListener(d, ItemChanges);
+        if (qFuzzyIsNull(menuBar->z()))
+            menuBar->setZ(2);
+    }
+    if (isComponentComplete())
+        d->relayout();
+    emit menuBarChanged();
 }
 
 bool QQuickApplicationWindow::isComponentComplete() const
@@ -741,6 +836,7 @@ void QQuickApplicationWindow::classBegin()
     d->complete = false;
     QQuickWindowQmlImpl::classBegin();
     d->resolveFont();
+    d->resolvePalette();
 }
 
 void QQuickApplicationWindow::componentComplete()
@@ -749,6 +845,7 @@ void QQuickApplicationWindow::componentComplete()
     d->complete = true;
     d->executeBackground(true);
     QQuickWindowQmlImpl::componentComplete();
+    d->relayout();
 }
 
 void QQuickApplicationWindow::resizeEvent(QResizeEvent *event)
@@ -763,11 +860,17 @@ class QQuickApplicationWindowAttachedPrivate : public QObjectPrivate
     Q_DECLARE_PUBLIC(QQuickApplicationWindowAttached)
 
 public:
-    QQuickApplicationWindowAttachedPrivate() : window(nullptr) { }
+    QQuickApplicationWindowAttachedPrivate()
+        : window(nullptr),
+          activeFocusControl(nullptr)
+    {
+    }
 
     void windowChange(QQuickWindow *wnd);
+    void activeFocusChange();
 
     QQuickWindow *window;
+    QQuickItem *activeFocusControl;
 };
 
 void QQuickApplicationWindowAttachedPrivate::windowChange(QQuickWindow *wnd)
@@ -781,22 +884,32 @@ void QQuickApplicationWindowAttachedPrivate::windowChange(QQuickWindow *wnd)
         oldWindow = nullptr; // being deleted (QTBUG-52731)
 
     if (oldWindow) {
-        QObject::disconnect(oldWindow, &QQuickApplicationWindow::activeFocusControlChanged,
-                            q, &QQuickApplicationWindowAttached::activeFocusControlChanged);
+        disconnect(oldWindow, &QQuickApplicationWindow::activeFocusControlChanged,
+                   this, &QQuickApplicationWindowAttachedPrivate::activeFocusChange);
+        QObject::disconnect(oldWindow, &QQuickApplicationWindow::menuBarChanged,
+                            q, &QQuickApplicationWindowAttached::menuBarChanged);
         QObject::disconnect(oldWindow, &QQuickApplicationWindow::headerChanged,
                             q, &QQuickApplicationWindowAttached::headerChanged);
         QObject::disconnect(oldWindow, &QQuickApplicationWindow::footerChanged,
                             q, &QQuickApplicationWindowAttached::footerChanged);
+    } else if (window) {
+        disconnect(window, &QQuickWindow::activeFocusItemChanged,
+                   this, &QQuickApplicationWindowAttachedPrivate::activeFocusChange);
     }
 
     QQuickApplicationWindow *newWindow = qobject_cast<QQuickApplicationWindow *>(wnd);
     if (newWindow) {
-        QObject::connect(newWindow, &QQuickApplicationWindow::activeFocusControlChanged,
-                         q, &QQuickApplicationWindowAttached::activeFocusControlChanged);
+        connect(newWindow, &QQuickApplicationWindow::activeFocusControlChanged,
+                this, &QQuickApplicationWindowAttachedPrivate::activeFocusChange);
+        QObject::connect(newWindow, &QQuickApplicationWindow::menuBarChanged,
+                         q, &QQuickApplicationWindowAttached::menuBarChanged);
         QObject::connect(newWindow, &QQuickApplicationWindow::headerChanged,
                          q, &QQuickApplicationWindowAttached::headerChanged);
         QObject::connect(newWindow, &QQuickApplicationWindow::footerChanged,
                          q, &QQuickApplicationWindowAttached::footerChanged);
+    } else if (wnd) {
+        connect(wnd, &QQuickWindow::activeFocusItemChanged,
+                this, &QQuickApplicationWindowAttachedPrivate::activeFocusChange);
     }
 
     window = wnd;
@@ -804,12 +917,28 @@ void QQuickApplicationWindowAttachedPrivate::windowChange(QQuickWindow *wnd)
     emit q->contentItemChanged();
     emit q->overlayChanged();
 
-    if ((oldWindow && oldWindow->activeFocusControl()) || (newWindow && newWindow->activeFocusControl()))
-        emit q->activeFocusControlChanged();
+    activeFocusChange();
+    if ((oldWindow && oldWindow->menuBar()) || (newWindow && newWindow->menuBar()))
+        emit q->menuBarChanged();
     if ((oldWindow && oldWindow->header()) || (newWindow && newWindow->header()))
         emit q->headerChanged();
     if ((oldWindow && oldWindow->footer()) || (newWindow && newWindow->footer()))
         emit q->footerChanged();
+}
+
+void QQuickApplicationWindowAttachedPrivate::activeFocusChange()
+{
+    Q_Q(QQuickApplicationWindowAttached);
+    QQuickItem *control = nullptr;
+    if (QQuickApplicationWindow *appWindow = qobject_cast<QQuickApplicationWindow *>(window))
+        control = appWindow->activeFocusControl();
+    else if (window)
+        control = findActiveFocusControl(window);
+    if (activeFocusControl == control)
+        return;
+
+    activeFocusControl = control;
+    emit q->activeFocusControlChanged();
 }
 
 QQuickApplicationWindowAttached::QQuickApplicationWindowAttached(QObject *parent)
@@ -873,17 +1002,14 @@ QQuickItem *QQuickApplicationWindowAttached::contentItem() const
 
     This attached property holds the control that currently has active focus, or \c null
     if there is no control with active focus. The property can be attached to any item.
-    The value is \c null if the item is not in an ApplicationWindow, or the window has
-    no active focus.
+    The value is \c null if the item is not in a window, or the window has no active focus.
 
     \sa Window::activeFocusItem, {Attached ApplicationWindow Properties}
 */
 QQuickItem *QQuickApplicationWindowAttached::activeFocusControl() const
 {
     Q_D(const QQuickApplicationWindowAttached);
-    if (QQuickApplicationWindow *window = qobject_cast<QQuickApplicationWindow *>(d->window))
-        return window->activeFocusControl();
-    return nullptr;
+    return d->activeFocusControl;
 }
 
 /*!
@@ -923,8 +1049,11 @@ QQuickItem *QQuickApplicationWindowAttached::footer() const
 }
 
 /*!
+    \deprecated
     \qmlattachedproperty Item QtQuick.Controls::ApplicationWindow::overlay
     \readonly
+
+    Use the \l Overlay::overlay attached property instead.
 
     This attached property holds the window overlay item. The property can be attached
     to any item. The value is \c null if the item is not in an ApplicationWindow.
@@ -935,6 +1064,25 @@ QQuickOverlay *QQuickApplicationWindowAttached::overlay() const
 {
     Q_D(const QQuickApplicationWindowAttached);
     return QQuickOverlay::overlay(d->window);
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlattachedproperty Item QtQuick.Controls::ApplicationWindow::menuBar
+    \readonly
+
+    This attached property holds the window menu bar. The property can be attached
+    to any item. The value is \c null if the item is not in an ApplicationWindow, or
+    the window has no menu bar.
+
+    \sa {Attached ApplicationWindow Properties}
+*/
+QQuickItem *QQuickApplicationWindowAttached::menuBar() const
+{
+    Q_D(const QQuickApplicationWindowAttached);
+    if (QQuickApplicationWindow *window = qobject_cast<QQuickApplicationWindow *>(d->window))
+        return window->menuBar();
+    return nullptr;
 }
 
 QT_END_NAMESPACE

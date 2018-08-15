@@ -45,6 +45,7 @@
 #include <qdesktopwidget.h>
 #endif
 #include <qpixmap.h>
+#include <qrandom.h>
 
 #include <private/qdrawhelper_p.h>
 #include <qpainter.h>
@@ -398,51 +399,6 @@ void tst_QPainter::cleanupTestCase()
     QFile::remove(QLatin1String("expected.png"));
     QFile::remove(QLatin1String("foo.png"));
 }
-
-static const char* const maskSource_data[] = {
-"16 13 6 1",
-". c None",
-"d c #000000",
-"# c #999999",
-"c c #cccccc",
-"b c #ffff00",
-"a c #ffffff",
-"...#####........",
-"..#aaaaa#.......",
-".#abcbcba######.",
-".#acbcbcaaaaaa#d",
-".#abcbcbcbcbcb#d",
-"#############b#d",
-"#aaaaaaaaaa##c#d",
-"#abcbcbcbcbbd##d",
-".#abcbcbcbcbcd#d",
-".#acbcbcbcbcbd#d",
-"..#acbcbcbcbb#dd",
-"..#############d",
-"...ddddddddddddd"};
-
-static const char* const maskResult_data[] = {
-"16 13 6 1",
-". c #ff0000",
-"d c #000000",
-"# c #999999",
-"c c #cccccc",
-"b c #ffff00",
-"a c #ffffff",
-"...#####........",
-"..#aaaaa#.......",
-".#abcbcba######.",
-".#acbcbcaaaaaa#d",
-".#abcbcbcbcbcb#d",
-"#############b#d",
-"#aaaaaaaaaa##c#d",
-"#abcbcbcbcbbd##d",
-".#abcbcbcbcbcd#d",
-".#acbcbcbcbcbd#d",
-"..#acbcbcbcbb#dd",
-"..#############d",
-"...ddddddddddddd"};
-
 
 #ifndef QT_NO_WIDGETS
 void tst_QPainter::drawPixmap_comp_data()
@@ -3097,7 +3053,7 @@ void tst_QPainter::fpe_steepSlopes_data()
 
 qreal randf()
 {
-    return rand() / (RAND_MAX + 1.0);
+    return QRandomGenerator::global()->bounded(1.0);
 }
 
 QPointF randInRect(const QRectF &rect)
@@ -3559,11 +3515,9 @@ void tst_QPainter::drawImage_data()
                 continue;
             for (int odd_x = 0; odd_x <= 1; ++odd_x) {
                 for (int odd_width = 0; odd_width <= 1; ++odd_width) {
-                    QString description =
-                        QString("srcFormat %1, dstFormat %2, odd x: %3, odd width: %4")
-                            .arg(srcFormat).arg(dstFormat).arg(odd_x).arg(odd_width);
-
-                    QTest::newRow(qPrintable(description)) << (10 + odd_x) << 10 << (20 + odd_width) << 20
+                    QTest::addRow("srcFormat %d, dstFormat %d, odd x: %d, odd width: %d",
+                                  srcFormat, dstFormat, odd_x, odd_width)
+                        << (10 + odd_x) << 10 << (20 + odd_width) << 20
                         << QImage::Format(srcFormat)
                         << QImage::Format(dstFormat);
                 }

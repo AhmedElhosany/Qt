@@ -105,9 +105,6 @@ protected:
 
     QDrag *drag() const { return m_drag; }
 
-protected:
-    QWindow *m_current_window;
-
 private:
     void enableEventFilter();
     void disableEventFilter();
@@ -128,13 +125,15 @@ class Q_GUI_EXPORT QSimpleDrag : public QBasicDrag
 {
 public:
     QSimpleDrag();
-    virtual QMimeData *platformDropData() Q_DECL_OVERRIDE;
 
 protected:
     virtual void startDrag() Q_DECL_OVERRIDE;
     virtual void cancel() Q_DECL_OVERRIDE;
     virtual void move(const QPoint &globalPos) Q_DECL_OVERRIDE;
     virtual void drop(const QPoint &globalPos) Q_DECL_OVERRIDE;
+
+private:
+    QWindow *m_current_window;
 };
 
 #endif // QT_NO_DRAGANDDROP

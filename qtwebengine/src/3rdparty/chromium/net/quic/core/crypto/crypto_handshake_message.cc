@@ -6,19 +6,17 @@
 
 #include <memory>
 
-#include "base/stl_util.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "net/quic/core/crypto/crypto_framer.h"
 #include "net/quic/core/crypto/crypto_protocol.h"
 #include "net/quic/core/crypto/crypto_utils.h"
 #include "net/quic/core/quic_socket_address_coder.h"
 #include "net/quic/core/quic_utils.h"
+#include "net/quic/platform/api/quic_endian.h"
+#include "net/quic/platform/api/quic_map_util.h"
+#include "net/quic/platform/api/quic_str_cat.h"
+#include "net/quic/platform/api/quic_text_utils.h"
 
-using base::StringPiece;
-using base::StringPrintf;
 using std::string;
-using std::vector;
 
 namespace net {
 
@@ -59,9 +57,11 @@ void CryptoHandshakeMessage::Clear() {
   serialized_.reset();
 }
 
-const QuicData& CryptoHandshakeMessage::GetSerialized() const {
+const QuicData& CryptoHandshakeMessage::GetSerialized(
+    Perspective perspective) const {
   if (!serialized_.get()) {
-    serialized_.reset(CryptoFramer::ConstructHandshakeMessage(*this));
+    serialized_.reset(
+        CryptoFramer::ConstructHandshakeMessage(*this, perspective));
   }
   return *serialized_;
 }
@@ -70,7 +70,8 @@ void CryptoHandshakeMessage::MarkDirty() {
   serialized_.reset();
 }
 
-void CryptoHandshakeMessage::SetStringPiece(QuicTag tag, StringPiece value) {
+void CryptoHandshakeMessage::SetStringPiece(QuicTag tag,
+                                            QuicStringPiece value) {
   tag_value_map_[tag] = value.as_string();
 }
 
@@ -78,9 +79,9 @@ void CryptoHandshakeMessage::Erase(QuicTag tag) {
   tag_value_map_.erase(tag);
 }
 
-QuicErrorCode CryptoHandshakeMessage::GetTaglist(QuicTag tag,
-                                                 const QuicTag** out_tags,
-                                                 size_t* out_len) const {
+QuicErrorCode CryptoHandshakeMessage::GetTaglist(
+    QuicTag tag,
+    QuicTagVector* out_tags) const {
   QuicTagValueMap::const_iterator it = tag_value_map_.find(tag);
   QuicErrorCode ret = QUIC_NO_ERROR;
 
@@ -91,18 +92,22 @@ QuicErrorCode CryptoHandshakeMessage::GetTaglist(QuicTag tag,
   }
 
   if (ret != QUIC_NO_ERROR) {
-    *out_tags = nullptr;
-    *out_len = 0;
+    out_tags->clear();
     return ret;
   }
 
-  *out_tags = reinterpret_cast<const QuicTag*>(it->second.data());
-  *out_len = it->second.size() / sizeof(QuicTag);
+  size_t num_tags = it->second.size() / sizeof(QuicTag);
+  out_tags->resize(num_tags);
+  for (size_t i = 0; i < num_tags; ++i) {
+    QuicTag tag;
+    memcpy(&tag, it->second.data() + i * sizeof(tag), sizeof(tag));
+    (*out_tags)[i] = tag;
+  }
   return ret;
 }
 
 bool CryptoHandshakeMessage::GetStringPiece(QuicTag tag,
-                                            StringPiece* out) const {
+                                            QuicStringPiece* out) const {
   QuicTagValueMap::const_iterator it = tag_value_map_.find(tag);
   if (it == tag_value_map_.end()) {
     return false;
@@ -112,13 +117,14 @@ bool CryptoHandshakeMessage::GetStringPiece(QuicTag tag,
 }
 
 bool CryptoHandshakeMessage::HasStringPiece(QuicTag tag) const {
-  return base::ContainsKey(tag_value_map_, tag);
+  return QuicContainsKey(tag_value_map_, tag);
 }
 
-QuicErrorCode CryptoHandshakeMessage::GetNthValue24(QuicTag tag,
-                                                    unsigned index,
-                                                    StringPiece* out) const {
-  StringPiece value;
+QuicErrorCode CryptoHandshakeMessage::GetNthValue24(
+    QuicTag tag,
+    unsigned index,
+    QuicStringPiece* out) const {
+  QuicStringPiece value;
   if (!GetStringPiece(tag, &value)) {
     return QUIC_CRYPTO_MESSAGE_PARAMETER_NOT_FOUND;
   }
@@ -143,7 +149,7 @@ QuicErrorCode CryptoHandshakeMessage::GetNthValue24(QuicTag tag,
     }
 
     if (i == index) {
-      *out = StringPiece(value.data(), size);
+      *out = QuicStringPiece(value.data(), size);
       return QUIC_NO_ERROR;
     }
 
@@ -186,8 +192,8 @@ size_t CryptoHandshakeMessage::minimum_size() const {
   return minimum_size_;
 }
 
-string CryptoHandshakeMessage::DebugString() const {
-  return DebugStringInternal(0);
+string CryptoHandshakeMessage::DebugString(Perspective perspective) const {
+  return DebugStringInternal(0, perspective);
 }
 
 QuicErrorCode CryptoHandshakeMessage::GetPOD(QuicTag tag,
@@ -211,12 +217,14 @@ QuicErrorCode CryptoHandshakeMessage::GetPOD(QuicTag tag,
   return ret;
 }
 
-string CryptoHandshakeMessage::DebugStringInternal(size_t indent) const {
-  string ret = string(2 * indent, ' ') + QuicUtils::TagToString(tag_) + "<\n";
+string CryptoHandshakeMessage::DebugStringInternal(
+    size_t indent,
+    Perspective perspective) const {
+  string ret = string(2 * indent, ' ') + QuicTagToString(tag_) + "<\n";
   ++indent;
   for (QuicTagValueMap::const_iterator it = tag_value_map_.begin();
        it != tag_value_map_.end(); ++it) {
-    ret += string(2 * indent, ' ') + QuicUtils::TagToString(it->first) + ": ";
+    ret += string(2 * indent, ' ') + QuicTagToString(it->first) + ": ";
 
     bool done = false;
     switch (it->first) {
@@ -234,7 +242,7 @@ string CryptoHandshakeMessage::DebugStringInternal(size_t indent) const {
         if (it->second.size() == 4) {
           uint32_t value;
           memcpy(&value, it->second.data(), sizeof(value));
-          ret += base::UintToString(value);
+          ret += QuicTextUtils::Uint64ToString(value);
           done = true;
         }
         break;
@@ -243,7 +251,8 @@ string CryptoHandshakeMessage::DebugStringInternal(size_t indent) const {
         if (it->second.size() == 8) {
           uint64_t value;
           memcpy(&value, it->second.data(), sizeof(value));
-          ret += base::Uint64ToString(value);
+          value = QuicEndian::NetToHost64(value);
+          ret += QuicTextUtils::Uint64ToString(value);
           done = true;
         }
         break;
@@ -261,7 +270,7 @@ string CryptoHandshakeMessage::DebugStringInternal(size_t indent) const {
             if (j > 0) {
               ret += ",";
             }
-            ret += "'" + QuicUtils::TagToString(tag) + "'";
+            ret += "'" + QuicTagToString(tag) + "'";
           }
           done = true;
         }
@@ -286,7 +295,7 @@ string CryptoHandshakeMessage::DebugStringInternal(size_t indent) const {
         if (!it->second.empty()) {
           QuicSocketAddressCoder decoder;
           if (decoder.Decode(it->second.data(), it->second.size())) {
-            ret += IPAddressToStringWithPort(decoder.ip(), decoder.port());
+            ret += QuicSocketAddress(decoder.ip(), decoder.port()).ToString();
             done = true;
           }
         }
@@ -295,18 +304,18 @@ string CryptoHandshakeMessage::DebugStringInternal(size_t indent) const {
         // nested messages.
         if (!it->second.empty()) {
           std::unique_ptr<CryptoHandshakeMessage> msg(
-              CryptoFramer::ParseMessage(it->second));
+              CryptoFramer::ParseMessage(it->second, perspective));
           if (msg.get()) {
             ret += "\n";
-            ret += msg->DebugStringInternal(indent + 1);
+            ret += msg->DebugStringInternal(indent + 1, perspective);
 
             done = true;
           }
         }
         break;
       case kPAD:
-        ret += StringPrintf("(%d bytes of padding)",
-                            static_cast<int>(it->second.size()));
+        ret += QuicStringPrintf("(%d bytes of padding)",
+                                static_cast<int>(it->second.size()));
         done = true;
         break;
       case kSNI:
@@ -319,7 +328,7 @@ string CryptoHandshakeMessage::DebugStringInternal(size_t indent) const {
     if (!done) {
       // If there's no specific format for this tag, or the value is invalid,
       // then just use hex.
-      ret += "0x" + QuicUtils::HexEncode(it->second);
+      ret += "0x" + QuicTextUtils::HexEncode(it->second);
     }
     ret += "\n";
   }

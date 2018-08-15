@@ -31,7 +31,7 @@ from collections import defaultdict
 import sys
 
 import css_properties
-import in_generator
+import json5_generator
 from name_utilities import enum_for_css_property
 from name_utilities import lower_first
 import template_expander
@@ -40,8 +40,8 @@ import template_expander
 class StylePropertyShorthandWriter(css_properties.CSSProperties):
     class_name = 'StylePropertyShorthand'
 
-    def __init__(self, in_file_path):
-        super(StylePropertyShorthandWriter, self).__init__(in_file_path)
+    def __init__(self, json5_file_path):
+        super(StylePropertyShorthandWriter, self).__init__(json5_file_path)
         self._outputs = {
             ('StylePropertyShorthand.cpp'): self.generate_style_property_shorthand_cpp,
             ('StylePropertyShorthand.h'): self.generate_style_property_shorthand_h}
@@ -51,7 +51,7 @@ class StylePropertyShorthandWriter(css_properties.CSSProperties):
         self._properties = {property_id: property for property_id, property in self._properties.items() if property['longhands']}
 
         for property in self._properties.values():
-            property['longhand_property_ids'] = map(enum_for_css_property, property['longhands'].split(';'))
+            property['longhand_property_ids'] = map(enum_for_css_property, property['longhands'])
             for longhand in property['longhand_property_ids']:
                 self._longhand_dictionary[longhand].append(property)
         for longhands in self._longhand_dictionary.values():
@@ -60,18 +60,20 @@ class StylePropertyShorthandWriter(css_properties.CSSProperties):
                 key=lambda property: (-len(property['longhand_property_ids']), property['name'])
             )
 
-    @template_expander.use_jinja('StylePropertyShorthand.cpp.tmpl')
+    @template_expander.use_jinja('templates/StylePropertyShorthand.cpp.tmpl')
     def generate_style_property_shorthand_cpp(self):
         return {
+            'input_files': self._input_files,
             'properties': self._properties,
             'longhands_dictionary': self._longhand_dictionary,
         }
 
-    @template_expander.use_jinja('StylePropertyShorthand.h.tmpl')
+    @template_expander.use_jinja('templates/StylePropertyShorthand.h.tmpl')
     def generate_style_property_shorthand_h(self):
         return {
+            'input_files': self._input_files,
             'properties': self._properties,
         }
 
 if __name__ == '__main__':
-    in_generator.Maker(StylePropertyShorthandWriter).main(sys.argv)
+    json5_generator.Maker(StylePropertyShorthandWriter).main()

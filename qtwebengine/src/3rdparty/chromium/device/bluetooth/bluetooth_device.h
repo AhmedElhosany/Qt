@@ -16,25 +16,21 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/gtest_prod_util.h"
+#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/optional.h"
 #include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "device/bluetooth/bluetooth_common.h"
 #include "device/bluetooth/bluetooth_export.h"
+#include "device/bluetooth/bluetooth_remote_gatt_service.h"
 #include "device/bluetooth/bluetooth_uuid.h"
-
-namespace base {
-class BinaryValue;
-}
 
 namespace device {
 
 class BluetoothAdapter;
 class BluetoothGattConnection;
-class BluetoothRemoteGattService;
 class BluetoothSocket;
 class BluetoothUUID;
 
@@ -76,24 +72,24 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
     ~ConnectionInfo();
   };
 
+  // Possible connection latency values to pass to SetConnectionLatency().
+  enum ConnectionLatency {
+    CONNECTION_LATENCY_LOW,
+    CONNECTION_LATENCY_MEDIUM,
+    CONNECTION_LATENCY_HIGH,
+  };
+
   // Possible errors passed back to an error callback function in case of a
   // failed call to Connect().
   enum ConnectErrorCode {
-    ERROR_ATTRIBUTE_LENGTH_INVALID,
     ERROR_AUTH_CANCELED,
     ERROR_AUTH_FAILED,
     ERROR_AUTH_REJECTED,
     ERROR_AUTH_TIMEOUT,
-    ERROR_CONNECTION_CONGESTED,
     ERROR_FAILED,
     ERROR_INPROGRESS,
-    ERROR_INSUFFICIENT_ENCRYPTION,
-    ERROR_OFFSET_INVALID,
-    ERROR_READ_NOT_PERMITTED,
-    ERROR_REQUEST_NOT_SUPPORTED,
     ERROR_UNKNOWN,
     ERROR_UNSUPPORTED_DEVICE,
-    ERROR_WRITE_NOT_PERMITTED,
     NUM_CONNECT_ERROR_CODES  // Keep as last enum.
   };
 
@@ -110,8 +106,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
 
   // Mapping from the platform-specific GATT service identifiers to
   // BluetoothRemoteGattService objects.
-  typedef base::ScopedPtrHashMap<std::string,
-                                 std::unique_ptr<BluetoothRemoteGattService>>
+  typedef std::unordered_map<std::string,
+                             std::unique_ptr<BluetoothRemoteGattService>>
       GattServiceMap;
 
   // Interface for negotiating pairing of bluetooth devices.
@@ -261,10 +257,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   bool IsPairable() const;
 
   // Indicates whether the device is paired with the adapter.
-  // On Chrome OS this function also returns true if the user has connected
-  // to the device in the past.
-  // TODO(crbug.com/649651): Change Chrome OS to only return true if the
-  // device is actually paired.
   virtual bool IsPaired() const = 0;
 
   // Indicates whether the device is currently connected to the adapter.
@@ -279,17 +271,14 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   virtual bool IsGattConnected() const = 0;
 
   // Indicates whether the paired device accepts connections initiated from the
-  // adapter. This value is undefined for unpaired devices.
+  // adapter. This value is undefined for unpaired devices. Only available for
+  // Chrome OS.
   virtual bool IsConnectable() const = 0;
 
   // Indicates whether there is a call to Connect() ongoing. For this attribute,
   // we consider a call is ongoing if none of the callbacks passed to Connect()
   // were called after the corresponding call to Connect().
   virtual bool IsConnecting() const = 0;
-
-  // Indicates whether the device can be trusted, based on device properties,
-  // such as vendor and product id.
-  bool IsTrustable() const;
 
   // Returns the set of UUIDs that this device supports.
   //  * For classic Bluetooth devices this data is collected from both the EIR
@@ -407,6 +396,12 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // If the device isn't connected, then the ConnectionInfo struct passed into
   // the callback will be populated with |kUnknownPower|.
   virtual void GetConnectionInfo(const ConnectionInfoCallback& callback) = 0;
+
+  // Sets the connection latency for the device. This API is only valid for LE
+  // devices.
+  virtual void SetConnectionLatency(ConnectionLatency connection_latency,
+                                    const base::Closure& callback,
+                                    const ErrorCallback& error_callback) = 0;
 
   // Initiates a connection to the device, pairing first if necessary.
   //
@@ -559,6 +554,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // Return associated BluetoothAdapter.
   BluetoothAdapter* GetAdapter() { return adapter_; }
 
+  std::vector<BluetoothRemoteGattService*> GetPrimaryServices();
+
+  std::vector<BluetoothRemoteGattService*> GetPrimaryServicesByUUID(
+      const BluetoothUUID& service_uuid);
+
  protected:
   // BluetoothGattConnection is a friend to call Add/RemoveGattConnection.
   friend BluetoothGattConnection;
@@ -583,6 +583,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
     DeviceUUIDs();
     ~DeviceUUIDs();
 
+    DeviceUUIDs(const DeviceUUIDs& other);
+    DeviceUUIDs& operator=(const DeviceUUIDs& other);
+
     // Advertised Service UUIDs functions
     void ReplaceAdvertisedUUIDs(UUIDList new_advertised_uuids);
 
@@ -605,7 +608,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
     BluetoothDevice::UUIDSet device_uuids_;
   };
 
-  BluetoothDevice(BluetoothAdapter* adapter);
+  explicit BluetoothDevice(BluetoothAdapter* adapter);
 
   // Implements platform specific operations to initiate a GATT connection.
   // Subclasses must also call DidConnectGatt, DidFailToConnectGatt, or
@@ -677,6 +680,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // Returns a localized string containing the device's bluetooth address and
   // a device type for display when |name_| is empty.
   base::string16 GetAddressWithLocalizedDeviceTypeName() const;
+
+  DISALLOW_COPY_AND_ASSIGN(BluetoothDevice);
 };
 
 }  // namespace device

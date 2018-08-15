@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
@@ -25,7 +26,6 @@
 
 namespace net {
 
-class AddressList;
 class ClientSocketHandle;
 class GrowableIOBuffer;
 class HttpStream;
@@ -54,7 +54,7 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
 
   // ProxyClientSocket implementation.
   const HttpResponseInfo* GetConnectResponseInfo() const override;
-  HttpStream* CreateConnectResponseStream() override;
+  std::unique_ptr<HttpStream> CreateConnectResponseStream() override;
   int RestartWithAuth(const CompletionCallback& callback) override;
   const scoped_refptr<HttpAuthController>& GetAuthController() const override;
   bool IsUsingSpdy() const override;
@@ -69,7 +69,7 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
   void SetSubresourceSpeculation() override;
   void SetOmniboxSpeculation() override;
   bool WasEverUsed() const override;
-  bool WasNpnNegotiated() const override;
+  bool WasAlpnNegotiated() const override;
   NextProto GetNegotiatedProtocol() const override;
   bool GetSSLInfo(SSLInfo* ssl_info) override;
   void GetConnectionAttempts(ConnectionAttempts* out) const override;

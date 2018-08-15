@@ -59,6 +59,7 @@
 #include <Qt3DRender/private/gltexturemanager_p.h>
 #include <Qt3DRender/private/attachmentpack_p.h>
 #include <Qt3DRender/private/qbuffer_p.h>
+#include <Qt3DRender/private/renderbuffer_p.h>
 #include <QOpenGLShaderProgram>
 
 #if !defined(QT_OPENGL_ES_2)
@@ -73,6 +74,7 @@
 #endif
 #include <Qt3DRender/private/graphicshelperes2_p.h>
 #include <Qt3DRender/private/graphicshelperes3_p.h>
+#include <Qt3DRender/private/graphicshelperes3_2_p.h>
 
 #include <QSurface>
 #include <QWindow>
@@ -118,22 +120,14 @@ static void logOpenGLDebugMessage(const QOpenGLDebugMessage &debugMessage)
 
 namespace {
 
-GLBuffer::Type bufferTypeToGLBufferType(QBuffer::BufferType type)
+GLBuffer::Type attributeTypeToGLBufferType(QAttribute::AttributeType type)
 {
     switch (type) {
-    case QBuffer::VertexBuffer:
+    case QAttribute::VertexAttribute:
         return GLBuffer::ArrayBuffer;
-    case QBuffer::IndexBuffer:
+    case QAttribute::IndexAttribute:
         return GLBuffer::IndexBuffer;
-    case QBuffer::PixelPackBuffer:
-        return GLBuffer::PixelPackBuffer;
-    case QBuffer::PixelUnpackBuffer:
-        return GLBuffer::PixelUnpackBuffer;
-    case QBuffer::UniformBuffer:
-        return GLBuffer::UniformBuffer;
-    case QBuffer::ShaderStorageBuffer:
-        return GLBuffer::ShaderStorageBuffer;
-    case QBuffer::DrawIndirectBuffer:
+    case QAttribute::DrawIndirectAttribute:
         return GLBuffer::DrawIndirectBuffer;
     default:
         Q_UNREACHABLE();
@@ -372,6 +366,10 @@ QSize GraphicsContext::renderTargetSize(const QSize &surfaceSize) const
 
 void GraphicsContext::setViewport(const QRectF &viewport, const QSize &surfaceSize)
 {
+    // save for later use; this has nothing to do with the viewport but it is
+    // here that we get to know the surfaceSize from the RenderView.
+    m_surfaceSize = surfaceSize;
+
     m_viewport = viewport;
     QSize size = renderTargetSize(surfaceSize);
 
@@ -476,7 +474,7 @@ QOpenGLShaderProgram *GraphicsContext::createShaderProgram(Shader *shaderNode)
         if (!shaderCode.at(i).isEmpty()) {
             // Note: logs only return the error but not all the shader code
             // we could append it
-            if (!shaderProgram->addShaderFromSourceCode(shaderType(type), shaderCode.at(i)))
+            if (!shaderProgram->addCacheableShaderFromSourceCode(shaderType(type), shaderCode.at(i)))
                 logs += shaderProgram->log();
         }
     }
@@ -511,14 +509,14 @@ void GraphicsContext::introspectShaderInterface(Shader *shader, QOpenGLShaderPro
 
 void GraphicsContext::loadShader(Shader *shader, ShaderManager *manager)
 {
-    bool wasPresent = false;
-    QOpenGLShaderProgram *shaderProgram = m_shaderCache.getShaderProgramAndAddRef(shader->dna(), shader->peerId(), &wasPresent);
-    if (!shaderProgram && !wasPresent) {
+    QOpenGLShaderProgram *shaderProgram = m_shaderCache.getShaderProgramAndAddRef(shader->dna(), shader->peerId());
+    if (!shaderProgram) {
         // No matching QOpenGLShader in the cache so create one
         shaderProgram = createShaderProgram(shader);
 
-        // Store in cache (even when failed and shaderProgram is null)
-        m_shaderCache.insert(shader->dna(), shader->peerId(), shaderProgram);
+        // Store in cache
+        if (shaderProgram)
+            m_shaderCache.insert(shader->dna(), shader->peerId(), shaderProgram);
     }
 
     // Ensure the Shader node knows about the program interface
@@ -586,38 +584,11 @@ void GraphicsContext::activateRenderTarget(Qt3DCore::QNodeId renderTargetNodeId,
                 // this is the default fbo that some platforms create (iOS), we just register it
                 // Insert FBO into hash
                 m_renderTargets.insert(renderTargetNodeId, fboId);
-            } else if ((fboId = m_glHelper->createFrameBufferObject()) != 0) {
-                // The FBO is created and its attachments are set once
-                // Insert FBO into hash
-                m_renderTargets.insert(renderTargetNodeId, fboId);
-                // Bind FBO
-                m_glHelper->bindFrameBufferObject(fboId, GraphicsHelperInterface::FBODraw);
-                bindFrameBufferAttachmentHelper(fboId, attachments);
             } else {
-                qCritical() << "Failed to create FBO";
+                fboId = createRenderTarget(renderTargetNodeId, attachments);
             }
         } else {
-            fboId = m_renderTargets.value(renderTargetNodeId);
-
-            // We need to check if  one of the attachment was resized
-            bool needsResize = !m_renderTargetsSize.contains(fboId);    // not even initialized yet?
-            if (!needsResize) {
-                // render target exists, has attachment been resized?
-                GLTextureManager *glTextureManager = m_renderer->nodeManagers()->glTextureManager();
-                const QSize s = m_renderTargetsSize[fboId];
-                const auto attachments_ = attachments.attachments();
-                for (const Attachment &attachment : attachments_) {
-                    GLTexture *rTex = glTextureManager->lookupResource(attachment.m_textureUuid);
-                    needsResize |= (rTex != nullptr && rTex->size() != s);
-                    if (attachment.m_point == QRenderTargetOutput::Color0)
-                        m_renderTargetFormat = rTex->properties().format;
-                }
-            }
-
-            if (needsResize) {
-                m_glHelper->bindFrameBufferObject(fboId, GraphicsHelperInterface::FBODraw);
-                bindFrameBufferAttachmentHelper(fboId, attachments);
-            }
+            fboId = updateRenderTarget(renderTargetNodeId, attachments, true);
         }
     }
     m_activeFBO = fboId;
@@ -626,22 +597,85 @@ void GraphicsContext::activateRenderTarget(Qt3DCore::QNodeId renderTargetNodeId,
     activateDrawBuffers(attachments);
 }
 
+GLuint GraphicsContext::createRenderTarget(Qt3DCore::QNodeId renderTargetNodeId, const AttachmentPack &attachments)
+{
+    const GLuint fboId = m_glHelper->createFrameBufferObject();
+    if (fboId) {
+        // The FBO is created and its attachments are set once
+        // Insert FBO into hash
+        m_renderTargets.insert(renderTargetNodeId, fboId);
+        // Bind FBO
+        m_glHelper->bindFrameBufferObject(fboId, GraphicsHelperInterface::FBODraw);
+        bindFrameBufferAttachmentHelper(fboId, attachments);
+    } else {
+        qCritical("Failed to create FBO");
+    }
+    return fboId;
+}
+
+GLuint GraphicsContext::updateRenderTarget(Qt3DCore::QNodeId renderTargetNodeId, const AttachmentPack &attachments, bool isActiveRenderTarget)
+{
+    const GLuint fboId = m_renderTargets.value(renderTargetNodeId);
+
+    // We need to check if  one of the attachment was resized
+    bool needsResize = !m_renderTargetsSize.contains(fboId);    // not even initialized yet?
+    if (!needsResize) {
+        // render target exists, has attachment been resized?
+        GLTextureManager *glTextureManager = m_renderer->nodeManagers()->glTextureManager();
+        const QSize s = m_renderTargetsSize[fboId];
+        const auto attachments_ = attachments.attachments();
+        for (const Attachment &attachment : attachments_) {
+            GLTexture *rTex = glTextureManager->lookupResource(attachment.m_textureUuid);
+            // ### TODO QTBUG-64757 this check is insufficient since the
+            // texture may have changed to another one with the same size. That
+            // case is not handled atm.
+            needsResize |= (rTex != nullptr && rTex->size() != s);
+            if (isActiveRenderTarget) {
+                if (attachment.m_point == QRenderTargetOutput::Color0)
+                    m_renderTargetFormat = rTex->properties().format;
+            }
+        }
+    }
+
+    if (needsResize) {
+        m_glHelper->bindFrameBufferObject(fboId, GraphicsHelperInterface::FBODraw);
+        bindFrameBufferAttachmentHelper(fboId, attachments);
+    }
+
+    return fboId;
+}
+
 void GraphicsContext::bindFrameBufferAttachmentHelper(GLuint fboId, const AttachmentPack &attachments)
 {
-    // Set FBO attachments
+    // Set FBO attachments. These are normally textures, except that on Open GL
+    // ES <= 3.1 we must use a renderbuffer if a combined depth+stencil is
+    // desired since this cannot be achieved neither with a single texture (not
+    // before GLES 3.2) nor with separate textures (no suitable format for
+    // stencil before 3.1 with the appropriate extension).
 
     QSize fboSize;
     GLTextureManager *glTextureManager = m_renderer->nodeManagers()->glTextureManager();
     const auto attachments_ = attachments.attachments();
     for (const Attachment &attachment : attachments_) {
         GLTexture *rTex = glTextureManager->lookupResource(attachment.m_textureUuid);
-        QOpenGLTexture *glTex = rTex ? rTex->getOrCreateGLTexture() : nullptr;
-        if (glTex != nullptr) {
-            if (fboSize.isEmpty())
-                fboSize = QSize(glTex->width(), glTex->height());
-            else
-                fboSize = QSize(qMin(fboSize.width(), glTex->width()), qMin(fboSize.height(), glTex->height()));
-            m_glHelper->bindFrameBufferAttachment(glTex, attachment);
+        if (!m_glHelper->frameBufferNeedsRenderBuffer(attachment)) {
+            QOpenGLTexture *glTex = rTex ? rTex->getOrCreateGLTexture() : nullptr;
+            if (glTex != nullptr) {
+                if (fboSize.isEmpty())
+                    fboSize = QSize(glTex->width(), glTex->height());
+                else
+                    fboSize = QSize(qMin(fboSize.width(), glTex->width()), qMin(fboSize.height(), glTex->height()));
+                m_glHelper->bindFrameBufferAttachment(glTex, attachment);
+            }
+        } else {
+            RenderBuffer *renderBuffer = rTex ? rTex->getOrCreateRenderBuffer() : nullptr;
+            if (renderBuffer) {
+                if (fboSize.isEmpty())
+                    fboSize = QSize(renderBuffer->width(), renderBuffer->height());
+                else
+                    fboSize = QSize(qMin(fboSize.width(), renderBuffer->width()), qMin(fboSize.height(), renderBuffer->height()));
+                m_glHelper->bindFrameBufferAttachment(renderBuffer, attachment);
+            }
         }
     }
     m_renderTargetsSize.insert(fboId, fboSize);
@@ -732,8 +766,13 @@ GraphicsHelperInterface *GraphicsContext::resolveHighestOpenGLFunctions()
 
     if (m_gl->isOpenGLES()) {
         if (m_gl->format().majorVersion() >= 3) {
-            glHelper = new GraphicsHelperES3();
-            qCDebug(Backend) << Q_FUNC_INFO << " Building OpenGL ES3 Helper";
+            if (m_gl->format().minorVersion() >= 2) {
+                glHelper = new GraphicsHelperES3_2;
+                qCDebug(Backend) << Q_FUNC_INFO << " Building OpenGL ES 3.2 Helper";
+            } else {
+                glHelper = new GraphicsHelperES3();
+                qCDebug(Backend) << Q_FUNC_INFO << " Building OpenGL ES 3.0 Helper";
+            }
         } else {
             glHelper = new GraphicsHelperES2();
             qCDebug(Backend) << Q_FUNC_INFO << " Building OpenGL ES2 Helper";
@@ -1090,9 +1129,9 @@ GLboolean GraphicsContext::unmapBuffer(GLenum target)
     return m_glHelper->unmapBuffer(target);
 }
 
-char *GraphicsContext::mapBuffer(GLenum target)
+char *GraphicsContext::mapBuffer(GLenum target, GLsizeiptr size)
 {
-    return m_glHelper->mapBuffer(target);
+    return m_glHelper->mapBuffer(target, size);
 }
 
 void GraphicsContext::enablei(GLenum cap, GLuint index)
@@ -1185,7 +1224,7 @@ bool GraphicsContext::setParameters(ShaderParameterPack &parameterPack)
                 UniformValue &texUniform = uniformValues[namedTex.glslNameId];
                 Q_ASSERT(texUniform.valueType() == UniformValue::TextureValue);
                 const int texUnit = activateTexture(TextureScopeMaterial, t);
-                texUniform.data<int>()[namedTex.uniformArrayIndex] = texUnit;
+                texUniform.data<UniformValue::Texture>()->textureId = texUnit;
                 // if the texture data from generators may not be available yet,
                 // make sure that the next frame is rendered
                 if (texUnit == -1)
@@ -1204,7 +1243,7 @@ bool GraphicsContext::setParameters(ShaderParameterPack &parameterPack)
     int ssboIndex = 0;
     for (const BlockToSSBO b : blockToSSBOs) {
         Buffer *cpuBuffer = m_renderer->nodeManagers()->bufferManager()->lookupResource(b.m_bufferID);
-        GLBuffer *ssbo = glBufferForRenderBuffer(cpuBuffer);
+        GLBuffer *ssbo = glBufferForRenderBuffer(cpuBuffer, GLBuffer::ShaderStorageBuffer);
         bindShaderStorageBlock(shader->programId(), b.m_blockIndex, ssboIndex);
         // Needed to avoid conflict where the buffer would already
         // be bound as a VertexArray
@@ -1219,7 +1258,7 @@ bool GraphicsContext::setParameters(ShaderParameterPack &parameterPack)
     int uboIndex = 0;
     for (const BlockToUBO &b : blockToUBOs) {
         Buffer *cpuBuffer = m_renderer->nodeManagers()->bufferManager()->lookupResource(b.m_bufferID);
-        GLBuffer *ubo = glBufferForRenderBuffer(cpuBuffer);
+        GLBuffer *ubo = glBufferForRenderBuffer(cpuBuffer, GLBuffer::UniformBuffer);
         bindUniformBlock(shader->programId(), b.m_blockIndex, uboIndex);
         // Needed to avoid conflict where the buffer would already
         // be bound as a VertexArray
@@ -1235,10 +1274,11 @@ bool GraphicsContext::setParameters(ShaderParameterPack &parameterPack)
     for (const ShaderUniform &uniform : activeUniforms) {
         // We can use [] as we are sure the the uniform wouldn't
         // be un activeUniforms if there wasn't a matching value
-        const UniformValue &v = values[uniform.m_nameId];
+        const auto &v = values[uniform.m_nameId];
 
         // skip invalid textures
-        if (v.valueType() == UniformValue::TextureValue && *v.constData<int>() == -1)
+        if (v.valueType() == UniformValue::TextureValue &&
+                v.constData<UniformValue::Texture>()->textureId == -1)
             continue;
 
         applyUniform(uniform, v);
@@ -1247,20 +1287,34 @@ bool GraphicsContext::setParameters(ShaderParameterPack &parameterPack)
     return allValid;
 }
 
+void GraphicsContext::readBuffer(GLenum mode)
+{
+    m_glHelper->readBuffer(mode);
+}
+
+void GraphicsContext::drawBuffer(GLenum mode)
+{
+    m_glHelper->drawBuffer(mode);
+}
+
 void GraphicsContext::enableAttribute(const VAOVertexAttribute &attr)
 {
     // Bind buffer within the current VAO
     GLBuffer *buf = m_renderer->nodeManagers()->glBufferManager()->data(attr.bufferHandle);
     Q_ASSERT(buf);
-    bindGLBuffer(buf, attr.bufferType);
+    bindGLBuffer(buf, attr.attributeType);
 
-    QOpenGLShaderProgram *prog = activeShader();
-    prog->enableAttributeArray(attr.location);
-    prog->setAttributeBuffer(attr.location,
-                             attr.dataType,
-                             attr.byteOffset,
-                             attr.vertexSize,
-                             attr.byteStride);
+    // Don't use QOpenGLShaderProgram::setAttributeBuffer() because of QTBUG-43199.
+    // Use the introspection data and set the attribute explicitly
+    m_glHelper->enableVertexAttributeArray(attr.location);
+    m_glHelper->vertexAttributePointer(attr.shaderDataType,
+                                       attr.location,
+                                       attr.vertexSize,
+                                       attr.dataType,
+                                       GL_TRUE, // TODO: Support normalization property on QAttribute
+                                       attr.byteStride,
+                                       reinterpret_cast<const void *>(qintptr(attr.byteOffset)));
+
 
     // Done by the helper if it supports it
     if (attr.divisor != 0)
@@ -1283,100 +1337,100 @@ void GraphicsContext::applyUniform(const ShaderUniform &description, const Unifo
         if (v.storedType() == Int) {
             float value = float(*v.constData<int>());
             UniformValue floatV(value);
-            applyUniformHelper<UniformType::Float>(description.m_location, description.m_size, floatV);
+            applyUniformHelper<UniformType::Float>(description, floatV);
         } else {
-            applyUniformHelper<UniformType::Float>(description.m_location, description.m_size, v);
+            applyUniformHelper<UniformType::Float>(description, v);
         }
         break;
     case UniformType::Vec2:
-        applyUniformHelper<UniformType::Vec2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Vec2>(description, v);
         break;
     case UniformType::Vec3:
-        applyUniformHelper<UniformType::Vec3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Vec3>(description, v);
         break;
     case UniformType::Vec4:
-        applyUniformHelper<UniformType::Vec4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Vec4>(description, v);
         break;
 
     case UniformType::Double:
-        applyUniformHelper<UniformType::Double>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Double>(description, v);
         break;
     case UniformType::DVec2:
-        applyUniformHelper<UniformType::DVec2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::DVec2>(description, v);
         break;
     case UniformType::DVec3:
-        applyUniformHelper<UniformType::DVec3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::DVec3>(description, v);
         break;
     case UniformType::DVec4:
-        applyUniformHelper<UniformType::DVec4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::DVec4>(description, v);
         break;
 
     case UniformType::Sampler:
     case UniformType::Int:
-        applyUniformHelper<UniformType::Int>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Int>(description, v);
         break;
     case UniformType::IVec2:
-        applyUniformHelper<UniformType::IVec2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::IVec2>(description, v);
         break;
     case UniformType::IVec3:
-        applyUniformHelper<UniformType::IVec3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::IVec3>(description, v);
         break;
     case UniformType::IVec4:
-        applyUniformHelper<UniformType::IVec4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::IVec4>(description, v);
         break;
 
     case UniformType::UInt:
-        applyUniformHelper<UniformType::UInt>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::UInt>(description, v);
         break;
     case UniformType::UIVec2:
-        applyUniformHelper<UniformType::UIVec2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::UIVec2>(description, v);
         break;
     case UniformType::UIVec3:
-        applyUniformHelper<UniformType::UIVec3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::UIVec3>(description, v);
         break;
     case UniformType::UIVec4:
-        applyUniformHelper<UniformType::UIVec4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::UIVec4>(description, v);
         break;
 
     case UniformType::Bool:
-        applyUniformHelper<UniformType::Bool>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Bool>(description, v);
         break;
     case UniformType::BVec2:
-        applyUniformHelper<UniformType::BVec2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::BVec2>(description, v);
         break;
     case UniformType::BVec3:
-        applyUniformHelper<UniformType::BVec3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::BVec3>(description, v);
         break;
     case UniformType::BVec4:
-        applyUniformHelper<UniformType::BVec4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::BVec4>(description, v);
         break;
 
     case UniformType::Mat2:
-        applyUniformHelper<UniformType::Mat2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat2>(description, v);
         break;
     case UniformType::Mat3:
-        applyUniformHelper<UniformType::Mat3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat3>(description, v);
         break;
     case UniformType::Mat4:
-        applyUniformHelper<UniformType::Mat4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat4>(description, v);
         break;
     case UniformType::Mat2x3:
-        applyUniformHelper<UniformType::Mat2x3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat2x3>(description, v);
         break;
     case UniformType::Mat3x2:
-        applyUniformHelper<UniformType::Mat3x2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat3x2>(description, v);
         break;
     case UniformType::Mat2x4:
-        applyUniformHelper<UniformType::Mat2x4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat2x4>(description, v);
         break;
     case UniformType::Mat4x2:
-        applyUniformHelper<UniformType::Mat4x2>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat4x2>(description, v);
         break;
     case UniformType::Mat3x4:
-        applyUniformHelper<UniformType::Mat3x4>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat3x4>(description, v);
         break;
     case UniformType::Mat4x3:
-        applyUniformHelper<UniformType::Mat4x3>(description.m_location, description.m_size, v);
+        applyUniformHelper<UniformType::Mat4x3>(description, v);
         break;
 
     default:
@@ -1385,8 +1439,11 @@ void GraphicsContext::applyUniform(const ShaderUniform &description, const Unifo
 }
 
 // Note: needs to be called while VAO is bound
-void GraphicsContext::specifyAttribute(const Attribute *attribute, Buffer *buffer, int location)
+void GraphicsContext::specifyAttribute(const Attribute *attribute,
+                                       Buffer *buffer,
+                                       const ShaderAttribute *attributeDescription)
 {
+    const int location = attributeDescription->m_location;
     if (location < 0) {
         qCWarning(Backend) << "failed to resolve location for attribute:" << attribute->name();
         return;
@@ -1394,7 +1451,8 @@ void GraphicsContext::specifyAttribute(const Attribute *attribute, Buffer *buffe
 
     const GLint attributeDataType = glDataTypeFromAttributeDataType(attribute->vertexBaseType());
     const HGLBuffer glBufferHandle = m_renderer->nodeManagers()->glBufferManager()->lookupHandle(buffer->peerId());
-    const GLBuffer::Type bufferType = bufferTypeToGLBufferType(buffer->type());
+    Q_ASSERT(!glBufferHandle.isNull());
+    const GLBuffer::Type attributeType = attributeTypeToGLBufferType(attribute->attributeType());
 
     int typeSize = 0;
     int attrCount = 0;
@@ -1414,13 +1472,14 @@ void GraphicsContext::specifyAttribute(const Attribute *attribute, Buffer *buffe
     for (int i = 0; i < attrCount; i++) {
         VAOVertexAttribute attr;
         attr.bufferHandle = glBufferHandle;
-        attr.bufferType = bufferType;
+        attr.attributeType = attributeType;
         attr.location = location + i;
         attr.dataType = attributeDataType;
         attr.byteOffset = attribute->byteOffset() + (i * attrCount * typeSize);
         attr.vertexSize = attribute->vertexSize() / attrCount;
         attr.byteStride = (attribute->byteStride() != 0) ? attribute->byteStride() : (attrCount * attrCount * typeSize);
         attr.divisor = attribute->divisor();
+        attr.shaderDataType = attributeDescription->m_type;
 
         enableAttribute(attr);
 
@@ -1432,9 +1491,7 @@ void GraphicsContext::specifyAttribute(const Attribute *attribute, Buffer *buffe
 
 void GraphicsContext::specifyIndices(Buffer *buffer)
 {
-    Q_ASSERT(buffer->type() == QBuffer::IndexBuffer);
-
-    GLBuffer *buf = glBufferForRenderBuffer(buffer);
+    GLBuffer *buf = glBufferForRenderBuffer(buffer, GLBuffer::IndexBuffer);
     if (!bindGLBuffer(buf, GLBuffer::IndexBuffer))
         qCWarning(Backend) << Q_FUNC_INFO << "binding index buffer failed";
 
@@ -1484,19 +1541,95 @@ bool GraphicsContext::hasGLBufferForBuffer(Buffer *buffer)
     return (it != m_renderBufferHash.end());
 }
 
+void GraphicsContext::blitFramebuffer(Qt3DCore::QNodeId inputRenderTargetId,
+                                      Qt3DCore::QNodeId outputRenderTargetId,
+                                      QRect inputRect, QRect outputRect,
+                                      uint defaultFboId,
+                                      QRenderTargetOutput::AttachmentPoint inputAttachmentPoint,
+                                      QRenderTargetOutput::AttachmentPoint outputAttachmentPoint,
+                                      QBlitFramebuffer::InterpolationMethod interpolationMethod)
+{
+    GLuint inputFboId = defaultFboId;
+    bool inputBufferIsDefault = true;
+    if (!inputRenderTargetId.isNull()) {
+        RenderTarget *renderTarget = m_renderer->nodeManagers()->renderTargetManager()->lookupResource(inputRenderTargetId);
+        if (renderTarget) {
+            AttachmentPack attachments(renderTarget, m_renderer->nodeManagers()->attachmentManager());
+            if (m_renderTargets.contains(inputRenderTargetId))
+                inputFboId = updateRenderTarget(inputRenderTargetId, attachments, false);
+            else
+                inputFboId = createRenderTarget(inputRenderTargetId, attachments);
+        }
+        inputBufferIsDefault = false;
+    }
+
+    GLuint outputFboId = defaultFboId;
+    bool outputBufferIsDefault = true;
+    if (!outputRenderTargetId.isNull()) {
+        RenderTarget *renderTarget = m_renderer->nodeManagers()->renderTargetManager()->lookupResource(outputRenderTargetId);
+        if (renderTarget) {
+            AttachmentPack attachments(renderTarget, m_renderer->nodeManagers()->attachmentManager());
+            if (m_renderTargets.contains(outputRenderTargetId))
+                outputFboId = updateRenderTarget(outputRenderTargetId, attachments, false);
+            else
+                outputFboId = createRenderTarget(outputRenderTargetId, attachments);
+        }
+        outputBufferIsDefault = false;
+    }
+
+    // Up until this point the input and output rects are normal Qt rectangles.
+    // Convert them to GL rectangles (Y at bottom).
+    const int inputFboHeight = inputFboId == defaultFboId ? m_surfaceSize.height() : m_renderTargetsSize[inputFboId].height();
+    const GLint srcX0 = inputRect.left();
+    const GLint srcY0 = inputFboHeight - (inputRect.top() + inputRect.height());
+    const GLint srcX1 = srcX0 + inputRect.width();
+    const GLint srcY1 = srcY0 + inputRect.height();
+
+    const int outputFboHeight = outputFboId == defaultFboId ? m_surfaceSize.height() : m_renderTargetsSize[outputFboId].height();
+    const GLint dstX0 = outputRect.left();
+    const GLint dstY0 = outputFboHeight - (outputRect.top() + outputRect.height());
+    const GLint dstX1 = dstX0 + outputRect.width();
+    const GLint dstY1 = dstY0 + outputRect.height();
+
+    //Get the last bounded framebuffers
+    const GLuint lastDrawFboId = boundFrameBufferObject();
+
+    // Activate input framebuffer for reading
+    bindFramebuffer(inputFboId, GraphicsHelperInterface::FBORead);
+
+    // Activate output framebuffer for writing
+    bindFramebuffer(outputFboId, GraphicsHelperInterface::FBODraw);
+
+    //Bind texture
+    if (!inputBufferIsDefault)
+        readBuffer(GL_COLOR_ATTACHMENT0 + inputAttachmentPoint);
+
+    if (!outputBufferIsDefault)
+        drawBuffer(GL_COLOR_ATTACHMENT0 + outputAttachmentPoint);
+
+    // Blit framebuffer
+    const GLenum mode = interpolationMethod ? GL_NEAREST : GL_LINEAR;
+    m_glHelper->blitFramebuffer(srcX0, srcY0, srcX1, srcY1,
+                                dstX0, dstY0, dstX1, dstY1,
+                                GL_COLOR_BUFFER_BIT, mode);
+
+    // Reset draw buffer
+    bindFramebuffer(lastDrawFboId, GraphicsHelperInterface::FBOReadAndDraw);
+}
+
 void GraphicsContext::memoryBarrier(QMemoryBarrier::Operations barriers)
 {
     m_glHelper->memoryBarrier(barriers);
 }
 
-GLBuffer *GraphicsContext::glBufferForRenderBuffer(Buffer *buf)
+GLBuffer *GraphicsContext::glBufferForRenderBuffer(Buffer *buf, GLBuffer::Type type)
 {
     if (!m_renderBufferHash.contains(buf->peerId()))
-        m_renderBufferHash.insert(buf->peerId(), createGLBufferFor(buf));
+        m_renderBufferHash.insert(buf->peerId(), createGLBufferFor(buf, type));
     return m_renderer->nodeManagers()->glBufferManager()->data(m_renderBufferHash.value(buf->peerId()));
 }
 
-HGLBuffer GraphicsContext::createGLBufferFor(Buffer *buffer)
+HGLBuffer GraphicsContext::createGLBufferFor(Buffer *buffer, GLBuffer::Type type)
 {
     GLBuffer *b = m_renderer->nodeManagers()->glBufferManager()->getOrCreateResource(buffer->peerId());
     //    b.setUsagePattern(static_cast<QOpenGLBuffer::UsagePattern>(buffer->usage()));
@@ -1504,7 +1637,7 @@ HGLBuffer GraphicsContext::createGLBufferFor(Buffer *buffer)
     if (!b->create(this))
         qCWarning(Render::Io) << Q_FUNC_INFO << "buffer creation failed";
 
-    if (!bindGLBuffer(b, bufferTypeToGLBufferType(buffer->type())))
+    if (!bindGLBuffer(b, type))
         qCWarning(Render::Io) << Q_FUNC_INFO << "buffer binding failed";
 
     return m_renderer->nodeManagers()->glBufferManager()->lookupHandle(buffer->peerId());
@@ -1525,7 +1658,7 @@ bool GraphicsContext::bindGLBuffer(GLBuffer *buffer, GLBuffer::Type type)
 
 void GraphicsContext::uploadDataToGLBuffer(Buffer *buffer, GLBuffer *b, bool releaseBuffer)
 {
-    if (!bindGLBuffer(b, bufferTypeToGLBufferType(buffer->type())))
+    if (!bindGLBuffer(b, GLBuffer::ArrayBuffer)) // We're uploading, the type doesn't matter here
         qCWarning(Render::Io) << Q_FUNC_INFO << "buffer bind failed";
     // If the buffer is dirty (hence being called here)
     // there are two possible cases
@@ -1567,15 +1700,14 @@ void GraphicsContext::uploadDataToGLBuffer(Buffer *buffer, GLBuffer *b, bool rel
 
     if (releaseBuffer) {
         b->release(this);
-        if (bufferTypeToGLBufferType(buffer->type()) == GLBuffer::ArrayBuffer)
-            m_boundArrayBuffer = nullptr;
+        m_boundArrayBuffer = nullptr;
     }
     qCDebug(Render::Io) << "uploaded buffer size=" << buffer->data().size();
 }
 
 QByteArray GraphicsContext::downloadDataFromGLBuffer(Buffer *buffer, GLBuffer *b)
 {
-    if (!bindGLBuffer(b, bufferTypeToGLBufferType(buffer->type())))
+    if (!bindGLBuffer(b, GLBuffer::ArrayBuffer)) // We're downloading, the type doesn't matter here
         qCWarning(Render::Io) << Q_FUNC_INFO << "buffer bind failed";
 
     QByteArray data = b->download(this, buffer->data().size());
@@ -1728,10 +1860,10 @@ static void copyGLFramebufferDataToImage(QImage &img, const uchar *srcData, uint
     }
 }
 
-QImage GraphicsContext::readFramebuffer(QSize size)
+QImage GraphicsContext::readFramebuffer(const QRect &rect)
 {
     QImage img;
-    const unsigned int area = size.width() * size.height();
+    const unsigned int area = rect.width() * rect.height();
     unsigned int bytes;
     GLenum format, type;
     QImage::Format imageFormat;
@@ -1756,7 +1888,7 @@ QImage GraphicsContext::readFramebuffer(QSize size)
 #endif
         type = GL_UNSIGNED_BYTE;
         bytes = area * 4;
-        stride = size.width() * 4;
+        stride = rect.width() * 4;
         break;
     case QAbstractTexture::SRGB8:
     case QAbstractTexture::RGBFormat:
@@ -1772,7 +1904,7 @@ QImage GraphicsContext::readFramebuffer(QSize size)
 #endif
         type = GL_UNSIGNED_BYTE;
         bytes = area * 4;
-        stride = size.width() * 4;
+        stride = rect.width() * 4;
         break;
 #ifndef QT_OPENGL_ES_2
     case QAbstractTexture::RG11B10F:
@@ -1780,14 +1912,14 @@ QImage GraphicsContext::readFramebuffer(QSize size)
         format = GL_RGB;
         type = GL_UNSIGNED_INT_10F_11F_11F_REV;
         imageFormat = QImage::Format_RGB30;
-        stride = size.width() * 4;
+        stride = rect.width() * 4;
         break;
     case QAbstractTexture::RGB10A2:
         bytes = area * 4;
         format = GL_RGBA;
         type = GL_UNSIGNED_INT_2_10_10_10_REV;
         imageFormat = QImage::Format_A2BGR30_Premultiplied;
-        stride = size.width() * 4;
+        stride = rect.width() * 4;
         break;
     case QAbstractTexture::R5G6B5:
         bytes = area * 2;
@@ -1795,7 +1927,7 @@ QImage GraphicsContext::readFramebuffer(QSize size)
         type = GL_UNSIGNED_SHORT;
         internalFormat = GL_UNSIGNED_SHORT_5_6_5_REV;
         imageFormat = QImage::Format_RGB16;
-        stride = size.width() * 2;
+        stride = rect.width() * 2;
         break;
     case QAbstractTexture::RGBA16F:
     case QAbstractTexture::RGBA16U:
@@ -1805,7 +1937,7 @@ QImage GraphicsContext::readFramebuffer(QSize size)
         format = GL_RGBA;
         type = GL_FLOAT;
         imageFormat = QImage::Format_ARGB32_Premultiplied;
-        stride = size.width() * 16;
+        stride = rect.width() * 16;
         break;
 #endif
     default:
@@ -1822,7 +1954,7 @@ QImage GraphicsContext::readFramebuffer(QSize size)
         return img;
     }
 
-    img = QImage(size.width(), size.height(), imageFormat);
+    img = QImage(rect.width(), rect.height(), imageFormat);
 
     QScopedArrayPointer<uchar> data(new uchar [bytes]);
 
@@ -1834,7 +1966,7 @@ QImage GraphicsContext::readFramebuffer(QSize size)
         gl->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
         gl->glGenRenderbuffers(1, &rb);
         gl->glBindRenderbuffer(GL_RENDERBUFFER, rb);
-        gl->glRenderbufferStorage(GL_RENDERBUFFER, internalFormat, size.width(), size.height());
+        gl->glRenderbufferStorage(GL_RENDERBUFFER, internalFormat, rect.width(), rect.height());
         gl->glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb);
 
         const GLenum status = gl->glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
@@ -1845,13 +1977,13 @@ QImage GraphicsContext::readFramebuffer(QSize size)
             return img;
         }
 
-        m_glHelper->blitFramebuffer(0, 0, size.width(), size.height(),
-                                    0, 0, size.width(), size.height(),
+        m_glHelper->blitFramebuffer(rect.x(), rect.y(), rect.x() + rect.width(), rect.y() + rect.height(),
+                                    0, 0, rect.width(), rect.height(),
                                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
         gl->glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-        gl->glReadPixels(0,0,size.width(), size.height(), format, type, data.data());
+        gl->glReadPixels(0,0,rect.width(), rect.height(), format, type, data.data());
 
-        copyGLFramebufferDataToImage(img, data.data(), stride, size.width(), size.height(), m_renderTargetFormat);
+        copyGLFramebufferDataToImage(img, data.data(), stride, rect.width(), rect.height(), m_renderTargetFormat);
 
         gl->glBindRenderbuffer(GL_RENDERBUFFER, rb);
         gl->glDeleteRenderbuffers(1, &rb);
@@ -1859,8 +1991,8 @@ QImage GraphicsContext::readFramebuffer(QSize size)
         gl->glDeleteFramebuffers(1, &fbo);
     } else {
         // read pixels directly from framebuffer
-        m_gl->functions()->glReadPixels(0,0,size.width(), size.height(), format, type, data.data());
-        copyGLFramebufferDataToImage(img, data.data(), stride, size.width(), size.height(), m_renderTargetFormat);
+        m_gl->functions()->glReadPixels(rect.x(), rect.y(), rect.width(), rect.height(), format, type, data.data());
+        copyGLFramebufferDataToImage(img, data.data(), stride, rect.width(), rect.height(), m_renderTargetFormat);
     }
 
     return img;

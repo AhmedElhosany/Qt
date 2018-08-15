@@ -21,11 +21,13 @@ Tile::Tile(TileManager* tile_manager,
            const CreateInfo& info,
            int layer_id,
            int source_frame_number,
-           int flags)
+           int flags,
+           bool can_use_lcd_text)
     : tile_manager_(tile_manager),
+      tiling_(info.tiling),
       content_rect_(info.content_rect),
       enclosing_layer_rect_(info.enclosing_layer_rect),
-      raster_scales_(info.raster_scales),
+      raster_transform_(info.raster_transform),
       layer_id_(layer_id),
       source_frame_number_(source_frame_number),
       flags_(flags),
@@ -34,6 +36,7 @@ Tile::Tile(TileManager* tile_manager,
       required_for_activation_(false),
       required_for_draw_(false),
       is_solid_color_analysis_performed_(false),
+      can_use_lcd_text_(can_use_lcd_text),
       id_(tile_manager->GetUniqueTileId()),
       invalidated_id_(0),
       scheduled_priority_(0) {}
@@ -42,17 +45,18 @@ Tile::~Tile() {
   TRACE_EVENT_OBJECT_DELETED_WITH_ID(
       TRACE_DISABLED_BY_DEFAULT("cc.debug"),
       "cc::Tile", this);
+  tile_manager_->Release(this);
 }
 
 void Tile::AsValueInto(base::trace_event::TracedValue* value) const {
   TracedValue::MakeDictIntoImplicitSnapshotWithCategory(
       TRACE_DISABLED_BY_DEFAULT("cc.debug"), value, "cc::Tile", this);
-  // TODO(vmpstr): Update tracing to use x/y scales.
   value->SetDouble("contents_scale", contents_scale_key());
 
-  value->BeginArray("raster_scales");
-  value->AppendDouble(raster_scales_.width());
-  value->AppendDouble(raster_scales_.height());
+  value->BeginArray("raster_transform");
+  value->AppendDouble(raster_transform_.scale());
+  value->AppendDouble(raster_transform_.translation().x());
+  value->AppendDouble(raster_transform_.translation().y());
   value->EndArray();
 
   MathUtil::AddToTracedValue("content_rect", content_rect_, value);
@@ -80,10 +84,6 @@ size_t Tile::GPUMemoryUsageInBytes() const {
         draw_info_.resource_->size(), draw_info_.resource_->format());
   }
   return 0;
-}
-
-void Tile::Deleter::operator()(Tile* tile) const {
-  tile->tile_manager_->Release(tile);
 }
 
 }  // namespace cc

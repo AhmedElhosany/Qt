@@ -84,10 +84,8 @@ static QString cacheFilePath(const QUrl &url)
 {
     const QString localSourcePath = QQmlFile::urlToLocalFileOrQrc(url);
     const QString localCachePath = localSourcePath + QLatin1Char('c');
-#ifndef Q_OS_ANDROID
     if (QFile::exists(localCachePath) || QFileInfo(QFileInfo(localSourcePath).dir().absolutePath()).isWritable())
         return localCachePath;
-#endif
     QCryptographicHash fileNameHash(QCryptographicHash::Sha1);
     fileNameHash.addData(localSourcePath.toUtf8());
     QString directory = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QLatin1String("/qmlcache/");
@@ -175,8 +173,6 @@ QV4::Function *CompilationUnit::linkToEngine(ExecutionEngine *engine)
             l->level = -1;
             l->index = UINT_MAX;
             l->nameIndex = compiledLookups[i].nameIndex;
-            if (type == CompiledData::Lookup::Type_IndexedGetter || type == CompiledData::Lookup::Type_IndexedSetter)
-                l->engine = engine;
         }
     }
 
@@ -195,7 +191,7 @@ QV4::Function *CompilationUnit::linkToEngine(ExecutionEngine *engine)
 
 #if Q_BYTE_ORDER == Q_BIG_ENDIAN
     Value *bigEndianConstants = new Value[data->constantTableSize];
-    const LEUInt64 *littleEndianConstants = data->constants();
+    const quint64_le *littleEndianConstants = data->constants();
     for (uint i = 0; i < data->constantTableSize; ++i)
         bigEndianConstants[i] = Value::fromReturnedValue(littleEndianConstants[i]);
     constants = bigEndianConstants;
@@ -253,14 +249,14 @@ void CompilationUnit::unlink()
 #endif
 }
 
-void CompilationUnit::markObjects(QV4::ExecutionEngine *e)
+void CompilationUnit::markObjects(QV4::MarkStack *markStack)
 {
     for (uint i = 0; i < data->stringTableSize; ++i)
         if (runtimeStrings[i])
-            runtimeStrings[i]->mark(e);
+            runtimeStrings[i]->mark(markStack);
     if (runtimeRegularExpressions) {
         for (uint i = 0; i < data->regexpTableSize; ++i)
-            runtimeRegularExpressions[i].mark(e);
+            runtimeRegularExpressions[i].mark(markStack);
     }
 }
 
@@ -278,7 +274,7 @@ IdentifierHash<int> CompilationUnit::namedObjectsPerComponent(int componentObjec
     if (it == namedObjectsPerComponentCache.end()) {
         IdentifierHash<int> namedObjectCache(engine);
         const CompiledData::Object *component = data->objectAt(componentObjectIndex);
-        const LEUInt32 *namedObjectIndexPtr = component->namedObjectsInComponentTable();
+        const quint32_le *namedObjectIndexPtr = component->namedObjectsInComponentTable();
         for (quint32 i = 0; i < component->nNamedObjectsInComponent; ++i, ++namedObjectIndexPtr) {
             const CompiledData::Object *namedObject = data->objectAt(*namedObjectIndexPtr);
             namedObjectCache.add(runtimeStrings[namedObject->idNameIndex], namedObject->id);

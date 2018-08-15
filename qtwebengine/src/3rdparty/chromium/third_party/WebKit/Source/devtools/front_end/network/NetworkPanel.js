@@ -30,7 +30,6 @@
 /**
  * @implements {UI.ContextMenu.Provider}
  * @implements {UI.Searchable}
- * @unrestricted
  */
 Network.NetworkPanel = class extends UI.Panel {
   constructor() {
@@ -40,10 +39,13 @@ Network.NetworkPanel = class extends UI.Panel {
     this._networkLogShowOverviewSetting = Common.settings.createSetting('networkLogShowOverview', true);
     this._networkLogLargeRowsSetting = Common.settings.createSetting('networkLogLargeRows', false);
     this._networkRecordFilmStripSetting = Common.settings.createSetting('networkRecordFilmStripSetting', false);
-    this._toggleRecordAction =
-        /** @type {!UI.Action }*/ (UI.actionRegistry.action('network.toggle-recording'));
+    this._toggleRecordAction = /** @type {!UI.Action }*/ (UI.actionRegistry.action('network.toggle-recording'));
 
-    /** @type {?Components.FilmStripView} */
+    /** @type {number|undefined} */
+    this._pendingStopTimer;
+    /** @type {?Network.NetworkItemView} */
+    this._networkItemView = null;
+    /** @type {?PerfUI.FilmStripView} */
     this._filmStripView = null;
     /** @type {?Network.NetworkPanel.FilmStripRecorder} */
     this._filmStripRecorder = null;
@@ -51,13 +53,19 @@ Network.NetworkPanel = class extends UI.Panel {
     this._panelToolbar = new UI.Toolbar('', this.element);
     this._filterBar = new UI.FilterBar('networkPanel', true);
     this._filterBar.show(this.element);
+    this.setDefaultFocusedChild(this._filterBar);
+
+    this._filmStripPlaceholderElement = this.element.createChild('div', 'network-film-strip-placeholder');
 
     // Create top overview component.
-    this._overviewPane = new UI.TimelineOverviewPane('network');
-    this._overviewPane.addEventListener(UI.TimelineOverviewPane.Events.WindowChanged, this._onWindowChanged.bind(this));
+    this._overviewPane = new PerfUI.TimelineOverviewPane('network');
+    this._overviewPane.addEventListener(
+        PerfUI.TimelineOverviewPane.Events.WindowChanged, this._onWindowChanged.bind(this));
     this._overviewPane.element.id = 'network-overview-panel';
     this._networkOverview = new Network.NetworkOverview();
     this._overviewPane.setOverviewControls([this._networkOverview]);
+    this._overviewPlaceholderElement = this.element.createChild('div');
+
     this._calculator = new Network.NetworkTransferTimeCalculator();
 
     this._splitWidget = new UI.SplitWidget(true, false, 'networkPanelSplitViewState');
@@ -66,7 +74,6 @@ Network.NetworkPanel = class extends UI.Panel {
     this._splitWidget.show(this.element);
 
     this._progressBarContainer = createElement('div');
-    this._createToolbarButtons();
 
     this._searchableView = new UI.SearchableView(this);
     this._searchableView.setPlaceholder(Common.UIString('Find by filename or path'));
@@ -89,6 +96,12 @@ Network.NetworkPanel = class extends UI.Panel {
     this._networkLogLargeRowsSetting.addChangeListener(this._toggleLargerRequests, this);
     this._networkRecordFilmStripSetting.addChangeListener(this._toggleRecordFilmStrip, this);
 
+    this._preserveLogSetting = Common.moduleSetting('network_log.preserve-log');
+
+    this._offlineCheckbox = MobileThrottling.throttlingManager().createOfflineToolbarCheckbox();
+    this._throttlingSelect = this._createThrottlingConditionsSelect();
+    this._setupToolbarButtons();
+
     this._toggleRecord(true);
     this._toggleShowOverview();
     this._toggleLargerRequests();
@@ -103,9 +116,9 @@ Network.NetworkPanel = class extends UI.Panel {
         Network.NetworkLogView.Events.SearchCountUpdated, this._onSearchCountUpdated, this);
     this._networkLogView.addEventListener(
         Network.NetworkLogView.Events.SearchIndexUpdated, this._onSearchIndexUpdated, this);
-    this._networkLogView.addEventListener(Network.NetworkLogView.Events.UpdateRequest, this._onUpdateRequest, this);
-
-    Components.DataSaverInfobar.maybeShowInPanel(this);
+    NetworkLog.networkLog.addEventListener(NetworkLog.NetworkLog.Events.RequestAdded, this._onUpdateRequest, this);
+    NetworkLog.networkLog.addEventListener(NetworkLog.NetworkLog.Events.RequestUpdated, this._onUpdateRequest, this);
+    NetworkLog.networkLog.addEventListener(NetworkLog.NetworkLog.Events.Reset, this._onNetworkLogReset, this);
   }
 
   /**
@@ -128,6 +141,20 @@ Network.NetworkPanel = class extends UI.Panel {
   }
 
   /**
+   * @return {!UI.ToolbarCheckbox}
+   */
+  offlineCheckboxForTest() {
+    return this._offlineCheckbox;
+  }
+
+  /**
+   * @return {!UI.ToolbarComboBox}
+   */
+  throttlingSelectForTest() {
+    return this._throttlingSelect;
+  }
+
+  /**
    * @param {!Common.Event} event
    */
   _onWindowChanged(event) {
@@ -136,12 +163,12 @@ Network.NetworkPanel = class extends UI.Panel {
     this._networkLogView.setWindow(startTime, endTime);
   }
 
-  _createToolbarButtons() {
+  _setupToolbarButtons() {
     this._panelToolbar.appendToolbarItem(UI.Toolbar.createActionButton(this._toggleRecordAction));
 
-    this._clearButton = new UI.ToolbarButton(Common.UIString('Clear'), 'largeicon-clear');
-    this._clearButton.addEventListener('click', this._onClearButtonClicked, this);
-    this._panelToolbar.appendToolbarItem(this._clearButton);
+    var clearButton = new UI.ToolbarButton(Common.UIString('Clear'), 'largeicon-clear');
+    clearButton.addEventListener(UI.ToolbarButton.Events.Click, () => NetworkLog.networkLog.reset(), this);
+    this._panelToolbar.appendToolbarItem(clearButton);
     this._panelToolbar.appendSeparator();
     var recordFilmStripButton = new UI.ToolbarSettingToggle(
         this._networkRecordFilmStripSetting, 'largeicon-camera', Common.UIString('Capture screenshots'));
@@ -161,56 +188,42 @@ Network.NetworkPanel = class extends UI.Panel {
         this._networkLogShowOverviewSetting, 'largeicon-waterfall', Common.UIString('Show overview'),
         Common.UIString('Hide overview'));
     this._panelToolbar.appendToolbarItem(showOverviewButton);
-    this._panelToolbar.appendSeparator();
 
-    this._preserveLogCheckbox = new UI.ToolbarCheckbox(
-        Common.UIString('Preserve log'), Common.UIString('Do not clear log on page reload / navigation'));
-    this._preserveLogCheckbox.inputElement.addEventListener(
-        'change', this._onPreserveLogCheckboxChanged.bind(this), false);
-    this._panelToolbar.appendToolbarItem(this._preserveLogCheckbox);
-
-    this._disableCacheCheckbox = new UI.ToolbarCheckbox(
-        Common.UIString('Disable cache'), Common.UIString('Disable cache (while DevTools is open)'),
-        Common.moduleSetting('cacheDisabled'));
-    this._panelToolbar.appendToolbarItem(this._disableCacheCheckbox);
-
-    this._panelToolbar.appendSeparator();
-    this._panelToolbar.appendToolbarItem(this._createBlockedURLsButton());
-    this._panelToolbar.appendToolbarItem(Components.NetworkConditionsSelector.createOfflineToolbarCheckbox());
-    this._panelToolbar.appendToolbarItem(this._createNetworkConditionsSelect());
-    this._panelToolbar.appendToolbarItem(new UI.ToolbarItem(this._progressBarContainer));
-  }
-
-  /**
-   * @return {!UI.ToolbarItem}
-   */
-  _createBlockedURLsButton() {
-    var setting = Common.moduleSetting('blockedURLs');
-    setting.addChangeListener(updateAction);
-    var action = /** @type {!UI.Action }*/ (UI.actionRegistry.action('network.blocked-urls.show'));
-    var button = UI.Toolbar.createActionButton(action);
-    button.setVisible(Runtime.experiments.isEnabled('requestBlocking'));
-    updateAction();
-    return button;
-
-    function updateAction() {
-      action.setToggled(!!setting.get().length);
+    if (Runtime.experiments.isEnabled('networkGroupingRequests')) {
+      this._panelToolbar.appendToolbarItem(new UI.ToolbarSettingCheckbox(
+          Common.moduleSetting('network.group-by-frame'), '', Common.UIString('Group by frame')));
     }
+
+    this._panelToolbar.appendSeparator();
+    this._panelToolbar.appendToolbarItem(new UI.ToolbarSettingCheckbox(
+        this._preserveLogSetting, Common.UIString('Do not clear log on page reload / navigation'),
+        Common.UIString('Preserve log')));
+
+    var disableCacheCheckbox = new UI.ToolbarSettingCheckbox(
+        Common.moduleSetting('cacheDisabled'), Common.UIString('Disable cache (while DevTools is open)'),
+        Common.UIString('Disable cache'));
+    this._panelToolbar.appendToolbarItem(disableCacheCheckbox);
+
+    this._panelToolbar.appendSeparator();
+    this._panelToolbar.appendToolbarItem(this._offlineCheckbox);
+    this._panelToolbar.appendToolbarItem(this._throttlingSelect);
+
+    this._panelToolbar.appendToolbarItem(new UI.ToolbarItem(this._progressBarContainer));
   }
 
   /**
    * @return {!UI.ToolbarComboBox}
    */
-  _createNetworkConditionsSelect() {
+  _createThrottlingConditionsSelect() {
     var toolbarItem = new UI.ToolbarComboBox(null);
-    toolbarItem.setMaxWidth(140);
-    Components.NetworkConditionsSelector.decorateSelect(toolbarItem.selectElement());
+    toolbarItem.setMaxWidth(160);
+    MobileThrottling.throttlingManager().decorateSelectWithNetworkThrottling(toolbarItem.selectElement());
     return toolbarItem;
   }
 
   _toggleRecording() {
-    if (!this._preserveLogCheckbox.checked() && !this._toggleRecordAction.toggled())
-      this._reset();
+    if (!this._preserveLogSetting.get() && !this._toggleRecordAction.toggled())
+      NetworkLog.networkLog.reset();
     this._toggleRecord(!this._toggleRecordAction.toggled());
   }
 
@@ -222,10 +235,13 @@ Network.NetworkPanel = class extends UI.Panel {
     this._networkLogView.setRecording(toggled);
     if (!toggled && this._filmStripRecorder)
       this._filmStripRecorder.stopRecording(this._filmStripAvailable.bind(this));
+    // TODO(einbinder) This should be moved to a setting/action that NetworkLog owns but NetworkPanel controls, but
+    // always be present in the command menu.
+    NetworkLog.networkLog.setIsRecording(toggled);
   }
 
   /**
-   * @param {?Components.FilmStripModel} filmStripModel
+   * @param {?SDK.FilmStripModel} filmStripModel
    */
   _filmStripAvailable(filmStripModel) {
     if (!filmStripModel)
@@ -236,7 +252,7 @@ Network.NetworkPanel = class extends UI.Panel {
     var timestamps = filmStripModel.frames().map(mapTimestamp);
 
     /**
-     * @param {!Components.FilmStripModel.Frame} frame
+     * @param {!SDK.FilmStripModel.Frame} frame
      * @return {number}
      */
     function mapTimestamp(frame) {
@@ -246,25 +262,12 @@ Network.NetworkPanel = class extends UI.Panel {
     this._networkLogView.addFilmStripFrames(timestamps);
   }
 
-  /**
-   * @param {!Event} event
-   */
-  _onPreserveLogCheckboxChanged(event) {
-    this._networkLogView.setPreserveLog(this._preserveLogCheckbox.checked());
-  }
-
-  /**
-   * @param {!Common.Event} event
-   */
-  _onClearButtonClicked(event) {
-    this._reset();
-  }
-
-  _reset() {
-    this._calculator.reset();
-    this._overviewPane.reset();
-    this._networkLogView.reset();
+  _onNetworkLogReset() {
     Network.BlockedURLsPane.reset();
+    if (!this._preserveLogSetting.get()) {
+      this._calculator.reset();
+      this._overviewPane.reset();
+    }
     if (this._filmStripView)
       this._resetFilmStripView();
   }
@@ -273,8 +276,6 @@ Network.NetworkPanel = class extends UI.Panel {
    * @param {!Common.Event} event
    */
   _willReloadPage(event) {
-    if (!this._preserveLogCheckbox.checked())
-      this._reset();
     this._toggleRecord(true);
     if (this._pendingStopTimer) {
       clearTimeout(this._pendingStopTimer);
@@ -306,7 +307,7 @@ Network.NetworkPanel = class extends UI.Panel {
   _toggleShowOverview() {
     var toggled = this._networkLogShowOverviewSetting.get();
     if (toggled)
-      this._overviewPane.show(this.element, this._splitWidget.element);
+      this._overviewPane.show(this._overviewPlaceholderElement);
     else
       this._overviewPane.detach();
     this.doResize();
@@ -315,16 +316,15 @@ Network.NetworkPanel = class extends UI.Panel {
   _toggleRecordFilmStrip() {
     var toggled = this._networkRecordFilmStripSetting.get();
     if (toggled && !this._filmStripRecorder) {
-      this._filmStripView = new Components.FilmStripView();
-      this._filmStripView.setMode(Components.FilmStripView.Modes.FrameBased);
+      this._filmStripView = new PerfUI.FilmStripView();
+      this._filmStripView.setMode(PerfUI.FilmStripView.Modes.FrameBased);
       this._filmStripView.element.classList.add('network-film-strip');
       this._filmStripRecorder =
           new Network.NetworkPanel.FilmStripRecorder(this._networkLogView.timeCalculator(), this._filmStripView);
-      this._filmStripView.show(this.element, this.element.firstElementChild);
-      this._filmStripView.addEventListener(
-          Components.FilmStripView.Events.FrameSelected, this._onFilmFrameSelected, this);
-      this._filmStripView.addEventListener(Components.FilmStripView.Events.FrameEnter, this._onFilmFrameEnter, this);
-      this._filmStripView.addEventListener(Components.FilmStripView.Events.FrameExit, this._onFilmFrameExit, this);
+      this._filmStripView.show(this._filmStripPlaceholderElement);
+      this._filmStripView.addEventListener(PerfUI.FilmStripView.Events.FrameSelected, this._onFilmFrameSelected, this);
+      this._filmStripView.addEventListener(PerfUI.FilmStripView.Events.FrameEnter, this._onFilmFrameEnter, this);
+      this._filmStripView.addEventListener(PerfUI.FilmStripView.Events.FrameExit, this._onFilmFrameExit, this);
       this._resetFilmStripView();
     }
 
@@ -519,7 +519,7 @@ Network.NetworkPanel = class extends UI.Panel {
      * @this {Network.NetworkPanel}
      */
     function appendRevealItem(request) {
-      contextMenu.appendItem(Common.UIString.capitalize('Reveal in Network ^panel'), reveal.bind(this, request));
+      contextMenu.appendItem(Common.UIString('Reveal in Network panel'), reveal.bind(this, request));
     }
 
     if (event.target.isSelfOrDescendant(this.element))
@@ -625,22 +625,23 @@ Network.NetworkPanel.RequestRevealer = class {
 
 /**
  * @implements {SDK.TracingManagerClient}
- * @unrestricted
  */
 Network.NetworkPanel.FilmStripRecorder = class {
   /**
    * @param {!Network.NetworkTimeCalculator} timeCalculator
-   * @param {!Components.FilmStripView} filmStripView
+   * @param {!PerfUI.FilmStripView} filmStripView
    */
   constructor(timeCalculator, filmStripView) {
+    /** @type {?SDK.TracingManager} */
+    this._tracingManager = null;
+    /** @type {?SDK.ResourceTreeModel} */
+    this._resourceTreeModel = null;
     this._timeCalculator = timeCalculator;
     this._filmStripView = filmStripView;
-  }
-
-  /**
-   * @override
-   */
-  tracingStarted() {
+    /** @type {?SDK.TracingModel} */
+    this._tracingModel = null;
+    /** @type {?function(?SDK.FilmStripModel)} */
+    this._callback = null;
   }
 
   /**
@@ -656,13 +657,15 @@ Network.NetworkPanel.FilmStripRecorder = class {
    * @override
    */
   tracingComplete() {
-    if (!this._tracingModel)
+    if (!this._tracingModel || !this._tracingManager)
       return;
     this._tracingModel.tracingComplete();
-    SDK.targetManager.resumeReload(this._target);
-    this._target = null;
-    this._callback(new Components.FilmStripModel(this._tracingModel, this._timeCalculator.minimumBoundary() * 1000));
-    delete this._callback;
+    this._tracingManager = null;
+    this._callback(new SDK.FilmStripModel(this._tracingModel, this._timeCalculator.minimumBoundary() * 1000));
+    this._callback = null;
+    if (this._resourceTreeModel)
+      this._resourceTreeModel.resumeReload();
+    this._resourceTreeModel = null;
   }
 
   /**
@@ -681,33 +684,35 @@ Network.NetworkPanel.FilmStripRecorder = class {
   startRecording() {
     this._filmStripView.reset();
     this._filmStripView.setStatusText(Common.UIString('Recording frames...'));
-    if (this._target)
+    var tracingManagers = SDK.targetManager.models(SDK.TracingManager);
+    if (this._tracingManager || !tracingManagers.length)
       return;
 
-    this._target = SDK.targetManager.mainTarget();
+    this._tracingManager = tracingManagers[0];
+    this._resourceTreeModel = this._tracingManager.target().model(SDK.ResourceTreeModel);
     if (this._tracingModel)
-      this._tracingModel.reset();
-    else
-      this._tracingModel = new SDK.TracingModel(new Bindings.TempFileBackingStorage('tracing'));
-    this._target.tracingManager.start(this, '-*,disabled-by-default-devtools.screenshot', '');
+      this._tracingModel.dispose();
+    this._tracingModel = new SDK.TracingModel(new Bindings.TempFileBackingStorage());
+    this._tracingManager.start(this, '-*,disabled-by-default-devtools.screenshot', '');
   }
 
   /**
    * @return {boolean}
    */
   isRecording() {
-    return !!this._target;
+    return !!this._tracingManager;
   }
 
   /**
-   * @param {function(?Components.FilmStripModel)} callback
+   * @param {function(?SDK.FilmStripModel)} callback
    */
   stopRecording(callback) {
-    if (!this._target)
+    if (!this._tracingManager)
       return;
 
-    this._target.tracingManager.stop();
-    SDK.targetManager.suspendReload(this._target);
+    this._tracingManager.stop();
+    if (this._resourceTreeModel)
+      this._resourceTreeModel.suspendReload();
     this._callback = callback;
     this._filmStripView.setStatusText(Common.UIString('Fetching frames...'));
   }
@@ -715,7 +720,6 @@ Network.NetworkPanel.FilmStripRecorder = class {
 
 /**
  * @implements {UI.ActionDelegate}
- * @unrestricted
  */
 Network.NetworkPanel.RecordActionDelegate = class {
   /**

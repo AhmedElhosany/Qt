@@ -110,13 +110,13 @@ MessageCenterTray::~MessageCenterTray() {
   message_center_->RemoveObserver(this);
 }
 
-bool MessageCenterTray::ShowMessageCenterBubble() {
+bool MessageCenterTray::ShowMessageCenterBubble(bool show_by_click) {
   if (message_center_visible_)
     return true;
 
   HidePopupBubbleInternal();
 
-  message_center_visible_ = delegate_->ShowMessageCenter();
+  message_center_visible_ = delegate_->ShowMessageCenter(show_by_click);
   if (message_center_visible_) {
     message_center_->SetVisibility(message_center::VISIBILITY_MESSAGE_CENTER);
     NotifyMessageCenterTrayChanged();
@@ -233,6 +233,11 @@ void MessageCenterTray::OnNotificationButtonClicked(
     int button_index) {
   if (popups_visible_)
     OnMessageCenterChanged();
+}
+
+void MessageCenterTray::OnNotificationSettingsClicked(bool handled) {
+  if (!handled)
+    ShowNotifierSettingsBubble();
 }
 
 void MessageCenterTray::OnNotificationDisplayed(

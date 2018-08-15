@@ -11,10 +11,12 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/accessible_pane_view.h"
+#include "ui/views/focus/focus_manager_delegate.h"
 #include "ui/views/focus/focus_manager_factory.h"
 #include "ui/views/focus/widget_focus_manager.h"
 #include "ui/views/test/focus_manager_test.h"
@@ -125,7 +127,7 @@ TEST_F(FocusManagerTest, WidgetFocusChangeListener) {
   // TODO: this test ends up calling focus on the aura::Window associated with
   // the Widget and expecting that to change activation. This should work for
   // aura-mus-client as well. http://crbug.com/664261.
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   // First, ensure the simulator is aware of the Widget created in SetUp() being
@@ -476,14 +478,17 @@ class FocusManagerDtorTest : public FocusManagerTest {
     explicit TestFocusManagerFactory(DtorTrackVector* dtor_tracker)
         : dtor_tracker_(dtor_tracker) {
     }
+    ~TestFocusManagerFactory() override {}
 
-    FocusManager* CreateFocusManager(Widget* widget,
-                                     bool desktop_widget) override {
-      return new FocusManagerDtorTracked(widget, dtor_tracker_);
+    std::unique_ptr<FocusManager> CreateFocusManager(
+        Widget* widget,
+        bool desktop_widget) override {
+      return base::MakeUnique<FocusManagerDtorTracked>(widget, dtor_tracker_);
     }
 
    private:
     DtorTrackVector* dtor_tracker_;
+
     DISALLOW_COPY_AND_ASSIGN(TestFocusManagerFactory);
   };
 
@@ -856,9 +861,6 @@ class AdvanceFocusWidgetDelegate : public WidgetDelegate {
 
 // Verifies focus wrapping happens in the same widget.
 TEST_F(FocusManagerTest, AdvanceFocusStaysInWidget) {
-  // Mus doesn't support child Widgets well yet. https://crbug.com/612820
-  if (IsMus())
-    return;
   // Add |widget_view| as a child of the Widget.
   View* widget_view = new View;
   widget_view->SetFocusBehavior(View::FocusBehavior::ALWAYS);

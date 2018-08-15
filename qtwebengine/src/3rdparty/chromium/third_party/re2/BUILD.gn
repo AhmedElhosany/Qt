@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//testing/libfuzzer/fuzzer_test.gni")
 import("//build/shim_headers.gni")
 
 declare_args() {
@@ -14,6 +15,7 @@ config("re2_config") {
 
 static_library("bundled_re2") {
   sources = [
+    "src/re2/bitmap256.h",
     "src/re2/bitstate.cc",
     "src/re2/compile.cc",
     "src/re2/dfa.cc",
@@ -44,28 +46,32 @@ static_library("bundled_re2") {
     "src/re2/unicode_casefold.h",
     "src/re2/unicode_groups.cc",
     "src/re2/unicode_groups.h",
-    "src/re2/variadic_function.h",
     "src/re2/walker-inl.h",
-    "src/util/atomicops.h",
     "src/util/flags.h",
-    "src/util/hash.cc",
-    "src/util/logging.cc",
     "src/util/logging.h",
+    "src/util/mix.h",
     "src/util/mutex.h",
     "src/util/rune.cc",
     "src/util/sparse_array.h",
     "src/util/sparse_set.h",
-    "src/util/stringprintf.cc",
     "src/util/strutil.cc",
+    "src/util/strutil.h",
     "src/util/utf.h",
     "src/util/util.h",
-    "src/util/valgrind.cc",
-    "src/util/valgrind.h",
   ]
 
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   public_configs = [ ":re2_config" ]
+}
+
+fuzzer_test("third_party_re2_fuzzer") {
+  sources = [
+    "src/re2/fuzzing/re2_fuzzer.cc",
+  ]
+  deps = [
+    ":re2",
+  ]
 }
 
 shim_headers("re2_shim") {
@@ -75,15 +81,12 @@ shim_headers("re2_shim") {
     "filtered_re2.h",
     "re2.h",
     "set.h",
-    "stringpiece.h",
-    "variadic_function.h",
+    "stringpiece.h"
   ]
 }
 
 source_set("system_re2") {
-  deps = [
-      ":re2_shim",
-  ]
+  deps = [ ":re2_shim" ]
   libs = [ "re2" ]
 }
 

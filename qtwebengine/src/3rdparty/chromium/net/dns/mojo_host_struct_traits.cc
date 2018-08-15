@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/memory/ptr_util.h"
 #include "net/base/address_list.h"
 
 namespace mojo {
@@ -75,7 +76,8 @@ bool StructTraits<net::interfaces::IPEndPointDataView, net::IPEndPoint>::Read(
   if (!data.ReadAddress(&bytes))
     return false;
 
-  *out = net::IPEndPoint(net::IPAddress(bytes), data.port());
+  *out =
+      net::IPEndPoint(net::IPAddress(bytes.data(), bytes.size()), data.port());
   return true;
 }
 

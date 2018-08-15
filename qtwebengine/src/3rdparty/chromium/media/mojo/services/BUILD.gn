@@ -3,64 +3,34 @@
 # found in the LICENSE file.
 
 import("//media/media_options.gni")
+import("//services/catalog/public/tools/catalog.gni")
 import("//services/service_manager/public/cpp/service.gni")
 import("//services/service_manager/public/service_manifest.gni")
+import("//services/service_manager/public/tools/test/service_test.gni")
 import("//testing/test.gni")
-
-config("mojo_media_config") {
-  if (!enable_mojo_media) {
-    assert(mojo_media_services == [], "Mojo media is not enabled")
-    assert(mojo_media_host == "none", "Mojo media is not enabled")
-    assert(!enable_test_mojo_media_client, "Mojo media is not enabled")
-  } else {
-    defines = [ "ENABLE_MOJO_MEDIA" ]
-
-    assert(mojo_media_services != [], "No mojo media service specified")
-    foreach(service, mojo_media_services) {
-      if (service == "renderer") {
-        defines += [ "ENABLE_MOJO_RENDERER" ]
-      } else if (service == "cdm") {
-        defines += [ "ENABLE_MOJO_CDM" ]
-      } else if (service == "audio_decoder") {
-        defines += [ "ENABLE_MOJO_AUDIO_DECODER" ]
-      } else if (service == "video_decoder") {
-        defines += [ "ENABLE_MOJO_VIDEO_DECODER" ]
-      } else {
-        assert(false, "Invalid mojo media service: $service")
-      }
-    }
-
-    if (mojo_media_host == "browser") {
-      defines += [ "ENABLE_MOJO_MEDIA_IN_BROWSER_PROCESS" ]
-    } else if (mojo_media_host == "gpu") {
-      defines += [ "ENABLE_MOJO_MEDIA_IN_GPU_PROCESS" ]
-    } else if (mojo_media_host == "utility") {
-      defines += [ "ENABLE_MOJO_MEDIA_IN_UTILITY_PROCESS" ]
-    } else {
-      assert(false, "Invalid mojo media host: $mojo_media_host")
-    }
-
-    if (enable_test_mojo_media_client) {
-      defines += [ "ENABLE_TEST_MOJO_MEDIA_CLIENT" ]
-    }
-  }
-}
 
 component("services") {
   output_name = "media_mojo_services"
-
   sources = [
-    "demuxer_stream_provider_shim.cc",
-    "demuxer_stream_provider_shim.h",
+    "gpu_mojo_media_client.cc",
+    "gpu_mojo_media_client.h",
     "interface_factory_impl.cc",
     "interface_factory_impl.h",
+    "media_interface_provider.cc",
+    "media_interface_provider.h",
     "media_mojo_export.h",
+    "media_resource_shim.cc",
+    "media_resource_shim.h",
     "media_service.cc",
     "media_service.h",
     "media_service_factory.cc",
     "media_service_factory.h",
     "mojo_audio_decoder_service.cc",
     "mojo_audio_decoder_service.h",
+    "mojo_audio_output_stream.cc",
+    "mojo_audio_output_stream.h",
+    "mojo_audio_output_stream_provider.cc",
+    "mojo_audio_output_stream_provider.h",
     "mojo_cdm_allocator.cc",
     "mojo_cdm_allocator.h",
     "mojo_cdm_promise.cc",
@@ -75,12 +45,16 @@ component("services") {
     "mojo_demuxer_stream_adapter.h",
     "mojo_media_client.cc",
     "mojo_media_client.h",
+    "mojo_media_log.cc",
+    "mojo_media_log.h",
     "mojo_provision_fetcher.cc",
     "mojo_provision_fetcher.h",
     "mojo_renderer_service.cc",
     "mojo_renderer_service.h",
     "mojo_video_decoder_service.cc",
     "mojo_video_decoder_service.h",
+    "mojo_video_encode_accelerator_service.cc",
+    "mojo_video_encode_accelerator_service.h",
     "test_mojo_media_client.cc",
     "test_mojo_media_client.h",
   ]
@@ -89,11 +63,12 @@ component("services") {
 
   # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
   configs += [ "//build/config/compiler:no_size_t_to_int_warning" ]
-  public_configs = [ ":mojo_media_config" ]
 
   public_deps = [
     "//base",
     "//media",
+    "//media/gpu",
+    "//media/mojo:features",
     "//media/mojo/interfaces",
     "//mojo/public/cpp/bindings",
     "//mojo/public/cpp/system",
@@ -102,9 +77,11 @@ component("services") {
   ]
 
   deps = [
-    "//media:cdm_api",
     "//media:shared_memory_support",
+    "//media/cdm:cdm_api",
+    "//media/cdm:cdm_manager",
     "//media/mojo/common",
+    "//media/mojo/common:mojo_shared_buffer_video_frame",
     "//mojo/common",
     "//services/service_manager/public/interfaces",
   ]
@@ -113,6 +90,8 @@ component("services") {
     sources += [
       "android_mojo_media_client.cc",
       "android_mojo_media_client.h",
+      "mojo_media_drm_storage.cc",
+      "mojo_media_drm_storage.h",
     ]
   }
 }
@@ -125,40 +104,48 @@ service("media") {
   ]
 
   public_deps = [
-    ":services",
     "//base",
     "//media",
   ]
 
   deps = [
+    ":services",
     "//mojo/public/c/system",
     "//services/service_manager/public/cpp",
   ]
 }
 
-test("media_mojo_shell_unittests") {
+service_test("media_service_unittests") {
   testonly = true
 
   sources = [
-    "media_mojo_unittest.cc",
+    "media_service_unittest.cc",
   ]
 
+  catalog = ":media_service_unittests_catalog"
+
   deps = [
+    ":services",
+    "//base",
     "//media",
     "//media/base:test_support",
     "//media/mojo/clients",
     "//media/mojo/common",
     "//media/mojo/interfaces",
+    "//media/mojo/interfaces:constants",
     "//services/service_manager/public/cpp:service_test_support",
-    "//services/service_manager/public/cpp/test:run_all_service_tests",
     "//testing/gmock",
     "//testing/gtest",
   ]
 
   data_deps = [
-    "//media/mojo/services:test_manifest",
-    "//media/mojo/services:media",
+    ":media",
   ]
+}
+
+service_manifest("cdm_manifest") {
+  name = "cdm"
+  source = "cdm_manifest.json"
 }
 
 service_manifest("media_manifest") {
@@ -167,25 +154,35 @@ service_manifest("media_manifest") {
 }
 
 service_manifest("test_manifest") {
-  name = "media_mojo_shell_unittests"
+  name = "media_service_unittests"
   source = "test_manifest.json"
 }
 
-test("media_pipeline_integration_unittests") {
+service_test("media_pipeline_integration_unittests") {
   testonly = true
+
+  catalog = ":media_pipeline_integration_unittests_catalog"
 
   deps = [
     "//media/test:mojo_pipeline_integration_tests",
-    "//services/service_manager/public/cpp/test:run_all_service_tests",
   ]
 
   data_deps = [
     ":media",
-    ":pipeline_test_manifest",
   ]
 }
 
 service_manifest("pipeline_test_manifest") {
   name = "media_pipeline_integration_unittests"
   source = "pipeline_test_manifest.json"
+}
+
+catalog("media_service_unittests_catalog") {
+  embedded_services = [ ":test_manifest" ]
+  standalone_services = [ ":media_manifest" ]
+}
+
+catalog("media_pipeline_integration_unittests_catalog") {
+  embedded_services = [ ":pipeline_test_manifest" ]
+  standalone_services = [ ":media_manifest" ]
 }

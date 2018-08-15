@@ -44,25 +44,28 @@ Image ImageFrom1xJPEGEncodedData(const unsigned char* input,
   return Image();
 }
 
-bool JPEG1xEncodedDataFromImage(const Image& image, int quality,
+// The MacOS implementation of this function is in image_utils_mac.mm.
+#if !defined(OS_MACOSX)
+bool JPEG1xEncodedDataFromImage(const Image& image,
+                                int quality,
                                 std::vector<unsigned char>* dst) {
+  return JPEG1xEncodedDataFromSkiaRepresentation(image, quality, dst);
+}
+#endif  // !defined(OS_MACOSX)
+
+bool JPEG1xEncodedDataFromSkiaRepresentation(const Image& image,
+                                             int quality,
+                                             std::vector<unsigned char>* dst) {
   const gfx::ImageSkiaRep& image_skia_rep =
       image.AsImageSkia().GetRepresentation(1.0f);
   if (image_skia_rep.scale() != 1.0f)
     return false;
 
   const SkBitmap& bitmap = image_skia_rep.sk_bitmap();
-  SkAutoLockPixels bitmap_lock(bitmap);
-
   if (!bitmap.readyToDraw())
     return false;
 
-  return gfx::JPEGCodec::Encode(
-          reinterpret_cast<unsigned char*>(bitmap.getAddr32(0, 0)),
-          gfx::JPEGCodec::FORMAT_SkBitmap, bitmap.width(),
-          bitmap.height(),
-          static_cast<int>(bitmap.rowBytes()), quality,
-          dst);
+  return gfx::JPEGCodec::Encode(bitmap, quality, dst);
 }
 #endif  // !defined(OS_IOS)
 
@@ -75,7 +78,6 @@ void GetVisibleMargins(const ImageSkia& image, int* left, int* right) {
   if (bitmap.drawsNothing() || bitmap.isOpaque())
     return;
 
-  SkAutoLockPixels lock(bitmap);
   int x = 0;
   for (; x < bitmap.width(); ++x) {
     if (ColumnHasVisiblePixels(bitmap, x)) {

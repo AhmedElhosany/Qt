@@ -6,12 +6,11 @@
 
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "cc/output/context_provider.h"
-#include "content/common/gpu/client/context_provider_command_buffer.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/ipc/client/command_buffer_proxy_impl.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "gpu/ipc/common/gpu_messages.h"
+#include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace content {
@@ -22,11 +21,9 @@ StreamTextureProxy::StreamTextureProxy(std::unique_ptr<StreamTextureHost> host)
 StreamTextureProxy::~StreamTextureProxy() {}
 
 void StreamTextureProxy::Release() {
-  {
-    // Cannot call |received_frame_cb_| after returning from here.
-    base::AutoLock lock(lock_);
-    received_frame_cb_.Reset();
-  }
+  // Cannot call |received_frame_cb_| after returning from here.
+  ClearReceivedFrameCB();
+
   // Release is analogous to the destructor, so there should be no more external
   // calls to this object in Release. Therefore there is no need to acquire the
   // lock to access |task_runner_|.
@@ -34,6 +31,11 @@ void StreamTextureProxy::Release() {
       !task_runner_->DeleteSoon(FROM_HERE, this)) {
     delete this;
   }
+}
+
+void StreamTextureProxy::ClearReceivedFrameCB() {
+  base::AutoLock lock(lock_);
+  received_frame_cb_.Reset();
 }
 
 void StreamTextureProxy::BindToTaskRunner(
@@ -68,10 +70,6 @@ void StreamTextureProxy::OnFrameAvailable() {
     received_frame_cb_.Run();
 }
 
-void StreamTextureProxy::EstablishPeer(int player_id, int frame_id) {
-  host_->EstablishPeer(player_id, frame_id);
-}
-
 void StreamTextureProxy::SetStreamTextureSize(const gfx::Size& size) {
   host_->SetStreamTextureSize(size);
 }
@@ -83,12 +81,12 @@ void StreamTextureProxy::ForwardStreamTextureForSurfaceRequest(
 
 // static
 scoped_refptr<StreamTextureFactory> StreamTextureFactory::Create(
-    scoped_refptr<ContextProviderCommandBuffer> context_provider) {
+    scoped_refptr<ui::ContextProviderCommandBuffer> context_provider) {
   return new StreamTextureFactory(std::move(context_provider));
 }
 
 StreamTextureFactory::StreamTextureFactory(
-    scoped_refptr<ContextProviderCommandBuffer> context_provider)
+    scoped_refptr<ui::ContextProviderCommandBuffer> context_provider)
     : context_provider_(std::move(context_provider)),
       channel_(context_provider_->GetCommandBufferProxy()->channel()) {
   DCHECK(channel_);

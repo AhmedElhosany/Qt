@@ -86,6 +86,8 @@ class Q_WEBENGINE_PRIVATE_EXPORT QQuickWebEngineSettings : public QObject {
     Q_PROPERTY(bool printElementBackgrounds READ printElementBackgrounds WRITE setPrintElementBackgrounds NOTIFY printElementBackgroundsChanged REVISION 3 FINAL)
     Q_PROPERTY(bool allowRunningInsecureContent READ allowRunningInsecureContent WRITE setAllowRunningInsecureContent NOTIFY allowRunningInsecureContentChanged REVISION 3 FINAL)
     Q_PROPERTY(bool allowGeolocationOnInsecureOrigins READ allowGeolocationOnInsecureOrigins WRITE setAllowGeolocationOnInsecureOrigins NOTIFY allowGeolocationOnInsecureOriginsChanged REVISION 4 FINAL)
+    Q_PROPERTY(bool allowWindowActivationFromJavaScript READ allowWindowActivationFromJavaScript WRITE setAllowWindowActivationFromJavaScript NOTIFY allowWindowActivationFromJavaScriptChanged REVISION 5 FINAL)
+    Q_PROPERTY(bool showScrollBars READ showScrollBars WRITE setShowScrollBars NOTIFY showScrollBarsChanged REVISION 5 FINAL)
 
 public:
     ~QQuickWebEngineSettings();
@@ -113,6 +115,8 @@ public:
     bool printElementBackgrounds() const;
     bool allowRunningInsecureContent() const;
     bool allowGeolocationOnInsecureOrigins() const;
+    bool allowWindowActivationFromJavaScript() const;
+    bool showScrollBars() const;
 
     void setAutoLoadImages(bool on);
     void setJavascriptEnabled(bool on);
@@ -137,6 +141,8 @@ public:
     void setPrintElementBackgrounds(bool on);
     void setAllowRunningInsecureContent(bool on);
     void setAllowGeolocationOnInsecureOrigins(bool on);
+    void setAllowWindowActivationFromJavaScript(bool on);
+    void setShowScrollBars(bool on);
 
 signals:
     void autoLoadImagesChanged();
@@ -162,6 +168,8 @@ signals:
     Q_REVISION(3) void printElementBackgroundsChanged();
     Q_REVISION(3) void allowRunningInsecureContentChanged();
     Q_REVISION(4) void allowGeolocationOnInsecureOriginsChanged();
+    Q_REVISION(5) void allowWindowActivationFromJavaScriptChanged();
+    Q_REVISION(5) void showScrollBarsChanged();
 
 private:
     explicit QQuickWebEngineSettings(QQuickWebEngineSettings *parentSettings = 0);

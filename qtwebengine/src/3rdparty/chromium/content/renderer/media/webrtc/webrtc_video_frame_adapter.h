@@ -9,7 +9,7 @@
 
 #include "base/callback.h"
 #include "media/base/video_frame.h"
-#include "third_party/webrtc/common_video/include/video_frame_buffer.h"
+#include "third_party/webrtc/api/video/video_frame_buffer.h"
 
 namespace content {
 // Thin adapter from media::VideoFrame to webrtc::VideoFrameBuffer. This
@@ -26,21 +26,14 @@ class WebRtcVideoFrameAdapter : public webrtc::VideoFrameBuffer {
       const scoped_refptr<media::VideoFrame>& frame,
       const CopyTextureFrameCallback& copy_texture_callback);
 
+  scoped_refptr<media::VideoFrame> getMediaVideoFrame() const { return frame_; }
+
  private:
+  Type type() const override;
   int width() const override;
   int height() const override;
 
-  const uint8_t* DataY() const override;
-  const uint8_t* DataU() const override;
-  const uint8_t* DataV() const override;
-
-  int StrideY() const override;
-  int StrideU() const override;
-  int StrideV() const override;
-
-  void* native_handle() const override;
-
-  rtc::scoped_refptr<VideoFrameBuffer> NativeToI420Buffer() override;
+  rtc::scoped_refptr<webrtc::I420BufferInterface> ToI420() override;
 
   friend class rtc::RefCountedObject<WebRtcVideoFrameAdapter>;
 

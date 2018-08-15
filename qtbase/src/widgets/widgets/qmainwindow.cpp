@@ -66,13 +66,6 @@
 #ifdef Q_OS_OSX
 #include <qpa/qplatformnativeinterface.h>
 #endif
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-#include <private/qt_mac_p.h>
-#include <private/qt_cocoa_helpers_mac_p.h>
-QT_BEGIN_NAMESPACE
-extern OSWindowRef qt_mac_window_for(const QWidget *); // qwidget_mac.cpp
-QT_END_NAMESPACE
-#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -85,13 +78,6 @@ public:
 #ifdef Q_OS_OSX
             , useUnifiedToolBar(false)
 #endif
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-            , useHIToolBar(false)
-            , activateUnifiedToolbarAfterFullScreen(false)
-#endif
-#if QT_CONFIG(dockwidget) && !defined(QT_NO_CURSOR)
-            , hasOldCursor(false) , cursorAdjusted(false)
-#endif
     { }
     QMainWindowLayout *layout;
     QSize iconSize;
@@ -100,22 +86,7 @@ public:
 #ifdef Q_OS_OSX
     bool useUnifiedToolBar;
 #endif
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-    bool useHIToolBar;
-    bool activateUnifiedToolbarAfterFullScreen;
-#endif
     void init();
-    QList<int> hoverSeparator;
-    QPoint hoverPos;
-
-#if QT_CONFIG(dockwidget) && !defined(QT_NO_CURSOR)
-    QCursor separatorCursor(const QList<int> &path) const;
-    void adjustCursor(const QPoint &pos);
-    QCursor oldCursor;
-    QCursor adjustedCursor;
-    uint hasOldCursor : 1;
-    uint cursorAdjusted : 1;
-#endif
 
     static inline QMainWindowLayout *mainWindowLayout(const QMainWindow *mainWindow)
     {
@@ -811,11 +782,7 @@ void QMainWindow::addToolBar(Qt::ToolBarArea area, QToolBar *toolbar)
 #endif
     }
 
-    if (!d->layout->usesHIToolBar(toolbar)) {
-        d->layout->removeWidget(toolbar);
-    } else {
-        d->layout->removeToolBar(toolbar);
-    }
+    d->layout->removeToolBar(toolbar);
 
     toolbar->d_func()->_q_updateIconSize(d->iconSize);
     toolbar->d_func()->_q_updateToolButtonStyle(d->toolButtonStyle);
@@ -1117,21 +1084,6 @@ void QMainWindow::addDockWidget(Qt::DockWidgetArea area, QDockWidget *dockwidget
     }
     d_func()->layout->removeWidget(dockwidget); // in case it was already in here
     addDockWidget(area, dockwidget, orientation);
-
-#if 0 // Used to be included in Qt4 for Q_WS_MAC     //drawer support
-    QMacAutoReleasePool pool;
-    extern bool qt_mac_is_macdrawer(const QWidget *); //qwidget_mac.cpp
-    if (qt_mac_is_macdrawer(dockwidget)) {
-        extern bool qt_mac_set_drawer_preferred_edge(QWidget *, Qt::DockWidgetArea); //qwidget_mac.cpp
-        window()->createWinId();
-        dockwidget->window()->createWinId();
-        qt_mac_set_drawer_preferred_edge(dockwidget, area);
-        if (dockwidget->isVisible()) {
-            dockwidget->hide();
-            dockwidget->show();
-        }
-    }
-#endif
 }
 
 /*!
@@ -1350,152 +1302,13 @@ bool QMainWindow::restoreState(const QByteArray &state, int version)
     return restored;
 }
 
-#if QT_CONFIG(dockwidget) && !defined(QT_NO_CURSOR)
-QCursor QMainWindowPrivate::separatorCursor(const QList<int> &path) const
-{
-    QDockAreaLayoutInfo *info = layout->layoutState.dockAreaLayout.info(path);
-    Q_ASSERT(info != 0);
-    if (path.size() == 1) { // is this the "top-level" separator which separates a dock area
-                            // from the central widget?
-        switch (path.first()) {
-            case QInternal::LeftDock:
-            case QInternal::RightDock:
-                return Qt::SplitHCursor;
-            case QInternal::TopDock:
-            case QInternal::BottomDock:
-                return Qt::SplitVCursor;
-            default:
-                break;
-        }
-    }
-
-    // no, it's a splitter inside a dock area, separating two dock widgets
-
-    return info->o == Qt::Horizontal
-            ? Qt::SplitHCursor : Qt::SplitVCursor;
-}
-
-void QMainWindowPrivate::adjustCursor(const QPoint &pos)
-{
-    Q_Q(QMainWindow);
-
-    hoverPos = pos;
-
-    if (pos == QPoint(0, 0)) {
-        if (!hoverSeparator.isEmpty())
-            q->update(layout->layoutState.dockAreaLayout.separatorRect(hoverSeparator));
-        hoverSeparator.clear();
-
-        if (cursorAdjusted) {
-            cursorAdjusted = false;
-            if (hasOldCursor)
-                q->setCursor(oldCursor);
-            else
-                q->unsetCursor();
-        }
-    } else if (layout->movingSeparator.isEmpty()) { // Don't change cursor when moving separator
-        QList<int> pathToSeparator
-            = layout->layoutState.dockAreaLayout.findSeparator(pos);
-
-        if (pathToSeparator != hoverSeparator) {
-            if (!hoverSeparator.isEmpty())
-                q->update(layout->layoutState.dockAreaLayout.separatorRect(hoverSeparator));
-
-            hoverSeparator = pathToSeparator;
-
-            if (hoverSeparator.isEmpty()) {
-                if (cursorAdjusted) {
-                    cursorAdjusted = false;
-                    if (hasOldCursor)
-                        q->setCursor(oldCursor);
-                    else
-                        q->unsetCursor();
-                }
-            } else {
-                q->update(layout->layoutState.dockAreaLayout.separatorRect(hoverSeparator));
-                if (!cursorAdjusted) {
-                    oldCursor = q->cursor();
-                    hasOldCursor = q->testAttribute(Qt::WA_SetCursor);
-                }
-                adjustedCursor = separatorCursor(hoverSeparator);
-                q->setCursor(adjustedCursor);
-                cursorAdjusted = true;
-            }
-        }
-    }
-}
-#endif
-
 /*! \reimp */
 bool QMainWindow::event(QEvent *event)
 {
     Q_D(QMainWindow);
+    if (d->layout && d->layout->windowEvent(event))
+        return true;
     switch (event->type()) {
-
-#if QT_CONFIG(dockwidget)
-        case QEvent::Paint: {
-            QPainter p(this);
-            QRegion r = static_cast<QPaintEvent*>(event)->region();
-            d->layout->layoutState.dockAreaLayout.paintSeparators(&p, this, r, d->hoverPos);
-            break;
-        }
-
-#ifndef QT_NO_CURSOR
-        case QEvent::HoverMove:  {
-            d->adjustCursor(static_cast<QHoverEvent*>(event)->pos());
-            break;
-        }
-
-        // We don't want QWidget to call update() on the entire QMainWindow
-        // on HoverEnter and HoverLeave, hence accept the event (return true).
-        case QEvent::HoverEnter:
-            return true;
-        case QEvent::HoverLeave:
-            d->adjustCursor(QPoint(0, 0));
-            return true;
-        case QEvent::ShortcutOverride: // when a menu pops up
-            d->adjustCursor(QPoint(0, 0));
-            break;
-#endif // QT_NO_CURSOR
-
-        case QEvent::MouseButtonPress: {
-            QMouseEvent *e = static_cast<QMouseEvent*>(event);
-            if (e->button() == Qt::LeftButton && d->layout->startSeparatorMove(e->pos())) {
-                // The click was on a separator, eat this event
-                e->accept();
-                return true;
-            }
-            break;
-        }
-
-        case QEvent::MouseMove: {
-            QMouseEvent *e = static_cast<QMouseEvent*>(event);
-
-#ifndef QT_NO_CURSOR
-            d->adjustCursor(e->pos());
-#endif
-            if (e->buttons() & Qt::LeftButton) {
-                if (d->layout->separatorMove(e->pos())) {
-                    // We're moving a separator, eat this event
-                    e->accept();
-                    return true;
-                }
-            }
-
-            break;
-        }
-
-        case QEvent::MouseButtonRelease: {
-            QMouseEvent *e = static_cast<QMouseEvent*>(event);
-            if (d->layout->endSeparatorMove(e->pos())) {
-                // We've released a separator, eat this event
-                e->accept();
-                return true;
-            }
-            break;
-        }
-
-#endif
 
 #ifndef QT_NO_TOOLBAR
         case QEvent::ToolBarChange: {
@@ -1522,40 +1335,6 @@ bool QMainWindow::event(QEvent *event)
             if (!d->explicitIconSize)
                 setIconSize(QSize());
             break;
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-        case QEvent::Show:
-            if (unifiedTitleAndToolBarOnMac())
-                d->layout->syncUnifiedToolbarVisibility();
-            d->layout->blockVisiblityCheck = false;
-            break;
-       case QEvent::WindowStateChange:
-            {
-                if (isHidden()) {
-                    // We are coming out of a minimize, leave things as is.
-                    d->layout->blockVisiblityCheck = true;
-                }
-                // We need to update the HIToolbar status when we go out of or into fullscreen.
-                QWindowStateChangeEvent *wce = static_cast<QWindowStateChangeEvent *>(event);
-                if ((windowState() & Qt::WindowFullScreen) || (wce->oldState() & Qt::WindowFullScreen)) {
-                    d->layout->updateHIToolBarStatus();
-                }
-            }
-            break;
-#endif
-#if QT_CONFIG(dockwidget) && !defined(QT_NO_CURSOR)
-       case QEvent::CursorChange:
-           // CursorChange events are triggered as mouse moves to new widgets even
-           // if the cursor doesn't actually change, so do not change oldCursor if
-           // the "changed" cursor has same shape as adjusted cursor.
-           if (d->cursorAdjusted && d->adjustedCursor.shape() != cursor().shape()) {
-               d->oldCursor = cursor();
-               d->hasOldCursor = testAttribute(Qt::WA_SetCursor);
-
-               // Ensure our adjusted cursor stays visible
-               setCursor(d->adjustedCursor);
-           }
-           break;
-#endif
         default:
             break;
     }
@@ -1595,33 +1374,6 @@ void QMainWindow::setUnifiedTitleAndToolBarOnMac(bool set)
         (reinterpret_cast<SetContentBorderEnabledFunction>(function))(window()->windowHandle(), set);
         update();
     }
-#endif
-
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-    Q_D(QMainWindow);
-    if (!isWindow() || d->useHIToolBar == set || QSysInfo::MacintoshVersion < QSysInfo::MV_10_3)
-        return;
-
-    d->useHIToolBar = set;
-    createWinId(); // We need the hiview for down below.
-
-    // Activate the unified toolbar with the raster engine.
-    if (windowSurface() && set) {
-        d->layout->unifiedSurface = new QUnifiedToolbarSurface(this);
-    }
-
-    d->layout->updateHIToolBarStatus();
-
-    // Deactivate the unified toolbar with the raster engine.
-    if (windowSurface() && !set) {
-        if (d->layout->unifiedSurface) {
-            delete d->layout->unifiedSurface;
-            d->layout->unifiedSurface = 0;
-        }
-    }
-
-    // Enabling the unified toolbar clears the opaque size grip setting, update it.
-    d->macUpdateOpaqueSizeGrip();
 #else
     Q_UNUSED(set)
 #endif
@@ -1631,9 +1383,6 @@ bool QMainWindow::unifiedTitleAndToolBarOnMac() const
 {
 #ifdef Q_OS_OSX
     return d_func()->useUnifiedToolBar;
-#endif
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-    return d_func()->useHIToolBar && !testAttribute(Qt::WA_MacBrushedMetal) && !(windowFlags() & Qt::FramelessWindowHint);
 #endif
     return false;
 }

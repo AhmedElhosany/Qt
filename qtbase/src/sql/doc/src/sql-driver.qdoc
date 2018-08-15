@@ -299,6 +299,12 @@
     e.g., the SQLSTATEs.  Before setting this connect option, consult
     your ODBC documentation about behavior differences you can expect.
 
+    When using the SAP HANA database, the connection has to be
+    established using the option "SCROLLABLERESULT=TRUE", as the
+    HANA ODBC driver does not provide scrollable results by default, e.g.:
+
+    \snippet code/doc_src_sql-driver.cpp 35
+
     If you experience very slow access of the ODBC datasource, make sure
     that ODBC call tracing is turned off in the ODBC datasource manager.
 
@@ -533,6 +539,22 @@
     On Windows:
 
     \snippet code/doc_src_sql-driver.qdoc 23
+
+    \section3 Enable REGEXP operator
+
+    SQLite comes with a REGEXP operation. However the needed implementation must
+    be provided by the user. For convenience a default implementation can be
+    enabled by \l{QSqlDatabase::setConnectOptions()} {setting the connect
+    option} \c{QSQLITE_ENABLE_REGEXP} before \l{QSqlDatabase::open()} {the
+    database connection is opened}. Then a SQL statement like "column REGEXP
+    'pattern'" basically expands to the Qt code
+
+    \snippet code/doc_src_sql-driver.cpp 34
+
+    For better performance the regular expressions are cached internally. By
+    default the cache size is 25, but it can be changed through the option's
+    value. For example passing "\c{QSQLITE_ENABLE_REGEXP=10}" reduces the
+    cache size to 10.
 
     \section3 QSQLITE File Format Compatibility
 

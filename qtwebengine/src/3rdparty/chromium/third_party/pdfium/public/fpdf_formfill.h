@@ -7,6 +7,7 @@
 #ifndef PUBLIC_FPDF_FORMFILL_H_
 #define PUBLIC_FPDF_FORMFILL_H_
 
+// NOLINTNEXTLINE(build/include)
 #include "fpdfview.h"
 
 typedef void* FPDF_FORMHANDLE;
@@ -148,10 +149,8 @@ typedef struct _IPDF_JsPlatform {
   *       The filePath should be always input in local encoding.
   *
   *       The return value always indicated number of bytes required for the
-  * buffer, even when there is
-  *       no buffer specified, or the buffer size is less then required. In this
-  * case, the buffer will not
-  *       be modified.
+  *       buffer , even when there is no buffer specified, or the buffer size is
+  *       less than required. In this case, the buffer will not be modified.
   */
   int (*Doc_getFilePath)(struct _IPDF_JsPlatform* pThis,
                          void* filePath,
@@ -1356,6 +1355,29 @@ DLLEXPORT FPDF_BOOL STDCALL FORM_OnChar(FPDF_FORMHANDLE hHandle,
                                         int modifier);
 
 /**
+ * Function: FORM_GetSelectedText
+ *          You can call this function to obtain selected text within
+ *          a form text field or form combobox text field.
+ * Parameters:
+ *          hHandle     -   Handle to the form fill module. Returned by
+ *                          FPDFDOC_InitFormFillEnvironment.
+ *          page        -   Handle to the page. Returned by FPDF_LoadPage
+ *                          function.
+ *          buffer      -   Buffer for holding the selected text, encoded
+ *                          in UTF16-LE. If NULL, |buffer| is not modified.
+ *          buflen      -   Length of |buffer| in bytes. If |buflen|
+                            is less than the length of the selected text
+                            string, |buffer| is not modified.
+ * Return Value:
+ *          Length in bytes of selected text in form text field or form combobox
+ *          text field.
+ **/
+DLLEXPORT unsigned long STDCALL FORM_GetSelectedText(FPDF_FORMHANDLE hHandle,
+                                                     FPDF_PAGE page,
+                                                     void* buffer,
+                                                     unsigned long buflen);
+
+/**
  * Function: FORM_ForceToKillFocus.
  *          You can call this member function to force to kill the focus of the
  *form field which got focus.
@@ -1398,15 +1420,6 @@ DLLEXPORT int STDCALL FPDFPage_HasFormFieldAtPoint(FPDF_FORMHANDLE hHandle,
                                                    FPDF_PAGE page,
                                                    double page_x,
                                                    double page_y);
-
-/**
- * Function: FPDPage_HasFormFieldAtPoint
- *     DEPRECATED. Please use FPDFPage_HasFormFieldAtPoint.
- **/
-DLLEXPORT int STDCALL FPDPage_HasFormFieldAtPoint(FPDF_FORMHANDLE hHandle,
-                                                  FPDF_PAGE page,
-                                                  double page_x,
-                                                  double page_y);
 
 /**
  * Function: FPDFPage_FormFieldZOrderAtPoint
@@ -1688,15 +1701,16 @@ FPDF_Widget_ReplaceSpellCheckWord(FPDF_DOCUMENT document,
 /**
  * Function: FPDF_Widget_GetSpellCheckWords
  *          This method will implement the spell check feature for the specified
- *xfa field.
+ *          xfa field.
  * Parameters:
- *          document        -   Handle to document. Returned by
- *FPDF_LoadDocument function.
+ *          document        -   Handle to document as returned by
+ *                              FPDF_LoadDocument function.
  *          hWidget         -   Handle to the xfa field.
  *          x               -   The x value of the specified point.
  *          y               -   The y value of the specified point.
  *          stringHandle    -   Pointer to FPDF_STRINGHANDLE to receive the
- *speck check text buffer, in UTF-16LE format.
+ *                              speck check text buffer, in UTF-16LE format.
+ *                              Caller must free using FPDF_StringHandleRelease.
  * Return Value:
  *          None.
  **/

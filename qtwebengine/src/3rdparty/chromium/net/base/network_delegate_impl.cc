@@ -92,8 +92,10 @@ bool NetworkDelegateImpl::OnCanSetCookie(const URLRequest& request,
   return true;
 }
 
-bool NetworkDelegateImpl::OnCanAccessFile(const URLRequest& request,
-                                          const base::FilePath& path) const {
+bool NetworkDelegateImpl::OnCanAccessFile(
+    const URLRequest& request,
+    const base::FilePath& original_path,
+    const base::FilePath& absolute_path) const {
   return false;
 }
 
@@ -107,15 +109,31 @@ bool NetworkDelegateImpl::OnAreExperimentalCookieFeaturesEnabled() const {
   return false;
 }
 
-bool NetworkDelegateImpl::OnAreStrictSecureCookiesEnabled() const {
-  return false;
-}
-
 bool NetworkDelegateImpl::OnCancelURLRequestWithPolicyViolatingReferrerHeader(
     const URLRequest& request,
     const GURL& target_url,
     const GURL& referrer_url) const {
   return false;
+}
+
+bool NetworkDelegateImpl::OnCanQueueReportingReport(
+    const url::Origin& origin) const {
+  return true;
+}
+
+bool NetworkDelegateImpl::OnCanSendReportingReport(
+    const url::Origin& origin) const {
+  return true;
+}
+
+bool NetworkDelegateImpl::OnCanSetReportingClient(const url::Origin& origin,
+                                                  const GURL& endpoint) const {
+  return true;
+}
+
+bool NetworkDelegateImpl::OnCanUseReportingClient(const url::Origin& origin,
+                                                  const GURL& endpoint) const {
+  return true;
 }
 
 }  // namespace net

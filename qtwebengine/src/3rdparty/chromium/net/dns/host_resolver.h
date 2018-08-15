@@ -109,14 +109,6 @@ class NET_EXPORT HostResolver {
     bool is_my_ip_address() const { return is_my_ip_address_; }
     void set_is_my_ip_address(bool b) { is_my_ip_address_ = b; }
 
-    using CacheHitCallback = base::Callback<void(const RequestInfo&)>;
-    const CacheHitCallback& cache_hit_callback() const {
-      return cache_hit_callback_;
-    }
-    void set_cache_hit_callback(const CacheHitCallback& callback) {
-      cache_hit_callback_ = callback;
-    }
-
    private:
     RequestInfo();
 
@@ -138,10 +130,6 @@ class NET_EXPORT HostResolver {
     // Indicates a request for myIpAddress (to differentiate from other requests
     // for localhost, currently used by Chrome OS).
     bool is_my_ip_address_;
-
-    // A callback that will be called when another request reads the cache data
-    // returned (and possibly written) by this request.
-    CacheHitCallback cache_hit_callback_;
   };
 
   // Set Options.max_concurrent_resolves to this to select a default level
@@ -212,6 +200,11 @@ class NET_EXPORT HostResolver {
   virtual void InitializePersistence(
       const PersistCallback& persist_callback,
       std::unique_ptr<const base::Value> old_data);
+
+  // Sets the HostResolver to assume that IPv6 is unreachable when on a wifi
+  // connection. See https://crbug.com/696569 for further context.
+  virtual void SetNoIPv6OnWifi(bool no_ipv6_on_wifi);
+  virtual bool GetNoIPv6OnWifi();
 
   // Creates a HostResolver implementation that queries the underlying system.
   // (Except if a unit-test has changed the global HostResolverProc using

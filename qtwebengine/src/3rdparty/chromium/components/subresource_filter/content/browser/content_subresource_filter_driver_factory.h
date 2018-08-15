@@ -5,138 +5,113 @@
 #ifndef COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CONTENT_SUBRESOURCE_FILTER_DRIVER_FACTORY_H_
 #define COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CONTENT_SUBRESOURCE_FILTER_DRIVER_FACTORY_H_
 
-#include <map>
-#include <set>
-#include <string>
-#include <utility>
-#include <vector>
+#include <memory>
 
 #include "base/macros.h"
-#include "base/supports_user_data.h"
-#include "components/safe_browsing_db/util.h"
+#include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
+#include "components/subresource_filter/core/browser/subresource_filter_features.h"
+#include "components/subresource_filter/core/common/activation_decision.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "url/gurl.h"
+#include "content/public/browser/web_contents_user_data.h"
 
 namespace content {
 class WebContents;
-class RenderFrameHost;
 }  // namespace content
+
+namespace safe_browsing {
+class SafeBrowsingServiceTest;
+};
 
 namespace subresource_filter {
 
-using HostSet = std::set<std::string>;
-
-class ContentSubresourceFilterDriver;
 class SubresourceFilterClient;
-enum class ActivationState;
+enum class ActivationLevel;
+enum class ActivationList;
 
 // Controls the activation of subresource filtering for each page load in a
-// WebContents and manufactures the per-frame ContentSubresourceFilterDrivers.
-// TODO(melandory): Once https://crbug.com/621856 is fixed this class should
-// take care of passing the activation information not only to the main frame,
-// but also to the subframes.
+// WebContents and is responsible for sending the activation signal to all the
+// per-frame SubresourceFilterAgents on the renderer side.
 class ContentSubresourceFilterDriverFactory
-    : public base::SupportsUserData::Data,
-      public content::WebContentsObserver {
+    : public content::WebContentsUserData<
+          ContentSubresourceFilterDriverFactory>,
+      public content::WebContentsObserver,
+      public ContentSubresourceFilterThrottleManager::Delegate {
  public:
-  static void CreateForWebContents(
-      content::WebContents* web_contents,
-      std::unique_ptr<SubresourceFilterClient> client);
-  static ContentSubresourceFilterDriverFactory* FromWebContents(
-      content::WebContents* web_contents);
+  static void CreateForWebContents(content::WebContents* web_contents,
+                                   SubresourceFilterClient* client);
 
   explicit ContentSubresourceFilterDriverFactory(
       content::WebContents* web_contents,
-      std::unique_ptr<SubresourceFilterClient> client);
+      SubresourceFilterClient* client);
   ~ContentSubresourceFilterDriverFactory() override;
 
-  ContentSubresourceFilterDriver* DriverFromFrameHost(
-      content::RenderFrameHost* render_frame_host);
+  void NotifyPageActivationComputed(
+      content::NavigationHandle* navigation_handle,
+      ActivationDecision activation_decision,
+      Configuration::ActivationOptions matched_options);
 
-  bool IsWhitelisted(const GURL& url) const;
-  bool IsBlacklisted(const GURL& url) const;
-
-  // Whitelists the host of |url|, so that page loads with the main-frame
-  // document being loaded from this host will be exempted from subresource
-  // filtering for the lifetime of this WebContents.
-  void AddHostOfURLToWhitelistSet(const GURL& url);
-
-  void AddToActivationHitsSet(const GURL& url);
-
-  // Called when Safe Browsing detects that the |url| corresponding to the load
-  // of the main frame belongs to the blacklist with |threat_type|. If the
-  // blacklist is the Safe Browsing Social Engineering ads landing, then |url|
-  // and |redirects| are saved.
-  void OnMainResourceMatchedSafeBrowsingBlacklist(
-      const GURL& url,
-      const std::vector<GURL>& redirect_urls,
-      safe_browsing::SBThreatType threat_type,
-      safe_browsing::ThreatPatternType threat_type_metadata);
-
-  // Reloads the page and inserts the url to the whitelist.
-  void OnReloadRequested();
-
-  const HostSet& safe_browsing_blacklisted_patterns_set() const {
-    return safe_browsing_blacklisted_patterns_;
+  // Returns the |ActivationDecision| for the current main frame document. Do
+  // not rely on this API, it is only temporary.
+  // TODO(csharrison): Remove this and |activation_decision_| once consumers
+  // move to become SubresourceFilterObservers.
+  ActivationDecision GetActivationDecisionForLastCommittedPageLoad() const {
+    return activation_decision_;
   }
-  ActivationState activation_state() { return activation_state_; }
+
+  // Returns the |ActivationOptions| for the current main frame
+  // document. Do not rely on this API, it is only temporary.
+  // TODO(csharrison): Remove this and |activation_options_| in place of adding
+  // |should_suppress_notifications| on ActivationState.
+  const Configuration::ActivationOptions&
+  GetActivationOptionsForLastCommittedPageLoad() const {
+    return activation_options_;
+  }
+
+  // ContentSubresourceFilterThrottleManager::Delegate:
+  void OnFirstSubresourceLoadDisallowed() override;
+  bool AllowStrongPopupBlocking() override;
+  bool AllowRulesetRules() override;
+
+  ContentSubresourceFilterThrottleManager* throttle_manager() {
+    return throttle_manager_.get();
+  }
+
+  SubresourceFilterClient* client() { return client_; }
 
  private:
   friend class ContentSubresourceFilterDriverFactoryTest;
-  friend class SubresourceFilterNavigationThrottleTest;
-
-  typedef std::map<content::RenderFrameHost*,
-                   std::unique_ptr<ContentSubresourceFilterDriver>>
-      FrameHostToOwnedDriverMap;
-
-  void SetDriverForFrameHostForTesting(
-      content::RenderFrameHost* render_frame_host,
-      std::unique_ptr<ContentSubresourceFilterDriver> driver);
-
-  void CreateDriverForFrameHostIfNeeded(
-      content::RenderFrameHost* render_frame_host);
-
-  void OnFirstSubresourceLoadDisallowed();
+  friend class safe_browsing::SafeBrowsingServiceTest;
 
   // content::WebContentsObserver:
-  void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override;
-  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
   void DidStartNavigation(
       content::NavigationHandle* navigation_handle) override;
-  void ReadyToCommitNavigation(
+  void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
-  bool OnMessageReceived(const IPC::Message& message,
-                         content::RenderFrameHost* render_frame_host) override;
 
-  // Checks base on the value of |urr| and current activation scope if
-  // activation signal should be sent.
-  bool ShouldActivateForMainFrameURL(const GURL& url) const;
-  void ActivateForFrameHostIfNeeded(content::RenderFrameHost* render_frame_host,
-                                    const GURL& url);
+  // Must outlive this class.
+  SubresourceFilterClient* client_;
 
-  // Internal implementation of ReadyToCommitNavigation which doesn't use
-  // NavigationHandle to ease unit tests.
-  void ReadyToCommitNavigationInternal(
-      content::RenderFrameHost* render_frame_host,
-      const GURL& url);
+  std::unique_ptr<ContentSubresourceFilterThrottleManager> throttle_manager_;
 
-  bool IsHit(const GURL& url) const;
+  // The activation decision corresponding to the most recently _started_
+  // non-same-document navigation in the main frame.
+  //
+  // The value is reset to ActivationDecision::UNKNOWN at the start of each such
+  // navigation, and will not be assigned until the navigation successfully
+  // reaches the WillProcessResponse stage (or successfully finishes if
+  // throttles are not invoked). This means that after a cancelled or otherwise
+  // unsuccessful navigation, the value will be left at UNKNOWN indefinitely.
+  ActivationDecision activation_decision_ =
+      ActivationDecision::ACTIVATION_DISABLED;
 
-  static const char kWebContentsUserDataKey[];
-
-  FrameHostToOwnedDriverMap frame_drivers_;
-  std::unique_ptr<SubresourceFilterClient> client_;
-
-  HostSet whitelisted_hosts_;
-
-  // Host+path list of the URLs, where the Safe Browsing detected hit to the
-  // threat list of interest. When the navigation is commited
-  // |safe_browsing_blacklisted_patterns_| is used to determine whenever
-  // the activation signal should be sent. All entities are deleted from the
-  // list on navigation commit event.
-  HostSet safe_browsing_blacklisted_patterns_;
-
-  ActivationState activation_state_;
+  // The activation options corresponding to the most recently _committed_
+  // non-same-document navigation in the main frame.
+  //
+  // The value corresponding to the previous such navigation will be retained,
+  // and the new value not assigned until a subsequent navigation successfully
+  // reaches the WillProcessResponse stage (or successfully finishes if
+  // throttles are not invoked).
+  Configuration::ActivationOptions activation_options_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentSubresourceFilterDriverFactory);
 };

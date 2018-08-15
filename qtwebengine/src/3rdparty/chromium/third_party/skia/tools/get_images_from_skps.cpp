@@ -7,6 +7,7 @@
 
 #include "SkBitmap.h"
 #include "SkCodec.h"
+#include "SkColorSpace.h"
 #include "SkCommandLineFlags.h"
 #include "SkData.h"
 #include "SkJSONCPP.h"
@@ -19,12 +20,16 @@
 #include "SkTHash.h"
 
 
+#include <iostream>
 #include <map>
 
-DEFINE_string2(skps, s, "skps", "A path to a directory of skps.");
+DEFINE_string2(skps, s, "skps", "A path to a directory of skps or a single skp.");
 DEFINE_string2(out, o, "img-out", "A path to an output directory.");
 DEFINE_bool(testDecode, false, "Indicates if we want to test that the images decode successfully.");
-DEFINE_bool(writeImages, true, "Indicates if we want to write out images.");
+DEFINE_bool(writeImages, true,
+            "Indicates if we want to write out supported/decoded images.");
+DEFINE_bool(writeFailedImages, false,
+            "Indicates if we want to write out unsupported/failed to decode images.");
 DEFINE_string2(failuresJsonPath, j, "",
                "Dump SKP and count of unknown images to the specified JSON file. Will not be "
                "written anywhere if empty.");
@@ -32,6 +37,7 @@ DEFINE_string2(failuresJsonPath, j, "",
 static int gKnown;
 static const char* gOutputDir;
 static std::map<std::string, unsigned int> gSkpToUnknownCount = {};
+static std::map<std::string, unsigned int> gSkpToUnsupportedCount;
 
 static SkTHashSet<SkMD5::Digest> gSeen;
 
@@ -65,19 +71,29 @@ struct Sniffer : public SkPixelSerializer {
         }
         SkString ext;
         switch (codec->getEncodedFormat()) {
-            case SkEncodedFormat::kBMP_SkEncodedFormat:  ext =  "bmp"; break;
-            case SkEncodedFormat::kGIF_SkEncodedFormat:  ext =  "gif"; break;
-            case SkEncodedFormat::kICO_SkEncodedFormat:  ext =  "ico"; break;
-            case SkEncodedFormat::kJPEG_SkEncodedFormat: ext =  "jpg"; break;
-            case SkEncodedFormat::kPNG_SkEncodedFormat:  ext =  "png"; break;
-            case SkEncodedFormat::kDNG_SkEncodedFormat:  ext =  "dng"; break;
-            case SkEncodedFormat::kWBMP_SkEncodedFormat: ext = "wbmp"; break;
-            case SkEncodedFormat::kWEBP_SkEncodedFormat: ext = "webp"; break;
+            case SkEncodedImageFormat::kBMP:  ext =  "bmp"; break;
+            case SkEncodedImageFormat::kGIF:  ext =  "gif"; break;
+            case SkEncodedImageFormat::kICO:  ext =  "ico"; break;
+            case SkEncodedImageFormat::kJPEG: ext =  "jpg"; break;
+            case SkEncodedImageFormat::kPNG:  ext =  "png"; break;
+            case SkEncodedImageFormat::kDNG:  ext =  "dng"; break;
+            case SkEncodedImageFormat::kWBMP: ext = "wbmp"; break;
+            case SkEncodedImageFormat::kWEBP: ext = "webp"; break;
             default:
                 // This should be unreachable because we cannot create a codec if we do not know
                 // the image type.
                 SkASSERT(false);
         }
+
+        auto writeImage = [&] (const char* name, int num) {
+            SkString path;
+            path.appendf("%s/%s%d.%s", gOutputDir, name, num, ext.c_str());
+
+            SkFILEWStream file(path.c_str());
+            file.write(ptr, len);
+
+            SkDebugf("%s\n", path.c_str());
+        };
 
         if (FLAGS_testDecode) {
             SkBitmap bitmap;
@@ -85,23 +101,25 @@ struct Sniffer : public SkPixelSerializer {
             bitmap.allocPixels(info);
             const SkCodec::Result result = codec->getPixels(
                 info, bitmap.getPixels(),  bitmap.rowBytes());
-            if (SkCodec::kIncompleteInput != result && SkCodec::kSuccess != result)
-            {
-                SkDebugf("Decoding failed for %s\n", skpName.c_str());
-                gSkpToUnknownCount[skpName]++;
-                return;
+            switch (result) {
+                case SkCodec::kSuccess:
+                case SkCodec::kIncompleteInput:
+                case SkCodec::kErrorInInput:
+                    break;
+                default:
+                    SkDebugf("Decoding failed for %s\n", skpName.c_str());
+                    if (FLAGS_writeFailedImages) {
+                        writeImage("unknown", gSkpToUnknownCount[skpName]);
+                    }
+                    gSkpToUnknownCount[skpName]++;
+                    return;
             }
         }
 
         if (FLAGS_writeImages) {
-            SkString path;
-            path.appendf("%s/%d.%s", gOutputDir, gKnown, ext.c_str());
-
-            SkFILEWStream file(path.c_str());
-            file.write(ptr, len);
-
-            SkDebugf("%s\n", path.c_str());
+            writeImage("", gKnown);
         }
+
         gKnown++;
     }
 
@@ -112,32 +130,45 @@ struct Sniffer : public SkPixelSerializer {
     SkData* onEncode(const SkPixmap&) override { return nullptr; }
 };
 
+static bool get_images_from_file(const SkString& file) {
+    auto stream = SkStream::MakeFromFile(file.c_str());
+    sk_sp<SkPicture> picture(SkPicture::MakeFromStream(stream.get()));
+    if (!picture) {
+        return false;
+    }
+
+    SkDynamicMemoryWStream scratch;
+    Sniffer sniff(file.c_str());
+    picture->serialize(&scratch, &sniff);
+    return true;
+}
 
 int main(int argc, char** argv) {
     SkCommandLineFlags::SetUsage(
             "Usage: get_images_from_skps -s <dir of skps> -o <dir for output images> --testDecode "
-            "-j <output JSON path>\n");
+            "-j <output JSON path> --writeImages, --writeFailedImages\n");
 
     SkCommandLineFlags::Parse(argc, argv);
     const char* inputs = FLAGS_skps[0];
     gOutputDir = FLAGS_out[0];
 
-    if (!sk_isdir(inputs) || !sk_isdir(gOutputDir)) {
+    if (!sk_isdir(gOutputDir)) {
         SkCommandLineFlags::PrintUsage();
         return 1;
     }
 
-    SkOSFile::Iter iter(inputs, "skp");
-    for (SkString file; iter.next(&file); ) {
-        std::unique_ptr<SkStream> stream =
-                SkStream::MakeFromFile(SkOSPath::Join(inputs, file.c_str()).c_str());
-        sk_sp<SkPicture> picture(SkPicture::MakeFromStream(stream.get()));
-
-        SkDynamicMemoryWStream scratch;
-        Sniffer sniff(file.c_str());
-        picture->serialize(&scratch, &sniff);
+    if (sk_isdir(inputs)) {
+        SkOSFile::Iter iter(inputs, "skp");
+        for (SkString file; iter.next(&file); ) {
+            if (!get_images_from_file(SkOSPath::Join(inputs, file.c_str()))) {
+                return 2;
+            }
+        }
+    } else {
+        if (!get_images_from_file(SkString(inputs))) {
+            return 2;
+        }
     }
-    int totalUnknowns = 0;
     /**
      JSON results are written out in the following format:
      {
@@ -146,21 +177,37 @@ int main(int argc, char** argv) {
          "skp4": 2,
          ...
        },
+       "unsupported": {
+        "skp9": 13,
+        "skp17": 3,
+        ...
+       }
        "totalFailures": 32,
+       "totalUnsupported": 9,
        "totalSuccesses": 21,
      }
      */
     Json::Value fRoot;
+    int totalFailures = 0;
     for(auto it = gSkpToUnknownCount.cbegin(); it != gSkpToUnknownCount.cend(); ++it)
     {
         SkDebugf("%s %d\n", it->first.c_str(), it->second);
-        totalUnknowns += it->second;
+        totalFailures += it->second;
         fRoot["failures"][it->first.c_str()] = it->second;
     }
-    SkDebugf("%d known, %d unknown\n", gKnown, totalUnknowns);
-    fRoot["totalFailures"] = totalUnknowns;
+    fRoot["totalFailures"] = totalFailures;
+    int totalUnsupported = 0;
+#ifdef SK_DEBUG
+    for (const auto& unsupported : gSkpToUnsupportedCount) {
+        SkDebugf("%s %d\n", unsupported.first.c_str(), unsupported.second);
+        totalUnsupported += unsupported.second;
+        fRoot["unsupported"][unsupported.first] = unsupported.second;
+    }
+    fRoot["totalUnsupported"] = totalUnsupported;
+#endif
     fRoot["totalSuccesses"] = gKnown;
-    if (totalUnknowns > 0) {
+    SkDebugf("%d known, %d failures, %d unsupported\n", gKnown, totalFailures, totalUnsupported);
+    if (totalFailures > 0 || totalUnsupported > 0) {
         if (!FLAGS_failuresJsonPath.isEmpty()) {
             SkDebugf("Writing failures to %s\n", FLAGS_failuresJsonPath[0]);
             SkFILEWStream stream(FLAGS_failuresJsonPath[0]);

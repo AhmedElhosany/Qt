@@ -16,11 +16,11 @@
 #include "gpu/command_buffer/service/gl_stream_texture_image.h"
 #include "gpu/command_buffer/service/gles2_cmd_copy_texture_chromium.h"
 #include "gpu/command_buffer/service/texture_manager.h"
-#include "gpu/ipc/common/gpu_surface_lookup.h"
 #include "gpu/ipc/service/gpu_channel.h"
-#include "media/base/android/sdk_media_codec_bridge.h"
+#include "media/base/android/media_codec_bridge_impl.h"
 #include "media/gpu/avda_codec_image.h"
 #include "media/gpu/avda_shared_state.h"
+#include "ui/gl/android/scoped_java_surface.h"
 #include "ui/gl/android/surface_texture.h"
 #include "ui/gl/egl_util.h"
 #include "ui/gl/gl_bindings.h"
@@ -40,38 +40,6 @@
   } while (0)
 
 namespace media {
-namespace {
-
-// Creates a SurfaceTexture and attaches a new gl texture to it. |*service_id|
-// is set to the new texture id.
-scoped_refptr<gl::SurfaceTexture> CreateAttachedSurfaceTexture(
-    base::WeakPtr<gpu::gles2::GLES2Decoder> gl_decoder,
-    GLuint* service_id) {
-  GLuint texture_id;
-  glGenTextures(1, &texture_id);
-
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture_id);
-  glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-  gl_decoder->RestoreTextureUnitBindings(0);
-  gl_decoder->RestoreActiveTexture();
-  DCHECK_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
-
-  *service_id = texture_id;
-  // Previously, to reduce context switching, we used to create an unattached
-  // SurfaceTexture and attach it lazily in the compositor's context. But that
-  // was flaky because SurfaceTexture#detachFromGLContext() is buggy on a lot of
-  // devices. Now we attach it to the current context, which means we might have
-  // to context switch later to call updateTexImage(). Fortunately, if virtual
-  // contexts are in use, we won't have to context switch.
-  return gl::SurfaceTexture::Create(texture_id);
-}
-
-}  // namespace
 
 AVDAPictureBufferManager::AVDAPictureBufferManager(
     AVDAStateProvider* state_provider)
@@ -79,24 +47,28 @@ AVDAPictureBufferManager::AVDAPictureBufferManager(
 
 AVDAPictureBufferManager::~AVDAPictureBufferManager() {}
 
-gl::ScopedJavaSurface AVDAPictureBufferManager::Initialize(int surface_id) {
-  shared_state_ = new AVDASharedState();
+bool AVDAPictureBufferManager::Initialize(
+    scoped_refptr<AVDASurfaceBundle> surface_bundle) {
+  shared_state_ = nullptr;
+  surface_texture_ = nullptr;
 
-  // Acquire the SurfaceView surface if given a valid id.
-  if (surface_id != SurfaceManager::kNoSurfaceID) {
-    if (surface_texture_) {
-      surface_texture_->ReleaseSurfaceTexture();
-      surface_texture_ = nullptr;
-    }
-    return gpu::GpuSurfaceLookup::GetInstance()->AcquireJavaSurface(surface_id);
+  if (!surface_bundle->overlay) {
+    // Create the surface texture.
+    surface_texture_ = SurfaceTextureGLOwnerImpl::Create();
+    if (!surface_texture_)
+      return false;
+
+    surface_bundle->surface_texture_surface =
+        surface_texture_->CreateJavaSurface();
+    surface_bundle->surface_texture = surface_texture_;
   }
 
-  // Otherwise create a SurfaceTexture.
-  GLuint service_id;
-  surface_texture_ = CreateAttachedSurfaceTexture(
-      state_provider_->GetGlDecoder(), &service_id);
-  shared_state_->SetSurfaceTexture(surface_texture_, service_id);
-  return gl::ScopedJavaSurface(surface_texture_.get());
+  // Only do this once the surface texture is filled in, since the constructor
+  // assumes that it will be.
+  shared_state_ = new AVDASharedState(surface_bundle);
+  shared_state_->SetPromotionHintCB(state_provider_->GetPromotionHintCB());
+
+  return true;
 }
 
 void AVDAPictureBufferManager::Destroy(const PictureBufferMap& buffers) {
@@ -106,11 +78,7 @@ void AVDAPictureBufferManager::Destroy(const PictureBufferMap& buffers) {
 
   ReleaseCodecBuffers(buffers);
   CodecChanged(nullptr);
-
-  // Release the surface texture and any back buffers.  This will preserve the
-  // front buffer, if any.
-  if (surface_texture_)
-    surface_texture_->ReleaseSurfaceTexture();
+  surface_texture_ = nullptr;
 }
 
 void AVDAPictureBufferManager::SetImageForPicture(
@@ -194,8 +162,8 @@ void AVDAPictureBufferManager::AssignOnePictureBuffer(
     bool have_context) {
   // Attach a GLImage to each texture that will use the surface texture.
   scoped_refptr<gpu::gles2::GLStreamTextureImage> gl_image =
-      codec_images_[picture_buffer.id()] = new AVDACodecImage(
-          shared_state_, media_codec_, state_provider_->GetGlDecoder());
+      codec_images_[picture_buffer.id()] =
+          new AVDACodecImage(shared_state_, media_codec_);
   SetImageForPicture(picture_buffer, gl_image.get());
 }
 
@@ -277,11 +245,11 @@ void AVDAPictureBufferManager::MaybeRenderEarly() {
       AVDACodecImage::UpdateMode::RENDER_TO_BACK_BUFFER);
 }
 
-void AVDAPictureBufferManager::CodecChanged(VideoCodecBridge* codec) {
+void AVDAPictureBufferManager::CodecChanged(MediaCodecBridge* codec) {
   media_codec_ = codec;
   for (auto& image_kv : codec_images_)
     image_kv.second->CodecChanged(codec);
-  shared_state_->clear_release_time();
+  shared_state_->ClearReleaseTime();
 }
 
 bool AVDAPictureBufferManager::ArePicturesOverlayable() {
@@ -296,6 +264,15 @@ bool AVDAPictureBufferManager::HasUnrenderedPictures() const {
       return true;
   }
   return false;
+}
+
+void AVDAPictureBufferManager::ImmediatelyForgetOverlay(
+    const PictureBufferMap& buffers) {
+  if (!shared_state_ || !shared_state_->overlay())
+    return;
+
+  ReleaseCodecBuffers(buffers);
+  shared_state_->ClearOverlay(shared_state_->overlay());
 }
 
 }  // namespace media

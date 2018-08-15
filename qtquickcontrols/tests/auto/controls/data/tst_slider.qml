@@ -51,7 +51,7 @@
 import QtQuick 2.6
 import QtTest 1.0
 import QtQuickControlsTests 1.0
-import QtQuick.Controls 1.4
+import QtQuick.Controls 1.6
 import QtQuick.Controls.Private 1.0
 import QtQuick.Controls.Styles 1.4
 
@@ -136,8 +136,22 @@ Item {
             slider.destroy()
         }
 
+        Component {
+            id: fixedHandleSizeSlider
+
+            Slider {
+                style: SliderStyle {
+                    handle: Rectangle {
+                        color: "red"
+                        implicitWidth: 15
+                        implicitHeight: 15
+                    }
+                }
+            }
+        }
+
         function test_mouseWheel() {
-            var slider = Qt.createQmlObject('import QtQuick.Controls 1.2; Slider {}', container, '');
+            var slider = createTemporaryObject(fixedHandleSizeSlider, container)
             slider.forceActiveFocus()
             slider.value = 0
             slider.maximumValue = 300
@@ -176,7 +190,12 @@ Item {
             slider.value = 0
             mouseWheel(slider, 5, 5, -40 * ratio, 0)
             compare(slider.value, slider.maximumValue)
-            slider.destroy()
+
+            // Mousewheel deactivated
+            slider.value = 0
+            slider.wheelEnabled = false
+            mouseWheel(slider, 5, 5, 4 * ratio, 0)
+            compare(slider.value, 0)
         }
 
         function test_activeFocusOnPress(){

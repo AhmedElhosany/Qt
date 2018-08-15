@@ -95,7 +95,9 @@ Polymer({
         markers: {
           type: Array,
           readOnly: true,
-          value: []
+          value: function() {
+              return [];
+          }
         },
       },
 
@@ -112,8 +114,10 @@ Polymer({
       },
 
       keyBindings: {
-        'left down pagedown home': '_decrementKey',
-        'right up pageup end': '_incrementKey'
+        'left': '_leftKey',
+        'right': '_rightKey',
+        'down pagedown home': '_decrementKey',
+        'up pageup end': '_incrementKey'
       },
 
       /**
@@ -137,16 +141,16 @@ Polymer({
         this.setAttribute('aria-valuemax', max);
         this.setAttribute('aria-valuenow', value);
 
-        this._positionKnob(this._calcRatio(value));
+        this._positionKnob(this._calcRatio(value) * 100);
       },
 
       _valueChanged: function() {
-        this.fire('value-change');
+        this.fire('value-change', {composed: true});
       },
 
       _immediateValueChanged: function() {
         if (this.dragging) {
-          this.fire('immediate-value-change');
+          this.fire('immediate-value-change', {composed: true});
         } else {
           this.value = this.immediateValue;
         }
@@ -167,17 +171,17 @@ Polymer({
 
       _positionKnob: function(ratio) {
         this._setImmediateValue(this._calcStep(this._calcKnobPosition(ratio)));
-        this._setRatio(this._calcRatio(this.immediateValue));
+        this._setRatio(this._calcRatio(this.immediateValue) * 100);
 
-        this.$.sliderKnob.style.left = (this.ratio * 100) + '%';
+        this.$.sliderKnob.style.left = this.ratio + '%';
         if (this.dragging) {
-          this._knobstartx = this.ratio * this._w;
+          this._knobstartx = (this.ratio * this._w) / 100;
           this.translate3d(0, 0, 0, this.$.sliderKnob);
         }
       },
 
       _calcKnobPosition: function(ratio) {
-        return (this.max - this.min) * ratio + this.min;
+        return (this.max - this.min) * ratio / 100 + this.min;
       },
 
       _onTrack: function(event) {
@@ -196,8 +200,9 @@ Polymer({
       },
 
       _trackStart: function(event) {
+        this._setTransiting(false);
         this._w = this.$.sliderBar.offsetWidth;
-        this._x = this.ratio * this._w;
+        this._x = this.ratio * this._w / 100;
         this._startx = this._x;
         this._knobstartx = this._startx;
         this._minx = - this._startx;
@@ -206,15 +211,17 @@ Polymer({
         this._setDragging(true);
       },
 
-      _trackX: function(e) {
+      _trackX: function(event) {
         if (!this.dragging) {
-          this._trackStart(e);
+          this._trackStart(event);
         }
 
-        var dx = Math.min(this._maxx, Math.max(this._minx, e.detail.dx));
+        var direction = this._isRTL ? -1 : 1;
+        var dx = Math.min(
+            this._maxx, Math.max(this._minx, event.detail.dx * direction));
         this._x = this._startx + dx;
 
-        var immediateValue = this._calcStep(this._calcKnobPosition(this._x / this._w));
+        var immediateValue = this._calcStep(this._calcKnobPosition(this._x / this._w * 100));
         this._setImmediateValue(immediateValue);
 
         // update knob's position
@@ -232,7 +239,7 @@ Polymer({
 
         s.transform = s.webkitTransform = '';
 
-        this.fire('change');
+        this.fire('change', {composed: true});
       },
 
       _knobdown: function(event) {
@@ -248,7 +255,10 @@ Polymer({
       _bardown: function(event) {
         this._w = this.$.sliderBar.offsetWidth;
         var rect = this.$.sliderBar.getBoundingClientRect();
-        var ratio = (event.detail.x - rect.left) / this._w;
+        var ratio = (event.detail.x - rect.left) / this._w * 100;
+        if (this._isRTL) {
+          ratio = 100 - ratio;
+        }
         var prevRatio = this.ratio;
 
         this._setTransiting(true);
@@ -266,7 +276,7 @@ Polymer({
         }
 
         this.async(function() {
-          this.fire('change');
+          this.fire('change', {composed: true});
         });
 
         // cancel selection
@@ -289,6 +299,9 @@ Polymer({
         var steps = Math.round((max - min) / this.step);
         if (steps > maxMarkers) {
           steps = maxMarkers;
+        }
+        if (steps < 0 || !isFinite(steps)) {
+          steps = 0;
         }
         this._setMarkers(new Array(steps));
       },
@@ -313,6 +326,27 @@ Polymer({
         });
       },
 
+      get _isRTL() {
+        if (this.__isRTL === undefined) {
+          this.__isRTL = window.getComputedStyle(this)['direction'] === 'rtl';
+        }
+        return this.__isRTL;
+      },
+
+      _leftKey: function(event) {
+        if (this._isRTL)
+          this._incrementKey(event);
+        else
+          this._decrementKey(event);
+      },
+
+      _rightKey: function(event) {
+        if (this._isRTL)
+          this._decrementKey(event);
+        else
+          this._incrementKey(event);
+      },
+
       _incrementKey: function(event) {
         if (!this.disabled) {
           if (event.detail.key === 'end') {
@@ -321,6 +355,7 @@ Polymer({
             this.increment();
           }
           this.fire('change');
+          event.preventDefault();
         }
       },
 
@@ -332,12 +367,13 @@ Polymer({
             this.decrement();
           }
           this.fire('change');
+          event.preventDefault();
         }
       },
 
       _changeValue: function(event) {
         this.value = event.target.value;
-        this.fire('change');
+        this.fire('change', {composed: true});
       },
 
       _inputKeyDown: function(event) {
@@ -379,7 +415,7 @@ Polymer({
      * Fired when the slider's immediateValue changes. Only occurs while the
      * user is dragging.
      *
-     * To detect changes to immediateValue that happen for any input (i.e.                                                          
+     * To detect changes to immediateValue that happen for any input (i.e.
      * dragging, tapping, clicking, etc.) listen for immediate-value-changed
      * instead.
      *

@@ -55,10 +55,18 @@ host_build:cross_compile: return()
 # -Wdate-time: warn if we use __DATE__ or __TIME__ (we want to be able to reproduce the exact same binary)
 # -Wvla: use of variable-length arrays (an extension to C++)
 clang {
-    # Clang 3.5 introduced -Wdate-time
-    # The conditional assumes we aren't compiling against Clang 2.x anymore
-    greaterThan(QT_CLANG_MAJOR_VERSION, 3)|greaterThan(QT_CLANG_MINOR_VERSION, 4): \
+    clang_ver = $${QT_CLANG_MAJOR_VERSION}.$${QT_CLANG_MINOR_VERSION}
+    versionAtLeast(clang_ver, 3.5): \
         QMAKE_CXXFLAGS_WARN_ON += -Wdate-time
+
+    # Clang/LLVM 5.0 and Xcode 9.0 introduced unguarded availability warnings.
+    # The same construct has been a hard error in Swift from the very beginning.
+    apple_ver = $${QT_APPLE_CLANG_MAJOR_VERSION}.$${QT_APPLE_CLANG_MINOR_VERSION}
+    darwin:if(versionAtLeast(clang_ver, 5.0)|versionAtLeast(apple_ver, 9.0)): \
+        QMAKE_CXXFLAGS_WARN_ON += \
+            -Werror=unguarded-availability \
+            -Werror=unguarded-availability-new \
+            -Werror=unsupported-availability-guard
 } else: gcc:!intel_icc {
     QMAKE_CXXFLAGS_WARN_ON += -Wvla
     # GCC 5 introduced -Wdate-time

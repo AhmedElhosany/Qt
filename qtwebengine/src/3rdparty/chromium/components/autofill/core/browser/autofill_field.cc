@@ -25,7 +25,7 @@
 #include "components/autofill/core/common/autofill_l10n_util.h"
 #include "components/autofill/core/common/autofill_switches.h"
 #include "components/autofill/core/common/autofill_util.h"
-#include "grit/components_strings.h"
+#include "components/strings/grit/components_strings.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_data.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_formatter.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -289,9 +289,9 @@ bool FillYearSelectControl(const base::string16& value,
   return false;
 }
 
-// Try to fill a credit card type |value| (Visa, MasterCard, etc.) into the
+// Try to fill a credit card type |value| (Visa, Mastercard, etc.) into the
 // given |field|. We ignore whitespace when filling credit card types to
-// allow for cases such as "Master Card".
+// allow for cases such as "Master card".
 
 bool FillCreditCardTypeSelectControl(const base::string16& value,
                                      FormFieldData* field) {

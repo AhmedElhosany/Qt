@@ -49,6 +49,9 @@
 #include "content/common/font_list.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_factory.h"
+#include "ui/events/devices/device_data_manager.h"
+#include "ui/events/platform/platform_event_source.h"
+#include "ppapi/features/features.h"
 
 #include <QGuiApplication>
 #include <QScreen>
@@ -96,7 +99,21 @@ XDisplay* GetQtXDisplay()
 {
     return static_cast<XDisplay*>(GLContextHelper::getXDisplay());
 }
-#endif
+
+namespace ui {
+class DummyPlatformEventSource : public PlatformEventSource
+{
+public:
+    DummyPlatformEventSource() {
+        DeviceDataManager::CreateInstance();
+    }
+};
+
+std::unique_ptr<PlatformEventSource> PlatformEventSource::CreateDefault() {
+  return base::MakeUnique<DummyPlatformEventSource>();
+}
+} // namespace ui
+#endif // defined(USE_X11)
 
 namespace content {
 class WebContentsImpl;
@@ -141,7 +158,7 @@ std::unique_ptr<base::ListValue> GetFontList_SlowBlocking()
     return std::move(font_list);
 }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 // content/browser/renderer_host/pepper/pepper_truetype_font_list.h
 void GetFontFamilies_SlowBlocking(std::vector<std::string> *font_families)
 {
@@ -155,10 +172,23 @@ void GetFontsInFamily_SlowBlocking(const std::string &, std::vector<ppapi::proxy
 {
     QT_NOT_USED
 }
-#endif //defined(ENABLE_PLUGINS)
+#endif // BUILDFLAG(ENABLE_PLUGINS)
 
 } // namespace content
 
+namespace aura {
+class Window;
+}
+
+namespace wm {
+class ActivationClient;
+
+ActivationClient *GetActivationClient(aura::Window *)
+{
+    return nullptr;
+}
+
+} // namespace wm
 #endif // defined(USE_AURA) || defined(USE_OZONE)
 
 std::unique_ptr<ui::OSExchangeData::Provider>
@@ -170,7 +200,7 @@ ui::OSExchangeDataProviderFactory::CreateProvider() {
 #if defined(USE_OPENSSL_CERTS)
 namespace net {
 
-scoped_refptr<SSLPrivateKey> FetchClientCertPrivateKey(X509Certificate* certificate)
+scoped_refptr<SSLPrivateKey> FetchClientCertPrivateKey(const X509Certificate* certificate)
 {
     return OpenSSLClientKeyStore::GetInstance()->FetchClientCertPrivateKey(certificate);
 }

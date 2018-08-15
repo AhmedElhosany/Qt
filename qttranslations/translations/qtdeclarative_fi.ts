@@ -17,6 +17,10 @@
         <translation>Illegal method name</translation>
     </message>
     <message>
+        <source>Duplicate scoped enum name</source>
+        <translation>Duplicate scoped enum name</translation>
+    </message>
+    <message>
         <source>Duplicate signal name</source>
         <translation>Duplicate signal name</translation>
     </message>
@@ -104,6 +108,22 @@
     <message>
         <source>Expected type name</source>
         <translation>Expected type name</translation>
+    </message>
+    <message>
+        <source>Scoped enum names must begin with an upper case letter</source>
+        <translation>Scoped enum names must begin with an upper case letter</translation>
+    </message>
+    <message>
+        <source>Enum names must begin with an upper case letter</source>
+        <translation>Enum names must begin with an upper case letter</translation>
+    </message>
+    <message>
+        <source>Enum value must be an integer</source>
+        <translation>Enum value must be an integer</translation>
+    </message>
+    <message>
+        <source>Enum value out of range</source>
+        <translation>Enum value out of range</translation>
     </message>
     <message>
         <source>Signal names cannot begin with an upper case letter</source>
@@ -543,12 +563,12 @@
 <context>
     <name>QQmlListModel</name>
     <message>
-        <source>unable to enable dynamic roles as this model is not empty!</source>
-        <translation>unable to enable dynamic roles as this model is not empty!</translation>
+        <source>unable to enable dynamic roles as this model is not empty</source>
+        <translation>unable to enable dynamic roles as this model is not empty</translation>
     </message>
     <message>
-        <source>unable to enable static roles as this model is not empty!</source>
-        <translation>unable to enable static roles as this model is not empty!</translation>
+        <source>unable to enable static roles as this model is not empty</source>
+        <translation>unable to enable static roles as this model is not empty</translation>
     </message>
     <message>
         <source>dynamic role setting must be made from the main thread, before any worker scripts are created</source>
@@ -1230,6 +1250,13 @@
     </message>
 </context>
 <context>
+    <name>QQuickDragHandler</name>
+    <message>
+        <source>DragAxis is only available as a grouped property of DragHandler</source>
+        <translation>DragAxis is only available as a grouped property of DragHandler</translation>
+    </message>
+</context>
+<context>
     <name>QQuickEnterKeyAttached</name>
     <message>
         <source>EnterKey attached property only works with Items</source>
@@ -1396,9 +1423,40 @@
         <translation>Failed to get texture from provider: %1</translation>
     </message>
     <message>
+        <source>Error decoding: %1</source>
+        <translation>Error decoding: %1</translation>
+    </message>
+    <message>
         <source>Cannot open: %1</source>
         <translatorcomment>Tämä viesti on suomennettu, koska siitä voi olla hyötyä myös ongelmaa selvittävälle Qt:lla tehdyn ohjelman loppukäyttäjälle eikä tämän viestin suomentamisen luulisi vaikeuttavan ongelman selvittämistä.</translatorcomment>
         <translation>Ei voi avata: %1</translation>
+    </message>
+</context>
+<context>
+    <name>QQuickPointerHandler</name>
+    <message>
+        <source>PointerEvent is only available as a parameter of several signals in PointerHandler</source>
+        <translation>PointerEvent is only available as a parameter of several signals in PointerHandler</translation>
+    </message>
+    <message>
+        <source>EventPoint is only available as a member of PointerEvent</source>
+        <translation>EventPoint is only available as a member of PointerEvent</translation>
+    </message>
+    <message>
+        <source>EventTouchPoint is only available as a member of PointerEvent</source>
+        <translation>EventTouchPoint is only available as a member of PointerEvent</translation>
+    </message>
+    <message>
+        <source>PointerDevice is only available as a property of PointerEvent</source>
+        <translation>PointerDevice is only available as a property of PointerEvent</translation>
+    </message>
+    <message>
+        <source>PointingDeviceUniqueId is only available as a property of PointerEvent</source>
+        <translation>PointingDeviceUniqueId is only available as a property of PointerEvent</translation>
+    </message>
+    <message>
+        <source>PointerHandler is an abstract base class</source>
+        <translation>PointerHandler is an abstract base class</translation>
     </message>
 </context>
 <context>
@@ -1435,6 +1493,13 @@
     <message>
         <source>Cannot create instance of abstract class ShaderEffectMesh.</source>
         <translation>Cannot create instance of abstract class ShaderEffectMesh.</translation>
+    </message>
+</context>
+<context>
+    <name>QQuickShapeGradient</name>
+    <message>
+        <source>ShapeGradient is an abstract base class</source>
+        <translation>ShapeGradient is an abstract base class</translation>
     </message>
 </context>
 <context>

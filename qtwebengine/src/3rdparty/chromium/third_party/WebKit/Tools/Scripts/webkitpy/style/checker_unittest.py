@@ -37,8 +37,8 @@ import logging
 import os
 import unittest
 
-from webkitpy.common.system.logtesting import LoggingTestCase
-from webkitpy.common.system.logtesting import TestLogStream
+from webkitpy.common.system.log_testing import LoggingTestCase
+from webkitpy.common.system.log_testing import TestLogStream
 from webkitpy.style import checker as style
 from webkitpy.style.checker import _all_categories
 from webkitpy.style.checker import _BASE_FILTER_RULES
@@ -207,8 +207,6 @@ class GlobalVariablesTest(unittest.TestCase):
                     "build/include")
         assert_check("random_path.cpp",
                     "readability/naming")
-        assert_no_check("Source/core/css/CSSParser-in.cpp",
-                      "readability/naming")
 
         # Third-party Python code: webkitpy/thirdparty
         path = "Tools/Scripts/webkitpy/thirdparty/mock.py"
@@ -434,6 +432,7 @@ class CheckerDispatcherDispatchTest(unittest.TestCase):
         paths = [
             "foo.py",
             "Tools/Scripts/modules/text_style.py",
+            os.path.join("Tools", "Scripts", "check-webkit-style"),
         ]
 
         for path in paths:
@@ -471,7 +470,6 @@ class CheckerDispatcherDispatchTest(unittest.TestCase):
             "foo.xhtml",
             "foo.y",
             os.path.join("Source", "WebCore", "inspector", "front-end", "Main.js"),
-            os.path.join("Tools", "Scripts", "check-webkit-style"),
         ]
 
         for path in paths:
@@ -795,9 +793,10 @@ class StyleProcessor_CodeCoverageTest(LoggingTestCase):
     def test_process__no_checker_dispatched(self):
         """Test the process() method for a path with no dispatched checker."""
         path = os.path.join('foo', 'do_not_process.txt')
-        self.assertRaises(AssertionError, self._processor.process,
-                          lines=['line1', 'line2'], file_path=path,
-                          line_numbers=[100])
+        with self.assertRaises(AssertionError):
+            self._processor.process(
+                lines=['line1', 'line2'], file_path=path,
+                line_numbers=[100])
 
     def test_process__carriage_returns_not_stripped(self):
         """Test that carriage returns aren't stripped from files that are allowed to contain them."""

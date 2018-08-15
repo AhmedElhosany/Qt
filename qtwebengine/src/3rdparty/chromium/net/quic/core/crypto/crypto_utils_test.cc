@@ -4,8 +4,10 @@
 
 #include "net/quic/core/crypto/crypto_utils.h"
 
+#include "net/quic/core/quic_utils.h"
+#include "net/quic/platform/api/quic_test.h"
+#include "net/quic/platform/api/quic_text_utils.h"
 #include "net/quic/test_tools/quic_test_utils.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 using std::string;
 
@@ -13,54 +15,9 @@ namespace net {
 namespace test {
 namespace {
 
-TEST(CryptoUtilsTest, IsValidSNI) {
-  // IP as SNI.
-  EXPECT_FALSE(CryptoUtils::IsValidSNI("192.168.0.1"));
-  // SNI without any dot.
-  EXPECT_FALSE(CryptoUtils::IsValidSNI("somedomain"));
-  // Invalid RFC2396 hostname
-  // TODO(rtenneti): Support RFC2396 hostname.
-  // EXPECT_FALSE(CryptoUtils::IsValidSNI("some_domain.com"));
-  // An empty string must be invalid otherwise the QUIC client will try sending
-  // it.
-  EXPECT_FALSE(CryptoUtils::IsValidSNI(""));
+class CryptoUtilsTest : public QuicTest {};
 
-  // Valid SNI
-  EXPECT_TRUE(CryptoUtils::IsValidSNI("test.google.com"));
-}
-
-TEST(CryptoUtilsTest, NormalizeHostname) {
-  struct {
-    const char *input, *expected;
-  } tests[] = {
-      {
-          "www.google.com", "www.google.com",
-      },
-      {
-          "WWW.GOOGLE.COM", "www.google.com",
-      },
-      {
-          "www.google.com.", "www.google.com",
-      },
-      {
-          "www.google.COM.", "www.google.com",
-      },
-      {
-          "www.google.com..", "www.google.com",
-      },
-      {
-          "www.google.com........", "www.google.com",
-      },
-  };
-
-  for (size_t i = 0; i < arraysize(tests); ++i) {
-    char buf[256];
-    snprintf(buf, sizeof(buf), "%s", tests[i].input);
-    EXPECT_EQ(string(tests[i].expected), CryptoUtils::NormalizeHostname(buf));
-  }
-}
-
-TEST(CryptoUtilsTest, TestExportKeyingMaterial) {
+TEST_F(CryptoUtilsTest, TestExportKeyingMaterial) {
   const struct TestVector {
     // Input (strings of hexadecimal digits):
     const char* subkey_secret;
@@ -93,14 +50,15 @@ TEST(CryptoUtilsTest, TestExportKeyingMaterial) {
 
   for (size_t i = 0; i < arraysize(test_vector); i++) {
     // Decode the test vector.
-    string subkey_secret = QuicUtils::HexDecode(test_vector[i].subkey_secret);
-    string label = QuicUtils::HexDecode(test_vector[i].label);
-    string context = QuicUtils::HexDecode(test_vector[i].context);
+    string subkey_secret =
+        QuicTextUtils::HexDecode(test_vector[i].subkey_secret);
+    string label = QuicTextUtils::HexDecode(test_vector[i].label);
+    string context = QuicTextUtils::HexDecode(test_vector[i].context);
     size_t result_len = test_vector[i].result_len;
     bool expect_ok = test_vector[i].expected != nullptr;
     string expected;
     if (expect_ok) {
-      expected = QuicUtils::HexDecode(test_vector[i].expected);
+      expected = QuicTextUtils::HexDecode(test_vector[i].expected);
     }
 
     string result;
@@ -116,7 +74,7 @@ TEST(CryptoUtilsTest, TestExportKeyingMaterial) {
   }
 }
 
-TEST(CryptoUtilsTest, HandshakeFailureReasonToString) {
+TEST_F(CryptoUtilsTest, HandshakeFailureReasonToString) {
   EXPECT_STREQ("HANDSHAKE_OK",
                CryptoUtils::HandshakeFailureReasonToString(HANDSHAKE_OK));
   EXPECT_STREQ("CLIENT_NONCE_UNKNOWN_FAILURE",

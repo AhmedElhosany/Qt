@@ -62,7 +62,15 @@ void EvaluateBlendClipAnimatorJob::run()
     // TODO: We should be able to cache this for each blend animator and only
     // update when a node indicates its dependencies have changed as a result
     // of blend factors changing
+
     BlendedClipAnimator *blendedClipAnimator = m_handler->blendedClipAnimatorManager()->data(m_blendClipAnimatorHandle);
+    Q_ASSERT(blendedClipAnimator);
+    if (!blendedClipAnimator->isRunning())
+        return;
+
+    qint64 globalTimeNS = m_handler->simulationTime();
+    qint64 nsSincePreviousFrame = blendedClipAnimator->nsSincePreviousFrame(globalTimeNS);
+
     Qt3DCore::QNodeId blendTreeRootId = blendedClipAnimator->blendTreeRootId();
     const QVector<Qt3DCore::QNodeId> valueNodeIdsToEvaluate = gatherValueNodesToEvaluate(m_handler, blendTreeRootId);
 
@@ -72,16 +80,15 @@ void EvaluateBlendClipAnimatorJob::run()
     Q_ASSERT(blendTreeRootNode);
     const double duration = blendTreeRootNode->duration();
 
+    Clock *clock = m_handler->clockManager()->lookupResource(blendedClipAnimator->clockId());
+
     // Calculate the phase given the blend tree duration and global time
-    const qint64 globalTime = m_handler->simulationTime();
-    const AnimatorEvaluationData animatorData = evaluationDataForAnimator(blendedClipAnimator, globalTime);
-    int currentLoop = 0;
-    const double phase = phaseFromGlobalTime(animatorData.globalTime,
-                                             animatorData.startTime,
-                                             animatorData.playbackRate,
-                                             duration,
-                                             animatorData.loopCount,
-                                             currentLoop);
+    AnimatorEvaluationData animatorData = evaluationDataForAnimator(blendedClipAnimator, clock, nsSincePreviousFrame);
+    const double phase = phaseFromElapsedTime(animatorData.currentTime, animatorData.elapsedTime,
+                                              animatorData.playbackRate,
+                                              duration,
+                                              animatorData.loopCount,
+                                              animatorData.currentLoop);
 
     // Iterate over the value nodes of the blend tree, evaluate the
     // contained animation clips at the current phase and store the results
@@ -96,8 +103,9 @@ void EvaluateBlendClipAnimatorJob::run()
         ClipResults rawClipResults = evaluateClipAtPhase(clip, phase);
 
         // Reformat the clip results into the layout used by this animator/blend tree
-        ComponentIndices format = valueNode->formatIndices(blendedClipAnimator->peerId());
-        ClipResults formattedClipResults = formatClipResults(rawClipResults, format);
+        const ClipFormat format = valueNode->clipFormat(blendedClipAnimator->peerId());
+        ClipResults formattedClipResults = formatClipResults(rawClipResults, format.sourceClipIndices);
+        applyComponentDefaultValues(format.defaultComponentValues, formattedClipResults);
         valueNode->setClipResults(blendedClipAnimator->peerId(), formattedClipResults);
     }
 
@@ -105,7 +113,10 @@ void EvaluateBlendClipAnimatorJob::run()
     ClipResults blendedResults = evaluateBlendTree(m_handler, blendedClipAnimator, blendTreeRootId);
 
     const double localTime = phase * duration;
-    const bool finalFrame = isFinalFrame(localTime, duration, currentLoop, animatorData.loopCount);
+    blendedClipAnimator->setLastGlobalTimeNS(globalTimeNS);
+    blendedClipAnimator->setLastLocalTime(localTime);
+    blendedClipAnimator->setCurrentLoop(animatorData.currentLoop);
+    const bool finalFrame = isFinalFrame(localTime, duration, animatorData.currentLoop, animatorData.loopCount);
 
     // Prepare the property change events
     const QVector<MappingData> mappingData = blendedClipAnimator->mappingData();
@@ -115,6 +126,10 @@ void EvaluateBlendClipAnimatorJob::run()
                                                                               finalFrame);
     // Send the property changes
     blendedClipAnimator->sendPropertyChanges(changes);
+
+    // Trigger callbacks either on this thread or by notifying the gui thread.
+    const QVector<AnimationCallbackAndValue> callbacks = prepareCallbacks(mappingData, blendedResults);
+    blendedClipAnimator->sendCallbacks(callbacks);
 }
 
 } // Animation

@@ -39,11 +39,19 @@
 
 #include "scene3ditem_p.h"
 
-#include <Qt3DCore/QAspectEngine>
+#include <Qt3DCore/qt3dcore_global.h>
 #include <Qt3DCore/qentity.h>
+#include <Qt3DCore/QAspectEngine>
+
+#if QT_CONFIG(qt3d_input)
 #include <Qt3DInput/QInputAspect>
 #include <Qt3DInput/qinputsettings.h>
+#endif
+
+#if QT_CONFIG(qt3d_logic)
 #include <Qt3DLogic/qlogicaspect.h>
+#endif
+
 #include <Qt3DRender/QRenderAspect>
 #include <Qt3DRender/qcamera.h>
 #include <Qt3DRender/qrendersurfaceselector.h>
@@ -64,32 +72,16 @@ QT_BEGIN_NAMESPACE
 namespace Qt3DRender {
 
 /*!
-    \class Qt3DRender::Scene3DItem
+    \class Qt3DCore::Scene3DItem
     \internal
 
-    \brief The Scene3DItem class is a QQuickItem subclass used to integrate
+    \brief The Qt3DCore::Scene3DItem class is a QQuickItem subclass used to integrate
     a Qt3D scene into a QtQuick 2 scene.
 
-    The Scene3DItem class renders a Qt3D scene, provided by a Qt3DCore::QEntity
-    into a multisampled Framebuffer object that is later blitted into a
-    non-multisampled Framebuffer object to be then rendered through the use of a
+    The Qt3DCore::Scene3DItem class renders a Qt3D scene, provided by a Qt3DCore::QEntity
+    into a multisampled Framebuffer object that is later blitted into a non
+    multisampled Framebuffer object to be then renderer through the use of a
     Qt3DCore::Scene3DSGNode with premultiplied alpha.
- */
-
-/*!
-    \qmltype Scene3D
-    \inherits Item
-    \inqmlmodule Qt3D.Scene3D
-
-    \preliminary
-
-    \brief The Scene3D type is used to integrate a Qt3D scene into a QtQuick 2
-    scene.
-
-    The Scene3D type renders a Qt3D scene, provided by an \l Entity, into a
-    multisampled Framebuffer object. This object is later blitted into a
-    non-multisampled Framebuffer object, which is then rendered with
-    premultiplied alpha.
  */
 Scene3DItem::Scene3DItem(QQuickItem *parent)
     : QQuickItem(parent)
@@ -113,23 +105,11 @@ Scene3DItem::~Scene3DItem()
     // Scene3DSGNode still exist and will perform their cleanup on their own.
 }
 
-/*!
-    \qmlproperty list<string> Scene3D::aspects
-
-    \brief \TODO
-    */
 QStringList Scene3DItem::aspects() const
 {
     return m_aspects;
 }
 
-/*!
-    \qmlproperty Entity Scene3D::entity
-
-    \default
-
-    \brief \TODO
- */
 Qt3DCore::QEntity *Scene3DItem::entity() const
 {
     return m_entity;
@@ -149,12 +129,20 @@ void Scene3DItem::setAspects(const QStringList &aspects)
         if (aspect == QLatin1String("render")) // This one is hardwired anyway
             continue;
         if (aspect == QLatin1String("input"))  {
+#if QT_CONFIG(qt3d_input)
             m_aspectEngine->registerAspect(new Qt3DInput::QInputAspect);
             continue;
+#else
+            qFatal("Scene3D requested the Qt 3D input aspect but Qt 3D wasn't configured to build the Qt 3D Input aspect");
+#endif
         }
         if (aspect == QLatin1String("logic"))  {
+#if QT_CONFIG(qt3d_logic)
             m_aspectEngine->registerAspect(new Qt3DLogic::QLogicAspect);
             continue;
+#else
+            qFatal("Scene3D requested the Qt 3D input aspect but Qt 3D wasn't configured to build the Qt 3D Input aspect");
+#endif
         }
         m_aspectEngine->registerAspect(aspect);
     }
@@ -189,16 +177,6 @@ void Scene3DItem::setHoverEnabled(bool enabled)
     }
 }
 
-/*!
-    \qmlproperty enumeration Scene3D::cameraAspectRatioMode
-
-    \value Scene3D.AutomaticAspectRatio
-           Automatic aspect ratio.
-
-    \value Scene3D.UserAspectRatio
-           User defined aspect ratio.
-    \brief \TODO
- */
 Scene3DItem::CameraAspectRatioMode Scene3DItem::cameraAspectRatioMode() const
 {
     return m_cameraAspectRatioMode;
@@ -227,6 +205,7 @@ void Scene3DItem::applyRootEntityChange()
             }
         }
 
+#if QT_CONFIG(qt3d_input)
         // Set ourselves up as a source of input events for the input aspect
         Qt3DInput::QInputSettings *inputSettings = m_entity->findChild<Qt3DInput::QInputSettings *>();
         if (inputSettings) {
@@ -234,6 +213,7 @@ void Scene3DItem::applyRootEntityChange()
         } else {
             qCDebug(Scene3D) << "No Input Settings found, keyboard and mouse events won't be handled";
         }
+#endif
     }
 }
 
@@ -260,11 +240,7 @@ void Scene3DItem::setWindowSurface(QObject *rootObject)
         }
     }
 }
-/*!
-    \qmlmethod void Scene3D::setItemAreaAndDevicePixelRatio(size area, real devicePixelRatio)
 
-    \brief \TODO
- */
 void Scene3DItem::setItemAreaAndDevicePixelRatio(QSize area, qreal devicePixelRatio)
 {
     Qt3DRender::QRenderSurfaceSelector *surfaceSelector = Qt3DRender::QRenderSurfaceSelectorPrivate::find(m_entity);
@@ -274,11 +250,6 @@ void Scene3DItem::setItemAreaAndDevicePixelRatio(QSize area, qreal devicePixelRa
     }
 }
 
-/*!
-    \qmlproperty bool Scene3D::hoverEnabled
-
-    \c true if hover events are accepted.
- */
 bool Scene3DItem::isHoverEnabled() const
 {
     return acceptHoverEvents();
@@ -308,11 +279,6 @@ void Scene3DItem::updateCameraAspectRatio()
     }
 }
 
-/*!
-    \qmlproperty bool Scene3D::multisample
-
-    \c true if a multi-sample render buffer is in use.
- */
 /*!
     \return \c true if a multisample renderbuffer is in use.
  */

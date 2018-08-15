@@ -26,12 +26,11 @@
 #ifndef ApplicationCache_h
 #define ApplicationCache_h
 
+#include "core/dom/ContextLifecycleObserver.h"
 #include "core/events/EventTarget.h"
-
-#include "core/frame/DOMWindowProperty.h"
 #include "core/loader/appcache/ApplicationCacheHost.h"
 #include "platform/heap/Handle.h"
-#include "wtf/Forward.h"
+#include "platform/wtf/Forward.h"
 
 namespace blink {
 
@@ -39,17 +38,15 @@ class ExceptionState;
 class LocalFrame;
 
 class ApplicationCache final : public EventTargetWithInlineData,
-                               public DOMWindowProperty {
+                               public DOMWindowClient {
   DEFINE_WRAPPERTYPEINFO();
   USING_GARBAGE_COLLECTED_MIXIN(ApplicationCache);
 
  public:
-  static ApplicationCache* create(LocalFrame* frame) {
+  static ApplicationCache* Create(LocalFrame* frame) {
     return new ApplicationCache(frame);
   }
   ~ApplicationCache() override {}
-
-  void frameDestroyed() override;
 
   unsigned short status() const;
   void update(ExceptionState&);
@@ -67,19 +64,19 @@ class ApplicationCache final : public EventTargetWithInlineData,
   DEFINE_ATTRIBUTE_EVENT_LISTENER(cached);
   DEFINE_ATTRIBUTE_EVENT_LISTENER(obsolete);
 
-  const AtomicString& interfaceName() const override;
-  ExecutionContext* getExecutionContext() const override;
+  const AtomicString& InterfaceName() const override;
+  ExecutionContext* GetExecutionContext() const override;
 
-  static const AtomicString& toEventType(ApplicationCacheHost::EventID);
+  static const AtomicString& ToEventType(ApplicationCacheHost::EventID);
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
   explicit ApplicationCache(LocalFrame*);
 
-  void recordAPIUseType() const;
+  void RecordAPIUseType() const;
 
-  ApplicationCacheHost* applicationCacheHost() const;
+  ApplicationCacheHost* GetApplicationCacheHost() const;
 };
 
 }  // namespace blink

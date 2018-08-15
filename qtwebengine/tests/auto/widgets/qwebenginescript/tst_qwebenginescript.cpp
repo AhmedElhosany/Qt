@@ -38,6 +38,7 @@ private Q_SLOTS:
     void webChannel_data();
     void webChannel();
     void noTransportWithoutWebChannel();
+    void scriptsInNestedIframes();
 };
 
 void tst_QWebEngineScript::domEditing()
@@ -66,7 +67,7 @@ void tst_QWebEngineScript::domEditing()
     QVERIFY(spyFinished.wait());
     QCOMPARE(evaluateJavaScriptSync(&page, "document.getElementById(\"banner\").innerText"), QVariant(QStringLiteral("Injected banner")));
     // elementFromPoint only works for exposed elements
-    QTest::qWaitForWindowExposed(&view);
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
     QCOMPARE(evaluateJavaScriptSync(&page, "document.elementFromPoint(2, 2).id"), QVariant::fromValue(QStringLiteral("banner")));
 }
 
@@ -80,15 +81,12 @@ void tst_QWebEngineScript::injectionPoint()
     s.setInjectionPoint(static_cast<QWebEngineScript::InjectionPoint>(injectionPoint));
     s.setWorldId(QWebEngineScript::MainWorld);
     QWebEnginePage page;
-    page.scripts().insert(s);
-    page.setHtml(QStringLiteral("<html><head><script> var contents;") + testScript
-                 + QStringLiteral("document.addEventListener(\"load\", setTimeout(function(event) {\
-                                   document.body.innerText = contents;\
-                                   }, 550));\
-                                   </script></head><body></body></html>"));
     QSignalSpy spyFinished(&page, &QWebEnginePage::loadFinished);
+    page.scripts().insert(s);
+    page.setHtml(QStringLiteral("<html><head><script>") + testScript + QStringLiteral("</script></head><body></body></html>"));
     QVERIFY(spyFinished.wait());
-    QTRY_COMPARE(evaluateJavaScriptSync(&page, "document.body.innerText"), QVariant::fromValue(QStringLiteral("SUCCESS")));
+    const QVariant expected(QVariant::fromValue(QStringLiteral("SUCCESS")));
+    QTRY_COMPARE(evaluateJavaScriptSync(&page, "document.myContents"), expected);
 }
 
 void tst_QWebEngineScript::injectionPoint_data()
@@ -96,17 +94,21 @@ void tst_QWebEngineScript::injectionPoint_data()
     QTest::addColumn<int>("injectionPoint");
     QTest::addColumn<QString>("testScript");
     QTest::newRow("DocumentCreation") << static_cast<int>(QWebEngineScript::DocumentCreation)
-                                      << QStringLiteral("var contents = (typeof(foo) == \"undefined\")? \"FAILURE\" : \"SUCCESS\";");
+                                      << QStringLiteral("document.myContents = (typeof(foo) == \"undefined\")? \"FAILURE\" : \"SUCCESS\";");
     QTest::newRow("DocumentReady") << static_cast<int>(QWebEngineScript::DocumentReady)
     // use a zero timeout to make sure the user script got a chance to run as the order is undefined.
                                    << QStringLiteral("document.addEventListener(\"DOMContentLoaded\", function() {\
-                                                      setTimeout(function() {\
-                                                      contents = (typeof(foo) == \"undefined\")? \"FAILURE\" : \"SUCCESS\";\
-                                                      }, 0)});");
-    QTest::newRow("Deferred") << static_cast<int>(QWebEngineScript::Deferred)
-                              << QStringLiteral("document.addEventListener(\"load\", setTimeout(function(event) {\
-                                                 contents = (typeof(foo) == \"undefined\")? \"FAILURE\" : \"SUCCESS\";\
-                                                 }, 500));");
+                                                        setTimeout(function() {\
+                                                          document.myContents = (typeof(foo) == \"undefined\")? \"FAILURE\" : \"SUCCESS\";\
+                                                        }, 0)});");
+    QTest::newRow("Deferred") << static_cast<int>(QWebEngineScript::DocumentReady)
+                              << QStringLiteral("document.onreadystatechange = function() { \
+                                                   if (document.readyState == \"complete\") { \
+                                                     setTimeout(function() {\
+                                                       document.myContents = (typeof(foo) == \"undefined\")? \"FAILURE\" : \"SUCCESS\";\
+                                                     }, 0);\
+                                                   } \
+                                                 };");
 }
 
 void tst_QWebEngineScript::scriptWorld()
@@ -244,6 +246,58 @@ void tst_QWebEngineScript::noTransportWithoutWebChannel()
     QSignalSpy spyFinished(&page, &QWebEnginePage::loadFinished);
     QVERIFY(spyFinished.wait());
     QCOMPARE(evaluateJavaScriptSync(&page, "qt.webChannelTransport"), QVariant(QVariant::Invalid));
+}
+
+void tst_QWebEngineScript::scriptsInNestedIframes()
+{
+    QWebEnginePage page;
+    QWebEngineView view;
+    view.setPage(&page);
+    QWebEngineScript s;
+    s.setInjectionPoint(QWebEngineScript::DocumentReady);
+    s.setWorldId(QWebEngineScript::ApplicationWorld);
+
+    // Prepend a "Modified prefix" to every frame's div content.
+    s.setSourceCode("var elements = document.getElementsByTagName(\"div\");\
+                    var i;\
+                    for (i = 0; i < elements.length; i++) {\
+                        var content = elements[i].innerHTML;\
+                        elements[i].innerHTML = \"Modified \" + content;\
+                    }\
+                    ");
+
+    // Make sure the script runs on all frames.
+    s.setRunsOnSubFrames(true);
+    page.scripts().insert(s);
+
+    QSignalSpy spyFinished(&page, &QWebEnginePage::loadFinished);
+    page.load(QUrl("qrc:/resources/test_iframe_main.html"));
+    view.show();
+    QVERIFY(spyFinished.wait());
+
+    // Check that main frame has modified content.
+    QCOMPARE(
+        evaluateJavaScriptSyncInWorld(&page, "document.getElementsByTagName(\"div\")[0].innerHTML",
+                                      QWebEngineScript::ApplicationWorld),
+                QVariant::fromValue(QStringLiteral("Modified Main text")));
+
+    // Check that outer frame has modified content.
+    QCOMPARE(
+        evaluateJavaScriptSyncInWorld(&page,
+                                      "var i = document.getElementById(\"outer\").contentDocument;\
+                                       i.getElementsByTagName(\"div\")[0].innerHTML",
+                                      QWebEngineScript::ApplicationWorld),
+                QVariant::fromValue(QStringLiteral("Modified Outer text")));
+
+
+    // Check that inner frame has modified content.
+    QCOMPARE(
+        evaluateJavaScriptSyncInWorld(&page,
+                                      "var i = document.getElementById(\"outer\").contentDocument;\
+                                       var i2 = i.getElementById(\"inner\").contentDocument;\
+                                       i2.getElementsByTagName(\"div\")[0].innerHTML",
+                                      QWebEngineScript::ApplicationWorld),
+                QVariant::fromValue(QStringLiteral("Modified Inner text")));
 }
 
 QTEST_MAIN(tst_QWebEngineScript)

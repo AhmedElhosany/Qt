@@ -5,7 +5,7 @@
 #ifndef MEDIA_GPU_DXVA_VIDEO_DECODE_ACCELERATOR_WIN_H_
 #define MEDIA_GPU_DXVA_VIDEO_DECODE_ACCELERATOR_WIN_H_
 
-#include <d3d11.h>
+#include <d3d11_1.h>
 #include <d3d9.h>
 #include <initguid.h>
 #include <stdint.h>
@@ -28,10 +28,10 @@
 #include "base/memory/linked_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
-#include "base/threading/non_thread_safe.h"
 #include "base/threading/thread.h"
 #include "base/win/scoped_comptr.h"
 #include "gpu/command_buffer/service/gpu_preferences.h"
+#include "media/base/video_color_space.h"
 #include "media/filters/h264_parser.h"
 #include "media/gpu/gpu_video_decode_accelerator_helpers.h"
 #include "media/gpu/media_gpu_export.h"
@@ -71,10 +71,9 @@ class H264ConfigChangeDetector {
   // Detects stream configuration changes.
   // Returns false on failure.
   bool DetectConfig(const uint8_t* stream, unsigned int size);
-
   bool config_changed() const { return config_changed_; }
 
-  gfx::ColorSpace current_color_space() const;
+  VideoColorSpace current_color_space() const;
 
  private:
   // These fields are used to track the SPS/PPS in the H.264 bitstream and
@@ -136,27 +135,53 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   GLenum GetSurfaceInternalFormat() const override;
 
   static VideoDecodeAccelerator::SupportedProfiles GetSupportedProfiles(
-      const gpu::GpuPreferences& gpu_preferences);
+      const gpu::GpuPreferences& gpu_preferences,
+      const gpu::GpuDriverBugWorkarounds& workarounds);
 
   // Preload dlls required for decoding.
   static void PreSandboxInitialization();
 
  private:
   friend class DXVAPictureBuffer;
+  friend class EGLStreamDelayedCopyPictureBuffer;
   friend class EGLStreamCopyPictureBuffer;
   friend class EGLStreamPictureBuffer;
   friend class PbufferPictureBuffer;
   typedef void* EGLConfig;
   typedef void* EGLSurface;
+  typedef std::list<base::win::ScopedComPtr<IMFSample>> PendingInputs;
+
+  enum class PictureBufferMechanism {
+    // Copy to either a BGRA8 or FP16 texture using the video processor.
+    COPY_TO_RGB,
+
+    // Copy to another NV12 texture that can be used in ANGLE.
+    COPY_TO_NV12,
+
+    // Bind the resulting GLImage to the NV12 texture. If the texture's used
+    // in a an overlay than use it directly, otherwise copy it to another NV12
+    // texture when necessary.
+    DELAYED_COPY_TO_NV12,
+
+    // Bind the NV12 decoder texture directly to the texture used in ANGLE.
+    BIND
+  };
 
   // Returns the minimum resolution for the |profile| passed in.
-  static std::pair<int, int> GetMinResolution(const VideoCodecProfile profile);
+  static gfx::Size GetMinResolution(VideoCodecProfile profile);
 
   // Returns the maximum resolution for the |profile| passed in.
-  static std::pair<int, int> GetMaxResolution(const VideoCodecProfile profile);
+  static gfx::Size GetMaxResolution(VideoCodecProfile profile);
 
-  // Returns the maximum resolution for H264 video.
-  static std::pair<int, int> GetMaxH264Resolution();
+  // Returns the maximum resolution for by attempting to create a decoder for
+  // each of the resolutions in |resolutions_to_test| for the first decoder
+  // matching a GUID from |valid_guids|. |resolutions_to_test| should be ordered
+  // from smallest to largest resolution. |default_max_resolution| will be
+  // returned if any errors occur during the process.
+  static gfx::Size GetMaxResolutionForGUIDs(
+      const gfx::Size& default_max_resolution,
+      const std::vector<GUID>& valid_guids,
+      const std::vector<gfx::Size>& resolutions_to_test);
 
   // Certain AMD GPU drivers like R600, R700, Evergreen and Cayman and
   // some second generation Intel GPU drivers crash if we create a video
@@ -168,6 +193,9 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // corresponding device manager. The device manager instance is eventually
   // passed to the IMFTransform interface implemented by the decoder.
   bool CreateD3DDevManager();
+
+  // TODO(hubbe): COMMENT
+  bool CreateVideoProcessor();
 
   // Creates and initializes an instance of the DX11 device and the
   // corresponding device manager. The device manager instance is eventually
@@ -205,7 +233,7 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // Invoked when we have a valid decoded output sample. Retrieves the D3D
   // surface and maintains a copy of it which is passed eventually to the
   // client when we have a picture buffer to copy the surface contents to.
-  bool ProcessOutputSample(IMFSample* sample,
+  bool ProcessOutputSample(base::win::ScopedComPtr<IMFSample> sample,
                            const gfx::ColorSpace& color_space);
 
   // Processes pending output samples by copying them to available picture
@@ -218,6 +246,9 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // Transitions the decoder to the uninitialized state. The decoder will stop
   // accepting requests in this state.
   void Invalidate();
+
+  // Stop and join on the decoder thread.
+  void StopDecoderThread();
 
   // Notifies the client that the input buffer identifed by input_buffer_id has
   // been processed.
@@ -235,11 +266,12 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // Notifies the client about the availability of a picture.
   void NotifyPictureReady(int picture_buffer_id,
                           int input_buffer_id,
-                          const gfx::ColorSpace& color_space);
+                          const gfx::ColorSpace& color_space,
+                          bool allow_overlay);
 
   // Sends pending input buffer processed acks to the client if we don't have
   // output samples waiting to be processed.
-  void NotifyInputBuffersDropped();
+  void NotifyInputBuffersDropped(const PendingInputs& input_buffers);
 
   // Decodes pending input buffers.
   void DecodePendingInputBuffers();
@@ -269,8 +301,8 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // the decoder thread. Thread safe.
   State GetState();
 
-  // Starts the thread used for decoding.
-  void StartDecoderThread();
+  // Starts the thread used for decoding. Returns true on success.
+  bool StartDecoderThread();
 
   // Returns if we have output samples waiting to be processed. We only
   // allow one output sample to be present in the output queue at any given
@@ -282,7 +314,8 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   void CopySurface(IDirect3DSurface9* src_surface,
                    IDirect3DSurface9* dest_surface,
                    int picture_buffer_id,
-                   int input_buffer_id);
+                   int input_buffer_id,
+                   const gfx::ColorSpace& color_space);
 
   // This is a notification that the source surface |src_surface| was copied to
   // the destination |dest_surface|. Received on the main thread.
@@ -302,14 +335,15 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
                    base::win::ScopedComPtr<IDXGIKeyedMutex> dest_keyed_mutex,
                    uint64_t keyed_mutex_value,
                    int picture_buffer_id,
-                   int input_buffer_id);
+                   int input_buffer_id,
+                   const gfx::ColorSpace& color_space);
 
   // Copies the |video_frame| to the destination |dest_texture|.
   void CopyTextureOnDecoderThread(
       ID3D11Texture2D* dest_texture,
       base::win::ScopedComPtr<IDXGIKeyedMutex> dest_keyed_mutex,
       uint64_t keyed_mutex_value,
-      IMFSample* video_frame,
+      base::win::ScopedComPtr<IMFSample> input_sample,
       int picture_buffer_id,
       int input_buffer_id);
 
@@ -326,9 +360,11 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // before reusing it.
   void WaitForOutputBuffer(int32_t picture_buffer_id, int count);
 
-  // Initializes the DX11 Video format converter media types.
+  // Initialize the DX11 video processor.
   // Returns true on success.
-  bool InitializeDX11VideoFormatConverterMediaType(int width, int height);
+  bool InitializeID3D11VideoProcessor(int width,
+                                      int height,
+                                      const gfx::ColorSpace& color_space);
 
   // Returns the output video frame dimensions (width, height).
   // |sample| :- This is the output sample containing the video frame.
@@ -351,7 +387,7 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // Checks if the resolution, bitrate etc of the stream changed. We do this
   // by keeping track of the SPS/PPS frames and if they change we assume
   // that the configuration changed.
-  // Returns S_OK or S_FALSE on succcess.
+  // Returns S_OK or S_FALSE on success.
   // The |config_changed| parameter is set to true if we detect a change in the
   // stream.
   HRESULT CheckConfigChanged(IMFSample* sample, bool* config_changed);
@@ -362,11 +398,14 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
 
   uint32_t GetTextureTarget() const;
 
+  PictureBufferMechanism GetPictureBufferMechanism() const;
+  bool ShouldUseANGLEDevice() const;
+  ID3D11Device* D3D11Device() const;
+
   // To expose client callbacks from VideoDecodeAccelerator.
   VideoDecodeAccelerator::Client* client_;
 
   base::win::ScopedComPtr<IMFTransform> decoder_;
-  base::win::ScopedComPtr<IMFTransform> video_format_converter_mft_;
 
   base::win::ScopedComPtr<IDirect3D9Ex> d3d9_;
   base::win::ScopedComPtr<IDirect3DDevice9Ex> d3d9_device_ex_;
@@ -379,6 +418,19 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   base::win::ScopedComPtr<ID3D10Multithread> multi_threaded_;
   base::win::ScopedComPtr<ID3D11DeviceContext> d3d11_device_context_;
   base::win::ScopedComPtr<ID3D11Query> d3d11_query_;
+
+  base::win::ScopedComPtr<ID3D11VideoDevice> video_device_;
+  base::win::ScopedComPtr<ID3D11VideoContext> video_context_;
+  base::win::ScopedComPtr<ID3D11VideoProcessorEnumerator> enumerator_;
+  base::win::ScopedComPtr<ID3D11VideoProcessor> d3d11_processor_;
+
+  int processor_width_ = 0;
+  int processor_height_ = 0;
+
+  base::win::ScopedComPtr<IDirectXVideoProcessorService>
+      video_processor_service_;
+  base::win::ScopedComPtr<IDirectXVideoProcessor> processor_;
+  DXVA2_ProcAmpValues default_procamp_values_;
 
   // Ideally the reset token would be a stack variable which is used while
   // creating the device manager. However it seems that the device manager
@@ -404,7 +456,7 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // Contains information about a decoded sample.
   struct PendingSampleInfo {
     PendingSampleInfo(int32_t buffer_id,
-                      IMFSample* sample,
+                      base::win::ScopedComPtr<IMFSample> sample,
                       const gfx::ColorSpace& color_space);
     PendingSampleInfo(const PendingSampleInfo& other);
     ~PendingSampleInfo();
@@ -448,8 +500,11 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // |pending_input_buffers_| is drained. Protected by |decoder_lock_|.
   bool sent_drain_message_;
 
+  // This is the array size of the D3D11 texture that's output to by the
+  // decoder. It's only used for debugging.
+  uint32_t output_array_size_ = 0;
+
   // List of input samples waiting to be processed.
-  typedef std::list<base::win::ScopedComPtr<IMFSample>> PendingInputs;
   PendingInputs pending_input_buffers_;
 
   // Callback to get current GLContext.
@@ -487,10 +542,22 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // Use CODECAPI_AVLowLatencyMode.
   bool enable_low_latency_;
 
-  bool share_nv12_textures_;
+  // Supports sharing the decoded NV12 textures with ANGLE
+  bool support_share_nv12_textures_;
 
-  // Copy NV12 texture to another NV12 texture.
-  bool copy_nv12_textures_;
+  // Supports copying the NV12 texture to another NV12 texture to use in
+  // ANGLE.
+  bool support_copy_nv12_textures_;
+
+  // Supports copying NV12 textures on the main thread to use in ANGLE.
+  bool support_delayed_copy_nv12_textures_;
+
+  // Copy video to FP16 scRGB textures.
+  bool use_fp16_ = false;
+
+  // When converting YUV to RGB, make sure we tell the blitter about the input
+  // color space so that it can convert it correctly.
+  bool use_color_info_ = true;
 
   // Defaults to false. Indicates if we should use D3D or DX11 interfaces for
   // H/W decoding.
@@ -503,9 +570,8 @@ class MEDIA_GPU_EXPORT DXVAVideoDecodeAccelerator
   // contexts.
   bool use_keyed_mutex_;
 
-  // Set to true if the DX11 video format converter input media types need to
-  // be initialized. Defaults to true.
-  bool dx11_video_format_converter_media_type_needs_init_;
+  // Outputs from the dx11 format converter will be in this color space.
+  gfx::ColorSpace dx11_converter_output_color_space_;
 
   // Set to true if we are sharing ANGLE's device.
   bool using_angle_device_;

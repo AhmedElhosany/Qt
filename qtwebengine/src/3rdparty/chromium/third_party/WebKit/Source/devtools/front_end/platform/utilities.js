@@ -26,15 +26,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-// FIXME: This performance optimization should be moved to blink so that all developers could enjoy it.
-// console is retrieved with V8Window.getAttribute method which is slow. Here we copy it to a js variable for faster access.
-console = console;
-console.__originalAssert = console.assert;
-console.assert = function(value, message) {
-  if (value)
-    return;
-  console.__originalAssert(value, message);
-};
 
 /** @typedef {Array|NodeList|Arguments|{length: number}} */
 var ArrayLike;
@@ -173,6 +164,12 @@ String.prototype.trimMiddle = function(maxLength) {
     return String(this);
   var leftHalf = maxLength >> 1;
   var rightHalf = maxLength - leftHalf - 1;
+  if (this.codePointAt(this.length - rightHalf - 1) >= 0x10000) {
+    --rightHalf;
+    ++leftHalf;
+  }
+  if (leftHalf > 0 && this.codePointAt(leftHalf - 1) >= 0x10000)
+    --leftHalf;
   return this.substr(0, leftHalf) + '\u2026' + this.substr(this.length - rightHalf, rightHalf);
 };
 
@@ -411,31 +408,6 @@ Date.prototype.toISO8601Compact = function() {
   }
   return this.getFullYear() + leadZero(this.getMonth() + 1) + leadZero(this.getDate()) + 'T' +
       leadZero(this.getHours()) + leadZero(this.getMinutes()) + leadZero(this.getSeconds());
-};
-
-/**
- * @return {string}
- */
-Date.prototype.toConsoleTime = function() {
-  /**
-   * @param {number} x
-   * @return {string}
-   */
-  function leadZero2(x) {
-    return (x > 9 ? '' : '0') + x;
-  }
-
-  /**
-   * @param {number} x
-   * @return {string}
-   */
-  function leadZero3(x) {
-    return '0'.repeat(3 - x.toString().length) + x;
-  }
-
-  return this.getFullYear() + '-' + leadZero2(this.getMonth() + 1) + '-' + leadZero2(this.getDate()) + ' ' +
-      leadZero2(this.getHours()) + ':' + leadZero2(this.getMinutes()) + ':' + leadZero2(this.getSeconds()) + '.' +
-      leadZero3(this.getMilliseconds());
 };
 
 Object.defineProperty(Array.prototype, 'remove', {
@@ -726,6 +698,10 @@ Object.defineProperty(Array.prototype, 'upperBound', {
 Object.defineProperty(Uint32Array.prototype, 'lowerBound', {value: Array.prototype.lowerBound});
 
 Object.defineProperty(Uint32Array.prototype, 'upperBound', {value: Array.prototype.upperBound});
+
+Object.defineProperty(Int32Array.prototype, 'lowerBound', {value: Array.prototype.lowerBound});
+
+Object.defineProperty(Int32Array.prototype, 'upperBound', {value: Array.prototype.upperBound});
 
 Object.defineProperty(Float64Array.prototype, 'lowerBound', {value: Array.prototype.lowerBound});
 
@@ -1116,6 +1092,16 @@ Set.prototype.valuesArray = function() {
 };
 
 /**
+ * @return {?T}
+ * @template T
+ */
+Set.prototype.firstValue = function() {
+  if (!this.size)
+    return null;
+  return this.values().next().value;
+};
+
+/**
  * @param {!Iterable<T>|!Array<!T>} iterable
  * @template T
  */
@@ -1237,18 +1223,20 @@ Multimap.prototype = {
   /**
    * @param {K} key
    * @param {V} value
+   * @return {boolean}
    */
-  remove: function(key, value) {
+  delete: function(key, value) {
     var values = this.get(key);
-    values.delete(value);
+    var result = values.delete(value);
     if (!values.size)
       this._map.delete(key);
+    return result;
   },
 
   /**
    * @param {K} key
    */
-  removeAll: function(key) {
+  deleteAll: function(key) {
     this._map.delete(key);
   },
 
@@ -1304,64 +1292,6 @@ function loadXHR(url) {
 }
 
 /**
- * @unrestricted
- */
-var CallbackBarrier = class {
-  constructor() {
-    this._pendingIncomingCallbacksCount = 0;
-  }
-
-  /**
-   * @param {function(...)=} userCallback
-   * @return {function(...)}
-   */
-  createCallback(userCallback) {
-    console.assert(
-        !this._outgoingCallback, 'CallbackBarrier.createCallback() is called after CallbackBarrier.callWhenDone()');
-    ++this._pendingIncomingCallbacksCount;
-    return this._incomingCallback.bind(this, userCallback);
-  }
-
-  /**
-   * @param {function()} callback
-   */
-  callWhenDone(callback) {
-    console.assert(!this._outgoingCallback, 'CallbackBarrier.callWhenDone() is called multiple times');
-    this._outgoingCallback = callback;
-    if (!this._pendingIncomingCallbacksCount)
-      this._outgoingCallback();
-  }
-
-  /**
-   * @return {!Promise.<undefined>}
-   */
-  donePromise() {
-    return new Promise(promiseConstructor.bind(this));
-
-    /**
-     * @param {function()} success
-     * @this {CallbackBarrier}
-     */
-    function promiseConstructor(success) {
-      this.callWhenDone(success);
-    }
-  }
-
-  /**
-   * @param {function(...)=} userCallback
-   */
-  _incomingCallback(userCallback) {
-    console.assert(this._pendingIncomingCallbacksCount > 0);
-    if (userCallback) {
-      var args = Array.prototype.slice.call(arguments, 1);
-      userCallback.apply(null, args);
-    }
-    if (!--this._pendingIncomingCallbacksCount && this._outgoingCallback)
-      this._outgoingCallback();
-  }
-};
-
-/**
  * @param {*} value
  */
 function suppressUnused(value) {
@@ -1372,7 +1302,8 @@ function suppressUnused(value) {
  * @return {number}
  */
 self.setImmediate = function(callback) {
-  Promise.resolve().then(callback);
+  const args = [...arguments].slice(1);
+  Promise.resolve().then(() => callback(...args));
   return 0;
 };
 
@@ -1445,3 +1376,38 @@ Map.prototype.diff = function(other, isEqual) {
   }
   return {added: added, removed: removed, equal: equal};
 };
+
+/**
+ * TODO: move into its own module
+ * @param {function()} callback
+ * @suppressGlobalPropertiesCheck
+ */
+function runOnWindowLoad(callback) {
+  /**
+   * @suppressGlobalPropertiesCheck
+   */
+  function windowLoaded() {
+    self.removeEventListener('DOMContentLoaded', windowLoaded, false);
+    callback();
+  }
+
+  if (document.readyState === 'complete' || document.readyState === 'interactive')
+    callback();
+  else
+    self.addEventListener('DOMContentLoaded', windowLoaded, false);
+}
+
+var _singletonSymbol = Symbol('singleton');
+
+/**
+ * @template T
+ * @param {function(new:T, ...)} constructorFunction
+ * @return {!T}
+ */
+function singleton(constructorFunction) {
+  if (_singletonSymbol in constructorFunction)
+    return constructorFunction[_singletonSymbol];
+  var instance = new constructorFunction();
+  constructorFunction[_singletonSymbol] = instance;
+  return instance;
+}

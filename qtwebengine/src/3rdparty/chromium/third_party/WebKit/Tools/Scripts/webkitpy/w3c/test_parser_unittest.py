@@ -29,7 +29,7 @@ import os
 import unittest
 
 from webkitpy.common.host_mock import MockHost
-from webkitpy.common.system.outputcapture import OutputCapture
+from webkitpy.common.system.output_capture import OutputCapture
 from webkitpy.w3c.test_parser import TestParser
 
 
@@ -203,7 +203,7 @@ CONTENT OF TEST
 </body>
 </html>
 """
-        parser = TestParser('/some/csswg-test/path/somefile.html', MockHost())
+        parser = TestParser('/some/wpt/css/path/somefile.html', MockHost())
         test_info = parser.analyze_test(test_contents=test_html)
         self.assertIsNotNone(test_info, 'test_info should not be None')
         self.assertIn('test', test_info.keys(), 'should find a test file')
@@ -223,3 +223,10 @@ CONTENT OF TEST
         self.assertEqual(parser.filename, 'some/bogus/path.html')
         self.assertIsNone(parser.test_doc)
         self.assertIsNone(parser.ref_doc)
+
+    def test_load_file_with_non_ascii_tags(self):
+        host = MockHost()
+        host.filesystem.files['/some/path.xml'] = '<d\xc3\x98dd></d\xc3\x98dd>'
+        parser = TestParser('/some/path.xml', host)
+        self.assertEqual(parser.filename, '/some/path.xml')
+        self.assertIsNone(parser.test_doc)

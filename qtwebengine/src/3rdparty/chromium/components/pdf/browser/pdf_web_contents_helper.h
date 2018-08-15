@@ -10,9 +10,14 @@
 
 #include "base/callback.h"
 #include "base/macros.h"
+#include "components/pdf/common/pdf.mojom.h"
+#include "content/public/browser/touch_selection_controller_client_manager.h"
+#include "content/public/browser/web_contents_binding_set.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "ipc/ipc_message.h"
+#include "ui/touch_selection/selection_event_type.h"
+#include "ui/touch_selection/touch_selection_controller.h"
+#include "ui/touch_selection/touch_selection_menu_runner.h"
 
 namespace content {
 class WebContents;
@@ -20,49 +25,63 @@ class WebContents;
 
 namespace pdf {
 
-class OpenPDFInReaderPromptClient;
 class PDFWebContentsHelperClient;
 
 // Per-WebContents class to handle PDF messages.
 class PDFWebContentsHelper
     : public content::WebContentsObserver,
-      public content::WebContentsUserData<PDFWebContentsHelper> {
+      public content::WebContentsUserData<PDFWebContentsHelper>,
+      public mojom::PdfService,
+      public ui::TouchSelectionControllerClient,
+      public ui::TouchSelectionMenuClient,
+      public content::TouchSelectionControllerClientManager::Observer {
  public:
+  ~PDFWebContentsHelper() override;
+
   static void CreateForWebContentsWithClient(
       content::WebContents* contents,
       std::unique_ptr<PDFWebContentsHelperClient> client);
 
-  OpenPDFInReaderPromptClient* open_in_reader_prompt() const {
-    return open_in_reader_prompt_.get();
-  }
+  void SelectionChanged(const gfx::Point& left,
+                        int32_t left_height,
+                        const gfx::Point& right,
+                        int32_t right_height);
 
-  void ShowOpenInReaderPrompt(
-      std::unique_ptr<OpenPDFInReaderPromptClient> prompt);
+  // ui::TouchSelectionControllerClient :
+  bool SupportsAnimation() const override;
+  void SetNeedsAnimate() override {}
+  void MoveCaret(const gfx::PointF& position) override;
+  void MoveRangeSelectionExtent(const gfx::PointF& extent) override;
+  void SelectBetweenCoordinates(const gfx::PointF& base,
+                                const gfx::PointF& extent) override;
+  void OnSelectionEvent(ui::SelectionEventType event) override;
+  std::unique_ptr<ui::TouchHandleDrawable> CreateDrawable() override;
+
+  // ui::TouchSelectionMenuRunner:
+  bool IsCommandIdEnabled(int command_id) const override;
+  void ExecuteCommand(int command_id, int event_flags) override;
+  void RunContextMenu() override;
+
+  // ui::TouchSelectionControllerClientManager::Observer:
+  void OnManagerWillDestroy(
+      content::TouchSelectionControllerClientManager* manager) override;
 
  private:
   PDFWebContentsHelper(content::WebContents* web_contents,
                        std::unique_ptr<PDFWebContentsHelperClient> client);
-  ~PDFWebContentsHelper() override;
 
-  // content::WebContentsObserver overrides:
-  bool OnMessageReceived(const IPC::Message& message,
-                         content::RenderFrameHost* render_frame_host) override;
-  void DidNavigateMainFrame(
-      const content::LoadCommittedDetails& details,
-      const content::FrameNavigateParams& params) override;
+  void InitTouchSelectionClientManager();
 
-  // Internal helpers ----------------------------------------------------------
+  // mojom::PdfService:
+  void HasUnsupportedFeature() override;
+  void SaveUrlAs(const GURL& url, const content::Referrer& referrer) override;
+  void UpdateContentRestrictions(int32_t content_restrictions) override;
 
-  void UpdateLocationBar();
-
-  // Message handlers.
-  void OnHasUnsupportedFeature();
-  void OnSaveURLAs(const GURL& url, const content::Referrer& referrer);
-  void OnUpdateContentRestrictions(int content_restrictions);
-
-  // The model for the confirmation prompt to open a PDF in Adobe Reader.
-  std::unique_ptr<OpenPDFInReaderPromptClient> open_in_reader_prompt_;
+  content::WebContentsFrameBindingSet<mojom::PdfService> pdf_service_bindings_;
   std::unique_ptr<PDFWebContentsHelperClient> client_;
+  content::TouchSelectionControllerClientManager*
+      touch_selection_controller_client_manager_;
+  bool has_selection_;
 
   DISALLOW_COPY_AND_ASSIGN(PDFWebContentsHelper);
 };

@@ -9,10 +9,10 @@ namespace security_state {
 namespace switches {
 
 extern const char kMarkHttpAs[];
-extern const char kMarkHttpAsNeutral[];
 extern const char kMarkHttpAsDangerous[];
-extern const char kMarkHttpWithPasswordsOrCcWithChip[];
-extern const char kMarkHttpWithPasswordsOrCcWithChipAndFormWarning[];
+extern const char kMarkHttpAsNonSecureAfterEditing[];
+extern const char kMarkHttpAsNonSecureWhileIncognito[];
+extern const char kMarkHttpAsNonSecureWhileIncognitoOrEditing[];
 }
 }  // namespace security_state
 

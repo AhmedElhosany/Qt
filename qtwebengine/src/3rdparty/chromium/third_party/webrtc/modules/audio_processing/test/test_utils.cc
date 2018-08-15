@@ -10,8 +10,8 @@
 
 #include <utility>
 
-#include "webrtc/base/checks.h"
 #include "webrtc/modules/audio_processing/test/test_utils.h"
+#include "webrtc/rtc_base/checks.h"
 
 namespace webrtc {
 
@@ -136,7 +136,7 @@ std::vector<Point> ParseArrayGeometry(const std::string& mic_positions) {
   const std::vector<float> values = ParseList<float>(mic_positions);
   const size_t num_mics =
       rtc::CheckedDivExact(values.size(), static_cast<size_t>(3));
-  RTC_CHECK_GT(num_mics, 0u) << "mic_positions is not large enough.";
+  RTC_CHECK_GT(num_mics, 0) << "mic_positions is not large enough.";
 
   std::vector<Point> result;
   result.reserve(num_mics);

@@ -10,9 +10,8 @@
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "third_party/skia/include/core/SkPaint.h"
+#include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkPath.h"
-#include "third_party/skia/include/core/SkXfermode.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/gfx/animation/linear_animation.h"
@@ -29,8 +28,10 @@ namespace {
 const int kCornerRadius = 3;
 
 // Adds a rectangle to the path. The corners will be rounded if there is room.
-void AddPossiblyRoundRectToPath(const gfx::Rect& rectangle, SkPath* path) {
-  if (rectangle.height() < kCornerRadius) {
+void AddPossiblyRoundRectToPath(const gfx::Rect& rectangle,
+                                bool allow_round_corner,
+                                SkPath* path) {
+  if (!allow_round_corner || rectangle.height() < kCornerRadius) {
     path->addRect(gfx::RectToSkRect(rectangle));
   } else {
     path->addRoundRect(gfx::RectToSkRect(rectangle), kCornerRadius,
@@ -43,8 +44,9 @@ void AddPossiblyRoundRectToPath(const gfx::Rect& rectangle, SkPath* path) {
 // static
 const char ProgressBar::kViewClassName[] = "ProgressBar";
 
-ProgressBar::ProgressBar(int preferred_height)
-    : preferred_height_(preferred_height) {
+ProgressBar::ProgressBar(int preferred_height, bool allow_round_corner)
+    : preferred_height_(preferred_height),
+      allow_round_corner_(allow_round_corner) {
   EnableCanvasFlippingForRTLUI(true);
 }
 
@@ -53,10 +55,9 @@ ProgressBar::~ProgressBar() {
 
 void ProgressBar::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   node_data->role = ui::AX_ROLE_PROGRESS_INDICATOR;
-  node_data->AddStateFlag(ui::AX_STATE_READ_ONLY);
 }
 
-gfx::Size ProgressBar::GetPreferredSize() const {
+gfx::Size ProgressBar::CalculatePreferredSize() const {
   // The width will typically be ignored.
   gfx::Size pref_size(1, preferred_height_);
   gfx::Insets insets = GetInsets();
@@ -76,12 +77,13 @@ void ProgressBar::OnPaint(gfx::Canvas* canvas) {
 
   // Draw background.
   SkPath background_path;
-  AddPossiblyRoundRectToPath(content_bounds, &background_path);
-  SkPaint background_paint;
-  background_paint.setStyle(SkPaint::kFill_Style);
-  background_paint.setFlags(SkPaint::kAntiAlias_Flag);
-  background_paint.setColor(GetBackgroundColor());
-  canvas->DrawPath(background_path, background_paint);
+  AddPossiblyRoundRectToPath(content_bounds, allow_round_corner_,
+                             &background_path);
+  cc::PaintFlags background_flags;
+  background_flags.setStyle(cc::PaintFlags::kFill_Style);
+  background_flags.setAntiAlias(true);
+  background_flags.setColor(GetBackgroundColor());
+  canvas->DrawPath(background_path, background_flags);
 
   // Draw slice.
   SkPath slice_path;
@@ -92,13 +94,13 @@ void ProgressBar::OnPaint(gfx::Canvas* canvas) {
 
   gfx::Rect slice_bounds = content_bounds;
   slice_bounds.set_width(slice_width);
-  AddPossiblyRoundRectToPath(slice_bounds, &slice_path);
+  AddPossiblyRoundRectToPath(slice_bounds, allow_round_corner_, &slice_path);
 
-  SkPaint slice_paint;
-  slice_paint.setStyle(SkPaint::kFill_Style);
-  slice_paint.setFlags(SkPaint::kAntiAlias_Flag);
-  slice_paint.setColor(GetForegroundColor());
-  canvas->DrawPath(slice_path, slice_paint);
+  cc::PaintFlags slice_flags;
+  slice_flags.setStyle(cc::PaintFlags::kFill_Style);
+  slice_flags.setAntiAlias(true);
+  slice_flags.setColor(GetForegroundColor());
+  canvas->DrawPath(slice_path, slice_flags);
 }
 
 void ProgressBar::SetValue(double value) {
@@ -110,7 +112,7 @@ void ProgressBar::SetValue(double value) {
   current_value_ = adjusted_value;
   if (IsIndeterminate()) {
     indeterminate_bar_animation_.reset(new gfx::LinearAnimation(this));
-    indeterminate_bar_animation_->SetDuration(2000);  // In milliseconds.
+    indeterminate_bar_animation_->SetDuration(base::TimeDelta::FromSeconds(2));
     indeterminate_bar_animation_->Start();
   } else {
     indeterminate_bar_animation_.reset();
@@ -151,12 +153,13 @@ void ProgressBar::OnPaintIndeterminate(gfx::Canvas* canvas) {
 
   // Draw background.
   SkPath background_path;
-  AddPossiblyRoundRectToPath(content_bounds, &background_path);
-  SkPaint background_paint;
-  background_paint.setStyle(SkPaint::kFill_Style);
-  background_paint.setFlags(SkPaint::kAntiAlias_Flag);
-  background_paint.setColor(GetBackgroundColor());
-  canvas->DrawPath(background_path, background_paint);
+  AddPossiblyRoundRectToPath(content_bounds, allow_round_corner_,
+                             &background_path);
+  cc::PaintFlags background_flags;
+  background_flags.setStyle(cc::PaintFlags::kFill_Style);
+  background_flags.setAntiAlias(true);
+  background_flags.setColor(GetBackgroundColor());
+  canvas->DrawPath(background_path, background_flags);
 
   // Draw slice.
   SkPath slice_path;
@@ -195,16 +198,16 @@ void ProgressBar::OnPaintIndeterminate(gfx::Canvas* canvas) {
   gfx::Rect slice_bounds = content_bounds;
   slice_bounds.set_x(content_bounds.x() + bar1_start_x);
   slice_bounds.set_width(bar1_end_x - bar1_start_x);
-  AddPossiblyRoundRectToPath(slice_bounds, &slice_path);
+  AddPossiblyRoundRectToPath(slice_bounds, allow_round_corner_, &slice_path);
   slice_bounds.set_x(content_bounds.x() + bar2_start_x);
   slice_bounds.set_width(bar2_end_x - bar2_start_x);
-  AddPossiblyRoundRectToPath(slice_bounds, &slice_path);
+  AddPossiblyRoundRectToPath(slice_bounds, allow_round_corner_, &slice_path);
 
-  SkPaint slice_paint;
-  slice_paint.setStyle(SkPaint::kFill_Style);
-  slice_paint.setFlags(SkPaint::kAntiAlias_Flag);
-  slice_paint.setColor(GetForegroundColor());
-  canvas->DrawPath(slice_path, slice_paint);
+  cc::PaintFlags slice_flags;
+  slice_flags.setStyle(cc::PaintFlags::kFill_Style);
+  slice_flags.setAntiAlias(true);
+  slice_flags.setColor(GetForegroundColor());
+  canvas->DrawPath(slice_path, slice_flags);
 }
 
 }  // namespace views

@@ -31,10 +31,6 @@
 class ProfileOAuth2TokenService;
 class SigninClient;
 
-namespace net {
-class CanonicalCookie;
-}
-
 class AccountReconcilor : public KeyedService,
                           public content_settings::Observer,
                           public GaiaCookieManagerService::Observer,
@@ -155,8 +151,7 @@ class AccountReconcilor : public KeyedService,
 
   // Overriden from SigninManagerBase::Observer.
   void GoogleSigninSucceeded(const std::string& account_id,
-                             const std::string& username,
-                             const std::string& password) override;
+                             const std::string& username) override;
   void GoogleSignedOut(const std::string& account_id,
                        const std::string& username) override;
 

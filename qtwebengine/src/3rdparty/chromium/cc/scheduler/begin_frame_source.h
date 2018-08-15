@@ -26,12 +26,17 @@ class CC_EXPORT BeginFrameObserver {
   virtual ~BeginFrameObserver() {}
 
   // The |args| given to OnBeginFrame is guaranteed to have
-  // |args|.IsValid()==true and have |args|.frame_time
-  // field be strictly greater than the previous call.
+  // |args|.IsValid()==true. If |args|.source_id did not change between
+  // invocations, |args|.sequence_number is guaranteed to be be strictly greater
+  // than the previous call. Further, |args|.frame_time is guaranteed to be
+  // greater than or equal to the previous call even if the source_id changes.
   //
   // Side effects: This function can (and most of the time *will*) change the
   // return value of the LastUsedBeginFrameArgs method. See the documentation
   // on that method for more information.
+  //
+  // The observer is required call BeginFrameSource::DidFinishFrame() as soon as
+  // it has completed handling the BeginFrame.
   virtual void OnBeginFrame(const BeginFrameArgs& args) = 0;
 
   // Returns the last BeginFrameArgs used by the observer. This method's return
@@ -67,6 +72,7 @@ class CC_EXPORT BeginFrameObserver {
 class CC_EXPORT BeginFrameObserverBase : public BeginFrameObserver {
  public:
   BeginFrameObserverBase();
+  ~BeginFrameObserverBase() override;
 
   // BeginFrameObserver
 
@@ -77,12 +83,13 @@ class CC_EXPORT BeginFrameObserverBase : public BeginFrameObserver {
   const BeginFrameArgs& LastUsedBeginFrameArgs() const override;
 
  protected:
-  // Subclasses should override this method!
   // Return true if the given argument is (or will be) used.
   virtual bool OnBeginFrameDerivedImpl(const BeginFrameArgs& args) = 0;
 
+  void AsValueInto(base::trace_event::TracedValue* state) const;
+
   BeginFrameArgs last_begin_frame_args_;
-  int64_t dropped_begin_frame_args_;
+  int64_t dropped_begin_frame_args_ = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(BeginFrameObserverBase);
@@ -99,14 +106,20 @@ class CC_EXPORT BeginFrameObserverBase : public BeginFrameObserver {
 // all BeginFrameSources *must* provide.
 class CC_EXPORT BeginFrameSource {
  public:
-  virtual ~BeginFrameSource() {}
+  BeginFrameSource();
+  virtual ~BeginFrameSource();
 
-  // DidFinishFrame provides back pressure to a frame source about frame
-  // processing (rather than toggling SetNeedsBeginFrames every frame). It is
-  // used by systems like the BackToBackFrameSource to make sure only one frame
-  // is pending at a time.
-  virtual void DidFinishFrame(BeginFrameObserver* obs,
-                              size_t remaining_frames) = 0;
+  // Returns an identifier for this BeginFrameSource. Guaranteed unique within a
+  // process, but not across processes. This is used to create BeginFrames that
+  // originate at this source. Note that BeginFrameSources may pass on
+  // BeginFrames created by other sources, with different IDs.
+  uint32_t source_id() const { return source_id_; }
+
+  // BeginFrameObservers use DidFinishFrame to provide back pressure to a frame
+  // source about frame processing (rather than toggling SetNeedsBeginFrames
+  // every frame). For example, the BackToBackFrameSource uses them to make sure
+  // only one frame is pending at a time.
+  virtual void DidFinishFrame(BeginFrameObserver* obs) = 0;
 
   // Add/Remove an observer from the source. When no observers are added the BFS
   // should shut down its timers, disable vsync, etc.
@@ -116,13 +129,19 @@ class CC_EXPORT BeginFrameSource {
   // Returns false if the begin frame source will just continue to produce
   // begin frames without waiting.
   virtual bool IsThrottled() const = 0;
+
+  virtual void AsValueInto(base::trace_event::TracedValue* state) const;
+
+ private:
+  uint32_t source_id_;
+
+  DISALLOW_COPY_AND_ASSIGN(BeginFrameSource);
 };
 
 // A BeginFrameSource that does nothing.
 class CC_EXPORT StubBeginFrameSource : public BeginFrameSource {
  public:
-  void DidFinishFrame(BeginFrameObserver* obs,
-                      size_t remaining_frames) override {}
+  void DidFinishFrame(BeginFrameObserver* obs) override {}
   void AddObserver(BeginFrameObserver* obs) override {}
   void RemoveObserver(BeginFrameObserver* obs) override {}
   bool IsThrottled() const override;
@@ -140,7 +159,7 @@ class CC_EXPORT SyntheticBeginFrameSource : public BeginFrameSource {
 };
 
 // A frame source which calls BeginFrame (at the next possible time) as soon as
-// remaining frames reaches zero.
+// an observer acknowledges the prior BeginFrame.
 class CC_EXPORT BackToBackBeginFrameSource : public SyntheticBeginFrameSource,
                                              public DelayBasedTimeSourceClient {
  public:
@@ -151,8 +170,7 @@ class CC_EXPORT BackToBackBeginFrameSource : public SyntheticBeginFrameSource,
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs,
-                      size_t remaining_frames) override;
+  void DidFinishFrame(BeginFrameObserver* obs) override;
   bool IsThrottled() const override;
 
   // SyntheticBeginFrameSource implementation.
@@ -167,6 +185,7 @@ class CC_EXPORT BackToBackBeginFrameSource : public SyntheticBeginFrameSource,
   std::unique_ptr<DelayBasedTimeSource> time_source_;
   std::unordered_set<BeginFrameObserver*> observers_;
   std::unordered_set<BeginFrameObserver*> pending_begin_frame_observers_;
+  uint64_t next_sequence_number_;
   base::WeakPtrFactory<BackToBackBeginFrameSource> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(BackToBackBeginFrameSource);
@@ -184,8 +203,7 @@ class CC_EXPORT DelayBasedBeginFrameSource : public SyntheticBeginFrameSource,
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs,
-                      size_t remaining_frames) override {}
+  void DidFinishFrame(BeginFrameObserver* obs) override {}
   bool IsThrottled() const override;
 
   // SyntheticBeginFrameSource implementation.
@@ -204,6 +222,8 @@ class CC_EXPORT DelayBasedBeginFrameSource : public SyntheticBeginFrameSource,
   std::unordered_set<BeginFrameObserver*> observers_;
   base::TimeTicks last_timebase_;
   base::TimeDelta authoritative_interval_;
+  BeginFrameArgs current_begin_frame_args_;
+  uint64_t next_sequence_number_;
 
   DISALLOW_COPY_AND_ASSIGN(DelayBasedBeginFrameSource);
 };
@@ -227,15 +247,15 @@ class CC_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs,
-                      size_t remaining_frames) override {}
+  void DidFinishFrame(BeginFrameObserver* obs) override {}
   bool IsThrottled() const override;
+  void AsValueInto(base::trace_event::TracedValue* state) const override;
 
   void OnSetBeginFrameSourcePaused(bool paused);
   void OnBeginFrame(const BeginFrameArgs& args);
 
  protected:
-  BeginFrameArgs missed_begin_frame_args_;
+  BeginFrameArgs last_begin_frame_args_;
   std::unordered_set<BeginFrameObserver*> observers_;
   ExternalBeginFrameSourceClient* client_;
   bool paused_ = false;

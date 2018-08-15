@@ -143,10 +143,14 @@ protected:
             VariableDeclaration,
             FunctionDefinition
         };
+
         struct Member {
             MemberType type;
             int index;
             AST::FunctionExpression *function;
+            AST::VariableDeclaration::VariableScope scope;
+
+            bool isLexicallyScoped() const { return this->scope != AST::VariableDeclaration::FunctionScope; }
         };
         typedef QMap<QString, Member> MemberMap;
 
@@ -193,6 +197,18 @@ protected:
             return (*it).index;
         }
 
+        bool memberInfo(const QString &name, const Member **m) const
+        {
+            Q_ASSERT(m);
+            MemberMap::const_iterator it = members.find(name);
+            if (it == members.end()) {
+                *m = 0;
+                return false;
+            }
+            *m = &(*it);
+            return true;
+        }
+
         bool lookupMember(const QString &name, Environment **scope, int *index, int *distance)
         {
             Environment *it = this;
@@ -208,7 +224,7 @@ protected:
             return false;
         }
 
-        void enter(const QString &name, MemberType type, AST::FunctionExpression *function = 0)
+        void enter(const QString &name, MemberType type, AST::VariableDeclaration::VariableScope scope, AST::FunctionExpression *function = 0)
         {
             if (! name.isEmpty()) {
                 if (type != FunctionDefinition) {
@@ -222,8 +238,10 @@ protected:
                     m.index = -1;
                     m.type = type;
                     m.function = function;
+                    m.scope = scope;
                     members.insert(name, m);
                 } else {
+                    Q_ASSERT(scope == (*it).scope);
                     if ((*it).type <= type) {
                         (*it).type = type;
                         (*it).function = function;
@@ -460,7 +478,7 @@ protected:
     QV4::IR::BasicBlock *_block;
     QV4::IR::BasicBlock *_exitBlock;
     unsigned _returnAddress;
-    Environment *_env;
+    Environment *_variableEnvironment;
     Loop *_loop;
     AST::LabelledStatement *_labelledStatement;
     ScopeAndFinally *_scopeAndFinally;
@@ -538,7 +556,7 @@ protected:
     // fields:
         Codegen *_cg;
         const QString _sourceCode;
-        Environment *_env;
+        Environment *_variableEnvironment;
         QStack<Environment *> _envStack;
 
         bool _allowFuncDecls;

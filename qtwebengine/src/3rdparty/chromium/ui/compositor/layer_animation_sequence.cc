@@ -22,18 +22,18 @@ LayerAnimationSequence::LayerAnimationSequence()
       waiting_for_group_start_(false),
       animation_group_id_(0),
       last_progressed_fraction_(0.0),
-      weak_ptr_factory_(this) {
-}
+      animation_metrics_reporter_(nullptr) {}
 
-LayerAnimationSequence::LayerAnimationSequence(LayerAnimationElement* element)
+LayerAnimationSequence::LayerAnimationSequence(
+    std::unique_ptr<LayerAnimationElement> element)
     : properties_(LayerAnimationElement::UNKNOWN),
       is_cyclic_(false),
       last_element_(0),
       waiting_for_group_start_(false),
       animation_group_id_(0),
       last_progressed_fraction_(0.0),
-      weak_ptr_factory_(this) {
-  AddElement(element);
+      animation_metrics_reporter_(nullptr) {
+  AddElement(std::move(element));
 }
 
 LayerAnimationSequence::~LayerAnimationSequence() {
@@ -88,7 +88,7 @@ void LayerAnimationSequence::Progress(base::TimeTicks now,
       animation_group_id_ = cc::AnimationIdProvider::NextGroupId();
       elements_[current_index]->Start(delegate, animation_group_id_);
     }
-    base::WeakPtr<LayerAnimationSequence> alive(weak_ptr_factory_.GetWeakPtr());
+    base::WeakPtr<LayerAnimationSequence> alive(AsWeakPtr());
     if (elements_[current_index]->Progress(now, delegate))
       redraw_required = true;
     if (!alive)
@@ -182,9 +182,11 @@ void LayerAnimationSequence::Abort(LayerAnimationDelegate* delegate) {
   NotifyAborted();
 }
 
-void LayerAnimationSequence::AddElement(LayerAnimationElement* element) {
+void LayerAnimationSequence::AddElement(
+    std::unique_ptr<LayerAnimationElement> element) {
   properties_ |= element->properties();
-  elements_.push_back(make_linked_ptr(element));
+  element->set_animation_metrics_reporter(animation_metrics_reporter_);
+  elements_.push_back(std::move(element));
 }
 
 bool LayerAnimationSequence::HasConflictingProperty(
@@ -239,6 +241,13 @@ void LayerAnimationSequence::OnAnimatorDestroyed() {
       observer.DetachedFromSequence(this, false);
     }
   }
+}
+
+void LayerAnimationSequence::SetAnimationMetricsReporter(
+    AnimationMetricsReporter* reporter) {
+  animation_metrics_reporter_ = reporter;
+  for (auto& element : elements_)
+    element->set_animation_metrics_reporter(animation_metrics_reporter_);
 }
 
 size_t LayerAnimationSequence::size() const {

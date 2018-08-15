@@ -67,15 +67,15 @@ SyntheticGesture::Result SyntheticSmoothMoveGesture::ForwardInputEvents(
 
   switch (params_.input_type) {
     case SyntheticSmoothMoveGestureParams::TOUCH_INPUT:
-      if (!synthetic_pointer_)
-        synthetic_pointer_ =
-            SyntheticPointer::Create(SyntheticGestureParams::TOUCH_INPUT);
+      if (!synthetic_pointer_driver_)
+        synthetic_pointer_driver_ =
+            SyntheticPointerDriver::Create(SyntheticGestureParams::TOUCH_INPUT);
       ForwardTouchInputEvents(timestamp, target);
       break;
     case SyntheticSmoothMoveGestureParams::MOUSE_DRAG_INPUT:
-      if (!synthetic_pointer_)
-        synthetic_pointer_ =
-            SyntheticPointer::Create(SyntheticGestureParams::MOUSE_INPUT);
+      if (!synthetic_pointer_driver_)
+        synthetic_pointer_driver_ =
+            SyntheticPointerDriver::Create(SyntheticGestureParams::MOUSE_INPUT);
       ForwardMouseClickInputEvents(timestamp, target);
       break;
     case SyntheticSmoothMoveGestureParams::MOUSE_WHEEL_INPUT:
@@ -149,6 +149,8 @@ void SyntheticSmoothMoveGesture::ForwardTouchInputEvents(
 void SyntheticSmoothMoveGesture::ForwardMouseWheelInputEvents(
     const base::TimeTicks& timestamp,
     SyntheticGestureTarget* target) {
+  blink::WebMouseWheelEvent::Phase phase =
+      blink::WebMouseWheelEvent::kPhaseChanged;
   switch (state_) {
     case STARTED:
       if (MoveIsNoOp()) {
@@ -157,6 +159,7 @@ void SyntheticSmoothMoveGesture::ForwardMouseWheelInputEvents(
       }
       ComputeNextMoveSegment();
       state_ = MOVING;
+      phase = blink::WebMouseWheelEvent::kPhaseBegan;
       // Fall through to forward the first event.
     case MOVING: {
       // Even though WebMouseWheelEvents take floating point deltas,
@@ -170,7 +173,7 @@ void SyntheticSmoothMoveGesture::ForwardMouseWheelInputEvents(
       gfx::Vector2d delta_discrete =
           FloorTowardZero(current_move_segment_total_delta -
                           current_move_segment_total_delta_discrete_);
-      ForwardMouseWheelEvent(target, delta_discrete, event_timestamp);
+      ForwardMouseWheelEvent(target, delta_discrete, phase, event_timestamp);
       current_move_segment_total_delta_discrete_ += delta_discrete;
 
       if (FinishedCurrentMoveSegment(event_timestamp)) {
@@ -180,6 +183,9 @@ void SyntheticSmoothMoveGesture::ForwardMouseWheelInputEvents(
           ForwardMouseWheelInputEvents(timestamp, target);
         } else {
           state_ = DONE;
+          ForwardMouseWheelEvent(target, gfx::Vector2d(),
+                                 blink::WebMouseWheelEvent::kPhaseEnded,
+                                 event_timestamp);
         }
       }
     } break;
@@ -240,15 +246,18 @@ void SyntheticSmoothMoveGesture::ForwardMouseClickInputEvents(
 void SyntheticSmoothMoveGesture::ForwardMouseWheelEvent(
     SyntheticGestureTarget* target,
     const gfx::Vector2dF& delta,
+    const blink::WebMouseWheelEvent::Phase phase,
     const base::TimeTicks& timestamp) const {
   blink::WebMouseWheelEvent mouse_wheel_event =
       SyntheticWebMouseWheelEventBuilder::Build(0, 0, delta.x(), delta.y(), 0,
                                                 false);
 
-  mouse_wheel_event.x = current_move_segment_start_position_.x();
-  mouse_wheel_event.y = current_move_segment_start_position_.y();
+  mouse_wheel_event.SetPositionInWidget(
+      current_move_segment_start_position_.x(),
+      current_move_segment_start_position_.y());
+  mouse_wheel_event.phase = phase;
 
-  mouse_wheel_event.timeStampSeconds = ConvertTimestampToSeconds(timestamp);
+  mouse_wheel_event.SetTimeStampSeconds(ConvertTimestampToSeconds(timestamp));
 
   target->DispatchInputEventToPlatform(mouse_wheel_event);
 }
@@ -256,10 +265,9 @@ void SyntheticSmoothMoveGesture::ForwardMouseWheelEvent(
 void SyntheticSmoothMoveGesture::PressPoint(SyntheticGestureTarget* target,
                                             const base::TimeTicks& timestamp) {
   DCHECK_EQ(current_move_segment_, 0);
-  synthetic_pointer_->Press(current_move_segment_start_position_.x(),
-                            current_move_segment_start_position_.y(), target,
-                            timestamp);
-  synthetic_pointer_->DispatchEvent(target, timestamp);
+  synthetic_pointer_driver_->Press(current_move_segment_start_position_.x(),
+                                   current_move_segment_start_position_.y());
+  synthetic_pointer_driver_->DispatchEvent(target, timestamp);
 }
 
 void SyntheticSmoothMoveGesture::MovePoint(SyntheticGestureTarget* target,
@@ -268,9 +276,8 @@ void SyntheticSmoothMoveGesture::MovePoint(SyntheticGestureTarget* target,
   DCHECK_GE(current_move_segment_, 0);
   DCHECK_LT(current_move_segment_, static_cast<int>(params_.distances.size()));
   gfx::PointF new_position = current_move_segment_start_position_ + delta;
-  synthetic_pointer_->Move(0, new_position.x(), new_position.y(), target,
-                           timestamp);
-  synthetic_pointer_->DispatchEvent(target, timestamp);
+  synthetic_pointer_driver_->Move(new_position.x(), new_position.y());
+  synthetic_pointer_driver_->DispatchEvent(target, timestamp);
 }
 
 void SyntheticSmoothMoveGesture::ReleasePoint(
@@ -284,8 +291,8 @@ void SyntheticSmoothMoveGesture::ReleasePoint(
     position = current_move_segment_start_position_ +
                GetPositionDeltaAtTime(timestamp);
   }
-  synthetic_pointer_->Release(0, target, timestamp);
-  synthetic_pointer_->DispatchEvent(target, timestamp);
+  synthetic_pointer_driver_->Release();
+  synthetic_pointer_driver_->DispatchEvent(target, timestamp);
 }
 
 void SyntheticSmoothMoveGesture::AddTouchSlopToFirstDistance(

@@ -7,11 +7,13 @@
 #ifndef CORE_FXCODEC_CODEC_CCODEC_JPEGMODULE_H_
 #define CORE_FXCODEC_CODEC_CCODEC_JPEGMODULE_H_
 
+#include <memory>
+
+#include "core/fxcrt/cfx_retain_ptr.h"
 #include "core/fxcrt/fx_system.h"
 
 class CCodec_ScanlineDecoder;
 class CFX_DIBSource;
-struct FXJPEG_Context;
 
 #ifdef PDF_ENABLE_XFA
 class CFX_DIBAttribute;
@@ -19,14 +21,17 @@ class CFX_DIBAttribute;
 
 class CCodec_JpegModule {
  public:
-  CCodec_JpegModule() {}
+  class Context {
+   public:
+    virtual ~Context() {}
+  };
 
-  CCodec_ScanlineDecoder* CreateDecoder(const uint8_t* src_buf,
-                                        uint32_t src_size,
-                                        int width,
-                                        int height,
-                                        int nComps,
-                                        bool ColorTransform);
+  std::unique_ptr<CCodec_ScanlineDecoder> CreateDecoder(const uint8_t* src_buf,
+                                                        uint32_t src_size,
+                                                        int width,
+                                                        int height,
+                                                        int nComps,
+                                                        bool ColorTransform);
   bool LoadInfo(const uint8_t* src_buf,
                 uint32_t src_size,
                 int* width,
@@ -34,28 +39,29 @@ class CCodec_JpegModule {
                 int* num_components,
                 int* bits_per_components,
                 bool* color_transform);
-  FXJPEG_Context* Start();
-  void Finish(FXJPEG_Context* pContext);
-  void Input(FXJPEG_Context* pContext,
-             const uint8_t* src_buf,
-             uint32_t src_size);
+
+  std::unique_ptr<Context> Start();
+  void Input(Context* pContext, const uint8_t* src_buf, uint32_t src_size);
 
 #ifndef PDF_ENABLE_XFA
-  int ReadHeader(FXJPEG_Context* pContext,
-                 int* width,
-                 int* height,
-                 int* nComps);
+  int ReadHeader(Context* pContext, int* width, int* height, int* nComps);
 #else   // PDF_ENABLE_XFA
-  int ReadHeader(FXJPEG_Context* pContext,
+  int ReadHeader(Context* pContext,
                  int* width,
                  int* height,
                  int* nComps,
                  CFX_DIBAttribute* pAttribute);
 #endif  // PDF_ENABLE_XFA
 
-  bool StartScanline(FXJPEG_Context* pContext, int down_scale);
-  bool ReadScanline(FXJPEG_Context* pContext, uint8_t* dest_buf);
-  uint32_t GetAvailInput(FXJPEG_Context* pContext, uint8_t** avail_buf_ptr);
+  bool StartScanline(Context* pContext, int down_scale);
+  bool ReadScanline(Context* pContext, uint8_t* dest_buf);
+  uint32_t GetAvailInput(Context* pContext, uint8_t** avail_buf_ptr);
+
+#if _FX_OS_ == _FX_WIN32_DESKTOP_ || _FX_OS_ == _FX_WIN64_DESKTOP_
+  static bool JpegEncode(const CFX_RetainPtr<CFX_DIBSource>& pSource,
+                         uint8_t** dest_buf,
+                         FX_STRSIZE* dest_size);
+#endif
 };
 
 #endif  // CORE_FXCODEC_CODEC_CCODEC_JPEGMODULE_H_

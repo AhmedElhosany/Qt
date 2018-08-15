@@ -13,6 +13,7 @@
 #include "SkPaint.h"
 #include "SkPath.h"
 #include "SkRandom.h"
+#include "SkClipOpPriv.h"
 
 constexpr int W = 150;
 constexpr int H = 200;
@@ -26,7 +27,7 @@ static void show_text(SkCanvas* canvas, bool doAA) {
 
     for (int i = 0; i < 200; ++i) {
         paint.setColor((SK_A32_MASK << SK_A32_SHIFT) | rand.nextU());
-        canvas->drawText("Hamburgefons", 12,
+        canvas->drawString("Hamburgefons",
                          rand.nextSScalar1() * W, rand.nextSScalar1() * H + 20,
                          paint);
     }
@@ -56,7 +57,7 @@ static void show_fill(SkCanvas* canvas, bool doAA) {
 
 static SkScalar randRange(SkRandom& rand, SkScalar min, SkScalar max) {
     SkASSERT(min <= max);
-    return min + SkScalarMul(rand.nextUScalar1(), max - min);
+    return min + rand.nextUScalar1() * (max - min);
 }
 
 static void show_stroke(SkCanvas* canvas, bool doAA, SkScalar strokeWidth, int n) {
@@ -142,7 +143,7 @@ protected:
             canvas->save();
             for (size_t i = 0; i < SK_ARRAY_COUNT(gProc); ++i) {
                 canvas->save();
-                canvas->clipPath(clipPath, SkCanvas::kIntersect_Op, SkToBool(aa));
+                canvas->clipPath(clipPath, kIntersect_SkClipOp, SkToBool(aa));
 //                canvas->drawColor(SK_ColorWHITE);
                 gProc[i](canvas, SkToBool(aa));
                 canvas->restore();

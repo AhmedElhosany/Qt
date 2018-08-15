@@ -10,8 +10,10 @@
 
 #include "base/callback.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/associated_binding_set.h"
 #include "mojo/public/cpp/bindings/associated_interface_request.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
@@ -24,7 +26,7 @@ class WebContentsImpl;
 // Base class for something which owns a mojo::AssociatedBindingSet on behalf
 // of a WebContents. See WebContentsFrameBindingSet<T> below.
 class CONTENT_EXPORT WebContentsBindingSet {
- protected:
+ public:
   class CONTENT_EXPORT Binder {
    public:
     virtual ~Binder() {}
@@ -34,6 +36,16 @@ class CONTENT_EXPORT WebContentsBindingSet {
         mojo::ScopedInterfaceEndpointHandle handle);
   };
 
+  void SetBinderForTesting(std::unique_ptr<Binder> binder) {
+    binder_for_testing_ = std::move(binder);
+  }
+
+  template <typename Interface>
+  static WebContentsBindingSet* GetForWebContents(WebContents* web_contents) {
+    return GetForWebContents(web_contents, Interface::Name_);
+  }
+
+ protected:
   WebContentsBindingSet(WebContents* web_contents,
                         const std::string& interface_name,
                         std::unique_ptr<Binder> binder);
@@ -42,12 +54,16 @@ class CONTENT_EXPORT WebContentsBindingSet {
  private:
   friend class WebContentsImpl;
 
+  static WebContentsBindingSet* GetForWebContents(WebContents* web_contents,
+                                                  const char* interface_name);
+
   void CloseAllBindings();
   void OnRequestForFrame(RenderFrameHost* render_frame_host,
                          mojo::ScopedInterfaceEndpointHandle handle);
 
   const base::Closure remove_callback_;
   std::unique_ptr<Binder> binder_;
+  std::unique_ptr<Binder> binder_for_testing_;
 
   DISALLOW_COPY_AND_ASSIGN(WebContentsBindingSet);
 };
@@ -98,8 +114,9 @@ class WebContentsFrameBindingSet : public WebContentsBindingSet {
  public:
   WebContentsFrameBindingSet(WebContents* web_contents, Interface* impl)
       : WebContentsBindingSet(
-          web_contents, Interface::Name_,
-          base::MakeUnique<FrameInterfaceBinder>(this, impl)) {}
+            web_contents,
+            Interface::Name_,
+            base::MakeUnique<FrameInterfaceBinder>(this, web_contents, impl)) {}
   ~WebContentsFrameBindingSet() {}
 
   // Returns the RenderFrameHost currently targeted by a message dispatch to
@@ -115,11 +132,12 @@ class WebContentsFrameBindingSet : public WebContentsBindingSet {
   }
 
  private:
-  class FrameInterfaceBinder : public Binder {
+  class FrameInterfaceBinder : public Binder, public WebContentsObserver {
    public:
     FrameInterfaceBinder(WebContentsFrameBindingSet* binding_set,
+                         WebContents* web_contents,
                          Interface* impl)
-        : impl_(impl), bindings_(mojo::BindingSetDispatchMode::WITH_CONTEXT) {
+        : WebContentsObserver(web_contents), impl_(impl) {
       bindings_.set_pre_dispatch_handler(
           base::Bind(&WebContentsFrameBindingSet::WillDispatchForContext,
                      base::Unretained(binding_set)));
@@ -131,19 +149,32 @@ class WebContentsFrameBindingSet : public WebContentsBindingSet {
     void OnRequestForFrame(
         RenderFrameHost* render_frame_host,
         mojo::ScopedInterfaceEndpointHandle handle) override {
-      mojo::AssociatedInterfaceRequest<Interface> request;
-      request.Bind(std::move(handle));
-      bindings_.AddBinding(impl_, std::move(request), render_frame_host);
+      auto id = bindings_.AddBinding(
+          impl_, mojo::AssociatedInterfaceRequest<Interface>(std::move(handle)),
+          render_frame_host);
+      frame_to_bindings_map_[render_frame_host].push_back(id);
+    }
+
+    // WebContentsObserver:
+    void RenderFrameDeleted(RenderFrameHost* render_frame_host) override {
+      auto it = frame_to_bindings_map_.find(render_frame_host);
+      if (it == frame_to_bindings_map_.end())
+        return;
+      for (auto id : it->second)
+        bindings_.RemoveBinding(id);
+      frame_to_bindings_map_.erase(it);
     }
 
     Interface* const impl_;
-    mojo::AssociatedBindingSet<Interface> bindings_;
+    mojo::AssociatedBindingSet<Interface, RenderFrameHost*> bindings_;
+    std::map<RenderFrameHost*, std::vector<mojo::BindingId>>
+        frame_to_bindings_map_;
 
     DISALLOW_COPY_AND_ASSIGN(FrameInterfaceBinder);
   };
 
-  void WillDispatchForContext(void* context) {
-    current_target_frame_ = static_cast<RenderFrameHost*>(context);
+  void WillDispatchForContext(RenderFrameHost* const& frame_host) {
+    current_target_frame_ = frame_host;
   }
 
   RenderFrameHost* current_target_frame_ = nullptr;

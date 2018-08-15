@@ -263,7 +263,7 @@ Q_GLOBAL_STATIC(QStartUpFuncList, preRList)
 typedef QList<QtCleanUpFunction> QVFuncList;
 Q_GLOBAL_STATIC(QVFuncList, postRList)
 #ifndef QT_NO_QOBJECT
-static QBasicMutex globalPreRoutinesMutex;
+static QBasicMutex globalRoutinesMutex;
 #endif
 
 /*!
@@ -277,13 +277,15 @@ void qAddPreRoutine(QtStartUpFunction p)
     QStartUpFuncList *list = preRList();
     if (!list)
         return;
+
+    if (QCoreApplication::instance())
+        p();
+
     // Due to C++11 parallel dynamic initialization, this can be called
     // from multiple threads.
 #ifndef QT_NO_THREAD
-    QMutexLocker locker(&globalPreRoutinesMutex);
+    QMutexLocker locker(&globalRoutinesMutex);
 #endif
-    if (QCoreApplication::instance())
-        p();
     list->prepend(p); // in case QCoreApplication is re-created, see qt_call_pre_routines
 }
 
@@ -292,6 +294,9 @@ void qAddPostRoutine(QtCleanUpFunction p)
     QVFuncList *list = postRList();
     if (!list)
         return;
+#ifndef QT_NO_THREAD
+    QMutexLocker locker(&globalRoutinesMutex);
+#endif
     list->prepend(p);
 }
 
@@ -300,6 +305,9 @@ void qRemovePostRoutine(QtCleanUpFunction p)
     QVFuncList *list = postRList();
     if (!list)
         return;
+#ifndef QT_NO_THREAD
+    QMutexLocker locker(&globalRoutinesMutex);
+#endif
     list->removeAll(p);
 }
 
@@ -308,15 +316,18 @@ static void qt_call_pre_routines()
     if (!preRList.exists())
         return;
 
+    QVFuncList list;
+    {
 #ifndef QT_NO_THREAD
-    QMutexLocker locker(&globalPreRoutinesMutex);
+        QMutexLocker locker(&globalRoutinesMutex);
 #endif
-    QVFuncList *list = &(*preRList);
-    // Unlike qt_call_post_routines, we don't empty the list, because
-    // Q_COREAPP_STARTUP_FUNCTION is a macro, so the user expects
-    // the function to be executed every time QCoreApplication is created.
-    for (int i = 0; i < list->count(); ++i)
-        list->at(i)();
+        // Unlike qt_call_post_routines, we don't empty the list, because
+        // Q_COREAPP_STARTUP_FUNCTION is a macro, so the user expects
+        // the function to be executed every time QCoreApplication is created.
+        list = *preRList;
+    }
+    for (int i = 0; i < list.count(); ++i)
+        list.at(i)();
 }
 
 void Q_CORE_EXPORT qt_call_post_routines()
@@ -324,9 +335,21 @@ void Q_CORE_EXPORT qt_call_post_routines()
     if (!postRList.exists())
         return;
 
-    QVFuncList *list = &(*postRList);
-    while (!list->isEmpty())
-        (list->takeFirst())();
+    forever {
+        QVFuncList list;
+        {
+            // extract the current list and make the stored list empty
+#ifndef QT_NO_THREAD
+            QMutexLocker locker(&globalRoutinesMutex);
+#endif
+            qSwap(*postRList, list);
+        }
+
+        if (list.isEmpty())
+            break;
+        for (QtCleanUpFunction f : qAsConst(list))
+            f();
+    }
 }
 
 
@@ -437,6 +460,9 @@ QCoreApplicationPrivate::QCoreApplicationPrivate(int &aargc, char **aargv, uint 
     , q_ptr(0)
 #endif
 {
+#if defined(Q_OS_DARWIN)
+    qt_apple_check_os_version();
+#endif
     app_compile_version = flags & 0xffffff;
     static const char *const empty = "";
     if (argc == 0 || argv == 0) {
@@ -1022,6 +1048,21 @@ bool QCoreApplication::notifyInternal2(QObject *receiver, QEvent *event)
     if (!selfRequired)
         return doNotify(receiver, event);
     return self->notify(receiver, event);
+}
+
+/*!
+    \internal
+    \since 5.10
+
+    Forwards the \a event to the \a receiver, using the spontaneous
+    state of the \a originatingEvent if specified.
+*/
+bool QCoreApplication::forwardEvent(QObject *receiver, QEvent *event, QEvent *originatingEvent)
+{
+    if (event && originatingEvent)
+        event->spont = originatingEvent->spont;
+
+    return notifyInternal2(receiver, event);
 }
 
 /*!
@@ -1937,7 +1978,10 @@ bool QCoreApplication::installTranslator(QTranslator *translationFile)
     if (!QCoreApplicationPrivate::checkInstance("installTranslator"))
         return false;
     QCoreApplicationPrivate *d = self->d_func();
-    d->translators.prepend(translationFile);
+    {
+        QWriteLocker locker(&d->translateMutex);
+        d->translators.prepend(translationFile);
+    }
 
 #ifndef QT_NO_TRANSLATION_BUILDER
     if (translationFile->isEmpty())
@@ -1969,8 +2013,10 @@ bool QCoreApplication::removeTranslator(QTranslator *translationFile)
     if (!QCoreApplicationPrivate::checkInstance("removeTranslator"))
         return false;
     QCoreApplicationPrivate *d = self->d_func();
+    QWriteLocker locker(&d->translateMutex);
     if (d->translators.removeAll(translationFile)) {
 #ifndef QT_NO_QOBJECT
+        locker.unlock();
         if (!self->closingDown()) {
             QEvent ev(QEvent::LanguageChange);
             QCoreApplication::sendEvent(self, &ev);
@@ -2006,7 +2052,7 @@ static void replacePercentN(QString *result, int n)
 }
 
 /*!
-    \reentrant
+    \threadsafe
 
     Returns the translation text for \a sourceText, by querying the
     installed translation files. The translation files are searched
@@ -2035,13 +2081,7 @@ static void replacePercentN(QString *result, int n)
     This function is not virtual. You can use alternative translation
     techniques by subclassing \l QTranslator.
 
-    \warning This method is reentrant only if all translators are
-    installed \e before calling this method. Installing or removing
-    translators while performing translations is not supported. Doing
-    so will most likely result in crashes or other undesirable
-    behavior.
-
-    \sa QObject::tr(), installTranslator()
+    \sa QObject::tr(), installTranslator(), removeTranslator(), translate()
 */
 QString QCoreApplication::translate(const char *context, const char *sourceText,
                                     const char *disambiguation, int n)
@@ -2051,14 +2091,18 @@ QString QCoreApplication::translate(const char *context, const char *sourceText,
     if (!sourceText)
         return result;
 
-    if (self && !self->d_func()->translators.isEmpty()) {
-        QList<QTranslator*>::ConstIterator it;
-        QTranslator *translationFile;
-        for (it = self->d_func()->translators.constBegin(); it != self->d_func()->translators.constEnd(); ++it) {
-            translationFile = *it;
-            result = translationFile->translate(context, sourceText, disambiguation, n);
-            if (!result.isNull())
-                break;
+    if (self) {
+        QCoreApplicationPrivate *d = self->d_func();
+        QReadLocker locker(&d->translateMutex);
+        if (!d->translators.isEmpty()) {
+            QList<QTranslator*>::ConstIterator it;
+            QTranslator *translationFile;
+            for (it = d->translators.constBegin(); it != d->translators.constEnd(); ++it) {
+                translationFile = *it;
+                result = translationFile->translate(context, sourceText, disambiguation, n);
+                if (!result.isNull())
+                    break;
+            }
         }
     }
 
@@ -2082,8 +2126,11 @@ QString qtTrId(const char *id, int n)
 
 bool QCoreApplicationPrivate::isTranslatorInstalled(QTranslator *translator)
 {
-    return QCoreApplication::self
-           && QCoreApplication::self->d_func()->translators.contains(translator);
+    if (!QCoreApplication::self)
+        return false;
+    QCoreApplicationPrivate *d = QCoreApplication::self->d_func();
+    QReadLocker locker(&d->translateMutex);
+    return d->translators.contains(translator);
 }
 
 #else
@@ -2865,6 +2912,7 @@ void QCoreApplication::setEventDispatcher(QAbstractEventDispatcher *eventDispatc
 
 /*!
     \fn void qAddPostRoutine(QtCleanUpFunction ptr)
+    \threadsafe
     \relates QCoreApplication
 
     Adds a global routine that will be called from the QCoreApplication
@@ -2878,10 +2926,10 @@ void QCoreApplication::setEventDispatcher(QAbstractEventDispatcher *eventDispatc
 
     \snippet code/src_corelib_kernel_qcoreapplication.cpp 4
 
-    Note that for an application- or module-wide cleanup, qaddPostRoutine()
+    Note that for an application- or module-wide cleanup, qAddPostRoutine()
     is often not suitable. For example, if the program is split into dynamically
     loaded modules, the relevant module may be unloaded long before the
-    QCoreApplication destructor is called. In such cases, if using qaddPostRoutine()
+    QCoreApplication destructor is called. In such cases, if using qAddPostRoutine()
     is still desirable, qRemovePostRoutine() can be used to prevent a routine
     from being called by the QCoreApplication destructor. For example, if that
     routine was called before the module was unloaded.
@@ -2897,11 +2945,14 @@ void QCoreApplication::setEventDispatcher(QAbstractEventDispatcher *eventDispatc
     By selecting the right parent object, this can often be made to
     clean up the module's data at the right moment.
 
+    \note This function has been thread-safe since Qt 5.10.
+
     \sa qRemovePostRoutine()
 */
 
 /*!
     \fn void qRemovePostRoutine(QtCleanUpFunction ptr)
+    \threadsafe
     \relates QCoreApplication
     \since 5.3
 
@@ -2909,6 +2960,8 @@ void QCoreApplication::setEventDispatcher(QAbstractEventDispatcher *eventDispatc
     routines called by the QCoreApplication destructor. The routine
     must have been previously added to the list by a call to
     qAddPostRoutine(), otherwise this function has no effect.
+
+    \note This function has been thread-safe since Qt 5.10.
 
     \sa qAddPostRoutine()
 */

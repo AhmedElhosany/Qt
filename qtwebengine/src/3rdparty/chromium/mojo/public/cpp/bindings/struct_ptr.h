@@ -6,10 +6,12 @@
 #define MOJO_PUBLIC_CPP_BINDINGS_STRUCT_PTR_H_
 
 #include <functional>
+#include <memory>
 #include <new>
 
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/optional.h"
 #include "mojo/public/cpp/bindings/lib/hash_util.h"
 #include "mojo/public/cpp/bindings/type_converter.h"
 
@@ -17,15 +19,6 @@ namespace mojo {
 namespace internal {
 
 constexpr size_t kHashSeed = 31;
-
-template <typename Struct>
-class StructHelper {
- public:
-  template <typename Ptr>
-  static void Initialize(Ptr* ptr) {
-    ptr->Initialize();
-  }
-};
 
 template <typename Struct>
 class StructPtrWTFHelper;
@@ -41,35 +34,34 @@ class StructPtr {
  public:
   using Struct = S;
 
-  StructPtr() : ptr_(nullptr) {}
-  StructPtr(decltype(nullptr)) : ptr_(nullptr) {}
+  StructPtr() = default;
+  StructPtr(decltype(nullptr)) {}
 
-  ~StructPtr() { delete ptr_; }
+  ~StructPtr() = default;
 
   StructPtr& operator=(decltype(nullptr)) {
     reset();
     return *this;
   }
 
-  StructPtr(StructPtr&& other) : ptr_(nullptr) { Take(&other); }
+  StructPtr(StructPtr&& other) { Take(&other); }
   StructPtr& operator=(StructPtr&& other) {
     Take(&other);
     return *this;
   }
+
+  template <typename... Args>
+  StructPtr(base::in_place_t, Args&&... args)
+      : ptr_(new Struct(std::forward<Args>(args)...)) {}
 
   template <typename U>
   U To() const {
     return TypeConverter<U, StructPtr>::Convert(*this);
   }
 
-  void reset() {
-    if (ptr_) {
-      delete ptr_;
-      ptr_ = nullptr;
-    }
-  }
+  void reset() { ptr_.reset(); }
 
-  bool is_null() const { return ptr_ == nullptr; }
+  bool is_null() const { return !ptr_; }
 
   Struct& operator*() const {
     DCHECK(ptr_);
@@ -77,9 +69,9 @@ class StructPtr {
   }
   Struct* operator->() const {
     DCHECK(ptr_);
-    return ptr_;
+    return ptr_.get();
   }
-  Struct* get() const { return ptr_; }
+  Struct* get() const { return ptr_.get(); }
 
   void Swap(StructPtr* other) { std::swap(ptr_, other->ptr_); }
 
@@ -89,7 +81,8 @@ class StructPtr {
   StructPtr Clone() const { return is_null() ? StructPtr() : ptr_->Clone(); }
 
   // Compares the pointees (which might both be null).
-  // TODO(tibell): Get rid of Equals in favor of the operator. Same for Hash.
+  // TODO(crbug.com/735302): Get rid of Equals in favor of the operator. Same
+  // for Hash.
   bool Equals(const StructPtr& other) const {
     if (is_null() || other.is_null())
       return is_null() && other.is_null();
@@ -106,20 +99,13 @@ class StructPtr {
   explicit operator bool() const { return !is_null(); }
 
  private:
-  friend class internal::StructHelper<Struct>;
   friend class internal::StructPtrWTFHelper<Struct>;
-
-  void Initialize() {
-    DCHECK(!ptr_);
-    ptr_ = new Struct();
-  }
-
   void Take(StructPtr* other) {
     reset();
     Swap(other);
   }
 
-  Struct* ptr_;
+  std::unique_ptr<Struct> ptr_;
 
   DISALLOW_COPY_AND_ASSIGN(StructPtr);
 };
@@ -154,6 +140,10 @@ class InlinedStructPtr {
     Take(&other);
     return *this;
   }
+
+  template <typename... Args>
+  InlinedStructPtr(base::in_place_t, Args&&... args)
+      : value_(std::forward<Args>(args)...), state_(VALID) {}
 
   template <typename U>
   U To() const {
@@ -204,11 +194,7 @@ class InlinedStructPtr {
   explicit operator bool() const { return !is_null(); }
 
  private:
-  friend class internal::StructHelper<Struct>;
   friend class internal::InlinedStructPtrWTFHelper<Struct>;
-
-  void Initialize() { state_ = VALID; }
-
   void Take(InlinedStructPtr* other) {
     reset();
     Swap(other);
@@ -243,7 +229,7 @@ template <typename Struct>
 class StructPtrWTFHelper {
  public:
   static bool IsHashTableDeletedValue(const StructPtr<Struct>& value) {
-    return value.ptr_ == reinterpret_cast<Struct*>(1u);
+    return value.ptr_.get() == reinterpret_cast<Struct*>(1u);
   }
 
   static void ConstructDeletedValue(mojo::StructPtr<Struct>& slot) {
@@ -254,7 +240,7 @@ class StructPtrWTFHelper {
     // Dirty trick: implant an invalid pointer in |ptr_|. Destructor isn't
     // called for deleted buckets, so this is okay.
     new (&slot) StructPtr<Struct>();
-    slot.ptr_ = reinterpret_cast<Struct*>(1u);
+    slot.ptr_.reset(reinterpret_cast<Struct*>(1u));
   }
 };
 

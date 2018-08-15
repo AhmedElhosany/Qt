@@ -7,36 +7,36 @@
 #ifndef CORE_FXCODEC_CODEC_CCODEC_PNGMODULE_H_
 #define CORE_FXCODEC_CODEC_CCODEC_PNGMODULE_H_
 
+#include <memory>
+
 #include "core/fxcrt/fx_system.h"
 
 class CFX_DIBAttribute;
-struct FXPNG_Context;
-
-#define PNG_ERROR_SIZE 256
 
 class CCodec_PngModule {
  public:
-  CCodec_PngModule() { FXSYS_memset(m_szLastError, 0, sizeof(m_szLastError)); }
+  class Context {
+   public:
+    virtual ~Context() {}
+  };
 
-  FXPNG_Context* Start(void* pModule);
-  void Finish(FXPNG_Context* pContext);
-  bool Input(FXPNG_Context* pContext,
+  class Delegate {
+   public:
+    virtual bool PngReadHeader(int width,
+                               int height,
+                               int bpc,
+                               int pass,
+                               int* color_type,
+                               double* gamma) = 0;
+    virtual bool PngAskScanlineBuf(int line, uint8_t*& src_buf) = 0;
+    virtual void PngFillScanlineBufCompleted(int pass, int line) = 0;
+  };
+
+  std::unique_ptr<Context> Start(Delegate* pDelegate);
+  bool Input(Context* pContext,
              const uint8_t* src_buf,
              uint32_t src_size,
              CFX_DIBAttribute* pAttribute);
-
-  bool (*ReadHeaderCallback)(void* pModule,
-                             int width,
-                             int height,
-                             int bpc,
-                             int pass,
-                             int* color_type,
-                             double* gamma);
-  bool (*AskScanlineBufCallback)(void* pModule, int line, uint8_t*& src_buf);
-  void (*FillScanlineBufCompletedCallback)(void* pModule, int pass, int line);
-
- protected:
-  FX_CHAR m_szLastError[PNG_ERROR_SIZE];
 };
 
 #endif  // CORE_FXCODEC_CODEC_CCODEC_PNGMODULE_H_

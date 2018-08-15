@@ -34,6 +34,10 @@ class CommandLine;
 class FilePath;
 }
 
+namespace discardable_memory {
+class ClientDiscardableSharedMemoryManager;
+}
+
 namespace IPC {
 struct ChannelHandle;
 }
@@ -171,6 +175,9 @@ class PpapiThread : public ChildThreadImpl,
   // Caches the handle to the peer process if this is a broker.
   base::win::ScopedHandle peer_handle_;
 #endif
+
+  std::unique_ptr<discardable_memory::ClientDiscardableSharedMemoryManager>
+      discardable_shared_memory_manager_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(PpapiThread);
 };

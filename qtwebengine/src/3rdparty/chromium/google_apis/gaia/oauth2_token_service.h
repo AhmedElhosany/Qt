@@ -16,7 +16,7 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/threading/non_thread_safe.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
@@ -53,7 +53,7 @@ class OAuth2TokenServiceDelegate;
 //
 // The caller of StartRequest() owns the returned request and is responsible to
 // delete the request even once the callback has been invoked.
-class OAuth2TokenService : public base::NonThreadSafe {
+class OAuth2TokenService {
  public:
   // A set of scopes in OAuth2 authentication.
   typedef std::set<std::string> ScopeSet;
@@ -93,8 +93,12 @@ class OAuth2TokenService : public base::NonThreadSafe {
    public:
     // Called whenever a new login-scoped refresh token is available for
     // account |account_id|. Once available, access tokens can be retrieved for
-    // this account.  This is called during initial startup for each token
-    // loaded.
+    // this account. This is called during initial startup for each token
+    // loaded (and any time later when, e.g., credentials change). When called,
+    // any pending token request is cancelled and needs to be retried. Such a
+    // pending request can easily occur on Android, where refresh tokens are
+    // held by the OS and are thus often available on startup even before
+    // OnRefreshTokenAvailable() is called.
     virtual void OnRefreshTokenAvailable(const std::string& account_id) {}
     // Called whenever the login-scoped refresh token becomes unavailable for
     // account |account_id|.
@@ -132,7 +136,8 @@ class OAuth2TokenService : public base::NonThreadSafe {
                                 const ScopeSet& scopes) = 0;
   };
 
-  explicit OAuth2TokenService(OAuth2TokenServiceDelegate* delegate);
+  explicit OAuth2TokenService(
+      std::unique_ptr<OAuth2TokenServiceDelegate> delegate);
   virtual ~OAuth2TokenService();
 
   // Add or remove observers of this token service.
@@ -209,13 +214,13 @@ class OAuth2TokenService : public base::NonThreadSafe {
       const ScopeSet& scopes) const;
 
   OAuth2TokenServiceDelegate* GetDelegate();
+  const OAuth2TokenServiceDelegate* GetDelegate() const;
 
  protected:
   // Implements a cancelable |OAuth2TokenService::Request|, which should be
   // operated on the UI thread.
   // TODO(davidroche): move this out of header file.
   class RequestImpl : public base::SupportsWeakPtr<RequestImpl>,
-                      public base::NonThreadSafe,
                       public Request {
    public:
     // |consumer| is required to outlive this.
@@ -236,6 +241,8 @@ class OAuth2TokenService : public base::NonThreadSafe {
     // |consumer_| to call back when this request completes.
     const std::string account_id_;
     Consumer* const consumer_;
+
+    SEQUENCE_CHECKER(sequence_checker_);
   };
 
   // Implement it in delegates if they want to report errors to the user.
@@ -381,6 +388,8 @@ class OAuth2TokenService : public base::NonThreadSafe {
   FRIEND_TEST_ALL_PREFIXES(OAuth2TokenServiceTest,
                            SameScopesRequestedForDifferentClients);
   FRIEND_TEST_ALL_PREFIXES(OAuth2TokenServiceTest, UpdateClearsCache);
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(OAuth2TokenService);
 };

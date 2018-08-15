@@ -24,16 +24,22 @@ class CONTENT_EXPORT InterstitialPageNavigatorImpl : public Navigator {
       InterstitialPageImpl* interstitial,
       NavigationControllerImpl* navigation_controller);
 
+  // Navigator implementation.
   NavigatorDelegate* GetDelegate() override;
   NavigationController* GetController() override;
   void DidStartProvisionalLoad(
       RenderFrameHostImpl* render_frame_host,
       const GURL& url,
+      const std::vector<GURL>& redirect_chain,
       const base::TimeTicks& navigation_start) override;
   void DidNavigate(
       RenderFrameHostImpl* render_frame_host,
       const FrameHostMsg_DidCommitProvisionalLoad_Params& input_params,
       std::unique_ptr<NavigationHandleImpl> navigation_handle) override;
+
+  // Disables any further action when the interstitial page is preparing to
+  // delete itself.
+  void Disable();
 
  private:
   ~InterstitialPageNavigatorImpl() override;
@@ -44,6 +50,10 @@ class CONTENT_EXPORT InterstitialPageNavigatorImpl : public Navigator {
 
   // The NavigationController associated with this navigator.
   NavigationControllerImpl* controller_;
+
+  // Whether this interstitial is still enabled.  Becomes false when the
+  // interstitial page is asychronously deleting itself.
+  bool enabled_;
 
   DISALLOW_COPY_AND_ASSIGN(InterstitialPageNavigatorImpl);
 };

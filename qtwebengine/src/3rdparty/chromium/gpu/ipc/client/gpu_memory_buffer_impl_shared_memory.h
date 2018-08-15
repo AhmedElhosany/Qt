@@ -26,7 +26,7 @@ class GPU_EXPORT GpuMemoryBufferImplSharedMemory : public GpuMemoryBufferImpl {
       gfx::BufferFormat format,
       const DestructionCallback& callback);
 
-  static gfx::GpuMemoryBufferHandle AllocateForChildProcess(
+  static gfx::GpuMemoryBufferHandle CreateGpuMemoryBuffer(
       gfx::GpuMemoryBufferId id,
       const gfx::Size& size,
       gfx::BufferFormat format);
@@ -55,6 +55,8 @@ class GPU_EXPORT GpuMemoryBufferImplSharedMemory : public GpuMemoryBufferImpl {
   void Unmap() override;
   int stride(size_t plane) const override;
   gfx::GpuMemoryBufferHandle GetHandle() const override;
+  base::trace_event::MemoryAllocatorDumpGuid GetGUIDForTracing(
+      uint64_t tracing_process_id) const override;
 
  private:
   GpuMemoryBufferImplSharedMemory(

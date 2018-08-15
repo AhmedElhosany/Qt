@@ -40,7 +40,7 @@ $version = "9.1.9-1"
 $packagex64 = "C:\Windows\temp\postgresql-$version-windows-x64-binaries.zip"
 $packagex86 = "C:\Windows\temp\postgresql-$version-windows-binaries.zip"
 
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     # Install x64 bit versions
     $architecture = "x64"
     $installFolder = "C:\Utils\postgresql\pgsql"
@@ -48,17 +48,18 @@ if (Is64BitWinHost) {
     $internalUrl = "\\ci-files01-hki.intra.qt.io\provisioning\windows\postgresql-$version-windows-x64-binaries.zip"
     $sha1 = "4da0453cdfda335e064d4437cf5bb9d356054cfd"
 
-    Write-Host "Fetching from URL ..."
+    echo "Fetching from URL ..."
     Download $externalUrl $internalUrl $packagex64
     Verify-Checksum $packagex64 $sha1
-    Write-Host "Installing $packagex64 ..."
+    echo "Installing $packagex64 ..."
     Extract-Dev-Folders-From-Zip $packagex64 "pgsql" $installFolder
 
-    Write-Host "Remove downloaded $packagex64 ..."
-    Remove-Item -Path $packagex64
+    echo "Remove downloaded $packagex64 ..."
+    Remove-Item $packagex64
 
-    Set-EnvironmentVariable "POSTGRESQL_INCLUDE_x64" "$installFolder\include"
-    Set-EnvironmentVariable "POSTGRESQL_LIB_x64" "$installFolder\lib"
+    echo "Set $architecture environment variables ..."
+    [Environment]::SetEnvironmentVariable("POSTGRESQL_INCLUDE_x64", "$installFolder\include", "Machine")
+    [Environment]::SetEnvironmentVariable("POSTGRESQL_LIB_x64", "$installFolder\lib", "Machine")
 }
 
 # Install x86 bit version
@@ -66,24 +67,26 @@ $architecture = "x86"
 $externalUrl = "http://get.enterprisedb.com/postgresql/postgresql-$version-windows-binaries.zip"
 $internalUrl = "\\ci-files01-hki.intra.qt.io\provisioning\windows\postgresql-$version-windows-binaries.zip"
 $sha1 = "eb4f01845e1592800edbb74f60944b6c0aca51a9"
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     $installFolder = "C:\Utils\postgresql$architecture\pgsql"
-} else {
+}
+else {
     $installFolder = "C:\Utils\postgresql\pgsql"
 }
 
 
-Write-Host "Fetching from URL..."
+echo "Fetching from URL..."
 Download $externalUrl $internalUrl $packagex86
 Verify-Checksum $packagex86 $sha1
-Write-Host "Installing $packagex86 ..."
+echo "Installing $packagex86 ..."
 Extract-Dev-Folders-From-Zip $packagex86 "pgsql" $installFolder
 
-Write-Host "Remove downloaded $packagex86 ..."
-Remove-Item -Path $packagex86
+echo "Remove downloaded $packagex86 ..."
+Remove-Item $packagex86
 
-Set-EnvironmentVariable "POSTGRESQL_INCLUDE_x86" "$installFolder\include"
-Set-EnvironmentVariable "POSTGRESQL_LIB_x86" "$installFolder\lib"
+echo "Set $architecture environment variables ..."
+[Environment]::SetEnvironmentVariable("POSTGRESQL_INCLUDE_x86", "$installFolder\include", "Machine")
+[Environment]::SetEnvironmentVariable("POSTGRESQL_LIB_x86", "$installFolder\lib", "Machine")
 
 # Store version information to ~/versions.txt, which is used to print version information to provision log.
-Write-Output "PostgreSQL = $version" >> ~/versions.txt
+echo "PostgreSQL = $version" >> ~/versions.txt

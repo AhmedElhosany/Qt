@@ -4,32 +4,44 @@
 
 #include "modules/shapedetection/DetectedBarcode.h"
 
-#include "core/dom/DOMRect.h"
+#include "core/geometry/DOMRect.h"
 
 namespace blink {
 
-DetectedBarcode* DetectedBarcode::create() {
-  return new DetectedBarcode(emptyString(), DOMRect::create(0, 0, 0, 0));
+DetectedBarcode* DetectedBarcode::Create() {
+  HeapVector<Point2D> empty_list;
+  return new DetectedBarcode(g_empty_string, DOMRect::Create(0, 0, 0, 0),
+                             empty_list);
 }
 
-DetectedBarcode* DetectedBarcode::create(String rawValue,
-                                         DOMRect* boundingBox) {
-  return new DetectedBarcode(rawValue, boundingBox);
+DetectedBarcode* DetectedBarcode::Create(String raw_value,
+                                         DOMRect* bounding_box,
+                                         HeapVector<Point2D> corner_points) {
+  return new DetectedBarcode(raw_value, bounding_box, corner_points);
 }
 
 const String& DetectedBarcode::rawValue() const {
-  return m_rawValue;
+  return raw_value_;
 }
 
 DOMRect* DetectedBarcode::boundingBox() const {
-  return m_boundingBox.get();
+  return bounding_box_.Get();
 }
 
-DetectedBarcode::DetectedBarcode(String rawValue, DOMRect* boundingBox)
-    : m_rawValue(rawValue), m_boundingBox(boundingBox) {}
+const HeapVector<Point2D>& DetectedBarcode::cornerPoints() const {
+  return corner_points_;
+}
+
+DetectedBarcode::DetectedBarcode(String raw_value,
+                                 DOMRect* bounding_box,
+                                 HeapVector<Point2D> corner_points)
+    : raw_value_(raw_value),
+      bounding_box_(bounding_box),
+      corner_points_(corner_points) {}
 
 DEFINE_TRACE(DetectedBarcode) {
-  visitor->trace(m_boundingBox);
+  visitor->Trace(bounding_box_);
+  visitor->Trace(corner_points_);
 }
 
 }  // namespace blink

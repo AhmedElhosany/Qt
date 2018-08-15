@@ -7,8 +7,8 @@
 
 #include <memory>
 
-#include "cc/base/cc_export.h"
-#include "third_party/skia/include/core/SkXfermode.h"
+#include "cc/cc_export.h"
+#include "third_party/skia/include/core/SkBlendMode.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/transform.h"
 
@@ -32,19 +32,19 @@ class CC_EXPORT SharedQuadState {
   ~SharedQuadState();
 
   void SetAll(const gfx::Transform& quad_to_target_transform,
-              const gfx::Size& layer_bounds,
+              const gfx::Rect& layer_rect,
               const gfx::Rect& visible_layer_rect,
               const gfx::Rect& clip_rect,
               bool is_clipped,
               float opacity,
-              SkXfermode::Mode blend_mode,
+              SkBlendMode blend_mode,
               int sorting_context_id);
   void AsValueInto(base::trace_event::TracedValue* dict) const;
 
   // Transforms quad rects into the target content space.
   gfx::Transform quad_to_target_transform;
-  // The size of the quads' originating layer in the space of the quad rects.
-  gfx::Size quad_layer_bounds;
+  // The rect of the quads' originating layer in the space of the quad rects.
+  gfx::Rect quad_layer_rect;
   // The size of the visible area in the quads' originating layer, in the space
   // of the quad rects.
   gfx::Rect visible_quad_layer_rect;
@@ -52,7 +52,7 @@ class CC_EXPORT SharedQuadState {
   gfx::Rect clip_rect;
   bool is_clipped;
   float opacity;
-  SkXfermode::Mode blend_mode;
+  SkBlendMode blend_mode;
   int sorting_context_id;
 };
 

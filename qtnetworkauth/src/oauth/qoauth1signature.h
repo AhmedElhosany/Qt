@@ -90,10 +90,9 @@ public:
 
     QByteArray hmacSha1() const;
     QByteArray rsaSha1() const;
-    QByteArray plainText(const QString &clientIdentifier) const;
+    QByteArray plainText() const;
 
-    static QByteArray plainText(const QString &clientIdentifier, const QString clientSharedKey);
-    static QByteArray plainText(const QPair<QString, QString> &clientCredentials);
+    static QByteArray plainText(const QString &clientSharedSecret, const QString &tokenSecret);
 
     void swap(QOAuth1Signature &other);
     QOAuth1Signature &operator=(const QOAuth1Signature &other);

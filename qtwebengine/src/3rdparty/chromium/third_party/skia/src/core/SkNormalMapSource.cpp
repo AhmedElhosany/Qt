@@ -7,37 +7,34 @@
 
 #include "SkNormalMapSource.h"
 
+#include "SkArenaAlloc.h"
 #include "SkLightingShader.h"
 #include "SkMatrix.h"
 #include "SkNormalSource.h"
-#include "SkNormalSourcePriv.h"
 #include "SkPM4f.h"
 #include "SkReadBuffer.h"
 #include "SkWriteBuffer.h"
 
 #if SK_SUPPORT_GPU
 #include "GrCoordTransform.h"
-#include "GrInvariantOutput.h"
-#include "GrTextureParams.h"
+#include "GrSamplerParams.h"
 #include "glsl/GrGLSLFragmentProcessor.h"
 #include "glsl/GrGLSLFragmentShaderBuilder.h"
 #include "SkGr.h"
 
 class NormalMapFP : public GrFragmentProcessor {
 public:
-    NormalMapFP(sk_sp<GrFragmentProcessor> mapFP, const SkMatrix& invCTM)
-        : fInvCTM(invCTM) {
-        this->registerChildProcessor(mapFP);
-
-        this->initClassID<NormalMapFP>();
+    static sk_sp<GrFragmentProcessor> Make(sk_sp<GrFragmentProcessor> mapFP,
+                                           const SkMatrix& invCTM) {
+        return sk_sp<GrFragmentProcessor>(new NormalMapFP(std::move(mapFP), invCTM));
     }
 
-    class GLSLNormalMapFP : public GLSLNormalFP {
+    class GLSLNormalMapFP : public GrGLSLFragmentProcessor {
     public:
         GLSLNormalMapFP()
             : fColumnMajorInvCTM22{0.0f} {}
 
-        void onEmitCode(EmitArgs& args) override {
+        void emitCode(EmitArgs& args) override {
             GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
             GrGLSLUniformHandler* uniformHandler = args.fUniformHandler;
 
@@ -47,7 +44,7 @@ public:
                                                    kDefault_GrSLPrecision, "Xform", &xformUniName);
 
             SkString dstNormalColorName("dstNormalColor");
-            this->emitChild(0, nullptr, &dstNormalColorName, args);
+            this->emitChild(0, &dstNormalColorName, args);
             fragBuilder->codeAppendf("vec3 normal = normalize(%s.rgb - vec3(0.5));",
                                      dstNormalColorName.c_str());
 
@@ -73,13 +70,13 @@ public:
             fragBuilder->codeAppend( "}");
         }
 
-        static void GenKey(const GrProcessor&, const GrGLSLCaps&, GrProcessorKeyBuilder* b) {
+        static void GenKey(const GrProcessor&, const GrShaderCaps&, GrProcessorKeyBuilder* b) {
             b->add32(0x0);
         }
 
-    protected:
-        void setNormalData(const GrGLSLProgramDataManager& pdman,
-                           const GrProcessor& proc) override {
+    private:
+        void onSetData(const GrGLSLProgramDataManager& pdman,
+                       const GrFragmentProcessor& proc) override {
             const NormalMapFP& normalMapFP = proc.cast<NormalMapFP>();
 
             const SkMatrix& invCTM = normalMapFP.invCTM();
@@ -96,19 +93,22 @@ public:
         GrGLSLProgramDataManager::UniformHandle fXformUni;
     };
 
-    void onGetGLSLProcessorKey(const GrGLSLCaps& caps, GrProcessorKeyBuilder* b) const override {
+    void onGetGLSLProcessorKey(const GrShaderCaps& caps, GrProcessorKeyBuilder* b) const override {
         GLSLNormalMapFP::GenKey(*this, caps, b);
     }
 
     const char* name() const override { return "NormalMapFP"; }
 
-    void onComputeInvariantOutput(GrInvariantOutput* inout) const override {
-        inout->setToUnknown(GrInvariantOutput::ReadInput::kWillNot_ReadInput);
-    }
-
     const SkMatrix& invCTM() const { return fInvCTM; }
 
 private:
+    NormalMapFP(sk_sp<GrFragmentProcessor> mapFP, const SkMatrix& invCTM)
+            : INHERITED(kNone_OptimizationFlags), fInvCTM(invCTM) {
+        this->registerChildProcessor(mapFP);
+
+        this->initClassID<NormalMapFP>();
+    }
+
     GrGLSLFragmentProcessor* onCreateGLSLInstance() const override { return new GLSLNormalMapFP; }
 
     bool onIsEqual(const GrFragmentProcessor& proc) const override {
@@ -117,16 +117,18 @@ private:
     }
 
     SkMatrix fInvCTM;
+
+    typedef GrFragmentProcessor INHERITED;
 };
 
 sk_sp<GrFragmentProcessor> SkNormalMapSourceImpl::asFragmentProcessor(
-        const SkShader::AsFPArgs& args) const {
-    sk_sp<GrFragmentProcessor> mapFP = fMapShader->asFragmentProcessor(args);
+        const SkShaderBase::AsFPArgs& args) const {
+    sk_sp<GrFragmentProcessor> mapFP = as_SB(fMapShader)->asFragmentProcessor(args);
     if (!mapFP) {
         return nullptr;
     }
 
-    return sk_make_sp<NormalMapFP>(std::move(mapFP), fInvCTM);
+    return NormalMapFP::Make(std::move(mapFP), fInvCTM);
 }
 
 #endif // SK_SUPPORT_GPU
@@ -134,55 +136,39 @@ sk_sp<GrFragmentProcessor> SkNormalMapSourceImpl::asFragmentProcessor(
 ////////////////////////////////////////////////////////////////////////////
 
 SkNormalMapSourceImpl::Provider::Provider(const SkNormalMapSourceImpl& source,
-                                          SkShader::Context* mapContext,
-                                          SkPaint* overridePaint)
+                                          SkShaderBase::Context* mapContext)
     : fSource(source)
-    , fMapContext(mapContext)
-    , fOverridePaint(overridePaint) {}
+    , fMapContext(mapContext) {}
 
-SkNormalMapSourceImpl::Provider::~Provider() {
-    fMapContext->~Context();
-    fOverridePaint->~SkPaint();
-}
-
-SkNormalSource::Provider* SkNormalMapSourceImpl::asProvider(const SkShader::ContextRec &rec,
-                                                            void *storage) const {
+SkNormalSource::Provider* SkNormalMapSourceImpl::asProvider(const SkShaderBase::ContextRec &rec,
+                                                            SkArenaAlloc* alloc) const {
     SkMatrix normTotalInv;
     if (!this->computeNormTotalInverse(rec, &normTotalInv)) {
         return nullptr;
     }
 
     // Overriding paint's alpha because we need the normal map's RGB channels to be unpremul'd
-    void* paintStorage = (char*)storage + sizeof(Provider);
-    SkPaint* overridePaint = new (paintStorage) SkPaint(*(rec.fPaint));
-    overridePaint->setAlpha(0xFF);
-    SkShader::ContextRec overrideRec(*overridePaint, *(rec.fMatrix), rec.fLocalMatrix,
-                                     rec.fPreferredDstType);
+    SkPaint overridePaint {*(rec.fPaint)};
+    overridePaint.setAlpha(0xFF);
+    SkShaderBase::ContextRec overrideRec(overridePaint, *(rec.fMatrix), rec.fLocalMatrix,
+                                         rec.fPreferredDstType, rec.fDstColorSpace);
 
-    void* mapContextStorage = (char*) paintStorage + sizeof(SkPaint);
-    SkShader::Context* context = fMapShader->createContext(overrideRec, mapContextStorage);
+    auto* context = as_SB(fMapShader)->makeContext(overrideRec, alloc);
     if (!context) {
         return nullptr;
     }
 
-    return new (storage) Provider(*this, context, overridePaint);
+    return alloc->make<Provider>(*this, context);
 }
 
-size_t SkNormalMapSourceImpl::providerSize(const SkShader::ContextRec& rec) const {
-    return sizeof(Provider) + sizeof(SkPaint) + fMapShader->contextSize(rec);
-}
-
-bool SkNormalMapSourceImpl::computeNormTotalInverse(const SkShader::ContextRec& rec,
+bool SkNormalMapSourceImpl::computeNormTotalInverse(const SkShaderBase::ContextRec& rec,
                                                     SkMatrix* normTotalInverse) const {
-    SkMatrix total;
-    total.setConcat(*rec.fMatrix, fMapShader->getLocalMatrix());
-
-    const SkMatrix* m = &total;
+    SkMatrix total = SkMatrix::Concat(*rec.fMatrix, fMapShader->getLocalMatrix());
     if (rec.fLocalMatrix) {
-        total.setConcat(*m, *rec.fLocalMatrix);
-        m = &total;
+        total.preConcat(*rec.fLocalMatrix);
     }
-    return m->invert(normTotalInverse);
+
+    return total.invert(normTotalInverse);
 }
 
 #define BUFFER_MAX 16
@@ -239,7 +225,7 @@ void SkNormalMapSourceImpl::Provider::fillScanLine(int x, int y, SkPoint3 output
 
 sk_sp<SkFlattenable> SkNormalMapSourceImpl::CreateProc(SkReadBuffer& buf) {
 
-    sk_sp<SkShader> mapShader = buf.readFlattenable<SkShader>();
+    sk_sp<SkShader> mapShader = buf.readFlattenable<SkShaderBase>();
 
     SkMatrix invCTM;
     buf.readMatrix(&invCTM);

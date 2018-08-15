@@ -944,9 +944,7 @@ static bool multicastMembershipHelper(QNativeSocketEnginePrivate *d,
         Q_IPV6ADDR ip6 = groupAddress.toIPv6Address();
         memcpy(&mreq6.ipv6mr_multiaddr, &ip6, sizeof(ip6));
         mreq6.ipv6mr_interface = iface.index();
-    } else
-
-    if (groupAddress.protocol() == QAbstractSocket::IPv4Protocol) {
+    } else if (groupAddress.protocol() == QAbstractSocket::IPv4Protocol) {
         level = IPPROTO_IP;
         sockOpt = how4;
         sockArg = reinterpret_cast<char *>(&mreq4);
@@ -1148,10 +1146,10 @@ qint64 QNativeSocketEnginePrivate::nativePendingDatagramSize() const
     DWORD bufferCount = 5;
     WSABUF * buf = 0;
     for (;;) {
-        // the data written to udpMessagePeekBuffer is discarded, so
-        // this function is still reentrant although it might not look
-        // so.
-        static char udpMessagePeekBuffer[8192];
+        // We start at 1500 bytes (the MTU for Ethernet V2), which should catch
+        // almost all uses (effective MTU for UDP under IPv4 is 1468), except
+        // for localhost datagrams and those reassembled by the IP layer.
+        char udpMessagePeekBuffer[1500];
 
         buf = new WSABUF[bufferCount];
         for (DWORD i=0; i<bufferCount; i++) {
@@ -1321,6 +1319,9 @@ qint64 QNativeSocketEnginePrivate::nativeSendDatagram(const char *data, qint64 l
 
     setPortAndAddress(header.destinationPort, header.destinationAddress, &aa, &msg.namelen);
 
+    uint oldIfIndex = 0;
+    bool mustSetIpv6MulticastIf = false;
+
     if (msg.namelen == sizeof(aa.a6)) {
         // sending IPv6
         if (header.hopLimit != -1) {
@@ -1332,7 +1333,7 @@ qint64 QNativeSocketEnginePrivate::nativeSendDatagram(const char *data, qint64 l
             cmsgptr = reinterpret_cast<WSACMSGHDR *>(reinterpret_cast<char *>(cmsgptr)
                                                      + WSA_CMSG_SPACE(sizeof(int)));
         }
-        if (header.ifindex != 0 || !header.senderAddress.isNull()) {
+        if (!header.senderAddress.isNull()) {
             struct in6_pktinfo *data = reinterpret_cast<in6_pktinfo *>(WSA_CMSG_DATA(cmsgptr));
             memset(data, 0, sizeof(*data));
             msg.Control.len += WSA_CMSG_SPACE(sizeof(*data));
@@ -1345,6 +1346,21 @@ qint64 QNativeSocketEnginePrivate::nativeSendDatagram(const char *data, qint64 l
             memcpy(&data->ipi6_addr, &tmp, sizeof(tmp));
             cmsgptr = reinterpret_cast<WSACMSGHDR *>(reinterpret_cast<char *>(cmsgptr)
                                                      + WSA_CMSG_SPACE(sizeof(*data)));
+        } else if (header.ifindex != 0) {
+            // Unlike other operating systems, setting the interface index in the in6_pktinfo
+            // structure above and leaving the ipi6_addr set to :: will cause the packets to be
+            // sent with source address ::. So we have to use IPV6_MULTICAST_IF, which MSDN is
+            // quite clear that "This option does not change the default interface for receiving
+            // IPv6 multicast traffic."
+            QT_SOCKOPTLEN_T len = sizeof(oldIfIndex);
+            if (::getsockopt(socketDescriptor, IPPROTO_IPV6, IPV6_MULTICAST_IF,
+                             reinterpret_cast<char *>(&oldIfIndex), &len) == -1
+                    || ::setsockopt(socketDescriptor, IPPROTO_IPV6, IPV6_MULTICAST_IF,
+                                    reinterpret_cast<const char *>(&header.ifindex), sizeof(header.ifindex)) == -1) {
+                setError(QAbstractSocket::NetworkError, SendDatagramErrorString);
+                return -1;
+            }
+            mustSetIpv6MulticastIf = true;
         }
     } else {
         // sending IPv4
@@ -1396,6 +1412,12 @@ qint64 QNativeSocketEnginePrivate::nativeSendDatagram(const char *data, qint64 l
         ret = -1;
     } else {
         ret = qint64(bytesSent);
+    }
+
+    if (mustSetIpv6MulticastIf) {
+        // undo what we did above
+        ::setsockopt(socketDescriptor, IPPROTO_IPV6, IPV6_MULTICAST_IF,
+                     reinterpret_cast<char *>(&oldIfIndex), sizeof(oldIfIndex));
     }
 
 #if defined (QNATIVESOCKETENGINE_DEBUG)

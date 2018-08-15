@@ -7,8 +7,7 @@
 #include "content/browser/indexed_db/indexed_db_context_impl.h"
 #include "content/browser/indexed_db/indexed_db_database_error.h"
 #include "content/browser/indexed_db/indexed_db_dispatcher_host.h"
-#include "content/browser/indexed_db/indexed_db_observer_changes.h"
-#include "content/common/indexed_db/indexed_db_messages.h"
+#include "content/browser/indexed_db/indexed_db_transaction.h"
 
 using ::indexed_db::mojom::DatabaseCallbacksAssociatedPtrInfo;
 
@@ -23,6 +22,8 @@ class IndexedDBDatabaseCallbacks::IOThreadHelper {
   void SendVersionChange(int64_t old_version, int64_t new_version);
   void SendAbort(int64_t transaction_id, const IndexedDBDatabaseError& error);
   void SendComplete(int64_t transaction_id);
+  void SendChanges(::indexed_db::mojom::ObserverChangesPtr changes);
+  void OnConnectionError();
 
  private:
   ::indexed_db::mojom::DatabaseCallbacksAssociatedPtr callbacks_;
@@ -31,109 +32,125 @@ class IndexedDBDatabaseCallbacks::IOThreadHelper {
 };
 
 IndexedDBDatabaseCallbacks::IndexedDBDatabaseCallbacks(
-    scoped_refptr<IndexedDBDispatcherHost> dispatcher_host,
-    int32_t ipc_thread_id,
+    scoped_refptr<IndexedDBContextImpl> context,
     DatabaseCallbacksAssociatedPtrInfo callbacks_info)
-    : dispatcher_host_(std::move(dispatcher_host)),
-      ipc_thread_id_(ipc_thread_id),
+    : indexed_db_context_(std::move(context)),
       io_helper_(new IOThreadHelper(std::move(callbacks_info))) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  thread_checker_.DetachFromThread();
+  DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
 IndexedDBDatabaseCallbacks::~IndexedDBDatabaseCallbacks() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
 void IndexedDBDatabaseCallbacks::OnForcedClose() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  if (!dispatcher_host_)
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (complete_)
     return;
 
   DCHECK(io_helper_);
   BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-                          base::Bind(&IOThreadHelper::SendForcedClose,
-                                     base::Unretained(io_helper_.get())));
-  dispatcher_host_ = NULL;
+                          base::BindOnce(&IOThreadHelper::SendForcedClose,
+                                         base::Unretained(io_helper_.get())));
+  complete_ = true;
 }
 
 void IndexedDBDatabaseCallbacks::OnVersionChange(int64_t old_version,
                                                  int64_t new_version) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  if (!dispatcher_host_)
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (complete_)
     return;
 
   DCHECK(io_helper_);
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
-      base::Bind(&IOThreadHelper::SendVersionChange,
-                 base::Unretained(io_helper_.get()), old_version, new_version));
+  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
+                          base::BindOnce(&IOThreadHelper::SendVersionChange,
+                                         base::Unretained(io_helper_.get()),
+                                         old_version, new_version));
 }
 
-void IndexedDBDatabaseCallbacks::OnAbort(int64_t host_transaction_id,
-                                         const IndexedDBDatabaseError& error) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  if (!dispatcher_host_)
+void IndexedDBDatabaseCallbacks::OnAbort(
+    const IndexedDBTransaction& transaction,
+    const IndexedDBDatabaseError& error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (complete_)
     return;
 
-  dispatcher_host_->FinishTransaction(host_transaction_id, false);
   DCHECK(io_helper_);
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
-      base::Bind(&IOThreadHelper::SendAbort, base::Unretained(io_helper_.get()),
-                 dispatcher_host_->RendererTransactionId(host_transaction_id),
-                 error));
+  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
+                          base::BindOnce(&IOThreadHelper::SendAbort,
+                                         base::Unretained(io_helper_.get()),
+                                         transaction.id(), error));
 }
 
-void IndexedDBDatabaseCallbacks::OnComplete(int64_t host_transaction_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  if (!dispatcher_host_)
+void IndexedDBDatabaseCallbacks::OnComplete(
+    const IndexedDBTransaction& transaction) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (complete_)
     return;
 
-  dispatcher_host_->FinishTransaction(host_transaction_id, true);
+  indexed_db_context_->TransactionComplete(transaction.database()->origin());
   DCHECK(io_helper_);
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      base::Bind(&IOThreadHelper::SendComplete,
-                 base::Unretained(io_helper_.get()),
-                 dispatcher_host_->RendererTransactionId(host_transaction_id)));
+      base::BindOnce(&IOThreadHelper::SendComplete,
+                     base::Unretained(io_helper_.get()), transaction.id()));
 }
 
 void IndexedDBDatabaseCallbacks::OnDatabaseChange(
-    std::unique_ptr<IndexedDBObserverChanges> changes) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+    ::indexed_db::mojom::ObserverChangesPtr changes) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(io_helper_);
-  dispatcher_host_->Send(new IndexedDBMsg_DatabaseCallbacksChanges(
-      ipc_thread_id_,
-      IndexedDBDispatcherHost::ConvertObserverChanges(std::move(changes))));
+  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
+                          base::BindOnce(&IOThreadHelper::SendChanges,
+                                         base::Unretained(io_helper_.get()),
+                                         base::Passed(&changes)));
 }
 
 IndexedDBDatabaseCallbacks::IOThreadHelper::IOThreadHelper(
     DatabaseCallbacksAssociatedPtrInfo callbacks_info) {
+  if (!callbacks_info.is_valid())
+    return;
   callbacks_.Bind(std::move(callbacks_info));
+  callbacks_.set_connection_error_handler(base::BindOnce(
+      &IOThreadHelper::OnConnectionError, base::Unretained(this)));
 }
 
 IndexedDBDatabaseCallbacks::IOThreadHelper::~IOThreadHelper() {}
 
 void IndexedDBDatabaseCallbacks::IOThreadHelper::SendForcedClose() {
-  callbacks_->ForcedClose();
+  if (callbacks_)
+    callbacks_->ForcedClose();
 }
 
 void IndexedDBDatabaseCallbacks::IOThreadHelper::SendVersionChange(
     int64_t old_version,
     int64_t new_version) {
-  callbacks_->VersionChange(old_version, new_version);
+  if (callbacks_)
+    callbacks_->VersionChange(old_version, new_version);
 }
 
 void IndexedDBDatabaseCallbacks::IOThreadHelper::SendAbort(
     int64_t transaction_id,
     const IndexedDBDatabaseError& error) {
-  callbacks_->Abort(transaction_id, error.code(), error.message());
+  if (callbacks_)
+    callbacks_->Abort(transaction_id, error.code(), error.message());
 }
 
 void IndexedDBDatabaseCallbacks::IOThreadHelper::SendComplete(
     int64_t transaction_id) {
-  callbacks_->Complete(transaction_id);
+  if (callbacks_)
+    callbacks_->Complete(transaction_id);
+}
+
+void IndexedDBDatabaseCallbacks::IOThreadHelper::SendChanges(
+    ::indexed_db::mojom::ObserverChangesPtr changes) {
+  if (callbacks_)
+    callbacks_->Changes(std::move(changes));
+}
+
+void IndexedDBDatabaseCallbacks::IOThreadHelper::OnConnectionError() {
+  callbacks_.reset();
 }
 
 }  // namespace content

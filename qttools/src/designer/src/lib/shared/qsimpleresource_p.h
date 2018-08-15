@@ -43,10 +43,10 @@
 #include "shared_global_p.h"
 #include "abstractformbuilder.h"
 #include <QtCore/QStringList>
+#include <QtCore/QVector>
 
 QT_BEGIN_NAMESPACE
 
-class DomScript;
 class DomCustomWidgets;
 class DomCustomWidget;
 class DomSlots;
@@ -87,16 +87,11 @@ public:
                                        const DomCustomWidgets *dom_custom_widgets);
 
 protected:
-    enum ScriptSource { ScriptDesigner, ScriptExtension, ScriptCustomWidgetPlugin };
-    static DomScript*createScript(const QString &script, ScriptSource source);
-    typedef QList<DomScript*> DomScripts;
-    static void addScript(const QString &script, ScriptSource source, DomScripts &domScripts);
-
     static bool addFakeMethods(const DomSlots *domSlots, QStringList &fakeSlots, QStringList &fakeSignals);
 
 private:
     static void addCustomWidgetsToWidgetDatabase(const QDesignerFormEditorInterface *core,
-                                                 QList<DomCustomWidget*>& custom_widget_list);
+                                                 QVector<DomCustomWidget *> &custom_widget_list);
     static void addFakeMethodsToWidgetDataBase(const DomCustomWidget *domCustomWidget, WidgetDataBaseItem *item);
 
     static bool m_warningsEnabled;

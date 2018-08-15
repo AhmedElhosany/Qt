@@ -19,11 +19,6 @@
 #include "components/update_client/update_checker.h"
 #include "components/update_client/update_client.h"
 
-namespace base {
-class SequencedTaskRunner;
-class SingleThreadTaskRunner;
-}  // namespace base
-
 namespace update_client {
 
 class Configurator;
@@ -31,7 +26,6 @@ class PingManager;
 class Task;
 class UpdateEngine;
 enum class Error;
-struct TaskContext;
 
 class UpdateClientImpl : public UpdateClient {
  public:
@@ -55,7 +49,8 @@ class UpdateClientImpl : public UpdateClient {
   void Stop() override;
   void SendUninstallPing(const std::string& id,
                          const base::Version& version,
-                         int reason) override;
+                         int reason,
+                         const Callback& callback) override;
 
  private:
   ~UpdateClientImpl() override;
@@ -67,8 +62,8 @@ class UpdateClientImpl : public UpdateClient {
 
   base::ThreadChecker thread_checker_;
 
-  // True is Stop method has been called.
-  bool is_stopped_;
+  // True if Stop method has been called.
+  bool is_stopped_ = false;
 
   scoped_refptr<Configurator> config_;
 

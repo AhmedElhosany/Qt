@@ -148,7 +148,7 @@
             Gives focus to the view associated with the page, whenever a navigation operation occurs
             (load, stop, reload, reload and bypass cache, forward, backward, set content, and so
             on).
-            Enabled by default. (Added in Qt 5.8)
+            Disabled by default. (Added in Qt 5.8)
     \value  PrintElementBackgrounds
             Turns on printing of CSS backgrounds when printing a web page.
             Enabled by default. (Added in Qt 5.8)
@@ -162,6 +162,13 @@
             Geolocation features. This provides an override to allow non secure
             origins to access Geolocation again.
             Disabled by default. (Added in Qt 5.9)
+    \value  AllowWindowActivationFromJavaScript
+            Allows activating windows by using the window.focus() JavaScript
+            method. Disabled by default.
+            (Added in Qt 5.10)
+    \value  ShowScrollBars
+            Shows scroll bars.
+            Enabled by default. (Added in Qt 5.10)
 
 */
 

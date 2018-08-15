@@ -78,25 +78,30 @@ class AutoreleasePoolType;
 typedef NSAutoreleasePool AutoreleasePoolType;
 #endif  // !defined(__OBJC__) || __has_feature(objc_arc)
 
-class MessagePumpCFRunLoopBase : public MessagePump {
+class BASE_EXPORT MessagePumpCFRunLoopBase : public MessagePump {
+ public:
+  // MessagePump:
+  void Run(Delegate* delegate) override;
+  void ScheduleWork() override;
+  void ScheduleDelayedWork(const TimeTicks& delayed_work_time) override;
+  void SetTimerSlack(TimerSlack timer_slack) override;
+
+ protected:
   // Needs access to CreateAutoreleasePool.
   friend class MessagePumpScopedAutoreleasePool;
- public:
-  MessagePumpCFRunLoopBase();
+  friend class TestMessagePumpCFRunLoopBase;
+
+  // Tasks will be pumped in the run loop modes described by |mode_mask|, which
+  // maps bits to the index of an internal array of run loop mode identifiers.
+  explicit MessagePumpCFRunLoopBase(int mode_mask);
   ~MessagePumpCFRunLoopBase() override;
 
   // Subclasses should implement the work they need to do in MessagePump::Run
   // in the DoRun method.  MessagePumpCFRunLoopBase::Run calls DoRun directly.
   // This arrangement is used because MessagePumpCFRunLoopBase needs to set
   // up and tear down things before and after the "meat" of DoRun.
-  void Run(Delegate* delegate) override;
   virtual void DoRun(Delegate* delegate) = 0;
 
-  void ScheduleWork() override;
-  void ScheduleDelayedWork(const TimeTicks& delayed_work_time) override;
-  void SetTimerSlack(TimerSlack timer_slack) override;
-
- protected:
   // Accessors for private data members to be used by subclasses.
   CFRunLoopRef run_loop() const { return run_loop_; }
   int nesting_level() const { return nesting_level_; }
@@ -112,7 +117,27 @@ class MessagePumpCFRunLoopBase : public MessagePump {
   // objects autoreleased by work to fall into the current autorelease pool.
   virtual AutoreleasePoolType* CreateAutoreleasePool();
 
+  // Invokes function(run_loop_, arg, mode) for all the modes in |mode_mask_|.
+  template <typename Argument>
+  void InvokeForEnabledModes(void function(CFRunLoopRef, Argument, CFStringRef),
+                             Argument argument);
+
  private:
+  // Marking timers as invalid at the right time helps significantly reduce
+  // power use (see the comment in RunDelayedWorkTimer()), however there is no
+  // public API for doing so. CFRuntime.h states that CFRuntimeBase, upon which
+  // the above timer invalidation functions are based, can change from release
+  // to release and should not be accessed directly (this struct last changed at
+  // least in 2008 in CF-476).
+  //
+  // This function uses private API to modify a test timer's valid state and
+  // uses public API to confirm that the private API changed the right bit.
+  static bool CanInvalidateCFRunLoopTimers();
+
+  // Sets a Core Foundation object's "invalid" bit to |valid|. Based on code
+  // from CFRunLoop.c.
+  static void ChromeCFRunLoopTimerSetValid(CFRunLoopTimerRef timer, bool valid);
+
   // Timer callback scheduled by ScheduleDelayedWork.  This does not do any
   // work, but it signals work_source_ so that delayed work can be performed
   // within the appropriate priority constraints.
@@ -172,6 +197,9 @@ class MessagePumpCFRunLoopBase : public MessagePump {
 
   // The thread's run loop.
   CFRunLoopRef run_loop_;
+
+  // Bitmask controlling the run loop modes in which posted tasks may run.
+  const int mode_mask_;
 
   // The timer, sources, and observers are described above alongside their
   // callbacks.

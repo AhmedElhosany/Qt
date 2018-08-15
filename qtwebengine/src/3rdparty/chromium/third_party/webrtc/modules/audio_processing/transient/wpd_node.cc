@@ -13,9 +13,9 @@
 #include <math.h>
 #include <string.h>
 
-#include "webrtc/base/checks.h"
 #include "webrtc/common_audio/fir_filter.h"
 #include "webrtc/modules/audio_processing/transient/dyadic_decimator.h"
+#include "webrtc/rtc_base/checks.h"
 
 namespace webrtc {
 
@@ -29,9 +29,9 @@ WPDNode::WPDNode(size_t length,
       filter_(FIRFilter::Create(coefficients,
                                 coefficients_length,
                                 2 * length + 1)) {
-  RTC_DCHECK_GT(length, 0u);
+  RTC_DCHECK_GT(length, 0);
   RTC_DCHECK(coefficients);
-  RTC_DCHECK_GT(coefficients_length, 0u);
+  RTC_DCHECK_GT(coefficients_length, 0);
   memset(data_.get(), 0.f, (2 * length + 1) * sizeof(data_[0]));
 }
 

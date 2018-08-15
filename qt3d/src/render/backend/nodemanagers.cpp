@@ -46,6 +46,8 @@
 #include <Qt3DRender/private/texturedatamanager_p.h>
 #include <Qt3DRender/private/geometryrenderermanager_p.h>
 #include <Qt3DRender/private/techniquemanager_p.h>
+#include <Qt3DRender/private/armature_p.h>
+#include <Qt3DRender/private/skeleton_p.h>
 #include <private/resourceaccessor_p.h>
 
 #include <QOpenGLVertexArrayObject>
@@ -63,6 +65,7 @@ NodeManagers::NodeManagers()
     , m_worldMatrixManager(new MatrixManager())
     , m_vaoManager(new VAOManager())
     , m_shaderManager(new ShaderManager())
+    , m_shaderBuilderManager(new ShaderBuilderManager())
     , m_techniqueManager(new TechniqueManager())
     , m_effectManager(new EffectManager())
     , m_renderPassManager(new RenderPassManager())
@@ -92,6 +95,9 @@ NodeManagers::NodeManagers()
     , m_environmentLightManager(new EnvironmentLightManager())
     , m_computeJobManager(new ComputeCommandManager())
     , m_renderStateManager(new RenderStateManager())
+    , m_armatureManager(new ArmatureManager())
+    , m_skeletonManager(new SkeletonManager())
+    , m_jointManager(new JointManager())
     , m_resourceAccessor(new ResourceAccessor(this))
 {
 }
@@ -103,6 +109,7 @@ NodeManagers::~NodeManagers()
     delete m_worldMatrixManager;
     delete m_vaoManager;
     delete m_shaderManager;
+    delete m_shaderBuilderManager;
     delete m_techniqueManager;
     delete m_effectManager;
     delete m_renderPassManager;
@@ -136,6 +143,9 @@ NodeManagers::~NodeManagers()
     delete m_computeJobManager;
     delete m_renderStateManager;
     delete m_renderNodesManager;
+    delete m_armatureManager;
+    delete m_skeletonManager;
+    delete m_jointManager;
 }
 
 QSharedPointer<ResourceAccessor> NodeManagers::resourceAccessor()
@@ -177,6 +187,12 @@ template<>
 ShaderManager *NodeManagers::manager<Shader>() const Q_DECL_NOTHROW
 {
     return m_shaderManager;
+}
+
+template<>
+ShaderBuilderManager *NodeManagers::manager<ShaderBuilder>() const Q_DECL_NOTHROW
+{
+    return m_shaderBuilderManager;
 }
 
 template<>
@@ -339,6 +355,24 @@ template<>
 RenderStateManager *NodeManagers::manager<RenderStateNode>() const Q_DECL_NOTHROW
 {
     return m_renderStateManager;
+}
+
+template<>
+ArmatureManager *NodeManagers::manager<Armature>() const Q_DECL_NOTHROW
+{
+    return m_armatureManager;
+}
+
+template<>
+SkeletonManager *NodeManagers::manager<Skeleton>() const Q_DECL_NOTHROW
+{
+    return m_skeletonManager;
+}
+
+template<>
+JointManager *NodeManagers::manager<Joint>() const Q_DECL_NOTHROW
+{
+    return m_jointManager;
 }
 
 } // Render

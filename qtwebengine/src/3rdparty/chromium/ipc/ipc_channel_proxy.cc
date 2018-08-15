@@ -27,17 +27,6 @@
 
 namespace IPC {
 
-namespace {
-
-void BindAssociatedInterfaceOnTaskRunner(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-    const ChannelProxy::GenericAssociatedInterfaceFactory& factory,
-    mojo::ScopedInterfaceEndpointHandle handle) {
-  task_runner->PostTask(FROM_HERE, base::Bind(factory, base::Passed(&handle)));
-}
-
-}  // namespace
-
 //------------------------------------------------------------------------------
 
 ChannelProxy::Context::Context(
@@ -78,18 +67,18 @@ void ChannelProxy::Context::CreateChannel(
   Channel::AssociatedInterfaceSupport* support =
       channel_->GetAssociatedInterfaceSupport();
   if (support) {
-    associated_group_ = *support->GetAssociatedGroup();
+    thread_safe_channel_ = support->CreateThreadSafeChannel();
 
     base::AutoLock l(pending_filters_lock_);
-    for (auto& entry : pending_interfaces_)
+    for (auto& entry : pending_io_thread_interfaces_)
       support->AddGenericAssociatedInterface(entry.first, entry.second);
-    pending_interfaces_.clear();
+    pending_io_thread_interfaces_.clear();
   }
 }
 
 bool ChannelProxy::Context::TryFilters(const Message& message) {
   DCHECK(message_filter_router_);
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   Logging* logger = Logging::GetInstance();
   if (logger->Enabled())
     logger->OnPreDispatchMessage(message);
@@ -100,7 +89,7 @@ bool ChannelProxy::Context::TryFilters(const Message& message) {
       listener_task_runner_->PostTask(
           FROM_HERE, base::Bind(&Context::OnDispatchBadMessage, this, message));
     }
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
     if (logger->Enabled())
       logger->OnPostDispatchMessage(message);
 #endif
@@ -326,7 +315,7 @@ void ChannelProxy::Context::OnDispatchMessage(const Message& message) {
 
   OnDispatchConnected();
 
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   Logging* logger = Logging::GetInstance();
   if (message.type() == IPC_LOGGING_ID) {
     logger->OnReceivedLoggingMessage(message);
@@ -341,7 +330,7 @@ void ChannelProxy::Context::OnDispatchMessage(const Message& message) {
   if (message.dispatch_error())
     listener_->OnBadMessageReceived(message);
 
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   if (logger->Enabled())
     logger->OnPostDispatchMessage(message);
 #endif
@@ -385,15 +374,6 @@ void ChannelProxy::Context::OnDispatchAssociatedInterfaceRequest(
 void ChannelProxy::Context::ClearChannel() {
   base::AutoLock l(channel_lifetime_lock_);
   channel_.reset();
-  associated_group_ = mojo::AssociatedGroup();
-}
-
-void ChannelProxy::Context::AddGenericAssociatedInterface(
-    const std::string& name,
-    const GenericAssociatedInterfaceFactory& factory) {
-  AddGenericAssociatedInterfaceForIOThread(
-      name, base::Bind(&BindAssociatedInterfaceOnTaskRunner,
-                       listener_task_runner_, factory));
 }
 
 void ChannelProxy::Context::AddGenericAssociatedInterfaceForIOThread(
@@ -402,7 +382,7 @@ void ChannelProxy::Context::AddGenericAssociatedInterfaceForIOThread(
   base::AutoLock l(channel_lifetime_lock_);
   if (!channel_) {
     base::AutoLock l(pending_filters_lock_);
-    pending_interfaces_.emplace_back(name, factory);
+    pending_io_thread_interfaces_.emplace_back(name, factory);
     return;
   }
   Channel::AssociatedInterfaceSupport* support =
@@ -415,19 +395,6 @@ void ChannelProxy::Context::Send(Message* message) {
   ipc_task_runner()->PostTask(
       FROM_HERE, base::Bind(&ChannelProxy::Context::OnSendMessage, this,
                             base::Passed(base::WrapUnique(message))));
-}
-
-// Called on the IPC::Channel thread
-void ChannelProxy::Context::GetRemoteAssociatedInterface(
-    const std::string& name,
-    mojo::ScopedInterfaceEndpointHandle handle) {
-  if (!channel_)
-    return;
-  Channel::AssociatedInterfaceSupport* associated_interface_support =
-      channel_->GetAssociatedInterfaceSupport();
-  DCHECK(associated_interface_support);
-  associated_interface_support->GetGenericRemoteAssociatedInterface(
-      name, std::move(handle));
 }
 
 //-----------------------------------------------------------------------------
@@ -472,7 +439,7 @@ ChannelProxy::ChannelProxy(
 }
 
 ChannelProxy::~ChannelProxy() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   Close();
 }
@@ -496,7 +463,7 @@ void ChannelProxy::Init(const IPC::ChannelHandle& channel_handle,
 
 void ChannelProxy::Init(std::unique_ptr<ChannelFactory> factory,
                         bool create_pipe_now) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!did_init_);
 
   if (create_pipe_now) {
@@ -536,7 +503,7 @@ void ChannelProxy::Flush() {
 }
 
 void ChannelProxy::Close() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Clear the backpointer to the listener so that any pending calls to
   // Context::OnDispatchMessage or OnDispatchError will be ignored.  It is
@@ -550,6 +517,12 @@ void ChannelProxy::Close() {
 }
 
 bool ChannelProxy::Send(Message* message) {
+  DCHECK(!message->is_sync()) << "Need to use IPC::SyncChannel";
+  SendInternal(message);
+  return true;
+}
+
+void ChannelProxy::SendInternal(Message* message) {
   DCHECK(did_init_);
 
   // TODO(alexeypa): add DCHECK(CalledOnValidThread()) here. Currently there are
@@ -563,32 +536,25 @@ bool ChannelProxy::Send(Message* message) {
     message = outgoing_message_filter()->Rewrite(message);
 #endif
 
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   Logging::GetInstance()->OnSendMessage(message);
 #endif
 
   context_->Send(message);
-  return true;
 }
 
 void ChannelProxy::AddFilter(MessageFilter* filter) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   context_->AddFilter(filter);
 }
 
 void ChannelProxy::RemoveFilter(MessageFilter* filter) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   context_->ipc_task_runner()->PostTask(
       FROM_HERE, base::Bind(&Context::OnRemoveFilter, context_,
                             base::RetainedRef(filter)));
-}
-
-void ChannelProxy::AddGenericAssociatedInterface(
-    const std::string& name,
-    const GenericAssociatedInterfaceFactory& factory) {
-  context()->AddGenericAssociatedInterface(name, factory);
 }
 
 void ChannelProxy::AddGenericAssociatedInterfaceForIOThread(
@@ -597,22 +563,16 @@ void ChannelProxy::AddGenericAssociatedInterfaceForIOThread(
   context()->AddGenericAssociatedInterfaceForIOThread(name, factory);
 }
 
-mojo::AssociatedGroup* ChannelProxy::GetAssociatedGroup() {
-  return context()->associated_group();
-}
-
 void ChannelProxy::GetGenericRemoteAssociatedInterface(
     const std::string& name,
     mojo::ScopedInterfaceEndpointHandle handle) {
   DCHECK(did_init_);
-  context_->ipc_task_runner()->PostTask(
-      FROM_HERE, base::Bind(&Context::GetRemoteAssociatedInterface,
-                            context_, name, base::Passed(&handle)));
+  context()->thread_safe_channel().GetAssociatedInterface(
+      name, mojom::GenericInterfaceAssociatedRequest(std::move(handle)));
 }
 
 void ChannelProxy::ClearIPCTaskRunner() {
-  DCHECK(CalledOnValidThread());
-
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   context()->ClearIPCTaskRunner();
 }
 

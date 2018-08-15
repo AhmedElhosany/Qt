@@ -49,12 +49,18 @@
 //
 
 #include <Qt3DAnimation/private/qt3danimation_global_p.h>
+#include <Qt3DAnimation/private/clock_p.h>
+#include <Qt3DAnimation/qanimationcallback.h>
 #include <Qt3DCore/qnodeid.h>
 #include <Qt3DCore/qscenechange.h>
+
+#include <QtCore/qbitarray.h>
+#include <QtCore/qdebug.h>
 
 QT_BEGIN_NAMESPACE
 
 namespace Qt3DAnimation {
+class QAnimationCallback;
 namespace Animation {
 
 struct Channel;
@@ -66,19 +72,45 @@ class ChannelMapping;
 
 typedef QVector<int> ComponentIndices;
 
+enum JointTransformComponent {
+    NoTransformComponent = 0,
+    Scale,
+    Rotation,
+    Translation
+};
+
 struct MappingData
 {
     Qt3DCore::QNodeId targetId;
+    Skeleton *skeleton = nullptr;
+    int jointIndex = -1;
+    JointTransformComponent jointTransformComponent = NoTransformComponent;
     const char *propertyName;
+    QAnimationCallback *callback = nullptr;
+    QAnimationCallback::Flags callbackFlags;
     int type;
     ComponentIndices channelIndices;
 };
 
+#ifndef QT_NO_DEBUG_STREAM
+inline QDebug operator<<(QDebug dbg, const MappingData &mapping)
+{
+    QDebugStateSaver saver(dbg);
+    dbg << "targetId =" << mapping.targetId << endl
+        << "jointIndex =" << mapping.jointIndex << endl
+        << "jointTransformComponent: " << mapping.jointTransformComponent << endl
+        << "propertyName:" << mapping.propertyName << endl
+        << "channelIndices:" << mapping.channelIndices;
+    return dbg;
+}
+#endif
+
 struct AnimatorEvaluationData
 {
-    double globalTime;
-    double startTime;
+    double elapsedTime;
+    double currentTime;
     int loopCount;
+    int currentLoop;
     double playbackRate;
 };
 
@@ -93,24 +125,137 @@ typedef QVector<float> ClipResults;
 
 struct ChannelNameAndType
 {
+    QString jointName;
     QString name;
     int type;
+    int jointIndex;
+    Qt3DCore::QNodeId mappingId;
+    JointTransformComponent jointTransformComponent;
+    float pad; // Unused
+
+    static const int invalidIndex = -1;
+
+    ChannelNameAndType()
+        : jointName()
+        , name()
+        , type(-1)
+        , jointIndex(-1)
+        , mappingId()
+        , jointTransformComponent(NoTransformComponent)
+        , pad(0)
+    {}
+
+    ChannelNameAndType(const QString &_name,
+                       int _type,
+                       Qt3DCore::QNodeId _mappingId = Qt3DCore::QNodeId(),
+                       int _jointIndex = invalidIndex)
+        : jointName()
+        , name(_name)
+        , type(_type)
+        , jointIndex(_jointIndex)
+        , mappingId(_mappingId)
+        , jointTransformComponent(NoTransformComponent)
+        , pad(0)
+    {}
+
+    ChannelNameAndType(const QString &_name,
+                       int _type,
+                       JointTransformComponent _jointTransformComponent)
+        : jointName()
+        , name(_name)
+        , type(_type)
+        , jointIndex(invalidIndex)
+        , mappingId()
+        , jointTransformComponent(_jointTransformComponent)
+        , pad(0)
+    {}
 
     bool operator==(const ChannelNameAndType &rhs) const
     {
-        return name == rhs.name && type == rhs.type;
+        return name == rhs.name
+            && type == rhs.type
+            && jointIndex == rhs.jointIndex
+            && mappingId == rhs.mappingId
+            && jointTransformComponent == rhs.jointTransformComponent;
     }
 };
 
+#ifndef QT_NO_DEBUG_STREAM
+inline QDebug operator<<(QDebug dbg, const ChannelNameAndType &nameAndType)
+{
+    QDebugStateSaver saver(dbg);
+    dbg << "name =" << nameAndType.name
+        << "type =" << nameAndType.type
+        << "mappingId =" << nameAndType.mappingId
+        << "jointIndex =" << nameAndType.jointIndex
+        << "jointName =" << nameAndType.jointName
+        << "jointTransformComponent =" << nameAndType.jointTransformComponent;
+    return dbg;
+}
+#endif
+
+struct ComponentValue
+{
+    int componentIndex;
+    float value;
+};
+QT3D_DECLARE_TYPEINFO_2(Qt3DAnimation, Animation, ComponentValue, Q_PRIMITIVE_TYPE)
+
+struct ClipFormat
+{
+    // TODO: Remove the mask and store both the sourceClipIndices and
+    // formattedComponentIndices in flat vectors. This will require a
+    // way to look up the offset and number of elements for each channel.
+    ComponentIndices sourceClipIndices;
+    QVector<QBitArray> sourceClipMask;
+    QVector<ComponentIndices> formattedComponentIndices;
+    QVector<ChannelNameAndType> namesAndTypes;
+    QVector<ComponentValue> defaultComponentValues;
+};
+
+#ifndef QT_NO_DEBUG_STREAM
+inline QDebug operator<<(QDebug dbg, const ClipFormat &format)
+{
+    QDebugStateSaver saver(dbg);
+    int sourceIndex = 0;
+    for (int i = 0; i < format.namesAndTypes.size(); ++i) {
+        dbg << i
+            << format.namesAndTypes[i].jointIndex
+            << format.namesAndTypes[i].jointName
+            << format.namesAndTypes[i].name
+            << format.namesAndTypes[i].type
+            << "formatted results dst indices =" << format.formattedComponentIndices[i];
+        const int componentCount = format.formattedComponentIndices[i].size();
+
+        dbg << "clip src indices =";
+        for (int j = sourceIndex; j < sourceIndex + componentCount; ++j)
+            dbg << format.sourceClipIndices[j] << "";
+
+        dbg << "src clip mask =" << format.sourceClipMask[i];
+        dbg << endl;
+        sourceIndex += componentCount;
+    }
+    return dbg;
+}
+#endif
+
+struct AnimationCallbackAndValue
+{
+    QAnimationCallback *callback;
+    QAnimationCallback::Flags flags;
+    QVariant value;
+};
+
 template<typename Animator>
-AnimatorEvaluationData evaluationDataForAnimator(Animator animator, qint64 globalTime)
+AnimatorEvaluationData evaluationDataForAnimator(Animator animator, Clock* clock, qint64 nsSincePreviousFrame)
 {
     AnimatorEvaluationData data;
     data.loopCount = animator->loops();
-    data.playbackRate = 1.0; // should be a property on the animator
+    data.currentLoop = animator->currentLoop();
+    data.playbackRate = clock != nullptr ? clock->playbackRate() : 1.0;
     // Convert global time from nsec to sec
-    data.startTime = double(animator->startTime()) / 1.0e9;
-    data.globalTime = double(globalTime) / 1.0e9;
+    data.elapsedTime = double(nsSincePreviousFrame) / 1.0e9;
+    data.currentTime = animator->lastLocalTime();
     return data;
 }
 
@@ -152,14 +297,19 @@ ClipResults evaluateClipAtPhase(AnimationClip *clip,
 
 Q_AUTOTEST_EXPORT
 QVector<Qt3DCore::QSceneChangePtr> preparePropertyChanges(Qt3DCore::QNodeId animatorId,
-                                                          const QVector<MappingData> &mappingData,
+                                                          const QVector<MappingData> &mappingDataVec,
                                                           const QVector<float> &channelResults,
                                                           bool finalFrame);
 
 Q_AUTOTEST_EXPORT
+QVector<AnimationCallbackAndValue> prepareCallbacks(const QVector<MappingData> &mappingDataVec,
+                                                    const QVector<float> &channelResults);
+
+Q_AUTOTEST_EXPORT
 QVector<MappingData> buildPropertyMappings(const QVector<ChannelMapping *> &channelMappings,
                                            const QVector<ChannelNameAndType> &channelNamesAndTypes,
-                                           const QVector<ComponentIndices> &channelComponentIndices);
+                                           const QVector<ComponentIndices> &channelComponentIndices,
+                                           const QVector<QBitArray> &sourceClipMask);
 
 Q_AUTOTEST_EXPORT
 QVector<ChannelNameAndType> buildRequiredChannelsAndTypes(Handler *handler,
@@ -169,12 +319,12 @@ Q_AUTOTEST_EXPORT
 QVector<ComponentIndices> assignChannelComponentIndices(const QVector<ChannelNameAndType> &namesAndTypes);
 
 Q_AUTOTEST_EXPORT
-double localTimeFromGlobalTime(double t_global, double t_start_global,
-                               double playbackRate, double duration,
-                               int loopCount, int &currentLoop);
+double localTimeFromElapsedTime(double t_current_local, double t_elapsed_global,
+                                double playbackRate, double duration,
+                                int loopCount, int &currentLoop);
 
 Q_AUTOTEST_EXPORT
-double phaseFromGlobalTime(double t_global, double t_start_global,
+double phaseFromElapsedTime(double t_current_local, double t_elapsed_global,
                            double playbackRate, double duration,
                            int loopCount, int &currentLoop);
 
@@ -183,9 +333,9 @@ QVector<Qt3DCore::QNodeId> gatherValueNodesToEvaluate(Handler *handler,
                                                       Qt3DCore::QNodeId blendTreeRootId);
 
 Q_AUTOTEST_EXPORT
-ComponentIndices generateClipFormatIndices(const QVector<ChannelNameAndType> &targetChannels,
-                                           const QVector<ComponentIndices> &targetIndices,
-                                           const AnimationClip *clip);
+ClipFormat generateClipFormatIndices(const QVector<ChannelNameAndType> &targetChannels,
+                                     const QVector<ComponentIndices> &targetIndices,
+                                     const AnimationClip *clip);
 
 Q_AUTOTEST_EXPORT
 ClipResults formatClipResults(const ClipResults &rawClipResults,
@@ -195,6 +345,13 @@ Q_AUTOTEST_EXPORT
 ClipResults evaluateBlendTree(Handler *handler,
                               BlendedClipAnimator *animator,
                               Qt3DCore::QNodeId blendNodeId);
+
+Q_AUTOTEST_EXPORT
+QVector<float> defaultValueForChannel(Handler *handler, const ChannelNameAndType &channelDescription);
+
+Q_AUTOTEST_EXPORT
+void applyComponentDefaultValues(const QVector<ComponentValue> &componentDefaults,
+                                 ClipResults &formattedClipResults);
 
 } // Animation
 } // Qt3DAnimation

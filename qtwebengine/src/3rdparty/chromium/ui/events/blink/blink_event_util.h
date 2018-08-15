@@ -7,14 +7,10 @@
 
 #include <memory>
 
+#include "third_party/WebKit/public/platform/WebGestureEvent.h"
 #include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebTouchEvent.h"
 #include "ui/events/gesture_detection/motion_event.h"
-
-namespace blink {
-class WebGestureEvent;
-class WebInputEvent;
-class WebTouchEvent;
-}
 
 namespace gfx {
 class PointF;
@@ -26,6 +22,22 @@ enum class DomCode;
 struct GestureEventData;
 struct GestureEventDetails;
 class MotionEvent;
+
+bool CanCoalesce(const blink::WebInputEvent& event_to_coalesce,
+                 const blink::WebInputEvent& event);
+
+void Coalesce(const blink::WebInputEvent& event_to_coalesce,
+              blink::WebInputEvent* event);
+
+bool IsCompatibleScrollorPinch(const blink::WebGestureEvent& new_event,
+                               const blink::WebGestureEvent& event_in_queue);
+
+// Coalesces 3 GestureScroll/PinchUpdate into 2 events.
+// Returns <GestureScrollUpdate, GesturePinchUpdate>.
+std::pair<blink::WebGestureEvent, blink::WebGestureEvent>
+CoalesceScrollAndPinch(const blink::WebGestureEvent* second_last_event,
+                       const blink::WebGestureEvent& last_event,
+                       const blink::WebGestureEvent& new_event);
 
 blink::WebTouchEvent CreateWebTouchEventFromMotionEvent(
     const MotionEvent& event,
@@ -65,7 +77,8 @@ void SetWebPointerPropertiesFromMotionEventData(
     int pointer_id,
     float pressure,
     float orientation_rad,
-    float tilt_rad,
+    float tilt_x,
+    float tilt_y,
     int android_buttons_changed,
     int tool_type);
 
@@ -73,6 +86,16 @@ int WebEventModifiersToEventFlags(int modifiers);
 
 blink::WebInputEvent::Modifiers DomCodeToWebInputEventModifiers(
     ui::DomCode code);
+
+bool IsGestureScrollOrFlingOrPinch(blink::WebInputEvent::Type);
+
+bool IsContinuousGestureEvent(blink::WebInputEvent::Type);
+
+inline const blink::WebGestureEvent& ToWebGestureEvent(
+    const blink::WebInputEvent& event) {
+  DCHECK(blink::WebInputEvent::IsGestureEventType(event.GetType()));
+  return static_cast<const blink::WebGestureEvent&>(event);
+}
 
 }  // namespace ui
 

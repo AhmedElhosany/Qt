@@ -7,16 +7,13 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "content/browser/compositor/browser_compositor_output_surface.h"
 #include "content/common/content_export.h"
 
 namespace cc {
 class SoftwareOutputDevice;
-}
-
-namespace ui {
-class CompositorVSyncManager;
 }
 
 namespace content {
@@ -26,8 +23,7 @@ class CONTENT_EXPORT SoftwareBrowserCompositorOutputSurface
  public:
   SoftwareBrowserCompositorOutputSurface(
       std::unique_ptr<cc::SoftwareOutputDevice> software_device,
-      const scoped_refptr<ui::CompositorVSyncManager>& vsync_manager,
-      cc::SyntheticBeginFrameSource* begin_frame_source,
+      const UpdateVSyncParametersCallback& update_vsync_parameters_callback,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
   ~SoftwareBrowserCompositorOutputSurface() override;
@@ -37,13 +33,16 @@ class CONTENT_EXPORT SoftwareBrowserCompositorOutputSurface
   void EnsureBackbuffer() override;
   void DiscardBackbuffer() override;
   void BindFramebuffer() override;
+  void SetDrawRectangle(const gfx::Rect& draw_rectangle) override;
   void Reshape(const gfx::Size& size,
                float device_scale_factor,
                const gfx::ColorSpace& color_space,
-               bool has_alpha) override;
+               bool has_alpha,
+               bool use_stencil) override;
   void SwapBuffers(cc::OutputSurfaceFrame frame) override;
   bool IsDisplayedAsOverlayPlane() const override;
   unsigned GetOverlayTextureId() const override;
+  gfx::BufferFormat GetOverlayBufferFormat() const override;
   bool SurfaceIsSuspendForRecycle() const override;
   uint32_t GetFramebufferCopyTextureFormat() override;
 

@@ -7,31 +7,31 @@
 #ifndef FPDFSDK_FPDFXFA_CPDFXFA_DOCENVIRONMENT_H_
 #define FPDFSDK_FPDFXFA_CPDFXFA_DOCENVIRONMENT_H_
 
+#include "core/fxcrt/cfx_retain_ptr.h"
+#include "core/fxcrt/cfx_unowned_ptr.h"
 #include "public/fpdfview.h"
 #include "xfa/fxfa/fxfa.h"
 
 class CPDFXFA_Context;
-class IJS_Context;
+class IJS_EventContext;
 
 class CPDFXFA_DocEnvironment : public IXFA_DocEnvironment {
  public:
-  CPDFXFA_DocEnvironment(CPDFXFA_Context*);
+  explicit CPDFXFA_DocEnvironment(CPDFXFA_Context*);
   ~CPDFXFA_DocEnvironment() override;
 
   // IXFA_DocEnvironment
   void SetChangeMark(CXFA_FFDoc* hDoc) override;
-  // used in dynamic xfa, dwFlags refer to XFA_INVALIDATE_XXX macros.
-  void InvalidateRect(CXFA_FFPageView* pPageView,
-                      const CFX_RectF& rt,
-                      uint32_t dwFlags) override;
-  // show or hide caret
+  // Used in dynamic xfa.
+  void InvalidateRect(CXFA_FFPageView* pPageView, const CFX_RectF& rt) override;
+  // Show or hide caret.
   void DisplayCaret(CXFA_FFWidget* hWidget,
                     bool bVisible,
                     const CFX_RectF* pRtAnchor) override;
   // dwPos: (0:bottom 1:top)
   bool GetPopupPos(CXFA_FFWidget* hWidget,
-                   FX_FLOAT fMinPopup,
-                   FX_FLOAT fMaxPopup,
+                   float fMinPopup,
+                   float fMaxPopup,
                    const CFX_RectF& rtAnchor,
                    CFX_RectF& rtPopup) override;
   bool PopupMenu(CXFA_FFWidget* hWidget, CFX_PointF ptPopup) override;
@@ -85,8 +85,9 @@ class CPDFXFA_DocEnvironment : public IXFA_DocEnvironment {
                          const CFX_ByteStringC& szPropName,
                          CFXJSE_Value* pValue) override;
 
-  IFX_SeekableReadStream* OpenLinkedFile(CXFA_FFDoc* hDoc,
-                                         const CFX_WideString& wsLink) override;
+  CFX_RetainPtr<IFX_SeekableReadStream> OpenLinkedFile(
+      CXFA_FFDoc* hDoc,
+      const CFX_WideString& wsLink) override;
 
  private:
   bool OnBeforeNotifySubmit();
@@ -105,8 +106,7 @@ class CPDFXFA_DocEnvironment : public IXFA_DocEnvironment {
                         FPDF_DWORD flag);
   void ToXFAContentFlags(CFX_WideString csSrcContent, FPDF_DWORD& flag);
 
-  CPDFXFA_Context* const m_pContext;  // Not owned;
-  IJS_Context* m_pJSContext;
+  CFX_UnownedPtr<CPDFXFA_Context> const m_pContext;
 };
 
 #endif  // FPDFSDK_FPDFXFA_CPDFXFA_DOCENVIRONMENT_H_

@@ -38,7 +38,9 @@ Display ScreenBase::GetPrimaryDisplay() const {
   return *iter;
 }
 
-Display ScreenBase::GetDisplayNearestWindow(gfx::NativeView view) const {
+Display ScreenBase::GetDisplayNearestWindow(gfx::NativeWindow window) const {
+  // TODO(riajiang): Implement this for multi-displays either here or in
+  // ScreenMus.
   NOTIMPLEMENTED();
   return GetPrimaryDisplay();
 }
@@ -51,11 +53,14 @@ int ScreenBase::GetNumDisplays() const {
   return static_cast<int>(display_list_.displays().size());
 }
 
-std::vector<Display> ScreenBase::GetAllDisplays() const {
+const std::vector<Display>& ScreenBase::GetAllDisplays() const {
   return display_list_.displays();
 }
 
 Display ScreenBase::GetDisplayMatching(const gfx::Rect& match_rect) const {
+  if (match_rect.IsEmpty())
+    return GetDisplayNearestPoint(match_rect.origin());
+
   const Display* match =
       FindDisplayWithBiggestIntersection(display_list_.displays(), match_rect);
   return match ? *match : GetPrimaryDisplay();

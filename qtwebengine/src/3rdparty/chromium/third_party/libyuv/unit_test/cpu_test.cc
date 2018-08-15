@@ -51,6 +51,8 @@ TEST_F(LibYUVBaseTest, TestCpuHas) {
   printf("Has MIPS %x\n", has_mips);
   int has_dspr2 = TestCpuFlag(kCpuHasDSPR2);
   printf("Has DSPR2 %x\n", has_dspr2);
+  int has_msa = TestCpuFlag(kCpuHasMSA);
+  printf("Has MSA %x\n", has_msa);
 }
 
 TEST_F(LibYUVBaseTest, TestCpuCompilerEnabled) {
@@ -81,7 +83,7 @@ TEST_F(LibYUVBaseTest, TestCpuCompilerEnabled) {
 TEST_F(LibYUVBaseTest, TestCpuId) {
   int has_x86 = TestCpuFlag(kCpuHasX86);
   if (has_x86) {
-    uint32 cpu_info[4];
+    int cpu_info[4];
     // Vendor ID:
     // AuthenticAMD AMD processor
     // CentaurHauls Centaur processor

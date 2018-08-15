@@ -14,8 +14,7 @@
 #include <math.h>
 #include <sstream>
 
-#include "webrtc/base/arraysize.h"
-#include "webrtc/base/common.h"
+#include "webrtc/rtc_base/arraysize.h"
 
 namespace cricket {
 

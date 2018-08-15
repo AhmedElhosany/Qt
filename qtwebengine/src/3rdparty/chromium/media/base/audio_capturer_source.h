@@ -22,6 +22,14 @@ class AudioCapturerSource
  public:
   class CaptureCallback {
    public:
+    // Signals that audio recording has been started.  Called asynchronously
+    // after Start() has completed. If Start() encounters problems before this
+    // callback can be made, OnCaptureError will be called instead.
+    // This callback is provided for sources such as local audio sources that
+    // require asynchronous initialization so not all sources will support this
+    // notification.
+    virtual void OnCaptureStarted() {}
+
     // Callback to deliver the captured data from the OS.
     // TODO(chcunningham): Update delay argument to use frames instead of
     // milliseconds to prevent loss of precision. See http://crbug.com/587291.
@@ -32,6 +40,10 @@ class AudioCapturerSource
 
     // Signals an error has occurred.
     virtual void OnCaptureError(const std::string& message) = 0;
+
+    // Signals the muted state has changed. May be called before
+    // OnCaptureStarted.
+    virtual void OnCaptureMuted(bool is_muted) = 0;
 
    protected:
     virtual ~CaptureCallback() {}

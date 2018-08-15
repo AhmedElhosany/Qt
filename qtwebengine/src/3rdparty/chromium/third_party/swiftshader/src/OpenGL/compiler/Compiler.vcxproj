@@ -124,7 +124,8 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <BrowseInformation>true</BrowseInformation>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <DisableSpecificWarnings>4005;</DisableSpecificWarnings>
+      <DisableSpecificWarnings>5030;4005;</DisableSpecificWarnings>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -140,7 +141,8 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <BrowseInformation>true</BrowseInformation>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <DisableSpecificWarnings>4005;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>5030;4005;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -155,7 +157,8 @@
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <DisableSpecificWarnings>4005;</DisableSpecificWarnings>
+      <DisableSpecificWarnings>5030;4005;</DisableSpecificWarnings>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -170,7 +173,8 @@
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <DisableSpecificWarnings>4005;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>5030;4005;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Profile|Win32'">
@@ -186,7 +190,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <OmitFramePointers>false</OmitFramePointers>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <DisableSpecificWarnings>4005;</DisableSpecificWarnings>
+      <DisableSpecificWarnings>5030;4005;</DisableSpecificWarnings>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">
@@ -202,7 +206,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <OmitFramePointers>false</OmitFramePointers>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <DisableSpecificWarnings>4005;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>5030;4005;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>

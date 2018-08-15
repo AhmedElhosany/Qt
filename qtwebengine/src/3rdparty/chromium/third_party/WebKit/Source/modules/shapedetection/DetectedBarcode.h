@@ -5,9 +5,10 @@
 #ifndef DetectedBarcode_h
 #define DetectedBarcode_h
 
-#include "bindings/core/v8/ScriptWrappable.h"
 #include "modules/ModulesExport.h"
-#include "wtf/text/WTFString.h"
+#include "modules/imagecapture/Point2D.h"
+#include "platform/bindings/ScriptWrappable.h"
+#include "platform/wtf/text/WTFString.h"
 
 namespace blink {
 
@@ -19,18 +20,20 @@ class MODULES_EXPORT DetectedBarcode final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static DetectedBarcode* create();
-  static DetectedBarcode* create(String, DOMRect*);
+  static DetectedBarcode* Create();
+  static DetectedBarcode* Create(String, DOMRect*, HeapVector<Point2D>);
 
   const String& rawValue() const;
   DOMRect* boundingBox() const;
+  const HeapVector<Point2D>& cornerPoints() const;
   DECLARE_TRACE();
 
  private:
-  DetectedBarcode(String rawValue, DOMRect* boundingBox);
+  DetectedBarcode(String, DOMRect*, HeapVector<Point2D>);
 
-  const String m_rawValue;
-  const Member<DOMRect> m_boundingBox;
+  const String raw_value_;
+  const Member<DOMRect> bounding_box_;
+  const HeapVector<Point2D> corner_points_;
 };
 
 }  // namespace blink

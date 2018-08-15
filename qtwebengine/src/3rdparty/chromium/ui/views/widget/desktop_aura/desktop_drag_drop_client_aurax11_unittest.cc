@@ -26,7 +26,6 @@
 #include "ui/events/event_utils.h"
 #include "ui/gfx/x/x11_atom_cache.h"
 #include "ui/gfx/x/x11_types.h"
-#include "ui/views/widget/desktop_aura/desktop_cursor_loader_updater.h"
 #include "ui/views/widget/desktop_aura/desktop_drag_drop_client_aurax11.h"
 #include "ui/views/widget/desktop_aura/desktop_native_cursor_manager.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
@@ -38,18 +37,6 @@
 namespace views {
 
 namespace {
-
-const char* kAtomsToCache[] = {
-  "XdndActionCopy",
-  "XdndDrop",
-  "XdndEnter",
-  "XdndFinished",
-  "XdndLeave",
-  "XdndPosition",
-  "XdndStatus",
-  "XdndTypeList",
-  NULL
-};
 
 class TestDragDropClient;
 
@@ -196,8 +183,6 @@ class TestDragDropClient : public SimpleTestDragDropClient {
   // for that window.
   std::map< ::Window, ClientMessageEventCollector*> collectors_;
 
-  ui::X11AtomCache atom_cache_;
-
   DISALLOW_COPY_AND_ASSIGN(TestDragDropClient);
 };
 
@@ -311,20 +296,18 @@ TestDragDropClient::TestDragDropClient(
     aura::Window* window,
     DesktopNativeCursorManager* cursor_manager)
     : SimpleTestDragDropClient(window, cursor_manager),
-      source_xid_(window->GetHost()->GetAcceleratedWidget()),
-      atom_cache_(gfx::GetXDisplay(), kAtomsToCache) {
-}
+      source_xid_(window->GetHost()->GetAcceleratedWidget()) {}
 
 TestDragDropClient::~TestDragDropClient() {
 }
 
 Atom TestDragDropClient::GetAtom(const char* name) {
-  return atom_cache_.GetAtom(name);
+  return gfx::GetAtom(name);
 }
 
 bool TestDragDropClient::MessageHasType(const XClientMessageEvent& event,
                                         const char* type) {
-  return event.message_type == atom_cache_.GetAtom(type);
+  return event.message_type == GetAtom(type);
 }
 
 void TestDragDropClient::SetEventCollectorFor(
@@ -340,7 +323,7 @@ void TestDragDropClient::OnStatus(XID target_window,
                                   bool will_accept_drop,
                                   ::Atom accepted_action) {
   XClientMessageEvent event;
-  event.message_type = atom_cache_.GetAtom("XdndStatus");
+  event.message_type = GetAtom("XdndStatus");
   event.format = 32;
   event.window = source_xid_;
   event.data.l[0] = target_window;
@@ -355,7 +338,7 @@ void TestDragDropClient::OnFinished(XID target_window,
                                     bool accepted_drop,
                                     ::Atom performed_action) {
   XClientMessageEvent event;
-  event.message_type = atom_cache_.GetAtom("XdndFinished");
+  event.message_type = GetAtom("XdndFinished");
   event.format = 32;
   event.window = source_xid_;
   event.data.l[0] = target_window;
@@ -409,7 +392,7 @@ class DesktopDragDropClientAuraX11Test : public ViewsTestBase {
   // ViewsTestBase:
   void SetUp() override {
     ViewsTestBase::SetUp();
-    views_delegate()->set_use_desktop_native_widgets(true);
+    test_views_delegate()->set_use_desktop_native_widgets(true);
 
     // Create widget to initiate the drags.
     widget_.reset(new Widget);
@@ -420,8 +403,7 @@ class DesktopDragDropClientAuraX11Test : public ViewsTestBase {
     widget_->Init(params);
     widget_->Show();
 
-    cursor_manager_.reset(new DesktopNativeCursorManager(
-        DesktopCursorLoaderUpdater::Create()));
+    cursor_manager_.reset(new DesktopNativeCursorManager());
 
     client_.reset(new TestDragDropClient(widget_->GetNativeWindow(),
                                          cursor_manager_.get()));
@@ -896,8 +878,7 @@ class DesktopDragDropClientAuraX11ChromeSourceTargetTest
     widget_->Init(params);
     widget_->Show();
 
-    cursor_manager_.reset(new DesktopNativeCursorManager(
-        DesktopCursorLoaderUpdater::Create()));
+    cursor_manager_.reset(new DesktopNativeCursorManager());
 
     client_.reset(new SimpleTestDragDropClient(widget_->GetNativeWindow(),
                                                cursor_manager_.get()));

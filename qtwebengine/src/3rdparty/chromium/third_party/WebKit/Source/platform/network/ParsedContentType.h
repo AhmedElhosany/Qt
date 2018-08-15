@@ -33,41 +33,39 @@
 #define ParsedContentType_h
 
 #include "platform/PlatformExport.h"
-#include "wtf/Allocator.h"
-#include "wtf/HashMap.h"
-#include "wtf/text/StringHash.h"
+#include "platform/network/ParsedContentHeaderFieldParameters.h"
+#include "platform/wtf/Allocator.h"
+#include "platform/wtf/HashMap.h"
+#include "platform/wtf/text/StringHash.h"
 
 namespace blink {
 
-// <index, length>
-typedef std::pair<unsigned, unsigned> SubstringRange;
-PLATFORM_EXPORT bool isValidContentType(const String&);
-
+// ParsedContentType parses the content of a Content-Type header field as
+// specified in RFC2045 into MIME type and parameters and stores them.
 // FIXME: add support for comments.
 class PLATFORM_EXPORT ParsedContentType final {
   STACK_ALLOCATED();
 
  public:
-  explicit ParsedContentType(const String&);
+  using Mode = ParsedContentHeaderFieldParameters::Mode;
 
-  String mimeType() const { return m_mimeType; }
-  String charset() const;
+  explicit ParsedContentType(const String&, Mode = Mode::kNormal);
+
+  String MimeType() const { return mime_type_; }
+  String Charset() const;
 
   // Note that in the case of multiple values for the same name, the last value
   // is returned.
-  String parameterValueForName(const String&) const;
-  size_t parameterCount() const;
+  String ParameterValueForName(const String& name) const {
+    return parameters_.ParameterValueForName(name);
+  }
+  size_t ParameterCount() const { return parameters_.ParameterCount(); }
+
+  bool IsValid() const { return parameters_.IsValid(); }
 
  private:
-  template <class ReceiverType>
-  friend bool parseContentType(const String&, ReceiverType&);
-  void setContentType(const SubstringRange&);
-  void setContentTypeParameter(const SubstringRange&, const SubstringRange&);
-
-  typedef HashMap<String, String> KeyValuePairs;
-  String m_contentType;
-  KeyValuePairs m_parameters;
-  String m_mimeType;
+  String mime_type_;
+  ParsedContentHeaderFieldParameters parameters_;
 };
 
 }  // namespace blink

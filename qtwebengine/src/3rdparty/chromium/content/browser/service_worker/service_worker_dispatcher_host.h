@@ -13,15 +13,16 @@
 #include "base/id_map.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "base/strings/string16.h"
 #include "content/browser/service_worker/service_worker_registration_status.h"
 #include "content/common/service_worker/service_worker.mojom.h"
 #include "content/common/service_worker/service_worker_types.h"
+#include "content/public/browser/browser_associated_interface.h"
 #include "content/public/browser/browser_message_filter.h"
-#include "mojo/public/cpp/bindings/associated_binding_set.h"
+#include "mojo/public/cpp/bindings/strong_associated_binding_set.h"
 
 class GURL;
-struct EmbeddedWorkerHostMsg_ReportConsoleMessage_Params;
 
 namespace url {
 class Origin;
@@ -29,7 +30,7 @@ class Origin;
 
 namespace content {
 
-class MessagePortMessageFilter;
+class MessagePort;
 class ResourceContext;
 class ServiceWorkerContextCore;
 class ServiceWorkerContextWrapper;
@@ -42,13 +43,34 @@ struct ServiceWorkerObjectInfo;
 struct ServiceWorkerRegistrationObjectInfo;
 struct ServiceWorkerVersionAttributes;
 
+// ServiceWorkerDispatcherHost is the browser-side endpoint for several IPC
+// messages for service workers. There is a 1:1 correspondence between
+// renderer processes and ServiceWorkerDispatcherHosts. Currently
+// ServiceWorkerDispatcherHost handles both legacy IPC messages (to and from
+// its corresponding ServiceWorkerDispatcher on the renderer) and Mojo IPC
+// messages (from any ServiceWorkerNetworkProvider on the renderer).
+//
+// Most messages are "from" a "service worker provider" on the renderer (a
+// ServiceWorkerNetworkProvider or a blink::WebServiceWorkerProvider), hence
+// they include a provider_id which must match to a ServiceWorkerProviderHost.
+//
+// ServiceWorkerDispatcherHost is created on the UI thread in
+// RenderProcessHostImpl::Init() via CreateMessageFilters(). But initialization
+// and destruction occur on the IO thread, as does most (or all?) message
+// handling.  It lives as long as the renderer process lives. Therefore much
+// tracking of renderer processes in browser-side service worker code is built
+// on ServiceWorkerDispatcherHost lifetime.
+//
+// This class is bound with mojom::ServiceWorkerDispatcherHost. All
+// InterfacePtrs on the same render process are bound to the same
+// content::ServiceWorkerDispatcherHost.
 class CONTENT_EXPORT ServiceWorkerDispatcherHost
-    : public mojom::ServiceWorkerDispatcherHost,
-      public BrowserMessageFilter {
+    : public BrowserMessageFilter,
+      public BrowserAssociatedInterface<mojom::ServiceWorkerDispatcherHost>,
+      public mojom::ServiceWorkerDispatcherHost {
  public:
   ServiceWorkerDispatcherHost(
       int render_process_id,
-      MessagePortMessageFilter* message_port_message_filter,
       ResourceContext* resource_context);
 
   void Init(ServiceWorkerContextWrapper* context_wrapper);
@@ -80,10 +102,6 @@ class CONTENT_EXPORT ServiceWorkerDispatcherHost
       base::WeakPtr<ServiceWorkerProviderHost> provider_host,
       ServiceWorkerRegistration* registration);
 
-  MessagePortMessageFilter* message_port_message_filter() {
-    return message_port_message_filter_;
-  }
-
  protected:
   ~ServiceWorkerDispatcherHost() override;
 
@@ -92,26 +110,28 @@ class CONTENT_EXPORT ServiceWorkerDispatcherHost
   friend class base::DeleteHelper<ServiceWorkerDispatcherHost>;
   friend class ServiceWorkerDispatcherHostTest;
   friend class TestingServiceWorkerDispatcherHost;
+  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerDispatcherHostTest,
+                           ProviderCreatedAndDestroyed);
+  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerDispatcherHostTest,
+                           CleanupOnRendererCrash);
 
   using StatusCallback = base::Callback<void(ServiceWorkerStatusCode status)>;
   enum class ProviderStatus { OK, NO_CONTEXT, DEAD_HOST, NO_HOST, NO_URL };
 
-  // Called when mojom::ServiceWorkerDispatcherHostPtr is created on the
-  // renderer-side.
-  void AddMojoBinding(mojo::ScopedInterfaceEndpointHandle handle);
-
   // mojom::ServiceWorkerDispatcherHost implementation
-  void OnProviderCreated(int provider_id,
-                         int route_id,
-                         ServiceWorkerProviderType provider_type,
-                         bool is_parent_frame_secure) override;
+  void OnProviderCreated(ServiceWorkerProviderHostInfo info) override;
+  void OnSetHostedVersionId(
+      int provider_id,
+      int64_t version_id,
+      int embedded_worker_id,
+      mojom::URLLoaderFactoryAssociatedRequest request) override;
 
   // IPC Message handlers
   void OnRegisterServiceWorker(int thread_id,
                                int request_id,
                                int provider_id,
-                               const GURL& pattern,
-                               const GURL& script_url);
+                               const GURL& script_url,
+                               const ServiceWorkerRegistrationOptions& options);
   void OnUpdateServiceWorker(int thread_id,
                              int request_id,
                              int provider_id,
@@ -142,36 +162,17 @@ class CONTENT_EXPORT ServiceWorkerDispatcherHost
                                     int provider_id,
                                     int64_t registration_id,
                                     const std::string& value);
-  void OnProviderDestroyed(int provider_id);
-  void OnSetHostedVersionId(int provider_id,
-                            int64_t version_id,
-                            int embedded_worker_id);
-  void OnWorkerReadyForInspection(int embedded_worker_id);
-  void OnWorkerScriptLoaded(int embedded_worker_id);
-  void OnWorkerThreadStarted(int embedded_worker_id,
-                             int thread_id,
-                             int provider_id);
-  void OnWorkerScriptLoadFailed(int embedded_worker_id);
-  void OnWorkerScriptEvaluated(int embedded_worker_id, bool success);
-  void OnWorkerStarted(int embedded_worker_id);
-  void OnWorkerStopped(int embedded_worker_id);
-  void OnReportException(int embedded_worker_id,
-                         const base::string16& error_message,
-                         int line_number,
-                         int column_number,
-                         const GURL& source_url);
-  void OnReportConsoleMessage(
-      int embedded_worker_id,
-      const EmbeddedWorkerHostMsg_ReportConsoleMessage_Params& params);
+  void OnCountFeature(int64_t version_id, uint32_t feature);
   void OnIncrementServiceWorkerRefCount(int handle_id);
   void OnDecrementServiceWorkerRefCount(int handle_id);
   void OnIncrementRegistrationRefCount(int registration_handle_id);
   void OnDecrementRegistrationRefCount(int registration_handle_id);
-  void OnPostMessageToWorker(int handle_id,
-                             int provider_id,
-                             const base::string16& message,
-                             const url::Origin& source_origin,
-                             const std::vector<int>& sent_message_ports);
+  void OnPostMessageToWorker(
+      int handle_id,
+      int provider_id,
+      const base::string16& message,
+      const url::Origin& source_origin,
+      const std::vector<MessagePort>& sent_message_ports);
 
   void OnTerminateWorker(int handle_id);
 
@@ -179,7 +180,7 @@ class CONTENT_EXPORT ServiceWorkerDispatcherHost
       scoped_refptr<ServiceWorkerVersion> worker,
       const base::string16& message,
       const url::Origin& source_origin,
-      const std::vector<int>& sent_message_ports,
+      const std::vector<MessagePort>& sent_message_ports,
       ServiceWorkerProviderHost* sender_provider_host,
       const StatusCallback& callback);
   template <typename SourceInfo>
@@ -187,19 +188,21 @@ class CONTENT_EXPORT ServiceWorkerDispatcherHost
       scoped_refptr<ServiceWorkerVersion> worker,
       const base::string16& message,
       const url::Origin& source_origin,
-      const std::vector<int>& sent_message_ports,
+      const std::vector<MessagePort>& sent_message_ports,
+      const base::Optional<base::TimeDelta>& timeout,
       const StatusCallback& callback,
       const SourceInfo& source_info);
   void DispatchExtendableMessageEventAfterStartWorker(
       scoped_refptr<ServiceWorkerVersion> worker,
       const base::string16& message,
       const url::Origin& source_origin,
-      const std::vector<int>& sent_message_ports,
+      const std::vector<MessagePort>& sent_message_ports,
       const ExtendableMessageEventSource& source,
+      const base::Optional<base::TimeDelta>& timeout,
       const StatusCallback& callback);
   template <typename SourceInfo>
   void DidFailToDispatchExtendableMessageEvent(
-      const std::vector<int>& sent_message_ports,
+      const std::vector<MessagePort>& sent_message_ports,
       const SourceInfo& source_info,
       const StatusCallback& callback,
       ServiceWorkerStatusCode status);
@@ -259,23 +262,30 @@ class CONTENT_EXPORT ServiceWorkerDispatcherHost
       ProviderStatus* out_status,
       int provider_id);
 
+  void DidUpdateNavigationPreloadEnabled(int thread_id,
+                                         int request_id,
+                                         int registration_id,
+                                         bool enable,
+                                         ServiceWorkerStatusCode status);
+  void DidUpdateNavigationPreloadHeader(int thread_id,
+                                        int request_id,
+                                        int registration_id,
+                                        const std::string& value,
+                                        ServiceWorkerStatusCode status);
+
   const int render_process_id_;
-  MessagePortMessageFilter* const message_port_message_filter_;
   ResourceContext* resource_context_;
+  // Only accessed on the IO thread.
   scoped_refptr<ServiceWorkerContextWrapper> context_wrapper_;
 
-  IDMap<ServiceWorkerHandle, IDMapOwnPointer> handles_;
+  IDMap<std::unique_ptr<ServiceWorkerHandle>> handles_;
 
   using RegistrationHandleMap =
-      IDMap<ServiceWorkerRegistrationHandle, IDMapOwnPointer>;
+      IDMap<std::unique_ptr<ServiceWorkerRegistrationHandle>>;
   RegistrationHandleMap registration_handles_;
 
   bool channel_ready_;  // True after BrowserMessageFilter::sender_ != NULL.
   std::vector<std::unique_ptr<IPC::Message>> pending_messages_;
-
-  mojo::AssociatedBindingSet<mojom::ServiceWorkerDispatcherHost> bindings_;
-
-  base::WeakPtrFactory<ServiceWorkerDispatcherHost> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ServiceWorkerDispatcherHost);
 };

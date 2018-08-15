@@ -7,11 +7,17 @@
 #ifndef CORE_FPDFDOC_CPDF_FORMFIELD_H_
 #define CORE_FPDFDOC_CPDF_FORMFIELD_H_
 
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "core/fpdfdoc/cpdf_aaction.h"
 #include "core/fpdfdoc/cpdf_formfield.h"
+#include "core/fxcrt/cfx_unowned_ptr.h"
 #include "core/fxcrt/fx_basic.h"
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
+#include "third_party/base/stl_util.h"
 
 #define FIELDTYPE_UNKNOWN 0
 #define FIELDTYPE_PUSHBUTTON 1
@@ -22,14 +28,18 @@
 #define FIELDTYPE_TEXTFIELD 6
 #define FIELDTYPE_SIGNATURE 7
 
+#define FORMFLAG_READONLY 0x01
+#define FORMFLAG_REQUIRED 0x02
+#define FORMFLAG_NOEXPORT 0x04
+
 class CPDF_Dictionary;
 class CPDF_Font;
 class CPDF_FormControl;
 class CPDF_InterForm;
 class CPDF_String;
 
-CPDF_Object* FPDF_GetFieldAttr(CPDF_Dictionary* pFieldDict,
-                               const FX_CHAR* name,
+CPDF_Object* FPDF_GetFieldAttr(const CPDF_Dictionary* pFieldDict,
+                               const char* name,
                                int nLevel = 0);
 CFX_WideString FPDF_GetFullName(CPDF_Dictionary* pFieldDict);
 
@@ -48,20 +58,25 @@ class CPDF_FormField {
     Sign
   };
 
+  CPDF_FormField(CPDF_InterForm* pForm, CPDF_Dictionary* pDict);
+  ~CPDF_FormField();
+
   CFX_WideString GetFullName() const;
 
   Type GetType() const { return m_Type; }
   uint32_t GetFlags() const { return m_Flags; }
 
-  CPDF_Dictionary* GetFieldDict() const { return m_pDict; }
+  CPDF_Dictionary* GetFieldDict() const { return m_pDict.Get(); }
   void SetFieldDict(CPDF_Dictionary* pDict) { m_pDict = pDict; }
 
   bool ResetField(bool bNotify = false);
 
-  int CountControls() const { return m_ControlList.GetSize(); }
+  int CountControls() const {
+    return pdfium::CollectionSize<int>(m_ControlList);
+  }
 
   CPDF_FormControl* GetControl(int index) const {
-    return m_ControlList.GetAt(index);
+    return m_ControlList[index].Get();
   }
 
   int GetControlIndex(const CPDF_FormControl* pControl) const;
@@ -118,16 +133,23 @@ class CPDF_FormField {
                    bool bNotify = false);
 #endif  // PDF_ENABLE_XFA
 
-  FX_FLOAT GetFontSize() const { return m_FontSize; }
-  CPDF_Font* GetFont() const { return m_pFont; }
+  float GetFontSize() const { return m_FontSize; }
+  CPDF_Font* GetFont() const { return m_pFont.Get(); }
+
+  const CPDF_Dictionary* GetDict() const { return m_pDict.Get(); }
+  const CPDF_InterForm* GetForm() const { return m_pForm.Get(); }
+
+  CFX_WideString GetCheckValue(bool bDefault) const;
+
+  void AddFormControl(CPDF_FormControl* pFormControl) {
+    m_ControlList.emplace_back(pFormControl);
+  }
+
+  void SetOpt(std::unique_ptr<CPDF_Object> pOpt) {
+    m_pDict->SetFor("Opt", std::move(pOpt));
+  }
 
  private:
-  friend class CPDF_InterForm;
-  friend class CPDF_FormControl;
-
-  CPDF_FormField(CPDF_InterForm* pForm, CPDF_Dictionary* pDict);
-  ~CPDF_FormField();
-
   CFX_WideString GetValue(bool bDefault) const;
   bool SetValue(const CFX_WideString& value, bool bDefault, bool bNotify);
 
@@ -136,7 +158,6 @@ class CPDF_FormField {
   CFX_WideString GetOptionText(int index, int sub_index) const;
 
   void LoadDA();
-  CFX_WideString GetCheckValue(bool bDefault) const;
   bool SetCheckValue(const CFX_WideString& value, bool bDefault, bool bNotify);
 
   bool NotifyBeforeSelectionChange(const CFX_WideString& value);
@@ -150,11 +171,12 @@ class CPDF_FormField {
 
   CPDF_FormField::Type m_Type;
   uint32_t m_Flags;
-  CPDF_InterForm* m_pForm;
-  CPDF_Dictionary* m_pDict;
-  CFX_ArrayTemplate<CPDF_FormControl*> m_ControlList;
-  FX_FLOAT m_FontSize;
-  CPDF_Font* m_pFont;
+  CFX_UnownedPtr<CPDF_InterForm> const m_pForm;
+  CFX_UnownedPtr<CPDF_Dictionary> m_pDict;
+  // Owned by InterForm parent.
+  std::vector<CFX_UnownedPtr<CPDF_FormControl>> m_ControlList;
+  float m_FontSize;
+  CFX_UnownedPtr<CPDF_Font> m_pFont;
 };
 
 #endif  // CORE_FPDFDOC_CPDF_FORMFIELD_H_

@@ -18,47 +18,7 @@ namespace base {
 class FilePath;
 }
 
-#if __OBJC__
-@class NSArray;
-@class NSString;
-#else
-class NSArray;
-class NSString;
-#endif
-
 namespace content {
-
-// This class wraps the C-style sandbox APIs in a class to ensure proper
-// initialization and cleanup.
-class CONTENT_EXPORT SandboxCompiler {
- public:
-  explicit SandboxCompiler(const std::string& profile_str);
-
-  ~SandboxCompiler();
-
-  // Inserts a boolean into the parameters key/value map. A duplicate key is not
-  // allowed, and will cause the function to return false. The value is not
-  // inserted in this case.
-  bool InsertBooleanParam(const std::string& key, bool value);
-
-  // Inserts a string into the parameters key/value map. A duplicate key is not
-  // allowed, and will cause the function to return false. The value is not
-  // inserted in this case.
-  bool InsertStringParam(const std::string& key, const std::string& value);
-
-  // Compiles and applies the profile; returns true on success.
-  bool CompileAndApplyProfile(std::string* error);
-
- private:
-  // Storage of the key/value pairs of strings that are used in the sandbox
-  // profile.
-  std::map<std::string, std::string> params_map_;
-
-  // The sandbox profile source code.
-  const std::string profile_str_;
-
-  DISALLOW_COPY_AND_ASSIGN(SandboxCompiler);
-};
 
 class CONTENT_EXPORT Sandbox {
  public:
@@ -83,32 +43,26 @@ class CONTENT_EXPORT Sandbox {
   // Returns true if the sandbox has been enabled for the current process.
   static bool SandboxIsCurrentlyActive();
 
-  // Escape |src_utf8| for use in a plain string variable in a sandbox
-  // configuraton file.  On return |dst| is set to the quoted output.
-  // Returns: true on success, false otherwise.
-  static bool QuotePlainString(const std::string& src_utf8, std::string* dst);
-
-  // Escape |str_utf8| for use in a regex literal in a sandbox
-  // configuraton file.  On return |dst| is set to the utf-8 encoded quoted
-  // output.
-  //
-  // The implementation of this function is based on empirical testing of the
-  // OS X sandbox on 10.5.8 & 10.6.2 which is undocumented and subject to
-  // change.
-  //
-  // Note: If str_utf8 contains any characters < 32 || >125 then the function
-  // fails and false is returned.
-  //
-  // Returns: true on success, false otherwise.
-  static bool QuoteStringForRegex(const std::string& str_utf8,
-                                  std::string* dst);
-
- private:
   // Convert provided path into a "canonical" path matching what the Sandbox
   // expects i.e. one without symlinks.
   // This path is not necessarily unique e.g. in the face of hardlinks.
   static base::FilePath GetCanonicalSandboxPath(const base::FilePath& path);
 
+  static const char* kSandboxBrowserPID;
+  static const char* kSandboxBundlePath;
+  static const char* kSandboxChromeBundleId;
+  static const char* kSandboxComponentPath;
+  static const char* kSandboxDisableDenialLogging;
+  static const char* kSandboxEnableLogging;
+  static const char* kSandboxHomedirAsLiteral;
+  static const char* kSandboxLoggingPathAsLiteral;
+  static const char* kSandboxOSVersion;
+  static const char* kSandboxPermittedDir;
+
+  // TODO(kerrnel): this is only for the legacy sandbox.
+  static const char* kSandboxElCapOrLater;
+
+ private:
   FRIEND_TEST_ALL_PREFIXES(MacDirAccessSandboxTest, StringEscape);
   FRIEND_TEST_ALL_PREFIXES(MacDirAccessSandboxTest, RegexEscape);
   FRIEND_TEST_ALL_PREFIXES(MacDirAccessSandboxTest, SandboxAccess);

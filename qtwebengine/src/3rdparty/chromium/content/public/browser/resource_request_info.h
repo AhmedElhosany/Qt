@@ -8,6 +8,7 @@
 #include "base/callback_forward.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/global_request_id.h"
+#include "content/public/common/previews_state.h"
 #include "content/public/common/resource_type.h"
 #include "third_party/WebKit/public/platform/WebPageVisibilityState.h"
 #include "third_party/WebKit/public/platform/WebReferrerPolicy.h"
@@ -49,7 +50,7 @@ class ResourceRequestInfo {
                                                 bool parent_is_main_frame,
                                                 bool allow_download,
                                                 bool is_async,
-                                                bool is_using_lofi);
+                                                PreviewsState previews_state);
 
   // Returns the associated RenderFrame for a given process. Returns false, if
   // there is no associated RenderFrame. This method does not rely on the
@@ -72,6 +73,11 @@ class ResourceRequestInfo {
   // non-null.
   using WebContentsGetter = base::Callback<WebContents*(void)>;
 
+  // A callback that returns a frame tree node id . The callback can always
+  // be used, but it may return -1 if no id is found. The callback should only
+  // run on the UI thread.
+  using FrameTreeNodeIdGetter = base::Callback<int(void)>;
+
   // Returns a callback that returns a pointer to the WebContents this request
   // is associated with, or nullptr if it no longer exists or the request is
   // not associated with a WebContents. The callback should only run on the UI
@@ -79,6 +85,13 @@ class ResourceRequestInfo {
   // Note: Not all resource requests will be owned by a WebContents. For
   // example, requests made by a ServiceWorker.
   virtual WebContentsGetter GetWebContentsGetterForRequest() const = 0;
+
+  // Returns a callback that returns an int with the frame tree node id
+  //   associated with this request, or -1 if it no longer exists. This
+  //   callback should only be run on the UI thread.
+  // Note: Not all resource requests will be associated with a frame. For
+  // example, requests made by a ServiceWorker.
+  virtual FrameTreeNodeIdGetter GetFrameTreeNodeIdGetterForRequest() const = 0;
 
   // Returns the associated ResourceContext.
   virtual ResourceContext* GetContext() const = 0;
@@ -102,6 +115,7 @@ class ResourceRequestInfo {
 
   // Returns the FrameTreeNode ID for this frame. This ID is browser-global and
   // uniquely identifies a frame that hosts content.
+  // Note: Returns -1 for all requests except PlzNavigate requests.
   virtual int GetFrameTreeNodeId() const = 0;
 
   // The IPC route identifier of the RenderFrame.
@@ -158,8 +172,8 @@ class ResourceRequestInfo {
   // Whether this is a download.
   virtual bool IsDownload() const = 0;
 
-  // Whether this request if using Lo-Fi mode.
-  virtual bool IsUsingLoFi() const = 0;
+  // Returns the current state of Previews.
+  virtual PreviewsState GetPreviewsState() const = 0;
 
   // PlzNavigate
   // Only used for navigations. Returns opaque data set by the embedder on the

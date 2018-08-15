@@ -64,7 +64,8 @@ enum ResourceType {
     HandleType,
     GlHandleType,
     GetDCType,
-    ReleaseDCType
+    ReleaseDCType,
+    VkSurface
 };
 
 static int resourceType(const QByteArray &key)
@@ -77,7 +78,8 @@ static int resourceType(const QByteArray &key)
         "handle",
         "glhandle",
         "getdc",
-        "releasedc"
+        "releasedc",
+        "vkSurface"
     };
     const char ** const end = names + sizeof(names) / sizeof(names[0]);
     const char **result = std::find(names, end, key);
@@ -111,6 +113,12 @@ void *QWindowsNativeInterface::nativeResourceForWindow(const QByteArray &resourc
         break;
     case QWindow::OpenGLSurface:
     case QWindow::OpenVGSurface:
+        break;
+    case QWindow::VulkanSurface:
+#if QT_CONFIG(vulkan)
+        if (type == VkSurface)
+            return bw->surface(nullptr, nullptr); // returns the address of the VkSurfaceKHR, not the value, as expected
+#endif
         break;
     }
     qWarning("%s: Invalid key '%s' requested.", __FUNCTION__, resource.constData());

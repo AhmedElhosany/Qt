@@ -24,7 +24,6 @@
 
 namespace content {
 
-struct NotificationResources;
 class ThreadSafeSender;
 
 class NotificationManager : public blink::WebNotificationManager,
@@ -41,26 +40,26 @@ class NotificationManager : public blink::WebNotificationManager,
   // WorkerThread::Observer implementation.
   void WillStopCurrentWorkerThread() override;
 
-  void show(
+  void Show(
       const blink::WebSecurityOrigin& origin,
       const blink::WebNotificationData& notification_data,
       std::unique_ptr<blink::WebNotificationResources> notification_resources,
       blink::WebNotificationDelegate* delegate) override;
-  void showPersistent(
+  void ShowPersistent(
       const blink::WebSecurityOrigin& origin,
       const blink::WebNotificationData& notification_data,
       std::unique_ptr<blink::WebNotificationResources> notification_resources,
       blink::WebServiceWorkerRegistration* service_worker_registration,
-      blink::WebNotificationShowCallbacks* callbacks) override;
-  void getNotifications(
+      std::unique_ptr<blink::WebNotificationShowCallbacks> callbacks) override;
+  void GetNotifications(
       const blink::WebString& filter_tag,
       blink::WebServiceWorkerRegistration* service_worker_registration,
-      blink::WebNotificationGetCallbacks* callbacks) override;
-  void close(blink::WebNotificationDelegate* delegate) override;
-  void closePersistent(const blink::WebSecurityOrigin& origin,
+      std::unique_ptr<blink::WebNotificationGetCallbacks> callbacks) override;
+  void Close(blink::WebNotificationDelegate* delegate) override;
+  void ClosePersistent(const blink::WebSecurityOrigin& origin,
                        const blink::WebString& tag,
                        const blink::WebString& notification_id) override;
-  void notifyDelegateDestroyed(
+  void NotifyDelegateDestroyed(
       blink::WebNotificationDelegate* delegate) override;
 
   // Called by the NotificationDispatcher.
@@ -83,11 +82,11 @@ class NotificationManager : public blink::WebNotificationManager,
   scoped_refptr<NotificationDispatcher> notification_dispatcher_;
 
   // Tracks pending requests for getting a list of notifications.
-  IDMap<blink::WebNotificationGetCallbacks, IDMapOwnPointer>
+  IDMap<std::unique_ptr<blink::WebNotificationGetCallbacks>>
       pending_get_notification_requests_;
 
   // Tracks pending requests for displaying persistent notifications.
-  IDMap<blink::WebNotificationShowCallbacks, IDMapOwnPointer>
+  IDMap<std::unique_ptr<blink::WebNotificationShowCallbacks>>
       pending_show_notification_requests_;
 
   // Structure holding the information for active non-persistent notifications.

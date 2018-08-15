@@ -80,7 +80,10 @@
 #include "private/qapplication_p.h"
 #include "private/qshortcutmap_p.h"
 #include "qkeysequence.h"
-#define ACCEL_KEY(k) (!qApp->d_func()->shortcutMap.hasShortcutForKeySequence(k) ? \
+#define ACCEL_KEY(k) ((qApp->testAttribute(Qt::AA_DontShowIconsInMenus) \
+                        ? false \
+                        : qApp->styleHints()->showShortcutsInContextMenus()) \
+                      && !qApp->d_func()->shortcutMap.hasShortcutForKeySequence(k) ? \
                       QLatin1Char('\t') + QKeySequence(k).toString(QKeySequence::NativeText) : QString())
 #else
 #define ACCEL_KEY(k) QString()
@@ -92,10 +95,6 @@
 #endif
 
 QT_BEGIN_NAMESPACE
-
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-extern void qt_mac_secure_keyboard(bool); //qapplication_mac.cpp
-#endif
 
 /*!
     Initialize \a option with the values from this QLineEdit. This method
@@ -578,10 +577,6 @@ void QLineEdit::setEchoMode(EchoMode mode)
     setInputMethodHints(imHints);
     d->control->setEchoMode(mode);
     update();
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-    if (hasFocus())
-        qt_mac_secure_keyboard(mode == Password || mode == NoEcho);
-#endif
 }
 
 
@@ -964,6 +959,8 @@ QString QLineEdit::selectedText() const
     line edit or -1 if no text is selected.
 
     \sa selectedText()
+    \sa selectionEnd()
+    \sa selectionLength()
 */
 
 int QLineEdit::selectionStart() const
@@ -972,8 +969,33 @@ int QLineEdit::selectionStart() const
     return d->control->selectionStart();
 }
 
+/*!
+    Returns the index of the character directly after the selection
+    in the line edit or -1 if no text is selected.
+    \since 5.10
 
+    \sa selectedText()
+    \sa selectionStart()
+    \sa selectionLength()
+*/
+int QLineEdit::selectionEnd() const
+{
+   Q_D(const QLineEdit);
+   return d->control->selectionEnd();
+}
 
+/*!
+    Returns the length of the selection.
+    \since 5.10
+
+    \sa selectedText()
+    \sa selectionStart()
+    \sa selectionEnd()
+*/
+int QLineEdit::selectionLength() const
+{
+   return selectionEnd() - selectionStart();
+}
 
 /*!
     Selects text from position \a start and for \a length characters.
@@ -1563,7 +1585,7 @@ void QLineEdit::mouseReleaseEvent(QMouseEvent* e)
             d->control->copy(QClipboard::Selection);
         } else if (!d->control->isReadOnly() && e->button() == Qt::MidButton) {
             deselect();
-            insert(QApplication::clipboard()->text(QClipboard::Selection));
+            d->control->paste(QClipboard::Selection);
         }
     }
 #endif
@@ -1818,10 +1840,6 @@ void QLineEdit::focusInEvent(QFocusEvent *e)
     if((!hasSelectedText() && d->control->preeditAreaText().isEmpty())
        || style()->styleHint(QStyle::SH_BlinkCursorWhenTextSelected, &opt, this))
         d->setCursorVisible(true);
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-    if (d->control->echoMode() == Password || d->control->echoMode() == NoEcho)
-        qt_mac_secure_keyboard(true);
-#endif
 #ifdef QT_KEYPAD_NAVIGATION
         d->control->setCancelText(d->control->text());
     }
@@ -1866,10 +1884,6 @@ void QLineEdit::focusOutEvent(QFocusEvent *e)
             if (hasAcceptableInput() || d->control->fixup())
                 emit editingFinished();
     }
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-    if (d->control->echoMode() == Password || d->control->echoMode() == NoEcho)
-        qt_mac_secure_keyboard(false);
-#endif
 #ifdef QT_KEYPAD_NAVIGATION
     d->control->setCancelText(QString());
 #endif

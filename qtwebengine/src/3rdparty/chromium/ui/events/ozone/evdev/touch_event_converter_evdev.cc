@@ -32,7 +32,7 @@
 #include "ui/events/event_utils.h"
 #include "ui/events/ozone/evdev/device_event_dispatcher_evdev.h"
 #include "ui/events/ozone/evdev/touch_evdev_types.h"
-#include "ui/events/ozone/evdev/touch_noise/touch_noise_finder.h"
+#include "ui/events/ozone/evdev/touch_filter/false_touch_finder.h"
 #include "ui/ozone/public/input_controller.h"
 
 namespace {
@@ -45,6 +45,11 @@ struct TouchCalibration {
   int bezel_top;
   int bezel_bottom;
 };
+
+// Convert tilt from [min, min + num_values) to [-90deg, +90deg)
+float ScaleTilt(int value, int min_value, int num_values) {
+  return 180.f * (value - min_value) / num_values - 90.f;
+}
 
 void GetTouchCalibration(TouchCalibration* cal) {
   std::vector<std::string> parts = base::SplitString(
@@ -110,10 +115,7 @@ TouchEventConverterEvdev::TouchEventConverterEvdev(
                           devinfo.product_id()),
       input_device_fd_(std::move(fd)),
       dispatcher_(dispatcher) {
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kExtraTouchNoiseFiltering)) {
-    touch_noise_finder_.reset(new TouchNoiseFinder);
-  }
+
   touch_evdev_debug_buffer_.Initialize(devinfo);
 }
 
@@ -142,6 +144,11 @@ void TouchEventConverterEvdev::Initialize(const EventDeviceInfo& info) {
     x_num_tuxels_ = info.GetAbsMaximum(ABS_X) - x_min_tuxels_ + 1;
     y_min_tuxels_ = info.GetAbsMinimum(ABS_Y);
     y_num_tuxels_ = info.GetAbsMaximum(ABS_Y) - y_min_tuxels_ + 1;
+    tilt_x_min_ = info.GetAbsMinimum(ABS_TILT_X);
+    tilt_y_min_ = info.GetAbsMinimum(ABS_TILT_Y);
+    tilt_x_range_ = info.GetAbsMaximum(ABS_TILT_X) - tilt_x_min_ + 1;
+    tilt_y_range_ = info.GetAbsMaximum(ABS_TILT_Y) - tilt_y_min_ + 1;
+
     touch_points_ = 1;
     major_max_ = 0;
     current_slot_ = 0;
@@ -189,7 +196,10 @@ void TouchEventConverterEvdev::Initialize(const EventDeviceInfo& info) {
           info.GetAbsMtSlotValueWithDefault(ABS_MT_TOUCH_MINOR, i, 0) / 2.0f;
       events_[i].pressure = ScalePressure(
           info.GetAbsMtSlotValueWithDefault(ABS_MT_PRESSURE, i, 0));
-      events_[i].cancelled = major_max_ > 0 && touch_major == major_max_;
+      int tool_type = info.GetAbsMtSlotValueWithDefault(ABS_MT_TOOL_TYPE, i,
+                                                        MT_TOOL_FINGER);
+      events_[i].cancelled = (tool_type == MT_TOOL_PALM) ||
+                             (major_max_ > 0 && touch_major == major_max_);
       if (events_[i].cancelled)
         cancelled_state = true;
     }
@@ -205,10 +215,24 @@ void TouchEventConverterEvdev::Initialize(const EventDeviceInfo& info) {
     events_[0].radius_y = 0;
     events_[0].pressure = 0;
     events_[0].tool_code = 0;
+    events_[0].tilt_x = 0;
+    events_[0].tilt_y = 0;
     events_[0].cancelled = false;
   }
   if (cancelled_state)
     CancelAllTouches();
+
+  bool touch_noise_filtering =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kExtraTouchNoiseFiltering);
+  bool edge_touch_filtering =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEdgeTouchFiltering);
+  if (touch_noise_filtering || edge_touch_filtering) {
+    false_touch_finder_.reset(new FalseTouchFinder(touch_noise_filtering,
+                                                  edge_touch_filtering,
+                                                  GetTouchscreenSize()));
+  }
 }
 
 void TouchEventConverterEvdev::Reinitialize() {
@@ -338,19 +362,10 @@ void TouchEventConverterEvdev::EmulateMultitouchEvent(
 
 void TouchEventConverterEvdev::ProcessKey(const input_event& input) {
   switch (input.code) {
-    case BTN_TOUCH:
-    case BTN_LEFT:
-    case BTN_0:
-      events_[current_slot_].btn_left.down = input.value;
-      events_[current_slot_].btn_left.changed = true;
-      break;
     case BTN_STYLUS:
-      events_[current_slot_].btn_right.down = input.value;
-      events_[current_slot_].btn_right.changed = true;
-      break;
-    case BTN_STYLUS2:
-      events_[current_slot_].btn_middle.down = input.value;
-      events_[current_slot_].btn_middle.changed = true;
+      events_[current_slot_].btn_stylus.down = input.value;
+      events_[current_slot_].btn_stylus.changed = true;
+      events_[current_slot_].altered = true;
       break;
     case BTN_TOOL_PEN:
     case BTN_TOOL_RUBBER:
@@ -360,6 +375,11 @@ void TouchEventConverterEvdev::ProcessKey(const input_event& input) {
         events_[current_slot_].tool_code = 0;
       }
       events_[current_slot_].altered = true;
+      break;
+    case BTN_LEFT:
+    case BTN_0:
+    case BTN_STYLUS2:
+    case BTN_TOUCH:
       break;
     default:
       NOTIMPLEMENTED() << "invalid code for EV_KEY: " << input.code;
@@ -374,8 +394,9 @@ void TouchEventConverterEvdev::ProcessAbs(const input_event& input) {
       // neither minor nor orientation, so this is all we can do.
       events_[current_slot_].radius_x = input.value / 2.0f;
 
-      // The MT protocol cannot communicate cancelled touches, so some kernel
-      // drivers will identify palms by setting touch major to max.
+      // The MT protocol communicates that there is palm on the surface
+      // by either sending ABS_MT_TOOL_TYPE/MT_TOOL_PALM, or by setting
+      // touch major to max.
       if (major_max_ > 0 && input.value == major_max_)
         events_[current_slot_].cancelled = true;
       break;
@@ -387,6 +408,10 @@ void TouchEventConverterEvdev::ProcessAbs(const input_event& input) {
       break;
     case ABS_MT_POSITION_Y:
       events_[current_slot_].y = input.value;
+      break;
+    case ABS_MT_TOOL_TYPE:
+      if (input.value == MT_TOOL_PALM)
+        events_[current_slot_].cancelled = true;
       break;
     case ABS_MT_TRACKING_ID:
       UpdateTrackingId(current_slot_, input.value);
@@ -401,6 +426,16 @@ void TouchEventConverterEvdev::ProcessAbs(const input_event& input) {
       } else {
         LOG(ERROR) << "invalid touch event index: " << input.value;
         return;
+      }
+      break;
+    case ABS_TILT_X:
+      if (!has_mt_) {
+        events_[0].tilt_x = ScaleTilt(input.value, tilt_x_min_, tilt_x_range_);
+      }
+      break;
+    case ABS_TILT_Y:
+      if (!has_mt_) {
+        events_[0].tilt_y = ScaleTilt(input.value, tilt_y_min_, tilt_y_range_);
       }
       break;
     default:
@@ -427,27 +462,46 @@ void TouchEventConverterEvdev::ProcessSyn(const input_event& input) {
 
 EventType TouchEventConverterEvdev::GetEventTypeForTouch(
     const InProgressTouchEvdev& touch) {
-  if (touch.was_cancelled)
+
+  bool touch_is_alive =
+      touch.touching && !touch.delayed && !touch.cancelled;
+  bool touch_was_alive =
+      touch.was_touching && !touch.was_delayed && !touch.was_cancelled;
+
+  // Delaying an already live touch is not possible.
+  DCHECK(!touch_was_alive || !touch.delayed);
+
+  if ((!touch_was_alive && !touch_is_alive) || touch.was_cancelled) {
+    // Ignore this touch; it was never born or has already died.
     return ET_UNKNOWN;
+  }
 
-  if (touch.cancelled)
-    return touch.was_touching ? ET_TOUCH_CANCELLED : ET_UNKNOWN;
+  if (!touch_was_alive) {
+    // This touch has just been born.
+    return ET_TOUCH_PRESSED;
+  }
 
-  if (touch.touching)
-    return touch.was_touching ? ET_TOUCH_MOVED : ET_TOUCH_PRESSED;
-  return touch.was_touching ? ET_TOUCH_RELEASED : ET_UNKNOWN;
+  if (!touch_is_alive) {
+    // This touch was alive but is now dead.
+    if (touch.cancelled)
+      return ET_TOUCH_CANCELLED;  // Cancelled by driver or noise filter.
+    return ET_TOUCH_RELEASED;  // Finger lifted.
+  }
+
+  return ET_TOUCH_MOVED;
 }
 
 void TouchEventConverterEvdev::ReportTouchEvent(
     const InProgressTouchEvdev& event,
     EventType event_type,
     base::TimeTicks timestamp) {
-  ui::PointerDetails details(event.reported_tool_type, event.radius_x,
-                             event.radius_y, event.pressure,
-                             /* tilt_x */ 0.0f, /* tilt_y */ 0.0f);
-  dispatcher_->DispatchTouchEvent(
-      TouchEventParams(input_device_.id, event.slot, event_type,
-                       gfx::PointF(event.x, event.y), details, timestamp));
+  ui::PointerDetails details(event.reported_tool_type, /* pointer_id*/ 0,
+                             event.radius_x, event.radius_y, event.pressure,
+                             event.tilt_x, event.tilt_y);
+  int flags = event.btn_stylus.down ? ui::EventFlags::EF_LEFT_MOUSE_BUTTON : 0;
+  dispatcher_->DispatchTouchEvent(TouchEventParams(
+      input_device_.id, event.slot, event_type, gfx::PointF(event.x, event.y),
+      details, timestamp, flags));
 }
 
 void TouchEventConverterEvdev::CancelAllTouches() {
@@ -468,14 +522,14 @@ void TouchEventConverterEvdev::ReportEvents(base::TimeTicks timestamp) {
     dropped_events_ = false;
   }
 
-  if (touch_noise_finder_)
-    touch_noise_finder_->HandleTouches(events_, timestamp);
+  if (false_touch_finder_)
+    false_touch_finder_->HandleTouches(events_, timestamp);
 
   for (size_t i = 0; i < events_.size(); i++) {
     InProgressTouchEvdev* event = &events_[i];
     if (event->altered && (event->cancelled ||
-                           (touch_noise_finder_ &&
-                            touch_noise_finder_->SlotHasNoise(event->slot)))) {
+                           (false_touch_finder_ &&
+                            false_touch_finder_->SlotHasNoise(event->slot)))) {
       CancelAllTouches();
       break;
     }
@@ -489,6 +543,9 @@ void TouchEventConverterEvdev::ReportEvents(base::TimeTicks timestamp) {
     if (enable_palm_suppression_callback_)
       enable_palm_suppression_callback_.Run(event->tool_code > 0);
 
+    if (false_touch_finder_)
+      event->delayed = false_touch_finder_->SlotShouldDelay(event->slot);
+
     EventType event_type = GetEventTypeForTouch(*event);
     // The tool type is fixed with the touch pressed event and does not change.
     if (event_type == ET_TOUCH_PRESSED)
@@ -498,10 +555,9 @@ void TouchEventConverterEvdev::ReportEvents(base::TimeTicks timestamp) {
 
     event->was_cancelled = event->cancelled;
     event->was_touching = event->touching;
+    event->was_delayed = event->delayed;
     event->altered = false;
-    event->btn_left.changed = false;
-    event->btn_right.changed = false;
-    event->btn_middle.changed = false;
+    event->btn_stylus.changed = false;
   }
 }
 
@@ -517,7 +573,7 @@ void TouchEventConverterEvdev::UpdateTrackingId(int slot, int tracking_id) {
 
   if (tracking_id >= 0) {
     event->was_cancelled = false;
-    event->cancelled = !enabled_;
+    event->cancelled = !IsEnabled();
   }
 }
 
@@ -534,17 +590,9 @@ void TouchEventConverterEvdev::ReleaseButtons() {
   for (size_t slot = 0; slot < events_.size(); slot++) {
     InProgressTouchEvdev* event = &events_[slot];
 
-    if (event->btn_left.down) {
-      event->btn_left.down = false;
-      event->btn_left.changed = true;
-    }
-    if (event->btn_right.down) {
-      event->btn_right.down = false;
-      event->btn_right.changed = true;
-    }
-    if (event->btn_middle.down) {
-      event->btn_middle.down = false;
-      event->btn_middle.changed = true;
+    if (event->btn_stylus.down) {
+      event->btn_stylus.down = false;
+      event->btn_stylus.changed = true;
     }
   }
 
@@ -555,6 +603,8 @@ float TouchEventConverterEvdev::ScalePressure(int32_t value) {
   float pressure = value - pressure_min_;
   if (pressure_max_ - pressure_min_)
     pressure /= pressure_max_ - pressure_min_;
+  if (pressure > 1.0)
+    pressure = 1.0;
   return pressure;
 }
 

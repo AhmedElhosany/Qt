@@ -25,7 +25,7 @@
 	#include <pthread.h>
 	#include <sched.h>
 	#include <unistd.h>
-	#define TLS_OUT_OF_INDEXES (~0)
+	#define TLS_OUT_OF_INDEXES (pthread_key_t)(~0)
 #endif
 
 namespace sw
@@ -70,6 +70,8 @@ namespace sw
 			static void *startFunction(void *parameters);
 			pthread_t handle;
 		#endif
+
+		bool hasJoined = false;
 	};
 
 	class Event
@@ -133,7 +135,7 @@ namespace sw
 			return TlsAlloc();
 		#else
 			LocalStorageKey key;
-			pthread_key_create(&key, 0);
+			pthread_key_create(&key, NULL);
 			return key;
 		#endif
 	}
@@ -143,7 +145,7 @@ namespace sw
 		#if defined(_WIN32)
 			TlsFree(key);
 		#else
-			pthread_key_delete(key);
+			pthread_key_delete(key);   // Using an invalid key is an error but not undefined behavior.
 		#endif
 	}
 
@@ -152,7 +154,10 @@ namespace sw
 		#if defined(_WIN32)
 			TlsSetValue(key, value);
 		#else
-			pthread_setspecific(key, value);
+			if(key != TLS_OUT_OF_INDEXES)   // Avoid undefined behavior.
+			{
+				pthread_setspecific(key, value);
+			}
 		#endif
 	}
 
@@ -161,6 +166,11 @@ namespace sw
 		#if defined(_WIN32)
 			return TlsGetValue(key);
 		#else
+			if(key == TLS_OUT_OF_INDEXES)   // Avoid undefined behavior.
+			{
+				return nullptr;
+			}
+
 			return pthread_getspecific(key);
 		#endif
 	}

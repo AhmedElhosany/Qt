@@ -57,7 +57,6 @@
 #include <qnetworkconfigmanager.h>
 #include <qnetworksession.h>
 
-#include <QSignalMapper>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -155,8 +154,6 @@ public:
     WeatherData now;
     QList<WeatherData*> forecast;
     QQmlListProperty<WeatherData> *fcProp;
-    QSignalMapper *geoReplyMapper;
-    QSignalMapper *weatherReplyMapper, *forecastReplyMapper;
     bool ready;
     bool useGps;
     QElapsedTimer throttle;
@@ -220,16 +217,6 @@ AppModel::AppModel(QObject *parent) :
                                                           forecastAt,
                                                           forecastClear);
 
-    d->geoReplyMapper = new QSignalMapper(this);
-    d->weatherReplyMapper = new QSignalMapper(this);
-    d->forecastReplyMapper = new QSignalMapper(this);
-
-    connect(d->geoReplyMapper, SIGNAL(mapped(QObject*)),
-            this, SLOT(handleGeoNetworkData(QObject*)));
-    connect(d->weatherReplyMapper, SIGNAL(mapped(QObject*)),
-            this, SLOT(handleWeatherNetworkData(QObject*)));
-    connect(d->forecastReplyMapper, SIGNAL(mapped(QObject*)),
-            this, SLOT(handleForecastNetworkData(QObject*)));
     connect(&d->delayedCityRequestTimer, SIGNAL(timeout()),
             this, SLOT(queryCity()));
     connect(&d->requestNewWeatherTimer, SIGNAL(timeout()),
@@ -322,9 +309,8 @@ void AppModel::queryCity()
 
     QNetworkReply *rep = d->nam->get(QNetworkRequest(url));
     // connect up the signal right away
-    d->geoReplyMapper->setMapping(rep, rep);
-    connect(rep, SIGNAL(finished()),
-            d->geoReplyMapper, SLOT(map()));
+    connect(rep, &QNetworkReply::finished,
+            this, [this, rep]() { handleGeoNetworkData(rep); });
 }
 
 void AppModel::positionError(QGeoPositionInfoSource::Error e)
@@ -354,9 +340,8 @@ void AppModel::hadError(bool tryAgain)
         d->delayedCityRequestTimer.start();
 }
 
-void AppModel::handleGeoNetworkData(QObject *replyObj)
+void AppModel::handleGeoNetworkData(QNetworkReply *networkReply)
 {
-    QNetworkReply *networkReply = qobject_cast<QNetworkReply*>(replyObj);
     if (!networkReply) {
         hadError(false); // should retry?
         return;
@@ -403,9 +388,8 @@ void AppModel::refreshWeather()
 
     QNetworkReply *rep = d->nam->get(QNetworkRequest(url));
     // connect up the signal right away
-    d->weatherReplyMapper->setMapping(rep, rep);
-    connect(rep, SIGNAL(finished()),
-            d->weatherReplyMapper, SLOT(map()));
+    connect(rep, &QNetworkReply::finished,
+            this, [this, rep]() { handleWeatherNetworkData(rep); });
 }
 
 static QString niceTemperatureString(double t)
@@ -413,10 +397,9 @@ static QString niceTemperatureString(double t)
     return QString::number(qRound(t-ZERO_KELVIN)) + QChar(0xB0);
 }
 
-void AppModel::handleWeatherNetworkData(QObject *replyObj)
+void AppModel::handleWeatherNetworkData(QNetworkReply *networkReply)
 {
     qCDebug(requestsLog) << "got weather network data";
-    QNetworkReply *networkReply = qobject_cast<QNetworkReply*>(replyObj);
     if (!networkReply)
         return;
 
@@ -462,14 +445,13 @@ void AppModel::handleWeatherNetworkData(QObject *replyObj)
 
     QNetworkReply *rep = d->nam->get(QNetworkRequest(url));
     // connect up the signal right away
-    d->forecastReplyMapper->setMapping(rep, rep);
-    connect(rep, SIGNAL(finished()), d->forecastReplyMapper, SLOT(map()));
+    connect(rep, &QNetworkReply::finished,
+            this, [this, rep]() { handleForecastNetworkData(rep); });
 }
 
-void AppModel::handleForecastNetworkData(QObject *replyObj)
+void AppModel::handleForecastNetworkData(QNetworkReply *networkReply)
 {
     qCDebug(requestsLog) << "got forecast";
-    QNetworkReply *networkReply = qobject_cast<QNetworkReply*>(replyObj);
     if (!networkReply)
         return;
 

@@ -37,14 +37,13 @@ MediaDevicesEventDispatcher::~MediaDevicesEventDispatcher() {}
 MediaDevicesEventDispatcher::SubscriptionId
 MediaDevicesEventDispatcher::SubscribeDeviceChangeNotifications(
     MediaDeviceType type,
-    const url::Origin& security_origin,
     const MediaDevicesEventDispatcher::DevicesChangedCallback& callback) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(IsValidMediaDeviceType(type));
 
   SubscriptionId subscription_id = ++current_id_;
   GetMediaDevicesDispatcher()->SubscribeDeviceChangeNotifications(
-      type, subscription_id, security_origin);
+      type, subscription_id);
   SubscriptionList& subscriptions = device_change_subscriptions_[type];
   subscriptions.push_back(Subscription{subscription_id, callback});
 
@@ -72,18 +71,17 @@ void MediaDevicesEventDispatcher::UnsubscribeDeviceChangeNotifications(
 
 MediaDevicesEventDispatcher::SubscriptionIdList
 MediaDevicesEventDispatcher::SubscribeDeviceChangeNotifications(
-    const url::Origin& security_origin,
     const DevicesChangedCallback& callback) {
   SubscriptionIdList list;
   SubscriptionId id;
   id = SubscribeDeviceChangeNotifications(MEDIA_DEVICE_TYPE_AUDIO_INPUT,
-                                          security_origin, callback);
+                                          callback);
   list.push_back(id);
   id = SubscribeDeviceChangeNotifications(MEDIA_DEVICE_TYPE_VIDEO_INPUT,
-                                          security_origin, callback);
+                                          callback);
   list.push_back(id);
   id = SubscribeDeviceChangeNotifications(MEDIA_DEVICE_TYPE_AUDIO_OUTPUT,
-                                          security_origin, callback);
+                                          callback);
   list.push_back(id);
 
   return list;
@@ -121,7 +119,7 @@ const ::mojom::MediaDevicesDispatcherHostPtr&
 MediaDevicesEventDispatcher::GetMediaDevicesDispatcher() {
   if (!media_devices_dispatcher_) {
     render_frame()->GetRemoteInterfaces()->GetInterface(
-        mojo::GetProxy(&media_devices_dispatcher_));
+        mojo::MakeRequest(&media_devices_dispatcher_));
   }
 
   return media_devices_dispatcher_;

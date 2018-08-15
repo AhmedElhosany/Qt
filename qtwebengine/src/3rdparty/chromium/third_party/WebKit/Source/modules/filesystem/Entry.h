@@ -31,10 +31,10 @@
 #ifndef Entry_h
 #define Entry_h
 
-#include "bindings/core/v8/ScriptWrappable.h"
 #include "modules/ModulesExport.h"
 #include "modules/filesystem/DOMFileSystem.h"
 #include "modules/filesystem/EntryBase.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Handle.h"
 
 namespace blink {
@@ -50,35 +50,35 @@ class MODULES_EXPORT Entry : public EntryBase, public ScriptWrappable {
 
  public:
   DOMFileSystem* filesystem() const {
-    return static_cast<DOMFileSystem*>(m_fileSystem.get());
+    return static_cast<DOMFileSystem*>(file_system_.Get());
   }
-  DOMFileSystem* filesystem(ExecutionContext*) const;
+  DOMFileSystem* filesystem(ScriptState*) const;
 
-  void getMetadata(ExecutionContext*,
-                   MetadataCallback* successCallback = nullptr,
+  void getMetadata(ScriptState*,
+                   MetadataCallback* success_callback = nullptr,
                    ErrorCallback* = nullptr);
-  void moveTo(ExecutionContext*,
+  void moveTo(ScriptState*,
               DirectoryEntry* parent,
               const String& name = String(),
-              EntryCallback* successCallback = nullptr,
+              EntryCallback* success_callback = nullptr,
               ErrorCallback* = nullptr) const;
-  void copyTo(ExecutionContext*,
+  void copyTo(ScriptState*,
               DirectoryEntry* parent,
               const String& name = String(),
-              EntryCallback* successCallback = nullptr,
+              EntryCallback* success_callback = nullptr,
               ErrorCallback* = nullptr) const;
-  void remove(ExecutionContext*,
-              VoidCallback* successCallback = nullptr,
+  void remove(ScriptState*,
+              VoidCallback* success_callback = nullptr,
               ErrorCallback* = nullptr) const;
-  void getParent(ExecutionContext*,
-                 EntryCallback* successCallback = nullptr,
+  void getParent(ScriptState*,
+                 EntryCallback* success_callback = nullptr,
                  ErrorCallback* = nullptr) const;
-  String toURL(ExecutionContext*) const;
+  String toURL(ScriptState*) const;
 
   DECLARE_VIRTUAL_TRACE();
 
  protected:
-  Entry(DOMFileSystemBase*, const String& fullPath);
+  Entry(DOMFileSystemBase*, const String& full_path);
 };
 
 }  // namespace blink

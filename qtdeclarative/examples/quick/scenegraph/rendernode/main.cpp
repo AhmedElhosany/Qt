@@ -48,6 +48,8 @@
 **
 ****************************************************************************/
 
+#include <QCommandLineParser>
+#include <QCommandLineOption>
 #include <QGuiApplication>
 #include <QQuickView>
 #include "customrenderitem.h"
@@ -60,7 +62,19 @@ int main(int argc, char **argv)
 
     QQuickView view;
 
-    if (QCoreApplication::arguments().contains(QStringLiteral("--multisample"))) {
+    QCoreApplication::setApplicationName("Qt Scene Graph Render Node Example");
+    QCoreApplication::setOrganizationName("QtProject");
+    QCoreApplication::setApplicationVersion(QT_VERSION_STR);
+    QCommandLineParser parser;
+    parser.setApplicationDescription(QCoreApplication::applicationName());
+    parser.addHelpOption();
+    parser.addVersionOption();
+    QCommandLineOption multipleSampleOption("multisample", "Multisampling");
+    parser.addOption(multipleSampleOption);
+
+    parser.process(app);
+
+    if (parser.isSet(multipleSampleOption)) {
         QSurfaceFormat fmt;
         fmt.setSamples(4);
         view.setFormat(fmt);

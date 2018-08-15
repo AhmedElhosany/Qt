@@ -60,6 +60,7 @@
 #include "render_widget_host_view_qt_delegate_widget.h"
 #include "web_contents_adapter.h"
 #include "web_engine_settings.h"
+#include "qwebenginescript.h"
 
 #ifdef QT_UI_DELEGATES
 #include "ui/messagebubblewidget_p.h"
@@ -100,18 +101,13 @@ static const int MaxTooltipLength = 1024;
 static bool printPdfDataOnPrinter(const QByteArray& data, QPrinter& printer)
 {
     if (!data.size()) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 7, 0)
         qWarning("Failure to print on printer %ls: Print result data is empty.",
                  qUtf16Printable(printer.printerName()));
-#else
-        qWarning("Failure to print on printer %s: Print result data is empty.",
-                 qPrintable(printer.printerName()));
-#endif
         return false;
     }
 
-    QRect printerPageRect = printer.pageRect();
-    PdfiumDocumentWrapperQt pdfiumWrapper(data.constData(), data.size(), printerPageRect.size());
+    QSize pageSize = printer.pageRect().size();
+    PdfiumDocumentWrapperQt pdfiumWrapper(data.constData(), data.size(), pageSize);
 
     int toPage = printer.toPage();
     int fromPage = printer.fromPage();
@@ -142,13 +138,8 @@ static bool printPdfDataOnPrinter(const QByteArray& data, QPrinter& printer)
 
     QPainter painter;
     if (!painter.begin(&printer)) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 7, 0)
         qWarning("Failure to print on printer %ls: Could not open printer for painting.",
                   qUtf16Printable(printer.printerName()));
-#else
-        qWarning("Failure to print on printer %s: Could not open printer for painting.",
-                 qPrintable(printer.printerName()));
-#endif
         return false;
     }
 
@@ -164,7 +155,8 @@ static bool printPdfDataOnPrinter(const QByteArray& data, QPrinter& printer)
                 if (currentImage.isNull())
                     return false;
 
-                painter.drawImage(printerPageRect, currentImage, currentImage.rect());
+                // Painting operations are automatically clipped to the bounds of the drawable part of the page.
+                painter.drawImage(QRect(0, 0, pageSize.width(), pageSize.height()), currentImage, currentImage.rect());
                 if (printedPages < pageCopies - 1)
                     printer.newPage();
             }
@@ -336,7 +328,7 @@ void QWebEnginePagePrivate::loadStarted(const QUrl &provisionalUrl, bool isError
         return;
 
     isLoading = true;
-    Q_EMIT q->loadStarted();
+    QTimer::singleShot(0, q, &QWebEnginePage::loadStarted);
     updateNavigationActions();
 }
 
@@ -354,8 +346,9 @@ void QWebEnginePagePrivate::loadFinished(bool success, const QUrl &url, bool isE
 
     if (isErrorPage) {
         Q_ASSERT(settings->testAttribute(QWebEngineSettings::ErrorPageEnabled));
-        Q_ASSERT(success);
-        Q_EMIT q->loadFinished(false);
+        QTimer::singleShot(0, q, [q](){
+            emit q->loadFinished(false);
+        });
         return;
     }
 
@@ -365,7 +358,9 @@ void QWebEnginePagePrivate::loadFinished(bool success, const QUrl &url, bool isE
     // Delay notifying failure until the error-page is done loading.
     // Error-pages are not loaded on failures due to abort.
     if (success || errorCode == -3 /* ERR_ABORTED*/ || !settings->testAttribute(QWebEngineSettings::ErrorPageEnabled)) {
-        Q_EMIT q->loadFinished(success);
+        QTimer::singleShot(0, q, [q, success](){
+            emit q->loadFinished(success);
+        });
     }
     updateNavigationActions();
 }
@@ -378,25 +373,14 @@ void QWebEnginePagePrivate::didPrintPageToPdf(const QString &filePath, bool succ
 
 void QWebEnginePagePrivate::focusContainer()
 {
-    if (view)
+    if (view) {
+        view->activateWindow();
         view->setFocus();
+    }
 }
 
 void QWebEnginePagePrivate::unhandledKeyEvent(QKeyEvent *event)
 {
-#ifdef Q_OS_OSX
-    Q_Q(QWebEnginePage);
-    if (event->type() == QEvent::KeyPress) {
-        QWebEnginePage::WebAction action = editorActionForKeyEvent(event);
-        if (action != QWebEnginePage::NoWebAction) {
-            // Try triggering a registered short-cut
-            if (QGuiApplicationPrivate::instance()->shortcutMap.tryShortcut(event))
-                return;
-            q->triggerAction(action);
-            return;
-        }
-    }
-#endif
     if (view && view->parentWidget())
         QGuiApplication::sendEvent(view->parentWidget(), event);
 }
@@ -560,16 +544,20 @@ void QWebEnginePagePrivate::showColorDialog(QSharedPointer<ColorChooserControlle
 void QWebEnginePagePrivate::runMediaAccessPermissionRequest(const QUrl &securityOrigin, WebContentsAdapterClient::MediaRequestFlags requestFlags)
 {
     Q_Q(QWebEnginePage);
-    QWebEnginePage::Feature requestedFeature;
-    if (requestFlags.testFlag(WebContentsAdapterClient::MediaAudioCapture) && requestFlags.testFlag(WebContentsAdapterClient::MediaVideoCapture))
-        requestedFeature = QWebEnginePage::MediaAudioVideoCapture;
+    QWebEnginePage::Feature feature;
+    if (requestFlags.testFlag(WebContentsAdapterClient::MediaAudioCapture) &&
+        requestFlags.testFlag(WebContentsAdapterClient::MediaVideoCapture))
+        feature = QWebEnginePage::MediaAudioVideoCapture;
     else if (requestFlags.testFlag(WebContentsAdapterClient::MediaAudioCapture))
-        requestedFeature = QWebEnginePage::MediaAudioCapture;
+        feature = QWebEnginePage::MediaAudioCapture;
     else if (requestFlags.testFlag(WebContentsAdapterClient::MediaVideoCapture))
-        requestedFeature = QWebEnginePage::MediaVideoCapture;
-    else
-        return;
-    Q_EMIT q->featurePermissionRequested(securityOrigin, requestedFeature);
+        feature = QWebEnginePage::MediaVideoCapture;
+    else if (requestFlags.testFlag(WebContentsAdapterClient::MediaDesktopAudioCapture) &&
+             requestFlags.testFlag(WebContentsAdapterClient::MediaDesktopVideoCapture))
+        feature = QWebEnginePage::DesktopAudioVideoCapture;
+    else // if (requestFlags.testFlag(WebContentsAdapterClient::MediaDesktopVideoCapture))
+        feature = QWebEnginePage::DesktopVideoCapture;
+    Q_EMIT q->featurePermissionRequested(securityOrigin, feature);
 }
 
 void QWebEnginePagePrivate::runGeolocationPermissionRequest(const QUrl &securityOrigin)
@@ -1142,6 +1130,42 @@ QAction *QWebEnginePage::action(WebAction action) const
     case ViewSource:
         text = tr("&View Page Source");
         break;
+    case ToggleBold:
+        text = tr("&Bold");
+        break;
+    case ToggleItalic:
+        text = tr("&Italic");
+        break;
+    case ToggleUnderline:
+        text = tr("&Underline");
+        break;
+    case ToggleStrikethrough:
+        text = tr("&Strikethrough");
+        break;
+    case AlignLeft:
+        text = tr("Align &Left");
+        break;
+    case AlignCenter:
+        text = tr("Align &Center");
+        break;
+    case AlignRight:
+        text = tr("Align &Right");
+        break;
+    case AlignJustified:
+        text = tr("Align &Justified");
+        break;
+    case Indent:
+        text = tr("&Indent");
+        break;
+    case Outdent:
+        text = tr("&Outdent");
+        break;
+    case InsertOrderedList:
+        text = tr("Insert &Ordered List");
+        break;
+    case InsertUnorderedList:
+        text = tr("Insert &Unordered List");
+        break;
     case NoWebAction:
     case WebActionCount:
         Q_UNREACHABLE();
@@ -1231,14 +1255,14 @@ void QWebEnginePage::triggerAction(WebAction action, bool)
         }
         break;
     case CopyLinkToClipboard:
-        if (menuData.linkUrl().isValid()) {
-            QString urlString = menuData.linkUrl().toString(QUrl::FullyEncoded);
+        if (!menuData.unfilteredLinkUrl().isEmpty()) {
+            QString urlString = menuData.unfilteredLinkUrl().toString(QUrl::FullyEncoded);
             QString title = menuData.linkText().toHtmlEscaped();
             QMimeData *data = new QMimeData();
             data->setText(urlString);
             QString html = QStringLiteral("<a href=\"") + urlString + QStringLiteral("\">") + title + QStringLiteral("</a>");
             data->setHtml(html);
-            data->setUrls(QList<QUrl>() << menuData.linkUrl());
+            data->setUrls(QList<QUrl>() << menuData.unfilteredLinkUrl());
             qApp->clipboard()->setMimeData(data);
         }
         break;
@@ -1347,6 +1371,42 @@ void QWebEnginePage::triggerAction(WebAction action, bool)
         // the viewSource() call after the QMenu's destruction.
         QTimer::singleShot(0, this, [d](){ d->adapter->viewSource(); });
         break;
+    case ToggleBold:
+        runJavaScript(QStringLiteral("document.execCommand('bold');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case ToggleItalic:
+        runJavaScript(QStringLiteral("document.execCommand('italic');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case ToggleUnderline:
+        runJavaScript(QStringLiteral("document.execCommand('underline');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case ToggleStrikethrough:
+        runJavaScript(QStringLiteral("document.execCommand('strikethrough');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case AlignLeft:
+        runJavaScript(QStringLiteral("document.execCommand('justifyLeft');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case AlignCenter:
+        runJavaScript(QStringLiteral("document.execCommand('justifyCenter');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case AlignRight:
+        runJavaScript(QStringLiteral("document.execCommand('justifyRight');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case AlignJustified:
+        runJavaScript(QStringLiteral("document.execCommand('justifyFull');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case Indent:
+        runJavaScript(QStringLiteral("document.execCommand('indent');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case Outdent:
+        runJavaScript(QStringLiteral("document.execCommand('outdent');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case InsertOrderedList:
+        runJavaScript(QStringLiteral("document.execCommand('insertOrderedList');"), QWebEngineScript::ApplicationWorld);
+        break;
+    case InsertUnorderedList:
+        runJavaScript(QStringLiteral("document.execCommand('insertUnorderedList');"), QWebEngineScript::ApplicationWorld);
+        break;
     case NoWebAction:
         break;
     case WebActionCount:
@@ -1401,35 +1461,36 @@ void QWebEnginePagePrivate::wasHidden()
     adapter->wasHidden();
 }
 
-bool QWebEnginePagePrivate::contextMenuRequested(const WebEngineContextMenuData &data)
+void QWebEnginePagePrivate::contextMenuRequested(const WebEngineContextMenuData &data)
 {
     if (!view)
-        return false;
+        return;
 
     contextData.reset();
-    QContextMenuEvent event(QContextMenuEvent::Mouse, data.position(), view->mapToGlobal(data.position()));
     switch (view->contextMenuPolicy()) {
-    case Qt::PreventContextMenu:
-        return false;
     case Qt::DefaultContextMenu:
+    {
         contextData = data;
+        QContextMenuEvent event(QContextMenuEvent::Mouse, data.position(), view->mapToGlobal(data.position()));
         view->contextMenuEvent(&event);
-        break;
+        return;
+    }
     case Qt::CustomContextMenu:
         contextData = data;
         Q_EMIT view->customContextMenuRequested(data.position());
-        break;
+        return;
     case Qt::ActionsContextMenu:
         if (view->actions().count()) {
+            QContextMenuEvent event(QContextMenuEvent::Mouse, data.position(), view->mapToGlobal(data.position()));
             QMenu::exec(view->actions(), event.globalPos(), 0, view);
-            break;
         }
-        // fallthrough
+        return;
+    case Qt::PreventContextMenu:
     case Qt::NoContextMenu:
-        event.ignore();
-        return false;
+        return;
     }
-    return true;
+
+    Q_UNREACHABLE();
 }
 
 void QWebEnginePagePrivate::navigationRequested(int navigationType, const QUrl &url, int &navigationRequestAction, bool isMainFrame)
@@ -1621,7 +1682,7 @@ QMenu *QWebEnginePage::createStandardContextMenu()
         menu->addAction(QWebEnginePage::action(Unselect));
     }
 
-    if (!contextMenuData.linkText().isEmpty() && contextMenuData.linkUrl().isValid()) {
+    if (!contextMenuData.linkText().isEmpty() && !contextMenuData.unfilteredLinkUrl().isEmpty()) {
         menu->addAction(QWebEnginePage::action(CopyLinkToClipboard));
     }
     if (contextMenuData.mediaUrl().isValid()) {
@@ -1668,37 +1729,58 @@ void QWebEnginePage::setFeaturePermission(const QUrl &securityOrigin, QWebEngine
     Q_D(QWebEnginePage);
     if (policy == PermissionUnknown)
         return;
-    WebContentsAdapterClient::MediaRequestFlags flags =  WebContentsAdapterClient::MediaNone;
-    switch (feature) {
-    case MediaAudioVideoCapture:
-    case MediaAudioCapture:
-    case MediaVideoCapture:
-        if (policy != PermissionUnknown) {
-            if (policy == PermissionDeniedByUser)
-                flags = WebContentsAdapterClient::MediaNone;
-            else {
-                if (feature == MediaAudioCapture)
-                    flags = WebContentsAdapterClient::MediaAudioCapture;
-                else if (feature == MediaVideoCapture)
-                    flags = WebContentsAdapterClient::MediaVideoCapture;
-                else
-                    flags = WebContentsAdapterClient::MediaRequestFlags(WebContentsAdapterClient::MediaVideoCapture | WebContentsAdapterClient::MediaAudioCapture);
-            }
-            d->adapter->grantMediaAccessPermission(securityOrigin, flags);
-        }
-        d->adapter->grantMediaAccessPermission(securityOrigin, flags);
-        break;
-    case QWebEnginePage::Geolocation:
-        d->adapter->runGeolocationRequestCallback(securityOrigin, (policy == PermissionGrantedByUser) ? true : false);
-        break;
-    case MouseLock:
-        if (policy == PermissionGrantedByUser)
+
+    const WebContentsAdapterClient::MediaRequestFlags audioVideoCaptureFlags(
+        WebContentsAdapterClient::MediaVideoCapture |
+        WebContentsAdapterClient::MediaAudioCapture);
+    const WebContentsAdapterClient::MediaRequestFlags desktopAudioVideoCaptureFlags(
+        WebContentsAdapterClient::MediaDesktopVideoCapture |
+        WebContentsAdapterClient::MediaDesktopAudioCapture);
+
+    if (policy == PermissionGrantedByUser) {
+        switch (feature) {
+        case MediaAudioVideoCapture:
+            d->adapter->grantMediaAccessPermission(securityOrigin, audioVideoCaptureFlags);
+            break;
+        case MediaAudioCapture:
+            d->adapter->grantMediaAccessPermission(securityOrigin, WebContentsAdapterClient::MediaAudioCapture);
+            break;
+        case MediaVideoCapture:
+            d->adapter->grantMediaAccessPermission(securityOrigin, WebContentsAdapterClient::MediaVideoCapture);
+            break;
+        case DesktopAudioVideoCapture:
+            d->adapter->grantMediaAccessPermission(securityOrigin, desktopAudioVideoCaptureFlags);
+            break;
+        case DesktopVideoCapture:
+            d->adapter->grantMediaAccessPermission(securityOrigin, WebContentsAdapterClient::MediaDesktopVideoCapture);
+            break;
+        case Geolocation:
+            d->adapter->runGeolocationRequestCallback(securityOrigin, true);
+            break;
+        case MouseLock:
             d->adapter->grantMouseLockPermission(true);
-        else
+            break;
+        case Notifications:
+            break;
+        }
+    } else { // if (policy == PermissionDeniedByUser)
+        switch (feature) {
+        case MediaAudioVideoCapture:
+        case MediaAudioCapture:
+        case MediaVideoCapture:
+        case DesktopAudioVideoCapture:
+        case DesktopVideoCapture:
+            d->adapter->grantMediaAccessPermission(securityOrigin, WebContentsAdapterClient::MediaNone);
+            break;
+        case Geolocation:
+            d->adapter->runGeolocationRequestCallback(securityOrigin, false);
+            break;
+        case MouseLock:
             d->adapter->grantMouseLockPermission(false);
-        break;
-    case Notifications:
-        break;
+            break;
+        case Notifications:
+            break;
+        }
     }
 }
 
@@ -1723,6 +1805,25 @@ void QWebEnginePagePrivate::runFileChooser(QSharedPointer<FilePickerController> 
 WebEngineSettings *QWebEnginePagePrivate::webEngineSettings() const
 {
     return settings->d_func();
+}
+
+/*!
+    \since 5.10
+    Downloads the resource from the location given by \a url to a local file.
+
+    If \a filename is given, it is used as the suggested file name.
+    If it is relative, the file is saved in the standard download location with
+    the given name.
+    If it is a null or empty QString, the default file name is used.
+
+    This will emit QWebEngineProfile::downloadRequested() after the download
+    has started.
+*/
+
+void QWebEnginePage::download(const QUrl& url, const QString& filename)
+{
+    Q_D(QWebEnginePage);
+    d->adapter->download(url, filename);
 }
 
 void QWebEnginePage::load(const QUrl& url)
@@ -2015,11 +2116,7 @@ void QWebEnginePage::printToPdf(const QString &filePath, const QPageLayout &page
     Q_D(const QWebEnginePage);
 #if defined(ENABLE_PRINTING)
     if (d->currentPrinter) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 7, 0)
         qWarning("Cannot print to PDF while at the same time printing on printer %ls", qUtf16Printable(d->currentPrinter->printerName()));
-#else
-        qWarning("Cannot print to PDF while at the same time printing on printer %s", qPrintable(d->currentPrinter->printerName()));
-#endif
         return;
     }
 #endif // ENABLE_PRINTING
@@ -2048,11 +2145,7 @@ void QWebEnginePage::printToPdf(const QWebEngineCallback<const QByteArray&> &res
 #if defined(ENABLE_PDF)
 #if defined(ENABLE_PRINTING)
     if (d->currentPrinter) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 7, 0)
         qWarning("Cannot print to PDF while at the same time printing on printer %ls", qUtf16Printable(d->currentPrinter->printerName()));
-#else
-        qWarning("Cannot print to PDF while at the same time printing on printer %s", qPrintable(d->currentPrinter->printerName()));
-#endif
         d->m_callbacks.invokeEmpty(resultCallback);
         return;
     }
@@ -2084,11 +2177,7 @@ void QWebEnginePage::print(QPrinter *printer, const QWebEngineCallback<bool> &re
 #if defined(ENABLE_PDF)
 #if defined(ENABLE_PRINTING)
     if (d->currentPrinter) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 7, 0)
         qWarning("Cannot print page on printer %ls: Already printing on %ls.", qUtf16Printable(printer->printerName()), qUtf16Printable(d->currentPrinter->printerName()));
-#else
-        qWarning("Cannot print page on printer %s: Already printing on %s.", qPrintable(printer->printerName()), qPrintable(d->currentPrinter->printerName()));
-#endif
         d->m_callbacks.invokeDirectly(resultCallback, false);
         return;
     }

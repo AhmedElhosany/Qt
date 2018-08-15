@@ -9,30 +9,39 @@ namespace net {
 TrustStoreCollection::TrustStoreCollection() = default;
 TrustStoreCollection::~TrustStoreCollection() = default;
 
-void TrustStoreCollection::SetPrimaryTrustStore(TrustStore* store) {
-  DCHECK(!primary_store_);
+void TrustStoreCollection::AddTrustStore(TrustStore* store) {
   DCHECK(store);
-  primary_store_ = store;
+  stores_.push_back(store);
 }
 
-void TrustStoreCollection::AddTrustStoreSynchronousOnly(TrustStore* store) {
-  DCHECK(store);
-  sync_only_stores_.push_back(store);
-}
-
-void TrustStoreCollection::FindTrustAnchorsForCert(
-    const scoped_refptr<ParsedCertificate>& cert,
-    const TrustAnchorsCallback& callback,
-    TrustAnchors* synchronous_matches,
-    std::unique_ptr<Request>* out_req) const {
-  if (primary_store_)
-    primary_store_->FindTrustAnchorsForCert(cert, callback, synchronous_matches,
-                                            out_req);
-
-  for (auto* store : sync_only_stores_) {
-    store->FindTrustAnchorsForCert(cert, TrustAnchorsCallback(),
-                                   synchronous_matches, nullptr);
+void TrustStoreCollection::SyncGetIssuersOf(const ParsedCertificate* cert,
+                                            ParsedCertificateList* issuers) {
+  for (auto* store : stores_) {
+    store->SyncGetIssuersOf(cert, issuers);
   }
+}
+
+void TrustStoreCollection::GetTrust(
+    const scoped_refptr<ParsedCertificate>& cert,
+    CertificateTrust* out_trust) const {
+  // The current aggregate result.
+  CertificateTrust result = CertificateTrust::ForUnspecified();
+
+  for (auto* store : stores_) {
+    CertificateTrust cur_trust;
+    store->GetTrust(cert, &cur_trust);
+
+    // * If any stores distrust the certificate, consider it untrusted.
+    // * If multiple stores consider it trusted, use the trust result from the
+    //   last one
+    if (!cur_trust.HasUnspecifiedTrust()) {
+      result = cur_trust;
+      if (result.IsDistrusted())
+        break;
+    }
+  }
+
+  *out_trust = result;
 }
 
 }  // namespace net

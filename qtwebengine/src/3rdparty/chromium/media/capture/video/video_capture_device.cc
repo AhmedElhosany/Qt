@@ -13,14 +13,29 @@
 
 namespace media {
 
-VideoCaptureDevice::Client::Buffer::~Buffer() {
-}
+VideoCaptureDevice::Client::Buffer::Buffer() : id(0), frame_feedback_id(0) {}
 
-VideoCaptureDevice::~VideoCaptureDevice() {
-}
+VideoCaptureDevice::Client::Buffer::Buffer(
+    int buffer_id,
+    int frame_feedback_id,
+    std::unique_ptr<HandleProvider> handle_provider,
+    std::unique_ptr<ScopedAccessPermission> access_permission)
+    : id(buffer_id),
+      frame_feedback_id(frame_feedback_id),
+      handle_provider(std::move(handle_provider)),
+      access_permission(std::move(access_permission)) {}
 
-void VideoCaptureDevice::GetPhotoCapabilities(
-    GetPhotoCapabilitiesCallback callback) {}
+VideoCaptureDevice::Client::Buffer::Buffer(
+    VideoCaptureDevice::Client::Buffer&& other) = default;
+
+VideoCaptureDevice::Client::Buffer::~Buffer() = default;
+
+VideoCaptureDevice::Client::Buffer& VideoCaptureDevice::Client::Buffer::
+operator=(VideoCaptureDevice::Client::Buffer&& other) = default;
+
+VideoCaptureDevice::~VideoCaptureDevice() {}
+
+void VideoCaptureDevice::GetPhotoState(GetPhotoStateCallback callback) {}
 
 void VideoCaptureDevice::SetPhotoOptions(mojom::PhotoSettingsPtr settings,
                                          SetPhotoOptionsCallback callback) {}

@@ -75,6 +75,7 @@
 #include <Qt3DRender/private/genericlambdajob_p.h>
 #include <Qt3DRender/private/updatemeshtrianglelistjob_p.h>
 #include <Qt3DRender/private/filtercompatibletechniquejob_p.h>
+#include <Qt3DRender/private/updateskinningpalettejob_p.h>
 #include <Qt3DRender/private/renderercache_p.h>
 
 #include <QHash>
@@ -114,7 +115,7 @@ class QAbstractShapeMesh;
 struct GraphicsApiFilterData;
 class QSceneImporter;
 
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
 namespace Debug {
 class CommandExecuter;
 }
@@ -158,7 +159,7 @@ public:
     void setTime(qint64 time) Q_DECL_OVERRIDE;
 
     void setNodeManagers(NodeManagers *managers) Q_DECL_OVERRIDE;
-    void setServices(Qt3DCore::QServiceLocator *services) Q_DECL_OVERRIDE { m_services = services; }
+    void setServices(Qt3DCore::QServiceLocator *services) Q_DECL_OVERRIDE;
     void setSurfaceExposed(bool exposed) Q_DECL_OVERRIDE;
 
     NodeManagers *nodeManagers() const Q_DECL_OVERRIDE;
@@ -181,8 +182,10 @@ public:
 
     void markDirty(BackendNodeDirtySet changes, BackendNode *node) Q_DECL_OVERRIDE;
     BackendNodeDirtySet dirtyBits() Q_DECL_OVERRIDE;
-    void clearDirtyBits(BackendNodeDirtySet changes) Q_DECL_OVERRIDE;
 
+#if defined(QT_BUILD_INTERNAL)
+    void clearDirtyBits(BackendNodeDirtySet changes) Q_DECL_OVERRIDE;
+#endif
 
     bool shouldRender() Q_DECL_OVERRIDE;
     void skipNextFrame() Q_DECL_OVERRIDE;
@@ -190,11 +193,11 @@ public:
     QVector<Qt3DCore::QAspectJobPtr> renderBinJobs() Q_DECL_OVERRIDE;
     Qt3DCore::QAspectJobPtr pickBoundingVolumeJob() Q_DECL_OVERRIDE;
     Qt3DCore::QAspectJobPtr syncTextureLoadingJob() Q_DECL_OVERRIDE;
+    Qt3DCore::QAspectJobPtr expandBoundingVolumeJob() Q_DECL_OVERRIDE;
 
     QVector<Qt3DCore::QAspectJobPtr> createRenderBufferJobs() const;
 
     inline FrameCleanupJobPtr frameCleanupJob() const { return m_cleanupJob; }
-    inline ExpandBoundingVolumeJobPtr expandBoundingVolumeJob() const { return m_expandBoundingVolumeJob; }
     inline UpdateShaderDataTransformJobPtr updateShaderDataTransformJob() const { return m_updateShaderDataTransformJob; }
     inline CalculateBoundingVolumeJobPtr calculateBoundingVolumeJob() const { return m_calculateBoundingVolumeJob; }
     inline UpdateTreeEnabledJobPtr updateTreeEnabledJob() const { return m_updateTreeEnabledJob; }
@@ -204,6 +207,7 @@ public:
     inline UpdateMeshTriangleListJobPtr updateMeshTriangleListJob() const { return m_updateMeshTriangleListJob; }
     inline FilterCompatibleTechniqueJobPtr filterCompatibleTechniqueJob() const { return m_filterCompatibleTechniqueJob; }
     inline SynchronizerJobPtr textureLoadSyncJob() const { return m_syncTextureLoadingJob; }
+    inline UpdateSkinningPaletteJobPtr updateSkinningPaletteJob() const { return m_updateSkinningPaletteJob; }
 
     Qt3DCore::QAbstractFrameAdvanceService *frameAdvanceService() const Q_DECL_OVERRIDE;
 
@@ -217,6 +221,11 @@ public:
     void updateTexture(Texture *texture);
     void cleanupTexture(const Texture *texture);
     void downloadGLBuffers();
+    void blitFramebuffer(Qt3DCore::QNodeId inputRenderTargetId,
+                         Qt3DCore::QNodeId outputRenderTargetId,
+                         QRect inputRect,
+                         QRect outputRect,
+                         GLuint defaultFramebuffer);
 
     void prepareCommandsSubmission(const QVector<RenderView *> &renderViews);
     bool executeCommandsSubmission(const RenderView *rv);
@@ -234,7 +243,7 @@ public:
 
     inline RenderStateSet *defaultRenderState() const { return m_defaultRenderStateSet; }
 
-    QList<QPair<QObject*, QMouseEvent>> pendingPickingEvents() const;
+    QList<QMouseEvent> pendingPickingEvents() const;
     QList<QKeyEvent> pendingKeyEvents() const;
 
     void addRenderCaptureSendRequest(Qt3DCore::QNodeId nodeId);
@@ -260,10 +269,7 @@ public:
 
     ViewSubmissionResultData submitRenderViews(const QVector<Render::RenderView *> &renderViews);
 
-    QMutex* mutex() { return &m_renderQueueMutex; }
-
-    RendererCache m_cache;
-
+    RendererCache *cache() { return &m_cache; }
 
 #ifdef QT3D_RENDER_UNIT_TESTS
 public:
@@ -293,7 +299,6 @@ private:
     QScopedPointer<RenderThread> m_renderThread;
     QScopedPointer<VSyncFrameAdvanceService> m_vsyncFrameAdvanceService;
 
-    QMutex m_renderQueueMutex;
     QSemaphore m_submitRenderViewsSemaphore;
     QSemaphore m_waitForInitializationToBeCompleted;
 
@@ -304,7 +309,13 @@ private:
     QVector<Attribute *> m_dirtyAttributes;
     QVector<Geometry *> m_dirtyGeometry;
     QAtomicInt m_exposed;
-    BackendNodeDirtySet m_changeSet;
+
+    struct DirtyBits {
+        BackendNodeDirtySet marked = 0; // marked dirty since last job build
+        BackendNodeDirtySet remaining = 0; // remaining dirty after jobs have finished
+    };
+    DirtyBits m_dirtyBits;
+
     QAtomicInt m_lastFrameCorrect;
     QOpenGLContext *m_glContext;
     QOpenGLContext *m_shareContext;
@@ -324,6 +335,7 @@ private:
     UpdateTreeEnabledJobPtr m_updateTreeEnabledJob;
     SendRenderCaptureJobPtr m_sendRenderCaptureJob;
     SendBufferCaptureJobPtr m_sendBufferCaptureJob;
+    UpdateSkinningPaletteJobPtr m_updateSkinningPaletteJob;
     UpdateLevelOfDetailJobPtr m_updateLevelOfDetailJob;
     UpdateMeshTriangleListJobPtr m_updateMeshTriangleListJob;
     FilterCompatibleTechniqueJobPtr m_filterCompatibleTechniqueJob;
@@ -362,12 +374,13 @@ private:
     OffscreenSurfaceHelper *m_offscreenHelper;
     QMutex m_offscreenSurfaceMutex;
 
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
     QScopedPointer<Qt3DRender::Debug::CommandExecuter> m_commandExecuter;
     friend class Qt3DRender::Debug::CommandExecuter;
 #endif
 
     QMetaObject::Connection m_contextConnection;
+    RendererCache m_cache;
 };
 
 } // namespace Render

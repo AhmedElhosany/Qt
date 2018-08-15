@@ -222,9 +222,11 @@ void QWaylandBufferMaterial::bind()
     case 3:
         if (m_textures[2])
             m_textures[2]->bind(2);
+        Q_FALLTHROUGH();
     case 2:
         if (m_textures[1])
             m_textures[1]->bind(1);
+        Q_FALLTHROUGH();
     case 1:
         if (m_textures[0])
             m_textures[0]->bind(0);
@@ -1064,14 +1066,14 @@ QVariant QWaylandQuickItem::inputMethodQuery(Qt::InputMethodQuery query, QVarian
 
     Returns true if the item is hidden, though the texture
     is still updated. As opposed to hiding the item by
-    setting \l{Item::visible}{visible} to \c false, setting this property to \c false
+    setting \l{Item::visible}{visible} to \c false, setting this property to \c true
     will not prevent mouse or keyboard input from reaching item.
 */
 
 /*!
     Returns true if the item is hidden, though the texture
     is still updated. As opposed to hiding the item by
-    setting \l{Item::visible}{visible} to \c false, setting this property to \c false
+    setting \l{Item::visible}{visible} to \c false, setting this property to \c true
     will not prevent mouse or keyboard input from reaching item.
 */
 bool QWaylandQuickItem::paintEnabled() const

@@ -44,9 +44,9 @@
 #include "base/threading/thread_restrictions.h"
 #include "components/spellcheck/spellcheck_build_features.h"
 #if BUILDFLAG(ENABLE_SPELLCHECK)
-#include "chrome/browser/spellchecker/spellcheck_message_filter.h"
+#include "chrome/browser/spellchecker/spell_check_host_impl.h"
 #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-#include "chrome/browser/spellchecker/spellcheck_message_filter_platform.h"
+#include "components/spellcheck/browser/spellcheck_message_filter_platform.h"
 #endif
 #endif
 #include "content/browser/renderer_host/render_view_host_delegate.h"
@@ -59,6 +59,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/resource_dispatcher_host.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/common/content_switches.h"
@@ -68,7 +69,9 @@
 #include "device/geolocation/geolocation_provider.h"
 #include "mojo/public/cpp/bindings/binding.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
-#include "services/service_manager/public/cpp/interface_registry.h"
+#include "net/ssl/client_cert_identity.h"
+#include "services/service_manager/public/cpp/bind_source_info.h"
+#include "services/service_manager/public/cpp/binder_registry.h"
 #include "third_party/WebKit/public/platform/modules/sensitive_input_visibility/sensitive_input_visibility_service.mojom.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/display/screen.h"
@@ -111,7 +114,7 @@
 #include "ui/base/resource/resource_bundle.h"
 #endif
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 #include "content/public/browser/browser_ppapi_host.h"
 #include "ppapi/host/ppapi_host.h"
 #include "renderer_host/pepper/pepper_host_factory_qt.h"
@@ -422,10 +425,6 @@ void ContentBrowserClientQt::RenderProcessWillLaunch(content::RenderProcessHost*
 #if BUILDFLAG(ENABLE_PEPPER_CDMS)
     host->AddFilter(new BrowserMessageFilterQt(id));
 #endif
-#if BUILDFLAG(ENABLE_SPELLCHECK)
-    // SpellCheckMessageFilter is required for both Hunspell and Native configurations.
-    host->AddFilter(new SpellCheckMessageFilter(id));
-#endif
 #if defined(Q_OS_MACOS) && BUILDFLAG(ENABLE_SPELLCHECK) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   host->AddFilter(new SpellCheckMessageFilterPlatform(id));
 #endif
@@ -466,6 +465,13 @@ content::QuotaPermissionContext *ContentBrowserClientQt::CreateQuotaPermissionCo
     return new QuotaPermissionContextQt;
 }
 
+void ContentBrowserClientQt::GetQuotaSettings(content::BrowserContext* context,
+                                              content::StoragePartition* partition,
+                                              storage::OptionalQuotaSettingsCallback callback)
+{
+    storage::GetNominalDynamicSettings(partition->GetPath(), context->IsOffTheRecord(), std::move(callback));
+}
+
 void ContentBrowserClientQt::AllowCertificateError(content::WebContents *webContents,
                                    int cert_error,
                                    const net::SSLInfo& ssl_info,
@@ -484,9 +490,10 @@ void ContentBrowserClientQt::AllowCertificateError(content::WebContents *webCont
 
 void ContentBrowserClientQt::SelectClientCertificate(content::WebContents * /*webContents*/,
                                                      net::SSLCertRequestInfo * /*certRequestInfo*/,
+                                                     net::ClientCertIdentityList /*client_certs*/,
                                                      std::unique_ptr<content::ClientCertificateDelegate> delegate)
 {
-    delegate->ContinueWithCertificate(nullptr);
+    delegate->ContinueWithCertificate(nullptr, nullptr);
 }
 
 std::string ContentBrowserClientQt::GetApplicationLocale()
@@ -529,7 +536,7 @@ void ContentBrowserClientQt::GetAdditionalMappedFilesForChildProcess(const base:
 }
 #endif
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 void ContentBrowserClientQt::DidCreatePpapiPlugin(content::BrowserPpapiHost* browser_host)
 {
     browser_host->GetPpapiHost()->AddHostFactoryFilter(
@@ -563,16 +570,16 @@ public:
             return nullptr;
         return FromWebContents(web_contents);
     }
-    static void BindSensitiveInputVisibilityService(content::RenderFrameHost* render_frame_host,
-                                                    blink::mojom::SensitiveInputVisibilityServiceRequest request)
+    static void BindSensitiveInputVisibilityService(blink::mojom::SensitiveInputVisibilityServiceRequest request,
+                                                    content::RenderFrameHost* render_frame_host)
     {
         CreateForRenderFrameHost(render_frame_host);
         ServiceDriver *driver = FromRenderFrameHost(render_frame_host);
 
         if (driver)
-            driver->BindSensitiveInputVisibilityServiceInternal(std::move(request));
+            driver->BindSensitiveInputVisibilityServiceRequest(std::move(request));
     }
-    void BindSensitiveInputVisibilityServiceInternal(blink::mojom::SensitiveInputVisibilityServiceRequest request)
+    void BindSensitiveInputVisibilityServiceRequest(blink::mojom::SensitiveInputVisibilityServiceRequest request)
     {
         m_sensitiveInputVisibilityBindings.AddBinding(this, std::move(request));
     }
@@ -590,10 +597,77 @@ private:
 
 };
 
-void ContentBrowserClientQt::RegisterRenderFrameMojoInterfaces(service_manager::InterfaceRegistry* registry,
-                                                               content::RenderFrameHost* render_frame_host)
+void ContentBrowserClientQt::InitFrameInterfaces()
 {
-    registry->AddInterface(base::Bind(&ServiceDriver::BindSensitiveInputVisibilityService, render_frame_host));
+    m_frameInterfaces = base::MakeUnique<service_manager::BinderRegistry>();
+    m_frameInterfacesParameterized = base::MakeUnique<service_manager::BinderRegistryWithArgs<content::RenderFrameHost*>>();
+    m_frameInterfacesParameterized->AddInterface(base::Bind(&ServiceDriver::BindSensitiveInputVisibilityService));
+}
+
+void ContentBrowserClientQt::BindInterfaceRequestFromFrame(content::RenderFrameHost* render_frame_host,
+                                                           const std::string& interface_name,
+                                                           mojo::ScopedMessagePipeHandle interface_pipe)
+{
+    if (!m_frameInterfaces.get() && !m_frameInterfacesParameterized.get())
+        InitFrameInterfaces();
+
+    if (!m_frameInterfacesParameterized->TryBindInterface(interface_name, &interface_pipe, render_frame_host))
+        m_frameInterfaces->TryBindInterface(interface_name, &interface_pipe);
+}
+
+void ContentBrowserClientQt::ExposeInterfacesToRenderer(service_manager::BinderRegistry *registry,
+                                                        content::AssociatedInterfaceRegistry */*associated_registry*/,
+                                                        content::RenderProcessHost *render_process_host)
+{
+#if BUILDFLAG(ENABLE_SPELLCHECK)
+    registry->AddInterface(base::Bind(&SpellCheckHostImpl::Create, render_process_host->GetID()),
+                           content::BrowserThread::GetTaskRunnerForThread(content::BrowserThread::UI));
+#else
+    Q_UNUSED(registry);
+    Q_UNUSED(render_process_host);
+#endif
+}
+
+bool ContentBrowserClientQt::CanCreateWindow(
+    content::RenderFrameHost* opener,
+    const GURL& opener_url,
+    const GURL& opener_top_level_frame_url,
+    const GURL& source_origin,
+    content::mojom::WindowContainerType container_type,
+    const GURL& target_url,
+    const content::Referrer& referrer,
+    const std::string& frame_name,
+    WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& features,
+    bool user_gesture,
+    bool opener_suppressed,
+    bool* no_javascript_access) {
+
+    Q_UNUSED(opener_url);
+    Q_UNUSED(opener_top_level_frame_url);
+    Q_UNUSED(source_origin);
+    Q_UNUSED(container_type);
+    Q_UNUSED(target_url);
+    Q_UNUSED(referrer);
+    Q_UNUSED(frame_name);
+    Q_UNUSED(disposition);
+    Q_UNUSED(features);
+    Q_UNUSED(opener_suppressed);
+
+    if (no_javascript_access)
+        *no_javascript_access = false;
+
+    content::WebContents* webContents = content::WebContents::FromRenderFrameHost(opener);
+
+    WebEngineSettings *settings = nullptr;
+    if (webContents) {
+        WebContentsDelegateQt* delegate =
+                static_cast<WebContentsDelegateQt*>(webContents->GetDelegate());
+        if (delegate)
+            settings = delegate->webEngineSettings();
+    }
+
+    return (settings && settings->getJavaScriptCanOpenWindowsAutomatically()) || user_gesture;
 }
 
 } // namespace QtWebEngineCore

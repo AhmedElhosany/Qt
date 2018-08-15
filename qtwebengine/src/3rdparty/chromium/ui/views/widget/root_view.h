@@ -97,7 +97,8 @@ class VIEWS_EXPORT RootView : public View,
   View* GetFocusTraversableParentView() override;
 
   // Overridden from ui::EventProcessor:
-  ui::EventTarget* GetRootTarget() override;
+  ui::EventTarget* GetRootForEvent(ui::Event* event) override;
+  ui::EventTargeter* GetDefaultEventTargeter() override;
   void OnEventProcessingStarted(ui::Event* event) override;
   void OnEventProcessingFinished(ui::Event* event) override;
 
@@ -105,7 +106,6 @@ class VIEWS_EXPORT RootView : public View,
   const Widget* GetWidget() const override;
   Widget* GetWidget() override;
   bool IsDrawn() const override;
-  void Layout() override;
   const char* GetClassName() const override;
   void SchedulePaintInRect(const gfx::Rect& rect) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;

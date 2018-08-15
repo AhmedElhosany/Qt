@@ -160,7 +160,7 @@ class TestingSpellingServiceClient : public SpellingServiceClient {
     base::string16 text(base::UTF8ToUTF16(sanitized_request_text_));
     for (std::vector<SpellCheckResult>::const_iterator it = results.begin();
          it != results.end(); ++it) {
-      text.replace(it->location, it->length, it->replacement);
+      text.replace(it->location, it->length, it->replacements[0]);
     }
     EXPECT_EQ(corrected_text_, text);
   }
@@ -171,7 +171,9 @@ class TestingSpellingServiceClient : public SpellingServiceClient {
   }
 
  private:
-  std::unique_ptr<net::URLFetcher> CreateURLFetcher(const GURL& url) override {
+  std::unique_ptr<net::URLFetcher> CreateURLFetcher(
+      const GURL& url,
+      net::NetworkTrafficAnnotationTag traffic_annotation) override {
     EXPECT_EQ("https://www.googleapis.com/rpc", url.spec());
     fetcher_ = new TestSpellingURLFetcher(
         0, url, this, request_type_, sanitized_request_text_, request_language_,

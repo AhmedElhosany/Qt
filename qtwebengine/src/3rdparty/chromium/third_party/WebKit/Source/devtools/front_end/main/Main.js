@@ -44,16 +44,29 @@ Main.Main = class {
    * @param {boolean} hard
    */
   static _reloadPage(hard) {
-    var mainTarget = SDK.targetManager.mainTarget();
-    if (mainTarget && mainTarget.hasBrowserCapability())
-      SDK.targetManager.reloadPage(hard);
+    SDK.ResourceTreeModel.reloadAllPages(hard);
+  }
+
+  /**
+   * @param {string} label
+   */
+  static time(label) {
+    if (Host.isUnderTest())
+      return;
+    console.time(label);
+  }
+
+  /**
+   * @param {string} label
+   */
+  static timeEnd(label) {
+    if (Host.isUnderTest())
+      return;
+    console.timeEnd(label);
   }
 
   _loaded() {
     console.timeStamp('Main._loaded');
-
-    if (InspectorFrontendHost.isUnderTest())
-      self.runtime.useTestBase();
     Runtime.setPlatform(Host.platform());
     InspectorFrontendHost.getPreferences(this._gotPreferences.bind(this));
   }
@@ -63,6 +76,8 @@ Main.Main = class {
    */
   _gotPreferences(prefs) {
     console.timeStamp('Main._gotPreferences');
+    if (Host.isUnderTest(prefs))
+      self.runtime.useTestBase();
     this._createSettings(prefs);
     this._createAppUI();
   }
@@ -76,7 +91,7 @@ Main.Main = class {
     var storagePrefix = '';
     if (Host.isCustomDevtoolsFrontend())
       storagePrefix = '__custom__';
-    else if (!Runtime.queryParam('can_dock') && !!Runtime.queryParam('debugFrontend'))
+    else if (!Runtime.queryParam('can_dock') && !!Runtime.queryParam('debugFrontend') && !Host.isUnderTest(prefs))
       storagePrefix = '__bundled__';
     var clearLocalStorage = window.localStorage ? window.localStorage.clear.bind(window.localStorage) : undefined;
     var localStorage =
@@ -85,8 +100,7 @@ Main.Main = class {
         prefs, InspectorFrontendHost.setPreference, InspectorFrontendHost.removePreference,
         InspectorFrontendHost.clearPreferences, storagePrefix);
     Common.settings = new Common.Settings(globalStorage, localStorage);
-
-    if (!InspectorFrontendHost.isUnderTest())
+    if (!Host.isUnderTest(prefs))
       new Common.VersionController().updateVersion();
   }
 
@@ -94,65 +108,72 @@ Main.Main = class {
    * @param {!Object<string, string>} prefs
    */
   _initializeExperiments(prefs) {
+    // Keep this sorted alphabetically: both keys and values.
     Runtime.experiments.register('accessibilityInspection', 'Accessibility Inspection');
     Runtime.experiments.register('applyCustomStylesheet', 'Allow custom UI themes');
-    Runtime.experiments.register('audits2', 'Audits 2.0', true);
+    Runtime.experiments.register('audits2', 'Audits 2.0');
     Runtime.experiments.register('autoAttachToCrossProcessSubframes', 'Auto-attach to cross-process subframes', true);
     Runtime.experiments.register('blackboxJSFramesOnTimeline', 'Blackbox JavaScript frames on Timeline', true);
-    Runtime.experiments.register('colorContrastRatio', 'Contrast ratio line in color picker', true);
-    Runtime.experiments.register('continueToFirstInvocation', 'Continue to first invocation', true);
+    Runtime.experiments.register('changesDrawer', 'Changes drawer', true);
+    Runtime.experiments.register('colorContrastRatio', 'Color contrast ratio line in color picker', true);
+    Runtime.experiments.register('continueToLocationMarkers', 'Continue to location markers', true);
     Runtime.experiments.register('emptySourceMapAutoStepping', 'Empty sourcemap auto-stepping');
     Runtime.experiments.register('inputEventsOnTimelineOverview', 'Input events on Timeline overview', true);
-    Runtime.experiments.register('layersPanel', 'Layers panel');
-    Runtime.experiments.register('layoutEditor', 'Layout editor', true);
-    Runtime.experiments.register('inspectTooltip', 'Dark inspect element tooltip');
     Runtime.experiments.register('liveSASS', 'Live SASS');
-    Runtime.experiments.register('nodeDebugging', 'Node debugging', true);
+    Runtime.experiments.register('networkGroupingRequests', 'Network request groups support', true);
+    Runtime.experiments.register('objectPreviews', 'Object previews', true);
+    Runtime.experiments.register('networkInWorkers', 'Network in workers', true);
     Runtime.experiments.register('persistence2', 'Persistence 2.0');
-    Runtime.experiments.register('privateScriptInspection', 'Private script inspection');
-    Runtime.experiments.register('requestBlocking', 'Request blocking', true);
-    Runtime.experiments.register('resolveVariableNames', 'Resolve variable names');
-    Runtime.experiments.register('timelineShowAllEvents', 'Show all events on Timeline', true);
-    Runtime.experiments.register('timelineShowAllProcesses', 'Show all processes on Timeline', true);
-    Runtime.experiments.register('securityPanel', 'Security panel');
     Runtime.experiments.register('sourceDiff', 'Source diff');
     Runtime.experiments.register('terminalInDrawer', 'Terminal in drawer', true);
-    Runtime.experiments.register('timelineFlowEvents', 'Timeline flow events', true);
-    Runtime.experiments.register('timelineInvalidationTracking', 'Timeline invalidation tracking', true);
-    Runtime.experiments.register('timelineRecordingPerspectives', 'Timeline recording perspectives UI');
-    Runtime.experiments.register('timelineTracingJSProfile', 'Timeline tracing based JS profiler', true);
-    Runtime.experiments.register('timelineV8RuntimeCallStats', 'V8 Runtime Call Stats on Timeline', true);
-    Runtime.experiments.register('timelineRuleUsageRecording', 'Track CSS rules usage while recording Timeline.');
-    Runtime.experiments.register('timelinePerFrameTrack', 'Show track per frame on Timeline', true);
+
+    // Timeline
+    Runtime.experiments.register('timelineColorByProduct', 'Timeline: color by product', true);
+    Runtime.experiments.register('timelineEventInitiators', 'Timeline: event initiators');
+    Runtime.experiments.register('timelineFlowEvents', 'Timeline: flow events', true);
+    Runtime.experiments.register('timelineInvalidationTracking', 'Timeline: invalidation tracking', true);
+    Runtime.experiments.register('timelineKeepHistory', 'Timeline: keep recording history');
+    Runtime.experiments.register('timelineMultipleMainViews', 'Timeline: multiple main views');
+    Runtime.experiments.register('timelinePaintTimingMarkers', 'Timeline: paint timing markers', true);
+    Runtime.experiments.register('timelinePerFrameTrack', 'Timeline: per-frame tracks', true);
+    Runtime.experiments.register('timelineShowAllEvents', 'Timeline: show all events', true);
+    Runtime.experiments.register('timelineShowAllProcesses', 'Timeline: show all processes', true);
+    Runtime.experiments.register('timelineTracingJSProfile', 'Timeline: tracing based JS profiler', true);
+    Runtime.experiments.register('timelineV8RuntimeCallStats', 'Timeline: V8 Runtime Call Stats on Timeline', true);
 
     Runtime.experiments.cleanUpStaleExperiments();
 
-    if (InspectorFrontendHost.isUnderTest()) {
+    if (Host.isUnderTest(prefs)) {
       var testPath = JSON.parse(prefs['testPath'] || '""');
       // Enable experiments for testing.
-      if (testPath.indexOf('layers/') !== -1)
-        Runtime.experiments.enableForTest('layersPanel');
-      if (testPath.indexOf('timeline/') !== -1 || testPath.indexOf('layers/') !== -1)
-        Runtime.experiments.enableForTest('layersPanel');
-      if (testPath.indexOf('security/') !== -1)
-        Runtime.experiments.enableForTest('securityPanel');
       if (testPath.indexOf('accessibility/') !== -1)
         Runtime.experiments.enableForTest('accessibilityInspection');
+      if (testPath.indexOf('audits2/') !== -1)
+        Runtime.experiments.enableForTest('audits2');
+      if (testPath.indexOf('coverage/') !== -1)
+        Runtime.experiments.enableForTest('cssTrackerPanel');
+      if (testPath.indexOf('changes/') !== -1)
+        Runtime.experiments.enableForTest('changesDrawer');
+      if (testPath.indexOf('sass/') !== -1)
+        Runtime.experiments.enableForTest('liveSASS');
     }
 
-    Runtime.experiments.setDefaultExperiments(['inspectTooltip', 'securityPanel', 'resolveVariableNames']);
+    Runtime.experiments.setDefaultExperiments([
+      'continueToLocationMarkers', 'autoAttachToCrossProcessSubframes', 'objectPreviews', 'audits2',
+      'networkGroupingRequests', 'timelineColorByProduct'
+    ]);
   }
 
   /**
    * @suppressGlobalPropertiesCheck
    */
   _createAppUI() {
-    console.time('Main._createAppUI');
+    Main.Main.time('Main._createAppUI');
 
     UI.viewManager = new UI.ViewManager();
 
     // Request filesystems early, we won't create connections until callback is fired. Things will happen in parallel.
-    Workspace.isolatedFileSystemManager = new Workspace.IsolatedFileSystemManager();
+    Persistence.isolatedFileSystemManager = new Persistence.IsolatedFileSystemManager();
 
     var themeSetting = Common.settings.createSetting('uiTheme', 'default');
     UI.initializeUIUtils(document, themeSetting);
@@ -169,66 +190,54 @@ Main.Main = class {
     UI.ContextMenu.installHandler(document);
     UI.Tooltip.installHandler(document);
     Components.dockController = new Components.DockController(canDock);
-    SDK.multitargetConsoleModel = new SDK.MultitargetConsoleModel();
+    ConsoleModel.consoleModel = new ConsoleModel.ConsoleModel();
     SDK.multitargetNetworkManager = new SDK.MultitargetNetworkManager();
+    NetworkLog.networkLog = new NetworkLog.NetworkLog();
+    SDK.domDebuggerManager = new SDK.DOMDebuggerManager();
     SDK.targetManager.addEventListener(
         SDK.TargetManager.Events.SuspendStateChanged, this._onSuspendStateChanged.bind(this));
 
-    Components.shortcutsScreen = new Components.ShortcutsScreen();
+    UI.shortcutsScreen = new UI.ShortcutsScreen();
     // set order of some sections explicitly
-    Components.shortcutsScreen.section(Common.UIString('Elements Panel'));
-    Components.shortcutsScreen.section(Common.UIString('Styles Pane'));
-    Components.shortcutsScreen.section(Common.UIString('Debugger'));
-    Components.shortcutsScreen.section(Common.UIString('Console'));
+    UI.shortcutsScreen.section(Common.UIString('Elements Panel'));
+    UI.shortcutsScreen.section(Common.UIString('Styles Pane'));
+    UI.shortcutsScreen.section(Common.UIString('Debugger'));
+    UI.shortcutsScreen.section(Common.UIString('Console'));
 
     Workspace.fileManager = new Workspace.FileManager();
     Workspace.workspace = new Workspace.Workspace();
-    Common.formatterWorkerPool = new Common.FormatterWorkerPool();
-    Workspace.fileSystemMapping = new Workspace.FileSystemMapping(Workspace.isolatedFileSystemManager);
+    Persistence.fileSystemMapping = new Persistence.FileSystemMapping(Persistence.isolatedFileSystemManager);
 
-    var fileSystemWorkspaceBinding =
-        new Bindings.FileSystemWorkspaceBinding(Workspace.isolatedFileSystemManager, Workspace.workspace);
-    Main.networkProjectManager = new Bindings.NetworkProjectManager(SDK.targetManager, Workspace.workspace);
+    Bindings.networkProjectManager = new Bindings.NetworkProjectManager(SDK.targetManager, Workspace.workspace);
+    Bindings.resourceMapping = new Bindings.ResourceMapping(SDK.targetManager, Workspace.workspace);
     Bindings.presentationConsoleMessageHelper = new Bindings.PresentationConsoleMessageHelper(Workspace.workspace);
-    Bindings.cssWorkspaceBinding =
-        new Bindings.CSSWorkspaceBinding(SDK.targetManager, Workspace.workspace);
-    Bindings.debuggerWorkspaceBinding =
-        new Bindings.DebuggerWorkspaceBinding(SDK.targetManager, Workspace.workspace);
+    Bindings.cssWorkspaceBinding = new Bindings.CSSWorkspaceBinding(SDK.targetManager, Workspace.workspace);
+    Bindings.debuggerWorkspaceBinding = new Bindings.DebuggerWorkspaceBinding(SDK.targetManager, Workspace.workspace);
     Bindings.breakpointManager =
         new Bindings.BreakpointManager(null, Workspace.workspace, SDK.targetManager, Bindings.debuggerWorkspaceBinding);
     Extensions.extensionServer = new Extensions.ExtensionServer();
 
+    new Persistence.FileSystemWorkspaceBinding(Persistence.isolatedFileSystemManager, Workspace.workspace);
     Persistence.persistence =
-        new Persistence.Persistence(Workspace.workspace, Bindings.breakpointManager, Workspace.fileSystemMapping);
+        new Persistence.Persistence(Workspace.workspace, Bindings.breakpointManager, Persistence.fileSystemMapping);
 
-    new Main.OverlayController();
-    new Components.ExecutionContextSelector(SDK.targetManager, UI.context);
+    new Main.ExecutionContextSelector(SDK.targetManager, UI.context);
     Bindings.blackboxManager = new Bindings.BlackboxManager(Bindings.debuggerWorkspaceBinding);
-
-    var autoselectPanel = Common.UIString('auto');
-    var openAnchorLocationSetting = Common.settings.createSetting('openLinkHandler', autoselectPanel);
-    Components.openAnchorLocationRegistry = new Components.HandlerRegistry(openAnchorLocationSetting);
-    Components.openAnchorLocationRegistry.registerHandler(autoselectPanel, function() {
-      return false;
-    });
-    Components.Linkifier.setLinkHandler(new Components.HandlerRegistry.LinkHandler());
 
     new Main.Main.PauseListener();
     new Main.Main.InspectedNodeRevealer();
     new Main.NetworkPanelIndicator();
     new Main.SourcesPanelIndicator();
     new Main.BackendSettingsSync();
-    Components.domBreakpointsSidebarPane = new Components.DOMBreakpointsSidebarPane();
 
     UI.actionRegistry = new UI.ActionRegistry();
     UI.shortcutRegistry = new UI.ShortcutRegistry(UI.actionRegistry, document);
-    Components.ShortcutsScreen.registerShortcuts();
+    UI.ShortcutsScreen.registerShortcuts();
     this._registerForwardedShortcuts();
     this._registerMessageSinkListener();
-    new Main.Main.InspectorDomainObserver();
 
     self.runtime.extension(Common.AppProvider).instance().then(this._showAppUI.bind(this));
-    console.timeEnd('Main._createAppUI');
+    Main.Main.timeEnd('Main._createAppUI');
   }
 
   /**
@@ -236,7 +245,7 @@ Main.Main = class {
    * @suppressGlobalPropertiesCheck
    */
   _showAppUI(appProvider) {
-    console.time('Main._showAppUI');
+    Main.Main.time('Main._showAppUI');
     var app = /** @type {!Common.AppProvider} */ (appProvider).createApp();
     // It is important to kick controller lifetime after apps are instantiated.
     Components.dockController.initialize();
@@ -275,17 +284,17 @@ Main.Main = class {
 
     // Allow UI cycles to repaint prior to creating connection.
     setTimeout(this._initializeTarget.bind(this), 0);
-    console.timeEnd('Main._showAppUI');
+    Main.Main.timeEnd('Main._showAppUI');
   }
 
   _initializeTarget() {
-    console.time('Main._initializeTarget');
+    Main.Main.time('Main._initializeTarget');
     SDK.targetManager.connectToMainTarget(webSocketConnectionLost);
 
     InspectorFrontendHost.readyForTest();
     // Asynchronously run the extensions.
     setTimeout(this._lateInitialization.bind(this), 100);
-    console.timeEnd('Main._initializeTarget');
+    Main.Main.timeEnd('Main._initializeTarget');
 
     function webSocketConnectionLost() {
       if (!Main._disconnectedScreenWithReasonWasShown)
@@ -297,11 +306,15 @@ Main.Main = class {
     console.timeStamp('Main._lateInitialization');
     this._registerShortcuts();
     Extensions.extensionServer.initializeExtensions();
+    if (!Host.isUnderTest())
+      Help.showReleaseNoteIfNeeded();
   }
 
   _registerForwardedShortcuts() {
-    /** @const */ var forwardedActions =
-        ['main.toggle-dock', 'debugger.toggle-breakpoints-active', 'debugger.toggle-pause', 'commandMenu.show'];
+    /** @const */ var forwardedActions = [
+      'main.toggle-dock', 'debugger.toggle-breakpoints-active', 'debugger.toggle-pause', 'commandMenu.show',
+      'console.show'
+    ];
     var actionKeys =
         UI.shortcutRegistry.keysForActions(forwardedActions).map(UI.KeyboardShortcut.keyCodeAndModifiersFromKey);
     InspectorFrontendHost.setWhitelistedShortcuts(JSON.stringify(actionKeys));
@@ -348,69 +361,14 @@ Main.Main = class {
     Workspace.workspace.addEventListener(Workspace.Workspace.Events.UISourceCodeAdded, listener);
   }
 
-  _documentClick(event) {
-    var target = event.target;
-    if (target.shadowRoot)
-      target = event.deepElementFromPoint();
-    if (!target)
-      return;
-
-    var anchor = target.enclosingNodeOrSelfWithNodeName('a');
-    if (!anchor || !anchor.href)
-      return;
-
-    // Prevent the link from navigating, since we don't do any navigation by following links normally.
-    event.consume(true);
-
-    if (anchor.preventFollow)
-      return;
-
-    function followLink() {
-      if (UI.isBeingEdited(target))
-        return;
-      if (Components.openAnchorLocationRegistry.dispatch({url: anchor.href, lineNumber: anchor.lineNumber}))
-        return;
-
-      var uiSourceCode = Workspace.workspace.uiSourceCodeForURL(anchor.href);
-      if (uiSourceCode) {
-        Common.Revealer.reveal(uiSourceCode.uiLocation(anchor.lineNumber || 0, anchor.columnNumber || 0));
-        return;
-      }
-
-      var resource = Bindings.resourceForURL(anchor.href);
-      if (resource) {
-        Common.Revealer.reveal(resource);
-        return;
-      }
-
-      var request = SDK.NetworkLog.requestForURL(anchor.href);
-      if (request) {
-        Common.Revealer.reveal(request);
-        return;
-      }
-      InspectorFrontendHost.openInNewTab(anchor.href);
-    }
-
-    if (!anchor.classList.contains('webkit-html-external-link'))
-      followLink();
-    else
-      InspectorFrontendHost.openInNewTab(anchor.href);
-  }
-
   _registerShortcuts() {
     var shortcut = UI.KeyboardShortcut;
-    var section = Components.shortcutsScreen.section(Common.UIString('All Panels'));
+    var section = UI.shortcutsScreen.section(Common.UIString('All Panels'));
     var keys = [
       shortcut.makeDescriptor('[', shortcut.Modifiers.CtrlOrMeta),
       shortcut.makeDescriptor(']', shortcut.Modifiers.CtrlOrMeta)
     ];
     section.addRelatedKeys(keys, Common.UIString('Go to the panel to the left/right'));
-
-    keys = [
-      shortcut.makeDescriptor('[', shortcut.Modifiers.CtrlOrMeta | shortcut.Modifiers.Alt),
-      shortcut.makeDescriptor(']', shortcut.Modifiers.CtrlOrMeta | shortcut.Modifiers.Alt)
-    ];
-    section.addRelatedKeys(keys, Common.UIString('Go back/forward in panel history'));
 
     var toggleConsoleLabel = Common.UIString('Show console');
     section.addKey(shortcut.makeDescriptor(shortcut.Keys.Tilde, shortcut.Modifiers.Ctrl), toggleConsoleLabel);
@@ -452,14 +410,6 @@ Main.Main = class {
     if (event.handled)
       return;
 
-    var document = event.target && event.target.ownerDocument;
-    var target = document ? document.deepActiveElement() : null;
-    if (target) {
-      var anchor = target.enclosingNodeOrSelfWithNodeName('a');
-      if (anchor && anchor.preventFollow)
-        event.preventDefault();
-    }
-
     if (!UI.Dialog.hasInstance() && UI.inspectorView.currentPanelDeprecated()) {
       UI.inspectorView.currentPanelDeprecated().handleShortcut(event);
       if (event.handled) {
@@ -475,7 +425,7 @@ Main.Main = class {
    * @param {!Event} event
    */
   _redispatchClipboardEvent(event) {
-    var eventCopy = new CustomEvent('clipboard-' + event.type);
+    var eventCopy = new CustomEvent('clipboard-' + event.type, {bubbles: true});
     eventCopy['original'] = event;
     var document = event.target && event.target.ownerDocument;
     var target = document ? document.deepActiveElement() : null;
@@ -500,7 +450,6 @@ Main.Main = class {
     document.addEventListener('cut', this._redispatchClipboardEvent.bind(this), false);
     document.addEventListener('paste', this._redispatchClipboardEvent.bind(this), false);
     document.addEventListener('contextmenu', this._contextMenuEventFired.bind(this), true);
-    document.addEventListener('click', this._documentClick.bind(this), false);
   }
 
   /**
@@ -518,41 +467,16 @@ Main.Main = class {
 };
 
 /**
- * @implements {SDK.TargetManager.Observer}
- * @unrestricted
- */
-Main.Main.InspectorDomainObserver = class {
-  constructor() {
-    SDK.targetManager.observeTargets(this, SDK.Target.Capability.Browser);
-  }
-
-  /**
-   * @override
-   * @param {!SDK.Target} target
-   */
-  targetAdded(target) {
-    target.registerInspectorDispatcher(new Main.Main.InspectorDomainDispatcher(target));
-    target.inspectorAgent().enable();
-  }
-
-  /**
-   * @override
-   * @param {!SDK.Target} target
-   */
-  targetRemoved(target) {
-  }
-};
-
-/**
  * @implements {Protocol.InspectorDispatcher}
- * @unrestricted
  */
-Main.Main.InspectorDomainDispatcher = class {
+Main.Main.InspectorModel = class extends SDK.SDKModel {
   /**
    * @param {!SDK.Target} target
    */
   constructor(target) {
-    this._target = target;
+    super(target);
+    target.registerInspectorDispatcher(this);
+    target.inspectorAgent().enable();
   }
 
   /**
@@ -568,11 +492,13 @@ Main.Main.InspectorDomainDispatcher = class {
    * @override
    */
   targetCrashed() {
-    var debuggerModel = SDK.DebuggerModel.fromTarget(this._target);
+    var debuggerModel = this.target().model(SDK.DebuggerModel);
     if (debuggerModel)
       Main.TargetCrashedScreen.show(debuggerModel);
   }
 };
+
+SDK.SDKModel.register(Main.Main.InspectorModel, SDK.Target.Capability.Inspector, true);
 
 /**
  * @implements {UI.ActionDelegate}
@@ -677,13 +603,12 @@ Main.Main.WarningErrorCounter = class {
     var shadowRoot = UI.createShadowRootWithCoreStyles(this._counter, 'main/errorWarningCounter.css');
 
     this._errors = this._createItem(shadowRoot, 'smallicon-error');
-    this._revokedErrors = this._createItem(shadowRoot, 'smallicon-revoked-error');
     this._warnings = this._createItem(shadowRoot, 'smallicon-warning');
     this._titles = [];
 
-    SDK.multitargetConsoleModel.addEventListener(SDK.ConsoleModel.Events.ConsoleCleared, this._update, this);
-    SDK.multitargetConsoleModel.addEventListener(SDK.ConsoleModel.Events.MessageAdded, this._update, this);
-    SDK.multitargetConsoleModel.addEventListener(SDK.ConsoleModel.Events.MessageUpdated, this._update, this);
+    ConsoleModel.consoleModel.addEventListener(ConsoleModel.ConsoleModel.Events.ConsoleCleared, this._update, this);
+    ConsoleModel.consoleModel.addEventListener(ConsoleModel.ConsoleModel.Events.MessageAdded, this._update, this);
+    ConsoleModel.consoleModel.addEventListener(ConsoleModel.ConsoleModel.Events.MessageUpdated, this._update, this);
     this._update();
   }
 
@@ -716,26 +641,14 @@ Main.Main.WarningErrorCounter = class {
   }
 
   _update() {
-    var errors = 0;
-    var revokedErrors = 0;
-    var warnings = 0;
-    var targets = SDK.targetManager.targets();
-    for (var i = 0; i < targets.length; ++i) {
-      errors += targets[i].consoleModel.errors();
-      revokedErrors += targets[i].consoleModel.revokedErrors();
-      warnings += targets[i].consoleModel.warnings();
-    }
+    var errors = ConsoleModel.consoleModel.errors();
+    var warnings = ConsoleModel.consoleModel.warnings();
 
     this._titles = [];
-    this._toolbarItem.setVisible(!!(errors || revokedErrors || warnings));
+    this._toolbarItem.setVisible(!!(errors || warnings));
     this._updateItem(this._errors, errors, false, Common.UIString(errors === 1 ? '%d error' : '%d errors', errors));
     this._updateItem(
-        this._revokedErrors, revokedErrors, !errors,
-        Common.UIString(
-            revokedErrors === 1 ? '%d handled promise rejection' : '%d handled promise rejections', revokedErrors));
-    this._updateItem(
-        this._warnings, warnings, !errors && !revokedErrors,
-        Common.UIString(warnings === 1 ? '%d warning' : '%d warnings', warnings));
+        this._warnings, warnings, !errors, Common.UIString(warnings === 1 ? '%d warning' : '%d warnings', warnings));
     this._counter.title = this._titles.join(', ');
     UI.inspectorView.toolbarItemResized();
   }
@@ -751,12 +664,11 @@ Main.Main.WarningErrorCounter = class {
 
 /**
  * @implements {UI.ToolbarItem.Provider}
- * @unrestricted
  */
 Main.Main.MainMenuItem = class {
   constructor() {
-    this._item = new UI.ToolbarButton(Common.UIString('Customize and control DevTools'), 'largeicon-menu');
-    this._item.addEventListener('mousedown', this._mouseDown, this);
+    this._item = new UI.ToolbarMenuButton(this._handleContextMenu.bind(this), true);
+    this._item.setTitle(Common.UIString('Customize and control DevTools'));
   }
 
   /**
@@ -768,13 +680,9 @@ Main.Main.MainMenuItem = class {
   }
 
   /**
-   * @param {!Common.Event} event
+   * @param {!UI.ContextMenu} contextMenu
    */
-  _mouseDown(event) {
-    var contextMenu = new UI.ContextMenu(
-        /** @type {!Event} */ (event.data), true, this._item.element.totalOffsetLeft(),
-        this._item.element.totalOffsetTop() + this._item.element.offsetHeight);
-
+  _handleContextMenu(contextMenu) {
     if (Components.dockController.canDock()) {
       var dockItemElement = createElementWithClass('div', 'flex-centered flex-auto');
       var titleElement = dockItemElement.createChild('span', 'flex-auto');
@@ -788,13 +696,25 @@ Main.Main.MainMenuItem = class {
       var undock = new UI.ToolbarToggle(Common.UIString('Undock into separate window'), 'largeicon-undock');
       var bottom = new UI.ToolbarToggle(Common.UIString('Dock to bottom'), 'largeicon-dock-to-bottom');
       var right = new UI.ToolbarToggle(Common.UIString('Dock to right'), 'largeicon-dock-to-right');
-      undock.addEventListener('mouseup', setDockSide.bind(null, Components.DockController.State.Undocked));
-      bottom.addEventListener('mouseup', setDockSide.bind(null, Components.DockController.State.DockedToBottom));
-      right.addEventListener('mouseup', setDockSide.bind(null, Components.DockController.State.DockedToRight));
+      var left = new UI.ToolbarToggle(Common.UIString('Dock to left'), 'largeicon-dock-to-left');
+      undock.addEventListener(UI.ToolbarButton.Events.MouseDown, event => event.data.consume());
+      bottom.addEventListener(UI.ToolbarButton.Events.MouseDown, event => event.data.consume());
+      right.addEventListener(UI.ToolbarButton.Events.MouseDown, event => event.data.consume());
+      left.addEventListener(UI.ToolbarButton.Events.MouseDown, event => event.data.consume());
+      undock.addEventListener(
+          UI.ToolbarButton.Events.MouseUp, setDockSide.bind(null, Components.DockController.State.Undocked));
+      bottom.addEventListener(
+          UI.ToolbarButton.Events.MouseUp, setDockSide.bind(null, Components.DockController.State.DockedToBottom));
+      right.addEventListener(
+          UI.ToolbarButton.Events.MouseUp, setDockSide.bind(null, Components.DockController.State.DockedToRight));
+      left.addEventListener(
+          UI.ToolbarButton.Events.MouseUp, setDockSide.bind(null, Components.DockController.State.DockedToLeft));
       undock.setToggled(Components.dockController.dockSide() === Components.DockController.State.Undocked);
       bottom.setToggled(Components.dockController.dockSide() === Components.DockController.State.DockedToBottom);
       right.setToggled(Components.dockController.dockSide() === Components.DockController.State.DockedToRight);
+      left.setToggled(Components.dockController.dockSide() === Components.DockController.State.DockedToLeft);
       dockItemToolbar.appendToolbarItem(undock);
+      dockItemToolbar.appendToolbarItem(left);
       dockItemToolbar.appendToolbarItem(bottom);
       dockItemToolbar.appendToolbarItem(right);
       contextMenu.appendCustomItem(dockItemElement);
@@ -824,13 +744,43 @@ Main.Main.MainMenuItem = class {
       moreTools.appendItem(extension.title(), UI.viewManager.showView.bind(UI.viewManager, descriptor['id']));
     }
 
-    contextMenu.show();
+    var helpSubMenu = contextMenu.namedSubMenu('mainMenuHelp');
+    helpSubMenu.appendAction('settings.documentation');
+    helpSubMenu.appendItem('Release Notes', () => InspectorFrontendHost.openInNewTab(Help.latestReleaseNote().link));
   }
 };
 
 /**
- * @unrestricted
+ * @implements {UI.ToolbarItem.Provider}
  */
+Main.Main.NodeIndicator = class {
+  constructor() {
+    var element = createElement('div');
+    var shadowRoot = UI.createShadowRootWithCoreStyles(element, 'main/nodeIcon.css');
+    this._element = shadowRoot.createChild('div', 'node-icon');
+    element.addEventListener('click', () => InspectorFrontendHost.openNodeFrontend(), false);
+    this._button = new UI.ToolbarItem(element);
+    this._button.setTitle(Common.UIString('Open dedicated DevTools for Node.js'));
+    SDK.targetManager.addEventListener(SDK.TargetManager.Events.AvailableNodeTargetsChanged, this._update, this);
+    this._button.setVisible(false);
+    this._update();
+  }
+
+  _update() {
+    this._element.classList.toggle('inactive', !SDK.targetManager.availableNodeTargetsCount());
+    if (SDK.targetManager.availableNodeTargetsCount())
+      this._button.setVisible(true);
+  }
+
+  /**
+   * @override
+   * @return {?UI.ToolbarItem}
+   */
+  item() {
+    return this._button;
+  }
+};
+
 Main.NetworkPanelIndicator = class {
   constructor() {
     // TODO: we should not access network from other modules.
@@ -838,17 +788,19 @@ Main.NetworkPanelIndicator = class {
       return;
     var manager = SDK.multitargetNetworkManager;
     manager.addEventListener(SDK.MultitargetNetworkManager.Events.ConditionsChanged, updateVisibility);
-    var blockedURLsSetting = Common.moduleSetting('blockedURLs');
-    blockedURLsSetting.addChangeListener(updateVisibility);
+    manager.addEventListener(SDK.MultitargetNetworkManager.Events.BlockedPatternsChanged, updateVisibility);
     updateVisibility();
 
     function updateVisibility() {
-      if (manager.isThrottling())
-        UI.inspectorView.setPanelIcon('network', 'smallicon-warning', Common.UIString('Network throttling is enabled'));
-      else if (blockedURLsSetting.get().length)
-        UI.inspectorView.setPanelIcon('network', 'smallicon-warning', Common.UIString('Requests may be blocked'));
-      else
-        UI.inspectorView.setPanelIcon('network', '', '');
+      var icon = null;
+      if (manager.isThrottling()) {
+        icon = UI.Icon.create('smallicon-warning');
+        icon.title = Common.UIString('Network throttling is enabled');
+      } else if (manager.isBlocking()) {
+        icon = UI.Icon.create('smallicon-warning');
+        icon.title = Common.UIString('Requests may be blocked');
+      }
+      UI.inspectorView.setPanelIcon('network', icon);
     }
   }
 };
@@ -862,11 +814,13 @@ Main.SourcesPanelIndicator = class {
     javaScriptDisabledChanged();
 
     function javaScriptDisabledChanged() {
+      var icon = null;
       var javaScriptDisabled = Common.moduleSetting('javaScriptDisabled').get();
-      if (javaScriptDisabled)
-        UI.inspectorView.setPanelIcon('sources', 'smallicon-warning', Common.UIString('JavaScript is disabled'));
-      else
-        UI.inspectorView.setPanelIcon('sources', '', '');
+      if (javaScriptDisabled) {
+        icon = UI.Icon.create('smallicon-warning');
+        icon.title = Common.UIString('JavaScript is disabled');
+      }
+      UI.inspectorView.setPanelIcon('sources', icon);
     }
   }
 };
@@ -886,8 +840,8 @@ Main.Main.PauseListener = class {
   _debuggerPaused(event) {
     SDK.targetManager.removeModelListener(
         SDK.DebuggerModel, SDK.DebuggerModel.Events.DebuggerPaused, this._debuggerPaused, this);
-    var debuggerPausedDetails = /** @type {!SDK.DebuggerPausedDetails} */ (event.data);
-    var debuggerModel = /** @type {!SDK.DebuggerModel} */ (event.target);
+    var debuggerModel = /** @type {!SDK.DebuggerModel} */ (event.data);
+    var debuggerPausedDetails = debuggerModel.debuggerPausedDetails();
     UI.context.setFlavor(SDK.Target, debuggerModel.target());
     Common.Revealer.reveal(debuggerPausedDetails);
   }
@@ -898,7 +852,8 @@ Main.Main.PauseListener = class {
  */
 Main.Main.InspectedNodeRevealer = class {
   constructor() {
-    SDK.targetManager.addModelListener(SDK.DOMModel, SDK.DOMModel.Events.NodeInspected, this._inspectNode, this);
+    SDK.targetManager.addModelListener(
+        SDK.OverlayModel, SDK.OverlayModel.Events.InspectNodeRequested, this._inspectNode, this);
   }
 
   /**
@@ -917,10 +872,10 @@ Main.Main.InspectedNodeRevealer = class {
  */
 Main.sendOverProtocol = function(method, params) {
   return new Promise((resolve, reject) => {
-    InspectorBackendClass.sendRawMessageForTesting(method, params, (err, result) => {
+    Protocol.InspectorBackend.sendRawMessageForTesting(method, params, (err, ...results) => {
       if (err)
         return reject(err);
-      return resolve(result);
+      return resolve(results);
     });
   });
 };
@@ -940,7 +895,7 @@ Main.RemoteDebuggingTerminatedScreen = class extends UI.VBox {
     message.createChild('span', 'reason').textContent = reason;
     this.contentElement.createChild('div', 'message').textContent =
         Common.UIString('Reconnect when ready by reopening DevTools.');
-    var button = createTextButton(Common.UIString('Reconnect DevTools'), () => window.location.reload());
+    var button = UI.createTextButton(Common.UIString('Reconnect DevTools'), () => window.location.reload());
     this.contentElement.createChild('div', 'button').appendChild(button);
   }
 
@@ -949,10 +904,10 @@ Main.RemoteDebuggingTerminatedScreen = class extends UI.VBox {
    */
   static show(reason) {
     var dialog = new UI.Dialog();
-    dialog.setWrapsContent(true);
+    dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.MeasureContent);
     dialog.addCloseButton();
     dialog.setDimmed(true);
-    new Main.RemoteDebuggingTerminatedScreen(reason).show(dialog.element);
+    new Main.RemoteDebuggingTerminatedScreen(reason).show(dialog.contentElement);
     dialog.show();
   }
 };
@@ -980,13 +935,13 @@ Main.TargetCrashedScreen = class extends UI.VBox {
    */
   static show(debuggerModel) {
     var dialog = new UI.Dialog();
-    dialog.setWrapsContent(true);
+    dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.MeasureContent);
     dialog.addCloseButton();
     dialog.setDimmed(true);
-    var hideBound = dialog.detach.bind(dialog);
+    var hideBound = dialog.hide.bind(dialog);
     debuggerModel.addEventListener(SDK.DebuggerModel.Events.GlobalObjectCleared, hideBound);
 
-    new Main.TargetCrashedScreen(onHide).show(dialog.element);
+    new Main.TargetCrashedScreen(onHide).show(dialog.contentElement);
     dialog.show();
 
     function onHide() {
@@ -1011,8 +966,6 @@ Main.BackendSettingsSync = class {
   constructor() {
     this._autoAttachSetting = Common.settings.moduleSetting('autoAttachToCreatedPages');
     this._autoAttachSetting.addChangeListener(this._update, this);
-    this._disableJavascriptSetting = Common.settings.moduleSetting('javaScriptDisabled');
-    this._disableJavascriptSetting.addChangeListener(this._update, this);
     SDK.targetManager.observeTargets(this, SDK.Target.Capability.Browser);
   }
 
@@ -1021,7 +974,6 @@ Main.BackendSettingsSync = class {
    */
   _updateTarget(target) {
     target.pageAgent().setAutoAttachToCreatedPages(this._autoAttachSetting.get());
-    target.emulationAgent().setScriptExecutionDisabled(this._disableJavascriptSetting.get());
   }
 
   _update() {
@@ -1034,7 +986,6 @@ Main.BackendSettingsSync = class {
    */
   targetAdded(target) {
     this._updateTarget(target);
-    target.renderingAgent().setShowViewportSizeOnResize(true);
   }
 
   /**

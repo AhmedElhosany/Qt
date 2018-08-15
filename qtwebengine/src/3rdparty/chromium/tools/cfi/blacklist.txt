@@ -1,8 +1,8 @@
 # e.g. RolloverProtectedTickClock
 fun:*MutableInstance*
 
-# WTF allocators.
-fun:*allocate*Backing*
+# WTF allocators. See https://crbug.com/713293.
+fun:*Allocate*Backing*
 
 # WTF::ThreadSpecific
 fun:*ThreadSpecific*
@@ -66,9 +66,6 @@ src:*wtf/PartitionAllocator.h*
 
 # Skia
 
-# https://crbug.com/638064#c1
-fun:*SkPictureUtils*ApproximateBytesUsed*
-
 # https://crbug.com/638056#c1
 fun:*SkCanvas*onDrawRect*
 
@@ -99,44 +96,14 @@ fun:*LayerTreeHost*NotifySwapPromiseMonitorsOfSetNeedsCommit*
 # WebKit
 # The entries below have not been categorized
 
-# blink::BoxClipper::BoxClipper
-fun:*blink*BoxClipper*LayoutBox*PaintInfo*LayoutPoint*ContentsClipBehavior*
-
-# blink::DrawingDisplayItem::DrawingDisplayItem
-fun:*blink*DrawingDisplayItem*DisplayItemClient*
-
 # cc::DisplayItemList::Inputs::~Inputs
 fun:*cc*DisplayItemList*Inputs*
 
-# StyleAttributeMutationScope::StyleAttributeMutationScope
-fun:*StyleAttributeMutationScope*AbstractPropertySetCSSStyleDeclaration*
-
-# StyleAttributeMutationScope::~StyleAttributeMutationScope
-fun:*StyleAttributeMutationScopeD2Ev*
-
 fun:*PaintInvalidationState*computePaintInvalidationRectInBacking*
-fun:*FrameTree*parent*
-fun:*FrameTree*traverseNext*
-fun:*PageAnimator*scheduleVisualUpdate*
-fun:*BlockPainter*paint*
-fun:*BlockPainter*paintObject*
-fun:*BlockPainter*intersectsPaintRect*
-fun:*ObjectPaintInvalidator*computePaintInvalidationReason*
-fun:*ObjectPaintInvalidator*invalidateSelectionIfNeeded*
-fun:*ObjectPaintInvalidator*invalidatePaintIfNeededWithComputedReason*
-fun:*StyleResolver*matchAllRules*
-fun:*ContiguousContainer*clear*
-fun:*GraphicsLayer*setNeedsDisplayInRect*
-fun:*PaintArtifact*appendToWebDisplayItemList*
-fun:*visualRectForDisplayItem*
-fun:*PaintController*commitNewDisplayItems*
 fun:*AdjustAndMarkTrait*mark*
 fun:*TraceTrait*trace*
 fun:*ChromeClientImpl*scheduleAnimation*
-fun:*blink*PODIntervalTree*searchForOverlapsFrom*
-fun:*borderPaddingWidthForBoxSizing*
 fun:*hasAspectRatio*
 fun:*nextBreakablePosition*
-fun:*shouldBeConsideredAsReplaced*
 fun:*supportsCachedOffsets*
 fun:*traceImpl*

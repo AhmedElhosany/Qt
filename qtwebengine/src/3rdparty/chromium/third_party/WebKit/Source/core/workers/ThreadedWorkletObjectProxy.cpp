@@ -4,79 +4,44 @@
 
 #include "core/workers/ThreadedWorkletObjectProxy.h"
 
-#include "bindings/core/v8/SerializedScriptValue.h"
-#include "bindings/core/v8/SourceLocation.h"
-#include "core/dom/Document.h"
-#include "core/dom/ExecutionContext.h"
-#include "core/dom/ExecutionContextTask.h"
-#include "core/inspector/ConsoleMessage.h"
-#include "core/workers/ThreadedWorkletMessagingProxy.h"
-#include "wtf/Functional.h"
-#include "wtf/PtrUtil.h"
 #include <memory>
+#include "bindings/core/v8/ScriptSourceCode.h"
+#include "bindings/core/v8/WorkerOrWorkletScriptController.h"
+#include "core/workers/ThreadedWorkletGlobalScope.h"
+#include "core/workers/ThreadedWorkletMessagingProxy.h"
+#include "core/workers/WorkerThread.h"
+#include "platform/wtf/PtrUtil.h"
 
 namespace blink {
 
-std::unique_ptr<ThreadedWorkletObjectProxy> ThreadedWorkletObjectProxy::create(
-    ThreadedWorkletMessagingProxy* messagingProxy) {
-  DCHECK(messagingProxy);
-  return wrapUnique(new ThreadedWorkletObjectProxy(messagingProxy));
+std::unique_ptr<ThreadedWorkletObjectProxy> ThreadedWorkletObjectProxy::Create(
+    ThreadedWorkletMessagingProxy* messaging_proxy_weak_ptr,
+    ParentFrameTaskRunners* parent_frame_task_runners) {
+  DCHECK(messaging_proxy_weak_ptr);
+  return WTF::WrapUnique(new ThreadedWorkletObjectProxy(
+      messaging_proxy_weak_ptr, parent_frame_task_runners));
 }
 
-void ThreadedWorkletObjectProxy::postTaskToMainExecutionContext(
-    std::unique_ptr<ExecutionContextTask> task) {
-  getExecutionContext()->postTask(BLINK_FROM_HERE, std::move(task));
-}
+ThreadedWorkletObjectProxy::~ThreadedWorkletObjectProxy() {}
 
-void ThreadedWorkletObjectProxy::reportConsoleMessage(
-    MessageSource source,
-    MessageLevel level,
-    const String& message,
-    SourceLocation* location) {
-  getExecutionContext()->postTask(
-      BLINK_FROM_HERE,
-      createCrossThreadTask(
-          &::blink::ThreadedWorkletMessagingProxy::reportConsoleMessage,
-          crossThreadUnretained(m_messagingProxy), source, level, message,
-          passed(location->clone())));
-}
-
-void ThreadedWorkletObjectProxy::postMessageToPageInspector(
-    const String& message) {
-  DCHECK(getExecutionContext()->isDocument());
-  toDocument(getExecutionContext())
-      ->postInspectorTask(
-          BLINK_FROM_HERE,
-          createCrossThreadTask(&::blink::ThreadedWorkletMessagingProxy::
-                                    postMessageToPageInspector,
-                                crossThreadUnretained(m_messagingProxy),
-                                message));
-}
-
-void ThreadedWorkletObjectProxy::didCloseWorkerGlobalScope() {
-  getExecutionContext()->postTask(
-      BLINK_FROM_HERE,
-      createCrossThreadTask(
-          &::blink::ThreadedWorkletMessagingProxy::terminateGlobalScope,
-          crossThreadUnretained(m_messagingProxy)));
-}
-
-void ThreadedWorkletObjectProxy::didTerminateWorkerThread() {
-  // This will terminate the MessagingProxy.
-  getExecutionContext()->postTask(
-      BLINK_FROM_HERE,
-      createCrossThreadTask(
-          &ThreadedWorkletMessagingProxy::workerThreadTerminated,
-          crossThreadUnretained(m_messagingProxy)));
+void ThreadedWorkletObjectProxy::EvaluateScript(const String& source,
+                                                const KURL& script_url,
+                                                WorkerThread* worker_thread) {
+  ThreadedWorkletGlobalScope* global_scope =
+      ToThreadedWorkletGlobalScope(worker_thread->GlobalScope());
+  global_scope->ScriptController()->Evaluate(
+      ScriptSourceCode(source, script_url));
 }
 
 ThreadedWorkletObjectProxy::ThreadedWorkletObjectProxy(
-    ThreadedWorkletMessagingProxy* messagingProxy)
-    : m_messagingProxy(messagingProxy) {}
+    ThreadedWorkletMessagingProxy* messaging_proxy_weak_ptr,
+    ParentFrameTaskRunners* parent_frame_task_runners)
+    : ThreadedObjectProxyBase(parent_frame_task_runners),
+      messaging_proxy_weak_ptr_(messaging_proxy_weak_ptr) {}
 
-ExecutionContext* ThreadedWorkletObjectProxy::getExecutionContext() const {
-  DCHECK(m_messagingProxy);
-  return m_messagingProxy->getExecutionContext();
+CrossThreadWeakPersistent<ThreadedMessagingProxyBase>
+ThreadedWorkletObjectProxy::MessagingProxyWeakPtr() {
+  return messaging_proxy_weak_ptr_;
 }
 
 }  // namespace blink

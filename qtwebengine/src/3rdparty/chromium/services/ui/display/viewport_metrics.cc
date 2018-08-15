@@ -8,32 +8,12 @@
 
 namespace display {
 
-namespace {
-
-std::string RotationString(Display::Rotation rotation) {
-  switch (rotation) {
-    case Display::ROTATE_0:
-      return "0";
-    case Display::ROTATE_90:
-      return "90";
-    case Display::ROTATE_180:
-      return "180";
-    case Display::ROTATE_270:
-      return "270";
-  }
-  NOTREACHED();
-  return "Invalid Rotation";
-}
-
-}  // namespace
-
 std::string ViewportMetrics::ToString() const {
   return base::StringPrintf(
-      "ViewportMetrics(bounds=%s, work_area=%s, pixel_size=%s, "
-      "rotation=%s, device_scale_factor=%g)",
-      bounds.ToString().c_str(), work_area.ToString().c_str(),
-      pixel_size.ToString().c_str(), RotationString(rotation).c_str(),
-      device_scale_factor);
+      "ViewportMetrics(bounds_in_pixels=%s, device_scale_factor=%g, "
+      "ui_scale_factor=%g)",
+      bounds_in_pixels.ToString().c_str(), device_scale_factor,
+      ui_scale_factor);
 }
 
 }  // namespace display

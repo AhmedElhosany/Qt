@@ -1,3 +1,6 @@
+include($$QTWEBENGINE_OUT_ROOT/qtwebengine-config.pri)
+QT_FOR_CONFIG += webengine-private
+
 MODULE = webenginecore
 
 include(core_common.pri)
@@ -37,8 +40,17 @@ else: LIBS_PRIVATE += $$NINJA_ARCHIVES
 LIBS_PRIVATE += $$NINJA_LIB_DIRS $$NINJA_LIBS
 # GN's LFLAGS doesn't always work across all the Linux configurations we support.
 # The Windows and macOS ones from GN does provide a few useful flags however
-linux: QMAKE_LFLAGS += -Wl,--gc-sections -Wl,-O1 -Wl,-z,now -Wl,-z,defs
-else: QMAKE_LFLAGS += $$NINJA_LFLAGS
+
+linux {
+    QMAKE_LFLAGS += -Wl,--gc-sections -Wl,-O1 -Wl,-z,now
+    # Embedded address sanitizer symbols are undefined and are picked up by the dynamic link loader
+    # at runtime. Thus we do not to pass the linker flag below, because the linker would complain
+    # about the undefined sanitizer symbols.
+    !sanitizer: QMAKE_LFLAGS += -Wl,-z,defs
+} else {
+    QMAKE_LFLAGS += $$NINJA_LFLAGS
+}
+
 POST_TARGETDEPS += $$NINJA_TARGETDEPS
 
 
@@ -47,9 +59,19 @@ CONFIG *= no_smart_library_merge
 osx {
     LIBS_PRIVATE += -Wl,-force_load,$${api_library_path}$${QMAKE_DIR_SEP}lib$${api_library_name}.a
 } else:msvc {
+    !isDeveloperBuild() {
+        # Remove unused functions and data in debug non-developer builds, because the binaries will
+        # be smaller in the shipped packages.
+        QMAKE_LFLAGS += /OPT:REF
+    } else:CONFIG(debug, debug|release) {
+        # Make sure to override qtbase's QMAKE_LFLAGS_DEBUG option in debug developer builds,
+        # because qmake chooses and overrides the option when it gets appended to QMAKE_LFLAGS in
+        # qtbase\mkspecs\features\default_post.prf, regardless of what Chromium passes back from GN.
+        QMAKE_LFLAGS_DEBUG -= /DEBUG
+        QMAKE_LFLAGS_DEBUG += /DEBUG:FASTLINK
+    }
     # Simulate -whole-archive by passing the list of object files that belong to the public
     # API library as response file to the linker.
-    QMAKE_LFLAGS += /OPT:REF
     QMAKE_LFLAGS += @$${api_library_path}$${QMAKE_DIR_SEP}$${api_library_name}.lib.objects
 } else {
     LIBS_PRIVATE += -Wl,-whole-archive -l$$api_library_name -Wl,-no-whole-archive
@@ -102,7 +124,7 @@ icu.files = $$OUT_PWD/$$getConfigDir()/icudtl.dat
         resources.path = $$[QT_INSTALL_DATA]/resources
         INSTALLS += locales resources
 
-        !use?(system_icu) {
+        !qtConfig(webengine-system-icu) {
             icu.CONFIG += no_check_exist
             icu.path = $$[QT_INSTALL_DATA]/resources
             INSTALLS += icu
@@ -114,7 +136,7 @@ icu.files = $$OUT_PWD/$$getConfigDir()/icudtl.dat
         # Copy essential files to the qtbase build directory for non-prefix builds
         #
 
-        !use?(system_icu) {
+        !qtConfig(webengine-system-icu) {
             COPIES += icu
         }
 

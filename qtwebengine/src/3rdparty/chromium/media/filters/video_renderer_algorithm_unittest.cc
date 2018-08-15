@@ -10,8 +10,10 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/macros.h"
+#include "base/memory/ref_counted.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/simple_test_tick_clock.h"
+#include "media/base/media_log.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/video_frame_pool.h"
 #include "media/base/wall_clock_time_source.h"
@@ -70,7 +72,8 @@ class VideoRendererAlgorithmTest : public testing::Test {
   VideoRendererAlgorithmTest()
       : tick_clock_(new base::SimpleTestTickClock()),
         algorithm_(base::Bind(&WallClockTimeSource::GetWallClockTimes,
-                              base::Unretained(&time_source_))) {
+                              base::Unretained(&time_source_)),
+                   &media_log_) {
     // Always start the TickClock at a non-zero value since null values have
     // special connotations.
     tick_clock_->Advance(base::TimeDelta::FromMicroseconds(10000));
@@ -328,6 +331,7 @@ class VideoRendererAlgorithmTest : public testing::Test {
   }
 
  protected:
+  MediaLog media_log_;
   VideoFramePool frame_pool_;
   std::unique_ptr<base::SimpleTestTickClock> tick_clock_;
   WallClockTimeSource time_source_;
@@ -716,6 +720,38 @@ TEST_F(VideoRendererAlgorithmTest, EffectiveFramesQueuedWithoutCadence) {
   EXPECT_EQ(0u, EffectiveFramesQueued());
   EXPECT_EQ(1u, frames_queued());
   EXPECT_EQ(96, algorithm_.GetMemoryUsage());
+}
+
+TEST_F(VideoRendererAlgorithmTest, EffectiveFramesQueuedWithoutFrameDropping) {
+  TickGenerator tg(tick_clock_->NowTicks(), 50);
+
+  algorithm_.disable_frame_dropping();
+
+  ASSERT_EQ(0u, EffectiveFramesQueued());
+  time_source_.StartTicking();
+
+  for (size_t i = 0; i < 3; ++i) {
+    algorithm_.EnqueueFrame(CreateFrame(tg.interval(i)));
+    EXPECT_EQ(i + 1, EffectiveFramesQueued());
+    EXPECT_EQ(i + 1, frames_queued());
+  }
+
+  // Issue a render call and verify that undropped frames remain effective.
+  tg.step(2);
+  size_t frames_dropped = 0;
+  scoped_refptr<VideoFrame> frame = RenderAndStep(&tg, &frames_dropped);
+  ASSERT_NE(nullptr, frame);
+  EXPECT_EQ(tg.interval(0), frame->timestamp());
+  EXPECT_EQ(0u, frames_dropped);
+  EXPECT_EQ(2u, EffectiveFramesQueued());
+
+  // As the next frame is consumed, the count of effective frames is
+  // decremented.
+  frame = RenderAndStep(&tg, &frames_dropped);
+  ASSERT_NE(nullptr, frame);
+  EXPECT_EQ(tg.interval(1), frame->timestamp());
+  EXPECT_EQ(0u, frames_dropped);
+  EXPECT_EQ(1u, EffectiveFramesQueued());
 }
 
 // The maximum acceptable drift should be updated once we have two frames.
@@ -1341,9 +1377,9 @@ TEST_F(VideoRendererAlgorithmTest, VariablePlaybackRateCadence) {
     const double playback_rate = kTestRates[i];
     SCOPED_TRACE(base::StringPrintf("Playback Rate: %.03f", playback_rate));
     time_source_.SetPlaybackRate(playback_rate);
-    RunFramePumpTest(false, &frame_tg, &display_tg,
-                     [this](const scoped_refptr<VideoFrame>& frame,
-                            size_t frames_dropped) {});
+    RunFramePumpTest(
+        false, &frame_tg, &display_tg,
+        [](const scoped_refptr<VideoFrame>& frame, size_t frames_dropped) {});
     if (HasFatalFailure())
       return;
 

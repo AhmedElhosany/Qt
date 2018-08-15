@@ -24,9 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// http://www.w3.org/TR/SVG2/animate.html#InterfaceSVGAnimationElement
+// https://svgwg.org/specs/animations/#InterfaceSVGAnimationElement
 
-[RuntimeEnabled=smil]
+[RuntimeEnabled=SMIL]
 interface SVGAnimationElement : SVGElement {
     readonly attribute SVGElement targetElement;
 

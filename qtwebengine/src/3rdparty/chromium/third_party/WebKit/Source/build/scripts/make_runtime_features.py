@@ -29,38 +29,22 @@
 
 import sys
 
-import in_generator
+import json5_generator
 import name_utilities
 from name_utilities import lower_first
 import template_expander
 
 
-class RuntimeFeatureWriter(in_generator.Writer):
+class RuntimeFeatureWriter(json5_generator.Writer):
     class_name = 'RuntimeEnabledFeatures'
 
-    # FIXME: valid_values and defaults should probably roll into one object.
-    valid_values = {
-        'status': ['stable', 'experimental', 'test'],
-    }
-    defaults = {
-        'condition': None,
-        'custom': False,
-        'depends_on': [],
-        'feature_policy': None,
-        'implied_by': [],
-        'origin_trial_feature_name': None,
-        'origin_trial_os': [],
-        'settable_from_internals': False,
-        'status': None,
-    }
-
-    def __init__(self, in_file_path):
-        super(RuntimeFeatureWriter, self).__init__(in_file_path)
+    def __init__(self, json5_file_path):
+        super(RuntimeFeatureWriter, self).__init__(json5_file_path)
         self._outputs = {(self.class_name + '.h'): self.generate_header,
                          (self.class_name + '.cpp'): self.generate_implementation,
                         }
 
-        self._features = self.in_file.name_dictionaries
+        self._features = self.json5_file.name_dictionaries
         # Make sure the resulting dictionaries have all the keys we expect.
         for feature in self._features:
             feature['first_lowered_name'] = lower_first(feature['name'])
@@ -74,27 +58,30 @@ class RuntimeFeatureWriter(in_generator.Writer):
                 enabled_condition += ' && is%sEnabled' % dependant_name
             feature['enabled_condition'] = enabled_condition
         self._standard_features = [feature for feature in self._features if not feature['custom']]
+        self._origin_trial_features = [feature for feature in self._features if feature['origin_trial_feature_name']]
 
     def _feature_sets(self):
         # Another way to think of the status levels is as "sets of features"
         # which is how we're referring to them in this generator.
-        return list(self.valid_values['status'])
+        return self.json5_file.parameters['status']['valid_values']
 
     def _template_inputs(self):
         return {
             'features': self._features,
             'feature_sets': self._feature_sets(),
+            'input_files': self._input_files,
             'standard_features': self._standard_features,
+            'origin_trial_controlled_features': self._origin_trial_features,
         }
 
-    @template_expander.use_jinja(class_name + '.h.tmpl')
+    @template_expander.use_jinja('templates/' + class_name + '.h.tmpl')
     def generate_header(self):
         return self._template_inputs()
 
-    @template_expander.use_jinja(class_name + '.cpp.tmpl')
+    @template_expander.use_jinja('templates/' + class_name + '.cpp.tmpl')
     def generate_implementation(self):
         return self._template_inputs()
 
 
 if __name__ == '__main__':
-    in_generator.Maker(RuntimeFeatureWriter).main(sys.argv)
+    json5_generator.Maker(RuntimeFeatureWriter).main()

@@ -52,11 +52,9 @@
 #ifndef MIMEIMAGERECORDEDITOR_H
 #define MIMEIMAGERECORDEDITOR_H
 
-#include <qnfcglobal.h>
+#include <QtNfc/qndefrecord.h>
 
-#include <QWidget>
-
-#include <qndefrecord.h>
+#include <QtWidgets/QWidget>
 
 QT_USE_NAMESPACE
 

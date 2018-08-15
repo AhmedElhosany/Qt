@@ -8,7 +8,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/feature_list.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
@@ -17,7 +16,6 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
 #include "components/autofill/core/browser/autofill_experiments.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/autofill_type.h"
@@ -186,7 +184,6 @@ class AutofillMergeTest : public DataDrivenTest,
   PersonalDataManagerMock personal_data_;
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   std::map<std::string, ServerFieldType> string_to_field_type_map_;
 
   DISALLOW_COPY_AND_ASSIGN(AutofillMergeTest);
@@ -205,7 +202,6 @@ AutofillMergeTest::~AutofillMergeTest() {
 
 void AutofillMergeTest::SetUp() {
   test::DisableSystemServices(nullptr);
-  scoped_feature_list_.InitAndEnableFeature(kAutofillProfileCleanup);
 }
 
 void AutofillMergeTest::TearDown() {
@@ -275,8 +271,10 @@ void AutofillMergeTest::MergeProfiles(const std::string& profiles,
 
       // Import the profile.
       std::unique_ptr<CreditCard> imported_credit_card;
-      personal_data_.ImportFormData(form_structure, false,
-                                    &imported_credit_card);
+      bool imported_credit_card_matches_masked_server_credit_card;
+      personal_data_.ImportFormData(
+          form_structure, false, &imported_credit_card,
+          &imported_credit_card_matches_masked_server_credit_card);
       EXPECT_FALSE(imported_credit_card);
 
       // Clear the |form| to start a new profile.

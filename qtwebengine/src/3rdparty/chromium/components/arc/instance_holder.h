@@ -6,12 +6,23 @@
 #define COMPONENTS_ARC_INSTANCE_HOLDER_H_
 
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
+
+// A macro to call InstanceHolder<T>::GetInstanceForVersionDoNotCallDirectly().
+// In order to avoid exposing method names from within the Mojo bindings, we
+// will rely on stringification and the fact that the method min versions have a
+// consistent naming scheme.
+#define ARC_GET_INSTANCE_FOR_METHOD(holder, method_name)        \
+  (holder)->GetInstanceForVersionDoNotCallDirectly(             \
+      std::remove_pointer<decltype(                             \
+          holder)>::type::Instance::k##method_name##MinVersion, \
+      #method_name)
 
 namespace arc {
 
@@ -34,6 +45,8 @@ class InstanceHolder {
     virtual ~Observer() = default;
   };
 
+  using Instance = T;
+
   InstanceHolder() = default;
 
   // Returns true if the Mojo interface is ready at least for its version 0
@@ -45,12 +58,13 @@ class InstanceHolder {
   // |method_name_for_logging|, but only if its reported version is at least
   // |min_version|. Returns nullptr if the instance is either not ready or does
   // not have the requested version, and logs appropriately.
-  // TODO(lhchavez): Improve the API. (crbug.com/649782)
-  T* GetInstanceForMethod(const std::string& method_name_for_logging,
-                          uint32_t min_version) {
+  // This function should not be called directly. Instead, use the
+  // ARC_GET_INSTANCE_FOR_METHOD() macro.
+  T* GetInstanceForVersionDoNotCallDirectly(
+      uint32_t min_version,
+      const char method_name_for_logging[]) {
     if (!instance_) {
-      VLOG(1) << "Instance for " << T::Name_ << "::" << method_name_for_logging
-              << " not available.";
+      VLOG(1) << "Instance " << T::Name_ << " not available.";
       return nullptr;
     }
     if (version_ < min_version) {
@@ -63,16 +77,11 @@ class InstanceHolder {
     return instance_;
   }
 
-  // Same as the above, but for the version zero.
-  T* GetInstanceForMethod(const std::string& method_name_for_logging) {
-    return GetInstanceForMethod(method_name_for_logging, 0u);
-  }
-
   // Adds or removes observers. This can only be called on the thread that this
   // class was created on. RemoveObserver does nothing if |observer| is not in
   // the list.
   void AddObserver(Observer* observer) {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
     observer_list_.AddObserver(observer);
 
     if (instance_)
@@ -80,7 +89,7 @@ class InstanceHolder {
   }
 
   void RemoveObserver(Observer* observer) {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
     observer_list_.RemoveObserver(observer);
   }
 
@@ -88,7 +97,7 @@ class InstanceHolder {
   // This can be called in both case; on ready, and on closed.
   // Passing nullptr to |instance| means closing.
   void SetInstance(T* instance, uint32_t version = T::Version_) {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
     DCHECK(instance == nullptr || instance_ == nullptr);
 
     // Note: This can be called with nullptr even if |instance_| is still
@@ -113,7 +122,7 @@ class InstanceHolder {
   T* instance_ = nullptr;
   uint32_t version_ = 0;
 
-  base::ThreadChecker thread_checker_;
+  THREAD_CHECKER(thread_checker_);
   base::ObserverList<Observer> observer_list_;
 
   DISALLOW_COPY_AND_ASSIGN(InstanceHolder<T>);

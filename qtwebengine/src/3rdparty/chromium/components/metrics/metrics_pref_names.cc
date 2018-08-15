@@ -7,21 +7,6 @@
 namespace metrics {
 namespace prefs {
 
-// Array of strings that are each UMA logs that were supposed to be sent in the
-// first minute of a browser session. These logs include things like crash count
-// info, etc.
-// Deprecated by kMetricsInitialLogs.
-const char kDeprecatedMetricsInitialLogs[] =
-    "user_experience_metrics.initial_logs_list";
-
-// Array of strings that are each UMA logs that were not sent because the
-// browser terminated before these accumulated metrics could be sent. These
-// logs typically include histograms and memory reports, as well as ongoing
-// user activities.
-// Deprecated by kMetricsOngoingLogs.
-const char kDeprecatedMetricsOngoingLogs[] =
-    "user_experience_metrics.ongoing_logs_list";
-
 // Set once, to the current epoch time, on the first run of chrome on this
 // machine. Attached to metrics reports forever thereafter.
 const char kInstallDate[] = "uninstall_metrics.installation_date2";
@@ -143,18 +128,9 @@ const char kStabilityExtensionRendererLaunchCount[] =
 const char kStabilityIncompleteSessionEndCount[] =
     "user_experience_metrics.stability.incomplete_session_end_count";
 
-// Time when the app was last known to be running, in seconds since
-// the epoch.
-const char kStabilityLastTimestampSec[] =
-    "user_experience_metrics.stability.last_timestamp_sec";
-
 // Number of times the application was launched since last report.
 const char kStabilityLaunchCount[] =
     "user_experience_metrics.stability.launch_count";
-
-// Time when the app was last launched, in seconds since the epoch.
-const char kStabilityLaunchTimeSec[] =
-    "user_experience_metrics.stability.launch_time_sec";
 
 // Number of times a page load event occurred since the last report.
 const char kStabilityPageLoadCount[] =
@@ -213,6 +189,10 @@ const char kUninstallLaunchCount[] = "uninstall_metrics.launch_count";
 const char kUninstallMetricsPageLoadCount[] =
     "uninstall_metrics.page_load_count";
 const char kUninstallMetricsUptimeSec[] = "uninstall_metrics.uptime_sec";
+
+// Dictionary for measuring cellular data used by UKM service during last 7
+// days.
+const char kUkmCellDataUse[] = "user_experience_metrics.ukm_cell_datause";
 
 // Dictionary for measuring cellular data used by UMA service during last 7
 // days.

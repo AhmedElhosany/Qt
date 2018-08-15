@@ -34,10 +34,22 @@ class CONTENT_EXPORT NavigationThrottle {
     CANCEL_AND_IGNORE,
 
     // Blocks a navigation due to rules asserted before the request is made.
-    // This can only be returned from WillStartRequest. This will result in an
+    // This can only be returned from WillStartRequest and also from
+    // WillRedirectRequest when PlzNavigate is enabled. This will result in an
     // error page for net::ERR_BLOCKED_BY_CLIENT being loaded in the frame that
     // is navigated.
     BLOCK_REQUEST,
+
+    // Blocks a navigation taking place in a subframe, and collapses the frame
+    // owner element in the parent document (i.e. removes it from the layout).
+    // This can only be returned from WillStartRequest, and also from
+    // WillRedirectRequest when PlzNavigate is enabled.
+    BLOCK_REQUEST_AND_COLLAPSE,
+
+    // Blocks a navigation due to rules asserted by a response (for instance,
+    // embedding restrictions like 'X-Frame-Options'). This result will only
+    // be returned from WillProcessResponse.
+    BLOCK_RESPONSE,
   };
 
   NavigationThrottle(NavigationHandle* navigation_handle);
@@ -67,12 +79,33 @@ class CONTENT_EXPORT NavigationThrottle {
   // throttle is associated with remain alive during the duration of this
   // method. Failing to do so will result in use-after-free bugs. Should the
   // implementer need to destroy the WebContents, it should return CANCEL,
-  // CANCEL_AND_IGNORE and perform the destruction asynchronously.
+  // CANCEL_AND_IGNORE, or BLOCK_RESPONSE and perform the destruction
+  // asynchronously.
   virtual ThrottleCheckResult WillProcessResponse();
+
+  // Returns the name of the throttle for logging purposes. It must not return
+  // nullptr.
+  virtual const char* GetNameForLogging() = 0;
 
   // The NavigationHandle that is tracking the information related to this
   // navigation.
   NavigationHandle* navigation_handle() const { return navigation_handle_; }
+
+ protected:
+  // Resumes a navigation that was previously deferred by this
+  // NavigationThrottle.
+  // Note: this may lead to the deletion of the NavigationHandle and its
+  // associated NavigationThrottles, including this one.
+  virtual void Resume();
+
+  // Cancels a navigation that was previously deferred by this
+  // NavigationThrottle. |result| should be equal to either:
+  //  - NavigationThrottle::CANCEL,
+  //  - NavigationThrottle::CANCEL_AND_IGNORE, or
+  //  - NavigationThrottle::BLOCK_REQUEST_AND_COLLAPSE.
+  // Note: this may lead to the deletion of the NavigationHandle and its
+  // associated NavigationThrottles, including this one.
+  virtual void CancelDeferredNavigation(ThrottleCheckResult result);
 
  private:
   NavigationHandle* navigation_handle_;

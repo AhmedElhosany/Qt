@@ -49,7 +49,12 @@ enum class PreviewsEligibilityReason {
   NETWORK_QUALITY_UNAVAILABLE = 6,
   // The network was fast enough to not warrant previews.
   NETWORK_NOT_SLOW = 7,
-  LAST = 8,
+  // If the page was reloaded, the user should not be shown a stale preview.
+  RELOAD_DISALLOWED = 8,
+  // The host is explicitly blacklisted by the server, so the user was not shown
+  // a preview.
+  HOST_BLACKLISTED_BY_SERVER = 9,
+  LAST = 9,
 };
 
 // Manages the state of black listed domains for the previews experiment. Loads

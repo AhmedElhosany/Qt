@@ -26,13 +26,12 @@
 #include "content/public/common/child_process_host_delegate.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
-#include "gpu/ipc/client/gpu_memory_buffer_impl_shared_memory.h"
 #include "ipc/ipc.mojom.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_mojo.h"
 #include "ipc/ipc_logging.h"
 #include "ipc/message_filter.h"
-#include "mojo/edk/embedder/embedder.h"
+#include "services/resource_coordinator/public/interfaces/memory_instrumentation/constants.mojom.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 
 #if defined(OS_LINUX)
@@ -44,16 +43,13 @@
 namespace {
 
 // Global atomic to generate child process unique IDs.
-base::StaticAtomicSequenceNumber g_unique_id;
+base::AtomicSequenceNumber g_unique_id;
 
 }  // namespace
 
 namespace content {
 
 int ChildProcessHost::kInvalidUniqueID = -1;
-
-uint64_t ChildProcessHost::kBrowserTracingProcessId =
-    std::numeric_limits<uint64_t>::max();
 
 // static
 ChildProcessHost* ChildProcessHost::Create(ChildProcessHostDelegate* delegate) {
@@ -112,42 +108,21 @@ void ChildProcessHostImpl::AddFilter(IPC::MessageFilter* filter) {
     filter->OnFilterAdded(channel_.get());
 }
 
-service_manager::InterfaceProvider*
-ChildProcessHostImpl::GetRemoteInterfaces() {
-  return delegate_->GetRemoteInterfaces();
+void ChildProcessHostImpl::BindInterface(
+    const std::string& interface_name,
+    mojo::ScopedMessagePipeHandle interface_pipe) {
+  return delegate_->BindInterface(interface_name, std::move(interface_pipe));
 }
 
 void ChildProcessHostImpl::ForceShutdown() {
   Send(new ChildProcessMsg_Shutdown());
 }
 
-std::string ChildProcessHostImpl::CreateChannelMojo(
-    const std::string& child_token) {
-  DCHECK(channel_id_.empty());
-  channel_id_ = mojo::edk::GenerateRandomToken();
-  mojo::ScopedMessagePipeHandle host_handle =
-      mojo::edk::CreateParentMessagePipe(channel_id_, child_token);
-  channel_ = IPC::ChannelMojo::Create(std::move(host_handle),
-                                      IPC::Channel::MODE_SERVER, this);
-  if (!channel_ || !InitChannel())
-    return std::string();
-
-  return channel_id_;
-}
-
 void ChildProcessHostImpl::CreateChannelMojo() {
-  // TODO(rockot): Remove |channel_id_| once this is the only code path by which
-  // the Channel is created. For now it serves to at least mutually exclude
-  // different CreateChannel* calls.
-  DCHECK(channel_id_.empty());
-  channel_id_ = "ChannelMojo";
 
-  service_manager::InterfaceProvider* remote_interfaces = GetRemoteInterfaces();
-  DCHECK(remote_interfaces);
-
-  IPC::mojom::ChannelBootstrapPtr bootstrap;
-  remote_interfaces->GetInterface(&bootstrap);
-  channel_ = IPC::ChannelMojo::Create(bootstrap.PassInterface().PassHandle(),
+  mojo::MessagePipe pipe;
+  BindInterface(IPC::mojom::ChannelBootstrap::Name_, std::move(pipe.handle1));
+  channel_ = IPC::ChannelMojo::Create(std::move(pipe.handle0),
                                       IPC::Channel::MODE_SERVER, this);
   DCHECK(channel_);
 
@@ -161,9 +136,10 @@ bool ChildProcessHostImpl::InitChannel() {
 
   for (size_t i = 0; i < filters_.size(); ++i)
     filters_[i]->OnFilterAdded(channel_.get());
+  delegate_->OnChannelInitialized(channel_.get());
 
   // Make sure these messages get sent first.
-#if defined(IPC_MESSAGE_LOG_ENABLED)
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   bool enabled = IPC::Logging::GetInstance()->Enabled();
   Send(new ChildProcessMsg_SetIPCLoggingEnabled(enabled));
 #endif
@@ -208,7 +184,7 @@ uint64_t ChildProcessHostImpl::ChildProcessUniqueIdToTracingProcessId(
   // tracing process ids.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kSingleProcess))
-    return ChildProcessHost::kBrowserTracingProcessId;
+    return memory_instrumentation::mojom::kServiceTracingProcessId;
 
   // The hash value is incremented so that the tracing id is never equal to
   // MemoryDumpManager::kInvalidTracingProcessId.
@@ -219,7 +195,7 @@ uint64_t ChildProcessHostImpl::ChildProcessUniqueIdToTracingProcessId(
 }
 
 bool ChildProcessHostImpl::OnMessageReceived(const IPC::Message& msg) {
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   IPC::Logging* logger = IPC::Logging::GetInstance();
   if (msg.type() == IPC_LOGGING_ID) {
     logger->OnReceivedLoggingMessage(msg);
@@ -243,13 +219,6 @@ bool ChildProcessHostImpl::OnMessageReceived(const IPC::Message& msg) {
     IPC_BEGIN_MESSAGE_MAP(ChildProcessHostImpl, msg)
       IPC_MESSAGE_HANDLER(ChildProcessHostMsg_ShutdownRequest,
                           OnShutdownRequest)
-      // NB: The SyncAllocateGpuMemoryBuffer and DeletedGpuMemoryBuffer IPCs are
-      // handled here for non-renderer child processes. For renderer processes,
-      // they are handled in RenderMessageFilter.
-      IPC_MESSAGE_HANDLER(ChildProcessHostMsg_SyncAllocateGpuMemoryBuffer,
-                          OnAllocateGpuMemoryBuffer)
-      IPC_MESSAGE_HANDLER(ChildProcessHostMsg_DeletedGpuMemoryBuffer,
-                          OnDeletedGpuMemoryBuffer)
       IPC_MESSAGE_UNHANDLED(handled = false)
     IPC_END_MESSAGE_MAP()
 
@@ -257,7 +226,7 @@ bool ChildProcessHostImpl::OnMessageReceived(const IPC::Message& msg) {
       handled = delegate_->OnMessageReceived(msg);
   }
 
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   if (logger->Enabled())
     logger->OnPostDispatchMessage(msg);
 #endif
@@ -295,31 +264,6 @@ void ChildProcessHostImpl::OnBadMessageReceived(const IPC::Message& message) {
 void ChildProcessHostImpl::OnShutdownRequest() {
   if (delegate_->CanShutdown())
     Send(new ChildProcessMsg_Shutdown());
-}
-
-void ChildProcessHostImpl::OnAllocateGpuMemoryBuffer(
-    gfx::GpuMemoryBufferId id,
-    uint32_t width,
-    uint32_t height,
-    gfx::BufferFormat format,
-    gfx::BufferUsage usage,
-    gfx::GpuMemoryBufferHandle* handle) {
-  // TODO(reveman): Add support for other types of GpuMemoryBuffers.
-
-  // AllocateForChildProcess() will check if |width| and |height| are valid
-  // and handle failure in a controlled way when not. We just need to make
-  // sure |usage| is supported here.
-  if (gpu::GpuMemoryBufferImplSharedMemory::IsUsageSupported(usage)) {
-    *handle = gpu::GpuMemoryBufferImplSharedMemory::AllocateForChildProcess(
-        id, gfx::Size(width, height), format);
-  }
-}
-
-void ChildProcessHostImpl::OnDeletedGpuMemoryBuffer(
-    gfx::GpuMemoryBufferId id,
-    const gpu::SyncToken& sync_token) {
-  // Note: Nothing to do here as ownership of shared memory backed
-  // GpuMemoryBuffers is passed with IPC.
 }
 
 }  // namespace content

@@ -53,6 +53,7 @@
 #include <QtGui/qevent.h>
 #include <QtCore/qlocale.h>
 #include <QtGui/qfont.h>
+#include <QtGui/qpalette.h>
 #include <QtQuickTemplates2/private/qtquicktemplates2global_p.h>
 #include <QtQml/qqml.h>
 #include <QtQml/qqmllist.h>
@@ -96,7 +97,7 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickPopup : public QObject, public QQml
     Q_PROPERTY(qreal bottomPadding READ bottomPadding WRITE setBottomPadding RESET resetBottomPadding NOTIFY bottomPaddingChanged FINAL)
     Q_PROPERTY(QLocale locale READ locale WRITE setLocale RESET resetLocale NOTIFY localeChanged FINAL)
     Q_PROPERTY(QFont font READ font WRITE setFont RESET resetFont NOTIFY fontChanged FINAL)
-    Q_PROPERTY(QQuickItem *parent READ parentItem WRITE setParentItem NOTIFY parentChanged FINAL)
+    Q_PROPERTY(QQuickItem *parent READ parentItem WRITE setParentItem RESET resetParentItem NOTIFY parentChanged FINAL)
     Q_PROPERTY(QQuickItem *background READ background WRITE setBackground NOTIFY backgroundChanged FINAL)
     Q_PROPERTY(QQuickItem *contentItem READ contentItem WRITE setContentItem NOTIFY contentItemChanged FINAL)
     Q_PROPERTY(QQmlListProperty<QObject> contentData READ contentData FINAL)
@@ -109,12 +110,17 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickPopup : public QObject, public QQml
     Q_PROPERTY(bool visible READ isVisible WRITE setVisible NOTIFY visibleChanged FINAL)
     Q_PROPERTY(qreal opacity READ opacity WRITE setOpacity NOTIFY opacityChanged FINAL)
     Q_PROPERTY(qreal scale READ scale WRITE setScale NOTIFY scaleChanged FINAL)
-    Q_PROPERTY(ClosePolicy closePolicy READ closePolicy WRITE setClosePolicy NOTIFY closePolicyChanged FINAL)
-    Q_PROPERTY(TransformOrigin transformOrigin READ transformOrigin WRITE setTransformOrigin)
+    Q_PROPERTY(ClosePolicy closePolicy READ closePolicy WRITE setClosePolicy RESET resetClosePolicy NOTIFY closePolicyChanged FINAL)
+    Q_PROPERTY(TransformOrigin transformOrigin READ transformOrigin WRITE setTransformOrigin FINAL)
     Q_PROPERTY(QQuickTransition *enter READ enter WRITE setEnter NOTIFY enterChanged FINAL)
     Q_PROPERTY(QQuickTransition *exit READ exit WRITE setExit NOTIFY exitChanged FINAL)
     // 2.1 (Qt 5.8)
     Q_PROPERTY(qreal spacing READ spacing WRITE setSpacing RESET resetSpacing NOTIFY spacingChanged FINAL REVISION 1)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(bool opened READ isOpened NOTIFY openedChanged FINAL REVISION 3)
+    Q_PROPERTY(bool mirrored READ isMirrored NOTIFY mirroredChanged FINAL REVISION 3)
+    Q_PROPERTY(bool enabled READ isEnabled WRITE setEnabled NOTIFY enabledChanged FINAL REVISION 3)
+    Q_PROPERTY(QPalette palette READ palette WRITE setPalette RESET resetPalette NOTIFY paletteChanged FINAL REVISION 3)
     Q_CLASSINFO("DeferredPropertyNames", "background,contentItem")
     Q_CLASSINFO("DefaultProperty", "contentData")
 
@@ -210,6 +216,7 @@ public:
 
     QQuickItem *parentItem() const;
     void setParentItem(QQuickItem *parent);
+    void resetParentItem();
 
     QQuickItem *background() const;
     void setBackground(QQuickItem *background);
@@ -257,6 +264,7 @@ public:
 
     ClosePolicy closePolicy() const;
     void setClosePolicy(ClosePolicy policy);
+    void resetClosePolicy();
 
     // keep in sync with Item.TransformOrigin
     enum TransformOrigin {
@@ -284,6 +292,17 @@ public:
     qreal spacing() const;
     void setSpacing(qreal spacing);
     void resetSpacing();
+
+    // 2.3 (Qt 5.10)
+    bool isOpened() const;
+    bool isMirrored() const;
+
+    bool isEnabled() const;
+    void setEnabled(bool enabled);
+
+    QPalette palette() const;
+    void setPalette(const QPalette &palette);
+    void resetPalette();
 
 public Q_SLOTS:
     void open();
@@ -335,6 +354,11 @@ Q_SIGNALS:
     void windowChanged(QQuickWindow *window);
     // 2.1 (Qt 5.8)
     Q_REVISION(1) void spacingChanged();
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void openedChanged();
+    Q_REVISION(3) void mirroredChanged();
+    Q_REVISION(3) void enabledChanged();
+    Q_REVISION(3) void paletteChanged();
 
 protected:
     QQuickPopup(QQuickPopupPrivate &dd, QObject *parent);
@@ -369,9 +393,11 @@ protected:
     virtual void itemChange(QQuickItem::ItemChange change, const QQuickItem::ItemChangeData &data);
     virtual void marginsChange(const QMarginsF &newMargins, const QMarginsF &oldMargins);
     virtual void paddingChange(const QMarginsF &newPadding, const QMarginsF &oldPadding);
+    virtual void paletteChange(const QPalette &newPalette, const QPalette &oldPalette);
     virtual void spacingChange(qreal newSpacing, qreal oldSpacing);
 
     virtual QFont defaultFont() const;
+    virtual QPalette defaultPalette() const;
 
 #if QT_CONFIG(accessibility)
     virtual QAccessible::Role accessibleRole() const;

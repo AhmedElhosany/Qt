@@ -11,7 +11,9 @@ class EmptyAXTreeDelegate : public ui::AXTreeDelegate {
   void OnNodeDataWillChange(ui::AXTree* tree,
                             const ui::AXNodeData& old_node_data,
                             const ui::AXNodeData& new_node_data) override {}
-  void OnTreeDataChanged(ui::AXTree* tree) override {}
+  void OnTreeDataChanged(ui::AXTree* tree,
+                         const ui::AXTreeData& old_data,
+                         const ui::AXTreeData& new_data) override {}
   void OnNodeWillBeDeleted(ui::AXTree* tree, ui::AXNode* node) override {}
   void OnSubtreeWillBeDeleted(ui::AXTree* tree, ui::AXNode* node) override {}
   void OnNodeWillBeReparented(ui::AXTree* tree, ui::AXNode* node) override {}
@@ -31,7 +33,6 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   while (i < size) {
     ui::AXNodeData node;
     node.id = data[i++];
-    node.state = 0;
     if (i < size) {
       size_t child_count = data[i++];
       for (size_t j = 0; j < child_count && i < size; j++)
@@ -43,8 +44,8 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   // Run with --v=1 to aid in debugging a specific crash.
   VLOG(1) << "Input accessibility tree:\n" << initial_state.ToString();
 
-  ui::AXTree tree;
   EmptyAXTreeDelegate delegate;
+  ui::AXTree tree;
   tree.SetDelegate(&delegate);
   tree.Unserialize(initial_state);
 

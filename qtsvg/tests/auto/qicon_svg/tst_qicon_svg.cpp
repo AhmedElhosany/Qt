@@ -43,6 +43,8 @@ private slots:
     void svgActualSize();
     void svg();
     void availableSizes();
+    void isNull();
+
 
 private:
     QString prefix;
@@ -137,6 +139,37 @@ void tst_QIcon_Svg::availableSizes()
         QList<QSize> availableSizes = icon.availableSizes();
         QVERIFY(availableSizes.isEmpty());
     }
+}
+
+void tst_QIcon_Svg::isNull()
+{
+    {
+        //checks that an invalid file results in the icon being null
+        QIcon icon(prefix + "nonExistentFile.svg");
+        QVERIFY(icon.isNull());
+    }
+    {
+        //valid svg, we're not null
+        QIcon icon(prefix + "heart.svg");
+        QVERIFY(!icon.isNull());
+
+        // check for non null of serialized/deserialized valid icon
+        QByteArray buf;
+        QDataStream out(&buf, QIODevice::WriteOnly);
+        out << icon;
+
+        QIcon icon2;
+        QDataStream in(buf);
+        in >> icon2;
+        QVERIFY(!icon2.isNull());
+    }
+    {
+        //invalid svg, but a pixmap added means we're not null
+        QIcon icon(prefix + "nonExistentFile.svg");
+        icon.addFile(prefix + "image.png", QSize(32,32));
+        QVERIFY(!icon.isNull());
+    }
+
 }
 
 QTEST_MAIN(tst_QIcon_Svg)

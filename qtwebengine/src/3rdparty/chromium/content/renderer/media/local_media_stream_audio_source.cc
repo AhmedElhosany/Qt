@@ -6,15 +6,18 @@
 
 #include "content/common/media/media_stream_options.h"
 #include "content/renderer/media/audio_device_factory.h"
+#include "content/renderer/media/webrtc_logging.h"
 #include "content/renderer/render_frame_impl.h"
 
 namespace content {
 
 LocalMediaStreamAudioSource::LocalMediaStreamAudioSource(
     int consumer_render_frame_id,
-    const StreamDeviceInfo& device_info)
+    const StreamDeviceInfo& device_info,
+    const ConstraintsCallback& started_callback)
     : MediaStreamAudioSource(true /* is_local_source */),
-      consumer_render_frame_id_(consumer_render_frame_id) {
+      consumer_render_frame_id_(consumer_render_frame_id),
+      started_callback_(started_callback) {
   DVLOG(1) << "LocalMediaStreamAudioSource::LocalMediaStreamAudioSource()";
   MediaStreamSource::SetDeviceInfo(device_info);
 
@@ -84,6 +87,10 @@ void LocalMediaStreamAudioSource::EnsureSourceIsStopped() {
           << GetAudioParameters().AsHumanReadableString() << "}.";
 }
 
+void LocalMediaStreamAudioSource::OnCaptureStarted() {
+  started_callback_.Run(this, MEDIA_DEVICE_OK, "");
+}
+
 void LocalMediaStreamAudioSource::Capture(const media::AudioBus* audio_bus,
                                           int audio_delay_milliseconds,
                                           double volume,
@@ -99,7 +106,12 @@ void LocalMediaStreamAudioSource::Capture(const media::AudioBus* audio_bus,
 }
 
 void LocalMediaStreamAudioSource::OnCaptureError(const std::string& why) {
+  WebRtcLogMessage("LocalMediaStreamAudioSource::OnCaptureError: " + why);
   StopSourceOnError(why);
+}
+
+void LocalMediaStreamAudioSource::OnCaptureMuted(bool is_muted) {
+  SetMutedState(is_muted);
 }
 
 }  // namespace content

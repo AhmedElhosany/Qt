@@ -35,15 +35,14 @@ class TestScreenWin : public ScreenWin {
   TestScreenWin(const std::vector<DisplayInfo>& display_infos,
                 const std::vector<MONITORINFOEX>& monitor_infos,
                 const std::unordered_map<HWND, gfx::Rect>& hwnd_map)
-      : monitor_infos_(monitor_infos),
-        hwnd_map_(hwnd_map) {
+      : ScreenWin(false), monitor_infos_(monitor_infos), hwnd_map_(hwnd_map) {
     UpdateFromDisplayInfos(display_infos);
   }
 
   ~TestScreenWin() override = default;
 
  protected:
-  // display::win::ScreenWin:
+  // win::ScreenWin:
   HWND GetHWNDFromNativeView(gfx::NativeView window) const override {
     // NativeView is only used as an identifier in this tests, so interchange
     // NativeView with an HWND for convenience.
@@ -57,8 +56,6 @@ class TestScreenWin : public ScreenWin {
   }
 
  private:
-  void Initialize() override {}
-
   // Finding the corresponding monitor from a point is generally handled by
   // Windows's MonitorFromPoint. This mocked function requires that the provided
   // point is contained entirely in the monitor.
@@ -157,9 +154,7 @@ class TestScreenWinManager : public TestScreenWinInitializer {
                   const wchar_t* device_name,
                   float device_scale_factor) override {
     MONITORINFOEX monitor_info =
-        display::win::test::CreateMonitorInfo(pixel_bounds,
-                                              pixel_work,
-                                              device_name);
+        win::test::CreateMonitorInfo(pixel_bounds, pixel_work, device_name);
     monitor_infos_.push_back(monitor_info);
     display_infos_.push_back(DisplayInfo(monitor_info, device_scale_factor,
                                          Display::ROTATE_0));
@@ -3392,7 +3387,7 @@ class ScreenWinUninitializedForced1x : public testing::Test {
   }
 
   void TearDown() override {
-    display::Display::ResetForceDeviceScaleFactorForTesting();
+    Display::ResetForceDeviceScaleFactorForTesting();
     testing::Test::TearDown();
   }
 
@@ -3506,7 +3501,7 @@ class ScreenWinUninitializedForced2x : public testing::Test {
   }
 
   void TearDown() override {
-    display::Display::ResetForceDeviceScaleFactorForTesting();
+    Display::ResetForceDeviceScaleFactorForTesting();
     testing::Test::TearDown();
   }
 

@@ -30,32 +30,32 @@ symatics should exist.  This is an exact match.
 */
 
 
-/* TREE
+/** TREE
  *Interface(MyIFace)
  */
 interface MyIFace { };
 
-/* TREE
+/** TREE
  *Interface(MyIFaceInherit)
  *  Inherit(Foo)
  */
 interface MyIFaceInherit : Foo {};
 
-/* TREE
+/** TREE
  *Interface(MyIFacePartial)
  */
 partial interface MyIFacePartial { };
 
-/* ERROR Unexpected ":" after identifier "MyIFaceInherit". */
+/** ERROR Unexpected ":" after identifier "MyIFaceInherit". */
 partial interface MyIFaceInherit : Foo {};
 
-/* TREE
+/** TREE
  *Interface(MyIFaceMissingArgument)
  *  Operation(foo)
  *    Arguments()
  *      Argument(arg)
  *        Type()
- *          PrimitiveType(DOMString)
+ *          StringType(DOMString)
  *      Error(Missing argument.)
  *    Type()
  *      PrimitiveType(void)
@@ -64,19 +64,19 @@ interface MyIFaceMissingArgument {
   void foo(DOMString arg, );
 };
 
-/* TREE
+/** TREE
  *Error(Unexpected keyword "double" after keyword "readonly".)
  */
 interface MyIFaceMissingAttribute {
   readonly double foo;
 };
 
-/* TREE
+/** TREE
  *Interface(MyIFaceContainsUnresolvedConflictDiff)
  *  Operation(foo)
  *    Arguments()
  *    Type()
- *      PrimitiveType(DOMString)
+ *      StringType(DOMString)
  *  Error(Unexpected "<" after ";".)
  */
 interface MyIFaceContainsUnresolvedConflictDiff {
@@ -88,17 +88,31 @@ interface MyIFaceContainsUnresolvedConflictDiff {
 >>>>>> theirs
 };
 
-/* TREE
+/** TREE
+ *Interface(MyIFaceWrongRecordKeyType)
+ *  Operation(foo)
+ *    Arguments()
+ *      Argument(arg)
+ *        Type()
+ *          Error(Unexpected identifier "int" after "<".)
+ *    Type()
+ *      PrimitiveType(void)
+ */
+interface MyIFaceWrongRecordKeyType {
+  void foo(record<int, ByteString> arg);
+};
+
+/** TREE
  *Interface(MyIFaceBig)
  *  Const(setString)
- *    PrimitiveType(DOMString)
+ *    StringType(DOMString)
  *    Value(NULL)
  */
 interface MyIFaceBig {
   const DOMString? setString = null;
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfaceEmptySequenceDefalutValue)
  *  Operation(foo)
  *    Arguments()
@@ -106,7 +120,7 @@ interface MyIFaceBig {
  *        Type()
  *          Sequence()
  *            Type()
- *              PrimitiveType(DOMString)
+ *              StringType(DOMString)
  *        Default()
  *    Type()
  *      PrimitiveType(void)
@@ -115,10 +129,41 @@ interface MyIfaceEmptySequenceDefalutValue {
   void foo(optional sequence<DOMString> arg = []);
 };
 
-/* TREE
+/** TREE
+ *Interface(MyIfaceWithRecords)
+ *  Operation(foo)
+ *    Arguments()
+ *      Argument(arg)
+ *        Type()
+ *          Record()
+ *            StringType(DOMString)
+ *            Type()
+ *              PrimitiveType(long)
+ *    Type()
+ *      PrimitiveType(void)
+ *  Operation(bar)
+ *    Arguments()
+ *      Argument(arg1)
+ *        Type()
+ *          Typeref(int)
+ *      Argument(arg2)
+ *        Type()
+ *          Record()
+ *            StringType(ByteString)
+ *            Type()
+ *              PrimitiveType(float)
+ *    Type()
+ *      PrimitiveType(double)
+ */
+interface MyIfaceWithRecords {
+  void foo(record<DOMString, long> arg);
+  double bar(int arg1, record<ByteString, float> arg2);
+};
+
+/** TREE
  *Interface(MyIFaceBig2)
  *  Const(nullValue)
- *    PrimitiveType(DOMString)
+ *    StringType(DOMString)
  *    Value(NULL)
  *  Const(longValue)
  *    PrimitiveType(long)
@@ -128,13 +173,13 @@ interface MyIfaceEmptySequenceDefalutValue {
  *    Value(123)
  *  Attribute(myString)
  *    Type()
- *      PrimitiveType(DOMString)
+ *      StringType(DOMString)
  *  Attribute(readOnlyString)
  *    Type()
- *      PrimitiveType(DOMString)
+ *      StringType(DOMString)
  *  Attribute(staticString)
  *    Type()
- *      PrimitiveType(DOMString)
+ *      StringType(DOMString)
  *  Operation(myFunction)
  *    Arguments()
  *      Argument(myLong)
@@ -162,20 +207,20 @@ interface MyIFaceBig2 {
 };
 
 
-/* TREE
+/** TREE
  *Interface(MyIFaceSpecials)
  *  Operation(set)
  *    Arguments()
  *      Argument(property)
  *        Type()
- *          PrimitiveType(DOMString)
+ *          StringType(DOMString)
  *    Type()
  *      PrimitiveType(void)
  *  Operation(_unnamed_)
  *    Arguments()
  *      Argument(property)
  *        Type()
- *          PrimitiveType(DOMString)
+ *          StringType(DOMString)
  *    Type()
  *      PrimitiveType(double)
  *  Operation(GetFiveSix)
@@ -194,23 +239,23 @@ interface MyIFaceSpecials {
   long long [5][6] GetFiveSix(SomeType arg);
 };
 
-/* TREE
+/** TREE
  *Interface(MyIFaceStringifiers)
  *  Stringifier()
  *  Stringifier()
  *    Operation(_unnamed_)
  *      Arguments()
  *      Type()
- *        PrimitiveType(DOMString)
+ *        StringType(DOMString)
  *  Stringifier()
  *    Operation(namedStringifier)
  *      Arguments()
  *      Type()
- *        PrimitiveType(DOMString)
+ *        StringType(DOMString)
  *  Stringifier()
  *    Attribute(stringValue)
  *      Type()
- *        PrimitiveType(DOMString)
+ *        StringType(DOMString)
  */
 interface MyIFaceStringifiers {
   stringifier;
@@ -219,7 +264,7 @@ interface MyIFaceStringifiers {
   stringifier attribute DOMString stringValue;
 };
 
-/* TREE
+/** TREE
  *Interface(MyExtendedAttributeInterface)
  *  Operation(method)
  *    Arguments()
@@ -238,7 +283,7 @@ interface MyExtendedAttributeInterface {
   [Attr, MethodIdentList=(Foo, Bar)] void method();
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfacePromise)
  *  Operation(method1)
  *    Arguments()
@@ -272,7 +317,7 @@ interface MyIfacePromise {
   Promise method4();
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfaceIterable)
  *  Iterable()
  *    Type()
@@ -281,24 +326,20 @@ interface MyIfacePromise {
  *    Type()
  *      PrimitiveType(double)
  *    Type()
- *      PrimitiveType(DOMString)
- *  LegacyIterable()
- *    Type()
- *      PrimitiveType(boolean)
+ *      StringType(DOMString)
  */
 interface MyIfaceIterable {
   iterable<long>;
   iterable<double, DOMString>;
-  legacyiterable<boolean>;
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfaceMaplike)
  *  Maplike()
  *    Type()
  *      PrimitiveType(long)
  *    Type()
- *      PrimitiveType(DOMString)
+ *      StringType(DOMString)
  *  Maplike()
  *    Type()
  *      PrimitiveType(double)
@@ -310,7 +351,7 @@ interface MyIfaceMaplike {
   maplike<double, boolean>;
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfaceSetlike)
  *  Setlike()
  *    Type()
@@ -324,7 +365,7 @@ interface MyIfaceSetlike {
   setlike<double>;
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfaceSerializer)
  *  Serializer()
  *  Serializer()
@@ -370,25 +411,25 @@ interface MyIfaceSerializer {
   serializer = [name1, name2];
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfaceFrozenArray)
  *  Attribute(foo)
  *    Type()
  *      FrozenArray()
  *        Type()
- *          PrimitiveType(DOMString)
+ *          StringType(DOMString)
  */
 interface MyIfaceFrozenArray {
   readonly attribute FrozenArray<DOMString> foo;
 };
 
-/* TREE
+/** TREE
  *Interface(MyIfaceUnion)
  *  Attribute(foo)
  *    Type()
  *      UnionType()
  *        Type()
- *          PrimitiveType(DOMString)
+ *          StringType(DOMString)
  *        Type()
  *          PrimitiveType(long)
  */

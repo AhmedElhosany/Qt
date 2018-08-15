@@ -4,8 +4,6 @@ osx:CONFIG -= app_bundle
 
 SOURCES += tst_qqmlprofilerservice.cpp
 
-INCLUDEPATH += ../shared
-include(../../../shared/util.pri)
 include(../shared/debugutil.pri)
 
 TESTDATA = data/*
@@ -22,4 +20,5 @@ OTHER_FILES += \
     data/signalSourceLocation.qml \
     data/javascript.qml \
     data/timer.qml \
+    data/qstr.qml \
     data/memory.qml

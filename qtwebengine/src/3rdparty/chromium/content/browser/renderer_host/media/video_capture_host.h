@@ -28,9 +28,11 @@ class CONTENT_EXPORT VideoCaptureHost
     : public VideoCaptureControllerEventHandler,
       public mojom::VideoCaptureHost {
  public:
-  explicit VideoCaptureHost(MediaStreamManager* media_stream_manager);
+  VideoCaptureHost(int render_process_id,
+                   MediaStreamManager* media_stream_manager);
 
-  static void Create(MediaStreamManager* media_stream_manager,
+  static void Create(int render_process_id,
+                     MediaStreamManager* media_stream_manager,
                      mojom::VideoCaptureHostRequest request);
 
   ~VideoCaptureHost() override;
@@ -46,10 +48,13 @@ class CONTENT_EXPORT VideoCaptureHost
                        int buffer_id) override;
   void OnBufferDestroyed(VideoCaptureControllerID id,
                          int buffer_id) override;
-  void OnBufferReady(VideoCaptureControllerID id,
-                     int buffer_id,
-                     const scoped_refptr<media::VideoFrame>& frame) override;
+  void OnBufferReady(
+      VideoCaptureControllerID id,
+      int buffer_id,
+      const media::mojom::VideoFrameInfoPtr& frame_info) override;
   void OnEnded(VideoCaptureControllerID id) override;
+  void OnStarted(VideoCaptureControllerID id) override;
+  void OnStartedUsingGpuDecode(VideoCaptureControllerID id) override;
 
   // mojom::VideoCaptureHost implementation
   void Start(int32_t device_id,
@@ -64,16 +69,14 @@ class CONTENT_EXPORT VideoCaptureHost
   void RequestRefreshFrame(int32_t device_id) override;
   void ReleaseBuffer(int32_t device_id,
                      int32_t buffer_id,
-                     const gpu::SyncToken& sync_token,
                      double consumer_resource_utilization) override;
   void GetDeviceSupportedFormats(
       int32_t device_id,
       int32_t session_id,
-      const GetDeviceSupportedFormatsCallback& callback) override;
-  void GetDeviceFormatsInUse(
-      int32_t device_id,
-      int32_t session_id,
-      const GetDeviceFormatsInUseCallback& callback) override;
+      GetDeviceSupportedFormatsCallback callback) override;
+  void GetDeviceFormatsInUse(int32_t device_id,
+                             int32_t session_id,
+                             GetDeviceFormatsInUseCallback callback) override;
 
   void DoError(VideoCaptureControllerID id);
   void DoEnded(VideoCaptureControllerID id);
@@ -88,6 +91,9 @@ class CONTENT_EXPORT VideoCaptureHost
   // VideoCaptureControllerEventHandler::OnError.
   void DeleteVideoCaptureController(VideoCaptureControllerID controller_id,
                                     bool on_error);
+
+  class RenderProcessHostDelegate;
+  std::unique_ptr<RenderProcessHostDelegate> render_process_host_delegate_;
 
   MediaStreamManager* const media_stream_manager_;
 

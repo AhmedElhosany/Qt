@@ -50,14 +50,14 @@
 
 #include <QtCore/qvariant.h>
 #include <QtGui/qfont.h>
-#include <QtQuickControls2/private/qquickproxytheme_p.h>
+#include <QtQuickControls2/private/qquicktheme_p.h>
 
 QT_BEGIN_NAMESPACE
 
-class QQuickMaterialTheme :  public QQuickProxyTheme
+class QQuickMaterialTheme : public QQuickTheme
 {
 public:
-    explicit QQuickMaterialTheme(QPlatformTheme *theme = nullptr);
+    explicit QQuickMaterialTheme();
 
     const QFont *font(Font type = SystemFont) const override;
 

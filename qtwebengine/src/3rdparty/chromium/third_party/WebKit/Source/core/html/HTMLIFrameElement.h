@@ -26,11 +26,11 @@
 
 #include "core/CoreExport.h"
 #include "core/html/HTMLFrameElementBase.h"
-#include "core/html/HTMLIFrameElementPermissions.h"
+#include "core/html/HTMLIFrameElementAllow.h"
 #include "core/html/HTMLIFrameElementSandbox.h"
 #include "platform/Supplementable.h"
+#include "public/platform/WebFeaturePolicy.h"
 #include "public/platform/WebVector.h"
-#include "public/platform/modules/permissions/WebPermissionType.h"
 
 namespace blink {
 
@@ -45,53 +45,51 @@ class CORE_EXPORT HTMLIFrameElement final
   DECLARE_VIRTUAL_TRACE();
   ~HTMLIFrameElement() override;
   DOMTokenList* sandbox() const;
-  DOMTokenList* permissions() const;
+  DOMTokenList* allow() const;
 
-  void sandboxValueWasSet();
-  void permissionsValueWasSet();
+  Vector<WebParsedFeaturePolicyDeclaration> ConstructContainerPolicy()
+      const override;
 
  private:
   explicit HTMLIFrameElement(Document&);
 
-  void parseAttribute(const QualifiedName&,
-                      const AtomicString&,
-                      const AtomicString&) override;
-  bool isPresentationAttribute(const QualifiedName&) const override;
-  void collectStyleForPresentationAttribute(const QualifiedName&,
+  void SetCollapsed(bool) override;
+
+  void ParseAttribute(const AttributeModificationParams&) override;
+  bool IsPresentationAttribute(const QualifiedName&) const override;
+  void CollectStyleForPresentationAttribute(const QualifiedName&,
                                             const AtomicString&,
                                             MutableStylePropertySet*) override;
 
-  InsertionNotificationRequest insertedInto(ContainerNode*) override;
-  void removedFrom(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
+  void RemovedFrom(ContainerNode*) override;
 
-  bool layoutObjectIsNeeded(const ComputedStyle&) override;
-  LayoutObject* createLayoutObject(const ComputedStyle&) override;
+  bool LayoutObjectIsNeeded(const ComputedStyle&) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
-  bool isInteractiveContent() const override;
+  bool IsInteractiveContent() const override;
 
-  ReferrerPolicy referrerPolicyAttribute() override;
+  ReferrerPolicy ReferrerPolicyAttribute() override;
 
-  bool allowFullscreen() const override { return m_allowFullscreen; }
-  bool allowPaymentRequest() const override { return m_allowPaymentRequest; }
-
-  AtomicString csp() const override { return m_csp; }
-
-  const WebVector<WebPermissionType>& delegatedPermissions() const override {
-    return m_delegatedPermissions;
+  // FrameOwner overrides:
+  bool AllowFullscreen() const override { return allow_fullscreen_; }
+  bool AllowPaymentRequest() const override { return allow_payment_request_; }
+  AtomicString Csp() const override { return csp_; }
+  const WebVector<WebFeaturePolicyFeature>& AllowedFeatures() const override {
+    return allowed_features_;
   }
 
-  bool initializePermissionsAttribute();
+  AtomicString name_;
+  AtomicString csp_;
+  bool allow_fullscreen_;
+  bool allow_payment_request_;
+  bool collapsed_by_client_;
+  Member<HTMLIFrameElementSandbox> sandbox_;
+  Member<HTMLIFrameElementAllow> allow_;
 
-  AtomicString m_name;
-  AtomicString m_csp;
-  bool m_allowFullscreen;
-  bool m_allowPaymentRequest;
-  Member<HTMLIFrameElementSandbox> m_sandbox;
-  Member<HTMLIFrameElementPermissions> m_permissions;
+  WebVector<WebFeaturePolicyFeature> allowed_features_;
 
-  WebVector<WebPermissionType> m_delegatedPermissions;
-
-  ReferrerPolicy m_referrerPolicy;
+  ReferrerPolicy referrer_policy_;
 };
 
 }  // namespace blink

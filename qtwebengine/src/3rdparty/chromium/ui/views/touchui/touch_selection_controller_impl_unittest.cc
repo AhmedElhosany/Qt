@@ -10,6 +10,8 @@
 #include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/test/test_cursor_client.h"
 #include "ui/aura/window.h"
+#include "ui/aura/window_event_dispatcher.h"
+#include "ui/aura/window_tree_host.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/touch/touch_editing_controller.h"
 #include "ui/base/ui_base_switches.h"
@@ -19,10 +21,8 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/render_text.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_test_api.h"
-#include "ui/views/resources/grit/views_resources.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/touchui/touch_selection_controller_impl.h"
 #include "ui/views/views_touch_selection_controller_factory.h"
@@ -77,7 +77,7 @@ class TouchSelectionControllerImplTest : public ViewsTestBase {
     ViewsTestBase::SetUp();
     // TODO: test uses GetContext(), which is not applicable to aura-mus.
     // http://crbug.com/663809.
-    if (IsAuraMusClient())
+    if (IsMus())
       return;
     test_cursor_client_.reset(new aura::test::TestCursorClient(GetContext()));
   }
@@ -323,7 +323,7 @@ class TouchSelectionControllerImplTest : public ViewsTestBase {
 // a Textfield changes.
 TEST_F(TouchSelectionControllerImplTest, SelectionInTextfieldTest) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();
@@ -360,7 +360,7 @@ TEST_F(TouchSelectionControllerImplTest, SelectionInTextfieldTest) {
 // Tests that the selection handles are placed appropriately in bidi text.
 TEST_F(TouchSelectionControllerImplTest, SelectionInBidiTextfieldTest) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();
@@ -416,7 +416,7 @@ TEST_F(TouchSelectionControllerImplTest, SelectionInBidiTextfieldTest) {
 // handles are moved.
 TEST_F(TouchSelectionControllerImplTest, SelectRectCallbackTest) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();
@@ -462,7 +462,7 @@ TEST_F(TouchSelectionControllerImplTest, SelectRectCallbackTest) {
 
 TEST_F(TouchSelectionControllerImplTest, SelectRectInBidiCallbackTest) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();
@@ -594,7 +594,7 @@ TEST_F(TouchSelectionControllerImplTest, SelectRectInBidiCallbackTest) {
 TEST_F(TouchSelectionControllerImplTest,
        HiddenSelectionHandleRetainsCursorPosition) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   static const uint32_t selection_start = 10u;
@@ -616,7 +616,7 @@ TEST_F(TouchSelectionControllerImplTest,
 // drag and that it maintains the correct orientation when exposed.
 TEST_F(TouchSelectionControllerImplTest, HiddenSelectionHandleExposed) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   static const uint32_t selection_start = 0u;
@@ -637,7 +637,7 @@ TEST_F(TouchSelectionControllerImplTest, HiddenSelectionHandleExposed) {
 TEST_F(TouchSelectionControllerImplTest,
        DoubleTapInTextfieldWithCursorHandleShouldSelectText) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();
@@ -740,7 +740,7 @@ class TestTouchEditable : public ui::TouchEditable {
 TEST_F(TouchSelectionControllerImplTest,
        VisibilityOfHandleRegardingClientBounds) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateWidget();
@@ -791,11 +791,12 @@ TEST_F(TouchSelectionControllerImplTest,
 
 TEST_F(TouchSelectionControllerImplTest, HandlesStackAboveParent) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
-  ui::EventTarget* root = GetContext();
-  ui::EventTargeter* targeter = root->GetEventTargeter();
+  aura::Window* root = GetContext();
+  ui::EventTargeter* targeter =
+      root->GetHost()->dispatcher()->GetDefaultEventTargeter();
 
   // Create the first window containing a Views::Textfield.
   CreateTextfield();
@@ -833,7 +834,7 @@ TEST_F(TouchSelectionControllerImplTest, HandlesStackAboveParent) {
 
 TEST_F(TouchSelectionControllerImplTest, MouseEventDeactivatesTouchSelection) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();
@@ -878,7 +879,7 @@ TEST_F(TouchSelectionControllerImplTest, MouseEventDeactivatesTouchSelection) {
 
 TEST_F(TouchSelectionControllerImplTest, MouseCaptureChangedEventIgnored) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();
@@ -901,7 +902,7 @@ TEST_F(TouchSelectionControllerImplTest, MouseCaptureChangedEventIgnored) {
 
 TEST_F(TouchSelectionControllerImplTest, KeyEventDeactivatesTouchSelection) {
   // TODO: see comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   CreateTextfield();

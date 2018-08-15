@@ -58,7 +58,7 @@ namespace {
 // For the NSS PKCS#12 library, must convert PRUnichars (shorts) to
 // a buffer of octets.  Must handle byte order correctly.
 // TODO: Is there a Mozilla way to do this?  In the string lib?
-void unicodeToItem(const base::char16 *uni, SECItem *item)
+void unicodeToItem(const PRUnichar *uni, SECItem *item)
 {
   int len = 0;
   while (uni[len++] != 0);
@@ -225,8 +225,10 @@ nsPKCS12Blob_ImportHelper(const char* pkcs12_data,
     if (imported_certs) {
       // Empty list of intermediates.
       net::X509Certificate::OSCertHandles intermediates;
-      imported_certs->push_back(
-          net::X509Certificate::CreateFromHandle(cert, intermediates));
+      scoped_refptr<net::X509Certificate> x509_cert =
+          net::X509Certificate::CreateFromHandle(cert, intermediates);
+      if (x509_cert)
+        imported_certs->push_back(std::move(x509_cert));
     }
 
     // Once we have determined that the imported certificate has an
@@ -371,7 +373,9 @@ int nsPKCS12Blob_Import(PK11SlotInfo* slot,
   //   We try both variations, zero length item and empty string,
   //   without giving a user prompt when trying the different empty password
   //   flavors.
-  if (rv == net::ERR_PKCS12_IMPORT_BAD_PASSWORD && password.empty()) {
+  if ((rv == net::ERR_PKCS12_IMPORT_BAD_PASSWORD ||
+       rv == net::ERR_PKCS12_IMPORT_INVALID_MAC) &&
+      password.empty()) {
     rv = nsPKCS12Blob_ImportHelper(pkcs12_data, pkcs12_len, password,
                                    is_extractable, true, slot, imported_certs);
   }

@@ -124,9 +124,7 @@ class ProcessReader {
   //! \brief Determines the target process’ start time.
   //!
   //! \param[out] start_time The time that the process started.
-  void StartTime(timeval* start_time) const {
-    process_info_.StartTime(start_time);
-  }
+  void StartTime(timeval* start_time) const;
 
   //! \brief Determines the target process’ execution time.
   //!
@@ -151,6 +149,21 @@ class ProcessReader {
   //!     `0`) corresponds to the main executable, and the final element
   //!     corresponds to the dynamic loader, dyld.
   const std::vector<Module>& Modules();
+
+  //! \brief Determines the location of the `dyld_all_image_infos` structure in
+  //!     the process’ address space.
+  //!
+  //! This function is an internal implementation detail of Modules(), and
+  //! should not normally be used directly. It is exposed solely for use by test
+  //! code.
+  //!
+  //! \param[out] all_image_info_size The size of the `dyld_all_image_infos`
+  //!     structure. Optional, may be `nullptr` if not required.
+  //!
+  //! \return The address of the `dyld_all_image_infos` structure in the
+  //!     process’ address space, with \a all_image_info_size set appropriately.
+  //!     On failure, returns `0` with a message logged.
+  mach_vm_address_t DyldAllImageInfo(mach_vm_size_t* all_image_info_size);
 
  private:
   //! Performs lazy initialization of the \a threads_ vector on behalf of
@@ -191,18 +204,18 @@ class ProcessReader {
   //! tag value. If these conditions cannot be met fully, as much of the red
   //! zone will be captured as is possible while meeting these conditions.
   //!
-  //! \param[inout] start_address The base address of the region to begin
+  //! \param[in,out] start_address The base address of the region to begin
   //!     capturing stack memory from. On entry, \a start_address is the stack
   //!     pointer. On return, \a start_address may be decreased to encompass a
   //!     red zone.
-  //! \param[inout] region_base The base address of the region that contains
+  //! \param[in,out] region_base The base address of the region that contains
   //!     stack memory. This is distinct from \a start_address in that \a
   //!     region_base will be page-aligned. On entry, \a region_base is the
   //!     base address of a region that contains \a start_address. On return,
   //!     if \a start_address is decremented and is outside of the region
   //!     originally described by \a region_base, \a region_base will also be
   //!     decremented appropriately.
-  //! \param[inout] region_size The size of the region that contains stack
+  //! \param[in,out] region_size The size of the region that contains stack
   //!     memory. This region begins at \a region_base. On return, if \a
   //!     region_base is decremented, \a region_size will be incremented
   //!     appropriately.

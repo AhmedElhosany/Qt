@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// http://w3c.github.io/web-animations/#the-animationplaybackevent-interface
+// https://w3c.github.io/web-animations/#the-animationplaybackevent-interface
 
 [
     Constructor(DOMString type, optional AnimationPlaybackEventInit eventInitDict),
-    RuntimeEnabled=WebAnimationsAPI,
+    RuntimeEnabled=WebAnimationsAPI
 ] interface AnimationPlaybackEvent : Event {
     readonly attribute double? currentTime;
     readonly attribute double? timelineTime;

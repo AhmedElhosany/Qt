@@ -128,7 +128,7 @@ static inline bool isSimpleExpr(IR::Expr *e)
 Codegen::ScanFunctions::ScanFunctions(Codegen *cg, const QString &sourceCode, CompilationMode defaultProgramMode)
     : _cg(cg)
     , _sourceCode(sourceCode)
-    , _env(0)
+    , _variableEnvironment(0)
     , _allowFuncDecls(true)
     , defaultProgramMode(defaultProgramMode)
 {
@@ -142,17 +142,17 @@ void Codegen::ScanFunctions::operator()(Node *node)
 
 void Codegen::ScanFunctions::enterEnvironment(Node *node, CompilationMode compilationMode)
 {
-    Environment *e = _cg->newEnvironment(node, _env, compilationMode);
+    Environment *e = _cg->newEnvironment(node, _variableEnvironment, compilationMode);
     if (!e->isStrict)
         e->isStrict = _cg->_strictMode;
     _envStack.append(e);
-    _env = e;
+    _variableEnvironment = e;
 }
 
 void Codegen::ScanFunctions::leaveEnvironment()
 {
     _envStack.pop();
-    _env = _envStack.isEmpty() ? 0 : _envStack.top();
+    _variableEnvironment = _envStack.isEmpty() ? 0 : _envStack.top();
 }
 
 void Codegen::ScanFunctions::checkDirectivePrologue(SourceElements *ast)
@@ -168,7 +168,7 @@ void Codegen::ScanFunctions::checkDirectivePrologue(SourceElements *ast)
                         continue;
                     QStringRef str = _sourceCode.midRef(strLit->literalToken.offset + 1, strLit->literalToken.length - 2);
                     if (str == QLatin1String("use strict")) {
-                        _env->isStrict = true;
+                        _variableEnvironment->isStrict = true;
                     } else {
                         // TODO: give a warning.
                     }
@@ -183,7 +183,7 @@ void Codegen::ScanFunctions::checkDirectivePrologue(SourceElements *ast)
 
 void Codegen::ScanFunctions::checkName(const QStringRef &name, const SourceLocation &loc)
 {
-    if (_env->isStrict) {
+    if (_variableEnvironment->isStrict) {
         if (name == QLatin1String("implements")
                 || name == QLatin1String("interface")
                 || name == QLatin1String("let")
@@ -201,7 +201,7 @@ void Codegen::ScanFunctions::checkForArguments(AST::FormalParameterList *paramet
 {
     while (parameters) {
         if (parameters->name == QLatin1String("arguments"))
-            _env->usesArgumentsObject = Environment::ArgumentsObjectNotUsed;
+            _variableEnvironment->usesArgumentsObject = Environment::ArgumentsObjectNotUsed;
         parameters = parameters->next;
     }
 }
@@ -220,19 +220,19 @@ void Codegen::ScanFunctions::endVisit(Program *)
 
 bool Codegen::ScanFunctions::visit(CallExpression *ast)
 {
-    if (! _env->hasDirectEval) {
+    if (! _variableEnvironment->hasDirectEval) {
         if (IdentifierExpression *id = cast<IdentifierExpression *>(ast->base)) {
             if (id->name == QLatin1String("eval")) {
-                if (_env->usesArgumentsObject == Environment::ArgumentsObjectUnknown)
-                    _env->usesArgumentsObject = Environment::ArgumentsObjectUsed;
-                _env->hasDirectEval = true;
+                if (_variableEnvironment->usesArgumentsObject == Environment::ArgumentsObjectUnknown)
+                    _variableEnvironment->usesArgumentsObject = Environment::ArgumentsObjectUsed;
+                _variableEnvironment->hasDirectEval = true;
             }
         }
     }
     int argc = 0;
     for (ArgumentList *it = ast->arguments; it; it = it->next)
         ++argc;
-    _env->maxNumberOfArguments = qMax(_env->maxNumberOfArguments, argc);
+    _variableEnvironment->maxNumberOfArguments = qMax(_variableEnvironment->maxNumberOfArguments, argc);
     return true;
 }
 
@@ -241,7 +241,7 @@ bool Codegen::ScanFunctions::visit(NewMemberExpression *ast)
     int argc = 0;
     for (ArgumentList *it = ast->arguments; it; it = it->next)
         ++argc;
-    _env->maxNumberOfArguments = qMax(_env->maxNumberOfArguments, argc);
+    _variableEnvironment->maxNumberOfArguments = qMax(_variableEnvironment->maxNumberOfArguments, argc);
     return true;
 }
 
@@ -257,26 +257,38 @@ bool Codegen::ScanFunctions::visit(ArrayLiteral *ast)
         for (Elision *elision = ast->elision->next; elision; elision = elision->next)
             ++index;
     }
-    _env->maxNumberOfArguments = qMax(_env->maxNumberOfArguments, index);
+    _variableEnvironment->maxNumberOfArguments = qMax(_variableEnvironment->maxNumberOfArguments, index);
     return true;
 }
 
 bool Codegen::ScanFunctions::visit(VariableDeclaration *ast)
 {
-    if (_env->isStrict && (ast->name == QLatin1String("eval") || ast->name == QLatin1String("arguments")))
+    if (_variableEnvironment->isStrict && (ast->name == QLatin1String("eval") || ast->name == QLatin1String("arguments")))
         _cg->throwSyntaxError(ast->identifierToken, QStringLiteral("Variable name may not be eval or arguments in strict mode"));
     checkName(ast->name, ast->identifierToken);
     if (ast->name == QLatin1String("arguments"))
-        _env->usesArgumentsObject = Environment::ArgumentsObjectNotUsed;
-    _env->enter(ast->name.toString(), ast->expression ? Environment::VariableDefinition : Environment::VariableDeclaration);
+        _variableEnvironment->usesArgumentsObject = Environment::ArgumentsObjectNotUsed;
+    if (ast->scope == AST::VariableDeclaration::VariableScope::ReadOnlyBlockScope && !ast->expression) {
+        _cg->throwSyntaxError(ast->identifierToken, QStringLiteral("Missing initializer in const declaration"));
+        return false;
+    }
+    QString name = ast->name.toString();
+    const Environment::Member *m = 0;
+    if (_variableEnvironment->memberInfo(name, &m)) {
+        if (m->isLexicallyScoped() || ast->isLexicallyScoped()) {
+            _cg->throwSyntaxError(ast->identifierToken, QStringLiteral("Identifier %1 has already been declared").arg(name));
+            return false;
+        }
+    }
+    _variableEnvironment->enter(ast->name.toString(), ast->expression ? Environment::VariableDefinition : Environment::VariableDeclaration, ast->scope);
     return true;
 }
 
 bool Codegen::ScanFunctions::visit(IdentifierExpression *ast)
 {
     checkName(ast->name, ast->identifierToken);
-    if (_env->usesArgumentsObject == Environment::ArgumentsObjectUnknown && ast->name == QLatin1String("arguments"))
-        _env->usesArgumentsObject = Environment::ArgumentsObjectUsed;
+    if (_variableEnvironment->usesArgumentsObject == Environment::ArgumentsObjectUnknown && ast->name == QLatin1String("arguments"))
+        _variableEnvironment->usesArgumentsObject = Environment::ArgumentsObjectUsed;
     return true;
 }
 
@@ -308,7 +320,7 @@ bool Codegen::ScanFunctions::visit(FunctionExpression *ast)
 
 void Codegen::ScanFunctions::enterFunction(FunctionExpression *ast, bool enterName, bool isExpression)
 {
-    if (_env->isStrict && (ast->name == QLatin1String("eval") || ast->name == QLatin1String("arguments")))
+    if (_variableEnvironment->isStrict && (ast->name == QLatin1String("eval") || ast->name == QLatin1String("arguments")))
         _cg->throwSyntaxError(ast->identifierToken, QStringLiteral("Function name may not be eval or arguments in strict mode"));
     enterFunction(ast, ast->name.toString(), ast->formals, ast->body, enterName ? ast : 0, isExpression);
 }
@@ -329,7 +341,7 @@ bool Codegen::ScanFunctions::visit(ObjectLiteral *ast)
         if (AST::cast<AST::PropertyGetterSetter *>(it->assignment))
             ++argc;
     }
-    _env->maxNumberOfArguments = qMax(_env->maxNumberOfArguments, argc);
+    _variableEnvironment->maxNumberOfArguments = qMax(_variableEnvironment->maxNumberOfArguments, argc);
 
     TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, true);
     Node::accept(ast->properties, this);
@@ -361,7 +373,7 @@ void Codegen::ScanFunctions::endVisit(FunctionDeclaration *)
 
 bool Codegen::ScanFunctions::visit(WithStatement *ast)
 {
-    if (_env->isStrict) {
+    if (_variableEnvironment->isStrict) {
         _cg->throwSyntaxError(ast->withToken, QStringLiteral("'with' statement is not allowed in strict mode"));
         return false;
     }
@@ -371,7 +383,7 @@ bool Codegen::ScanFunctions::visit(WithStatement *ast)
 
 bool Codegen::ScanFunctions::visit(DoWhileStatement *ast) {
     {
-        TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_env->isStrict);
+        TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_variableEnvironment->isStrict);
         Node::accept(ast->statement, this);
     }
     Node::accept(ast->expression, this);
@@ -383,7 +395,7 @@ bool Codegen::ScanFunctions::visit(ForStatement *ast) {
     Node::accept(ast->condition, this);
     Node::accept(ast->expression, this);
 
-    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_env->isStrict);
+    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_variableEnvironment->isStrict);
     Node::accept(ast->statement, this);
 
     return false;
@@ -394,7 +406,7 @@ bool Codegen::ScanFunctions::visit(LocalForStatement *ast) {
     Node::accept(ast->condition, this);
     Node::accept(ast->expression, this);
 
-    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_env->isStrict);
+    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_variableEnvironment->isStrict);
     Node::accept(ast->statement, this);
 
     return false;
@@ -404,7 +416,7 @@ bool Codegen::ScanFunctions::visit(ForEachStatement *ast) {
     Node::accept(ast->initialiser, this);
     Node::accept(ast->expression, this);
 
-    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_env->isStrict);
+    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_variableEnvironment->isStrict);
     Node::accept(ast->statement, this);
 
     return false;
@@ -414,7 +426,7 @@ bool Codegen::ScanFunctions::visit(LocalForEachStatement *ast) {
     Node::accept(ast->declaration, this);
     Node::accept(ast->expression, this);
 
-    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_env->isStrict);
+    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, !_variableEnvironment->isStrict);
     Node::accept(ast->statement, this);
 
     return false;
@@ -422,12 +434,12 @@ bool Codegen::ScanFunctions::visit(LocalForEachStatement *ast) {
 
 bool Codegen::ScanFunctions::visit(ThisExpression *)
 {
-    _env->usesThis = true;
+    _variableEnvironment->usesThis = true;
     return false;
 }
 
 bool Codegen::ScanFunctions::visit(Block *ast) {
-    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, _env->isStrict ? false : _allowFuncDecls);
+    TemporaryBoolAssignment allowFuncDecls(_allowFuncDecls, _variableEnvironment->isStrict ? false : _allowFuncDecls);
     Node::accept(ast->statements, this);
     return false;
 }
@@ -435,26 +447,26 @@ bool Codegen::ScanFunctions::visit(Block *ast) {
 void Codegen::ScanFunctions::enterFunction(Node *ast, const QString &name, FormalParameterList *formals, FunctionBody *body, FunctionExpression *expr, bool isExpression)
 {
     bool wasStrict = false;
-    if (_env) {
-        _env->hasNestedFunctions = true;
+    if (_variableEnvironment) {
+        _variableEnvironment->hasNestedFunctions = true;
         // The identifier of a function expression cannot be referenced from the enclosing environment.
         if (expr)
-            _env->enter(name, Environment::FunctionDefinition, expr);
+            _variableEnvironment->enter(name, Environment::FunctionDefinition, AST::VariableDeclaration::FunctionScope, expr);
         if (name == QLatin1String("arguments"))
-            _env->usesArgumentsObject = Environment::ArgumentsObjectNotUsed;
-        wasStrict = _env->isStrict;
+            _variableEnvironment->usesArgumentsObject = Environment::ArgumentsObjectNotUsed;
+        wasStrict = _variableEnvironment->isStrict;
     }
 
     enterEnvironment(ast, FunctionCode);
     checkForArguments(formals);
 
-    _env->isNamedFunctionExpression = isExpression && !name.isEmpty();
-    _env->formals = formals;
+    _variableEnvironment->isNamedFunctionExpression = isExpression && !name.isEmpty();
+    _variableEnvironment->formals = formals;
 
     if (body)
         checkDirectivePrologue(body->elements);
 
-    if (wasStrict || _env->isStrict) {
+    if (wasStrict || _variableEnvironment->isStrict) {
         QStringList args;
         for (FormalParameterList *it = formals; it; it = it->next) {
             QString arg = it->name.toString();
@@ -478,7 +490,7 @@ Codegen::Codegen(bool strict)
     , _block(0)
     , _exitBlock(0)
     , _returnAddress(0)
-    , _env(0)
+    , _variableEnvironment(0)
     , _loop(0)
     , _labelledStatement(0)
     , _scopeAndFinally(0)
@@ -499,7 +511,7 @@ void Codegen::generateFromProgram(const QString &fileName,
     Q_ASSERT(node);
 
     _module = module;
-    _env = 0;
+    _variableEnvironment = 0;
 
     _module->setFileName(fileName);
     _module->setFinalUrl(finalUrl);
@@ -521,7 +533,7 @@ void Codegen::generateFromFunctionExpression(const QString &fileName,
     _module = module;
     _module->setFileName(fileName);
     _module->setFinalUrl(finalUrl);
-    _env = 0;
+    _variableEnvironment = 0;
 
     ScanFunctions scan(this, sourceCode, GlobalCode);
     // fake a global environment
@@ -538,14 +550,14 @@ void Codegen::generateFromFunctionExpression(const QString &fileName,
 
 void Codegen::enterEnvironment(Node *node)
 {
-    _env = _envMap.value(node);
-    Q_ASSERT(_env);
+    _variableEnvironment = _envMap.value(node);
+    Q_ASSERT(_variableEnvironment);
 }
 
 void Codegen::leaveEnvironment()
 {
-    Q_ASSERT(_env);
-    _env = _env->parent;
+    Q_ASSERT(_variableEnvironment);
+    _variableEnvironment = _variableEnvironment->parent;
 }
 
 void Codegen::enterLoop(Statement *node, IR::BasicBlock *breakBlock, IR::BasicBlock *continueBlock)
@@ -1447,7 +1459,7 @@ bool Codegen::visit(DeleteExpression *ast)
         return false;
     // Temporaries cannot be deleted
     IR::ArgLocal *al = expr->asArgLocal();
-    if (al && al->index < static_cast<unsigned>(_env->members.size())) {
+    if (al && al->index < static_cast<unsigned>(_variableEnvironment->members.size())) {
         // Trying to delete a function argument might throw.
         if (_function->isStrict) {
             throwSyntaxError(ast->deleteToken, QStringLiteral("Delete of an unqualified identifier in strict mode."));
@@ -1476,7 +1488,7 @@ bool Codegen::visit(DeleteExpression *ast)
     }
     if (expr->asTemp() ||
             (expr->asArgLocal() &&
-             expr->asArgLocal()->index >= static_cast<unsigned>(_env->members.size()))) {
+             expr->asArgLocal()->index >= static_cast<unsigned>(_variableEnvironment->members.size()))) {
         _expr.code = _block->CONST(IR::BoolType, 1);
         return false;
     }
@@ -1529,7 +1541,7 @@ IR::Expr *Codegen::identifier(const QString &name, int line, int col)
         return 0;
 
     uint scope = 0;
-    Environment *e = _env;
+    Environment *e = _variableEnvironment;
     IR::Function *f = _function;
 
     while (f && e->parent) {
@@ -1560,7 +1572,7 @@ IR::Expr *Codegen::identifier(const QString &name, int line, int col)
     if (IR::Expr *fallback = fallbackNameLookup(name, line, col))
         return fallback;
 
-    if (!e->parent && (!f || !f->insideWithOrCatch) && _env->compilationMode != EvalCode && e->compilationMode != QmlBinding)
+    if (!e->parent && (!f || !f->insideWithOrCatch) && _variableEnvironment->compilationMode != EvalCode && e->compilationMode != QmlBinding)
         return _block->GLOBALNAME(name, line, col);
 
     // global context or with. Lookup by name
@@ -2076,7 +2088,7 @@ bool Codegen::visit(FunctionDeclaration * ast)
 
     TempScope scope(_function);
 
-    if (_env->compilationMode == QmlBinding)
+    if (_variableEnvironment->compilationMode == QmlBinding)
         move(_block->TEMP(_returnAddress), _block->NAME(ast->name.toString(), 0, 0));
     _expr.accept(nx);
     return false;
@@ -2100,35 +2112,26 @@ int Codegen::defineFunction(const QString &name, AST::Node *ast,
 
     IR::BasicBlock *entryBlock = function->newBasicBlock(0);
     IR::BasicBlock *exitBlock = function->newBasicBlock(0, IR::Function::DontInsertBlock);
-    function->hasDirectEval = _env->hasDirectEval || _env->compilationMode == EvalCode
+    function->hasDirectEval = _variableEnvironment->hasDirectEval || _variableEnvironment->compilationMode == EvalCode
             || _module->debugMode; // Conditional breakpoints are like eval in the function
-
-    // When a user writes the following QML signal binding:
-    //    onSignal: function() { doSomethingUsefull }
-    // we will generate a binding function that just returns the closure. However, that's not useful
-    // at all, because if the onSignal is a signal handler, the user is actually making it explicit
-    // that the binding is a function, so we should execute that. However, we don't know that during
-    // AOT compilation, so mark the surrounding function as only-returning-a-closure.
-    function->returnsClosure = cast<ExpressionStatement *>(ast) && cast<FunctionExpression *>(cast<ExpressionStatement *>(ast)->expression);
-
-    function->usesArgumentsObject = _env->parent && (_env->usesArgumentsObject == Environment::ArgumentsObjectUsed);
-    function->usesThis = _env->usesThis;
-    function->maxNumberOfArguments = qMax(_env->maxNumberOfArguments, (int)QV4::Global::ReservedArgumentCount);
-    function->isStrict = _env->isStrict;
-    function->isNamedExpression = _env->isNamedFunctionExpression;
-    function->isQmlBinding = _env->compilationMode == QmlBinding;
+    function->usesArgumentsObject = _variableEnvironment->parent && (_variableEnvironment->usesArgumentsObject == Environment::ArgumentsObjectUsed);
+    function->usesThis = _variableEnvironment->usesThis;
+    function->maxNumberOfArguments = qMax(_variableEnvironment->maxNumberOfArguments, (int)QV4::Global::ReservedArgumentCount);
+    function->isStrict = _variableEnvironment->isStrict;
+    function->isNamedExpression = _variableEnvironment->isNamedFunctionExpression;
+    function->isQmlBinding = _variableEnvironment->compilationMode == QmlBinding;
 
     AST::SourceLocation loc = ast->firstSourceLocation();
     function->line = loc.startLine;
     function->column = loc.startColumn;
 
     if (function->usesArgumentsObject)
-        _env->enter(QStringLiteral("arguments"), Environment::VariableDeclaration);
+        _variableEnvironment->enter(QStringLiteral("arguments"), Environment::VariableDeclaration, AST::VariableDeclaration::FunctionScope);
 
     // variables in global code are properties of the global context object, not locals as with other functions.
-    if (_env->compilationMode == FunctionCode || _env->compilationMode == QmlBinding) {
+    if (_variableEnvironment->compilationMode == FunctionCode || _variableEnvironment->compilationMode == QmlBinding) {
         unsigned t = 0;
-        for (Environment::MemberMap::iterator it = _env->members.begin(), end = _env->members.end(); it != end; ++it) {
+        for (Environment::MemberMap::iterator it = _variableEnvironment->members.begin(), end = _variableEnvironment->members.end(); it != end; ++it) {
             const QString &local = it.key();
             function->LOCAL(local);
             (*it).index = t;
@@ -2136,18 +2139,19 @@ int Codegen::defineFunction(const QString &name, AST::Node *ast,
             ++t;
         }
     } else {
-        if (!_env->isStrict) {
+        if (!_variableEnvironment->isStrict) {
             for (const QString &inheritedLocal : qAsConst(inheritedLocals)) {
                 function->LOCAL(inheritedLocal);
                 unsigned tempIndex = entryBlock->newTemp();
                 Environment::Member member = { Environment::UndefinedMember,
-                                               static_cast<int>(tempIndex), 0 };
-                _env->members.insert(inheritedLocal, member);
+                                               static_cast<int>(tempIndex), 0,
+                                               AST::VariableDeclaration::VariableScope::FunctionScope };
+                _variableEnvironment->members.insert(inheritedLocal, member);
             }
         }
 
         IR::ExprList *args = 0;
-        for (Environment::MemberMap::const_iterator it = _env->members.constBegin(), cend = _env->members.constEnd(); it != cend; ++it) {
+        for (Environment::MemberMap::const_iterator it = _variableEnvironment->members.constBegin(), cend = _variableEnvironment->members.constEnd(); it != cend; ++it) {
             const QString &local = it.key();
             IR::ExprList *next = function->New<IR::ExprList>();
             next->expr = entryBlock->NAME(local, 0, 0);
@@ -2179,11 +2183,11 @@ int Codegen::defineFunction(const QString &name, AST::Node *ast,
         _function->RECEIVE(it->name.toString());
     }
 
-    for (const Environment::Member &member : qAsConst(_env->members)) {
+    for (const Environment::Member &member : qAsConst(_variableEnvironment->members)) {
         if (member.function) {
             const int function = defineFunction(member.function->name.toString(), member.function, member.function->formals,
                                                 member.function->body ? member.function->body->elements : 0);
-            if (! _env->parent) {
+            if (! _variableEnvironment->parent) {
                 move(_block->NAME(member.function->name.toString(), member.function->identifierToken.startLine, member.function->identifierToken.startColumn),
                      _block->CLOSURE(function));
             } else {
@@ -2369,7 +2373,7 @@ bool Codegen::visit(ExpressionStatement *ast)
 
     TempScope scope(_function);
 
-    if (_env->compilationMode == EvalCode || _env->compilationMode == QmlBinding) {
+    if (_variableEnvironment->compilationMode == EvalCode || _variableEnvironment->compilationMode == QmlBinding) {
         Result e = expression(ast->expression);
         if (*e)
             move(_block->TEMP(_returnAddress), *e);
@@ -2617,7 +2621,7 @@ bool Codegen::visit(ReturnStatement *ast)
     if (hasError)
         return true;
 
-    if (_env->compilationMode != FunctionCode && _env->compilationMode != QmlBinding) {
+    if (_variableEnvironment->compilationMode != FunctionCode && _variableEnvironment->compilationMode != QmlBinding) {
         throwSyntaxError(ast->returnToken, QStringLiteral("Return statement outside of function"));
         return false;
     }
@@ -3005,7 +3009,7 @@ bool Codegen::visit(UiSourceElement *)
 
 bool Codegen::throwSyntaxErrorOnEvalOrArgumentsInStrictMode(IR::Expr *expr, const SourceLocation& loc)
 {
-    if (!_env->isStrict)
+    if (!_variableEnvironment->isStrict)
         return false;
     if (IR::Name *n = expr->asName()) {
         if (*n->id != QLatin1String("eval") && *n->id != QLatin1String("arguments"))

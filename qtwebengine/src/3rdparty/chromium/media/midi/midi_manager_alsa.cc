@@ -25,8 +25,11 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "crypto/sha2.h"
 #include "media/midi/midi_port_info.h"
+#include "media/midi/midi_service.h"
+#include "media/midi/task_service.h"
 
 namespace midi {
 
@@ -35,11 +38,17 @@ namespace {
 using mojom::PortState;
 using mojom::Result;
 
+enum {
+  kDefaultRunnerNotUsedOnAlsa = TaskService::kDefaultRunnerId,
+  kEventTaskRunner,
+  kSendTaskRunner
+};
+
 // Per-output buffer. This can be smaller, but then large sysex messages
 // will be (harmlessly) split across multiple seq events. This should
 // not have any real practical effect, except perhaps to slightly reorder
 // realtime messages with respect to sysex.
-const size_t kSendBufferSize = 256;
+constexpr size_t kSendBufferSize = 256;
 
 // Minimum client id for which we will have ALSA card devices for. When we
 // are searching for card devices (used to get the path, id, and manufacturer),
@@ -47,7 +56,7 @@ const size_t kSendBufferSize = 256;
 // See seq_clientmgr.c in the ALSA code for this.
 // TODO(agoode): Add proper client -> card export from the kernel to avoid
 //               hardcoding.
-const int kMinimumClientIdForCards = 16;
+constexpr int kMinimumClientIdForCards = 16;
 
 // ALSA constants.
 const char kAlsaHw[] = "hw";
@@ -78,16 +87,16 @@ const char kCardSyspath[] = "/card";
 
 // Constants for the capabilities we search for in inputs and outputs.
 // See http://www.alsa-project.org/alsa-doc/alsa-lib/seq.html.
-const unsigned int kRequiredInputPortCaps =
+constexpr unsigned int kRequiredInputPortCaps =
     SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ;
-const unsigned int kRequiredOutputPortCaps =
+constexpr unsigned int kRequiredOutputPortCaps =
     SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE;
 
-const unsigned int kCreateOutputPortCaps =
+constexpr unsigned int kCreateOutputPortCaps =
     SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_NO_EXPORT;
-const unsigned int kCreateInputPortCaps =
+constexpr unsigned int kCreateInputPortCaps =
     SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_NO_EXPORT;
-const unsigned int kCreatePortType =
+constexpr unsigned int kCreatePortType =
     SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION;
 
 int AddrToInt(int client, int port) {
@@ -153,30 +162,26 @@ void SetStringIfNonEmpty(base::DictionaryValue* value,
 
 }  // namespace
 
-MidiManagerAlsa::MidiManagerAlsa()
-    : event_thread_("MidiEventThread"), send_thread_("MidiSendThread") {}
+MidiManagerAlsa::MidiManagerAlsa(MidiService* service) : MidiManager(service) {}
 
 MidiManagerAlsa::~MidiManagerAlsa() {
-  // Take lock to ensure that the members initialized on the IO thread
-  // are not destructed here.
   base::AutoLock lock(lazy_init_member_lock_);
 
   // Extra CHECK to verify all members are already reset.
-  CHECK(!initialization_thread_checker_);
   CHECK(!in_client_);
   CHECK(!out_client_);
   CHECK(!decoder_);
   CHECK(!udev_);
   CHECK(!udev_monitor_);
-
-  CHECK(!send_thread_.IsRunning());
-  CHECK(!event_thread_.IsRunning());
 }
 
 void MidiManagerAlsa::StartInitialization() {
-  base::AutoLock lock(lazy_init_member_lock_);
+  if (!service()->task_service()->BindInstance()) {
+    NOTREACHED();
+    return CompleteInitialization(Result::INITIALIZATION_ERROR);
+  }
 
-  initialization_thread_checker_.reset(new base::ThreadChecker());
+  base::AutoLock lock(lazy_init_member_lock_);
 
   // Create client handles.
   snd_seq_t* tmp_seq = nullptr;
@@ -288,43 +293,31 @@ void MidiManagerAlsa::StartInitialization() {
 
   // Start processing events. Don't do this before enumeration of both
   // ALSA and udev.
-  event_thread_.Start();
-  event_thread_.task_runner()->PostTask(
-      FROM_HERE,
-      base::Bind(&MidiManagerAlsa::ScheduleEventLoop, base::Unretained(this)));
-  send_thread_.Start();
+  service()->task_service()->PostBoundTask(
+      kEventTaskRunner,
+      base::BindOnce(&MidiManagerAlsa::EventLoop, base::Unretained(this)));
 
   CompleteInitialization(Result::OK);
 }
 
 void MidiManagerAlsa::Finalize() {
-  base::AutoLock lock(lazy_init_member_lock_);
-  DCHECK(initialization_thread_checker_->CalledOnValidThread());
-
-  // Tell the event thread it will soon be time to shut down. This gives
-  // us assurance the thread will stop in case the SND_SEQ_EVENT_CLIENT_EXIT
-  // message is lost.
   {
-    base::AutoLock lock(shutdown_lock_);
-    event_thread_shutdown_ = true;
+    base::AutoLock lock(out_client_lock_);
+    // Close the out client. This will trigger the event thread to stop,
+    // because of SND_SEQ_EVENT_CLIENT_EXIT.
+    out_client_.reset();
   }
 
-  // Stop the send thread.
-  send_thread_.Stop();
-
-  // Close the out client. This will trigger the event thread to stop,
-  // because of SND_SEQ_EVENT_CLIENT_EXIT.
-  out_client_.reset();
-
-  // Wait for the event thread to stop.
-  event_thread_.Stop();
+  // Ensure that no task is running any more.
+  bool result = service()->task_service()->UnbindInstance();
+  CHECK(result);
 
   // Destruct the other stuff we initialized in StartInitialization().
+  base::AutoLock lock(lazy_init_member_lock_);
   udev_monitor_.reset();
   udev_.reset();
   decoder_.reset();
   in_client_.reset();
-  initialization_thread_checker_.reset();
 }
 
 void MidiManagerAlsa::DispatchSendMidiData(MidiManagerClient* client,
@@ -339,15 +332,11 @@ void MidiManagerAlsa::DispatchSendMidiData(MidiManagerClient* client,
     delay = std::max(time_to_send - base::TimeTicks::Now(), base::TimeDelta());
   }
 
-  send_thread_.task_runner()->PostDelayedTask(
-      FROM_HERE, base::Bind(&MidiManagerAlsa::SendMidiData,
-                            base::Unretained(this), port_index, data),
+  service()->task_service()->PostBoundDelayedTask(
+      kSendTaskRunner,
+      base::BindOnce(&MidiManagerAlsa::SendMidiData, base::Unretained(this),
+                     client, port_index, data),
       delay);
-
-  // Acknowledge send.
-  send_thread_.task_runner()->PostTask(
-      FROM_HERE, base::Bind(&MidiManagerAlsa::AccumulateMidiBytesSent,
-                            base::Unretained(this), client, data.size()));
 }
 
 MidiManagerAlsa::MidiPort::Id::Id() = default;
@@ -864,10 +853,9 @@ std::string MidiManagerAlsa::AlsaCard::ExtractManufacturerString(
   return "";
 }
 
-void MidiManagerAlsa::SendMidiData(uint32_t port_index,
+void MidiManagerAlsa::SendMidiData(MidiManagerClient* client,
+                                   uint32_t port_index,
                                    const std::vector<uint8_t>& data) {
-  DCHECK(send_thread_.task_runner()->BelongsToCurrentThread());
-
   snd_midi_event_t* encoder;
   snd_midi_event_new(kSendBufferSize, &encoder);
   for (const auto datum : data) {
@@ -878,6 +866,9 @@ void MidiManagerAlsa::SendMidiData(uint32_t port_index,
       base::AutoLock lock(out_ports_lock_);
       auto it = out_ports_.find(port_index);
       if (it != out_ports_.end()) {
+        base::AutoLock lock(out_client_lock_);
+        if (!out_client_)
+          return;
         snd_seq_ev_set_source(&event, it->second);
         snd_seq_ev_set_subs(&event);
         snd_seq_ev_set_direct(&event);
@@ -886,12 +877,9 @@ void MidiManagerAlsa::SendMidiData(uint32_t port_index,
     }
   }
   snd_midi_event_free(encoder);
-}
 
-void MidiManagerAlsa::ScheduleEventLoop() {
-  event_thread_.task_runner()->PostTask(
-      FROM_HERE,
-      base::Bind(&MidiManagerAlsa::EventLoop, base::Unretained(this)));
+  // Acknowledge send.
+  AccumulateMidiBytesSent(client, data.size());
 }
 
 void MidiManagerAlsa::EventLoop() {
@@ -922,9 +910,6 @@ void MidiManagerAlsa::EventLoop() {
           VLOG(1) << "snd_seq_event_input detected buffer overrun";
           // We've lost events: check another way to see if we need to shut
           // down.
-          base::AutoLock lock(shutdown_lock_);
-          if (event_thread_shutdown_)
-            loop_again = false;
         } else if (err == -EAGAIN) {
           // We've read all the data.
         } else if (err < 0) {
@@ -973,8 +958,11 @@ void MidiManagerAlsa::EventLoop() {
   }
 
   // Do again.
-  if (loop_again)
-    ScheduleEventLoop();
+  if (loop_again) {
+    service()->task_service()->PostBoundTask(
+        kEventTaskRunner,
+        base::BindOnce(&MidiManagerAlsa::EventLoop, base::Unretained(this)));
+  }
 }
 
 void MidiManagerAlsa::ProcessSingleEvent(snd_seq_event_t* event,
@@ -1401,8 +1389,10 @@ bool MidiManagerAlsa::Subscribe(uint32_t port_index,
   return true;
 }
 
-MidiManager* MidiManager::Create() {
-  return new MidiManagerAlsa();
+#if !defined(OS_CHROMEOS)
+MidiManager* MidiManager::Create(MidiService* service) {
+  return new MidiManagerAlsa(service);
 }
+#endif
 
 }  // namespace midi

@@ -22,21 +22,27 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/test/histogram_tester.h"
 #include "base/test/mock_entropy_provider.h"
+#include "base/test/simple_test_tick_clock.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_compression_stats.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_config_test_utils.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_metrics.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_mutable_config_values.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_network_delegate.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_service.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_test_utils.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_headers_test_utils.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_params_test_utils.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_pref_names.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_server.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_switches.h"
-#include "components/variations/variations_associated_data.h"
+#include "components/data_reduction_proxy/proto/client_config.pb.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_change_notifier.h"
 #include "net/base/proxy_delegate.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
@@ -44,6 +50,7 @@
 #include "net/proxy/proxy_config.h"
 #include "net/proxy/proxy_server.h"
 #include "net/socket/socket_test_util.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -125,49 +132,9 @@ class TestDataReductionProxyDelegate : public DataReductionProxyDelegate {
     }
   }
 
-  void VerifyGetDefaultAlternativeProxyHistogram(
-      const base::HistogramTester& histogram_tester,
-      bool is_in_quic_field_trial,
-      bool use_proxyzip_proxy_as_first_proxy,
-      bool alternative_proxy_broken) {
-    static const char kHistogram[] =
-        "DataReductionProxy.Quic.DefaultAlternativeProxy";
-    if (is_in_quic_field_trial && use_proxyzip_proxy_as_first_proxy &&
-        !alternative_proxy_broken) {
-      histogram_tester.ExpectUniqueSample(
-          kHistogram,
-          TestDataReductionProxyDelegate::DefaultAlternativeProxyStatus::
-              DEFAULT_ALTERNATIVE_PROXY_STATUS_AVAILABLE,
-          1);
-      return;
-    }
-
-    if (is_in_quic_field_trial && alternative_proxy_broken) {
-      histogram_tester.ExpectUniqueSample(
-          kHistogram,
-          TestDataReductionProxyDelegate::DefaultAlternativeProxyStatus::
-              DEFAULT_ALTERNATIVE_PROXY_STATUS_BROKEN,
-          1);
-      return;
-    }
-
-    if (is_in_quic_field_trial && !use_proxyzip_proxy_as_first_proxy) {
-      histogram_tester.ExpectUniqueSample(
-          kHistogram,
-          TestDataReductionProxyDelegate::DefaultAlternativeProxyStatus::
-              DEFAULT_ALTERNATIVE_PROXY_STATUS_UNAVAILABLE,
-          1);
-      return;
-    }
-
-    histogram_tester.ExpectTotalCount(kHistogram, 0);
-  }
-
   using DataReductionProxyDelegate::GetAlternativeProxy;
   using DataReductionProxyDelegate::OnAlternativeProxyBroken;
-  using DataReductionProxyDelegate::GetDefaultAlternativeProxy;
   using DataReductionProxyDelegate::QuicProxyStatus;
-  using DataReductionProxyDelegate::DefaultAlternativeProxyStatus;
 
  private:
   const bool proxy_supports_quic_;
@@ -226,16 +193,18 @@ TEST(DataReductionProxyDelegate, IsTrustedSpdyProxy) {
                    test.second_proxy_scheme == net::ProxyServer::SCHEME_HTTPS))
         << (&test - test_cases);
 
-    std::vector<net::ProxyServer> proxies_for_http;
+    std::vector<DataReductionProxyServer> proxies_for_http;
     net::ProxyServer first_proxy;
     net::ProxyServer second_proxy;
     if (test.first_proxy_scheme != net::ProxyServer::SCHEME_INVALID) {
       first_proxy = GetProxyWithScheme(test.first_proxy_scheme);
-      proxies_for_http.push_back(first_proxy);
+      proxies_for_http.push_back(
+          DataReductionProxyServer(first_proxy, ProxyServer::CORE));
     }
     if (test.second_proxy_scheme != net::ProxyServer::SCHEME_INVALID) {
       second_proxy = GetProxyWithScheme(test.second_proxy_scheme);
-      proxies_for_http.push_back(second_proxy);
+      proxies_for_http.push_back(DataReductionProxyServer(
+          second_proxy, ProxyServer::UNSPECIFIED_TYPE));
     }
 
     std::unique_ptr<DataReductionProxyMutableConfigValues> config_values =
@@ -256,9 +225,14 @@ TEST(DataReductionProxyDelegate, IsTrustedSpdyProxy) {
         test_context->io_data()->net_log());
 
     base::FieldTrialList field_trial_list(nullptr);
-    base::FieldTrialList::CreateFieldTrial(
-        params::GetTrustedSpdyProxyFieldTrialName(),
-        test.is_in_trusted_spdy_proxy_field_trial ? "Enabled" : "Control");
+    EXPECT_TRUE(params::IsIncludedInTrustedSpdyProxyFieldTrial());
+    if (!test.is_in_trusted_spdy_proxy_field_trial) {
+      // Trusted Spdy proxy field trial experiment is enabled by default.
+      base::FieldTrialList::CreateFieldTrial(
+          params::GetTrustedSpdyProxyFieldTrialName(), "Control");
+    }
+    EXPECT_EQ(test.is_in_trusted_spdy_proxy_field_trial,
+              params::IsIncludedInTrustedSpdyProxyFieldTrial());
 
     EXPECT_EQ(test.expect_proxy_is_trusted,
               delegate.IsTrustedSpdyProxy(first_proxy) ||
@@ -329,16 +303,18 @@ TEST(DataReductionProxyDelegate, AlternativeProxy) {
         !test.gurl.SchemeIsCryptographic() &&
         test.second_proxy_scheme == net::ProxyServer::SCHEME_HTTPS;
 
-    std::vector<net::ProxyServer> proxies_for_http;
+    std::vector<DataReductionProxyServer> proxies_for_http;
     net::ProxyServer first_proxy;
     net::ProxyServer second_proxy;
     if (test.first_proxy_scheme != net::ProxyServer::SCHEME_INVALID) {
       first_proxy = GetProxyWithScheme(test.first_proxy_scheme);
-      proxies_for_http.push_back(first_proxy);
+      proxies_for_http.push_back(
+          DataReductionProxyServer(first_proxy, ProxyServer::CORE));
     }
     if (test.second_proxy_scheme != net::ProxyServer::SCHEME_INVALID) {
       second_proxy = GetProxyWithScheme(test.second_proxy_scheme);
-      proxies_for_http.push_back(second_proxy);
+      proxies_for_http.push_back(DataReductionProxyServer(
+          second_proxy, ProxyServer::UNSPECIFIED_TYPE));
     }
 
     std::unique_ptr<DataReductionProxyMutableConfigValues> config_values =
@@ -463,107 +439,6 @@ TEST(DataReductionProxyDelegate, AlternativeProxy) {
   }
 }
 
-// Verifies that DataReductionProxyDelegate correctly returns the proxy server
-// that supports 0-RTT.
-TEST(DataReductionProxyDelegate, DefaultAlternativeProxyStatus) {
-  base::MessageLoopForIO message_loop_;
-  std::unique_ptr<DataReductionProxyTestContext> test_context =
-      DataReductionProxyTestContext::Builder()
-          .WithConfigClient()
-          .WithMockDataReductionProxyService()
-          .Build();
-
-  const struct {
-    bool is_in_quic_field_trial;
-    bool zero_rtt_param_set;
-    bool use_proxyzip_proxy_as_first_proxy;
-  } tests[] = {{false, false, false},
-               {false, false, true},
-               {true, false, false},
-               {true, false, true},
-               {true, true, true}};
-  for (const auto test : tests) {
-    std::vector<net::ProxyServer> proxies_for_http;
-    net::ProxyServer first_proxy;
-    net::ProxyServer second_proxy =
-        GetProxyWithScheme(net::ProxyServer::SCHEME_HTTP);
-
-    if (test.use_proxyzip_proxy_as_first_proxy) {
-      first_proxy =
-          net::ProxyServer(net::ProxyServer::SCHEME_QUIC,
-                           net::HostPortPair("proxy.googlezip.net", 443));
-    } else {
-      first_proxy = GetProxyWithScheme(net::ProxyServer::SCHEME_HTTPS);
-    }
-
-    proxies_for_http.push_back(first_proxy);
-    proxies_for_http.push_back(second_proxy);
-
-    std::unique_ptr<DataReductionProxyMutableConfigValues> config_values =
-        DataReductionProxyMutableConfigValues::CreateFromParams(
-            test_context->test_params());
-    config_values->UpdateValues(proxies_for_http);
-
-    std::unique_ptr<DataReductionProxyConfig> config(
-        new DataReductionProxyConfig(
-            message_loop_.task_runner(), test_context->net_log(),
-            std::move(config_values), test_context->configurator(),
-            test_context->event_creator()));
-
-    TestDataReductionProxyDelegate delegate(
-        config.get(), test_context->io_data()->configurator(),
-        test_context->io_data()->event_creator(),
-        test_context->io_data()->bypass_stats(), true,
-        test_context->io_data()->net_log());
-
-    variations::testing::ClearAllVariationParams();
-    std::map<std::string, std::string> variation_params;
-    if (test.zero_rtt_param_set)
-      variation_params["enable_zero_rtt"] = "true";
-    ASSERT_TRUE(variations::AssociateVariationParams(
-        params::GetQuicFieldTrialName(),
-        test.is_in_quic_field_trial ? "Enabled" : "Control", variation_params));
-    base::FieldTrialList field_trial_list(nullptr);
-    base::FieldTrialList::CreateFieldTrial(
-        params::GetQuicFieldTrialName(),
-        test.is_in_quic_field_trial ? "Enabled" : "Control");
-
-    {
-      // Test if the QUIC supporting proxy is correctly set.
-      base::HistogramTester histogram_tester;
-      if (test.is_in_quic_field_trial && test.zero_rtt_param_set &&
-          test.use_proxyzip_proxy_as_first_proxy) {
-        EXPECT_EQ(delegate.GetDefaultAlternativeProxy(), first_proxy);
-        EXPECT_TRUE(first_proxy.is_quic());
-
-      } else {
-        EXPECT_FALSE(delegate.GetDefaultAlternativeProxy().is_valid());
-      }
-
-      delegate.VerifyGetDefaultAlternativeProxyHistogram(
-          histogram_tester,
-          test.is_in_quic_field_trial && test.zero_rtt_param_set,
-          test.use_proxyzip_proxy_as_first_proxy, false);
-    }
-
-    {
-      // Test if the QUIC supporting proxy is correctly set if the proxy is
-      // marked as broken.
-      base::HistogramTester histogram_tester;
-
-      if (test.is_in_quic_field_trial && test.zero_rtt_param_set &&
-          test.use_proxyzip_proxy_as_first_proxy) {
-        delegate.OnAlternativeProxyBroken(first_proxy);
-        EXPECT_FALSE(delegate.GetDefaultAlternativeProxy().is_quic());
-        delegate.VerifyGetDefaultAlternativeProxyHistogram(
-            histogram_tester,
-            test.is_in_quic_field_trial && test.zero_rtt_param_set,
-            test.use_proxyzip_proxy_as_first_proxy, true);
-      }
-    }
-  }
-}
-
 #if defined(OS_ANDROID)
 const Client kClient = Client::CHROME_ANDROID;
 #elif defined(OS_IOS)
@@ -613,10 +488,16 @@ class DataReductionProxyDelegateTest : public testing::Test {
     lofi_ui_service_ = lofi_ui_service.get();
     test_context_->io_data()->set_lofi_ui_service(std::move(lofi_ui_service));
 
+    // Create a mock network change notifier to make it possible to call its
+    // static methods.
+    network_change_notifier_.reset(net::NetworkChangeNotifier::CreateMock());
+    base::RunLoop().RunUntilIdle();
+
     proxy_delegate_ = test_context_->io_data()->CreateProxyDelegate();
     context_.set_proxy_delegate(proxy_delegate_.get());
 
     context_.Init();
+    proxy_delegate_->InitializeOnIOThread(test_context_->io_data());
 
     test_context_->EnableDataReductionProxyWithSecureProxyCheckSuccess();
   }
@@ -639,8 +520,8 @@ class DataReductionProxyDelegateTest : public testing::Test {
     mock_socket_factory_.AddSocketDataProvider(&socket);
 
     net::TestDelegate delegate;
-    std::unique_ptr<net::URLRequest> request =
-        context_.CreateRequest(url, net::IDLE, &delegate);
+    std::unique_ptr<net::URLRequest> request = context_.CreateRequest(
+        url, net::IDLE, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS);
     if (request_headers)
       request->SetExtraRequestHeaders(*request_headers);
 
@@ -650,10 +531,12 @@ class DataReductionProxyDelegateTest : public testing::Test {
   }
 
   int64_t total_received_bytes() const {
+    test_context_->RunUntilIdle();
     return GetSessionNetworkStatsInfoInt64("session_received_content_length");
   }
 
   int64_t total_original_received_bytes() const {
+    test_context_->RunUntilIdle();
     return GetSessionNetworkStatsInfoInt64("session_original_content_length");
   }
 
@@ -671,15 +554,17 @@ class DataReductionProxyDelegateTest : public testing::Test {
     return test_context_->config();
   }
 
+  DataReductionProxyDelegate* proxy_delegate() const {
+    return proxy_delegate_.get();
+  }
+
  private:
   int64_t GetSessionNetworkStatsInfoInt64(const char* key) const {
-    const DataReductionProxyNetworkDelegate* drp_network_delegate =
-        reinterpret_cast<const DataReductionProxyNetworkDelegate*>(
-            context_.network_delegate());
-
     std::unique_ptr<base::DictionaryValue> session_network_stats_info =
-        base::DictionaryValue::From(
-            drp_network_delegate->SessionNetworkStatsInfoToValue());
+        base::DictionaryValue::From(test_context_->settings()
+                                        ->data_reduction_proxy_service()
+                                        ->compression_stats()
+                                        ->SessionNetworkStatsInfoToValue());
     EXPECT_TRUE(session_network_stats_info);
 
     std::string string_value;
@@ -695,30 +580,34 @@ class DataReductionProxyDelegateTest : public testing::Test {
   net::URLRequestContextStorage context_storage_;
 
   TestLoFiUIService* lofi_ui_service_;
-  std::unique_ptr<net::ProxyDelegate> proxy_delegate_;
+
+  std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier_;
+  std::unique_ptr<DataReductionProxyDelegate> proxy_delegate_;
   std::unique_ptr<DataReductionProxyTestContext> test_context_;
 };
 
 TEST_F(DataReductionProxyDelegateTest, OnResolveProxyHandler) {
   GURL url("http://www.google.com/");
-
-  // Data reduction proxy info
+  params()->UseNonSecureProxiesForHttp();
+  net::ProxyList proxy_list;
+  proxy_list.AddProxyServer(
+      params()->proxies_for_http().front().proxy_server());
+  proxy_list.AddProxyServer(net::ProxyServer::Direct());
   net::ProxyInfo data_reduction_proxy_info;
-  std::string data_reduction_proxy;
-  base::TrimString(params()->DefaultOrigin(), "/", &data_reduction_proxy);
-  data_reduction_proxy_info.UsePacString(
-      "PROXY " +
-      net::ProxyServer::FromURI(params()->DefaultOrigin(),
-                                net::ProxyServer::SCHEME_HTTP)
-          .host_port_pair()
-          .ToString() +
-      "; DIRECT");
+  data_reduction_proxy_info.UseProxyList(proxy_list);
   EXPECT_FALSE(data_reduction_proxy_info.is_empty());
 
   // Data reduction proxy config
   net::ProxyConfig data_reduction_proxy_config;
   data_reduction_proxy_config.proxy_rules().ParseFromString(
-      "http=" + data_reduction_proxy + ",direct://;");
+      "http=" +
+      params()
+          ->proxies_for_http()
+          .front()
+          .proxy_server()
+          .host_port_pair()
+          .ToString() +
+      ",direct://;");
   data_reduction_proxy_config.set_id(1);
 
   // Other proxy info
@@ -747,7 +636,7 @@ TEST_F(DataReductionProxyDelegateTest, OnResolveProxyHandler) {
   // Another proxy is used. It should be used afterwards.
   result.Use(other_proxy_info);
   OnResolveProxyHandler(url, "GET", data_reduction_proxy_config,
-                        empty_proxy_retry_info, config(), &result);
+                        empty_proxy_retry_info, *config(), nullptr, &result);
   EXPECT_EQ(other_proxy_info.proxy_server(), result.proxy_server());
 
   // A direct connection is used. The data reduction proxy should be used
@@ -756,7 +645,7 @@ TEST_F(DataReductionProxyDelegateTest, OnResolveProxyHandler) {
   result.Use(direct_proxy_info);
   net::ProxyConfig::ID prev_id = result.config_id();
   OnResolveProxyHandler(url, "GET", data_reduction_proxy_config,
-                        empty_proxy_retry_info, config(), &result);
+                        empty_proxy_retry_info, *config(), nullptr, &result);
   EXPECT_EQ(data_reduction_proxy_info.proxy_server(), result.proxy_server());
   // Only the proxy list should be updated, not the proxy info.
   EXPECT_EQ(result.config_id(), prev_id);
@@ -765,9 +654,9 @@ TEST_F(DataReductionProxyDelegateTest, OnResolveProxyHandler) {
   // list. A direct connection should be used afterwards.
   result.Use(direct_proxy_info);
   prev_id = result.config_id();
-  OnResolveProxyHandler(GURL("ws://echo.websocket.org/"), "GET",
-                        data_reduction_proxy_config,
-                        data_reduction_proxy_retry_info, config(), &result);
+  OnResolveProxyHandler(
+      GURL("ws://echo.websocket.org/"), "GET", data_reduction_proxy_config,
+      data_reduction_proxy_retry_info, *config(), nullptr, &result);
   EXPECT_TRUE(result.proxy_server().is_direct());
   EXPECT_EQ(result.config_id(), prev_id);
 
@@ -775,30 +664,31 @@ TEST_F(DataReductionProxyDelegateTest, OnResolveProxyHandler) {
   result.UseDirect();
   OnResolveProxyHandler(GURL("wss://echo.websocket.org/"), "GET",
                         data_reduction_proxy_config, empty_proxy_retry_info,
-                        config(), &result);
+                        *config(), nullptr, &result);
   EXPECT_TRUE(result.is_direct());
 
   result.UseDirect();
   OnResolveProxyHandler(GURL("wss://echo.websocket.org/"), "GET",
                         data_reduction_proxy_config, empty_proxy_retry_info,
-                        config(), &result);
+                        *config(), nullptr, &result);
   EXPECT_TRUE(result.is_direct());
 
   // POST methods go direct.
   result.UseDirect();
   OnResolveProxyHandler(url, "POST", data_reduction_proxy_config,
-                        empty_proxy_retry_info, config(), &result);
+                        empty_proxy_retry_info, *config(), nullptr, &result);
   EXPECT_TRUE(result.is_direct());
 
   // Without DataCompressionProxyCriticalBypass Finch trial set, the
   // BYPASS_DATA_REDUCTION_PROXY load flag should be ignored.
   result.UseDirect();
   OnResolveProxyHandler(url, "GET", data_reduction_proxy_config,
-                        empty_proxy_retry_info, config(), &result);
+                        empty_proxy_retry_info, *config(), nullptr, &result);
   EXPECT_FALSE(result.is_direct());
 
   OnResolveProxyHandler(url, "GET", data_reduction_proxy_config,
-                        empty_proxy_retry_info, config(), &other_proxy_info);
+                        empty_proxy_retry_info, *config(), nullptr,
+                        &other_proxy_info);
   EXPECT_FALSE(other_proxy_info.is_direct());
 }
 
@@ -845,17 +735,12 @@ TEST_F(DataReductionProxyDelegateTest, HTTPRequests) {
     GURL url(test.url);
 
     net::ProxyInfo data_reduction_proxy_info;
-
-    std::string data_reduction_proxy;
     if (!test.use_direct_proxy) {
-      base::TrimString(params()->DefaultOrigin(), "/", &data_reduction_proxy);
-      data_reduction_proxy_info.UsePacString(
-          "PROXY " +
-          net::ProxyServer::FromURI(params()->DefaultOrigin(),
-                                    net::ProxyServer::SCHEME_HTTP)
-              .host_port_pair()
-              .ToString() +
-          "; DIRECT");
+      net::ProxyList proxy_list;
+      proxy_list.AddProxyServer(
+          params()->proxies_for_http().front().proxy_server());
+      proxy_list.AddProxyServer(net::ProxyServer::Direct());
+      data_reduction_proxy_info.UseProxyList(proxy_list);
     }
     EXPECT_EQ(test.use_direct_proxy, data_reduction_proxy_info.is_empty());
 
@@ -865,12 +750,19 @@ TEST_F(DataReductionProxyDelegateTest, HTTPRequests) {
 
     } else {
       data_reduction_proxy_config.proxy_rules().ParseFromString(
-          "http=" + data_reduction_proxy + ",direct://;");
+          "http=" +
+          params()
+              ->proxies_for_http()
+              .front()
+              .proxy_server()
+              .host_port_pair()
+              .ToString() +
+          ",direct://;");
       data_reduction_proxy_config.set_id(1);
     }
     EXPECT_NE(test.use_direct_proxy, data_reduction_proxy_config.is_valid());
-    config()->SetStateForTest(test.enabled_by_user /* enabled */,
-                              false /* at_startup */);
+    config()->UpdateConfigForTesting(test.enabled_by_user /* enabled */,
+                                     false /* at_startup */);
 
     net::ProxyRetryInfoMap empty_proxy_retry_info;
 
@@ -881,15 +773,14 @@ TEST_F(DataReductionProxyDelegateTest, HTTPRequests) {
     net::ProxyInfo result;
     result.Use(direct_proxy_info);
     OnResolveProxyHandler(url, "GET", data_reduction_proxy_config,
-                          empty_proxy_retry_info, config(), &result);
+                          empty_proxy_retry_info, *config(), nullptr, &result);
     histogram_tester.ExpectTotalCount(
         "DataReductionProxy.ConfigService.HTTPRequests",
         test.expect_histogram ? 1 : 0);
 
     if (test.expect_histogram) {
       histogram_tester.ExpectUniqueSample(
-          "DataReductionProxy.ConfigService.HTTPRequests",
-          test.use_direct_proxy ? 0 : 1, 1);
+          "DataReductionProxy.ConfigService.HTTPRequests", 1, 1);
     }
   }
 }
@@ -911,6 +802,7 @@ TEST_F(DataReductionProxyDelegateTest, OnCompletedSizeFor200) {
       "Chrome-Proxy: q=low\r\n"
       "Content-Length: 1000\r\n\r\n";
 
+  params()->UseNonSecureProxiesForHttp();
   std::unique_ptr<net::URLRequest> request = FetchURLRequest(
       GURL("http://example.com/path/"), nullptr, kDrpResponseHeaders, 1000);
 
@@ -927,6 +819,91 @@ TEST_F(DataReductionProxyDelegateTest, OnCompletedSizeFor200) {
       "DataReductionProxy.ConfigService.HTTPRequests", 1, 1);
 }
 
+TEST_F(DataReductionProxyDelegateTest, TimeToFirstHttpDataSaverRequest) {
+  std::unique_ptr<base::SimpleTestTickClock> tick_clock(
+      new base::SimpleTestTickClock());
+  base::SimpleTestTickClock* tick_clock_ptr = tick_clock.get();
+  proxy_delegate()->SetTickClockForTesting(std::move(tick_clock));
+
+  const char kResponseHeaders[] =
+      "HTTP/1.1 200 OK\r\n"
+      "Via: 1.1 Chrome-Compression-Proxy-Suffix\r\n"
+      "Content-Length: 10\r\n\r\n";
+
+  params()->UseNonSecureProxiesForHttp();
+  {
+    base::HistogramTester histogram_tester;
+    base::TimeDelta advance_time(base::TimeDelta::FromSeconds(1));
+    tick_clock_ptr->Advance(advance_time);
+
+    FetchURLRequest(GURL("http://example.com/path/"), nullptr, kResponseHeaders,
+                    10);
+    histogram_tester.ExpectUniqueSample(
+        "DataReductionProxy.TimeToFirstDataSaverRequest",
+        advance_time.InMilliseconds(), 1);
+
+    // Second request should not result in recording of UMA.
+    FetchURLRequest(GURL("http://example.com/path/"), nullptr, kResponseHeaders,
+                    10);
+    histogram_tester.ExpectTotalCount(
+        "DataReductionProxy.TimeToFirstDataSaverRequest", 1);
+  }
+
+  {
+    base::HistogramTester histogram_tester;
+    // Third request should result in recording of UMA due to change in IP.
+    base::TimeDelta advance_time(base::TimeDelta::FromSeconds(2));
+    net::NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
+    base::RunLoop().RunUntilIdle();
+
+    tick_clock_ptr->Advance(advance_time);
+    FetchURLRequest(GURL("http://example.com/path/"), nullptr, kResponseHeaders,
+                    10);
+    histogram_tester.ExpectUniqueSample(
+        "DataReductionProxy.TimeToFirstDataSaverRequest",
+        advance_time.InMilliseconds(), 1);
+
+    // Fourth request should not result in recording of UMA.
+    FetchURLRequest(GURL("http://example.com/path/"), nullptr, kResponseHeaders,
+                    10);
+    histogram_tester.ExpectTotalCount(
+        "DataReductionProxy.TimeToFirstDataSaverRequest", 1);
+  }
+}
+
+TEST_F(DataReductionProxyDelegateTest, Holdback) {
+  const char kResponseHeaders[] =
+      "HTTP/1.1 200 OK\r\n"
+      "Via: 1.1 Chrome-Compression-Proxy-Suffix\r\n"
+      "Content-Length: 10\r\n\r\n";
+
+  const struct {
+    bool holdback;
+  } tests[] = {
+      {
+          true,
+      },
+      {
+          false,
+      },
+  };
+  for (const auto& test : tests) {
+    if (!test.holdback)
+      params()->UseNonSecureProxiesForHttp();
+
+    base::FieldTrialList field_trial_list(nullptr);
+    ASSERT_TRUE(base::FieldTrialList::CreateFieldTrial(
+        "DataCompressionProxyHoldback", test.holdback ? "Enabled" : "Control"));
+
+    base::HistogramTester histogram_tester;
+    FetchURLRequest(GURL("http://example.com/path/"), nullptr, kResponseHeaders,
+                    10);
+    histogram_tester.ExpectTotalCount(
+        "DataReductionProxy.SuccessfulRequestCompletionCounts",
+        test.holdback ? 0 : 1);
+  }
+}
+
 TEST_F(DataReductionProxyDelegateTest, OnCompletedSizeFor304) {
   int64_t baseline_received_bytes = total_received_bytes();
   int64_t baseline_original_received_bytes = total_original_received_bytes();
@@ -936,6 +913,7 @@ TEST_F(DataReductionProxyDelegateTest, OnCompletedSizeFor304) {
       "Via: 1.1 Chrome-Compression-Proxy\r\n"
       "X-Original-Content-Length: 10000\r\n\r\n";
 
+  params()->UseNonSecureProxiesForHttp();
   std::unique_ptr<net::URLRequest> request = FetchURLRequest(
       GURL("http://example.com/path/"), nullptr, kDrpResponseHeaders, 0);
 
@@ -953,6 +931,7 @@ TEST_F(DataReductionProxyDelegateTest, OnCompletedSizeForWriteError) {
   int64_t baseline_received_bytes = total_received_bytes();
   int64_t baseline_original_received_bytes = total_original_received_bytes();
 
+  params()->UseNonSecureProxiesForHttp();
   net::MockWrite writes[] = {
       net::MockWrite("GET http://example.com/path/ HTTP/1.1\r\n"
                      "Host: example.com\r\n"),
@@ -961,8 +940,9 @@ TEST_F(DataReductionProxyDelegateTest, OnCompletedSizeForWriteError) {
   mock_socket_factory()->AddSocketDataProvider(&socket);
 
   net::TestDelegate delegate;
-  std::unique_ptr<net::URLRequest> request = context()->CreateRequest(
-      GURL("http://example.com/path/"), net::IDLE, &delegate);
+  std::unique_ptr<net::URLRequest> request =
+      context()->CreateRequest(GURL("http://example.com/path/"), net::IDLE,
+                               &delegate, TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
   base::RunLoop().RunUntilIdle();
 
@@ -976,14 +956,16 @@ TEST_F(DataReductionProxyDelegateTest, OnCompletedSizeForReadError) {
   int64_t baseline_received_bytes = total_received_bytes();
   int64_t baseline_original_received_bytes = total_original_received_bytes();
 
+  params()->UseNonSecureProxiesForHttp();
   net::MockRead reads[] = {net::MockRead("HTTP/1.1 "),
                            net::MockRead(net::ASYNC, net::ERR_ABORTED)};
   net::StaticSocketDataProvider socket(reads, arraysize(reads), nullptr, 0);
   mock_socket_factory()->AddSocketDataProvider(&socket);
 
   net::TestDelegate delegate;
-  std::unique_ptr<net::URLRequest> request = context()->CreateRequest(
-      GURL("http://example.com/path/"), net::IDLE, &delegate);
+  std::unique_ptr<net::URLRequest> request =
+      context()->CreateRequest(GURL("http://example.com/path/"), net::IDLE,
+                               &delegate, TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
   base::RunLoop().RunUntilIdle();
 
@@ -1058,6 +1040,7 @@ TEST_F(DataReductionProxyDelegateTest, PartialRangeSavings) {
        100, 300},
   };
 
+  params()->UseNonSecureProxiesForHttp();
   for (const auto& test : test_cases) {
     base::HistogramTester histogram_tester;
     int64_t baseline_received_bytes = total_received_bytes();
@@ -1074,8 +1057,9 @@ TEST_F(DataReductionProxyDelegateTest, PartialRangeSavings) {
     mock_socket_factory()->AddSocketDataProvider(&socket);
 
     net::TestDelegate test_delegate;
-    std::unique_ptr<net::URLRequest> request = context()->CreateRequest(
-        GURL("http://example.com"), net::IDLE, &test_delegate);
+    std::unique_ptr<net::URLRequest> request =
+        context()->CreateRequest(GURL("http://example.com"), net::IDLE,
+                                 &test_delegate, TRAFFIC_ANNOTATION_FOR_TESTS);
     request->Start();
 
     base::RunLoop().RunUntilIdle();

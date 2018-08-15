@@ -31,7 +31,7 @@
 
 #include <QtDesigner/private/ui4_p.h>
 
-#include <QtCore/QRegExp>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QDebug>
 #include <QtCore/QXmlStreamReader>
 #include <QtCore/QSharedData>
@@ -157,7 +157,7 @@ bool QDesignerWidgetBox::findWidget(const QDesignerWidgetBoxInterface *wbox,
     QString pattern = QStringLiteral("^<widget\\s+class\\s*=\\s*\"");
     pattern += className;
     pattern += QStringLiteral("\".*$");
-    QRegExp regexp(pattern);
+    const QRegularExpression regexp(pattern);
     Q_ASSERT(regexp.isValid());
     const int catCount = wbox->categoryCount();
     for (int c = 0; c < catCount; c++) {
@@ -170,7 +170,7 @@ bool QDesignerWidgetBox::findWidget(const QDesignerWidgetBoxInterface *wbox,
                 const int widgetTagIndex = xml.indexOf(widgetTag);
                 if (widgetTagIndex != -1) {
                     xml.remove(0, widgetTagIndex);
-                    if (regexp.exactMatch(xml)) {
+                    if (regexp.match(xml).hasMatch()) {
                         *widgetData = widget;
                         return true;
                     }
@@ -190,7 +190,6 @@ DomUI *QDesignerWidgetBox::xmlToUi(const QString &name, const QString &xml, bool
 
     // The xml description must either contain a root element "ui" with a child element "widget"
     // or "widget" as the root element (4.3 legacy)
-    const QString widgetTag = QStringLiteral("widget");
 
     while (!reader.atEnd()) {
         if (reader.readNext() == QXmlStreamReader::StartElement) {
@@ -233,7 +232,7 @@ DomUI *QDesignerWidgetBox::xmlToUi(const QString &name, const QString &xml, bool
     if (insertFakeTopLevel)  {
         DomWidget *fakeTopLevel = new DomWidget;
         fakeTopLevel->setAttributeClass(QStringLiteral("QWidget"));
-        QList<DomWidget *> children;
+        QVector<DomWidget *> children;
         children.push_back(ui->takeElementWidget());
         fakeTopLevel->setElementWidget(children);
         ui->setElementWidget(fakeTopLevel);

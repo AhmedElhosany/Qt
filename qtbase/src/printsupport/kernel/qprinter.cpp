@@ -132,7 +132,7 @@ void QPrinterPrivate::initEngines(QPrinter::OutputFormat format, const QPrinterI
 {
     // Default to PdfFormat
     outputFormat = QPrinter::PdfFormat;
-    QPlatformPrinterSupport *ps = 0;
+    QPlatformPrinterSupport *ps = nullptr;
     QString printerName;
 
     // Only set NativeFormat if we have a valid plugin and printer to use
@@ -149,7 +149,8 @@ void QPrinterPrivate::initEngines(QPrinter::OutputFormat format, const QPrinterI
         printEngine = ps->createNativePrintEngine(printerMode, printerName);
         paintEngine = ps->createPaintEngine(printEngine, printerMode);
     } else {
-        QPdfPrintEngine *pdfEngine = new QPdfPrintEngine(printerMode);
+        const auto pdfEngineVersion = (pdfVersion == QPrinter::PdfVersion_1_4 ? QPdfEngine::Version_1_4 : QPdfEngine::Version_A1b);
+        QPdfPrintEngine *pdfEngine = new QPdfPrintEngine(printerMode, pdfEngineVersion);
         paintEngine = pdfEngine;
         printEngine = pdfEngine;
     }
@@ -686,7 +687,37 @@ QPrinter::OutputFormat QPrinter::outputFormat() const
     return d->outputFormat;
 }
 
+/*!
+    \since 5.10
 
+    Sets the PDF version for this printer to \a version.
+
+    If \a version is the same value as currently set then no change will be made.
+*/
+void QPrinter::setPdfVersion(PdfVersion version)
+{
+    Q_D(QPrinter);
+
+    if (d->pdfVersion == version)
+        return;
+
+    d->pdfVersion = version;
+
+    if (d->outputFormat == QPrinter::PdfFormat) {
+        d->changeEngines(d->outputFormat, QPrinterInfo());
+    }
+}
+
+/*!
+    \since 5.10
+
+    Returns the PDF version for this printer. The default is \c PdfVersion_1_4.
+*/
+QPrinter::PdfVersion QPrinter::pdfVersion() const
+{
+    Q_D(const QPrinter);
+    return d->pdfVersion;
+}
 
 /*! \internal
 */

@@ -34,11 +34,21 @@ static const float kDefaultVolume = 1.0f;
 
 namespace media {
 
+namespace {
+
+gfx::Size GetRotatedVideoSize(VideoRotation rotation, gfx::Size natural_size) {
+  if (rotation == VIDEO_ROTATION_90 || rotation == VIDEO_ROTATION_270)
+    return gfx::Size(natural_size.height(), natural_size.width());
+  return natural_size;
+}
+
+}  // namespace
+
 class PipelineImpl::RendererWrapper : public DemuxerHost,
                                       public RendererClient {
  public:
   RendererWrapper(scoped_refptr<base::SingleThreadTaskRunner> media_task_runner,
-                  scoped_refptr<MediaLog> media_log);
+                  MediaLog* media_log);
   ~RendererWrapper() final;
 
   void Start(Demuxer* demuxer,
@@ -57,14 +67,14 @@ class PipelineImpl::RendererWrapper : public DemuxerHost,
   PipelineStatistics GetStatistics() const;
   void SetCdm(CdmContext* cdm_context, const CdmAttachedCB& cdm_attached_cb);
 
-  // |enabledTrackIds| contains track ids of enabled audio tracks.
+  // |enabled_track_ids| contains track ids of enabled audio tracks.
   void OnEnabledAudioTracksChanged(
-      const std::vector<MediaTrack::Id>& enabledTrackIds);
+      const std::vector<MediaTrack::Id>& enabled_track_ids);
 
-  // |trackId| either empty, which means no video track is selected, or contain
-  // one element - the selected video track id.
+  // |selected_track_id| is either empty, which means no video track is
+  // selected, or contains the selected video track id.
   void OnSelectedVideoTrackChanged(
-      const std::vector<MediaTrack::Id>& selectedTrackId);
+      base::Optional<MediaTrack::Id> selected_track_id);
 
  private:
   // Contains state shared between main and media thread.
@@ -111,6 +121,8 @@ class PipelineImpl::RendererWrapper : public DemuxerHost,
   void OnStatisticsUpdate(const PipelineStatistics& stats) final;
   void OnBufferingStateChange(BufferingState state) final;
   void OnWaitingForDecryptionKey() final;
+  void OnAudioConfigChange(const AudioDecoderConfig& config) final;
+  void OnVideoConfigChange(const VideoDecoderConfig& config) final;
   void OnVideoNaturalSizeChange(const gfx::Size& size) final;
   void OnVideoOpacityChange(bool opaque) final;
   void OnDurationChange(base::TimeDelta duration) final;
@@ -139,7 +151,7 @@ class PipelineImpl::RendererWrapper : public DemuxerHost,
 
   const scoped_refptr<base::SingleThreadTaskRunner> media_task_runner_;
   const scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
-  const scoped_refptr<MediaLog> media_log_;
+  MediaLog* const media_log_;
 
   base::WeakPtr<PipelineImpl> weak_pipeline_;
   Demuxer* demuxer_;
@@ -177,10 +189,10 @@ class PipelineImpl::RendererWrapper : public DemuxerHost,
 
 PipelineImpl::RendererWrapper::RendererWrapper(
     scoped_refptr<base::SingleThreadTaskRunner> media_task_runner,
-    scoped_refptr<MediaLog> media_log)
+    MediaLog* media_log)
     : media_task_runner_(std::move(media_task_runner)),
       main_task_runner_(base::ThreadTaskRunnerHandle::Get()),
-      media_log_(std::move(media_log)),
+      media_log_(media_log),
       demuxer_(nullptr),
       playback_rate_(kDefaultPlaybackRate),
       volume_(kDefaultVolume),
@@ -191,7 +203,6 @@ PipelineImpl::RendererWrapper::RendererWrapper(
       text_renderer_ended_(false),
       weak_factory_(this) {
   weak_this_ = weak_factory_.GetWeakPtr();
-  media_log_->AddEvent(media_log_->CreatePipelineStateChangedEvent(kCreated));
 }
 
 PipelineImpl::RendererWrapper::~RendererWrapper() {
@@ -495,7 +506,9 @@ void PipelineImpl::RendererWrapper::SetDuration(base::TimeDelta duration) {
   // implementations call DemuxerHost on the media thread.
   media_log_->AddEvent(media_log_->CreateTimeEvent(MediaLogEvent::DURATION_SET,
                                                    "duration", duration));
-  UMA_HISTOGRAM_LONG_TIMES("Media.Duration", duration);
+  UMA_HISTOGRAM_CUSTOM_TIMES(
+      "Media.Duration2", duration, base::TimeDelta::FromMilliseconds(1),
+      base::TimeDelta::FromDays(1), 50 /* bucket_count */);
 
   main_task_runner_->PostTask(
       FROM_HERE,
@@ -550,26 +563,36 @@ void PipelineImpl::RendererWrapper::OnEnded() {
 }
 
 void PipelineImpl::OnEnabledAudioTracksChanged(
-    const std::vector<MediaTrack::Id>& enabledTrackIds) {
+    const std::vector<MediaTrack::Id>& enabled_track_ids) {
   DCHECK(thread_checker_.CalledOnValidThread());
   media_task_runner_->PostTask(
       FROM_HERE,
       base::Bind(&RendererWrapper::OnEnabledAudioTracksChanged,
-                 base::Unretained(renderer_wrapper_.get()), enabledTrackIds));
+                 base::Unretained(renderer_wrapper_.get()), enabled_track_ids));
 }
 
 void PipelineImpl::OnSelectedVideoTrackChanged(
-    const std::vector<MediaTrack::Id>& selectedTrackId) {
+    base::Optional<MediaTrack::Id> selected_track_id) {
   DCHECK(thread_checker_.CalledOnValidThread());
   media_task_runner_->PostTask(
       FROM_HERE,
       base::Bind(&RendererWrapper::OnSelectedVideoTrackChanged,
-                 base::Unretained(renderer_wrapper_.get()), selectedTrackId));
+                 base::Unretained(renderer_wrapper_.get()), selected_track_id));
 }
 
 void PipelineImpl::RendererWrapper::OnEnabledAudioTracksChanged(
-    const std::vector<MediaTrack::Id>& enabledTrackIds) {
+    const std::vector<MediaTrack::Id>& enabled_track_ids) {
   DCHECK(media_task_runner_->BelongsToCurrentThread());
+
+  // If the pipeline has been created, but not started yet, we may still receive
+  // track notifications from blink level (e.g. when video track gets deselected
+  // due to player/pipeline belonging to a background tab). We can safely ignore
+  // these, since WebMediaPlayerImpl will ensure that demuxer stream / track
+  // status is in sync with blink after pipeline is started.
+  if (state_ == kCreated) {
+    DCHECK(!demuxer_);
+    return;
+  }
 
   // Track status notifications might be delivered asynchronously. If we receive
   // a notification when pipeline is stopped/shut down, it's safe to ignore it.
@@ -580,15 +603,25 @@ void PipelineImpl::RendererWrapper::OnEnabledAudioTracksChanged(
   DCHECK(demuxer_);
   DCHECK(shared_state_.renderer || (state_ != kPlaying));
 
-  base::TimeDelta currTime = (state_ == kPlaying)
-                                 ? shared_state_.renderer->GetMediaTime()
-                                 : demuxer_->GetStartTime();
-  demuxer_->OnEnabledAudioTracksChanged(enabledTrackIds, currTime);
+  base::TimeDelta curr_time = (state_ == kPlaying)
+                                  ? shared_state_.renderer->GetMediaTime()
+                                  : demuxer_->GetStartTime();
+  demuxer_->OnEnabledAudioTracksChanged(enabled_track_ids, curr_time);
 }
 
 void PipelineImpl::RendererWrapper::OnSelectedVideoTrackChanged(
-    const std::vector<MediaTrack::Id>& selectedTrackId) {
+    base::Optional<MediaTrack::Id> selected_track_id) {
   DCHECK(media_task_runner_->BelongsToCurrentThread());
+
+  // If the pipeline has been created, but not started yet, we may still receive
+  // track notifications from blink level (e.g. when video track gets deselected
+  // due to player/pipeline belonging to a background tab). We can safely ignore
+  // these, since WebMediaPlayerImpl will ensure that demuxer stream / track
+  // status is in sync with blink after pipeline is started.
+  if (state_ == kCreated) {
+    DCHECK(!demuxer_);
+    return;
+  }
 
   // Track status notifications might be delivered asynchronously. If we receive
   // a notification when pipeline is stopped/shut down, it's safe to ignore it.
@@ -599,10 +632,10 @@ void PipelineImpl::RendererWrapper::OnSelectedVideoTrackChanged(
   DCHECK(demuxer_);
   DCHECK(shared_state_.renderer || (state_ != kPlaying));
 
-  base::TimeDelta currTime = (state_ == kPlaying)
-                                 ? shared_state_.renderer->GetMediaTime()
-                                 : demuxer_->GetStartTime();
-  demuxer_->OnSelectedVideoTrackChanged(selectedTrackId, currTime);
+  base::TimeDelta curr_time = (state_ == kPlaying)
+                                  ? shared_state_.renderer->GetMediaTime()
+                                  : demuxer_->GetStartTime();
+  demuxer_->OnSelectedVideoTrackChanged(selected_track_id, curr_time);
 }
 
 void PipelineImpl::RendererWrapper::OnStatisticsUpdate(
@@ -617,6 +650,26 @@ void PipelineImpl::RendererWrapper::OnStatisticsUpdate(
   shared_state_.statistics.video_frames_dropped += stats.video_frames_dropped;
   shared_state_.statistics.audio_memory_usage += stats.audio_memory_usage;
   shared_state_.statistics.video_memory_usage += stats.video_memory_usage;
+
+  if (stats.video_frame_duration_average != kNoTimestamp) {
+    shared_state_.statistics.video_frame_duration_average =
+        stats.video_frame_duration_average;
+  }
+
+  base::TimeDelta old_key_frame_distance_average =
+      shared_state_.statistics.video_keyframe_distance_average;
+  if (stats.video_keyframe_distance_average != kNoTimestamp) {
+    shared_state_.statistics.video_keyframe_distance_average =
+        stats.video_keyframe_distance_average;
+  }
+
+  if (shared_state_.statistics.video_keyframe_distance_average !=
+      old_key_frame_distance_average) {
+    main_task_runner_->PostTask(
+        FROM_HERE,
+        base::Bind(&PipelineImpl::OnVideoAverageKeyframeDistanceUpdate,
+                   weak_pipeline_));
+  }
 }
 
 void PipelineImpl::RendererWrapper::OnBufferingStateChange(
@@ -652,6 +705,24 @@ void PipelineImpl::RendererWrapper::OnVideoOpacityChange(bool opaque) {
   main_task_runner_->PostTask(
       FROM_HERE,
       base::Bind(&PipelineImpl::OnVideoOpacityChange, weak_pipeline_, opaque));
+}
+
+void PipelineImpl::RendererWrapper::OnAudioConfigChange(
+    const AudioDecoderConfig& config) {
+  DCHECK(media_task_runner_->BelongsToCurrentThread());
+
+  main_task_runner_->PostTask(
+      FROM_HERE,
+      base::Bind(&PipelineImpl::OnAudioConfigChange, weak_pipeline_, config));
+}
+
+void PipelineImpl::RendererWrapper::OnVideoConfigChange(
+    const VideoDecoderConfig& config) {
+  DCHECK(media_task_runner_->BelongsToCurrentThread());
+
+  main_task_runner_->PostTask(
+      FROM_HERE,
+      base::Bind(&PipelineImpl::OnVideoConfigChange, weak_pipeline_, config));
 }
 
 void PipelineImpl::RendererWrapper::OnDurationChange(base::TimeDelta duration) {
@@ -824,16 +895,15 @@ void PipelineImpl::RendererWrapper::InitializeRenderer(
   DCHECK(media_task_runner_->BelongsToCurrentThread());
 
   switch (demuxer_->GetType()) {
-    case DemuxerStreamProvider::Type::STREAM:
-      if (!demuxer_->GetStream(DemuxerStream::AUDIO) &&
-          !demuxer_->GetStream(DemuxerStream::VIDEO)) {
+    case MediaResource::Type::STREAM:
+      if (demuxer_->GetAllStreams().empty()) {
         DVLOG(1) << "Error: demuxer does not have an audio or a video stream.";
         done_cb.Run(PIPELINE_ERROR_COULD_NOT_RENDER);
         return;
       }
       break;
 
-    case DemuxerStreamProvider::Type::URL:
+    case MediaResource::Type::URL:
       // NOTE: Empty GURL are not valid.
       if (!demuxer_->GetMediaUrlParams().media_url.is_valid()) {
         DVLOG(1) << "Error: demuxer does not have a valid URL.";
@@ -866,26 +936,30 @@ void PipelineImpl::RendererWrapper::ReportMetadata() {
   DCHECK(media_task_runner_->BelongsToCurrentThread());
 
   PipelineMetadata metadata;
-  DemuxerStream* stream;
+  std::vector<DemuxerStream*> streams;
 
   switch (demuxer_->GetType()) {
-    case DemuxerStreamProvider::Type::STREAM:
+    case MediaResource::Type::STREAM:
       metadata.timeline_offset = demuxer_->GetTimelineOffset();
-      stream = demuxer_->GetStream(DemuxerStream::VIDEO);
-      if (stream) {
-        metadata.has_video = true;
-        metadata.natural_size = stream->video_decoder_config().natural_size();
-        metadata.video_rotation = stream->video_rotation();
-        metadata.video_decoder_config = stream->video_decoder_config();
-      }
-      stream = demuxer_->GetStream(DemuxerStream::AUDIO);
-      if (stream) {
-        metadata.has_audio = true;
-        metadata.audio_decoder_config = stream->audio_decoder_config();
+      // TODO(servolk): What should we do about metadata for multiple streams?
+      streams = demuxer_->GetAllStreams();
+      for (auto* stream : streams) {
+        if (stream->type() == DemuxerStream::VIDEO && !metadata.has_video) {
+          metadata.has_video = true;
+          metadata.natural_size = GetRotatedVideoSize(
+              stream->video_rotation(),
+              stream->video_decoder_config().natural_size());
+          metadata.video_rotation = stream->video_rotation();
+          metadata.video_decoder_config = stream->video_decoder_config();
+        }
+        if (stream->type() == DemuxerStream::AUDIO && !metadata.has_audio) {
+          metadata.has_audio = true;
+          metadata.audio_decoder_config = stream->audio_decoder_config();
+        }
       }
       break;
 
-    case DemuxerStreamProvider::Type::URL:
+    case MediaResource::Type::URL:
       // We don't know if the MediaPlayerRender has Audio/Video until we start
       // playing. Conservatively assume that they do.
       metadata.has_video = true;
@@ -1128,7 +1202,7 @@ base::TimeDelta PipelineImpl::GetMediaTime() const {
     return last_media_time_;
   }
 
-  DVLOG(3) << __FUNCTION__ << ": " << media_time.InMilliseconds() << " ms";
+  DVLOG(3) << __func__ << ": " << media_time.InMilliseconds() << " ms";
   last_media_time_ = media_time;
   return last_media_time_;
 }
@@ -1209,6 +1283,9 @@ void PipelineImpl::OnError(PipelineStatus error) {
   }
 
   // Any kind of error stops the pipeline.
+  //
+  // TODO (tguilbert): Move this out to PipelineController to make the state
+  // changes more consistent. See crbug.com/695734.
   Stop();
 }
 
@@ -1285,6 +1362,33 @@ void PipelineImpl::OnVideoOpacityChange(bool opaque) {
 
   DCHECK(client_);
   client_->OnVideoOpacityChange(opaque);
+}
+
+void PipelineImpl::OnAudioConfigChange(const AudioDecoderConfig& config) {
+  DVLOG(2) << __func__;
+  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK(IsRunning());
+
+  DCHECK(client_);
+  client_->OnAudioConfigChange(config);
+}
+
+void PipelineImpl::OnVideoConfigChange(const VideoDecoderConfig& config) {
+  DVLOG(2) << __func__;
+  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK(IsRunning());
+
+  DCHECK(client_);
+  client_->OnVideoConfigChange(config);
+}
+
+void PipelineImpl::OnVideoAverageKeyframeDistanceUpdate() {
+  DVLOG(2) << __func__;
+  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK(IsRunning());
+
+  DCHECK(client_);
+  client_->OnVideoAverageKeyframeDistanceUpdate();
 }
 
 void PipelineImpl::OnSeekDone() {

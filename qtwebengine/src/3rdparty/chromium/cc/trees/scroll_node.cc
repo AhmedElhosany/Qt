@@ -5,58 +5,54 @@
 #include "base/trace_event/trace_event_argument.h"
 #include "cc/base/math_util.h"
 #include "cc/input/main_thread_scrolling_reason.h"
-#include "cc/proto/gfx_conversions.h"
+#include "cc/layers/layer.h"
 #include "cc/trees/element_id.h"
+#include "cc/trees/property_tree.h"
 #include "cc/trees/scroll_node.h"
 
 namespace cc {
 
 ScrollNode::ScrollNode()
-    : id(-1),
-      parent_id(-1),
-      owner_id(-1),
-      scrollable(false),
+    : id(ScrollTree::kInvalidNodeId),
+      parent_id(ScrollTree::kInvalidNodeId),
       main_thread_scrolling_reasons(
           MainThreadScrollingReason::kNotScrollingOnMain),
-      contains_non_fast_scrollable_region(false),
+      scrollable(false),
       max_scroll_offset_affected_by_page_scale(false),
-      is_inner_viewport_scroll_layer(false),
-      is_outer_viewport_scroll_layer(false),
+      scrolls_inner_viewport(false),
+      scrolls_outer_viewport(false),
       should_flatten(false),
       user_scrollable_horizontal(false),
       user_scrollable_vertical(false),
-      transform_id(0) {}
+      transform_id(0),
+      scroll_boundary_behavior(
+          ScrollBoundaryBehavior::kScrollBoundaryBehaviorTypeAuto) {}
 
 ScrollNode::ScrollNode(const ScrollNode& other) = default;
 
 bool ScrollNode::operator==(const ScrollNode& other) const {
   return id == other.id && parent_id == other.parent_id &&
-         owner_id == other.owner_id && scrollable == other.scrollable &&
+         scrollable == other.scrollable &&
          main_thread_scrolling_reasons == other.main_thread_scrolling_reasons &&
-         contains_non_fast_scrollable_region ==
-             other.contains_non_fast_scrollable_region &&
-         scroll_clip_layer_bounds == other.scroll_clip_layer_bounds &&
-         bounds == other.bounds &&
+         non_fast_scrollable_region == other.non_fast_scrollable_region &&
+         container_bounds == other.container_bounds && bounds == other.bounds &&
          max_scroll_offset_affected_by_page_scale ==
              other.max_scroll_offset_affected_by_page_scale &&
-         is_inner_viewport_scroll_layer ==
-             other.is_inner_viewport_scroll_layer &&
-         is_outer_viewport_scroll_layer ==
-             other.is_outer_viewport_scroll_layer &&
+         scrolls_inner_viewport == other.scrolls_inner_viewport &&
+         scrolls_outer_viewport == other.scrolls_outer_viewport &&
          offset_to_transform_parent == other.offset_to_transform_parent &&
          should_flatten == other.should_flatten &&
          user_scrollable_horizontal == other.user_scrollable_horizontal &&
          user_scrollable_vertical == other.user_scrollable_vertical &&
-         element_id == other.element_id && transform_id == other.transform_id;
+         element_id == other.element_id && transform_id == other.transform_id &&
+         scroll_boundary_behavior == other.scroll_boundary_behavior;
 }
 
 void ScrollNode::AsValueInto(base::trace_event::TracedValue* value) const {
   value->SetInteger("id", id);
   value->SetInteger("parent_id", parent_id);
-  value->SetInteger("owner_id", owner_id);
   value->SetBoolean("scrollable", scrollable);
-  MathUtil::AddToTracedValue("scroll_clip_layer_bounds",
-                             scroll_clip_layer_bounds, value);
+  MathUtil::AddToTracedValue("container_bounds", container_bounds, value);
   MathUtil::AddToTracedValue("bounds", bounds, value);
   MathUtil::AddToTracedValue("offset_to_transform_parent",
                              offset_to_transform_parent, value);
@@ -66,6 +62,8 @@ void ScrollNode::AsValueInto(base::trace_event::TracedValue* value) const {
 
   element_id.AddToTracedValue(value);
   value->SetInteger("transform_id", transform_id);
+  value->SetInteger("scroll_boundary_behavior_x", scroll_boundary_behavior.x);
+  value->SetInteger("scroll_boundary_behavior_y", scroll_boundary_behavior.y);
 }
 
 }  // namespace cc

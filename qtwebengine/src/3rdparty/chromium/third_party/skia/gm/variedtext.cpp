@@ -6,6 +6,7 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkCanvas.h"
 #include "SkPath.h"
 #include "SkTypeface.h"
@@ -13,7 +14,7 @@
 
 /**
  * Draws text with random parameters. The text draws each get their own clip rect. It is also
- * used as a bench to measure how well the GPU backend batches text draws.
+ * used as a bench to measure how well the GPU backend combines draw ops for text draws.
  */
 
 class VariedTextGM : public skiagm::GM {
@@ -115,7 +116,7 @@ protected:
             canvas->save();
                 canvas->clipRect(fClipRects[i]);
                 canvas->translate(fPositions[i].fX, fPositions[i].fY);
-                canvas->drawText(fStrings[i].c_str(), fStrings[i].size(), 0, 0, fPaint);
+                canvas->drawString(fStrings[i], 0, 0, fPaint);
             canvas->restore();
         }
 

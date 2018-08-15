@@ -11,7 +11,6 @@
 #include "printing/printing_context.h"
 
 namespace base {
-class MessageLoop;
 class SequencedTaskRunner;
 }
 
@@ -45,10 +44,9 @@ class PrintJobWorkerOwner
   // Cookie uniquely identifying the PrintedDocument and/or loaded settings.
   virtual int cookie() const = 0;
 
-  // Returns true if the current thread is a thread on which a task
-  // may be run, and false if no task will be run on the current
-  // thread.
-  bool RunsTasksOnCurrentThread() const;
+  // Returns true if tasks posted to this TaskRunner are sequenced
+  // with this call.
+  bool RunsTasksInCurrentSequence() const;
 
   // Posts the given task to be run.
   bool PostTask(const tracked_objects::Location& from_here,

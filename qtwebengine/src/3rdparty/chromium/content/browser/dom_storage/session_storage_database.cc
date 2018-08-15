@@ -33,7 +33,12 @@ const char session_storage_uma_name[] = "SessionStorageDatabase.Open";
 enum SessionStorageUMA {
   SESSION_STORAGE_UMA_SUCCESS,
   SESSION_STORAGE_UMA_RECREATED,
-  SESSION_STORAGE_UMA_FAIL,
+  SESSION_STORAGE_UMA_RECREATE_FAIL,  // Deprecated in M56 (issue 183679)
+  SESSION_STORAGE_UMA_RECREATE_NOT_FOUND,
+  SESSION_STORAGE_UMA_RECREATE_NOT_SUPPORTED,
+  SESSION_STORAGE_UMA_RECREATE_CORRUPTION,
+  SESSION_STORAGE_UMA_RECREATE_INVALID_ARGUMENT,
+  SESSION_STORAGE_UMA_RECREATE_IO_ERROR,
   SESSION_STORAGE_UMA_MAX
 };
 
@@ -352,12 +357,10 @@ void SessionStorageDatabase::OnMemoryDump(
   mad->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
                  base::trace_event::MemoryAllocatorDump::kUnitsBytes, size);
 
-  // Memory is allocated from system allocator (malloc).
-  const char* system_allocator_name =
-      base::trace_event::MemoryDumpManager::GetInstance()
-          ->system_allocator_pool_name();
-  if (system_allocator_name)
-    pmd->AddSuballocation(mad->guid(), system_allocator_name);
+  // All leveldb databases are already dumped by leveldb_env::DBTracker. Add
+  // an edge to avoid double counting.
+  pmd->AddSuballocation(mad->guid(),
+                        leveldb_env::DBTracker::GetMemoryDumpName(db_.get()));
 }
 
 bool SessionStorageDatabase::LazyOpen(bool create_if_needed) {
@@ -378,23 +381,41 @@ bool SessionStorageDatabase::LazyOpen(bool create_if_needed) {
     return false;
   }
 
-  leveldb::DB* db;
-  leveldb::Status s = TryToOpen(&db);
+  leveldb::Status s = TryToOpen(&db_);
   if (!s.ok()) {
     LOG(WARNING) << "Failed to open leveldb in " << file_path_.value()
                  << ", error: " << s.ToString();
-    DCHECK(db == NULL);
 
     // Clear the directory and try again.
     base::DeleteFile(file_path_, true);
-    s = TryToOpen(&db);
+    s = TryToOpen(&db_);
     if (!s.ok()) {
       LOG(WARNING) << "Failed to open leveldb in " << file_path_.value()
                    << ", error: " << s.ToString();
-      UMA_HISTOGRAM_ENUMERATION(session_storage_uma_name,
-                                SESSION_STORAGE_UMA_FAIL,
-                                SESSION_STORAGE_UMA_MAX);
-      DCHECK(db == NULL);
+      if (s.IsNotFound()) {
+        UMA_HISTOGRAM_ENUMERATION(session_storage_uma_name,
+                                  SESSION_STORAGE_UMA_RECREATE_NOT_FOUND,
+                                  SESSION_STORAGE_UMA_MAX);
+      } else if (s.IsNotSupportedError()) {
+        UMA_HISTOGRAM_ENUMERATION(session_storage_uma_name,
+                                  SESSION_STORAGE_UMA_RECREATE_NOT_SUPPORTED,
+                                  SESSION_STORAGE_UMA_MAX);
+      } else if (s.IsCorruption()) {
+        UMA_HISTOGRAM_ENUMERATION(session_storage_uma_name,
+                                  SESSION_STORAGE_UMA_RECREATE_CORRUPTION,
+                                  SESSION_STORAGE_UMA_MAX);
+      } else if (s.IsInvalidArgument()) {
+        UMA_HISTOGRAM_ENUMERATION(session_storage_uma_name,
+                                  SESSION_STORAGE_UMA_RECREATE_INVALID_ARGUMENT,
+                                  SESSION_STORAGE_UMA_MAX);
+      } else if (s.IsIOError()) {
+        UMA_HISTOGRAM_ENUMERATION(session_storage_uma_name,
+                                  SESSION_STORAGE_UMA_RECREATE_IO_ERROR,
+                                  SESSION_STORAGE_UMA_MAX);
+      } else {
+        NOTREACHED();
+      }
+
       db_error_ = true;
       return false;
     }
@@ -406,11 +427,11 @@ bool SessionStorageDatabase::LazyOpen(bool create_if_needed) {
                               SESSION_STORAGE_UMA_SUCCESS,
                               SESSION_STORAGE_UMA_MAX);
   }
-  db_.reset(db);
   return true;
 }
 
-leveldb::Status SessionStorageDatabase::TryToOpen(leveldb::DB** db) {
+leveldb::Status SessionStorageDatabase::TryToOpen(
+    std::unique_ptr<leveldb::DB>* db) {
   leveldb::Options options;
   // The directory exists but a valid leveldb database might not exist inside it
   // (e.g., a subset of the needed files might be missing). Handle this
@@ -421,7 +442,7 @@ leveldb::Status SessionStorageDatabase::TryToOpen(leveldb::DB** db) {
   // Default write_buffer_size is 4 MB but that might leave a 3.999
   // memory allocation in RAM from a log file recovery.
   options.write_buffer_size = 64 * 1024;
-  return leveldb::DB::Open(options, file_path_.AsUTF8Unsafe(), db);
+  return leveldb_env::OpenDB(options, file_path_.AsUTF8Unsafe(), db);
 }
 
 bool SessionStorageDatabase::IsOpen() const {

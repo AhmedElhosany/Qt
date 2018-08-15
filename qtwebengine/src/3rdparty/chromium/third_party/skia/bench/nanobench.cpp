@@ -18,43 +18,42 @@
 #include "CrashHandler.h"
 #include "GMBench.h"
 #include "ProcStats.h"
-#include "ResultsWriter.h"
 #include "RecordingBench.h"
+#include "ResultsWriter.h"
 #include "SKPAnimationBench.h"
 #include "SKPBench.h"
-#include "Stats.h"
-
 #include "SkAndroidCodec.h"
-#include "SkBitmapRegionDecoder.h"
+#include "SkAutoMalloc.h"
 #include "SkBBoxHierarchy.h"
+#include "SkBitmapRegionDecoder.h"
 #include "SkCanvas.h"
 #include "SkCodec.h"
 #include "SkCommonFlags.h"
 #include "SkCommonFlagsConfig.h"
+#include "SkCommonFlagsPathRenderer.h"
 #include "SkData.h"
-#include "SkForceLinking.h"
+#include "SkDebugfTracer.h"
 #include "SkGraphics.h"
 #include "SkLeanWindows.h"
 #include "SkOSFile.h"
 #include "SkOSPath.h"
 #include "SkPictureRecorder.h"
-#include "SkPictureUtils.h"
+#include "SkSVGDOM.h"
+#include "SkScan.h"
 #include "SkString.h"
 #include "SkSurface.h"
-#include "SkSVGDOM.h"
 #include "SkTaskGroup.h"
 #include "SkThreadUtils.h"
+#include "Stats.h"
 #include "ThermalManager.h"
-#include "SkScan.h"
+#include "ios_utils.h"
 
 #include <stdlib.h>
 
+extern bool gSkForceRasterPipelineBlitter;
+
 #ifndef SK_BUILD_FOR_WIN32
     #include <unistd.h>
-#endif
-
-#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
-    #include "nanobenchAndroid.h"
 #endif
 
 #if SK_SUPPORT_GPU
@@ -62,6 +61,7 @@
     #include "GrCaps.h"
     #include "GrContextFactory.h"
     #include "gl/GrGLUtil.h"
+    #include "SkGr.h"
     using sk_gpu_test::GrContextFactory;
     using sk_gpu_test::TestContext;
     std::unique_ptr<GrContextFactory> gGrFactory;
@@ -69,12 +69,14 @@
 
     struct GrContextOptions;
 
-__SK_FORCE_IMAGE_DECODER_LINKING;
-
 static const int kAutoTuneLoops = 0;
 
+#if !defined(__has_feature)
+    #define  __has_feature(x) 0
+#endif
+
 static const int kDefaultLoops =
-#ifdef SK_DEBUG
+#if defined(SK_DEBUG) || __has_feature(address_sanitizer)
     1;
 #else
     kAutoTuneLoops;
@@ -123,11 +125,17 @@ DEFINE_bool(gpuStatsDump, false, "Dump GPU states after each benchmark to json")
 DEFINE_bool(keepAlive, false, "Print a message every so often so that we don't time out");
 DEFINE_string(useThermalManager, "0,1,10,1000", "enabled,threshold,sleepTimeMs,TimeoutMs for "
                                                 "thermalManager\n");
-
+DEFINE_bool(csv, false, "Print status in CSV format");
 DEFINE_string(sourceType, "",
         "Apply usual --match rules to source type: bench, gm, skp, image, etc.");
 DEFINE_string(benchType,  "",
         "Apply usual --match rules to bench type: micro, recording, piping, playback, skcodec, etc.");
+
+DEFINE_bool(forceRasterPipeline, false, "sets gSkForceRasterPipelineBlitter");
+
+#if SK_SUPPORT_GPU
+DEFINE_pathrenderer_flag;
+#endif
 
 static double now_ms() { return SkTime::GetNSecs() * 1e-6; }
 
@@ -151,8 +159,8 @@ bool Target::capturePixels(SkBitmap* bmp) {
     if (!canvas) {
         return false;
     }
-    bmp->setInfo(canvas->imageInfo());
-    if (!canvas->readPixels(bmp, 0, 0)) {
+    bmp->allocPixels(canvas->imageInfo());
+    if (!canvas->readPixels(*bmp, 0, 0)) {
         SkDebugf("Can't read canvas pixels.\n");
         return false;
     }
@@ -190,11 +198,11 @@ struct GPUTarget : public Target {
                                                   0;
         SkSurfaceProps props(flags, SkSurfaceProps::kLegacyFontHost_InitType);
         this->surface = SkSurface::MakeRenderTarget(gGrFactory->get(this->config.ctxType,
-                                                                    this->config.ctxOptions),
+                                                                    this->config.ctxOverrides),
                                                          SkBudgeted::kNo, info,
                                                          this->config.samples, &props);
         this->context = gGrFactory->getContextInfo(this->config.ctxType,
-                                                   this->config.ctxOptions).testContext();
+                                                   this->config.ctxOverrides).testContext();
         if (!this->surface.get()) {
             return false;
         }
@@ -300,7 +308,7 @@ static bool write_canvas_png(Target* target, const SkString& filename) {
         SkDebugf("Can't write %s.\n", filename.c_str());
         return false;
     }
-    if (!SkImageEncoder::EncodeStream(&stream, bmp, SkImageEncoder::kPNG_Type, 100)) {
+    if (!SkEncodeImage(&stream, bmp, SkEncodedImageFormat::kPNG, 100)) {
         SkDebugf("Can't encode a PNG.\n");
         return false;
     }
@@ -331,7 +339,7 @@ static int setup_cpu_bench(const double overhead, Target* target, Benchmark* ben
     //  -------------------------  < FLAGS_overheadGoal
     //  overhead + N * Bench Time
     //
-    // where bench_plus_overhead ≈ overhead + Bench Time.
+    // where bench_plus_overhead ~=~ overhead + Bench Time.
     //
     // Doing some math, we get:
     //
@@ -392,11 +400,11 @@ static int setup_gpu_bench(Target* target, Benchmark* bench, int maxGpuFrameLag)
 }
 
 #if SK_SUPPORT_GPU
-#define kBogusContextType GrContextFactory::kNativeGL_ContextType
-#define kBogusContextOptions GrContextFactory::ContextOptions::kNone
+#define kBogusContextType GrContextFactory::kGL_ContextType
+#define kBogusContextOverrides GrContextFactory::ContextOverrides::kNone
 #else
 #define kBogusContextType 0
-#define kBogusContextOptions 0
+#define kBogusContextOverrides 0
 #endif
 
 static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* configs) {
@@ -407,14 +415,18 @@ static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* c
             return;
 
         const auto ctxType = gpuConfig->getContextType();
-        const auto ctxOptions = gpuConfig->getContextOptions();
+        const auto ctxOverrides = gpuConfig->getContextOverrides();
         const auto sampleCount = gpuConfig->getSamples();
+        const auto colorType = gpuConfig->getColorType();
+        auto colorSpace = gpuConfig->getColorSpace();
 
-        if (const GrContext* ctx = gGrFactory->get(ctxType, ctxOptions)) {
-            const auto maxSampleCount = ctx->caps()->maxSampleCount();
-            if (sampleCount > ctx->caps()->maxSampleCount()) {
-                SkDebugf("Configuration sample count %d exceeds maximum %d.\n",
-                    sampleCount, maxSampleCount);
+        if (const GrContext* ctx = gGrFactory->get(ctxType, ctxOverrides)) {
+            GrPixelConfig grPixConfig = SkImageInfo2GrPixelConfig(colorType, colorSpace,
+                                                                  *ctx->caps());
+            int supportedSampleCount = ctx->caps()->getSampleCount(sampleCount, grPixConfig);
+            if (sampleCount != supportedSampleCount) {
+                SkDebugf("Configuration sample count %d is not a supported sample count.\n",
+                    sampleCount);
                 return;
             }
         } else {
@@ -425,12 +437,12 @@ static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* c
         Config target = {
             gpuConfig->getTag(),
             Benchmark::kGPU_Backend,
-            gpuConfig->getColorType(),
+            colorType,
             kPremul_SkAlphaType,
-            sk_ref_sp(gpuConfig->getColorSpace()),
+            sk_ref_sp(colorSpace),
             sampleCount,
             ctxType,
-            ctxOptions,
+            ctxOverrides,
             gpuConfig->getUseDIText()
         };
 
@@ -443,7 +455,7 @@ static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* c
         if (config->getTag().equals(#name)) {                                  \
             Config config = {                                                  \
                 SkString(#name), Benchmark::backend, color, alpha, colorSpace, \
-                0, kBogusContextType, kBogusContextOptions, false              \
+                0, kBogusContextType, kBogusContextOverrides, false            \
             };                                                                 \
             configs->push_back(config);                                        \
             return;                                                            \
@@ -457,24 +469,15 @@ static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* c
                    kN32_SkColorType, kPremul_SkAlphaType, nullptr)
         CPU_CONFIG(565,  kRaster_Backend,
                    kRGB_565_SkColorType, kOpaque_SkAlphaType, nullptr)
-        auto srgbColorSpace = SkColorSpace::MakeNamed(SkColorSpace::kSRGB_Named);
+        auto srgbColorSpace = SkColorSpace::MakeSRGB();
         CPU_CONFIG(srgb, kRaster_Backend,
                    kN32_SkColorType,  kPremul_SkAlphaType, srgbColorSpace)
-        auto srgbLinearColorSpace = SkColorSpace::MakeNamed(SkColorSpace::kSRGBLinear_Named);
+        auto srgbLinearColorSpace = SkColorSpace::MakeSRGBLinear();
         CPU_CONFIG(f16,  kRaster_Backend,
                    kRGBA_F16_SkColorType, kPremul_SkAlphaType, srgbLinearColorSpace)
     }
 
     #undef CPU_CONFIG
-
-#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
-    if (config->getTag().equals("hwui")) {
-        Config config = { SkString("hwui"), Benchmark::kHWUI_Backend,
-                          kRGBA_8888_SkColorType, kPremul_SkAlphaType, nullptr,
-                          0, kBogusContextType, kBogusContextOptions, false };
-        configs->push_back(config);
-    }
-#endif
 }
 
 // Append all configs that are enabled and supported.
@@ -507,11 +510,6 @@ static Target* is_enabled(Benchmark* bench, const Config& config) {
 #if SK_SUPPORT_GPU
     case Benchmark::kGPU_Backend:
         target = new GPUTarget(config);
-        break;
-#endif
-#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
-    case Benchmark::kHWUI_Backend:
-        target = new HWUITarget(config, bench);
         break;
 #endif
     default:
@@ -637,7 +635,6 @@ public:
         if (!FLAGS_simpleCodec) {
             fColorTypes.push_back(kRGB_565_SkColorType);
             fColorTypes.push_back(kAlpha_8_SkColorType);
-            fColorTypes.push_back(kIndex_8_SkColorType);
             fColorTypes.push_back(kGray_8_SkColorType);
         }
     }
@@ -724,7 +721,7 @@ public:
             SkString name = SkOSPath::Basename(path.c_str());
             fSourceType = "skp";
             fBenchType  = "recording";
-            fSKPBytes = static_cast<double>(SkPictureUtils::ApproximateBytesUsed(pic.get()));
+            fSKPBytes = static_cast<double>(pic->approximateBytesUsed());
             fSKPOps   = pic->approximateOpCount();
             return new RecordingBench(name.c_str(), pic.get(), FLAGS_bbh, FLAGS_lite);
         }
@@ -739,7 +736,7 @@ public:
             SkString name = SkOSPath::Basename(path.c_str());
             fSourceType = "skp";
             fBenchType  = "piping";
-            fSKPBytes = static_cast<double>(SkPictureUtils::ApproximateBytesUsed(pic.get()));
+            fSKPBytes = static_cast<double>(pic->approximateBytesUsed());
             fSKPOps   = pic->approximateOpCount();
             return new PipingBench(name.c_str(), pic.get());
         }
@@ -866,13 +863,8 @@ public:
                 const size_t rowBytes = info.minRowBytes();
                 SkAutoMalloc storage(info.getSafeSize(rowBytes));
 
-                // Used if fCurrentColorType is kIndex_8_SkColorType
-                int colorCount = 256;
-                SkPMColor colors[256];
-
                 const SkCodec::Result result = codec->getPixels(
-                        info, storage.get(), rowBytes, nullptr, colors,
-                        &colorCount);
+                        info, storage.get(), rowBytes);
                 switch (result) {
                     case SkCodec::kSuccess:
                     case SkCodec::kIncompleteInput:
@@ -1110,14 +1102,21 @@ static void start_keepalive() {
     intentionallyLeaked->start();
 }
 
-int nanobench_main();
-int nanobench_main() {
+int main(int argc, char** argv) {
+    SkCommandLineFlags::Parse(argc, argv);
+    if (FLAGS_trace) {
+        SkEventTracer::SetInstance(new SkDebugfTracer);
+    }
+#if defined(SK_BUILD_FOR_IOS)
+    cd_Documents();
+#endif
     SetupCrashHandler();
     SkAutoGraphics ag;
     SkTaskGroup::Enabler enabled(FLAGS_threads);
 
 #if SK_SUPPORT_GPU
     GrContextOptions grContextOpts;
+    grContextOpts.fGpuPathRenderers = CollectGpuPathRenderersFromFlags();
     gGrFactory.reset(new GrContextFactory(grContextOpts));
 #endif
 
@@ -1198,8 +1197,13 @@ int nanobench_main() {
         start_keepalive();
     }
 
-    if (FLAGS_analyticAA) {
-        gSkUseAnalyticAA = true;
+    gSkUseAnalyticAA = FLAGS_analyticAA;
+
+    if (FLAGS_forceAnalyticAA) {
+        gSkForceAnalyticAA = true;
+    }
+    if (FLAGS_forceRasterPipeline) {
+        gSkForceRasterPipelineBlitter = true;
     }
 
     int runs = 0;
@@ -1291,6 +1295,7 @@ int nanobench_main() {
             benchStream.fillCurrentOptions(log.get());
             target->fillOptions(log.get());
             log->metric("min_ms",    stats.min);
+            log->metrics("samples",    samples);
 #if SK_SUPPORT_GPU
             if (gpuStatsDump) {
                 // dump to json, only SKPBench currently returns valid keys / values
@@ -1322,9 +1327,21 @@ int nanobench_main() {
 
                 SkDebugf("%10.2f %s\t%s\t%s\n",
                          stats.median*1e3, mark, bench->getUniqueName(), config);
-            } else {
+            } else if (FLAGS_csv) {
                 const double stddev_percent = 100 * sqrt(stats.var) / stats.mean;
-                SkDebugf("%4d/%-4dMB\t%d\t%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\n"
+                SkDebugf("%g,%g,%g,%g,%g,%s,%s\n"
+                         , stats.min
+                         , stats.median
+                         , stats.mean
+                         , stats.max
+                         , stddev_percent
+                         , config
+                         , bench->getUniqueName()
+                         );
+            } else {
+                const char* format = "%4d/%-4dMB\t%d\t%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\n";
+                const double stddev_percent = 100 * sqrt(stats.var) / stats.mean;
+                SkDebugf(format
                         , sk_tools::getCurrResidentSetSizeMB()
                         , sk_tools::getMaxResidentSetSizeMB()
                         , loops
@@ -1342,7 +1359,7 @@ int nanobench_main() {
 #if SK_SUPPORT_GPU
             if (FLAGS_gpuStats && Benchmark::kGPU_Backend == configs[i].backend) {
                 GrContext* context = gGrFactory->get(configs[i].ctxType,
-                                                     configs[i].ctxOptions);
+                                                     configs[i].ctxOverrides);
                 context->printCacheStats();
                 context->printGpuStats();
             }
@@ -1359,6 +1376,8 @@ int nanobench_main() {
         }
     }
 
+    SkGraphics::PurgeAllCaches();
+
     log->bench("memory_usage", 0,0);
     log->config("meta");
     log->metric("max_rss_mb", sk_tools::getMaxResidentSetSizeMB());
@@ -1371,10 +1390,3 @@ int nanobench_main() {
 
     return 0;
 }
-
-#if !defined SK_BUILD_FOR_IOS
-int main(int argc, char** argv) {
-    SkCommandLineFlags::Parse(argc, argv);
-    return nanobench_main();
-}
-#endif

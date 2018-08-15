@@ -103,12 +103,47 @@ bool SpellingServiceClient::RequestTextCheck(
       kSpellingRequest, type, encoded_text.c_str(), language_code.c_str(),
       country_code.c_str(), api_key.c_str());
 
-  GURL url = GURL(kSpellingServiceURL);
-  net::URLFetcher* fetcher = CreateURLFetcher(url).release();
 #ifndef TOOLKIT_QT
+  GURL url = GURL(kSpellingServiceURL);
+
+  // Create traffic annotation tag.
+  net::NetworkTrafficAnnotationTag traffic_annotation =
+      net::DefineNetworkTrafficAnnotation("spellcheck_lookup", R"(
+        semantics {
+          sender: "Online Spellcheck"
+          description:
+            "Chromium can provide smarter spell-checking, by sending the text "
+            "that the users type into the browser, to Google's servers. This"
+            "allows users to use the same spell-checking technology used by "
+            "Google products, such as Docs. If the feature is enabled, "
+            "Chromium will send the entire contents of text fields as user "
+            "types them to Google, along with the browser’s default language. "
+            "Google returns a list of suggested spellings, which will be "
+            "displayed in the context menu."
+          trigger: "User types text into a text field or asks to correct a "
+                   "misspelled word."
+          data: "Text a user has typed into a text field. No user identifier "
+                "is sent along with the text."
+          destination: GOOGLE_OWNED_SERVICE
+        }
+        policy {
+          cookies_allowed: false
+          setting:
+            "Users can enable or disable this feature via 'Use a web service "
+            "to help resolve spelling errors.' in Chromium's settings under "
+            "Advanced. The feature is disabled by default."
+          chrome_policy {
+            SpellCheckServiceEnabled {
+                policy_options {mode: MANDATORY}
+                SpellCheckServiceEnabled: false
+            }
+          }
+        })");
+
+  net::URLFetcher* fetcher =
+      CreateURLFetcher(url, traffic_annotation).release();
   data_use_measurement::DataUseUserData::AttachToFetcher(
       fetcher, data_use_measurement::DataUseUserData::SPELL_CHECKER);
-#endif
   fetcher->SetRequestContext(
       content::BrowserContext::GetDefaultStoragePartition(context)
           ->GetURLRequestContext());
@@ -118,6 +153,7 @@ bool SpellingServiceClient::RequestTextCheck(
   spellcheck_fetchers_[fetcher] = base::MakeUnique<TextCheckCallbackData>(
       base::WrapUnique(fetcher), callback, text);
   fetcher->Start();
+#endif
   return true;
 }
 
@@ -200,7 +236,7 @@ bool SpellingServiceClient::ParseResponse(
       static_cast<base::DictionaryValue*>(
           base::JSONReader::Read(data, base::JSON_ALLOW_TRAILING_COMMAS)
               .release()));
-  if (!value.get() || !value->IsType(base::Value::TYPE_DICTIONARY))
+  if (!value.get() || !value->IsType(base::Value::Type::DICTIONARY))
     return false;
 
   // Check for errors from spelling service.
@@ -273,6 +309,8 @@ void SpellingServiceClient::OnURLFetchComplete(const net::URLFetcher* source) {
 }
 
 std::unique_ptr<net::URLFetcher> SpellingServiceClient::CreateURLFetcher(
-    const GURL& url) {
-  return net::URLFetcher::Create(url, net::URLFetcher::POST, this);
+    const GURL& url,
+    net::NetworkTrafficAnnotationTag traffic_annotation) {
+  return net::URLFetcher::Create(url, net::URLFetcher::POST, this,
+                                 traffic_annotation);
 }

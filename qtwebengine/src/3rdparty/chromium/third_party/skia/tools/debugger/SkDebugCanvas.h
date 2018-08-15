@@ -16,6 +16,7 @@
 #include "SkPicture.h"
 #include "SkString.h"
 #include "SkTArray.h"
+#include "SkVertices.h"
 #include "UrlDataManager.h"
 
 class GrAuditTrail;
@@ -25,7 +26,7 @@ class SkDebugCanvas : public SkCanvas {
 public:
     SkDebugCanvas(int width, int height);
 
-    virtual ~SkDebugCanvas();
+    ~SkDebugCanvas() override;
 
     void toggleFilter(bool toggle) { fFilter = toggle; }
 
@@ -47,11 +48,9 @@ public:
 
     SkColor getClipVizColor() const { return fClipVizColor; }
 
-    void setDrawGpuBatchBounds(bool drawGpuBatchBounds) {
-        fDrawGpuBatchBounds = drawGpuBatchBounds;
-    }
+    void setDrawGpuOpBounds(bool drawGpuOpBounds) { fDrawGpuOpBounds = drawGpuOpBounds; }
 
-    bool getDrawGpuBatchBounds() const { return fDrawGpuBatchBounds; }
+    bool getDrawGpuOpBounds() const { return fDrawGpuOpBounds; }
 
     bool getAllowSimplifyClip() const { return fAllowSimplifyClip; }
 
@@ -72,7 +71,7 @@ public:
         Executes the draw calls up to the specified index.
         @param canvas  The canvas being drawn to
         @param index  The index of the final command being executed
-        @param m an optional Mth gpu batch to highlight, or -1
+        @param m an optional Mth gpu op to highlight, or -1
      */
     void drawTo(SkCanvas *canvas, int index, int m = -1);
 
@@ -164,11 +163,11 @@ public:
      */
     Json::Value toJSON(UrlDataManager &urlDataManager, int n, SkCanvas *);
 
-    Json::Value toJSONBatchList(int n, SkCanvas *);
+    Json::Value toJSONOpList(int n, SkCanvas*);
 
-////////////////////////////////////////////////////////////////////////////////
-// Inherited from SkCanvas
-////////////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////////////
+    // Inherited from SkCanvas
+    ////////////////////////////////////////////////////////////////////////////////
 
     static const int kVizImageHeight = 256;
     static const int kVizImageWidth = 256;
@@ -177,20 +176,12 @@ public:
 
     bool isClipRect() const override { return true; }
 
-    bool getClipBounds(SkRect *bounds) const override {
-        if (bounds) {
-            bounds->setXYWH(0, 0,
-                            SkIntToScalar(this->imageInfo().width()),
-                            SkIntToScalar(this->imageInfo().height()));
-        }
-        return true;
+    SkRect onGetLocalClipBounds() const override {
+        return SkRect::MakeIWH(this->imageInfo().width(), this->imageInfo().height());
     }
 
-    bool getClipDeviceBounds(SkIRect *bounds) const override {
-        if (bounds) {
-            bounds->setLargest();
-        }
-        return true;
+    SkIRect onGetDeviceClipBounds() const override {
+        return SkIRect::MakeWH(this->imageInfo().width(), this->imageInfo().height());
     }
 
 protected:
@@ -203,12 +194,6 @@ protected:
     void didConcat(const SkMatrix &) override;
 
     void didSetMatrix(const SkMatrix &) override;
-
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    void didTranslateZ(SkScalar) override;
-#else
-    void didTranslateZ(SkScalar);
-#endif
 
     void onDrawAnnotation(const SkRect&, const char[], SkData*) override;
     void onDrawDRRect(const SkRRect&, const SkRRect&, const SkPaint&) override;
@@ -234,38 +219,24 @@ protected:
     void onDrawArc(const SkRect&, SkScalar, SkScalar, bool, const SkPaint&) override;
     void onDrawRRect(const SkRRect&, const SkPaint&) override;
     void onDrawPoints(PointMode, size_t count, const SkPoint pts[], const SkPaint&) override;
-    void onDrawVertices(VertexMode vmode, int vertexCount,
-                        const SkPoint vertices[], const SkPoint texs[],
-                        const SkColor colors[], SkBlendMode,
-                        const uint16_t indices[], int indexCount,
-                        const SkPaint&) override;
+    void onDrawVerticesObject(const SkVertices*, SkBlendMode, const SkPaint&) override;
     void onDrawPath(const SkPath&, const SkPaint&) override;
     void onDrawBitmap(const SkBitmap&, SkScalar left, SkScalar top, const SkPaint*) override;
     void onDrawBitmapRect(const SkBitmap&, const SkRect* src, const SkRect& dst, const SkPaint*,
                           SrcRectConstraint) override;
     void onDrawImage(const SkImage*, SkScalar left, SkScalar top, const SkPaint*) override;
+    void onDrawImageLattice(const SkImage* image, const Lattice& lattice,
+                            const SkRect& dst, const SkPaint* paint) override;
     void onDrawImageRect(const SkImage*, const SkRect* src, const SkRect& dst,
                          const SkPaint*, SrcRectConstraint) override;
     void onDrawBitmapNine(const SkBitmap&, const SkIRect& center, const SkRect& dst,
                           const SkPaint*) override;
-    void onClipRect(const SkRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipRRect(const SkRRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipPath(const SkPath&, ClipOp, ClipEdgeStyle) override;
-    void onClipRegion(const SkRegion& region, ClipOp) override;
+    void onClipRect(const SkRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRRect(const SkRRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipPath(const SkPath&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRegion(const SkRegion& region, SkClipOp) override;
 
     void onDrawPicture(const SkPicture*, const SkMatrix*, const SkPaint*) override;
-
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    void onDrawShadowedPicture(const SkPicture*,
-                               const SkMatrix*,
-                               const SkPaint*,
-                               const SkShadowParams& params) override;
-#else
-    void onDrawShadowedPicture(const SkPicture*,
-                               const SkMatrix*,
-                               const SkPaint*,
-                               const SkShadowParams& params);
-#endif
 
     void markActiveCommands(int index);
 
@@ -286,7 +257,7 @@ private:
     bool fOverrideFilterQuality;
     SkFilterQuality fFilterQuality;
     SkColor fClipVizColor;
-    bool fDrawGpuBatchBounds;
+    bool fDrawGpuOpBounds;
 
     /**
         The active saveLayer commands at a given point in the renderering.
@@ -308,7 +279,7 @@ private:
 
     void resetClipStackData() { fClipStackData.reset(); fCalledAddStackData = false; }
 
-    void addClipStackData(const SkPath& devPath, const SkPath& operand, ClipOp elementOp);
+    void addClipStackData(const SkPath& devPath, const SkPath& operand, SkClipOp elementOp);
     void addPathData(const SkPath& path, const char* pathName);
     bool lastClipStackData(const SkPath& devPath);
     void outputConicPoints(const SkPoint* pts, SkScalar weight);
@@ -318,7 +289,7 @@ private:
 
     GrAuditTrail* getAuditTrail(SkCanvas*);
 
-    void drawAndCollectBatches(int n, SkCanvas*);
+    void drawAndCollectOps(int n, SkCanvas*);
     void cleanupAuditTrail(SkCanvas*);
 
     typedef SkCanvas INHERITED;

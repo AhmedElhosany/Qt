@@ -31,101 +31,92 @@
 #ifndef InProcessWorkerObjectProxy_h
 #define InProcessWorkerObjectProxy_h
 
+#include <memory>
 #include "core/CoreExport.h"
 #include "core/dom/MessagePort.h"
+#include "core/workers/ThreadedObjectProxyBase.h"
 #include "core/workers/WorkerReportingProxy.h"
 #include "platform/Timer.h"
 #include "platform/heap/Handle.h"
-#include "wtf/PassRefPtr.h"
-#include <memory>
+#include "platform/wtf/PassRefPtr.h"
+#include "platform/wtf/WeakPtr.h"
 
 namespace blink {
 
-class ConsoleMessage;
-class ExecutionContext;
-class ExecutionContextTask;
 class InProcessWorkerMessagingProxy;
 class ParentFrameTaskRunners;
+class ThreadedMessagingProxyBase;
 class WorkerGlobalScope;
 class WorkerOrWorkletGlobalScope;
+class WorkerThread;
 
-// A proxy to talk to the worker object. This object is created on the
-// parent context thread (i.e. usually the main thread), passed on to
-// the worker thread, and used to proxy messages to the
-// InProcessWorkerMessagingProxy on the parent context thread.
+// A proxy to talk to the parent worker object. See class comments on
+// ThreadedObjectProxyBase.h for lifetime of this class etc.
 //
 // This also checks pending activities on WorkerGlobalScope and reports a result
 // to the message proxy when an exponential backoff timer is fired.
-//
-// Used only by in-process workers (DedicatedWorker and CompositorWorker.)
-class CORE_EXPORT InProcessWorkerObjectProxy : public WorkerReportingProxy {
+class CORE_EXPORT InProcessWorkerObjectProxy : public ThreadedObjectProxyBase {
   USING_FAST_MALLOC(InProcessWorkerObjectProxy);
   WTF_MAKE_NONCOPYABLE(InProcessWorkerObjectProxy);
 
  public:
-  static std::unique_ptr<InProcessWorkerObjectProxy> create(
-      const WeakPtr<InProcessWorkerMessagingProxy>&);
+  static std::unique_ptr<InProcessWorkerObjectProxy> Create(
+      InProcessWorkerMessagingProxy*,
+      ParentFrameTaskRunners*);
   ~InProcessWorkerObjectProxy() override;
 
-  void postMessageToWorkerObject(PassRefPtr<SerializedScriptValue>,
-                                 std::unique_ptr<MessagePortChannelArray>);
-  void postTaskToMainExecutionContext(std::unique_ptr<ExecutionContextTask>);
-  void confirmMessageFromWorkerObject();
-  void startPendingActivityTimer();
+  void PostMessageToWorkerObject(PassRefPtr<SerializedScriptValue>,
+                                 MessagePortChannelArray);
+  void ProcessUnhandledException(int exception_id, WorkerThread*);
+  void ProcessMessageFromWorkerObject(PassRefPtr<SerializedScriptValue> message,
+                                      MessagePortChannelArray channels,
+                                      WorkerThread*);
 
-  // WorkerReportingProxy overrides.
-  void reportException(const String& errorMessage,
+  // ThreadedObjectProxyBase overrides.
+  void ReportException(const String& error_message,
                        std::unique_ptr<SourceLocation>,
-                       int exceptionId) override;
-  void reportConsoleMessage(MessageSource,
-                            MessageLevel,
-                            const String& message,
-                            SourceLocation*) override;
-  void postMessageToPageInspector(const String&) override;
-  void didCreateWorkerGlobalScope(WorkerOrWorkletGlobalScope*) override;
-  void didEvaluateWorkerScript(bool success) override;
-  void didCloseWorkerGlobalScope() override;
-  void willDestroyWorkerGlobalScope() override;
-  void didTerminateWorkerThread() override;
+                       int exception_id) override;
+  void DidCreateWorkerGlobalScope(WorkerOrWorkletGlobalScope*) override;
+  void DidEvaluateWorkerScript(bool success) override;
+  void WillDestroyWorkerGlobalScope() override;
 
  protected:
-  InProcessWorkerObjectProxy(const WeakPtr<InProcessWorkerMessagingProxy>&);
-  virtual ExecutionContext* getExecutionContext();
+  InProcessWorkerObjectProxy(InProcessWorkerMessagingProxy*,
+                             ParentFrameTaskRunners*);
+
+  CrossThreadWeakPersistent<ThreadedMessagingProxyBase> MessagingProxyWeakPtr()
+      final;
 
  private:
-  friend class InProcessWorkerMessagingProxyForTest;
+  friend class InProcessWorkerObjectProxyForTest;
 
-  void checkPendingActivity(TimerBase*);
-
-  // Returns the parent frame's task runners.
-  ParentFrameTaskRunners* getParentFrameTaskRunners();
-
-  // This object always outlives this proxy.
-  InProcessWorkerMessagingProxy* m_messagingProxy;
+  void StartPendingActivityTimer();
+  void CheckPendingActivity(TimerBase*);
 
   // No guarantees about the lifetimes of tasks posted by this proxy wrt the
   // InProcessWorkerMessagingProxy so a weak pointer must be used when posting
   // the tasks.
-  WeakPtr<InProcessWorkerMessagingProxy> m_messagingProxyWeakPtr;
+  CrossThreadWeakPersistent<InProcessWorkerMessagingProxy>
+      messaging_proxy_weak_ptr_;
 
   // Used for checking pending activities on the worker global scope. This is
   // cancelled when the worker global scope is destroyed.
-  std::unique_ptr<Timer<InProcessWorkerObjectProxy>> m_timer;
+  std::unique_ptr<TaskRunnerTimer<InProcessWorkerObjectProxy>> timer_;
 
   // The default interval duration of the timer. This is usually
   // kDefaultIntervalInSec but made as a member variable for testing.
-  double m_defaultIntervalInSec;
+  double default_interval_in_sec_;
 
   // The next interval duration of the timer. This is initially set to
   // |m_defaultIntervalInSec| and exponentially increased up to
   // |m_maxIntervalInSec|.
-  double m_nextIntervalInSec;
+  double next_interval_in_sec_;
 
   // The max interval duration of the timer. This is usually kMaxIntervalInSec
   // but made as a member variable for testing.
-  double m_maxIntervalInSec;
+  double max_interval_in_sec_;
 
-  CrossThreadPersistent<WorkerGlobalScope> m_workerGlobalScope;
+  CrossThreadPersistent<WorkerGlobalScope> worker_global_scope_;
 };
 
 }  // namespace blink

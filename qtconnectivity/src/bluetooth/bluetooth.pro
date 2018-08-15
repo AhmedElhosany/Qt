@@ -6,7 +6,7 @@ QMAKE_DOCS = $$PWD/doc/qtbluetooth.qdocconf
 OTHER_FILES += doc/src/*.qdoc   # show .qdoc files in Qt Creator
 
 PUBLIC_HEADERS += \
-    qbluetoothglobal.h \
+    qtbluetoothglobal.h \
     qbluetoothaddress.h\
     qbluetoothhostinfo.h \
     qbluetoothuuid.h\
@@ -33,6 +33,7 @@ PUBLIC_HEADERS += \
     qlowenergycontroller.h
 
 PRIVATE_HEADERS += \
+    qtbluetoothglobal_p.h \
     qbluetoothaddress_p.h\
     qbluetoothhostinfo_p.h \
     qbluetoothdeviceinfo_p.h\
@@ -76,6 +77,11 @@ SOURCES += \
     qlowenergydescriptordata.cpp \
     qlowenergycontroller.cpp \
     qlowenergyserviceprivate.cpp
+
+win32 {
+    WINDOWS_SDK_VERSION_STRING = $$(WindowsSDKVersion)
+    WINDOWS_SDK_VERSION = $$member($$list($$split(WINDOWS_SDK_VERSION_STRING, .)), 2)
+}
 
 qtConfig(bluez) {
     QT_PRIVATE = concurrent
@@ -164,7 +170,6 @@ qtConfig(bluez) {
     SOURCES -= qlowenergyservice_p.cpp
     SOURCES -= qlowenergyservice.cpp
     SOURCES -= qlowenergycontroller.cpp
-    SOURCES -= qlowenergycontroller_p.cpp
 } else:ios|tvos {
     DEFINES += QT_IOS_BLUETOOTH
     LIBS_PRIVATE += -framework Foundation -framework CoreBluetooth
@@ -183,15 +188,19 @@ qtConfig(bluez) {
         qbluetoothserviceinfo_p.cpp \
         qbluetoothservicediscoveryagent_p.cpp \
         qbluetoothsocket_p.cpp \
-        qbluetoothserver_p.cpp \
-        qlowenergycontroller_p.cpp
+        qbluetoothserver_p.cpp
 
     SOURCES -= qbluetoothdevicediscoveryagent.cpp
-    SOURCES -= qlowenergycontroller_p.cpp
     SOURCES -= qlowenergyservice.cpp
     SOURCES -= qlowenergycontroller.cpp
-} else:winrt {
+} else: qtConfig(winrt_bt) {
     DEFINES += QT_WINRT_BLUETOOTH
+    !winrt {
+        SOURCES += qbluetoothutils_win.cpp
+        DEFINES += CLASSIC_APP_BUILD
+        LIBS += runtimeobject.lib user32.lib
+    }
+
     QT += core-private
 
     SOURCES += \
@@ -203,11 +212,9 @@ qtConfig(bluez) {
         qbluetoothsocket_winrt.cpp \
         qlowenergycontroller_winrt.cpp
 
-    WINRT_SDK_VERSION_STRING = $$(UCRTVersion)
-    WINRT_SDK_VERSION = $$member($$list($$split(WINRT_SDK_VERSION_STRING, .)), 2)
-    lessThan(WINRT_SDK_VERSION, 14393) {
+    lessThan(WINDOWS_SDK_VERSION, 14393) {
         DEFINES += QT_WINRT_LIMITED_SERVICEDISCOVERY
-        DEFINES += QT_UCRTVERSION=$$WINRT_SDK_VERSION
+        DEFINES += QT_UCRTVERSION=$$WINDOWS_SDK_VERSION
     }
 } else {
     message("Unsupported Bluetooth platform, will not build a working QtBluetooth library.")

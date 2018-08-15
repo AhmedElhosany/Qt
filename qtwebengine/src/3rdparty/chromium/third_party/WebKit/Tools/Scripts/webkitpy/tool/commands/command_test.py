@@ -29,14 +29,14 @@
 import optparse
 import unittest
 
-from webkitpy.common.system.outputcapture import OutputCapture
+from webkitpy.common.system.output_capture import OutputCapture
 from webkitpy.tool.mock_tool import MockWebKitPatch
 
 
 class CommandsTest(unittest.TestCase):
 
     def assert_execute_outputs(
-            self, command, args=None, expected_stdout="", expected_stderr="",
+            self, command, args=None, expected_stdout='', expected_stderr='',
             expected_exception=None, expected_logs=None, options=optparse.Values(), tool=MockWebKitPatch()):
         args = args or []
         options.blocks = None

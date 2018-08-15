@@ -46,7 +46,7 @@ CXXFLAGS_BARE = $(CFLAGS_BARE)
 CXXFLAGS = $(CFLAGS)
 
 LFLAGS	    =
-LIBS	    = ole32.lib advapi32.lib shell32.lib
+LIBS        = ole32.lib advapi32.lib shell32.lib netapi32.lib
 ADDCLEAN    = qmake.pdb qmake.ilk
 
 #qmake code
@@ -93,6 +93,7 @@ QTOBJS= \
 	qlocale.obj \
 	qlocale_tools.obj \
 	qlocale_win.obj \
+	qversionnumber.obj \
 	qmalloc.obj \
 	qmap.obj \
 	qoperatingsystemversion.obj \
@@ -108,6 +109,7 @@ QTOBJS= \
 	qtextstream.obj \
 	qdatastream.obj \
 	quuid.obj \
+	qrandom.obj \
 	qsettings.obj \
 	qvariant.obj \
 	qsettings_win.obj \

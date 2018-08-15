@@ -51,11 +51,15 @@
 #include <QtCore/qvector.h>
 #include <QtCore/qpointer.h>
 
+#include <QtQuickTemplates2/private/qquickmenu_p.h>
 #include <QtQuickTemplates2/private/qquickpopup_p_p.h>
 
 QT_BEGIN_NAMESPACE
 
+class QQuickAction;
+class QQmlComponent;
 class QQmlObjectModel;
+class QQuickMenuItem;
 
 class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickMenuPrivate : public QQuickPopupPrivate
 {
@@ -64,10 +68,21 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickMenuPrivate : public QQuickPopupPri
 public:
     QQuickMenuPrivate();
 
+    static QQuickMenuPrivate *get(QQuickMenu *menu)
+    {
+        return menu->d_func();
+    }
+
     QQuickItem *itemAt(int index) const;
     void insertItem(int index, QQuickItem *item);
     void moveItem(int from, int to);
     void removeItem(int index, QQuickItem *item);
+
+    QQuickItem *beginCreateItem();
+    void completeCreateItem();
+
+    QQuickItem *createItem(QQuickMenu *menu);
+    QQuickItem *createItem(QQuickAction *action);
 
     void resizeItem(QQuickItem *item);
     void resizeItems();
@@ -78,23 +93,43 @@ public:
     void itemDestroyed(QQuickItem *item) override;
     void itemGeometryChanged(QQuickItem *, QQuickGeometryChange change, const QRectF &diff) override;
 
-    void onItemPressed();
+    void reposition() override;
+    bool prepareEnterTransition() override;
+    bool prepareExitTransition() override;
+    bool blockInput(QQuickItem *item, const QPointF &point) const override;
+
+    void onItemHovered();
+    void onItemTriggered();
     void onItemActiveFocusChanged();
 
-    int currentIndex() const;
-    void setCurrentIndex(int index);
+    QQuickMenu *currentSubMenu() const;
+    void setParentMenu(QQuickMenu *parent);
+    void resolveParentItem();
 
-    void activateNextItem();
-    void activatePreviousItem();
+    void propagateKeyEvent(QKeyEvent *event);
+
+    void startHoverTimer();
+    void stopHoverTimer();
+
+    void setCurrentIndex(int index, Qt::FocusReason reason);
+    bool activateNextItem();
+    bool activatePreviousItem();
 
     static void contentData_append(QQmlListProperty<QObject> *prop, QObject *obj);
     static int contentData_count(QQmlListProperty<QObject> *prop);
     static QObject *contentData_at(QQmlListProperty<QObject> *prop, int index);
     static void contentData_clear(QQmlListProperty<QObject> *prop);
 
+    bool cascade;
+    int hoverTimer;
+    int currentIndex;
+    qreal overlap;
+    QPointer<QQuickMenu> parentMenu;
+    QPointer<QQuickMenuItem> currentItem;
     QQuickItem *contentItem; // TODO: cleanup
     QVector<QObject *> contentData;
     QQmlObjectModel *contentModel;
+    QQmlComponent *delegate;
     QString title;
 };
 

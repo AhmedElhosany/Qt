@@ -4,6 +4,7 @@
 
 #include "build/build_config.h"
 #include "content/public/common/content_switches.h"
+#include "media/media_features.h"
 
 namespace switches {
 
@@ -30,6 +31,10 @@ const char kAgcStartupMinVolume[] = "agc-startup-min-volume";
 // override for developers who need the old behavior for testing.
 const char kAllowFileAccessFromFiles[]      = "allow-file-access-from-files";
 
+// Enables TLS/SSL errors on localhost to be ignored (no interstitial,
+// no blocking of requests).
+const char kAllowInsecureLocalhost[] = "allow-insecure-localhost";
+
 // Allows loopback interface to be added in network list for peer connection.
 const char kAllowLoopbackInPeerConnection[] =
     "allow-loopback-in-peer-connection";
@@ -51,9 +56,9 @@ const char kAllowSandboxDebugging[]         = "allow-sandbox-debugging";
 const char kAndroidFontsPath[]          = "android-fonts-path";
 
 // Set blink settings. Format is <name>[=<value],<name>[=<value>],...
-// The names are declared in Settings.in. For boolean type, use "true", "false",
-// or omit '=<value>' part to set to true. For enum type, use the int value of
-// the enum value. Applied after other command line flags and prefs.
+// The names are declared in Settings.json5. For boolean type, use "true",
+// "false", or omit '=<value>' part to set to true. For enum type, use the int
+// value of the enum value. Applied after other command line flags and prefs.
 const char kBlinkSettings[]                 = "blink-settings";
 
 // Causes the browser process to crash on startup.
@@ -104,7 +109,7 @@ const char kDisableBackgroundTimerThrottling[] =
     "disable-background-timer-throttling";
 
 // Disable one or more Blink runtime-enabled features.
-// Use names from RuntimeEnabledFeatures.in, separated by commas.
+// Use names from RuntimeEnabledFeatures.json5, separated by commas.
 // Applied after kEnableBlinkFeatures, and after other flags that change these
 // features.
 const char kDisableBlinkFeatures[]          = "disable-blink-features";
@@ -132,10 +137,6 @@ const char kDisableFlash3d[]                = "disable-flash-3d";
 // Disable Stage3D inside of flapper.
 const char kDisableFlashStage3d[]           = "disable-flash-stage3d";
 
-// Disable user gesture requirement for media playback.
-const char kDisableGestureRequirementForMediaPlayback[] =
-    "disable-gesture-requirement-for-media-playback";
-
 // Disable user gesture requirement for presentation.
 const char kDisableGestureRequirementForPresentation[] =
     "disable-gesture-requirement-for-presentation";
@@ -162,13 +163,6 @@ const char kDisableGpuMemoryBufferVideoFrames[] =
 // For tests and platforms where software fallback is disabled.
 const char kDisableGpuProcessCrashLimit[] = "disable-gpu-process-crash-limit";
 
-// Disable async GL worker context. Overrides kEnableGpuAsyncWorkerContext.
-const char kDisableGpuAsyncWorkerContext[] = "disable-gpu-async-worker-context";
-
-// Disable GPU rasterization, i.e. rasterize on the CPU only.
-// Overrides the kEnableGpuRasterization and kForceGpuRasterization flags.
-const char kDisableGpuRasterization[]       = "disable-gpu-rasterization";
-
 // When using CPU rasterizing disable low resolution tiling. This uses
 // less power, particularly during animations, but more white may be seen
 // during fast scrolling especially on slower devices.
@@ -177,18 +171,10 @@ const char kDisableLowResTiling[] = "disable-low-res-tiling";
 // Disable the GPU process sandbox.
 const char kDisableGpuSandbox[]             = "disable-gpu-sandbox";
 
-// Disable in-process stack traces.
-const char kDisableInProcessStackTraces[]   = "disable-in-process-stack-traces";
-
 // Suppresses hang monitor dialogs in renderer processes.  This may allow slow
 // unload handlers on a page to prevent the tab from closing, but the Task
 // Manager can be used to terminate the offending process in this case.
 const char kDisableHangMonitor[]            = "disable-hang-monitor";
-
-// Disable hiding the close buttons of inactive tabs when the tabstrip is in
-// stacked mode.
-const char kDisableHideInactiveStackedTabCloseButtons[] =
-    "disable-hide-inactive-stacked-tab-close-buttons";
 
 // Disable the RenderThread's HistogramCustomizer.
 const char kDisableHistogramCustomizer[]    = "disable-histogram-customizer";
@@ -214,12 +200,11 @@ const char kDisableLogging[]                = "disable-logging";
 // Disables using CODECAPI_AVLowLatencyMode when creating DXVA decoders.
 const char kDisableLowLatencyDxva[]         = "disable-low-latency-dxva";
 
+// Dont use a Mojo-based LocalStorage implementation.
+const char kDisableMojoLocalStorage[] = "disable-mojo-local-storage";
+
 // Disables usage of the namespace sandbox.
 const char kDisableNamespaceSandbox[]       = "disable-namespace-sandbox";
-
-// Disables native GPU memory buffer support.
-const char kDisableNativeGpuMemoryBuffers[] =
-    "disable-native-gpu-memory-buffers";
 
 // Disables the Web Notification and the Push APIs.
 const char kDisableNotifications[]          = "disable-notifications";
@@ -269,6 +254,10 @@ const char kDisableRendererAccessibility[]  = "disable-renderer-accessibility";
 // Prevent renderer process backgrounding when set.
 const char kDisableRendererBackgrounding[]  = "disable-renderer-backgrounding";
 
+// No not manage renderer process priority at all when set.
+const char kDisableRendererPriorityManagement[] =
+    "disable-renderer-priority-management";
+
 // Whether the resize lock is disabled. Default is false. This is generally only
 // useful for tests that want to force disabling.
 const char kDisableResizeLock[] = "disable-resize-lock";
@@ -281,6 +270,15 @@ const char kDisableSetuidSandbox[]          = "disable-setuid-sandbox";
 
 // Disable shared workers.
 const char kDisableSharedWorkers[]          = "disable-shared-workers";
+
+// Do not use runtime-detected high-end CPU optimizations in Skia.  This is
+// useful for forcing a baseline code path for e.g. layout tests.
+const char kDisableSkiaRuntimeOpts[]        = "disable-skia-runtime-opts";
+
+// Disable paint invalidation based on slimming paint.
+// See kEnableSlimmingPaintInvalidation.
+const char kDisableSlimmingPaintInvalidation[] =
+    "disable-slimming-paint-invalidation";
 
 // Disable smooth scrolling for testing.
 const char kDisableSmoothScrolling[]        = "disable-smooth-scrolling";
@@ -330,6 +328,10 @@ const char kDisable2dCanvasClipAntialiasing[] = "disable-2d-canvas-clip-aa";
 const char kDisableAcceleratedJpegDecoding[] =
     "disable-accelerated-jpeg-decoding";
 
+// Logs Runtime Call Stats for Blink. --single-process also needs to be
+// used along with this for the stats to be logged.
+const char kDumpBlinkRuntimeCallStats[] = "dump-blink-runtime-call-stats";
+
 // Enables LCD text.
 const char kEnableLCDText[]                 = "enable-lcd-text";
 
@@ -342,7 +344,7 @@ const char kEnablePreferCompositingToLCDText[] =
     "enable-prefer-compositing-to-lcd-text";
 
 // Enable one or more Blink runtime-enabled features.
-// Use names from RuntimeEnabledFeatures.in, separated by commas.
+// Use names from RuntimeEnabledFeatures.json5, separated by commas.
 // Applied before kDisableBlinkFeatures, and after other flags that change these
 // features.
 const char kEnableBlinkFeatures[]           = "enable-blink-features";
@@ -358,11 +360,6 @@ const char kEnableDisplayList2dCanvas[]     = "enable-display-list-2d-canvas";
 const char kForceDisplayList2dCanvas[]      = "force-display-list-2d-canvas";
 const char kDisableDisplayList2dCanvas[]    = "disable-display-list-2d-canvas";
 
-// Enables dynamic rendering pipeline switching to optimize the
-// performance of 2d canvas
-const char kEnableCanvas2dDynamicRenderingModeSwitching[] =
-    "enable-canvas-2d-dynamic-rendering-mode-switching";
-
 // Enable experimental canvas features, e.g. canvas 2D context attributes
 const char kEnableExperimentalCanvasFeatures[] =
     "enable-experimental-canvas-features";
@@ -370,6 +367,10 @@ const char kEnableExperimentalCanvasFeatures[] =
 // Enables Web Platform features that are in development.
 const char kEnableExperimentalWebPlatformFeatures[] =
     "enable-experimental-web-platform-features";
+
+// Disables all RuntimeEnabledFeatures that can be enabled via OriginTrials.
+const char kDisableOriginTrialControlledBlinkFeatures[] =
+    "disable-origin-trial-controlled-blink-features";
 
 // Comma-separated list of feature names to enable. See also kDisableFeatures.
 const char kEnableFeatures[] = "enable-features";
@@ -395,11 +396,6 @@ const char kEnableGpuMemoryBufferCompositorResources[] =
 const char kEnableGpuMemoryBufferVideoFrames[] =
     "enable-gpu-memory-buffer-video-frames";
 
-// Allow heuristics to determine when a layer tile should be drawn with the
-// Skia GPU backend. Only valid with GPU accelerated compositing +
-// impl-side painting.
-const char kEnableGpuRasterization[]        = "enable-gpu-rasterization";
-
 // When using CPU rasterizing generate low resolution tiling. Low res
 // tiles may be displayed during fast scrolls especially on slower devices.
 const char kEnableLowResTiling[] = "enable-low-res-tiling";
@@ -408,11 +404,11 @@ const char kEnableLowResTiling[] = "enable-low-res-tiling";
 // builds.
 const char kEnableLogging[]                 = "enable-logging";
 
-// Enables the memory benchmarking extension
-const char kEnableMemoryBenchmarking[]      = "enable-memory-benchmarking";
-
-// Enables the network information API.
-const char kEnableNetworkInformation[]      = "enable-network-information";
+// Enables the type, downlinkMax attributes of the NetInfo API. Also, enables
+// triggering of change attribute of the NetInfo API when there is a change in
+// the connection type.
+const char kEnableNetworkInformationDownlinkMax[] =
+    "enable-network-information-downlink-max";
 
 // Disables the video decoder from drawing to an NV12 textures instead of ARGB.
 const char kDisableNv12DxgiVideo[] = "disable-nv12-dxgi-video";
@@ -430,19 +426,14 @@ const char kEnablePluginPlaceholderTesting[] =
 // also applys to workers.
 const char kEnablePreciseMemoryInfo[] = "enable-precise-memory-info";
 
+// Enables PrintBrowser mode, in which everything renders as though printed.
+const char kEnablePrintBrowser[] = "enable-print-browser";
+
 // Enables RGBA_4444 textures.
 const char kEnableRGBA4444Textures[] = "enable-rgba-4444-textures";
 
 // Set options to cache V8 data. (off, preparse data, or code)
 const char kV8CacheOptions[] = "v8-cache-options";
-
-// Signals that the V8 natives file has been transfered to the child process
-// by a file descriptor.
-const char kV8NativesPassedByFD[] = "v8-natives-passed-by-fd";
-
-// Signals that the V8 startup snapshot file has been transfered to the child
-// process by a file descriptor.
-const char kV8SnapshotPassedByFD[] = "v8-snapshot-passed-by-fd";
 
 // Set strategies to cache V8 data in CacheStorage. (off, normal, or aggressive)
 const char kV8CacheStrategiesForCacheStorage[] =
@@ -457,6 +448,11 @@ const char kEnableSkiaBenchmarking[]        = "enable-skia-benchmarking";
 
 // Enables slimming paint phase 2: http://www.chromium.org/blink/slimming-paint
 const char kEnableSlimmingPaintV2[]         = "enable-slimming-paint-v2";
+
+// Enables paint invalidation based on slimming paint but without
+// the full slimming paint v2 compositing code. See: https://goo.gl/eQczQW
+const char kEnableSlimmingPaintInvalidation[] =
+    "enable-slimming-paint-invalidation";
 
 // On platforms that support it, enables smooth scroll animation.
 const char kEnableSmoothScrolling[]         = "enable-smooth-scrolling";
@@ -575,9 +571,6 @@ const char kGpuSandboxFailuresFatal[]       = "gpu-sandbox-failures-fatal";
 // Causes the GPU process to display a dialog on launch.
 const char kGpuStartupDialog[]              = "gpu-startup-dialog";
 
-// Ignores certificate-related errors.
-const char kIgnoreCertificateErrors[]       = "ignore-certificate-errors";
-
 // Don't allow content to arbitrarily append to the back/forward list.
 // The page must prcoess a user gesture before an entry can be added.
 const char kHistoryEntryRequiresUserGesture[] =
@@ -586,11 +579,19 @@ const char kHistoryEntryRequiresUserGesture[] =
 // These mappings only apply to the host resolver.
 const char kHostResolverRules[]             = "host-resolver-rules";
 
-// Ignores GPU blacklist.
-const char kIgnoreGpuBlacklist[]            = "ignore-gpu-blacklist";
-
-// Makes all APIs reflect the layout viewport.
-const char kInertVisualViewport[]           = "inert-visual-viewport";
+// A set of public key hashes for which to ignore certificate-related errors.
+//
+// If the certificate chain presented by the server does not validate, and one
+// or more certificates have public key hashes that match a key from this list,
+// the error is ignored.
+//
+// The switch value must a be a comma-separated list of Base64-encoded SHA-256
+// SPKI Fingerprints (RFC 7469, Section 2.4).
+//
+// This switch has no effect unless --user-data-dir (as defined by the content
+// embedder) is also present.
+const char kIgnoreCertificateErrorsSPKIList[] =
+    "ignore-certificate-errors-spki-list";
 
 // Run the GPU process as a thread in the browser process.
 const char kInProcessGPU[]                  = "in-process-gpu";
@@ -598,6 +599,11 @@ const char kInProcessGPU[]                  = "in-process-gpu";
 // Overrides the timeout, in seconds, that a child process waits for a
 // connection from the browser before killing itself.
 const char kIPCConnectionTimeout[]          = "ipc-connection-timeout";
+
+// Require dedicated processes for a set of origins, specified as a
+// comma-separated list. For example:
+//   --isolate-origins=https://www.foo.com,https://www.bar.com
+const char kIsolateOrigins[] = "isolate-origins";
 
 // Chrome is running in Mash.
 const char kIsRunningInMash[] = "is-running-in-mash";
@@ -631,10 +637,6 @@ const char kMainFrameResizesAreOrientationChanges[] =
 const char kMaxUntiledLayerHeight[]         = "max-untiled-layer-height";
 const char kMaxUntiledLayerWidth[]          = "max-untiled-layer-width";
 
-// Sample memory usage with high frequency and store the results to the
-// Renderer.Memory histogram. Used in memory tests.
-const char kMemoryMetrics[]                 = "memory-metrics";
-
 // Sets options for MHTML generator to skip no-store resources:
 //   "skip-nostore-main" - fails to save a page if main frame is 'no-store'
 //   "skip-nostore-all" - also skips no-store subresources.
@@ -644,9 +646,6 @@ const char kMHTMLSkipNostoreAll[]           = "skip-nostore-all";
 
 // Use a Mojo-based LocalStorage implementation.
 const char kMojoLocalStorage[]              = "mojo-local-storage";
-
-// Disables a Mojo-based ServiceWorker implementation.
-const char kDisableMojoServiceWorker[]      = "disable-mojo-service-worker";
 
 // Mutes audio sent to the audio device so it is not audible during
 // automated testing.
@@ -689,6 +688,12 @@ const char kOverridePluginPowerSaverForTesting[] =
 // Defaults to '1'.
 const char kOverscrollHistoryNavigation[] =
     "overscroll-history-navigation";
+
+// Controls the value of the threshold to start horizontal overscroll relative
+// to the default value.
+// E.g. set the value to '133' to have the overscroll start threshold be 133%
+// of the default threshold.
+const char kOverscrollStartThreshold[] = "overscroll-start-threshold";
 
 // Override the default value for the 'passive' field in javascript
 // addEventListener calls. Values are defined as:
@@ -733,11 +738,22 @@ const char kProcessPerSite[]                = "process-per-site";
 // renderer process.  We default to using a renderer process for each
 // site instance (i.e., group of pages from the same registered domain with
 // script connections to each other).
+// TODO(creis): This flag is currently a no-op.  We should refactor it to avoid
+// "unnecessary" process swaps for cross-site navigations but still swap when
+// needed for security (e.g., isolated origins).
 const char kProcessPerTab[]                 = "process-per-tab";
 
 // The value of this switch determines whether the process is started as a
 // renderer or plugin host.  If it's empty, it's the browser.
 const char kProcessType[]                   = "type";
+
+// Uses a specified proxy server, overrides system settings. This switch only
+// affects HTTP and HTTPS requests. ARC-apps use only HTTP proxy server with the
+// highest priority.
+// TODO(yzshen): Move this switch back to chrome/common/chrome_switches.{h,cc},
+// once the network service is able to access the corresponding setting via the
+// pref service.
+const char kProxyServer[] = "proxy-server";
 
 // Enables more web features over insecure connections. Designed to be used
 // for testing purposes only.
@@ -831,16 +847,20 @@ const char kStartFullscreen[] = "start-fullscreen";
 const char kStatsCollectionController[] =
     "enable-stats-collection-bindings";
 
-// Allows for forcing socket connections to http/https to use fixed ports.
-const char kTestingFixedHttpPort[]          = "testing-fixed-http-port";
-const char kTestingFixedHttpsPort[]         = "testing-fixed-https-port";
-
 // Type of the current test harness ("browser" or "ui").
 const char kTestType[]                      = "test-type";
 
-// Groups all out-of-process iframes to a different process from the process
-// of the top document. This is a performance isolation mode.
-const char kTopDocumentIsolation[] = "top-document-isolation";
+// Enable support for touch event feature detection.
+const char kTouchEventFeatureDetection[] = "touch-events";
+
+// The values the kTouchEventFeatureDetection switch may have, as in
+// --touch-events=disabled.
+//   auto: enabled at startup when an attached touchscreen is present.
+const char kTouchEventFeatureDetectionAuto[] = "auto";
+//   enabled: touch events always enabled.
+const char kTouchEventFeatureDetectionEnabled[] = "enabled";
+//   disabled: touch events are disabled.
+const char kTouchEventFeatureDetectionDisabled[] = "disabled";
 
 // Controls how text selection granularity changes when touch text selection
 // handles are dragged. Should be "character" or "direction". If not specified,
@@ -854,12 +874,6 @@ const char kUIPrioritizeInGpuProcess[] = "ui-prioritize-in-gpu-process";
 // streams (e.g. WebRTC). Works with --use-fake-device-for-media-stream.
 const char kUseFakeUIForMediaStream[]     = "use-fake-ui-for-media-stream";
 
-// Use the Mandoline UI Service in the Chrome render process.
-const char kUseMusInRenderer[] = "use-mus-in-renderer";
-
-// Enable native GPU memory buffer support when available.
-const char kEnableNativeGpuMemoryBuffers[] = "enable-native-gpu-memory-buffers";
-
 // Texture target for CHROMIUM_image backed content textures.
 const char kContentImageTextureTarget[] = "content-image-texture-target";
 
@@ -868,9 +882,6 @@ const char kVideoImageTextureTarget[] = "video-image-texture-target";
 
 // Set when Chromium should use a mobile user agent.
 const char kUseMobileUserAgent[] = "use-mobile-user-agent";
-
-// Use remote compositor for the renderer.
-const char kUseRemoteCompositing[] = "use-remote-compositing";
 
 // The contents of this flag are prepended to the utility process command line.
 // Useful values might be "valgrind" or "xterm -e gdb --args".
@@ -899,19 +910,20 @@ const char kZygoteCmdPrefix[]               = "zygote-cmd-prefix";
 // Causes the process to run as a renderer zygote.
 const char kZygoteProcess[]                 = "zygote";
 
-#if defined(ENABLE_WEBRTC)
-// Disables HW decode acceleration for WebRTC.
-const char kDisableWebRtcHWDecoding[]       = "disable-webrtc-hw-decoding";
-
+#if BUILDFLAG(ENABLE_WEBRTC)
 // Disables encryption of RTP Media for WebRTC. When Chrome embeds Content, it
 // ignores this switch on its stable and beta channels.
 const char kDisableWebRtcEncryption[]      = "disable-webrtc-encryption";
 
+// Disables HW decode acceleration for WebRTC.
+const char kDisableWebRtcHWDecoding[]       = "disable-webrtc-hw-decoding";
+
 // Disables HW encode acceleration for WebRTC.
-const char kDisableWebRtcHWEncoding[]       = "disable-webrtc-hw-encoding";
-const char kDisableWebRtcHWEncodingVPx[] = "vpx";
-const char kDisableWebRtcHWEncodingH264[] = "h264";
-const char kDisableWebRtcHWEncodingNone[] = "none";
+const char kDisableWebRtcHWEncoding[] = "disable-webrtc-hw-encoding";
+
+// Enables negotiation of GCM cipher suites from RFC 7714 for SRTP in WebRTC.
+// See https://tools.ietf.org/html/rfc7714 for further information.
+const char kEnableWebRtcSrtpAesGcm[] = "enable-webrtc-srtp-aes-gcm";
 
 // Enables Origin header in Stun messages for WebRTC.
 const char kEnableWebRtcStunOrigin[]        = "enable-webrtc-stun-origin";
@@ -936,6 +948,9 @@ const char kWebRtcMaxCaptureFramerate[]     = "max-gum-fps";
 #endif
 
 #if defined(OS_ANDROID)
+// Disable Media Session API
+const char kDisableMediaSessionAPI[] = "disable-media-session-api";
+
 // Disable overscroll edge effects like those found in Android views.
 const char kDisableOverscrollEdgeEffect[]   = "disable-overscroll-edge-effect";
 
@@ -949,10 +964,6 @@ const char kDisableScreenOrientationLock[]  = "disable-screen-orientation-lock";
 // viewport boundaries.
 const char kEnableAdaptiveSelectionHandleOrientation[] =
     "enable-adaptive-selection-handle-orientation";
-
-// Enable content intent detection in the renderer.
-const char kEnableContentIntentDetection[] =
-    "enable-content-intent-detection";
 
 // Enable drag manipulation of longpress-triggered text selections.
 const char kEnableLongpressDragSelection[]  = "enable-longpress-drag-selection";
@@ -1073,6 +1084,19 @@ const char kIpcDumpDirectory[] = "ipc-dump-directory";
 // Specifies the testcase used by the IPC fuzzer.
 const char kIpcFuzzerTestcase[] = "ipc-fuzzer-testcase";
 #endif
+
+#if defined(OS_MACOSX)
+// Enable the V2 sandbox during the helper executable initialization.
+const char kEnableV2Sandbox[] = "v2-sandbox";
+
+// The command line paramter indicating that the v2 sandbox is enabled. This
+// must be different than the "v2-sandbox" flag to avoid endless re-executing.
+// The flag tells the sandbox initialization code inside Chrome that the sandbox
+// should already be enabled.
+// TODO(kerrnel): Remove this once the V2 sandbox migration is complete, as
+// processes will be assumed to run under the V2 sandbox.
+const char kV2SandboxedEnabled[] = "v2-sandbox-enabled";
+#endif  // defined(OS_MACOSX)
 
 // Don't dump stuff here, follow the same order as the header.
 

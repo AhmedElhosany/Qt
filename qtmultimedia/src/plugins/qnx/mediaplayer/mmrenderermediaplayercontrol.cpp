@@ -36,6 +36,7 @@
 ** $QT_END_LICENSE$
 **
 ****************************************************************************/
+#include "mmrendereraudiorolecontrol.h"
 #include "mmrenderermediaplayercontrol.h"
 #include "mmrenderermetadatareadercontrol.h"
 #include "mmrendererplayervideorenderercontrol.h"
@@ -70,7 +71,6 @@ MmRendererMediaPlayerControl::MmRendererMediaPlayerControl(QObject *parent)
       m_mediaStatus(QMediaPlayer::NoMedia),
       m_playAfterMediaLoaded(false),
       m_inputAttached(false),
-      m_stopEventsToIgnore(0),
       m_bufferLevel(0)
 {
     m_loadingTimer.setSingleShot(true);
@@ -109,30 +109,12 @@ void MmRendererMediaPlayerControl::openConnection()
     startMonitoring();
 }
 
-void MmRendererMediaPlayerControl::handleMmStatusUpdate(qint64 newPosition)
-{
-    // Prevent spurious position change events from overriding our own position, for example
-    // when setting the position to 0 in stop().
-    // Also, don't change the position while we're loading the media, as then play() would
-    // set a wrong initial position.
-    if (m_state != QMediaPlayer::PlayingState ||
-        m_mediaStatus == QMediaPlayer::LoadingMedia ||
-        m_mediaStatus == QMediaPlayer::NoMedia ||
-        m_mediaStatus == QMediaPlayer::InvalidMedia)
-        return;
-
-    setMmPosition(newPosition);
-}
-
 void MmRendererMediaPlayerControl::handleMmStopped()
 {
     // Only react to stop events that happen when the end of the stream is reached and
     // playback is stopped because of this.
-    // Ignore other stop event sources, souch as calling mmr_stop() ourselves and
-    // mmr_input_attach().
-    if (m_stopEventsToIgnore > 0) {
-        --m_stopEventsToIgnore;
-    } else {
+    // Ignore other stop event sources, such as calling mmr_stop() ourselves.
+    if (m_state != QMediaPlayer::StoppedState) {
         setMediaStatus(QMediaPlayer::EndOfMedia);
         stopInternal(IgnoreMmRenderer);
     }
@@ -197,6 +179,17 @@ void MmRendererMediaPlayerControl::attach()
         return;
     }
 
+    if (m_audioId != -1 && m_audioRoleControl) {
+        QString audioType = qnxAudioType(m_audioRoleControl->audioRole());
+        QByteArray latin1AudioType = audioType.toLatin1();
+        if (!audioType.isEmpty() && latin1AudioType == audioType) {
+            strm_dict_t *dict = strm_dict_new();
+            dict = strm_dict_set(dict, "audio_type", latin1AudioType.constData());
+            if (mmr_output_parameters(m_context, m_audioId, dict) != 0)
+                emitMmError("mmr_output_parameters: Setting audio_type failed");
+        }
+    }
+
     const QByteArray resourcePath = resourcePathForUrl(m_media.canonicalUrl());
     if (resourcePath.isEmpty()) {
         detach();
@@ -209,11 +202,6 @@ void MmRendererMediaPlayerControl::attach()
         detach();
         return;
     }
-
-    // For whatever reason, the mmrenderer sends out a MMR_STOPPED event when calling
-    // mmr_input_attach() above. Ignore it, as otherwise we'll trigger stopping right after we
-    // started.
-    m_stopEventsToIgnore++;
 
     m_inputAttached = true;
     setMediaStatus(QMediaPlayer::LoadedMedia);
@@ -351,7 +339,6 @@ void MmRendererMediaPlayerControl::stopInternal(StopCommand stopCommand)
     if (m_state != QMediaPlayer::StoppedState) {
 
         if (stopCommand == StopMmRenderer) {
-            ++m_stopEventsToIgnore;
             mmr_stop(m_context);
         }
 
@@ -519,7 +506,6 @@ void MmRendererMediaPlayerControl::play()
         return;
     }
 
-    m_stopEventsToIgnore = 0;    // once playing, stop events must be proccessed
     setState( QMediaPlayer::PlayingState);
 }
 
@@ -554,6 +540,11 @@ void MmRendererMediaPlayerControl::setVideoWindowControl(MmRendererVideoWindowCo
 void MmRendererMediaPlayerControl::setMetaDataReaderControl(MmRendererMetaDataReaderControl *metaDataReaderControl)
 {
     m_metaDataReaderControl = metaDataReaderControl;
+}
+
+void MmRendererMediaPlayerControl::setAudioRoleControl(MmRendererAudioRoleControl *audioRoleControl)
+{
+    m_audioRoleControl = audioRoleControl;
 }
 
 void MmRendererMediaPlayerControl::setMmPosition(qint64 newPosition)

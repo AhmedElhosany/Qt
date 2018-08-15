@@ -153,6 +153,28 @@ QJsonDocument &QJsonDocument::operator =(const QJsonDocument &other)
     return *this;
 }
 
+/*!
+    \fn QJsonDocument::QJsonDocument(QJsonDocument &&other)
+    \since 5.10
+
+    Move-constructs a QJsonDocument from \a other.
+*/
+
+/*!
+    \fn QJsonDocument &QJsonDocument::operator =(QJsonDocument &&other)
+    \since 5.10
+
+    Move-assigns \a other to this document.
+*/
+
+/*!
+    \fn void QJsonDocument::swap(QJsonDocument &other)
+    \since 5.10
+
+    Swaps the document \a other with this. This operation is very fast and never fails.
+*/
+
+
 /*! \enum QJsonDocument::DataValidation
 
   This value is used to tell QJsonDocument whether to validate the binary data
@@ -187,9 +209,6 @@ QJsonDocument QJsonDocument::fromRawData(const char *data, int size, DataValidat
         qWarning("QJsonDocument::fromRawData: data has to have 4 byte alignment");
         return QJsonDocument();
     }
-
-    if (size < (int)(sizeof(QJsonPrivate::Header) + sizeof(QJsonPrivate::Base)))
-        return QJsonDocument();
 
     QJsonPrivate::Data *d = new QJsonPrivate::Data((char *)data, size);
     d->ownsData = false;
@@ -529,6 +548,58 @@ void QJsonDocument::setArray(const QJsonArray &array)
         return;
     }
     d->ref.ref();
+}
+
+/*!
+    Returns a QJsonValue representing the value for the key \a key.
+
+    Equivalent to calling object().value(key).
+
+    The returned QJsonValue is QJsonValue::Undefined if the key does not exist,
+    or if isObject() is false.
+
+    \since 5.10
+
+    \sa QJsonValue, QJsonValue::isUndefined(), QJsonObject
+ */
+const QJsonValue QJsonDocument::operator[](const QString &key) const
+{
+    if (!isObject())
+        return QJsonValue(QJsonValue::Undefined);
+
+    return object().value(key);
+}
+
+/*!
+    \overload
+    \since 5.10
+*/
+const QJsonValue QJsonDocument::operator[](QLatin1String key) const
+{
+    if (!isObject())
+        return QJsonValue(QJsonValue::Undefined);
+
+    return object().value(key);
+}
+
+/*!
+    Returns a QJsonValue representing the value for index \a i.
+
+    Equivalent to calling array().at(i).
+
+    The returned QJsonValue is QJsonValue::Undefined, if \a i is out of bounds,
+    or if isArray() is false.
+
+    \since 5.10
+
+    \sa QJsonValue, QJsonValue::isUndefined(), QJsonArray
+ */
+const QJsonValue QJsonDocument::operator[](int i) const
+{
+    if (!isArray())
+        return QJsonValue(QJsonValue::Undefined);
+
+    return array().at(i);
 }
 
 /*!

@@ -66,7 +66,7 @@ extern QPointer<QWindow> qt_last_mouse_receiver;
 
 // ------------------- QWindowSystemInterfacePrivate -------------------
 
-/*!
+/*
     Handles a window system event asynchronously by posting the event to Qt Gui.
 
     This function posts the event on the window system event queue and wakes the
@@ -82,7 +82,7 @@ bool QWindowSystemInterfacePrivate::handleWindowSystemEvent<QWindowSystemInterfa
     return true;
 }
 
-/*!
+/*
     Handles a window system event synchronously.
 
     Qt Gui will process the event immediately. The return value indicates if Qt
@@ -112,7 +112,7 @@ bool QWindowSystemInterfacePrivate::handleWindowSystemEvent<QWindowSystemInterfa
     return accepted;
 }
 
-/*!
+/*
     Handles a window system event.
 
     By default this function posts the event on the window system event queue and
@@ -247,14 +247,14 @@ QT_DEFINE_QPA_EVENT_HANDLER(void, handleWindowActivated, QWindow *window, Qt::Fo
     QWindowSystemInterfacePrivate::handleWindowSystemEvent<Delivery>(e);
 }
 
-QT_DEFINE_QPA_EVENT_HANDLER(void, handleWindowStateChanged, QWindow *window, Qt::WindowState newState, int oldState)
+QT_DEFINE_QPA_EVENT_HANDLER(void, handleWindowStateChanged, QWindow *window, Qt::WindowStates newState, int oldState)
 {
     Q_ASSERT(window);
     if (oldState < Qt::WindowNoState)
         oldState = window->windowState();
 
     QWindowSystemInterfacePrivate::WindowStateChangedEvent *e =
-        new QWindowSystemInterfacePrivate::WindowStateChangedEvent(window, newState, Qt::WindowState(oldState));
+        new QWindowSystemInterfacePrivate::WindowStateChangedEvent(window, newState, Qt::WindowStates(oldState));
     QWindowSystemInterfacePrivate::handleWindowSystemEvent<Delivery>(e);
 }
 
@@ -280,12 +280,26 @@ QT_DEFINE_QPA_EVENT_HANDLER(void, handleApplicationStateChanged, Qt::Application
     QWindowSystemInterfacePrivate::handleWindowSystemEvent<Delivery>(e);
 }
 
-/*!
-  If \a oldRect is null, Qt will use the previously reported geometry instead.
- */
-QT_DEFINE_QPA_EVENT_HANDLER(void, handleGeometryChange, QWindow *window, const QRect &newRect, const QRect &oldRect)
+QWindowSystemInterfacePrivate::GeometryChangeEvent::GeometryChangeEvent(QWindow *window, const QRect &newGeometry)
+    : WindowSystemEvent(GeometryChange)
+    , window(window)
+    , newGeometry(newGeometry)
 {
-    QWindowSystemInterfacePrivate::GeometryChangeEvent *e = new QWindowSystemInterfacePrivate::GeometryChangeEvent(window, QHighDpi::fromNativePixels(newRect, window), QHighDpi::fromNativePixels(oldRect, window));
+    if (const QPlatformWindow *pw = window->handle())
+        requestedGeometry = QHighDpi::fromNativePixels(pw->QPlatformWindow::geometry(), window);
+}
+
+QT_DEFINE_QPA_EVENT_HANDLER(void, handleGeometryChange, QWindow *window, const QRect &newRect)
+{
+    Q_ASSERT(window);
+    QWindowSystemInterfacePrivate::GeometryChangeEvent *e = new QWindowSystemInterfacePrivate::GeometryChangeEvent(window, QHighDpi::fromNativePixels(newRect, window));
+    if (window->handle()) {
+        // Persist the new geometry so that QWindow::geometry() can be queried in the resize event
+        window->handle()->QPlatformWindow::setGeometry(newRect);
+        // FIXME: This does not work during platform window creation, where the QWindow does not
+        // have its handle set up yet. Platforms that deliver events during window creation need
+        // to handle the persistence manually, e.g. by overriding geometry().
+    }
     QWindowSystemInterfacePrivate::handleWindowSystemEvent<Delivery>(e);
 }
 
@@ -297,6 +311,23 @@ QWindowSystemInterfacePrivate::ExposeEvent::ExposeEvent(QWindow *window, const Q
 {
 }
 
+/*! \internal
+    Handles an expose event.
+
+    The platform plugin sends expose events when an area of the window
+    is invalidated or window exposure changes. \a region is in window
+    local coordinates. An empty region indicates that the window is
+    obscured, but note that the exposed property of the QWindow will be set
+    based on what QPlatformWindow::isExposed() returns at the time of this call,
+    not based on what the region is. // FIXME: this should probably be fixed.
+
+    The platform plugin may omit sending expose events (or send obscure
+    events) for windows that are on screen but where the client area is
+    completely covered by other windows or otherwise not visible. Expose
+    event consumers can then use this to disable updates for such windows.
+    This is required behavior on platforms where OpenGL swapbuffers stops
+    blocking for obscured windows (like macOS).
+*/
 QT_DEFINE_QPA_EVENT_HANDLER(void, handleExposeEvent, QWindow *window, const QRegion &region)
 {
     QWindowSystemInterfacePrivate::ExposeEvent *e =
@@ -452,9 +483,13 @@ QWindowSystemInterfacePrivate::WheelEvent::WheelEvent(QWindow *window, ulong tim
 {
 }
 
+#if QT_DEPRECATED_SINCE(5, 10)
 void QWindowSystemInterface::handleWheelEvent(QWindow *window, const QPointF &local, const QPointF &global, int d, Qt::Orientation o, Qt::KeyboardModifiers mods) {
     unsigned long time = QWindowSystemInterfacePrivate::eventTime.elapsed();
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
     handleWheelEvent(window, time, local, global, d, o, mods);
+QT_WARNING_POP
 }
 
 void QWindowSystemInterface::handleWheelEvent(QWindow *window, ulong timestamp, const QPointF &local, const QPointF &global, int d, Qt::Orientation o, Qt::KeyboardModifiers mods)
@@ -462,6 +497,7 @@ void QWindowSystemInterface::handleWheelEvent(QWindow *window, ulong timestamp, 
     QPoint point = (o == Qt::Vertical) ? QPoint(0, d) : QPoint(d, 0);
     handleWheelEvent(window, timestamp, local, global, QPoint(), point, mods);
 }
+#endif // QT_DEPRECATED_SINCE(5, 10)
 
 void QWindowSystemInterface::handleWheelEvent(QWindow *window, const QPointF &local, const QPointF &global, QPoint pixelDelta, QPoint angleDelta, Qt::KeyboardModifiers mods, Qt::ScrollPhase phase, Qt::MouseEventSource source)
 {
@@ -775,6 +811,7 @@ void QWindowSystemInterface::handleTabletEvent(QWindow *window, const QPointF &l
                       xTilt, yTilt, tangentialPressure, rotation, z, uid, modifiers);
 }
 
+#if QT_DEPRECATED_SINCE(5, 10)
 void QWindowSystemInterface::handleTabletEvent(QWindow *window, ulong timestamp, bool down, const QPointF &local, const QPointF &global,
                                                int device, int pointerType, qreal pressure, int xTilt, int yTilt,
                                                qreal tangentialPressure, qreal rotation, int z, qint64 uid,
@@ -792,6 +829,7 @@ void QWindowSystemInterface::handleTabletEvent(QWindow *window, bool down, const
     handleTabletEvent(window, local, global, device, pointerType, (down ? Qt::LeftButton : Qt::NoButton), pressure,
                       xTilt, yTilt, tangentialPressure, rotation, z, uid, modifiers);
 }
+#endif // QT_DEPRECATED_SINCE(5, 10)
 
 void QWindowSystemInterface::handleTabletEnterProximityEvent(ulong timestamp, int device, int pointerType, qint64 uid)
 {
@@ -820,28 +858,28 @@ void QWindowSystemInterface::handleTabletLeaveProximityEvent(int device, int poi
 }
 
 #ifndef QT_NO_GESTURES
-void QWindowSystemInterface::handleGestureEvent(QWindow *window, ulong timestamp, Qt::NativeGestureType type,
+void QWindowSystemInterface::handleGestureEvent(QWindow *window, QTouchDevice *device, ulong timestamp, Qt::NativeGestureType type,
                                                 QPointF &local, QPointF &global)
 {
     QWindowSystemInterfacePrivate::GestureEvent *e =
-        new QWindowSystemInterfacePrivate::GestureEvent(window, timestamp, type, local, global);
+        new QWindowSystemInterfacePrivate::GestureEvent(window, timestamp, type, device, local, global);
        QWindowSystemInterfacePrivate::handleWindowSystemEvent(e);
 }
 
-void QWindowSystemInterface::handleGestureEventWithRealValue(QWindow *window, ulong timestamp, Qt::NativeGestureType type,
+void QWindowSystemInterface::handleGestureEventWithRealValue(QWindow *window, QTouchDevice *device, ulong timestamp, Qt::NativeGestureType type,
                                                                 qreal value, QPointF &local, QPointF &global)
 {
     QWindowSystemInterfacePrivate::GestureEvent *e =
-        new QWindowSystemInterfacePrivate::GestureEvent(window, timestamp, type, local, global);
+        new QWindowSystemInterfacePrivate::GestureEvent(window, timestamp, type, device, local, global);
     e->realValue = value;
     QWindowSystemInterfacePrivate::handleWindowSystemEvent(e);
 }
 
-void QWindowSystemInterface::handleGestureEventWithSequenceIdAndValue(QWindow *window, ulong timestamp, Qt::NativeGestureType type,
+void QWindowSystemInterface::handleGestureEventWithSequenceIdAndValue(QWindow *window, QTouchDevice *device, ulong timestamp, Qt::NativeGestureType type,
                                                                          ulong sequenceId, quint64 value, QPointF &local, QPointF &global)
 {
     QWindowSystemInterfacePrivate::GestureEvent *e =
-        new QWindowSystemInterfacePrivate::GestureEvent(window, timestamp, type, local, global);
+        new QWindowSystemInterfacePrivate::GestureEvent(window, timestamp, type, device, local, global);
     e->sequenceId = sequenceId;
     e->intValue = value;
     QWindowSystemInterfacePrivate::handleWindowSystemEvent(e);

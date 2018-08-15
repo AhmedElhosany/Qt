@@ -10,15 +10,12 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "content/browser/devtools/devtools_io_context.h"
-#include "content/browser/devtools/protocol/devtools_protocol_delegate.h"
 #include "content/common/content_export.h"
 #include "content/common/devtools_messages.h"
 #include "content/public/browser/devtools_agent_host.h"
-
-namespace IPC {
-class Message;
-}
 
 namespace content {
 
@@ -26,15 +23,8 @@ class BrowserContext;
 class DevToolsSession;
 
 // Describes interface for managing devtools agents from the browser process.
-class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost,
-                                             public DevToolsProtocolDelegate {
+class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
  public:
-  // Informs the hosted agent that a client host has attached.
-  virtual void Attach() = 0;
-
-  // Informs the hosted agent that a client host has detached.
-  virtual void Detach() = 0;
-
   // DevToolsAgentHost implementation.
   bool AttachClient(DevToolsAgentHostClient* client) override;
   void ForceAttachClient(DevToolsAgentHostClient* client) override;
@@ -54,13 +44,8 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost,
   void DisconnectWebContents() override;
   void ConnectWebContents(WebContents* wc) override;
 
+  void AttachMultiClient(DevToolsAgentHostClient* client);
   bool Inspect();
-  void SendMessageToClient(int session_id, const std::string& message);
-
-  // DevToolsProtocolDelegate implementation.
-  void SendProtocolResponse(int session_id,
-                            const std::string& message) override;
-  void SendProtocolNotification(const std::string& message) override;
 
  protected:
   DevToolsAgentHostImpl(const std::string& id);
@@ -68,29 +53,37 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost,
 
   static bool ShouldForceCreation();
 
-  virtual bool DispatchProtocolMessage(const std::string& message) = 0;
-  virtual void InspectElement(int x, int y);
+  virtual void AttachSession(DevToolsSession* session) = 0;
+  virtual void DetachSession(int session_id) = 0;
+  virtual bool DispatchProtocolMessage(
+      DevToolsSession* session,
+      const std::string& message) = 0;
+  virtual void InspectElement(DevToolsSession* session, int x, int y);
 
   void NotifyCreated();
-  void HostClosed();
-  devtools::DevToolsIOContext* GetIOContext() { return &io_context_; }
+  void ForceDetachAllClients(bool replaced);
+  DevToolsIOContext* GetIOContext() { return &io_context_; }
 
-  DevToolsSession* session() { return session_.get(); }
+  base::flat_set<DevToolsSession*>& sessions() { return sessions_; }
+  DevToolsSession* SessionById(int session_id);
 
  private:
   friend class DevToolsAgentHost; // for static methods
-  bool InnerAttach(DevToolsAgentHostClient* client, bool force);
-  void InnerDetach();
+  friend class DevToolsSession;
+  void InnerAttachClient(DevToolsAgentHostClient* client);
+  void InnerDetachClient(DevToolsAgentHostClient* client);
   void NotifyAttached();
   void NotifyDetached();
   void NotifyDestroyed();
+  DevToolsSession* SessionByClient(DevToolsAgentHostClient* client);
 
   const std::string id_;
-  int session_id_;
   int last_session_id_;
-  std::unique_ptr<DevToolsSession> session_;
-  DevToolsAgentHostClient* client_;
-  devtools::DevToolsIOContext io_context_;
+  base::flat_set<DevToolsSession*> sessions_;
+  base::flat_map<int, DevToolsSession*> session_by_id_;
+  base::flat_map<DevToolsAgentHostClient*, std::unique_ptr<DevToolsSession>>
+      session_by_client_;
+  DevToolsIOContext io_context_;
   static int s_attached_count_;
   static int s_force_creation_count_;
 };
@@ -101,10 +94,11 @@ class DevToolsMessageChunkProcessor {
   explicit DevToolsMessageChunkProcessor(const SendMessageCallback& callback);
   ~DevToolsMessageChunkProcessor();
 
-  std::string state_cookie() const { return state_cookie_; }
+  const std::string& state_cookie() const { return state_cookie_; }
   void set_state_cookie(const std::string& cookie) { state_cookie_ = cookie; }
   int last_call_id() const { return last_call_id_; }
   bool ProcessChunkedMessageFromAgent(const DevToolsMessageChunk& chunk);
+  void Reset();
 
  private:
   SendMessageCallback callback_;

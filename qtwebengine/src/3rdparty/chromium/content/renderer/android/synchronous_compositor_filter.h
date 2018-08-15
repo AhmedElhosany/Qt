@@ -8,9 +8,9 @@
 #include <stdint.h>
 
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
 #include "base/single_thread_task_runner.h"
 #include "content/renderer/android/synchronous_compositor_registry.h"
@@ -48,12 +48,12 @@ class SynchronousCompositorFilter
   bool Send(IPC::Message* message) override;
 
   // SynchronousCompositorRegistry overrides.
-  void RegisterCompositorFrameSink(
+  void RegisterLayerTreeFrameSink(
       int routing_id,
-      SynchronousCompositorFrameSink* compositor_frame_sink) override;
-  void UnregisterCompositorFrameSink(
+      SynchronousLayerTreeFrameSink* layer_tree_frame_sink) override;
+  void UnregisterLayerTreeFrameSink(
       int routing_id,
-      SynchronousCompositorFrameSink* compositor_frame_sink) override;
+      SynchronousLayerTreeFrameSink* layer_tree_frame_sink) override;
 
   // SynchronousInputHandlerProxyClient overrides.
   void DidAddSynchronousHandlerProxy(
@@ -74,9 +74,9 @@ class SynchronousCompositorFilter
   void CreateSynchronousCompositorProxy(
       int routing_id,
       ui::SynchronousInputHandlerProxy* synchronous_input_handler_proxy);
-  void SetProxyCompositorFrameSink(
+  void SetProxyLayerTreeFrameSink(
       int routing_id,
-      SynchronousCompositorFrameSink* compositor_frame_sink);
+      SynchronousLayerTreeFrameSink* layer_tree_frame_sink);
   void UnregisterObjects(int routing_id);
   void RemoveEntryIfNeeded(int routing_id);
   SynchronousCompositorProxy* FindProxy(int routing_id);
@@ -92,21 +92,21 @@ class SynchronousCompositorFilter
 
   // Compositor thread-only fields.
   using SyncCompositorMap =
-      base::ScopedPtrHashMap<int /* routing_id */,
-                             std::unique_ptr<SynchronousCompositorProxy>>;
+      std::unordered_map<int /* routing_id */,
+                         std::unique_ptr<SynchronousCompositorProxy>>;
   SyncCompositorMap sync_compositor_map_;
 
   bool filter_ready_;
   using SynchronousInputHandlerProxyMap =
       base::hash_map<int, ui::SynchronousInputHandlerProxy*>;
-  using CompositorFrameSinkMap =
-      base::hash_map<int, SynchronousCompositorFrameSink*>;
+  using LayerTreeFrameSinkMap =
+      base::hash_map<int, SynchronousLayerTreeFrameSink*>;
 
   // This is only used before FilterReadyOnCompositorThread.
   SynchronousInputHandlerProxyMap synchronous_input_handler_proxy_map_;
 
   // This is only used if input_handler_proxy has not been registered.
-  CompositorFrameSinkMap compositor_frame_sink_map_;
+  LayerTreeFrameSinkMap layer_tree_frame_sink_map_;
 
   DISALLOW_COPY_AND_ASSIGN(SynchronousCompositorFilter);
 };

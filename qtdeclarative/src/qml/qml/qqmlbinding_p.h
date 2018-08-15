@@ -72,17 +72,17 @@ class Q_QML_PRIVATE_EXPORT QQmlBinding : public QQmlJavaScriptExpression,
 {
     friend class QQmlAbstractBinding;
 public:
-    typedef QExplicitlySharedDataPointer<QQmlBinding> Ptr;
-
     static QQmlBinding *create(const QQmlPropertyData *, const QQmlScriptString &, QObject *, QQmlContext *);
     static QQmlBinding *create(const QQmlPropertyData *, const QString &, QObject *, QQmlContextData *,
                                const QString &url = QString(), quint16 lineNumber = 0);
     static QQmlBinding *create(const QQmlPropertyData *property, QV4::Function *function,
                                QObject *obj, QQmlContextData *ctxt, QV4::ExecutionContext *scope);
+    static QQmlBinding *createTranslationBinding(QV4::CompiledData::CompilationUnit *unit, const QV4::CompiledData::Binding *binding,
+                                                 QObject *obj, QQmlContextData *ctxt);
     ~QQmlBinding();
 
     void setTarget(const QQmlProperty &);
-    bool setTarget(QObject *, const QQmlPropertyData &, const QQmlPropertyData *valueType);
+    void setTarget(QObject *, const QQmlPropertyData &, const QQmlPropertyData *valueType);
 
     void setNotifyOnValueChanged(bool);
 
@@ -101,6 +101,15 @@ public:
 
     QString expressionIdentifier() const override;
     void expressionChanged() override;
+
+    /**
+     * This method returns a snapshot of the currently tracked dependencies of
+     * this binding. The dependencies can change upon reevaluation. This method is
+     * used in GammaRay to visualize binding hierarchies.
+     *
+     * Call this method from the UI thread.
+     */
+    QVector<QQmlProperty> dependencies() const;
 
 protected:
     virtual void doUpdate(const DeleteWatcher &watcher,

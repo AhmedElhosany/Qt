@@ -8,6 +8,7 @@
 #include "base/time/time.h"
 #include "media/base/cdm_context.h"
 #include "media/base/demuxer_stream.h"
+#include "media/base/moving_average.h"
 #include "media/base/pipeline_status.h"
 #include "media/base/video_decoder_config.h"
 #include "media/filters/audio_timestamp_validator.h"
@@ -16,11 +17,13 @@ namespace media {
 
 class AudioBuffer;
 class AudioDecoder;
+class AudioDecoderConfig;
 class CdmContext;
 class DecryptingAudioDecoder;
 class DecryptingVideoDecoder;
 class DemuxerStream;
 class VideoDecoder;
+class VideoDecoderConfig;
 class VideoFrame;
 
 template <DemuxerStream::Type StreamType>
@@ -31,20 +34,22 @@ class MEDIA_EXPORT DecoderStreamTraits<DemuxerStream::AUDIO> {
  public:
   typedef AudioBuffer OutputType;
   typedef AudioDecoder DecoderType;
+  typedef AudioDecoderConfig DecoderConfigType;
   typedef DecryptingAudioDecoder DecryptingDecoderType;
   typedef base::Callback<void(bool success)> InitCB;
   typedef base::Callback<void(const scoped_refptr<OutputType>&)> OutputCB;
 
   static std::string ToString();
   static bool NeedsBitstreamConversion(DecoderType* decoder);
-  static void ReportStatistics(const StatisticsCB& statistics_cb,
-                               int bytes_decoded);
   static scoped_refptr<OutputType> CreateEOSOutput();
+  static DecoderConfigType GetDecoderConfig(DemuxerStream* stream);
 
-  explicit DecoderStreamTraits(const scoped_refptr<MediaLog>& media_log);
+  explicit DecoderStreamTraits(MediaLog* media_log);
 
+  void ReportStatistics(const StatisticsCB& statistics_cb, int bytes_decoded);
   void InitializeDecoder(DecoderType* decoder,
-                         DemuxerStream* stream,
+                         const DecoderConfigType& config,
+                         bool low_delay,
                          CdmContext* cdm_context,
                          const InitCB& init_cb,
                          const OutputCB& output_cb);
@@ -58,7 +63,7 @@ class MEDIA_EXPORT DecoderStreamTraits<DemuxerStream::AUDIO> {
   // drift.
   std::unique_ptr<AudioTimestampValidator> audio_ts_validator_;
 
-  scoped_refptr<MediaLog> media_log_;
+  MediaLog* media_log_;
 };
 
 template <>
@@ -66,20 +71,22 @@ class MEDIA_EXPORT DecoderStreamTraits<DemuxerStream::VIDEO> {
  public:
   typedef VideoFrame OutputType;
   typedef VideoDecoder DecoderType;
+  typedef VideoDecoderConfig DecoderConfigType;
   typedef DecryptingVideoDecoder DecryptingDecoderType;
   typedef base::Callback<void(bool success)> InitCB;
   typedef base::Callback<void(const scoped_refptr<OutputType>&)> OutputCB;
 
   static std::string ToString();
   static bool NeedsBitstreamConversion(DecoderType* decoder);
-  static void ReportStatistics(const StatisticsCB& statistics_cb,
-                               int bytes_decoded);
   static scoped_refptr<OutputType> CreateEOSOutput();
+  static DecoderConfigType GetDecoderConfig(DemuxerStream* stream);
 
-  explicit DecoderStreamTraits(const scoped_refptr<MediaLog>& media_log) {}
+  explicit DecoderStreamTraits(MediaLog* media_log);
 
+  void ReportStatistics(const StatisticsCB& statistics_cb, int bytes_decoded);
   void InitializeDecoder(DecoderType* decoder,
-                         DemuxerStream* stream,
+                         const DecoderConfigType& config,
+                         bool low_delay,
                          CdmContext* cdm_context,
                          const InitCB& init_cb,
                          const OutputCB& output_cb);
@@ -89,6 +96,7 @@ class MEDIA_EXPORT DecoderStreamTraits<DemuxerStream::VIDEO> {
 
  private:
   base::TimeDelta last_keyframe_timestamp_;
+  MovingAverage keyframe_distance_average_;
 };
 
 }  // namespace media

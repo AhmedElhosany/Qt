@@ -15,11 +15,11 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
-#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 
+using content::BrowserContext;
 using content::BrowserThread;
 using content::WebContents;
 
@@ -56,7 +56,7 @@ BackgroundPrintingManager::BackgroundPrintingManager() {
 }
 
 BackgroundPrintingManager::~BackgroundPrintingManager() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // The might be some WebContentses still in |printing_contents_map_| at this
   // point (e.g. when the last remaining tab closes and there is still a print
   // preview WebContents trying to print). In such a case it will fail to print,
@@ -66,7 +66,7 @@ BackgroundPrintingManager::~BackgroundPrintingManager() {
 
 void BackgroundPrintingManager::OwnPrintPreviewDialog(
     WebContents* preview_dialog) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(PrintPreviewDialogController::IsPrintPreviewDialog(preview_dialog));
   CHECK(!HasPrintPreviewDialog(preview_dialog));
 
@@ -98,6 +98,26 @@ void BackgroundPrintingManager::Observe(
   DeletePreviewContents(content::Source<WebContents>(source).ptr());
 }
 
+void BackgroundPrintingManager::DeletePreviewContentsForBrowserContext(
+    BrowserContext* browser_context) {
+  std::vector<WebContents*> preview_contents_to_delete;
+  for (const auto& iter : printing_contents_map_) {
+    WebContents* preview_contents = iter.first;
+    if (preview_contents->GetBrowserContext() == browser_context) {
+      preview_contents_to_delete.push_back(preview_contents);
+    }
+  }
+
+  for (size_t i = 0; i < preview_contents_to_delete.size(); i++) {
+    DeletePreviewContents(preview_contents_to_delete[i]);
+  }
+}
+
+void BackgroundPrintingManager::OnPrintRequestCancelled(
+    WebContents* preview_contents) {
+  DeletePreviewContents(preview_contents);
+}
+
 void BackgroundPrintingManager::DeletePreviewContents(
     WebContents* preview_contents) {
   auto i = printing_contents_map_.find(preview_contents);
@@ -113,8 +133,9 @@ void BackgroundPrintingManager::DeletePreviewContents(
                     content::Source<WebContents>(preview_contents));
   printing_contents_map_.erase(i);
 
-  // ... and mortally wound the contents. (Deletion immediately is not a good
-  // idea in case this was called from RenderViewGone.)
+  // ... and mortally wound the contents. Deletion immediately is not a good
+  // idea in case this was triggered by |preview_contents| far up the
+  // callstack. (Trace where the NOTIFICATION_PRINT_JOB_RELEASED comes from.)
   base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, preview_contents);
 }
 

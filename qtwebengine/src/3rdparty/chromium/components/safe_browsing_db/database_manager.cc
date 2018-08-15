@@ -15,7 +15,11 @@ using content::BrowserThread;
 
 namespace safe_browsing {
 
-SafeBrowsingDatabaseManager::SafeBrowsingDatabaseManager() {}
+SafeBrowsingDatabaseManager::SafeBrowsingDatabaseManager()
+    : base::RefCountedDeleteOnSequence<SafeBrowsingDatabaseManager>(
+          content::BrowserThread::GetTaskRunnerForThread(
+              content::BrowserThread::IO)),
+      enabled_(false) {}
 
 SafeBrowsingDatabaseManager::~SafeBrowsingDatabaseManager() {
   DCHECK(!v4_get_hash_protocol_manager_);
@@ -37,8 +41,9 @@ bool SafeBrowsingDatabaseManager::CheckApiBlacklistUrl(const GURL& url,
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(v4_get_hash_protocol_manager_);
 
-  // Make sure we can check this url.
-  if (!(url.SchemeIs(url::kHttpScheme) || url.SchemeIs(url::kHttpsScheme))) {
+  // Make sure we can check this url and that the service is enabled.
+  if (!enabled_ ||
+      !(url.SchemeIs(url::kHttpScheme) || url.SchemeIs(url::kHttpsScheme))) {
     return true;
   }
 

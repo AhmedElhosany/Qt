@@ -6,6 +6,7 @@
  */
 #include "skdiff.h"
 #include "skdiff_utils.h"
+#include "sk_tool_utils.h"
 #include "SkBitmap.h"
 #include "SkCodec.h"
 #include "SkData.h"
@@ -70,7 +71,6 @@ bool get_bitmap(sk_sp<SkData> fileBits, DiffResource& resource, bool sizeOnly) {
 
 /** Thanks to PNG, we need to force all pixels 100% opaque. */
 static void force_all_opaque(const SkBitmap& bitmap) {
-   SkAutoLockPixels lock(bitmap);
    for (int y = 0; y < bitmap.height(); y++) {
        for (int x = 0; x < bitmap.width(); x++) {
            *bitmap.getAddr32(x, y) |= (SK_A32_MASK << SK_A32_SHIFT);
@@ -80,10 +80,10 @@ static void force_all_opaque(const SkBitmap& bitmap) {
 
 bool write_bitmap(const SkString& path, const SkBitmap& bitmap) {
     SkBitmap copy;
-    bitmap.copyTo(&copy, kN32_SkColorType);
+    sk_tool_utils::copy_to(&copy, kN32_SkColorType, bitmap);
     force_all_opaque(copy);
-    return SkImageEncoder::EncodeFile(path.c_str(), copy,
-                                      SkImageEncoder::kPNG_Type, 100);
+    return sk_tool_utils::EncodeImageToFile(path.c_str(), copy,
+                                      SkEncodedImageFormat::kPNG, 100);
 }
 
 /// Return a copy of the "input" string, within which we have replaced all instances

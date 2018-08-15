@@ -49,7 +49,7 @@ gn gen out/Default --args='target_os="android"'
 (We don't have to specify target\_cpu because of the conditionals
 mentioned above).
 
-And, to do a 64-bit MIPS ChromeOS cross-compile:
+And, to do a 64-bit MIPS Chrome OS cross-compile:
 
 ```
 gn gen out/Default --args='target_os="chromeos" target_cpu="mips64el"'
@@ -80,8 +80,8 @@ be used rather than `target_cpu` most of the time**.
 
 By default, dependencies listed in the `deps` variable of a rule use the
 same (currently active) toolchain. You may specify a different toolchain
-using the `foo(bar)` label notation as described in
-[GNLanguage#Labels](language.md#Labels).
+using the `foo(bar)` label notation as described in [the label section
+of the reference doc](reference.md#Toolchains).
 
 Here's an example of when to use `target_cpu` vs `current_cpu`:
 
@@ -111,9 +111,7 @@ config("my_config") {
 
 ## As a //build/config or //build/toolchain author
 
-As described in
-[GNLanguage#Overall-build-flow](language.md#Overall-build-flow), the
-`default_toolchain` is declared in the `//build/config/BUILDCONFIG.gn`
+The `default_toolchain` is declared in the `//build/config/BUILDCONFIG.gn`
 file. Usually the `default_toolchain` should be the toolchain for the
 `target_os` and `target_cpu`. The `current_toolchain` reflects the
 toolchain that is currently in effect for a rule.

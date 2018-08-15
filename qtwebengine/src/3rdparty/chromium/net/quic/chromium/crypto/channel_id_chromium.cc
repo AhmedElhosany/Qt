@@ -23,7 +23,7 @@ ChannelIDKeyChromium::ChannelIDKeyChromium(
 
 ChannelIDKeyChromium::~ChannelIDKeyChromium() {}
 
-bool ChannelIDKeyChromium::Sign(base::StringPiece signed_data,
+bool ChannelIDKeyChromium::Sign(QuicStringPiece signed_data,
                                 std::string* out_signature) const {
   std::unique_ptr<crypto::ECSignatureCreator> sig_creator(
       crypto::ECSignatureCreator::Create(ec_private_key_.get()));
@@ -128,7 +128,7 @@ QuicAsyncStatus ChannelIDSourceChromium::Job::GetChannelIDKey(
   next_state_ = STATE_GET_CHANNEL_ID_KEY;
   switch (DoLoop(OK)) {
     case OK:
-      channel_id_key->reset(channel_id_key_.release());
+      *channel_id_key = std::move(channel_id_key_);
       return QUIC_SUCCESS;
     case ERR_IO_PENDING:
       callback_.reset(callback);

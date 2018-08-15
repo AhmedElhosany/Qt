@@ -29,22 +29,21 @@
 
 import sys
 
-import in_generator
+import json5_generator
 import trie_builder
 import template_expander
 
 
-class ElementLookupTrieWriter(in_generator.Writer):
+class ElementLookupTrieWriter(json5_generator.Writer):
     # FIXME: Inherit all these from somewhere.
-    defaults = {
-        'JSInterfaceName': None,
-        'constructorNeedsCreatedByParser': None,
-        'constructorNeedsFormElement': None,
-        'interfaceName': None,
-        'noConstructor': None,
-        'runtimeEnabled': None,
-    }
     default_parameters = {
+        'JSInterfaceName': {},
+        'constructorNeedsCreatedByParser': {},
+        'interfaceName': {},
+        'noConstructor': {},
+        'runtimeEnabled': {},
+    }
+    default_metadata = {
         'attrsNullNamespace': None,
         'export': '',
         'fallbackInterfaceName': '',
@@ -54,30 +53,32 @@ class ElementLookupTrieWriter(in_generator.Writer):
         'namespaceURI': '',
     }
 
-    def __init__(self, in_file_paths):
-        super(ElementLookupTrieWriter, self).__init__(in_file_paths)
+    def __init__(self, json5_file_paths):
+        super(ElementLookupTrieWriter, self).__init__(json5_file_paths)
         self._tags = {}
-        for entry in self.in_file.name_dictionaries:
+        for entry in self.json5_file.name_dictionaries:
             self._tags[entry['name']] = entry['name']
-        self._namespace = self.in_file.parameters['namespace'].strip('"')
+        self._namespace = self.json5_file.metadata['namespace'].strip('"')
         self._outputs = {
             (self._namespace + 'ElementLookupTrie.h'): self.generate_header,
             (self._namespace + 'ElementLookupTrie.cpp'): self.generate_implementation,
         }
 
-    @template_expander.use_jinja('ElementLookupTrie.h.tmpl')
+    @template_expander.use_jinja('templates/ElementLookupTrie.h.tmpl')
     def generate_header(self):
         return {
+            'input_files': self._input_files,
             'namespace': self._namespace,
         }
 
-    @template_expander.use_jinja('ElementLookupTrie.cpp.tmpl')
+    @template_expander.use_jinja('templates/ElementLookupTrie.cpp.tmpl')
     def generate_implementation(self):
         return {
+            'input_files': self._input_files,
             'namespace': self._namespace,
             'length_tries': trie_builder.trie_list_by_str_length(self._tags)
         }
 
 
 if __name__ == '__main__':
-    in_generator.Maker(ElementLookupTrieWriter).main(sys.argv)
+    json5_generator.Maker(ElementLookupTrieWriter).main()

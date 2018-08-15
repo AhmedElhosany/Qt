@@ -347,7 +347,7 @@ void VectorCanBackendPrivate::startRead()
             break;
         }
 
-        if (event.tag != XL_RECEIVE_MSG)
+        if (event.tag != XL_RECEIVE_MSG || event.portHandle != portHandle)
             continue;
 
         const s_xl_can_msg &msg = event.tagData.msg;
@@ -359,6 +359,7 @@ void VectorCanBackendPrivate::startRead()
                            QByteArray(reinterpret_cast<const char *>(msg.data), int(msg.dlc)));
         frame.setTimeStamp(QCanBusFrame::TimeStamp::fromMicroSeconds(event.timeStamp / 1000));
         frame.setExtendedFrameFormat(msg.id & XL_CAN_EXT_MSG_ID);
+        frame.setLocalEcho(msg.flags & XL_CAN_MSG_FLAG_TX_COMPLETED);
         frame.setFrameType((msg.flags & XL_CAN_MSG_FLAG_REMOTE_FRAME)
                            ? QCanBusFrame::RemoteRequestFrame
                            : (msg.flags & XL_CAN_MSG_FLAG_ERROR_FRAME)

@@ -8,10 +8,10 @@ import("//testing/test.gni")
 
 source_set("mus_common") {
   sources = [
-    "event_matcher_util.cc",
-    "event_matcher_util.h",
-    "generic_shared_memory_id_generator.cc",
-    "generic_shared_memory_id_generator.h",
+    "accelerator_util.cc",
+    "accelerator_util.h",
+    "image_cursors_set.cc",
+    "image_cursors_set.h",
     "switches.cc",
     "switches.h",
     "transient_window_utils.h",
@@ -38,20 +38,17 @@ source_set("mus_common") {
   ]
 }
 
-source_set("run_all_service_tests") {
+source_set("task_runner_test_base") {
   testonly = true
 
   sources = [
-    "run_all_service_tests.cc",
+    "task_runner_test_base.cc",
+    "task_runner_test_base.h",
   ]
 
   deps = [
+    "//base",
     "//base/test:test_support",
-    "//mojo/edk/system",
-    "//services/service_manager/background:main",
+    "//testing/gtest",
   ]
-
-  if (use_ozone) {
-    deps += [ "//ui/ozone" ]
-  }
 }

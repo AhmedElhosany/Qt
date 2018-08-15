@@ -8,11 +8,12 @@
 #include <memory>
 #include <vector>
 
+#include "base/callback.h"
 #include "content/common/content_export.h"
 
 namespace cc {
 class CopyOutputRequest;
-class CompositorFrameSink;
+class LayerTreeFrameSink;
 class SwapPromise;
 }
 
@@ -21,6 +22,9 @@ class Vector2dF;
 }
 
 namespace content {
+
+using LayerTreeFrameSinkCallback =
+    base::Callback<void(std::unique_ptr<cc::LayerTreeFrameSink>)>;
 
 // Consumers of RenderWidgetCompositor implement this delegate in order to
 // transport compositing information across processes.
@@ -35,12 +39,19 @@ class CONTENT_EXPORT RenderWidgetCompositorDelegate {
       float page_scale,
       float top_controls_delta) = 0;
 
+  // Record use count of wheel/touch sources for scrolling on the compositor
+  // thread.
+  virtual void RecordWheelAndTouchScrollingCount(
+      bool has_scrolled_by_wheel,
+      bool has_scrolled_by_touch) = 0;
+
   // Notifies that the compositor has issed a BeginMainFrame.
   virtual void BeginMainFrame(double frame_time_sec) = 0;
 
-  // Requests a CompositorFrameSink to submit to.
-  virtual std::unique_ptr<cc::CompositorFrameSink> CreateCompositorFrameSink(
-      bool fallback) = 0;
+  // Requests a LayerTreeFrameSink to submit CompositorFrames to.
+  virtual void RequestNewLayerTreeFrameSink(
+      bool fallback,
+      const LayerTreeFrameSinkCallback& callback) = 0;
 
   // Notifies that the draw commands for a committed frame have been issued.
   virtual void DidCommitAndDrawCompositorFrame() = 0;
@@ -54,10 +65,6 @@ class CONTENT_EXPORT RenderWidgetCompositorDelegate {
   // Notifies that the last submitted CompositorFrame has been processed and
   // will be displayed.
   virtual void DidReceiveCompositorFrameAck() = 0;
-
-  // Called by the compositor to forward a proto that represents serialized
-  // compositor state.
-  virtual void ForwardCompositorProto(const std::vector<uint8_t>& proto) = 0;
 
   // Indicates whether the RenderWidgetCompositor is about to close.
   virtual bool IsClosing() const = 0;

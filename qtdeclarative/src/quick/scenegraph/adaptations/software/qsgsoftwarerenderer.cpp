@@ -90,7 +90,7 @@ void QSGSoftwareRenderer::renderScene(uint)
     class B : public QSGBindable
     {
     public:
-        void bind() const { }
+        void bind() const override { }
     } bindable;
     QSGRenderer::renderScene(bindable);
 }
@@ -156,7 +156,6 @@ void QSGSoftwareRenderer::render()
     m_flushRegion = renderNodes(&painter);
     qint64 renderTime = renderTimer.elapsed();
 
-    painter.end();
     if (m_backingStore != nullptr)
         m_backingStore->endPaint();
 

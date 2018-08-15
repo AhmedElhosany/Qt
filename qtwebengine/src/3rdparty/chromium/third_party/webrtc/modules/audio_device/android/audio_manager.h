@@ -16,14 +16,14 @@
 #include <jni.h>
 #include <SLES/OpenSLES.h>
 
-#include "webrtc/base/thread_checker.h"
 #include "webrtc/modules/audio_device/android/audio_common.h"
-#include "webrtc/modules/audio_device/audio_device_config.h"
-#include "webrtc/modules/audio_device/include/audio_device_defines.h"
 #include "webrtc/modules/audio_device/android/opensles_common.h"
+#include "webrtc/modules/audio_device/audio_device_config.h"
 #include "webrtc/modules/audio_device/audio_device_generic.h"
+#include "webrtc/modules/audio_device/include/audio_device_defines.h"
 #include "webrtc/modules/utility/include/helpers_android.h"
 #include "webrtc/modules/utility/include/jvm_android.h"
+#include "webrtc/rtc_base/thread_checker.h"
 
 namespace webrtc {
 
@@ -120,7 +120,8 @@ class AudioManager {
   static void JNICALL CacheAudioParameters(JNIEnv* env,
                                            jobject obj,
                                            jint sample_rate,
-                                           jint channels,
+                                           jint output_channels,
+                                           jint input_channels,
                                            jboolean hardware_aec,
                                            jboolean hardware_agc,
                                            jboolean hardware_ns,
@@ -132,7 +133,8 @@ class AudioManager {
                                            jlong native_audio_manager);
   void OnCacheAudioParameters(JNIEnv* env,
                               jint sample_rate,
-                              jint channels,
+                              jint output_channels,
+                              jint input_channels,
                               jboolean hardware_aec,
                               jboolean hardware_agc,
                               jboolean hardware_ns,

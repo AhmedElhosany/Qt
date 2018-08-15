@@ -50,6 +50,7 @@
 #include <Qt3DRender/private/managers_p.h>
 #include <Qt3DRender/private/texturedatamanager_p.h>
 #include <Qt3DRender/private/qabstracttexture_p.h>
+#include <Qt3DRender/private/renderbuffer_p.h>
 #include <Qt3DCore/qpropertyupdatedchange.h>
 #include <Qt3DCore/qpropertynodeaddedchange.h>
 #include <Qt3DCore/qpropertynoderemovedchange.h>
@@ -67,6 +68,7 @@ GLTexture::GLTexture(TextureDataManager *texDataMgr,
                      bool unique)
     : m_unique(unique)
     , m_gl(nullptr)
+    , m_renderBuffer(nullptr)
     , m_textureDataManager(texDataMgr)
     , m_textureImageDataManager(texImgDataMgr)
     , m_dataFunctor(texGen)
@@ -97,6 +99,9 @@ void GLTexture::destroyGLTexture()
 {
     delete m_gl;
     m_gl = nullptr;
+    delete m_renderBuffer;
+    m_renderBuffer = nullptr;
+
     m_dirtyFlags.store(0);
 
     destroyResources();
@@ -170,7 +175,8 @@ QOpenGLTexture* GLTexture::getOrCreateGLTexture()
                     setDirtyFlag(Properties, true);
                 }
             } else {
-                qWarning() << "[Qt3DRender::GLTexture] No QTextureImageData generated from functor yet, texture will be invalid for this frame";
+                // No QTextureImageData generated from functor yet, texture will be invalid for this frame
+                // but will be correctly loaded at frame n+1
                 texturedDataInvalid = true;
             }
         }
@@ -217,6 +223,41 @@ QOpenGLTexture* GLTexture::getOrCreateGLTexture()
     setDirtyFlag(Parameters, false);
 
     return m_gl;
+}
+
+RenderBuffer *GLTexture::getOrCreateRenderBuffer()
+{
+    QMutexLocker locker(&m_textureMutex);
+
+    if (m_dataFunctor && !m_textureData) {
+        m_textureData = m_textureDataManager->getData(m_dataFunctor);
+        if (m_textureData) {
+            if (m_properties.target != QAbstractTexture::TargetAutomatic)
+                qWarning() << "[Qt3DRender::GLTexture] [renderbuffer] When a texture provides a generator, it's target is expected to be TargetAutomatic";
+
+            m_properties.width = m_textureData->width();
+            m_properties.height = m_textureData->height();
+            m_properties.format = m_textureData->format();
+
+            setDirtyFlag(Properties);
+        } else {
+            qWarning() << "[Qt3DRender::GLTexture] [renderbuffer] No QTextureData generated from Texture Generator yet. Texture will be invalid for this frame";
+            return nullptr;
+        }
+    }
+
+    if (testDirtyFlag(Properties)) {
+        delete m_renderBuffer;
+        m_renderBuffer = nullptr;
+    }
+
+    if (!m_renderBuffer)
+        m_renderBuffer = new RenderBuffer(m_properties.width, m_properties.height, m_properties.format);
+
+    setDirtyFlag(Properties, false);
+    setDirtyFlag(Parameters, false);
+
+    return m_renderBuffer;
 }
 
 void GLTexture::setParameters(const TextureParameters &params)
@@ -290,20 +331,24 @@ void GLTexture::setImages(const QVector<Image> &images)
 
 void GLTexture::setGenerator(const QTextureGeneratorPtr &generator)
 {
-    if (m_dataFunctor != generator) {
-        if (m_dataFunctor)
-            m_textureDataManager->releaseData(m_dataFunctor, this);
+    // Note: we do not compare if the generator is different
+    // as in some cases we may want to reset the same generator to force a reload
+    // e.g when using remote urls for textures
+    if (m_dataFunctor)
+        m_textureDataManager->releaseData(m_dataFunctor, this);
 
-        m_textureData.reset();
-        m_dataFunctor = generator;
+    m_textureData.reset();
+    m_dataFunctor = generator;
 
-        if (m_dataFunctor) {
-            m_textureDataManager->requestData(m_dataFunctor, this);
-            requestUpload();
-        }
+    if (m_dataFunctor) {
+        m_textureDataManager->requestData(m_dataFunctor, this);
+        requestUpload();
     }
 }
 
+// Return nullptr if
+// - context cannot be obtained
+// - texture hasn't yet been loaded
 QOpenGLTexture *GLTexture::buildGLTexture()
 {
     QOpenGLContext *ctx = QOpenGLContext::currentContext();
@@ -313,7 +358,9 @@ QOpenGLTexture *GLTexture::buildGLTexture()
     }
 
     if (m_actualTarget == QAbstractTexture::TargetAutomatic) {
-        qWarning() << Q_FUNC_INFO << "something went wrong, target shouldn't be automatic at this point";
+        // If the target is automatic at this point, it means that the texture
+        // hasn't been loaded yet (case of remote urls) and that loading failed
+        // and that target format couldn't be deduced
         return nullptr;
     }
 

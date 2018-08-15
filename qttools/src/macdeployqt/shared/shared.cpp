@@ -821,6 +821,12 @@ void changeInstallName(const QString &bundlePath, const FrameworkInfo &framework
             deployedInstallName = framework.deployedInstallName;
         }
         changeInstallName(framework.installName, deployedInstallName, binary);
+        // Workaround for the case when the library ID name is a symlink, while the dependencies
+        // specified using the canonical path to the library (QTBUG-56814)
+        QString canonicalInstallName = QFileInfo(framework.installName).canonicalFilePath();
+        if (canonicalInstallName != framework.installName) {
+            changeInstallName(canonicalInstallName, deployedInstallName, binary);
+        }
     }
 }
 
@@ -1023,73 +1029,69 @@ void deployPlugins(const ApplicationBundleInfo &appBundleInfo, const QString &pl
     // Plugin white list:
     QStringList pluginList;
 
+    const auto addPlugins = [&pluginSourcePath,&pluginList](const QString &subDirectory,
+            const std::function<bool(QString)> &predicate = std::function<bool(QString)>()) {
+        const QStringList libs = QDir(pluginSourcePath + QLatin1Char('/') + subDirectory)
+                .entryList({QStringLiteral("*.dylib")});
+        for (const QString &lib : libs) {
+            if (!lib.endsWith(QStringLiteral("_debug.dylib")) && (!predicate || predicate(lib)))
+                pluginList.append(subDirectory + QLatin1Char('/') + lib);
+        }
+    };
+
     // Platform plugin:
     pluginList.append("platforms/libqcocoa.dylib");
 
     // Cocoa print support
     pluginList.append("printsupport/libcocoaprintersupport.dylib");
 
+    // Styles
+    addPlugins(QStringLiteral("styles"));
+
     // Check if Qt was configured with -libinfix
     const QString libInfixWithFramework = getLibInfix(deploymentInfo.deployedFrameworks) + QStringLiteral(".framework");
 
     // Network
-    if (deploymentInfo.deployedFrameworks.contains(QStringLiteral("QtNetwork") + libInfixWithFramework)) {
-        QStringList bearerPlugins = QDir(pluginSourcePath +  QStringLiteral("/bearer")).entryList(QStringList() << QStringLiteral("*.dylib"));
-        foreach (const QString &plugin, bearerPlugins) {
-            if (!plugin.endsWith(QStringLiteral("_debug.dylib")))
-                pluginList.append(QStringLiteral("bearer/") + plugin);
-        }
-    }
+    if (deploymentInfo.deployedFrameworks.contains(QStringLiteral("QtNetwork") + libInfixWithFramework))
+        addPlugins(QStringLiteral("bearer"));
 
     // All image formats (svg if QtSvg.framework is used)
-    QStringList imagePlugins = QDir(pluginSourcePath +  QStringLiteral("/imageformats")).entryList(QStringList() << QStringLiteral("*.dylib"));
-    foreach (const QString &plugin, imagePlugins) {
-        if (plugin.contains(QStringLiteral("qsvg"))) {
-            if (deploymentInfo.deployedFrameworks.contains(QStringLiteral("QtSvg") + libInfixWithFramework))
-                pluginList.append(QStringLiteral("imageformats/") + plugin);
-        } else if (!plugin.endsWith(QStringLiteral("_debug.dylib"))) {
-            pluginList.append(QStringLiteral("imageformats/") + plugin);
-        }
-    }
+    const bool usesSvg = deploymentInfo.deployedFrameworks.contains(QStringLiteral("QtSvg") + libInfixWithFramework);
+    addPlugins(QStringLiteral("imageformats"), [usesSvg](const QString &lib) {
+        if (lib.contains(QStringLiteral("qsvg")) && !usesSvg)
+            return false;
+        return true;
+    });
 
-    QStringList iconEngines = QDir(pluginSourcePath + QStringLiteral("/iconengines")).entryList(QStringList() << QStringLiteral("*.dylib"));
-    foreach (const QString &plugin, iconEngines) {
-        if (!plugin.endsWith(QStringLiteral("_debug.dylib"))) {
-            pluginList.append(QStringLiteral("iconengines/") + plugin);
-        }
-    }
+    addPlugins(QStringLiteral("iconengines"));
 
     // Sql plugins if QtSql.framework is in use
     if (deploymentInfo.deployedFrameworks.contains(QStringLiteral("QtSql") + libInfixWithFramework)) {
-        QStringList sqlPlugins = QDir(pluginSourcePath +  QStringLiteral("/sqldrivers")).entryList(QStringList() << QStringLiteral("*.dylib"));
-        foreach (const QString &plugin, sqlPlugins) {
-            if (plugin.endsWith(QStringLiteral("_debug.dylib")))
-                continue;
-
-            // Some sql plugins are known to cause app store rejections. Skip or warn for these plugins.
-            if (plugin.startsWith(QStringLiteral("libqsqlodbc")) || plugin.startsWith(QStringLiteral("libqsqlpsql"))) {
-                LogWarning() << "Plugin" << plugin << "uses private API and is not Mac App store compliant.";
+        addPlugins(QStringLiteral("sqldrivers"), [](const QString &lib) {
+            if (lib.startsWith(QStringLiteral("libqsqlodbc")) || lib.startsWith(QStringLiteral("libqsqlpsql"))) {
+                LogWarning() << "Plugin" << lib << "uses private API and is not Mac App store compliant.";
                 if (appstoreCompliant) {
-                    LogWarning() << "Skip plugin" << plugin;
-                    continue;
+                    LogWarning() << "Skip plugin" << lib;
+                    return false;
                 }
             }
-
-            pluginList.append(QStringLiteral("sqldrivers/") + plugin);
-        }
+            return true;
+        });
     }
 
-    // multimedia plugins if QtMultimedia.framework is in use
-    if (deploymentInfo.deployedFrameworks.contains(QStringLiteral("QtMultimedia") + libInfixWithFramework)) {
-        QStringList plugins = QDir(pluginSourcePath + QStringLiteral("/mediaservice")).entryList(QStringList() << QStringLiteral("*.dylib"));
-        foreach (const QString &plugin, plugins) {
-            if (!plugin.endsWith(QStringLiteral("_debug.dylib")))
-                pluginList.append(QStringLiteral("mediaservice/") + plugin);
-        }
-        plugins = QDir(pluginSourcePath + QStringLiteral("/audio")).entryList(QStringList() << QStringLiteral("*.dylib"));
-        foreach (const QString &plugin, plugins) {
-            if (!plugin.endsWith(QStringLiteral("_debug.dylib")))
-                pluginList.append(QStringLiteral("audio/") + plugin);
+    static const std::map<QString, std::vector<QString>> map {
+        {QStringLiteral("QtMultimedia"), {QStringLiteral("mediaservice"), QStringLiteral("audio")}},
+        {QStringLiteral("Qt3DRender"), {QStringLiteral("sceneparsers"), QStringLiteral("geometryloaders")}},
+        {QStringLiteral("Qt3DQuickRender"), {QStringLiteral("renderplugins")}},
+        {QStringLiteral("QtPositioning"), {QStringLiteral("position")}},
+        {QStringLiteral("QtLocation"), {QStringLiteral("geoservices")}}
+    };
+
+    for (const auto &it : map) {
+        if (deploymentInfo.deployedFrameworks.contains(it.first + libInfixWithFramework)) {
+            for (const auto &pluginType : it.second) {
+                addPlugins(pluginType);
+            }
         }
     }
 
@@ -1493,7 +1495,7 @@ void codesign(const QString &identity, const QString &appBundlePath) {
     codesignBundle(identity, appBundlePath, QList<QString>());
 }
 
-void createDiskImage(const QString &appBundlePath, const QString &filesystemType)
+void createDiskImage(const QString &appBundlePath)
 {
     QString appBaseName = appBundlePath;
     appBaseName.chop(4); // remove ".app" from end
@@ -1511,22 +1513,16 @@ void createDiskImage(const QString &appBundlePath, const QString &filesystemType
         LogNormal() << "Creating disk image (.dmg) for" << appBundlePath;
     }
 
-    LogNormal() << "Image will use" << filesystemType;
-
     // More dmg options can be found in the hdiutil man page.
     QStringList options = QStringList()
             << "create" << dmgName
             << "-srcfolder" << appBundlePath
             << "-format" << "UDZO"
-            << "-fs" << filesystemType
             << "-volname" << appBaseName;
 
     QProcess hdutil;
     hdutil.start("hdiutil", options);
     hdutil.waitForFinished(-1);
-    if (hdutil.exitCode() != 0) {
-        LogError() << "Bundle creation error:" << hdutil.readAllStandardError();
-    }
 }
 
 void fixupFramework(const QString &frameworkName)

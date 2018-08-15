@@ -13,8 +13,9 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "media/base/audio_timestamp_helper.h"
 #include "media/base/fake_audio_render_callback.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -59,7 +60,7 @@ class AudioConverterTest
     // Allocate one callback for generating expected results.
     double step = kSineCycles / static_cast<double>(
         output_parameters_.frames_per_buffer());
-    expected_callback_.reset(new FakeAudioRenderCallback(step));
+    expected_callback_.reset(new FakeAudioRenderCallback(step, kSampleRate));
   }
 
   // Creates |count| input callbacks to be used for conversion testing.
@@ -71,8 +72,9 @@ class AudioConverterTest
         static_cast<double>(output_parameters_.frames_per_buffer()));
 
     for (int i = 0; i < count; ++i) {
-      fake_callbacks_.push_back(new FakeAudioRenderCallback(step));
-      converter_->AddInput(fake_callbacks_[i]);
+      fake_callbacks_.push_back(
+          base::MakeUnique<FakeAudioRenderCallback>(step, kSampleRate));
+      converter_->AddInput(fake_callbacks_[i].get());
     }
   }
 
@@ -115,7 +117,8 @@ class AudioConverterTest
     converter_->Convert(audio_bus_.get());
 
     // Render expected audio data.
-    expected_callback_->Render(expected_audio_bus_.get(), 0, 0);
+    expected_callback_->Render(base::TimeDelta(), base::TimeTicks::Now(), 0,
+                               expected_audio_bus_.get());
 
     // Zero out unused channels in the expected AudioBus just as AudioConverter
     // would during channel mixing.
@@ -160,7 +163,7 @@ class AudioConverterTest
 
     // Remove every other input.
     for (size_t i = 1; i < fake_callbacks_.size(); i += 2)
-      converter_->RemoveInput(fake_callbacks_[i]);
+      converter_->RemoveInput(fake_callbacks_[i].get());
 
     SetVolume(1);
     float scale = inputs > 1 ? inputs / 2.0f : inputs;
@@ -185,7 +188,7 @@ class AudioConverterTest
   std::unique_ptr<AudioBus> expected_audio_bus_;
 
   // Vector of all input callbacks used to drive AudioConverter::Convert().
-  ScopedVector<FakeAudioRenderCallback> fake_callbacks_;
+  std::vector<std::unique_ptr<FakeAudioRenderCallback>> fake_callbacks_;
 
   // Parallel input callback which generates the expected output.
   std::unique_ptr<FakeAudioRenderCallback> expected_callback_;
@@ -211,7 +214,7 @@ TEST(AudioConverterTest, AudioDelayAndDiscreteChannelCount) {
   output_parameters.set_channels_for_discrete(5);
 
   AudioConverter converter(input_parameters, output_parameters, false);
-  FakeAudioRenderCallback callback(0.2);
+  FakeAudioRenderCallback callback(0.2, kSampleRate);
   std::unique_ptr<AudioBus> audio_bus = AudioBus::Create(output_parameters);
   converter.AddInput(&callback);
   converter.Convert(audio_bus.get());
@@ -228,8 +231,9 @@ TEST(AudioConverterTest, AudioDelayAndDiscreteChannelCount) {
   // first two callbacks, 512 for the last two callbacks). See
   // SincResampler.ChunkSize().
   int kExpectedDelay = 992;
-
-  EXPECT_EQ(kExpectedDelay, callback.last_frames_delayed());
+  auto expected_delay =
+      AudioTimestampHelper::FramesToTime(kExpectedDelay, kSampleRate);
+  EXPECT_EQ(expected_delay, callback.last_delay());
   EXPECT_EQ(input_parameters.channels(), callback.last_channel_count());
 }
 

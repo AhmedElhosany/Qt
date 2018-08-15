@@ -6,9 +6,12 @@
 
 #include "fpdfsdk/formfiller/cba_fontmap.h"
 
+#include <utility>
+
 #include "core/fpdfapi/font/cpdf_font.h"
 #include "core/fpdfapi/page/cpdf_page.h"
 #include "core/fpdfapi/parser/cpdf_document.h"
+#include "core/fpdfapi/parser/cpdf_reference.h"
 #include "core/fpdfapi/parser/cpdf_simple_parser.h"
 #include "core/fpdfapi/parser/cpdf_stream.h"
 #include "core/fpdfapi/parser/fpdf_parser_decode.h"
@@ -25,7 +28,7 @@ CBA_FontMap::CBA_FontMap(CPDFSDK_Annot* pAnnot,
       m_sAPType("N") {
   CPDF_Page* pPage = pAnnot->GetPDFPage();
 
-  m_pDocument = pPage->m_pDocument;
+  m_pDocument = pPage->m_pDocument.Get();
   m_pAnnotDict = pAnnot->GetPDFAnnot()->GetAnnotDict();
   Initialize();
 }
@@ -39,10 +42,10 @@ void CBA_FontMap::Reset() {
 }
 
 void CBA_FontMap::Initialize() {
-  int32_t nCharset = FXFONT_DEFAULT_CHARSET;
+  int32_t nCharset = FX_CHARSET_Default;
 
   if (!m_pDefaultFont) {
-    m_pDefaultFont = GetAnnotDefaultFont(m_sDefaultFontName);
+    m_pDefaultFont = GetAnnotDefaultFont(&m_sDefaultFontName);
     if (m_pDefaultFont) {
       if (const CFX_SubstFont* pSubstFont = m_pDefaultFont->GetSubstFont()) {
         nCharset = pSubstFont->m_Charset;
@@ -51,16 +54,16 @@ void CBA_FontMap::Initialize() {
             m_sDefaultFontName == "Wingdings2" ||
             m_sDefaultFontName == "Wingdings3" ||
             m_sDefaultFontName == "Webdings")
-          nCharset = FXFONT_SYMBOL_CHARSET;
+          nCharset = FX_CHARSET_Symbol;
         else
-          nCharset = FXFONT_ANSI_CHARSET;
+          nCharset = FX_CHARSET_ANSI;
       }
-      AddFontData(m_pDefaultFont, m_sDefaultFontName, nCharset);
-      AddFontToAnnotDict(m_pDefaultFont, m_sDefaultFontName);
+      AddFontData(m_pDefaultFont.Get(), m_sDefaultFontName, nCharset);
+      AddFontToAnnotDict(m_pDefaultFont.Get(), m_sDefaultFontName);
     }
   }
 
-  if (nCharset != FXFONT_ANSI_CHARSET)
+  if (nCharset != FX_CHARSET_ANSI)
     CPWL_FontMap::Initialize();
 }
 
@@ -74,13 +77,13 @@ void CBA_FontMap::SetDefaultFont(CPDF_Font* pFont,
   m_pDefaultFont = pFont;
   m_sDefaultFontName = sFontName;
 
-  int32_t nCharset = FXFONT_DEFAULT_CHARSET;
+  int32_t nCharset = FX_CHARSET_Default;
   if (const CFX_SubstFont* pSubstFont = m_pDefaultFont->GetSubstFont())
     nCharset = pSubstFont->m_Charset;
-  AddFontData(m_pDefaultFont, m_sDefaultFontName, nCharset);
+  AddFontData(m_pDefaultFont.Get(), m_sDefaultFontName, nCharset);
 }
 
-CPDF_Font* CBA_FontMap::FindFontSameCharset(CFX_ByteString& sFontAlias,
+CPDF_Font* CBA_FontMap::FindFontSameCharset(CFX_ByteString* sFontAlias,
                                             int32_t nCharset) {
   if (m_pAnnotDict->GetStringFor("Subtype") != "Widget")
     return nullptr;
@@ -102,11 +105,11 @@ CPDF_Font* CBA_FontMap::FindFontSameCharset(CFX_ByteString& sFontAlias,
 }
 
 CPDF_Document* CBA_FontMap::GetDocument() {
-  return m_pDocument;
+  return m_pDocument.Get();
 }
 
 CPDF_Font* CBA_FontMap::FindResFontSameCharset(CPDF_Dictionary* pResDict,
-                                               CFX_ByteString& sFontAlias,
+                                               CFX_ByteString* sFontAlias,
                                                int32_t nCharset) {
   if (!pResDict)
     return nullptr;
@@ -119,11 +122,10 @@ CPDF_Font* CBA_FontMap::FindResFontSameCharset(CPDF_Dictionary* pResDict,
   CPDF_Font* pFind = nullptr;
   for (const auto& it : *pFonts) {
     const CFX_ByteString& csKey = it.first;
-    CPDF_Object* pObj = it.second;
-    if (!pObj)
+    if (!it.second)
       continue;
 
-    CPDF_Dictionary* pElement = ToDictionary(pObj->GetDirect());
+    CPDF_Dictionary* pElement = ToDictionary(it.second->GetDirect());
     if (!pElement)
       continue;
     if (pElement->GetStringFor("Type") != "Font")
@@ -136,7 +138,7 @@ CPDF_Font* CBA_FontMap::FindResFontSameCharset(CPDF_Dictionary* pResDict,
     if (!pSubst)
       continue;
     if (pSubst->m_Charset == nCharset) {
-      sFontAlias = csKey;
+      *sFontAlias = csKey;
       pFind = pFont;
     }
   }
@@ -154,10 +156,8 @@ void CBA_FontMap::AddFontToAnnotDict(CPDF_Font* pFont,
     return;
 
   CPDF_Dictionary* pAPDict = m_pAnnotDict->GetDictFor("AP");
-  if (!pAPDict) {
-    pAPDict = new CPDF_Dictionary(m_pDocument->GetByteStringPool());
-    m_pAnnotDict->SetFor("AP", pAPDict);
-  }
+  if (!pAPDict)
+    pAPDict = m_pAnnotDict->SetNewFor<CPDF_Dictionary>("AP");
 
   // to avoid checkbox and radiobutton
   CPDF_Object* pObject = pAPDict->GetObjectFor(m_sAPType);
@@ -167,34 +167,34 @@ void CBA_FontMap::AddFontToAnnotDict(CPDF_Font* pFont,
   CPDF_Stream* pStream = pAPDict->GetStreamFor(m_sAPType);
   if (!pStream) {
     pStream = m_pDocument->NewIndirect<CPDF_Stream>();
-    pAPDict->SetReferenceFor(m_sAPType, m_pDocument, pStream);
+    pAPDict->SetNewFor<CPDF_Reference>(m_sAPType, m_pDocument.Get(),
+                                       pStream->GetObjNum());
   }
 
   CPDF_Dictionary* pStreamDict = pStream->GetDict();
   if (!pStreamDict) {
-    pStreamDict = new CPDF_Dictionary(m_pDocument->GetByteStringPool());
-    pStream->InitStream(nullptr, 0, pStreamDict);
+    auto pOwnedDict =
+        pdfium::MakeUnique<CPDF_Dictionary>(m_pDocument->GetByteStringPool());
+    pStreamDict = pOwnedDict.get();
+    pStream->InitStream(nullptr, 0, std::move(pOwnedDict));
   }
 
-  if (pStreamDict) {
-    CPDF_Dictionary* pStreamResList = pStreamDict->GetDictFor("Resources");
-    if (!pStreamResList) {
-      pStreamResList = new CPDF_Dictionary(m_pDocument->GetByteStringPool());
-      pStreamDict->SetFor("Resources", pStreamResList);
-    }
-    CPDF_Dictionary* pStreamResFontList = pStreamResList->GetDictFor("Font");
-    if (!pStreamResFontList) {
-      pStreamResFontList = m_pDocument->NewIndirect<CPDF_Dictionary>();
-      pStreamResList->SetReferenceFor("Font", m_pDocument, pStreamResFontList);
-    }
-    if (!pStreamResFontList->KeyExist(sAlias)) {
-      pStreamResFontList->SetReferenceFor(sAlias, m_pDocument,
-                                          pFont->GetFontDict()->GetObjNum());
-    }
+  CPDF_Dictionary* pStreamResList = pStreamDict->GetDictFor("Resources");
+  if (!pStreamResList)
+    pStreamResList = pStreamDict->SetNewFor<CPDF_Dictionary>("Resources");
+  CPDF_Dictionary* pStreamResFontList = pStreamResList->GetDictFor("Font");
+  if (!pStreamResFontList) {
+    pStreamResFontList = m_pDocument->NewIndirect<CPDF_Dictionary>();
+    pStreamResList->SetNewFor<CPDF_Reference>("Font", m_pDocument.Get(),
+                                              pStreamResFontList->GetObjNum());
+  }
+  if (!pStreamResFontList->KeyExist(sAlias)) {
+    pStreamResFontList->SetNewFor<CPDF_Reference>(
+        sAlias, m_pDocument.Get(), pFont->GetFontDict()->GetObjNum());
   }
 }
 
-CPDF_Font* CBA_FontMap::GetAnnotDefaultFont(CFX_ByteString& sAlias) {
+CPDF_Font* CBA_FontMap::GetAnnotDefaultFont(CFX_ByteString* sAlias) {
   CPDF_Dictionary* pAcroFormDict = nullptr;
   const bool bWidget = (m_pAnnotDict->GetStringFor("Subtype") == "Widget");
   if (bWidget) {
@@ -203,7 +203,7 @@ CPDF_Font* CBA_FontMap::GetAnnotDefaultFont(CFX_ByteString& sAlias) {
   }
 
   CFX_ByteString sDA;
-  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pAnnotDict, "DA");
+  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pAnnotDict.Get(), "DA");
   if (pObj)
     sDA = pObj->GetString();
 
@@ -218,27 +218,26 @@ CPDF_Font* CBA_FontMap::GetAnnotDefaultFont(CFX_ByteString& sAlias) {
 
   CPDF_SimpleParser syntax(sDA.AsStringC());
   syntax.FindTagParamFromStart("Tf", 2);
-  CFX_ByteString sFontName(syntax.GetWord());
-  sAlias = PDF_NameDecode(sFontName).Mid(1);
-  CPDF_Dictionary* pFontDict = nullptr;
 
+  CFX_ByteString sFontName(syntax.GetWord());
+  *sAlias = PDF_NameDecode(sFontName).Mid(1);
+
+  CPDF_Dictionary* pFontDict = nullptr;
   if (CPDF_Dictionary* pAPDict = m_pAnnotDict->GetDictFor("AP")) {
     if (CPDF_Dictionary* pNormalDict = pAPDict->GetDictFor("N")) {
       if (CPDF_Dictionary* pNormalResDict =
               pNormalDict->GetDictFor("Resources")) {
         if (CPDF_Dictionary* pResFontDict = pNormalResDict->GetDictFor("Font"))
-          pFontDict = pResFontDict->GetDictFor(sAlias);
+          pFontDict = pResFontDict->GetDictFor(*sAlias);
       }
     }
   }
-
   if (bWidget && !pFontDict && pAcroFormDict) {
     if (CPDF_Dictionary* pDRDict = pAcroFormDict->GetDictFor("DR")) {
       if (CPDF_Dictionary* pDRFontDict = pDRDict->GetDictFor("Font"))
-        pFontDict = pDRFontDict->GetDictFor(sAlias);
+        pFontDict = pDRFontDict->GetDictFor(*sAlias);
     }
   }
-
   return pFontDict ? m_pDocument->LoadFont(pFontDict) : nullptr;
 }
 

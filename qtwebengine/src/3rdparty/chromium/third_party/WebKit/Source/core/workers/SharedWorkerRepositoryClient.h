@@ -31,19 +31,19 @@
 #ifndef SharedWorkerRepositoryClient_h
 #define SharedWorkerRepositoryClient_h
 
+#include "core/CoreExport.h"
 #include "platform/heap/Handle.h"
+#include "platform/wtf/Forward.h"
+#include "platform/wtf/Noncopyable.h"
 #include "public/platform/WebMessagePortChannel.h"
-#include "wtf/Forward.h"
-#include "wtf/Noncopyable.h"
 
 namespace blink {
 
 class Document;
-class ExceptionState;
 class KURL;
 class SharedWorker;
 
-class SharedWorkerRepositoryClient {
+class CORE_EXPORT SharedWorkerRepositoryClient {
   WTF_MAKE_NONCOPYABLE(SharedWorkerRepositoryClient);
   DISALLOW_NEW();
 
@@ -51,13 +51,12 @@ class SharedWorkerRepositoryClient {
   SharedWorkerRepositoryClient() {}
   virtual ~SharedWorkerRepositoryClient() {}
 
-  virtual void connect(SharedWorker*,
-                       WebMessagePortChannelUniquePtr,
+  virtual void Connect(SharedWorker*,
+                       std::unique_ptr<WebMessagePortChannel>,
                        const KURL&,
-                       const String& name,
-                       ExceptionState&) = 0;
+                       const String& name) = 0;
 
-  virtual void documentDetached(Document*) = 0;
+  virtual void DocumentDetached(Document*) = 0;
 };
 
 }  // namespace blink

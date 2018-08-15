@@ -18,9 +18,12 @@
 #include "headless/public/headless_browser_context.h"
 #include "headless/public/headless_export.h"
 #include "headless/public/headless_web_contents.h"
-#include "net/base/host_port_pair.h"
 #include "net/base/ip_endpoint.h"
 #include "ui/gfx/geometry/size.h"
+
+#if defined(OS_WIN)
+#include "sandbox/win/src/sandbox_types.h"
+#endif
 
 namespace base {
 class MessagePump;
@@ -46,6 +49,12 @@ class HEADLESS_EXPORT HeadlessBrowser {
 
   virtual std::vector<HeadlessBrowserContext*> GetAllBrowserContexts() = 0;
 
+  // Return a DevTools target corresponding to this browser. Note that this
+  // method only returns a valid target after browser has been initialized on
+  // the main thread. The target only supports the domains available on the
+  // browser endpoint excluding the Tethering domain.
+  virtual HeadlessDevToolsTarget* GetDevToolsTarget() = 0;
+
   // Returns the HeadlessWebContents associated with the
   // |devtools_agent_host_id| if any.  Otherwise returns null.
   virtual HeadlessWebContents* GetWebContentsForDevToolsAgentHostId(
@@ -56,9 +65,11 @@ class HEADLESS_EXPORT HeadlessBrowser {
   virtual HeadlessBrowserContext* GetBrowserContextForId(
       const std::string& id) = 0;
 
-  // Returns a task runner for submitting work to the browser file thread.
-  virtual scoped_refptr<base::SingleThreadTaskRunner> BrowserFileThread()
-      const = 0;
+  // Allows setting and getting the browser context that DevTools will create
+  // new targets in by default.
+  virtual void SetDefaultBrowserContext(
+      HeadlessBrowserContext* browser_context) = 0;
+  virtual HeadlessBrowserContext* GetDefaultBrowserContext() = 0;
 
   // Returns a task runner for submitting work to the browser io thread.
   virtual scoped_refptr<base::SingleThreadTaskRunner> BrowserIOThread()
@@ -83,7 +94,7 @@ class HEADLESS_EXPORT HeadlessBrowser {
 };
 
 // Embedding API overrides for the headless browser.
-struct HeadlessBrowser::Options {
+struct HEADLESS_EXPORT HeadlessBrowser::Options {
   class Builder;
 
   Options(Options&& options);
@@ -95,9 +106,24 @@ struct HeadlessBrowser::Options {
   int argc;
   const char** argv;
 
+#if defined(OS_WIN)
+  // Set hardware instance if available, otherwise it defaults to 0.
+  HINSTANCE instance;
+
+  // Set with sandbox information. This has to be already initialized.
+  sandbox::SandboxInterfaceInfo* sandbox_info;
+#endif
+
   // Address at which DevTools should listen for connections. Disabled by
-  // default.
+  // default. Mutually exclusive with devtools_socket_fd.
   net::IPEndPoint devtools_endpoint;
+
+  // The fd of an already-open socket inherited from a parent process. Disabled
+  // by default. Mutually exclusive with devtools_endpoint.
+  size_t devtools_socket_fd;
+
+  // A single way to test whether the devtools server has been requested.
+  bool DevtoolsServerEnabled();
 
   // Optional message pump that overrides the default. Must outlive the browser.
   base::MessagePump* message_pump;
@@ -122,11 +148,11 @@ struct HeadlessBrowser::Options {
 
   // Default per-context options, can be specialized on per-context basis.
 
+  std::string product_name_and_version;
   std::string user_agent;
 
-  // Address of the HTTP/HTTPS proxy server to use. The system proxy settings
-  // are used by default.
-  net::HostPortPair proxy_server;
+  // The ProxyConfig to use. The system proxy settings are used by default.
+  std::unique_ptr<net::ProxyConfig> proxy_config;
 
   // Comma-separated list of rules that control how hostnames are mapped. See
   // chrome::switches::kHostRules for a description for the format.
@@ -143,6 +169,20 @@ struct HeadlessBrowser::Options {
   // Run a browser context in an incognito mode. Enabled by default.
   bool incognito_mode;
 
+  // Set a callback that is invoked to override WebPreferences for RenderViews
+  // created within the HeadlessBrowser. Called whenever the WebPreferences of a
+  // RenderView change. Executed on the browser main thread.
+  //
+  // WARNING: We cannot provide any guarantees about the stability of the
+  // exposed WebPreferences API, so use with care.
+  base::Callback<void(WebPreferences*)> override_web_preferences_callback;
+
+  // Minidump crash reporter settings. Crash reporting is disabled by default.
+  // By default crash dumps are written to the directory containing the
+  // executable.
+  bool enable_crash_reporter;
+  base::FilePath crash_dumps_dir;
+
   // Reminder: when adding a new field here, do not forget to add it to
   // HeadlessBrowserContextOptions (where appropriate).
  private:
@@ -151,7 +191,7 @@ struct HeadlessBrowser::Options {
   DISALLOW_COPY_AND_ASSIGN(Options);
 };
 
-class HeadlessBrowser::Options::Builder {
+class HEADLESS_EXPORT HeadlessBrowser::Options::Builder {
  public:
   Builder(int argc, const char** argv);
   Builder();
@@ -160,20 +200,31 @@ class HeadlessBrowser::Options::Builder {
   // Browser-wide settings.
 
   Builder& EnableDevToolsServer(const net::IPEndPoint& endpoint);
+  Builder& EnableDevToolsServer(const size_t socket_fd);
   Builder& SetMessagePump(base::MessagePump* message_pump);
   Builder& SetSingleProcessMode(bool single_process_mode);
   Builder& SetDisableSandbox(bool disable_sandbox);
   Builder& SetGLImplementation(const std::string& gl_implementation);
   Builder& AddMojoServiceName(const std::string& mojo_service_name);
+#if defined(OS_WIN)
+  Builder& SetInstance(HINSTANCE instance);
+  Builder& SetSandboxInfo(sandbox::SandboxInterfaceInfo* sandbox_info);
+#endif
 
   // Per-context settings.
 
+  Builder& SetProductNameAndVersion(
+      const std::string& product_name_and_version);
   Builder& SetUserAgent(const std::string& user_agent);
-  Builder& SetProxyServer(const net::HostPortPair& proxy_server);
+  Builder& SetProxyConfig(std::unique_ptr<net::ProxyConfig> proxy_config);
   Builder& SetHostResolverRules(const std::string& host_resolver_rules);
   Builder& SetWindowSize(const gfx::Size& window_size);
   Builder& SetUserDataDir(const base::FilePath& user_data_dir);
   Builder& SetIncognitoMode(bool incognito_mode);
+  Builder& SetOverrideWebPreferencesCallback(
+      base::Callback<void(WebPreferences*)> callback);
+  Builder& SetCrashReporterEnabled(bool enabled);
+  Builder& SetCrashDumpsDir(const base::FilePath& dir);
 
   Options Build();
 
@@ -183,6 +234,7 @@ class HeadlessBrowser::Options::Builder {
   DISALLOW_COPY_AND_ASSIGN(Builder);
 };
 
+#if !defined(OS_WIN)
 // The headless browser may need to create child processes (e.g., a renderer
 // which runs web content). This is done by re-executing the parent process as
 // a zygote[1] and forking each child process from that zygote.
@@ -202,7 +254,17 @@ class HeadlessBrowser::Options::Builder {
 //
 // [1]
 // https://chromium.googlesource.com/chromium/src/+/master/docs/linux_zygote.md
-void RunChildProcessIfNeeded(int argc, const char** argv);
+HEADLESS_EXPORT void RunChildProcessIfNeeded(int argc, const char** argv);
+#else
+// In Windows, the headless browser may need to create child processes. This is
+// done by re-executing the parent process which may have been initialized with
+// different libraries (e.g. child_dll). In this case, the embedder has to pass
+// the appropiate HINSTANCE and initalization sandbox_info to properly launch
+// the child process.
+HEADLESS_EXPORT void RunChildProcessIfNeeded(
+    HINSTANCE instance,
+    sandbox::SandboxInterfaceInfo* sandbox_info);
+#endif  // !defined(OS_WIN)
 
 // Main entry point for running the headless browser. This function constructs
 // the headless browser instance, passing it to the given
@@ -210,7 +272,7 @@ void RunChildProcessIfNeeded(int argc, const char** argv);
 // the main loop, it will only return after HeadlessBrowser::Shutdown() is
 // called, returning the exit code for the process. It is not possible to
 // initialize the browser again after it has been torn down.
-int HeadlessBrowserMain(
+HEADLESS_EXPORT int HeadlessBrowserMain(
     HeadlessBrowser::Options options,
     const base::Callback<void(HeadlessBrowser*)>& on_browser_start_callback);
 

@@ -5,32 +5,30 @@
 #ifndef Accelerometer_h
 #define Accelerometer_h
 
-#include "modules/sensor/AccelerometerOptions.h"
 #include "modules/sensor/Sensor.h"
 
 namespace blink {
 
-class AccelerometerReading;
-
-class Accelerometer final : public Sensor {
+class Accelerometer : public Sensor {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static Accelerometer* create(ScriptState*,
-                               const AccelerometerOptions&,
+  static Accelerometer* Create(ExecutionContext*,
+                               const SensorOptions&,
                                ExceptionState&);
-  static Accelerometer* create(ScriptState*, ExceptionState&);
+  static Accelerometer* Create(ExecutionContext*, ExceptionState&);
 
-  AccelerometerReading* reading() const;
-  bool includesGravity() const;
+  double x(bool& is_null) const;
+  double y(bool& is_null) const;
+  double z(bool& is_null) const;
 
   DECLARE_VIRTUAL_TRACE();
 
- private:
-  Accelerometer(ScriptState*, const AccelerometerOptions&, ExceptionState&);
-  // Sensor overrides.
-  std::unique_ptr<SensorReadingFactory> createSensorReadingFactory() override;
-  AccelerometerOptions m_accelerometerOptions;
+ protected:
+  Accelerometer(ExecutionContext*,
+                const SensorOptions&,
+                ExceptionState&,
+                device::mojom::blink::SensorType);
 };
 
 }  // namespace blink

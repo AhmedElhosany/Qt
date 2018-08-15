@@ -22,6 +22,7 @@ GpuVideoEncodeAcceleratorHost::GpuVideoEncodeAcceleratorHost(
       client_(nullptr),
       impl_(impl),
       next_frame_id_(0),
+      media_task_runner_(base::ThreadTaskRunnerHandle::Get()),
       weak_this_factory_(this) {
   DCHECK(channel_);
   DCHECK(impl_);
@@ -29,9 +30,11 @@ GpuVideoEncodeAcceleratorHost::GpuVideoEncodeAcceleratorHost(
 }
 
 GpuVideoEncodeAcceleratorHost::~GpuVideoEncodeAcceleratorHost() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (channel_ && encoder_route_id_ != MSG_ROUTING_NONE)
     channel_->RemoveRoute(encoder_route_id_);
+
+  base::AutoLock lock(impl_lock_);
   if (impl_)
     impl_->RemoveDeletionObserver(this);
 }
@@ -57,7 +60,7 @@ bool GpuVideoEncodeAcceleratorHost::OnMessageReceived(
 }
 
 void GpuVideoEncodeAcceleratorHost::OnChannelError() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (channel_) {
     if (encoder_route_id_ != MSG_ROUTING_NONE)
       channel_->RemoveRoute(encoder_route_id_);
@@ -68,7 +71,7 @@ void GpuVideoEncodeAcceleratorHost::OnChannelError() {
 
 VideoEncodeAccelerator::SupportedProfiles
 GpuVideoEncodeAcceleratorHost::GetSupportedProfiles() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return VideoEncodeAccelerator::SupportedProfiles();
   return GpuVideoAcceleratorUtil::ConvertGpuToMediaEncodeProfiles(
@@ -81,8 +84,10 @@ bool GpuVideoEncodeAcceleratorHost::Initialize(
     VideoCodecProfile output_profile,
     uint32_t initial_bitrate,
     Client* client) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   client_ = client;
+
+  base::AutoLock lock(impl_lock_);
   if (!impl_) {
     DLOG(ERROR) << "impl_ destroyed";
     return false;
@@ -112,7 +117,7 @@ bool GpuVideoEncodeAcceleratorHost::Initialize(
 void GpuVideoEncodeAcceleratorHost::Encode(
     const scoped_refptr<VideoFrame>& frame,
     bool force_keyframe) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(PIXEL_FORMAT_I420, frame->format());
   DCHECK_EQ(VideoFrame::STORAGE_SHMEM, frame->storage_type());
   if (!channel_)
@@ -136,7 +141,7 @@ void GpuVideoEncodeAcceleratorHost::Encode(
 
 void GpuVideoEncodeAcceleratorHost::UseOutputBitstreamBuffer(
     const BitstreamBuffer& buffer) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
 
@@ -157,7 +162,7 @@ void GpuVideoEncodeAcceleratorHost::UseOutputBitstreamBuffer(
 void GpuVideoEncodeAcceleratorHost::RequestEncodingParametersChange(
     uint32_t bitrate,
     uint32_t framerate) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!channel_)
     return;
 
@@ -166,7 +171,7 @@ void GpuVideoEncodeAcceleratorHost::RequestEncodingParametersChange(
 }
 
 void GpuVideoEncodeAcceleratorHost::Destroy() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (channel_)
     Send(new AcceleratedVideoEncoderMsg_Destroy(encoder_route_id_));
   client_ = nullptr;
@@ -174,11 +179,13 @@ void GpuVideoEncodeAcceleratorHost::Destroy() {
 }
 
 void GpuVideoEncodeAcceleratorHost::OnWillDeleteImpl() {
-  DCHECK(CalledOnValidThread());
+  base::AutoLock lock(impl_lock_);
   impl_ = nullptr;
 
   // The gpu::CommandBufferProxyImpl is going away; error out this VEA.
-  OnChannelError();
+  media_task_runner_->PostTask(
+      FROM_HERE, base::Bind(&GpuVideoEncodeAcceleratorHost::OnChannelError,
+                            weak_this_factory_.GetWeakPtr()));
 }
 
 void GpuVideoEncodeAcceleratorHost::EncodeSharedMemoryFrame(
@@ -215,18 +222,17 @@ void GpuVideoEncodeAcceleratorHost::PostNotifyError(
     const tracked_objects::Location& location,
     Error error,
     const std::string& message) {
-  DCHECK(CalledOnValidThread());
-  DLOG(ERROR) << "Error from " << location.function_name() << "("
-              << location.file_name() << ":" << location.line_number() << ") "
-              << message << " (error = " << error << ")";
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DLOG(ERROR) << "Error from " << location.ToString() << ", " << message
+              << " (error = " << error << ")";
   // Post the error notification back to this thread, to avoid re-entrancy.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  media_task_runner_->PostTask(
       FROM_HERE, base::Bind(&GpuVideoEncodeAcceleratorHost::OnNotifyError,
                             weak_this_factory_.GetWeakPtr(), error));
 }
 
 void GpuVideoEncodeAcceleratorHost::Send(IPC::Message* message) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   uint32_t message_type = message->type();
   if (!channel_->Send(message)) {
     PostNotifyError(FROM_HERE, kPlatformFailureError,
@@ -238,19 +244,19 @@ void GpuVideoEncodeAcceleratorHost::OnRequireBitstreamBuffers(
     uint32_t input_count,
     const gfx::Size& input_coded_size,
     uint32_t output_buffer_size) {
-  DCHECK(CalledOnValidThread());
-  DVLOG(2) << __FUNCTION__ << " input_count=" << input_count
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DVLOG(2) << __func__ << " input_count=" << input_count
            << ", input_coded_size=" << input_coded_size.ToString()
            << ", output_buffer_size=" << output_buffer_size;
-  if (client_) {
-    client_->RequireBitstreamBuffers(input_count, input_coded_size,
-                                     output_buffer_size);
-  }
+  if (!client_)
+    return;
+  client_->RequireBitstreamBuffers(input_count, input_coded_size,
+                                   output_buffer_size);
 }
 
 void GpuVideoEncodeAcceleratorHost::OnNotifyInputDone(int32_t frame_id) {
-  DCHECK(CalledOnValidThread());
-  DVLOG(3) << __FUNCTION__ << " frame_id=" << frame_id;
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DVLOG(3) << __func__ << " frame_id=" << frame_id;
   // Fun-fact: std::hash_map is not spec'd to be re-entrant; since freeing a
   // frame can trigger a further encode to be kicked off and thus an .insert()
   // back into the map, we separate the frame's dtor running from the .erase()
@@ -258,7 +264,7 @@ void GpuVideoEncodeAcceleratorHost::OnNotifyInputDone(int32_t frame_id) {
   // theoretical" - Android's std::hash_map crashes if we don't do this.
   scoped_refptr<VideoFrame> frame = frame_map_[frame_id];
   if (!frame_map_.erase(frame_id)) {
-    DLOG(ERROR) << __FUNCTION__ << " invalid frame_id=" << frame_id;
+    DLOG(ERROR) << __func__ << " invalid frame_id=" << frame_id;
     // See OnNotifyError for why this needs to be the last thing in this
     // function.
     OnNotifyError(kPlatformFailureError);
@@ -273,17 +279,18 @@ void GpuVideoEncodeAcceleratorHost::OnBitstreamBufferReady(
     uint32_t payload_size,
     bool key_frame,
     base::TimeDelta timestamp) {
-  DCHECK(CalledOnValidThread());
-  DVLOG(3) << __FUNCTION__ << " bitstream_buffer_id=" << bitstream_buffer_id
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DVLOG(3) << __func__ << " bitstream_buffer_id=" << bitstream_buffer_id
            << ", payload_size=" << payload_size << ", key_frame=" << key_frame;
-  if (client_)
-    client_->BitstreamBufferReady(bitstream_buffer_id, payload_size, key_frame,
-                                  timestamp);
+  if (!client_)
+    return;
+  client_->BitstreamBufferReady(bitstream_buffer_id, payload_size, key_frame,
+                                timestamp);
 }
 
 void GpuVideoEncodeAcceleratorHost::OnNotifyError(Error error) {
-  DCHECK(CalledOnValidThread());
-  DLOG(ERROR) << __FUNCTION__ << " error=" << error;
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DLOG(ERROR) << __func__ << " error=" << error;
   if (!client_)
     return;
   weak_this_factory_.InvalidateWeakPtrs();

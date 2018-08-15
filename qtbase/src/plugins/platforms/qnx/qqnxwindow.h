@@ -85,7 +85,7 @@ public:
     void raise() override;
     void lower() override;
     void requestActivateWindow() override;
-    void setWindowState(Qt::WindowState state) override;
+    void setWindowState(Qt::WindowStates state) override;
     void setExposed(bool exposed);
 
     void propagateSizeHints() override;
@@ -112,13 +112,12 @@ public:
 
     bool shouldMakeFullScreen() const;
 
-    void windowPosted();
-
 protected:
     virtual int pixelFormat() const = 0;
     virtual void resetBuffers() = 0;
 
     void initWindow();
+    void windowPosted();
 
     screen_context_t m_screenContext;
 
@@ -142,7 +141,7 @@ private:
     bool m_visible;
     bool m_exposed;
     QRect m_unmaximizedGeometry;
-    Qt::WindowState m_windowState;
+    Qt::WindowStates m_windowState;
     QString m_mmRendererWindowName;
     screen_window_t m_mmRendererWindow;
 

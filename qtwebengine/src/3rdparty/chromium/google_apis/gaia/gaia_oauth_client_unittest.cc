@@ -15,6 +15,7 @@
 #include "google_apis/gaia/gaia_oauth_client.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_status_code.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/test_url_fetcher_factory.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_status.h"
@@ -94,7 +95,8 @@ class MockOAuthFetcherFactory : public net::URLFetcherFactory,
       int id,
       const GURL& url,
       net::URLFetcher::RequestType request_type,
-      net::URLFetcherDelegate* d) override {
+      net::URLFetcherDelegate* d,
+      net::NetworkTrafficAnnotationTag traffic_annotation) override {
     url_fetcher_ = new MockOAuthFetcher(
         response_code_,
         max_failure_count_,
@@ -299,6 +301,26 @@ TEST_F(GaiaOAuthClientTest, GetTokensSuccess) {
   auth.GetTokensFromAuthCode(client_info_, "auth_code", -1, &delegate);
 }
 
+TEST_F(GaiaOAuthClientTest, GetTokensAfterNetworkFailure) {
+  int response_code = net::HTTP_INTERNAL_SERVER_ERROR;
+
+  MockGaiaOAuthClientDelegate failure_delegate;
+  EXPECT_CALL(failure_delegate, OnNetworkError(response_code)).Times(1);
+
+  MockGaiaOAuthClientDelegate success_delegate;
+  EXPECT_CALL(success_delegate, OnGetTokensResponse(kTestRefreshToken,
+      kTestAccessToken, kTestExpiresIn)).Times(1);
+
+  MockOAuthFetcherFactory factory;
+  factory.set_response_code(response_code);
+  factory.set_max_failure_count(4);
+  factory.set_results(kDummyGetTokensResult);
+
+  GaiaOAuthClient auth(GetRequestContext());
+  auth.GetTokensFromAuthCode(client_info_, "auth_code", 2, &failure_delegate);
+  auth.GetTokensFromAuthCode(client_info_, "auth_code", -1, &success_delegate);
+}
+
 TEST_F(GaiaOAuthClientTest, RefreshTokenSuccess) {
   MockGaiaOAuthClientDelegate delegate;
   EXPECT_CALL(delegate, OnRefreshTokenResponse(kTestAccessToken,
@@ -372,7 +394,7 @@ TEST_F(GaiaOAuthClientTest, GetUserInfo) {
   std::unique_ptr<base::Value> value =
       base::JSONReader::Read(kDummyFullUserInfoResult);
   DCHECK(value);
-  ASSERT_TRUE(value->IsType(base::Value::TYPE_DICTIONARY));
+  ASSERT_TRUE(value->IsType(base::Value::Type::DICTIONARY));
   base::DictionaryValue* expected_result;
   value->GetAsDictionary(&expected_result);
 

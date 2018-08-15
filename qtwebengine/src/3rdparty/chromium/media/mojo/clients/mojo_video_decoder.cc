@@ -9,34 +9,40 @@
 #include "base/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
+#include "base/unguessable_token.h"
+#include "media/base/bind_to_current_loop.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/video_frame.h"
 #include "media/mojo/common/media_type_converters.h"
 #include "media/mojo/common/mojo_decoder_buffer_converter.h"
+#include "media/mojo/interfaces/media_types.mojom.h"
+#include "media/renderers/gpu_video_accelerator_factories.h"
 
 namespace media {
 
 MojoVideoDecoder::MojoVideoDecoder(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
     GpuVideoAcceleratorFactories* gpu_factories,
+    MediaLog* media_log,
     mojom::VideoDecoderPtr remote_decoder)
     : task_runner_(task_runner),
-      gpu_factories_(gpu_factories),
       remote_decoder_info_(remote_decoder.PassInterface()),
-      client_binding_(this) {
-  (void)gpu_factories_;
-  DVLOG(1) << __FUNCTION__;
+      gpu_factories_(gpu_factories),
+      client_binding_(this),
+      media_log_service_(media_log),
+      media_log_binding_(&media_log_service_),
+      weak_factory_(this) {
+  DVLOG(1) << __func__;
 }
 
 MojoVideoDecoder::~MojoVideoDecoder() {
-  DVLOG(1) << __FUNCTION__;
-  Stop();
+  DVLOG(1) << __func__;
 }
 
 std::string MojoVideoDecoder::GetDisplayName() const {
-  // TODO(sandersd): Build the name including information from the remote end.
   return "MojoVideoDecoder";
 }
 
@@ -45,9 +51,12 @@ void MojoVideoDecoder::Initialize(const VideoDecoderConfig& config,
                                   CdmContext* cdm_context,
                                   const InitCB& init_cb,
                                   const OutputCB& output_cb) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(!cdm_context);
+
+  if (!weak_this_)
+    weak_this_ = weak_factory_.GetWeakPtr();
 
   if (!remote_decoder_bound_)
     BindRemoteDecoder();
@@ -61,14 +70,14 @@ void MojoVideoDecoder::Initialize(const VideoDecoderConfig& config,
   init_cb_ = init_cb;
   output_cb_ = output_cb;
   remote_decoder_->Initialize(
-      mojom::VideoDecoderConfig::From(config), low_delay,
+      config, low_delay,
       base::Bind(&MojoVideoDecoder::OnInitializeDone, base::Unretained(this)));
 }
 
 void MojoVideoDecoder::OnInitializeDone(bool status,
                                         bool needs_bitstream_conversion,
                                         int32_t max_decode_requests) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   initialized_ = status;
   needs_bitstream_conversion_ = needs_bitstream_conversion;
@@ -78,7 +87,7 @@ void MojoVideoDecoder::OnInitializeDone(bool status,
 
 void MojoVideoDecoder::Decode(const scoped_refptr<DecoderBuffer>& buffer,
                               const DecodeCB& decode_cb) {
-  DVLOG(2) << __FUNCTION__;
+  DVLOG(2) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   if (has_connection_error_) {
@@ -102,14 +111,35 @@ void MojoVideoDecoder::Decode(const scoped_refptr<DecoderBuffer>& buffer,
                                      base::Unretained(this), decode_id));
 }
 
-void MojoVideoDecoder::OnVideoFrameDecoded(mojom::VideoFramePtr frame) {
-  DVLOG(2) << __FUNCTION__;
+void MojoVideoDecoder::OnVideoFrameDecoded(
+    const scoped_refptr<VideoFrame>& frame,
+    bool can_read_without_stalling,
+    const base::Optional<base::UnguessableToken>& release_token) {
+  DVLOG(2) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
-  output_cb_.Run(frame.To<scoped_refptr<VideoFrame>>());
+
+  // TODO(sandersd): Prove that all paths read this value again after running
+  // |output_cb_|. In practice this isn't very important, since all decoders
+  // running via MojoVideoDecoder currently use a static value.
+  can_read_without_stalling_ = can_read_without_stalling;
+
+  if (release_token) {
+    frame->SetReleaseMailboxCB(
+        BindToCurrentLoop(base::Bind(&MojoVideoDecoder::OnReleaseMailbox,
+                                     weak_this_, release_token.value())));
+  }
+  output_cb_.Run(frame);
+}
+
+void MojoVideoDecoder::OnReleaseMailbox(
+    const base::UnguessableToken& release_token,
+    const gpu::SyncToken& release_sync_token) {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+  remote_decoder_->OnReleaseMailbox(release_token, release_sync_token);
 }
 
 void MojoVideoDecoder::OnDecodeDone(uint64_t decode_id, DecodeStatus status) {
-  DVLOG(2) << __FUNCTION__;
+  DVLOG(2) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   auto it = pending_decodes_.find(decode_id);
@@ -124,7 +154,7 @@ void MojoVideoDecoder::OnDecodeDone(uint64_t decode_id, DecodeStatus status) {
 }
 
 void MojoVideoDecoder::Reset(const base::Closure& reset_cb) {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   if (has_connection_error_) {
@@ -138,30 +168,30 @@ void MojoVideoDecoder::Reset(const base::Closure& reset_cb) {
 }
 
 void MojoVideoDecoder::OnResetDone() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   base::ResetAndReturn(&reset_cb_).Run();
 }
 
 bool MojoVideoDecoder::NeedsBitstreamConversion() const {
-  DVLOG(3) << __FUNCTION__;
+  DVLOG(3) << __func__;
   DCHECK(initialized_);
   return needs_bitstream_conversion_;
 }
 
 bool MojoVideoDecoder::CanReadWithoutStalling() const {
-  DVLOG(3) << __FUNCTION__;
-  return true;
+  DVLOG(3) << __func__;
+  return can_read_without_stalling_;
 }
 
 int MojoVideoDecoder::GetMaxDecodeRequests() const {
-  DVLOG(3) << __FUNCTION__;
+  DVLOG(3) << __func__;
   DCHECK(initialized_);
   return max_decode_requests_;
 }
 
 void MojoVideoDecoder::BindRemoteDecoder() {
-  DVLOG(3) << __FUNCTION__;
+  DVLOG(3) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(!remote_decoder_bound_);
 
@@ -171,21 +201,34 @@ void MojoVideoDecoder::BindRemoteDecoder() {
   remote_decoder_.set_connection_error_handler(
       base::Bind(&MojoVideoDecoder::Stop, base::Unretained(this)));
 
-  // TODO(sandersd): Does this need its own error handler?
   mojom::VideoDecoderClientAssociatedPtrInfo client_ptr_info;
-  client_binding_.Bind(&client_ptr_info, remote_decoder_.associated_group());
+  client_binding_.Bind(mojo::MakeRequest(&client_ptr_info));
+
+  mojom::MediaLogAssociatedPtrInfo media_log_ptr_info;
+  media_log_binding_.Bind(mojo::MakeRequest(&media_log_ptr_info));
 
   // TODO(sandersd): Better buffer sizing.
   mojo::ScopedDataPipeConsumerHandle remote_consumer_handle;
   mojo_decoder_buffer_writer_ = MojoDecoderBufferWriter::Create(
       DemuxerStream::VIDEO, &remote_consumer_handle);
 
-  remote_decoder_->Construct(std::move(client_ptr_info),
-                             std::move(remote_consumer_handle));
+  media::mojom::CommandBufferIdPtr command_buffer_id;
+  if (gpu_factories_) {
+    base::UnguessableToken channel_token = gpu_factories_->GetChannelToken();
+    if (channel_token) {
+      command_buffer_id = media::mojom::CommandBufferId::New();
+      command_buffer_id->channel_token = std::move(channel_token);
+      command_buffer_id->route_id = gpu_factories_->GetCommandBufferRouteId();
+    }
+  }
+
+  remote_decoder_->Construct(
+      std::move(client_ptr_info), std::move(media_log_ptr_info),
+      std::move(remote_consumer_handle), std::move(command_buffer_id));
 }
 
 void MojoVideoDecoder::Stop() {
-  DVLOG(2) << __FUNCTION__;
+  DVLOG(2) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   has_connection_error_ = true;

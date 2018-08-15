@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/message_loop/message_loop.h"
 #include "build/build_config.h"
 
 #if defined(OS_POSIX)
@@ -77,8 +78,8 @@ class MyChannelDescriptorListener : public MyChannelDescriptorListenerBase {
         num_fds_received_(0) {
   }
 
-  bool GotExpectedNumberOfDescriptors() const {
-    return num_fds_received_ == kNumFDsToSend * kNumMessages;
+  unsigned num_fds_received() const {
+    return num_fds_received_;
   }
 
   void OnChannelError() override {
@@ -163,7 +164,7 @@ class SendFdsTestClientFixture : public IpcChannelMojoTestClient {
 
     // Verify that the message loop was exited due to getting the correct number
     // of descriptors, and not because of the channel closing unexpectedly.
-    EXPECT_TRUE(listener.GotExpectedNumberOfDescriptors());
+    EXPECT_EQ(kNumFDsToSend * kNumMessages, listener.num_fds_received());
 
     Close();
   }

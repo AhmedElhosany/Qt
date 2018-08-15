@@ -4,7 +4,9 @@
 
 #include "base/callback.h"
 #include "media/capture/capture_export.h"
+#include "media/capture/mojo/video_capture_types.mojom.h"
 #include "media/capture/video/video_capture_device.h"
+#include "media/capture/video/video_frame_receiver.h"
 
 namespace media {
 
@@ -20,8 +22,11 @@ class CAPTURE_EXPORT VideoCaptureJpegDecoder {
   };
 
   using DecodeDoneCB = base::Callback<void(
-      std::unique_ptr<media::VideoCaptureDevice::Client::Buffer>,
-      scoped_refptr<media::VideoFrame>)>;
+      int buffer_id,
+      int frame_feedback_id,
+      std::unique_ptr<VideoCaptureDevice::Client::Buffer::
+                          ScopedAccessPermission> buffer_read_permission,
+      mojom::VideoFrameInfoPtr frame_info)>;
 
   virtual ~VideoCaptureJpegDecoder() {}
 
@@ -38,8 +43,7 @@ class CAPTURE_EXPORT VideoCaptureJpegDecoder {
       const media::VideoCaptureFormat& frame_format,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,
-      std::unique_ptr<media::VideoCaptureDevice::Client::Buffer>
-          out_buffer) = 0;
+      media::VideoCaptureDevice::Client::Buffer out_buffer) = 0;
 };
 
 }  // namespace media

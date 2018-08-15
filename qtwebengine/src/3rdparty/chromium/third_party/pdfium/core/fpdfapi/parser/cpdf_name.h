@@ -7,6 +7,8 @@
 #ifndef CORE_FPDFAPI_PARSER_CPDF_NAME_H_
 #define CORE_FPDFAPI_PARSER_CPDF_NAME_H_
 
+#include <memory>
+
 #include "core/fpdfapi/parser/cpdf_object.h"
 #include "core/fxcrt/cfx_string_pool_template.h"
 #include "core/fxcrt/cfx_weak_ptr.h"
@@ -25,6 +27,7 @@ class CPDF_Name : public CPDF_Object {
   bool IsName() const override;
   CPDF_Name* AsName() override;
   const CPDF_Name* AsName() const override;
+  bool WriteTo(IFX_ArchiveStream* archive) const override;
 
  protected:
   CFX_ByteString m_Name;

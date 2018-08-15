@@ -560,7 +560,6 @@ EVRCustomPresenter::EVRCustomPresenter(QAbstractVideoSurface *surface)
     , m_mediaType(0)
     , m_surface(0)
     , m_canRenderToSurface(false)
-    , m_sampleToPresent(0)
 {
     // Initial source rectangle = (0,0,1,1)
     m_sourceRect.top = 0;
@@ -1350,13 +1349,6 @@ HRESULT EVRCustomPresenter::createOptimalVideoType(IMFMediaType *proposedType, I
         goto done;
 
     // Modify the new type.
-
-    // Set the pixel aspect ratio (PAR) to 1:1 (see assumption #1, above)
-    // The ratio is packed in a single UINT64. A helper function is normally available for
-    // that (MFSetAttributeRatio) but it's not correctly defined in MinGW 4.9.1.
-    hr = mtOptimal->SetUINT64(MF_MT_PIXEL_ASPECT_RATIO, (((UINT64) 1) << 32) | ((UINT64) 1));
-    if (FAILED(hr))
-        goto done;
 
     hr = proposedType->GetUINT64(MF_MT_FRAME_SIZE, &size);
     width = int(HI32(size));

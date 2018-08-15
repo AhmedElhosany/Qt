@@ -82,7 +82,7 @@ class LocalDeviceMonkeyTestRun(local_device_test_run.LocalDeviceTestRun):
         except device_errors.CommandFailedError:
           logging.exception('Failed to start MinidumpUploadService')
 
-    return result
+    return result, None
 
   #override
   def TearDown(self):
@@ -115,7 +115,7 @@ class LocalDeviceMonkeyTestRun(local_device_test_run.LocalDeviceTestRun):
         cmd.append('-v')
       cmd.append(str(self._test_instance.event_count))
       return device.RunShellCommand(
-          cmd, timeout=self._test_instance.timeout)
+          cmd, timeout=self._test_instance.timeout, check_return=True)
     finally:
       try:
         # Kill the monkey test process on the device. If you manually

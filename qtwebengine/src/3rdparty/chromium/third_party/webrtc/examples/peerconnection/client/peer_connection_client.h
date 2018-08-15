@@ -10,16 +10,15 @@
 
 #ifndef WEBRTC_EXAMPLES_PEERCONNECTION_CLIENT_PEER_CONNECTION_CLIENT_H_
 #define WEBRTC_EXAMPLES_PEERCONNECTION_CLIENT_PEER_CONNECTION_CLIENT_H_
-#pragma once
 
 #include <map>
 #include <memory>
 #include <string>
 
-#include "webrtc/base/nethelpers.h"
-#include "webrtc/base/physicalsocketserver.h"
-#include "webrtc/base/signalthread.h"
-#include "webrtc/base/sigslot.h"
+#include "webrtc/rtc_base/nethelpers.h"
+#include "webrtc/rtc_base/physicalsocketserver.h"
+#include "webrtc/rtc_base/signalthread.h"
+#include "webrtc/rtc_base/sigslot.h"
 
 typedef std::map<int, std::string> Peers;
 

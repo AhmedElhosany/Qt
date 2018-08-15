@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.RadioDelegate {
     id: control
@@ -52,28 +52,53 @@ T.RadioDelegate {
     padding: 12
     spacing: 12
 
-    contentItem: Text {
+    icon.width: 24
+    icon.height: 24
+    icon.color: control.palette.text
+
+    contentItem: IconLabel {
         leftPadding: control.mirrored ? control.indicator.width + control.spacing : 0
         rightPadding: !control.mirrored ? control.indicator.width + control.spacing : 0
 
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+        alignment: control.display === IconLabel.IconOnly || control.display === IconLabel.TextUnderIcon ? Qt.AlignCenter : Qt.AlignLeft
+
+        icon: control.icon
         text: control.text
         font: control.font
-        color: control.enabled ? Default.textDarkColor : Default.textDisabledColor
-        elide: Text.ElideRight
-        verticalAlignment: Text.AlignVCenter
+        color: control.palette.text
     }
 
-    indicator: RadioIndicator {
+    // keep in sync with RadioButton.qml (shared RadioIndicator.qml was removed for performance reasons)
+    indicator: Rectangle {
+        implicitWidth: 28
+        implicitHeight: 28
+
         x: control.mirrored ? control.leftPadding : control.width - width - control.rightPadding
         y: control.topPadding + (control.availableHeight - height) / 2
 
-        control: control
+        radius: width / 2
+        color: control.down ? control.palette.light : control.palette.base
+        border.width: control.visualFocus ? 2 : 1
+        border.color: control.visualFocus ? control.palette.highlight : control.palette.mid
+
+        Rectangle {
+            x: (parent.width - width) / 2
+            y: (parent.height - height) / 2
+            width: 20
+            height: 20
+            radius: width / 2
+            color: control.palette.text
+            visible: control.checked
+        }
     }
 
     background: Rectangle {
         implicitWidth: 100
         implicitHeight: 40
         visible: control.down || control.highlighted
-        color: control.down ? Default.delegatePressedColor : Default.delegateColor
+        color: control.down ? control.palette.midlight : control.palette.light
     }
 }

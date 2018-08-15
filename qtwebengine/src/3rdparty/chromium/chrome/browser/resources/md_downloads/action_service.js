@@ -8,7 +8,9 @@ cr.define('downloads', function() {
    * @return {function(string):void} A chrome.send() callback with curried name.
    */
   function chromeSendWithId(chromeSendName) {
-    return function(id) { chrome.send(chromeSendName, [id]); };
+    return function(id) {
+      chrome.send(chromeSendName, [id]);
+    };
   }
 
   /** @constructor */
@@ -21,13 +23,17 @@ cr.define('downloads', function() {
    * @param {string} s
    * @return {string} |s| without whitespace at the beginning or end.
    */
-  function trim(s) { return s.trim(); }
+  function trim(s) {
+    return s.trim();
+  }
 
   /**
    * @param {string|undefined} value
    * @return {boolean} Whether |value| is truthy.
    */
-  function truthy(value) { return !!value; }
+  function truthy(value) {
+    return !!value;
+  }
 
   /**
    * @param {string} searchText Input typed by the user into a search box.
@@ -78,12 +84,14 @@ cr.define('downloads', function() {
     },
 
     /** Opens the current local destination for downloads. */
-    openDownloadsFolder: chrome.send.bind(chrome, 'openDownloadsFolder'),
+    openDownloadsFolder: function() {
+      chrome.send('openDownloadsFolderRequiringGesture');
+    },
 
     /**
      * @param {string} id ID of the download to run locally on the user's box.
      */
-    openFile: chromeSendWithId('openFile'),
+    openFile: chromeSendWithId('openFileRequiringGesture'),
 
     /** @param {string} id ID the of the progressing download to pause. */
     pause: chromeSendWithId('pause'),
@@ -98,7 +106,7 @@ cr.define('downloads', function() {
      * @param {string} id ID of the dangerous download to save despite
      *     warnings.
      */
-    saveDangerous: chromeSendWithId('saveDangerous'),
+    saveDangerous: chromeSendWithId('saveDangerousRequiringGesture'),
 
     /**
      * @param {string} searchText What to search for.

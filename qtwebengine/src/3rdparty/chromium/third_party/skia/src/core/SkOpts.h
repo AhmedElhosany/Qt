@@ -9,10 +9,8 @@
 #define SkOpts_DEFINED
 
 #include "SkRasterPipeline.h"
-#include "SkTextureCompressor.h"
 #include "SkTypes.h"
 #include "SkXfermodePriv.h"
-#include <functional>
 
 struct ProcCoeff;
 
@@ -25,7 +23,7 @@ namespace SkOpts {
     // Declare function pointers here...
 
     // May return nullptr if we haven't specialized the given Mode.
-    extern SkXfermode* (*create_xfermode)(const ProcCoeff&, SkBlendMode);
+    extern SkXfermode* (*create_xfermode)(SkBlendMode);
 
     typedef void (*BoxBlur)(const SkPMColor*, int, const SkIRect& srcBounds, SkPMColor*, int, int, int, int, int);
     extern BoxBlur box_blur_xx, box_blur_xy, box_blur_yx;
@@ -33,23 +31,9 @@ namespace SkOpts {
     typedef void (*Morph)(const SkPMColor*, SkPMColor*, int, int, int, int, int);
     extern Morph dilate_x, dilate_y, erode_x, erode_y;
 
-    typedef bool (*TextureCompressor)(uint8_t* dst, const uint8_t* src,
-                                      int width, int height, size_t rowBytes);
-    extern TextureCompressor (*texture_compressor)(SkColorType, SkTextureCompressor::Format);
-    extern bool (*fill_block_dimensions)(SkTextureCompressor::Format, int* x, int* y);
-
     extern void (*blit_mask_d32_a8)(SkPMColor*, size_t, const SkAlpha*, size_t, SkColor, int, int);
     extern void (*blit_row_color32)(SkPMColor*, const SkPMColor*, int, SkPMColor);
     extern void (*blit_row_s32a_opaque)(SkPMColor*, const SkPMColor*, int, U8CPU);
-
-    // This function is an optimized version of SkColorCubeFilter::filterSpan
-    extern void (*color_cube_filter_span)(const SkPMColor[],
-                                          int,
-                                          SkPMColor[],
-                                          const int * [2],
-                                          const SkScalar * [2],
-                                          int,
-                                          const SkColor*);
 
     // Swizzle input into some sort of 8888 pixel, {premul,unpremul} x {rgba,bgra}.
     typedef void (*Swizzle_8888)(uint32_t*, const void*, int);
@@ -68,14 +52,15 @@ namespace SkOpts {
     // If nsrc < ndst, we loop over src to create a pattern.
     extern void (*srcover_srgb_srgb)(uint32_t* dst, const uint32_t* src, int ndst, int nsrc);
 
+    extern void (*memset16)(uint16_t[], uint16_t, int);
+    extern void (*memset32)(uint32_t[], uint32_t, int);
+    extern void (*memset64)(uint64_t[], uint64_t, int);
+
     // The fastest high quality 32-bit hash we can provide on this platform.
     extern uint32_t (*hash_fn)(const void*, size_t, uint32_t seed);
     static inline uint32_t hash(const void* data, size_t bytes, uint32_t seed=0) {
         return hash_fn(data, bytes, seed);
     }
-
-    extern std::function<void(size_t, size_t, size_t)>
-    (*compile_pipeline)(const SkRasterPipeline::Stage*, int);
 }
 
 #endif//SkOpts_DEFINED

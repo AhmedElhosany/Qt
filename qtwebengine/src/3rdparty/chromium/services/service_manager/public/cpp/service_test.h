@@ -8,12 +8,19 @@
 #include <memory>
 
 #include "base/macros.h"
+#include "base/test/scoped_task_environment.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "services/service_manager/public/cpp/service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
-class MessageLoop;
+class Thread;
+}
+
+namespace mojo {
+namespace edk {
+class ScopedIPCSupport;
+}
 }
 
 namespace service_manager {
@@ -36,8 +43,9 @@ class ServiceTestClient : public Service {
 
  protected:
   void OnStart() override;
-  bool OnConnect(const ServiceInfo& remote_info,
-                 InterfaceRegistry* registry) override;
+  void OnBindInterface(const BindSourceInfo& source_info,
+                       const std::string& interface_name,
+                       mojo::ScopedMessagePipeHandle interface_pipe) override;
 
  private:
   ServiceTest* test_;
@@ -52,7 +60,7 @@ class ServiceTest : public testing::Test {
   // Once set via this constructor, it cannot be changed later by calling
   // InitTestName(). The test executable must provide a manifest in the
   // appropriate location that specifies this name also.
-  explicit ServiceTest(const std::string& test_name);
+  explicit ServiceTest(const std::string& test_name, bool init_edk = false);
   ~ServiceTest() override;
 
  protected:
@@ -72,8 +80,6 @@ class ServiceTest : public testing::Test {
   // work.
   virtual std::unique_ptr<Service> CreateService();
 
-  virtual std::unique_ptr<base::MessageLoop> CreateMessageLoop();
-
   // Call to set OnStart() metadata when GetService() is overridden.
   void OnStartCalled(Connector* connector,
                      const std::string& name,
@@ -86,12 +92,15 @@ class ServiceTest : public testing::Test {
  private:
   friend ServiceTestClient;
 
+  base::test::ScopedTaskEnvironment scoped_task_environment_;
   std::unique_ptr<ServiceContext> context_;
-  std::unique_ptr<base::MessageLoop> message_loop_;
   std::unique_ptr<BackgroundServiceManager> background_service_manager_;
 
   // See constructor.
   std::string test_name_;
+  bool init_edk_;
+  std::unique_ptr<base::Thread> ipc_thread_;
+  std::unique_ptr<mojo::edk::ScopedIPCSupport> ipc_support_;
 
   Connector* connector_ = nullptr;
   std::string initialize_name_;

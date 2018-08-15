@@ -9,6 +9,7 @@
 
 #include <map>
 #include <memory>
+#include <utility>
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
@@ -16,29 +17,30 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_checker.h"
+#include "base/optional.h"
+#include "base/sequence_checker.h"
+#include "base/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/bindings_export.h"
 #include "mojo/public/cpp/bindings/connection_error_callback.h"
+#include "mojo/public/cpp/bindings/disconnect_reason.h"
 #include "mojo/public/cpp/bindings/filter_chain.h"
 #include "mojo/public/cpp/bindings/lib/control_message_handler.h"
 #include "mojo/public/cpp/bindings/lib/control_message_proxy.h"
+#include "mojo/public/cpp/bindings/lib/debug_util.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 
 namespace mojo {
 
 class AssociatedGroup;
-class AssociatedGroupController;
 class InterfaceEndpointController;
 
 // InterfaceEndpointClient handles message sending and receiving of an interface
 // endpoint, either the implementation side or the client side.
-// It should only be accessed and destructed on the creating thread.
+// It should only be accessed and destructed on the creating sequence.
 class MOJO_CPP_BINDINGS_EXPORT InterfaceEndpointClient
     : NON_EXPORTED_BASE(public MessageReceiverWithResponder),
-      public base::MessageLoop::DestructionObserver {
+      NON_EXPORTED_BASE(private internal::LifeTimeTrackerForDebugging) {
  public:
   // |receiver| is okay to be null. If it is not null, it must outlive this
   // object.
@@ -46,42 +48,38 @@ class MOJO_CPP_BINDINGS_EXPORT InterfaceEndpointClient
                           MessageReceiverWithResponderStatus* receiver,
                           std::unique_ptr<MessageReceiver> payload_validator,
                           bool expect_sync_requests,
-                          scoped_refptr<base::SingleThreadTaskRunner> runner,
+                          scoped_refptr<base::SequencedTaskRunner> runner,
                           uint32_t interface_version);
   ~InterfaceEndpointClient() override;
 
   // Sets the error handler to receive notifications when an error is
   // encountered.
-  void set_connection_error_handler(const base::Closure& error_handler) {
-    DCHECK(thread_checker_.CalledOnValidThread());
-    error_handler_ = error_handler;
+  void set_connection_error_handler(base::OnceClosure error_handler) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    error_handler_ = std::move(error_handler);
     error_with_reason_handler_.Reset();
   }
 
   void set_connection_error_with_reason_handler(
-      const ConnectionErrorWithReasonCallback& error_handler) {
-    DCHECK(thread_checker_.CalledOnValidThread());
-    error_with_reason_handler_ = error_handler;
+      ConnectionErrorWithReasonCallback error_handler) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    error_with_reason_handler_ = std::move(error_handler);
     error_handler_.Reset();
   }
 
   // Returns true if an error was encountered.
   bool encountered_error() const {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return encountered_error_;
   }
 
   // Returns true if this endpoint has any pending callbacks.
   bool has_pending_responders() const {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return !async_responders_.empty() || !sync_responses_.empty();
   }
 
-  AssociatedGroupController* group_controller() const {
-    return handle_.group_controller();
-  }
   AssociatedGroup* associated_group();
-  uint32_t interface_id() const;
 
   // Adds a MessageReceiver which can filter a message after validation but
   // before dispatch.
@@ -94,21 +92,29 @@ class MOJO_CPP_BINDINGS_EXPORT InterfaceEndpointClient
   // and notifies all interfaces running on this pipe.
   void RaiseError();
 
+  void CloseWithReason(uint32_t custom_reason, const std::string& description);
+
   // MessageReceiverWithResponder implementation:
+  // They must only be called when the handle is not in pending association
+  // state.
+  bool PrefersSerializedMessages() override;
   bool Accept(Message* message) override;
   bool AcceptWithResponder(Message* message,
-                           MessageReceiver* responder) override;
+                           std::unique_ptr<MessageReceiver> responder) override;
 
   // The following methods are called by the router. They must be called
   // outside of the router's lock.
 
   // NOTE: |message| must have passed message header validation.
   bool HandleIncomingMessage(Message* message);
-  void NotifyError();
+  void NotifyError(const base::Optional<DisconnectReason>& reason);
 
-  internal::ControlMessageProxy* control_message_proxy() {
-    return &control_message_proxy_;
-  }
+  // The following methods send interface control messages.
+  // They must only be called when the handle is not in pending association
+  // state.
+  void QueryVersion(const base::Callback<void(uint32_t)>& callback);
+  void RequireVersion(uint32_t version);
+  void FlushForTesting();
 
  private:
   // Maps from the id of a response to the MessageReceiver that handles the
@@ -148,37 +154,38 @@ class MOJO_CPP_BINDINGS_EXPORT InterfaceEndpointClient
     DISALLOW_COPY_AND_ASSIGN(HandleIncomingMessageThunk);
   };
 
-  bool HandleValidatedMessage(Message* message);
-  void StopObservingIfNecessary();
+  void InitControllerIfNecessary();
 
-  // base::MessageLoop::DestructionObserver:
-  void WillDestroyCurrentMessageLoop() override;
+  void OnAssociationEvent(
+      ScopedInterfaceEndpointHandle::AssociationEvent event);
+
+  bool HandleValidatedMessage(Message* message);
+
+  const bool expect_sync_requests_ = false;
 
   ScopedInterfaceEndpointHandle handle_;
   std::unique_ptr<AssociatedGroup> associated_group_;
-  InterfaceEndpointController* controller_;
+  InterfaceEndpointController* controller_ = nullptr;
 
-  MessageReceiverWithResponderStatus* const incoming_receiver_;
+  MessageReceiverWithResponderStatus* const incoming_receiver_ = nullptr;
   HandleIncomingMessageThunk thunk_;
   FilterChain filters_;
 
   AsyncResponderMap async_responders_;
   SyncResponseMap sync_responses_;
 
-  uint64_t next_request_id_;
+  uint64_t next_request_id_ = 1;
 
-  base::Closure error_handler_;
+  base::OnceClosure error_handler_;
   ConnectionErrorWithReasonCallback error_with_reason_handler_;
-  bool encountered_error_;
+  bool encountered_error_ = false;
 
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   internal::ControlMessageProxy control_message_proxy_;
   internal::ControlMessageHandler control_message_handler_;
 
-  bool observing_message_loop_destruction_ = true;
-
-  base::ThreadChecker thread_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<InterfaceEndpointClient> weak_ptr_factory_;
 

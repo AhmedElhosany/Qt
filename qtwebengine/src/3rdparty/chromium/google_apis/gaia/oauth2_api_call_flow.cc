@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/strings/stringprintf.h"
+#include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
@@ -78,9 +79,16 @@ std::unique_ptr<URLFetcher> OAuth2ApiCallFlow::CreateURLFetcher(
     const std::string& access_token) {
   std::string body = CreateApiCallBody();
   net::URLFetcher::RequestType request_type = GetRequestTypeForBody(body);
-  std::unique_ptr<URLFetcher> result =
-      net::URLFetcher::Create(0, CreateApiCallUrl(), request_type, this);
+  net::NetworkTrafficAnnotationTag traffic_annotation =
+      CompleteNetworkTrafficAnnotation("oauth2_api_call_flow",
+                                       GetNetworkTrafficAnnotationTag(), R"(
+          policy {
+            cookies_allowed: false
+          })");
+  std::unique_ptr<URLFetcher> result = net::URLFetcher::Create(
+      0, CreateApiCallUrl(), request_type, this, traffic_annotation);
 
+  gaia::MarkURLFetcherAsGaia(result.get());
   result->SetRequestContext(context);
   result->SetLoadFlags(net::LOAD_DO_NOT_SEND_COOKIES |
                        net::LOAD_DO_NOT_SAVE_COOKIES);

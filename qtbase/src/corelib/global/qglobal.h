@@ -46,8 +46,9 @@
 #  include <cstddef>
 #  include <utility>
 #endif
-
-#include <stddef.h>
+#ifndef __ASSEMBLER__
+#  include <stddef.h>
+#endif
 
 /*
    QT_VERSION is (major << 16) + (minor << 8) + patch.
@@ -188,6 +189,7 @@ namespace QT_NAMESPACE {}
 #  define QT_LARGEFILE_SUPPORT 64
 #endif
 
+#ifndef __ASSEMBLER__
 QT_BEGIN_NAMESPACE
 
 /*
@@ -355,7 +357,7 @@ typedef double qreal;
 #if !defined(QT_NAMESPACE) && defined(__cplusplus) && !defined(Q_QDOC)
 extern "C"
 #endif
-Q_CORE_EXPORT const char *qVersion(void) Q_DECL_NOTHROW;
+Q_CORE_EXPORT Q_DECL_CONST_FUNCTION const char *qVersion(void) Q_DECL_NOTHROW;
 
 #if defined(__cplusplus)
 
@@ -436,6 +438,9 @@ namespace QtPrivate {
 
       sizeof(void *) == sizeof(quintptr)
       && sizeof(void *) == sizeof(qptrdiff)
+
+  size_t and qsizetype are not guaranteed to be the same size as a pointer, but
+  they usually are.
 */
 template <int> struct QIntegerForSize;
 template <>    struct QIntegerForSize<1> { typedef quint8  Unsigned; typedef qint8  Signed; };
@@ -451,6 +456,7 @@ typedef QIntegerForSize<Q_PROCESSOR_WORDSIZE>::Unsigned qregisteruint;
 typedef QIntegerForSizeof<void*>::Unsigned quintptr;
 typedef QIntegerForSizeof<void*>::Signed qptrdiff;
 typedef qptrdiff qintptr;
+using qsizetype = QIntegerForSizeof<std::size_t>::Signed;
 
 /* moc compats (signals/slots) */
 #ifndef QT_MOC_COMPAT
@@ -466,7 +472,7 @@ typedef qptrdiff qintptr;
 #  define QT_ASCII_CAST_WARN
 #endif
 
-#if defined(__i386__) || defined(_WIN32)
+#ifdef Q_PROCESSOR_X86_32
 #  if defined(Q_CC_GNU)
 #    define QT_FASTCALL __attribute__((regparm(3)))
 #  elif defined(Q_CC_MSVC)
@@ -500,6 +506,12 @@ typedef qptrdiff qintptr;
 #else
 #  define Q_NEVER_INLINE
 #  define Q_ALWAYS_INLINE inline
+#endif
+
+#ifdef Q_CC_GNU
+#  define QT_INIT_METAOBJECT __attribute__((init_priority(101)))
+#else
+#  define QT_INIT_METAOBJECT
 #endif
 
 //defines the type for the WNDPROC on windows
@@ -612,6 +624,18 @@ private:
     void *pool;
 };
 
+#else
+
+#define QT_DARWIN_PLATFORM_SDK_EQUAL_OR_ABOVE(macos, ios, tvos, watchos) (0)
+#define QT_MACOS_IOS_PLATFORM_SDK_EQUAL_OR_ABOVE(macos, ios) (0)
+#define QT_MACOS_PLATFORM_SDK_EQUAL_OR_ABOVE(macos) (0)
+#define QT_IOS_PLATFORM_SDK_EQUAL_OR_ABOVE(ios) (0)
+#define QT_TVOS_PLATFORM_SDK_EQUAL_OR_ABOVE(tvos) (0)
+#define QT_WATCHOS_PLATFORM_SDK_EQUAL_OR_ABOVE(watchos) (0)
+
+#define QT_MAC_PLATFORM_SDK_EQUAL_OR_ABOVE(osx, ios) (0)
+#define QT_OSX_PLATFORM_SDK_EQUAL_OR_ABOVE(osx) (0)
+
 #endif // Q_OS_DARWIN
 
 /*
@@ -660,7 +684,7 @@ Q_NORETURN Q_CORE_EXPORT void qTerminate() Q_DECL_NOTHROW;
 #  endif
 #endif
 
-Q_CORE_EXPORT bool qSharedBuild() Q_DECL_NOTHROW;
+Q_CORE_EXPORT Q_DECL_CONST_FUNCTION bool qSharedBuild() Q_DECL_NOTHROW;
 
 #ifndef Q_OUTOFLINE_TEMPLATE
 #  define Q_OUTOFLINE_TEMPLATE
@@ -709,9 +733,9 @@ Q_CORE_EXPORT void qt_assert(const char *assertion, const char *file, int line) 
 
 #if !defined(Q_ASSERT)
 #  if defined(QT_NO_DEBUG) && !defined(QT_FORCE_ASSERTS)
-#    define Q_ASSERT(cond) do { } while ((false) && (cond))
+#    define Q_ASSERT(cond) static_cast<void>(false && (cond))
 #  else
-#    define Q_ASSERT(cond) ((!(cond)) ? qt_assert(#cond,__FILE__,__LINE__) : qt_noop())
+#    define Q_ASSERT(cond) ((cond) ? static_cast<void>(0) : qt_assert(#cond, __FILE__, __LINE__))
 #  endif
 #endif
 
@@ -726,9 +750,9 @@ Q_CORE_EXPORT void qt_assert_x(const char *where, const char *what, const char *
 
 #if !defined(Q_ASSERT_X)
 #  if defined(QT_NO_DEBUG) && !defined(QT_FORCE_ASSERTS)
-#    define Q_ASSERT_X(cond, where, what) do { } while ((false) && (cond))
+#    define Q_ASSERT_X(cond, where, what) static_cast<void>(false && (cond))
 #  else
-#    define Q_ASSERT_X(cond, where, what) ((!(cond)) ? qt_assert_x(where, what,__FILE__,__LINE__) : qt_noop())
+#    define Q_ASSERT_X(cond, where, what) ((cond) ? static_cast<void>(0) : qt_assert_x(where, what, __FILE__, __LINE__))
 #  endif
 #endif
 
@@ -915,13 +939,9 @@ QT_WARNING_DISABLE_MSVC(4530) /* C++ exception handler used, but unwind semantic
 #  endif
 #endif
 
-namespace QtPrivate {
-template <typename T> struct QAddConst { typedef const T Type; };
-}
-
 // this adds const to non-const objects (like std::as_const)
 template <typename T>
-Q_DECL_CONSTEXPR typename QtPrivate::QAddConst<T>::Type &qAsConst(T &t) Q_DECL_NOTHROW { return t; }
+Q_DECL_CONSTEXPR typename std::add_const<T>::type &qAsConst(T &t) Q_DECL_NOTHROW { return t; }
 // prevent rvalue arguments:
 template <typename T>
 void qAsConst(const T &&) Q_DECL_EQ_DELETE;
@@ -1112,6 +1132,13 @@ template <typename... Args> Q_CONSTEXPR Q_DECL_UNUSED QNonConstOverload<Args...>
 
 class QByteArray;
 Q_CORE_EXPORT QByteArray qgetenv(const char *varName);
+#ifdef Q_QDOC
+Q_CORE_EXPORT QString qEnvironmentVariable(const char *varName,
+                                           const QString &defaultValue = QString());
+#else // need it as two functions because QString is only forward-declared here
+Q_CORE_EXPORT QString qEnvironmentVariable(const char *varName);
+Q_CORE_EXPORT QString qEnvironmentVariable(const char *varName, const QString &defaultValue);
+#endif
 Q_CORE_EXPORT bool qputenv(const char *varName, const QByteArray& value);
 Q_CORE_EXPORT bool qunsetenv(const char *varName);
 
@@ -1161,5 +1188,6 @@ QT_END_NAMESPACE
 #include <QtCore/qversiontagging.h>
 
 #endif /* __cplusplus */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* QGLOBAL_H */

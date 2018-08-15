@@ -6,8 +6,10 @@
 
 #include "cc/layers/picture_image_layer.h"
 #include "cc/layers/solid_color_layer.h"
+#include "cc/paint/paint_image.h"
 #include "cc/test/layer_tree_pixel_resource_test.h"
 #include "cc/test/pixel_comparator.h"
+#include "components/viz/test/test_layer_tree_frame_sink.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkSurface.h"
 
@@ -16,15 +18,16 @@
 namespace cc {
 namespace {
 
-SkXfermode::Mode const kBlendModes[] = {
-    SkXfermode::kSrcOver_Mode,   SkXfermode::kScreen_Mode,
-    SkXfermode::kOverlay_Mode,   SkXfermode::kDarken_Mode,
-    SkXfermode::kLighten_Mode,   SkXfermode::kColorDodge_Mode,
-    SkXfermode::kColorBurn_Mode, SkXfermode::kHardLight_Mode,
-    SkXfermode::kSoftLight_Mode, SkXfermode::kDifference_Mode,
-    SkXfermode::kExclusion_Mode, SkXfermode::kMultiply_Mode,
-    SkXfermode::kHue_Mode,       SkXfermode::kSaturation_Mode,
-    SkXfermode::kColor_Mode,     SkXfermode::kLuminosity_Mode};
+SkBlendMode const kBlendModes[] = {
+    SkBlendMode::kSrcOver,   SkBlendMode::kScreen,
+    SkBlendMode::kOverlay,   SkBlendMode::kDarken,
+    SkBlendMode::kLighten,   SkBlendMode::kColorDodge,
+    SkBlendMode::kColorBurn, SkBlendMode::kHardLight,
+    SkBlendMode::kSoftLight, SkBlendMode::kDifference,
+    SkBlendMode::kExclusion, SkBlendMode::kMultiply,
+    SkBlendMode::kHue,       SkBlendMode::kSaturation,
+    SkBlendMode::kColor,     SkBlendMode::kLuminosity,
+    SkBlendMode::kDstIn};
 
 SkColor kCSSTestColors[] = {
     0xffff0000,  // red
@@ -65,13 +68,21 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
     pixel_comparator_.reset(new FuzzyPixelOffByOneComparator(true));
   }
 
-  void InitializeSettings(LayerTreeSettings* settings) override {
-    settings->renderer_settings.force_antialiasing = force_antialiasing_;
-    settings->renderer_settings.force_blending_with_shaders =
+ protected:
+  std::unique_ptr<viz::TestLayerTreeFrameSink> CreateLayerTreeFrameSink(
+      const viz::RendererSettings& renderer_settings,
+      double refresh_rate,
+      scoped_refptr<viz::ContextProvider> compositor_context_provider,
+      scoped_refptr<viz::ContextProvider> worker_context_provider) override {
+    viz::RendererSettings modified_renderer_settings = renderer_settings;
+    modified_renderer_settings.force_antialiasing = force_antialiasing_;
+    modified_renderer_settings.force_blending_with_shaders =
         force_blending_with_shaders_;
+    return LayerTreeHostPixelResourceTest::CreateLayerTreeFrameSink(
+        modified_renderer_settings, refresh_rate, compositor_context_provider,
+        worker_context_provider);
   }
 
- protected:
   void RunBlendingWithRootPixelTestType(PixelResourceTestCase type) {
     const int kLaneWidth = 2;
     const int kLaneHeight = kLaneWidth;
@@ -144,7 +155,8 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
     scoped_refptr<PictureImageLayer> layer = PictureImageLayer::Create();
     layer->SetIsDrawable(true);
     layer->SetBounds(gfx::Size(width, height));
-    layer->SetImage(backing_store->makeImageSnapshot());
+    layer->SetImage(PaintImage(PaintImage::GetNextId(),
+                               backing_store->makeImageSnapshot()));
     return layer;
   }
 
@@ -153,7 +165,7 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
     gfx::Size bounds = layer->bounds();
     scoped_refptr<PictureImageLayer> mask = PictureImageLayer::Create();
     mask->SetIsDrawable(true);
-    mask->SetIsMask(true);
+    mask->SetLayerMaskType(Layer::LayerMaskType::MULTI_TEXTURE_MASK);
     mask->SetBounds(bounds);
 
     sk_sp<SkSurface> surface =
@@ -166,7 +178,8 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
                                       bounds.width() - kMaskOffset * 2,
                                       bounds.height() - kMaskOffset * 2),
                      paint);
-    mask->SetImage(surface->makeImageSnapshot());
+    mask->SetImage(
+        PaintImage(PaintImage::GetNextId(), surface->makeImageSnapshot()));
     layer->SetMaskLayer(mask.get());
   }
 
@@ -180,15 +193,15 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
                                  int lane_height,
                                  scoped_refptr<Layer> background,
                                  RenderPassOptions flags) {
-    const int kLanesCount = kBlendModesCount + 4;
+    const int kLanesCount = kBlendModesCount + 6;
     const SkColor kMiscOpaqueColor = 0xffc86464;
     const SkColor kMiscTransparentColor = 0x80c86464;
-    const SkXfermode::Mode kCoeffBlendMode = SkXfermode::kScreen_Mode;
-    const SkXfermode::Mode kShaderBlendMode = SkXfermode::kColorBurn_Mode;
+    const SkBlendMode kCoeffBlendMode = SkBlendMode::kScreen;
+    const SkBlendMode kShaderBlendMode = SkBlendMode::kColorBurn;
     // add vertical lanes with each of the blend modes
     for (int i = 0; i < kLanesCount; ++i) {
       gfx::Rect child_rect(i * lane_width, 0, lane_width, lane_height);
-      SkXfermode::Mode blend_mode = SkXfermode::kSrcOver_Mode;
+      SkBlendMode blend_mode = SkBlendMode::kSrcOver;
       float opacity = 1.f;
       SkColor color = kMiscOpaqueColor;
 
@@ -206,6 +219,12 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
       } else if (i == kBlendModesCount + 3) {
         blend_mode = kShaderBlendMode;
         color = kMiscTransparentColor;
+      } else if (i == kBlendModesCount + 4) {
+        blend_mode = SkBlendMode::kDstIn;
+        opacity = 0.5f;
+      } else if (i == kBlendModesCount + 5) {
+        blend_mode = SkBlendMode::kDstIn;
+        color = kMiscTransparentColor;
       }
 
       scoped_refptr<SolidColorLayer> lane =
@@ -213,7 +232,8 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
       lane->SetBlendMode(blend_mode);
       lane->SetOpacity(opacity);
       lane->SetForceRenderSurfaceForTesting(true);
-      if (flags & kUseMasks)
+      // Layers with kDstIn blend mode with a mask is not supported.
+      if (flags & kUseMasks && blend_mode != SkBlendMode::kDstIn)
         SetupMaskLayer(lane);
       if (flags & kUseColorMatrix) {
         SetupColorMatrix(lane);
@@ -226,19 +246,19 @@ class LayerTreeHostBlendingPixelTest : public LayerTreeHostPixelResourceTest {
                                  const base::FilePath::CharType* expected_path,
                                  RenderPassOptions flags) {
     const int kLaneWidth = 8;
-    const int kLaneHeight = kLaneWidth * kCSSTestColorsCount;
-    const int kRootSize = kLaneHeight;
+    const int kRootWidth = kLaneWidth * (kBlendModesCount + 6);
+    const int kRootHeight = kLaneWidth * kCSSTestColorsCount;
     InitializeFromTestCase(type);
 
-    scoped_refptr<SolidColorLayer> root =
-        CreateSolidColorLayer(gfx::Rect(kRootSize, kRootSize), SK_ColorWHITE);
+    scoped_refptr<SolidColorLayer> root = CreateSolidColorLayer(
+        gfx::Rect(kRootWidth, kRootHeight), SK_ColorWHITE);
     scoped_refptr<Layer> background =
-        CreateColorfulBackdropLayer(kRootSize, kRootSize);
+        CreateColorfulBackdropLayer(kRootWidth, kRootHeight);
 
     background->SetIsRootForIsolatedGroup(true);
     root->AddChild(background);
 
-    CreateBlendingColorLayers(kLaneWidth, kLaneHeight, background.get(), flags);
+    CreateBlendingColorLayers(kLaneWidth, kRootHeight, background.get(), flags);
 
     this->force_antialiasing_ = (flags & kUseAntialiasing);
     this->force_blending_with_shaders_ = (flags & kForceShaders);

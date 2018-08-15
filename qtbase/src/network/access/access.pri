@@ -1,6 +1,14 @@
 # Qt network access module
 
 HEADERS += \
+    access/qhttpnetworkheader_p.h \
+    access/qhttpnetworkrequest_p.h \
+    access/qhttpnetworkreply_p.h \
+    access/qhttpnetworkconnection_p.h \
+    access/qhttpnetworkconnectionchannel_p.h \
+    access/qabstractprotocolhandler_p.h \
+    access/qhttpprotocolhandler_p.h \
+    access/qspdyprotocolhandler_p.h \
     access/qnetworkaccessauthenticationmanager_p.h \
     access/qnetworkaccessmanager.h \
     access/qnetworkaccessmanager_p.h \
@@ -19,14 +27,28 @@ HEADERS += \
     access/qnetworkreply_p.h \
     access/qnetworkreplyimpl_p.h \
     access/qnetworkreplydataimpl_p.h \
+    access/qnetworkreplyhttpimpl_p.h \
     access/qnetworkreplyfileimpl_p.h \
     access/qabstractnetworkcache_p.h \
     access/qabstractnetworkcache.h \
+    access/qhttpthreaddelegate_p.h \
+    access/qhttpmultipart.h \
+    access/qhttpmultipart_p.h \
     access/qnetworkfile_p.h \
+    access/qhttp2protocolhandler_p.h \
     access/qhsts_p.h \
-    access/qhstspolicy.h
+    access/qhstspolicy.h \
+    access/qhstsstore_p.h
 
 SOURCES += \
+    access/qhttpnetworkheader.cpp \
+    access/qhttpnetworkrequest.cpp \
+    access/qhttpnetworkreply.cpp \
+    access/qhttpnetworkconnection.cpp \
+    access/qhttpnetworkconnectionchannel.cpp \
+    access/qabstractprotocolhandler.cpp \
+    access/qhttpprotocolhandler.cpp \
+    access/qspdyprotocolhandler.cpp \
     access/qnetworkaccessauthenticationmanager.cpp \
     access/qnetworkaccessmanager.cpp \
     access/qnetworkaccesscache.cpp \
@@ -40,11 +62,16 @@ SOURCES += \
     access/qnetworkreply.cpp \
     access/qnetworkreplyimpl.cpp \
     access/qnetworkreplydataimpl.cpp \
+    access/qnetworkreplyhttpimpl.cpp \
     access/qnetworkreplyfileimpl.cpp \
     access/qabstractnetworkcache.cpp \
+    access/qhttpthreaddelegate.cpp \
+    access/qhttpmultipart.cpp \
     access/qnetworkfile.cpp \
+    access/qhttp2protocolhandler.cpp \
     access/qhsts.cpp \
-    access/qhstspolicy.cpp
+    access/qhstspolicy.cpp \
+    access/qhstsstore.cpp
 
 qtConfig(ftp) {
     HEADERS += \
@@ -67,36 +94,4 @@ qtConfig(networkdiskcache) {
 mac: LIBS_PRIVATE += -framework Security
 
 include($$PWD/../../3rdparty/zlib_dependency.pri)
-
-qtConfig(http) {
-    include($$PWD/http2/http2.pri)
-
-    SOURCES += \
-        access/qabstractprotocolhandler.cpp \
-        access/qhttp2protocolhandler.cpp \
-        access/qhttpmultipart.cpp \
-        access/qhttpnetworkconnection.cpp \
-        access/qhttpnetworkconnectionchannel.cpp \
-        access/qhttpnetworkheader.cpp \
-        access/qhttpnetworkreply.cpp \
-        access/qhttpnetworkrequest.cpp \
-        access/qhttpprotocolhandler.cpp \
-        access/qhttpthreaddelegate.cpp \
-        access/qnetworkreplyhttpimpl.cpp \
-        access/qspdyprotocolhandler.cpp
-
-    HEADERS += \
-        access/qabstractprotocolhandler_p.h \
-        access/qhttp2protocolhandler_p.h \
-        access/qhttpmultipart.h \
-        access/qhttpmultipart_p.h \
-        access/qhttpnetworkconnection_p.h \
-        access/qhttpnetworkconnectionchannel_p.h \
-        access/qhttpnetworkheader_p.h \
-        access/qhttpnetworkreply_p.h \
-        access/qhttpnetworkrequest_p.h \
-        access/qhttpprotocolhandler_p.h \
-        access/qhttpthreaddelegate_p.h \
-        access/qnetworkreplyhttpimpl_p.h \
-        access/qspdyprotocolhandler_p.h
-}
+include($$PWD/http2/http2.pri)

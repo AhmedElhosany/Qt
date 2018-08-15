@@ -24,13 +24,15 @@ cr.define('md_history', function() {
     deleteItems: function(items) {
       if (this.pendingDeleteItems_ != null) {
         // There's already a deletion in progress, reject immediately.
-        return new Promise(function(resolve, reject) { reject(items); });
+        return new Promise(function(resolve, reject) {
+          reject(items);
+        });
       }
 
       var removalList = items.map(function(item) {
         return {
           url: item.url,
-          timestamps: item.allTimestamps
+          timestamps: item.allTimestamps,
         };
       });
 
@@ -90,9 +92,9 @@ cr.define('md_history', function() {
     },
 
     /**
-    * Record an action in UMA.
-    * @param {string} action The name of the action to be logged.
-    */
+     * Record an action in UMA.
+     * @param {string} action The name of the action to be logged.
+     */
     recordAction: function(action) {
       if (action.indexOf('_') == -1)
         action = 'HistoryPage_' + action;
@@ -141,4 +143,3 @@ function deleteComplete() {
 function deleteFailed() {
   md_history.BrowserService.getInstance().resolveDelete_(false);
 }
-

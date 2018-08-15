@@ -5,6 +5,7 @@
 #ifndef ServiceWorkerRegistrationPush_h
 #define ServiceWorkerRegistrationPush_h
 
+#include "modules/serviceworkers/ServiceWorkerRegistration.h"
 #include "platform/Supplementable.h"
 #include "platform/heap/Handle.h"
 
@@ -21,7 +22,7 @@ class ServiceWorkerRegistrationPush final
 
  public:
   virtual ~ServiceWorkerRegistrationPush();
-  static ServiceWorkerRegistrationPush& from(ServiceWorkerRegistration&);
+  static ServiceWorkerRegistrationPush& From(ServiceWorkerRegistration&);
 
   static PushManager* pushManager(ServiceWorkerRegistration&);
   PushManager* pushManager();
@@ -30,10 +31,10 @@ class ServiceWorkerRegistrationPush final
 
  private:
   explicit ServiceWorkerRegistrationPush(ServiceWorkerRegistration*);
-  static const char* supplementName();
+  static const char* SupplementName();
 
-  Member<ServiceWorkerRegistration> m_registration;
-  Member<PushManager> m_pushManager;
+  Member<ServiceWorkerRegistration> registration_;
+  Member<PushManager> push_manager_;
 };
 
 }  // namespace blink

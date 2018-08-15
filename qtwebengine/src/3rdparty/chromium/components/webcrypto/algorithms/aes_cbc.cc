@@ -1,3 +1,4 @@
+
 // Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -41,10 +42,10 @@ Status AesCbcEncryptDecrypt(EncryptOrDecrypt cipher_operation,
                             std::vector<uint8_t>* buffer) {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
-  const blink::WebCryptoAesCbcParams* params = algorithm.aesCbcParams();
+  const blink::WebCryptoAesCbcParams* params = algorithm.AesCbcParams();
   const std::vector<uint8_t>& raw_key = GetSymmetricKeyData(key);
 
-  if (params->iv().size() != 16)
+  if (params->Iv().size() != 16)
     return Status::ErrorIncorrectSizeAesCbcIv();
 
   // According to the openssl docs, the amount of data written may be as large
@@ -55,7 +56,8 @@ Status AesCbcEncryptDecrypt(EncryptOrDecrypt cipher_operation,
   if (!output_max_len.IsValid())
     return Status::ErrorDataTooLarge();
 
-  const unsigned remainder = output_max_len.ValueOrDie() % AES_BLOCK_SIZE;
+  const unsigned remainder =
+      base::ValueOrDieForType<unsigned>(output_max_len % AES_BLOCK_SIZE);
   if (remainder != 0)
     output_max_len += AES_BLOCK_SIZE - remainder;
   if (!output_max_len.IsValid())
@@ -67,11 +69,11 @@ Status AesCbcEncryptDecrypt(EncryptOrDecrypt cipher_operation,
 
   bssl::ScopedEVP_CIPHER_CTX context;
   if (!EVP_CipherInit_ex(context.get(), cipher, NULL, &raw_key[0],
-                         params->iv().data(), cipher_operation)) {
+                         params->Iv().Data(), cipher_operation)) {
     return Status::OperationError();
   }
 
-  buffer->resize(output_max_len.ValueOrDie());
+  buffer->resize(base::ValueOrDieForType<size_t>(output_max_len));
 
   int output_len = 0;
   if (!EVP_CipherUpdate(context.get(), buffer->data(), &output_len,

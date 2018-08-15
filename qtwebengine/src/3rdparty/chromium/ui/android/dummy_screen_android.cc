@@ -15,7 +15,12 @@ using display::DisplayObserver;
 // one primary display with default Display configuration and 256x512 dip size.
 class DummyScreenAndroid : public display::Screen {
  public:
-  DummyScreenAndroid() {}
+  DummyScreenAndroid() {
+    const int display_id = 0;
+    const gfx::Rect bounds_in_dip(256, 512);
+    displays_.push_back(Display(display_id, bounds_in_dip));
+  }
+
   ~DummyScreenAndroid() override {}
 
   // Screen interface.
@@ -30,11 +35,15 @@ class DummyScreenAndroid : public display::Screen {
 
   int GetNumDisplays() const override { return 1; }
 
-  std::vector<Display> GetAllDisplays() const override {
-    return std::vector<Display>(1, GetPrimaryDisplay());
+  const std::vector<Display>& GetAllDisplays() const override {
+    return displays_;
   }
 
-  Display GetDisplayNearestWindow(gfx::NativeView view) const override {
+  Display GetDisplayNearestWindow(gfx::NativeWindow window) const override {
+    return GetPrimaryDisplay();
+  }
+
+  Display GetDisplayNearestView(gfx::NativeView view) const override {
     return GetPrimaryDisplay();
   }
 
@@ -46,14 +55,13 @@ class DummyScreenAndroid : public display::Screen {
     return GetPrimaryDisplay();
   }
 
-  Display GetPrimaryDisplay() const override {
-    const int display_id = 0;
-    const gfx::Rect bounds_in_dip(256, 512);
-    return display::Display(display_id, bounds_in_dip);
-  }
+  Display GetPrimaryDisplay() const override { return displays_[0]; }
 
   void AddObserver(DisplayObserver* observer) override {}
   void RemoveObserver(DisplayObserver* observer) override {}
+
+ private:
+  std::vector<Display> displays_;
 };
 
 display::Screen* CreateDummyScreenAndroid() {

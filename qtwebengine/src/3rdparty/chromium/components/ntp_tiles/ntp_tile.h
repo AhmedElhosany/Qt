@@ -10,37 +10,35 @@
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "base/strings/string16.h"
+#include "components/ntp_tiles/tile_source.h"
 #include "url/gurl.h"
 
 namespace ntp_tiles {
-
-// The source of an NTP tile.
-// A Java counterpart will be generated for this enum.
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ntp
-enum class NTPTileSource {
-  // Tile comes from the personal top sites list, based on local history.
-  TOP_SITES,
-  // Tile comes from the suggestions service, based on synced history.
-  SUGGESTIONS_SERVICE,
-  // Tile is regionally popular.
-  POPULAR,
-  // Tile is on an custodian-managed whitelist.
-  WHITELIST
-};
 
 // A suggested site shown on the New Tab Page.
 struct NTPTile {
   base::string16 title;
   GURL url;
-  NTPTileSource source;
+  TileSource source;
 
-  // Only valid for source == WHITELIST (empty otherwise).
+  // Empty unless whitelists are enabled and this site is in a whitelist.
+  // However, may be non-empty even if |source| is not |WHITELIST|, if this tile
+  // is also available from another, higher-priority source.
   base::FilePath whitelist_icon_path;
+
+  // Only valid for source == SUGGESTIONS_SERVICE (empty otherwise).
+  // May point to a local chrome:// URL or to a remote one. May be empty.
+  GURL thumbnail_url;
+  // This won't be empty, but might 404 etc.
+  GURL favicon_url;
 
   NTPTile();
   NTPTile(const NTPTile&);
   ~NTPTile();
 };
+
+bool operator==(const NTPTile& a, const NTPTile& b);
+bool operator!=(const NTPTile& a, const NTPTile& b);
 
 using NTPTilesVector = std::vector<NTPTile>;
 

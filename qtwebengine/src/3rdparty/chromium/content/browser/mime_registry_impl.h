@@ -5,6 +5,8 @@
 #ifndef CONTENT_BROWSER_MIME_REGISTRY_IMPL_H_
 #define CONTENT_BROWSER_MIME_REGISTRY_IMPL_H_
 
+#include "base/macros.h"
+#include "base/sequence_checker.h"
 #include "third_party/WebKit/public/platform/mime_registry.mojom.h"
 
 namespace content {
@@ -18,8 +20,12 @@ class MimeRegistryImpl : public blink::mojom::MimeRegistry {
 
  private:
   void GetMimeTypeFromExtension(
-      const mojo::String& extension,
-      const GetMimeTypeFromExtensionCallback& callback) override;
+      const std::string& extension,
+      GetMimeTypeFromExtensionCallback callback) override;
+
+  SEQUENCE_CHECKER(sequence_checker_);
+
+  DISALLOW_COPY_AND_ASSIGN(MimeRegistryImpl);
 };
 
 }  // namespace content

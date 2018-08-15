@@ -4,13 +4,20 @@
 
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_util.h"
 
+#include <stdint.h>
+
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "base/version.h"
+#include "components/data_reduction_proxy/core/common/lofi_decider.h"
 #include "components/data_reduction_proxy/core/common/version.h"
+#include "net/base/net_errors.h"
 #include "net/base/url_util.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_util.h"
 #include "net/proxy/proxy_config.h"
 #include "net/proxy/proxy_info.h"
+#include "net/url_request/url_request.h"
 
 #if defined(USE_GOOGLE_API_KEYS)
 #include "google_apis/google_api_keys.h"
@@ -24,6 +31,50 @@ namespace {
 // Used in all Data Reduction Proxy URLs to specify API Key.
 const char kApiKeyName[] = "key";
 #endif
+
+// Scales |byte_count| by the ratio of |numerator|:|denomenator|.
+int64_t ScaleByteCountByRatio(int64_t byte_count,
+                              int64_t numerator,
+                              int64_t denomenator) {
+  DCHECK_LE(0, byte_count);
+  DCHECK_LE(0, numerator);
+  DCHECK_LT(0, denomenator);
+
+  // As an optimization, use integer arithmetic if it won't overflow.
+  if (byte_count <= std::numeric_limits<int32_t>::max() &&
+      numerator <= std::numeric_limits<int32_t>::max()) {
+    return byte_count * numerator / denomenator;
+  }
+
+  double scaled_byte_count = static_cast<double>(byte_count) *
+                             static_cast<double>(numerator) /
+                             static_cast<double>(denomenator);
+  if (scaled_byte_count >
+      static_cast<double>(std::numeric_limits<int64_t>::max())) {
+    // If this ever triggers, then byte counts can no longer be safely stored in
+    // 64-bit ints.
+    NOTREACHED();
+    return byte_count;
+  }
+  return static_cast<int64_t>(scaled_byte_count);
+}
+
+// Estimate the size of the original headers of |request|. If |used_drp| is
+// true, then it's assumed that the original request would have used HTTP/1.1,
+// otherwise it assumes that the original request would have used the same
+// protocol as |request| did. This is to account for stuff like HTTP/2 header
+// compression.
+int64_t EstimateOriginalHeaderBytes(const net::URLRequest& request,
+                                    bool used_drp) {
+  if (used_drp) {
+    // TODO(sclittle): Remove headers added by Data Reduction Proxy when
+    // computing original size. https://crbug.com/535701.
+    return request.response_headers()->raw_headers().size();
+  }
+  return std::max<int64_t>(0, request.GetTotalReceivedBytes() -
+                                  request.received_response_content_length());
+}
+
 }  // namespace
 
 namespace util {
@@ -98,11 +149,6 @@ const char* GetStringForClient(Client client) {
   }
 }
 
-bool IsMethodIdempotent(const std::string& method) {
-  return method == "GET" || method == "OPTIONS" || method == "HEAD" ||
-         method == "PUT" || method == "DELETE" || method == "TRACE";
-}
-
 GURL AddApiKeyToUrl(const GURL& url) {
   GURL new_url = url;
 #if defined(USE_GOOGLE_API_KEYS)
@@ -118,7 +164,7 @@ bool EligibleForDataReductionProxy(const net::ProxyInfo& proxy_info,
                                    const GURL& url,
                                    const std::string& method) {
   return proxy_info.is_direct() && proxy_info.proxy_list().size() == 1 &&
-         !url.SchemeIsWSOrWSS() && IsMethodIdempotent(method);
+         !url.SchemeIsWSOrWSS() && net::HttpUtil::IsMethodIdempotent(method);
 }
 
 bool ApplyProxyConfigToProxyInfo(const net::ProxyConfig& proxy_config,
@@ -131,6 +177,55 @@ bool ApplyProxyConfigToProxyInfo(const net::ProxyConfig& proxy_config,
   proxy_config.proxy_rules().Apply(url, data_reduction_proxy_info);
   data_reduction_proxy_info->DeprioritizeBadProxies(proxy_retry_info);
   return !data_reduction_proxy_info->proxy_server().is_direct();
+}
+
+int64_t CalculateEffectiveOCL(const net::URLRequest& request) {
+  if (request.was_cached() || !request.response_headers())
+    return request.received_response_content_length();
+  int64_t original_content_length_from_header =
+      request.response_headers()->GetInt64HeaderValue(
+          "x-original-content-length");
+
+  if (original_content_length_from_header < 0)
+    return request.received_response_content_length();
+  if (request.status().error() == net::OK)
+    return original_content_length_from_header;
+
+  int64_t content_length_from_header =
+      request.response_headers()->GetContentLength();
+
+  if (content_length_from_header < 0)
+    return request.received_response_content_length();
+  if (content_length_from_header == 0)
+    return original_content_length_from_header;
+
+  return ScaleByteCountByRatio(request.received_response_content_length(),
+                               original_content_length_from_header,
+                               content_length_from_header);
+}
+
+int64_t EstimateOriginalReceivedBytes(const net::URLRequest& request,
+                                      bool used_drp,
+                                      const LoFiDecider* lofi_decider) {
+  if (request.was_cached() || !request.response_headers())
+    return request.GetTotalReceivedBytes();
+
+  if (lofi_decider) {
+    if (lofi_decider->IsClientLoFiAutoReloadRequest(request))
+      return 0;
+
+    int64_t first, last, length;
+    if (lofi_decider->IsClientLoFiImageRequest(request) &&
+        request.response_headers()->GetContentRangeFor206(&first, &last,
+                                                          &length) &&
+        length > request.received_response_content_length()) {
+      return EstimateOriginalHeaderBytes(request, used_drp) + length;
+    }
+  }
+
+  return used_drp ? EstimateOriginalHeaderBytes(request, used_drp) +
+                        util::CalculateEffectiveOCL(request)
+                  : request.GetTotalReceivedBytes();
 }
 
 }  // namespace util
@@ -166,8 +261,6 @@ net::ProxyServer::Scheme SchemeFromProxyScheme(
       return net::ProxyServer::SCHEME_HTTP;
     case ProxyServer_ProxyScheme_HTTPS:
       return net::ProxyServer::SCHEME_HTTPS;
-    case ProxyServer_ProxyScheme_QUIC:
-      return net::ProxyServer::SCHEME_QUIC;
     default:
       return net::ProxyServer::SCHEME_INVALID;
   }
@@ -179,8 +272,6 @@ ProxyServer_ProxyScheme ProxySchemeFromScheme(net::ProxyServer::Scheme scheme) {
       return ProxyServer_ProxyScheme_HTTP;
     case net::ProxyServer::SCHEME_HTTPS:
       return ProxyServer_ProxyScheme_HTTPS;
-    case net::ProxyServer::SCHEME_QUIC:
-      return ProxyServer_ProxyScheme_QUIC;
     default:
       return ProxyServer_ProxyScheme_UNSPECIFIED;
   }

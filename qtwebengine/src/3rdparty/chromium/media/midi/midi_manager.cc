@@ -22,9 +22,10 @@ using midi::mojom::Result;
 
 // If many users have more devices, this number will be increased.
 // But the number is expected to be big enough for now.
-const Sample kMaxUmaDevices = 31;
+constexpr Sample kMaxUmaDevices = 31;
 
-// Used to count events for usage histogram.
+// Used to count events for usage histogram. The item order should not be
+// changed, and new items should be just appended.
 enum class Usage {
   CREATED,
   CREATED_ON_UNSUPPORTED_PLATFORMS,
@@ -35,21 +36,35 @@ enum class Usage {
   OUTPUT_PORT_ADDED,
 
   // New items should be inserted here, and |MAX| should point the last item.
-  MAX = INITIALIZED,
+  MAX = OUTPUT_PORT_ADDED,
+};
+
+// Used to count events for transaction usage histogram. The item order should
+// not be changed, and new items should be just appended.
+enum class SendReceiveUsage {
+  NO_USE,
+  SENT,
+  RECEIVED,
+  SENT_AND_RECEIVED,
+
+  // New items should be inserted here, and |MAX| should point the last item.
+  MAX = SENT_AND_RECEIVED,
 };
 
 void ReportUsage(Usage usage) {
-  UMA_HISTOGRAM_ENUMERATION("Media.Midi.Usage",
-                            static_cast<Sample>(usage),
+  UMA_HISTOGRAM_ENUMERATION("Media.Midi.Usage", usage,
                             static_cast<Sample>(Usage::MAX) + 1);
 }
 
 }  // namespace
 
-MidiManager::MidiManager()
+MidiManager::MidiManager(MidiService* service)
     : initialization_state_(InitializationState::NOT_STARTED),
       finalized_(false),
-      result_(Result::NOT_INITIALIZED) {
+      result_(Result::NOT_INITIALIZED),
+      data_sent_(false),
+      data_received_(false),
+      service_(service) {
   ReportUsage(Usage::CREATED);
 }
 
@@ -62,25 +77,33 @@ MidiManager::~MidiManager() {
 
 #if !defined(OS_MACOSX) && !defined(OS_WIN) && \
     !(defined(USE_ALSA) && defined(USE_UDEV)) && !defined(OS_ANDROID)
-MidiManager* MidiManager::Create() {
+MidiManager* MidiManager::Create(MidiService* service) {
   ReportUsage(Usage::CREATED_ON_UNSUPPORTED_PLATFORMS);
-  return new MidiManager;
+  return new MidiManager(service);
 }
 #endif
 
 void MidiManager::Shutdown() {
-  UMA_HISTOGRAM_ENUMERATION("Media.Midi.ResultOnShutdown",
-                            static_cast<int>(result_),
-                            static_cast<int>(Result::MAX) + 1);
-  base::AutoLock auto_lock(lock_);
-  if (session_thread_runner_) {
-    session_thread_runner_->PostTask(
-        FROM_HERE, base::Bind(&MidiManager::ShutdownOnSessionThread,
-                              base::Unretained(this)));
-    session_thread_runner_ = nullptr;
-  } else {
-    finalized_ = true;
+  UMA_HISTOGRAM_ENUMERATION("Media.Midi.ResultOnShutdown", result_,
+                            static_cast<Sample>(Result::MAX) + 1);
+  bool shutdown_synchronously = false;
+  {
+    base::AutoLock auto_lock(lock_);
+    if (session_thread_runner_) {
+      if (session_thread_runner_->BelongsToCurrentThread()) {
+        shutdown_synchronously = true;
+      } else {
+        session_thread_runner_->PostTask(
+            FROM_HERE, base::Bind(&MidiManager::ShutdownOnSessionThread,
+                                  base::Unretained(this)));
+      }
+      session_thread_runner_ = nullptr;
+    } else {
+      finalized_ = true;
+    }
   }
+  if (shutdown_synchronously)
+    ShutdownOnSessionThread();
 }
 
 void MidiManager::StartSession(MidiManagerClient* client) {
@@ -155,6 +178,7 @@ void MidiManager::EndSession(MidiManagerClient* client) {
 
 void MidiManager::AccumulateMidiBytesSent(MidiManagerClient* client, size_t n) {
   base::AutoLock auto_lock(lock_);
+  data_sent_ = true;
   if (clients_.find(client) == clients_.end())
     return;
 
@@ -175,12 +199,21 @@ void MidiManager::StartInitialization() {
 }
 
 void MidiManager::CompleteInitialization(Result result) {
-  base::AutoLock auto_lock(lock_);
-  if (session_thread_runner_) {
-    session_thread_runner_->PostTask(
-        FROM_HERE, base::Bind(&MidiManager::CompleteInitializationInternal,
-                              base::Unretained(this), result));
+  bool complete_asynchronously = false;
+  {
+    base::AutoLock auto_lock(lock_);
+    if (session_thread_runner_) {
+      if (session_thread_runner_->BelongsToCurrentThread()) {
+        complete_asynchronously = true;
+      } else {
+        session_thread_runner_->PostTask(
+            FROM_HERE, base::Bind(&MidiManager::CompleteInitializationInternal,
+                                  base::Unretained(this), result));
+      }
+    }
   }
+  if (complete_asynchronously)
+    CompleteInitializationInternal(result);
 }
 
 void MidiManager::AddInputPort(const MidiPortInfo& info) {
@@ -220,6 +253,7 @@ void MidiManager::ReceiveMidiData(uint32_t port_index,
                                   size_t length,
                                   double timestamp) {
   base::AutoLock auto_lock(lock_);
+  data_received_ = true;
 
   for (auto* client : clients_)
     client->ReceiveMidiData(port_index, data, length, timestamp);
@@ -228,11 +262,9 @@ void MidiManager::ReceiveMidiData(uint32_t port_index,
 void MidiManager::CompleteInitializationInternal(Result result) {
   TRACE_EVENT0("midi", "MidiManager::CompleteInitialization");
   ReportUsage(Usage::INITIALIZED);
-  UMA_HISTOGRAM_ENUMERATION("Media.Midi.InputPorts",
-                            static_cast<Sample>(input_ports_.size()),
+  UMA_HISTOGRAM_ENUMERATION("Media.Midi.InputPorts", input_ports_.size(),
                             kMaxUmaDevices + 1);
-  UMA_HISTOGRAM_ENUMERATION("Media.Midi.OutputPorts",
-                            static_cast<Sample>(output_ports_.size()),
+  UMA_HISTOGRAM_ENUMERATION("Media.Midi.OutputPorts", output_ports_.size(),
                             kMaxUmaDevices + 1);
 
   base::AutoLock auto_lock(lock_);
@@ -268,6 +300,14 @@ void MidiManager::ShutdownOnSessionThread() {
   // Detach all clients so that they do not call MidiManager methods any more.
   for (auto* client : clients_)
     client->Detach();
+
+  UMA_HISTOGRAM_ENUMERATION(
+      "Media.Midi.SendReceiveUsage",
+      data_sent_ ? (data_received_ ? SendReceiveUsage::SENT_AND_RECEIVED
+                                   : SendReceiveUsage::SENT)
+                 : (data_received_ ? SendReceiveUsage::RECEIVED
+                                   : SendReceiveUsage::NO_USE),
+      static_cast<Sample>(SendReceiveUsage::MAX) + 1);
 }
 
 }  // namespace midi

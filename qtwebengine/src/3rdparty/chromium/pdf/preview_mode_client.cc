@@ -10,12 +10,9 @@
 
 namespace chrome_pdf {
 
-PreviewModeClient::PreviewModeClient(Client* client)
-    : client_(client) {
-}
+PreviewModeClient::PreviewModeClient(Client* client) : client_(client) {}
 
-void PreviewModeClient::DocumentSizeUpdated(const pp::Size& size) {
-}
+void PreviewModeClient::DocumentSizeUpdated(const pp::Size& size) {}
 
 void PreviewModeClient::Invalidate(const pp::Rect& rect) {
   NOTREACHED();
@@ -118,6 +115,10 @@ void PreviewModeClient::ScheduleCallback(int id, int delay_in_ms) {
   NOTREACHED();
 }
 
+void PreviewModeClient::ScheduleTouchTimerCallback(int id, int delay_in_ms) {
+  NOTREACHED();
+}
+
 void PreviewModeClient::SearchString(const base::char16* string,
                                      const base::char16* term,
                                      bool case_sensitive,
@@ -161,8 +162,6 @@ bool PreviewModeClient::IsPrintPreview() {
   NOTREACHED();
   return false;
 }
-
-void PreviewModeClient::CancelBrowserDownload() {}
 
 uint32_t PreviewModeClient::GetBackgroundColor() {
   NOTREACHED();

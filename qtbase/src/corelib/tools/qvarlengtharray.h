@@ -56,9 +56,6 @@
 QT_BEGIN_NAMESPACE
 
 
-template<class T, int Prealloc>
-class QPodList;
-
 // Prealloc = 256 by default, specified in qcontainerfwd.h
 template<class T, int Prealloc>
 class QVarLengthArray
@@ -234,9 +231,9 @@ public:
     inline const T &front() const { return first(); }
     inline T &back() { return last(); }
     inline const T &back() const { return last(); }
+    void shrink_to_fit() { squeeze(); }
 
 private:
-    friend class QPodList<T, Prealloc>;
     void realloc(int size, int alloc);
 
     int a;      // capacity
@@ -344,7 +341,7 @@ Q_OUTOFLINE_TEMPLATE void QVarLengthArray<T, Prealloc>::append(const T *abuf, in
         while (s < asize)
             new (ptr+(s++)) T(*abuf++);
     } else {
-        memcpy(static_cast<void *>(&ptr[s]), static_cast<const void *>(abuf), increment * sizeof(T));
+        memcpy(&ptr[s], abuf, increment * sizeof(T));
         s = asize;
     }
 }
@@ -392,7 +389,7 @@ Q_OUTOFLINE_TEMPLATE void QVarLengthArray<T, Prealloc>::realloc(int asize, int a
                 QT_RETHROW;
             }
         } else {
-            memcpy(static_cast<void *>(ptr), static_cast<const void *>(oldPtr), copySize * sizeof(T));
+            memcpy(ptr, oldPtr, copySize * sizeof(T));
         }
     }
     s = copySize;

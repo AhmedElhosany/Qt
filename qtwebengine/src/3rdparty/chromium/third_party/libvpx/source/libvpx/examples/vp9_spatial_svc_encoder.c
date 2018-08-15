@@ -679,7 +679,7 @@ int main(int argc, const char **argv) {
   }
 #if OUTPUT_RC_STATS
   // For now, just write temporal layer streams.
-  // TODO(wonkap): do spatial by re-writing superframe.
+  // TODO(marpan): do spatial by re-writing superframe.
   if (svc_ctx.output_rc_stat) {
     for (tl = 0; tl < enc_cfg.ts_number_layers; ++tl) {
       char file_name[PATH_MAX];
@@ -697,8 +697,13 @@ int main(int argc, const char **argv) {
 
   if (svc_ctx.speed != -1)
     vpx_codec_control(&codec, VP8E_SET_CPUUSED, svc_ctx.speed);
-  if (svc_ctx.threads)
+  if (svc_ctx.threads) {
     vpx_codec_control(&codec, VP9E_SET_TILE_COLUMNS, (svc_ctx.threads >> 1));
+    if (svc_ctx.threads > 1)
+      vpx_codec_control(&codec, VP9E_SET_ROW_MT, 1);
+    else
+      vpx_codec_control(&codec, VP9E_SET_ROW_MT, 0);
+  }
   if (svc_ctx.speed >= 5 && svc_ctx.aqmode == 1)
     vpx_codec_control(&codec, VP9E_SET_AQ_MODE, 3);
   if (svc_ctx.speed >= 5)
@@ -770,7 +775,7 @@ int main(int argc, const char **argv) {
                                          cx_pkt->data.frame.sz,
                                          cx_pkt->data.frame.pts);
 #if OUTPUT_RC_STATS
-            // TODO(marpan/wonkap): Put this (to line728) in separate function.
+            // TODO(marpan): Put this (to line728) in separate function.
             if (svc_ctx.output_rc_stat) {
               vpx_codec_control(&codec, VP9E_GET_SVC_LAYER_ID, &layer_id);
               parse_superframe_index(cx_pkt->data.frame.buf,

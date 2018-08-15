@@ -85,9 +85,19 @@ Origin::Origin(base::StringPiece scheme,
                uint16_t port,
                base::StringPiece suborigin,
                SchemeHostPort::ConstructPolicy policy)
-    : tuple_(scheme, host, port, policy) {
+    : tuple_(scheme.as_string(), host.as_string(), port, policy) {
   unique_ = tuple_.IsInvalid();
   suborigin_ = suborigin.as_string();
+}
+
+Origin::Origin(std::string scheme,
+               std::string host,
+               uint16_t port,
+               std::string suborigin,
+               SchemeHostPort::ConstructPolicy policy)
+    : tuple_(std::move(scheme), std::move(host), port, policy) {
+  unique_ = tuple_.IsInvalid();
+  suborigin_ = std::move(suborigin);
 }
 
 Origin::~Origin() {
@@ -97,22 +107,18 @@ Origin::~Origin() {
 Origin Origin::UnsafelyCreateOriginWithoutNormalization(
     base::StringPiece scheme,
     base::StringPiece host,
-    uint16_t port) {
-  return Origin(scheme, host, port, "", SchemeHostPort::CHECK_CANONICALIZATION);
-}
-
-Origin Origin::CreateFromNormalizedTuple(base::StringPiece scheme,
-                                         base::StringPiece host,
-                                         uint16_t port) {
-  return CreateFromNormalizedTupleWithSuborigin(scheme, host, port, "");
-}
-
-Origin Origin::CreateFromNormalizedTupleWithSuborigin(
-    base::StringPiece scheme,
-    base::StringPiece host,
     uint16_t port,
     base::StringPiece suborigin) {
   return Origin(scheme, host, port, suborigin,
+                SchemeHostPort::CHECK_CANONICALIZATION);
+}
+
+Origin Origin::CreateFromNormalizedTupleWithSuborigin(
+    std::string scheme,
+    std::string host,
+    uint16_t port,
+    std::string suborigin) {
+  return Origin(std::move(scheme), std::move(host), port, std::move(suborigin),
                 SchemeHostPort::ALREADY_CANONICALIZED);
 }
 
@@ -175,7 +181,8 @@ bool Origin::DomainIs(base::StringPiece lower_ascii_domain) const {
 }
 
 bool Origin::operator<(const Origin& other) const {
-  return tuple_ < other.tuple_;
+  return tuple_ < other.tuple_ ||
+         (tuple_.Equals(other.tuple_) && suborigin_ < other.suborigin_);
 }
 
 std::ostream& operator<<(std::ostream& out, const url::Origin& origin) {

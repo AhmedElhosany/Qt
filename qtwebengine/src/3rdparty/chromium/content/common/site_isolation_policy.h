@@ -41,11 +41,10 @@ class CONTENT_EXPORT SiteIsolationPolicy {
   // different process from the main frame.
   static bool IsTopDocumentIsolationEnabled();
 
-  // Returns true if navigation and history code should maintain per-frame
-  // navigation entries. This is an in-progress feature related to site
-  // isolation, so the return value is currently tied to --site-per-process.
-  // TODO(creis, avi): Make this the default, and eliminate this.
-  static bool UseSubframeNavigationEntries();
+  // Returns true if there exist origins that require process isolation.  Such
+  // origins require a dedicated process, and hence they make cross-process
+  // iframes possible.
+  static bool AreIsolatedOriginsEnabled();
 
  private:
   SiteIsolationPolicy();  // Not instantiable.

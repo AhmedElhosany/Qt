@@ -5,6 +5,8 @@
 #ifndef UI_VIEWS_BUBBLE_BUBBLE_DIALOG_DELEGATE_H_
 #define UI_VIEWS_BUBBLE_BUBBLE_DIALOG_DELEGATE_H_
 
+#include <memory>
+
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "ui/views/bubble/bubble_border.h"
@@ -13,13 +15,13 @@
 #include "ui/views/window/dialog_delegate.h"
 
 namespace gfx {
-class FontList;
 class Rect;
 }
 
 namespace views {
 
 class BubbleFrameView;
+class ViewTracker;
 
 // BubbleDialogDelegateView is a special DialogDelegateView for bubbles.
 class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
@@ -79,6 +81,9 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
 
   const gfx::Insets& margins() const { return margins_; }
   void set_margins(const gfx::Insets& margins) { margins_ = margins; }
+  void set_title_margins(const gfx::Insets& title_margins) {
+    title_margins_ = title_margins;
+  }
 
   const gfx::Insets& anchor_view_insets() const { return anchor_view_insets_; }
   void set_anchor_view_insets(const gfx::Insets& i) { anchor_view_insets_ = i; }
@@ -89,9 +94,6 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
   bool accept_events() const { return accept_events_; }
   void set_accept_events(bool accept_events) { accept_events_ = accept_events; }
 
-  bool border_accepts_events() const { return border_accepts_events_; }
-  void set_border_accepts_events(bool event) { border_accepts_events_ = event; }
-
   bool adjust_if_offscreen() const { return adjust_if_offscreen_; }
   void set_adjust_if_offscreen(bool adjust) { adjust_if_offscreen_ = adjust; }
 
@@ -99,7 +101,6 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
   virtual gfx::Rect GetAnchorRect() const;
 
   // Allows delegates to provide custom parameters before widget initialization.
-  // For example, mus needs to set a custom ui::Window* parent.
   virtual void OnBeforeBubbleWidgetInit(Widget::InitParams* params,
                                         Widget* widget) const;
 
@@ -128,10 +129,6 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
   // Get bubble bounds from the anchor rect and client view's preferred size.
   virtual gfx::Rect GetBubbleBounds();
 
-  // Return a FontList to use for the title of the bubble.
-  // (The default is MediumFont).
-  virtual const gfx::FontList& GetTitleFontList() const;
-
   // View overrides:
   void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
 
@@ -146,7 +143,7 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
   void SetAnchorRect(const gfx::Rect& rect);
 
   // Resize and potentially move the bubble to fit the content's preferred size.
-  void SizeToContents();
+  virtual void SizeToContents();
 
   BubbleFrameView* GetBubbleFrameView() const;
 
@@ -167,9 +164,9 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
   bool close_on_deactivate_;
 
   // The view and widget to which this bubble is anchored. Since an anchor view
-  // can be deleted without notice, we store it in the ViewStorage and retrieve
+  // can be deleted without notice, we store it in a ViewTracker and retrieve
   // it from there. It will make sure that the view is still valid.
-  const int anchor_view_storage_id_;
+  std::unique_ptr<ViewTracker> anchor_view_tracker_;
   Widget* anchor_widget_;
 
   // The anchor rect used in the absence of an anchor view.
@@ -191,12 +188,15 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public DialogDelegateView,
   // The margins between the content and the inside of the border.
   gfx::Insets margins_;
 
+  // The margins around the title.
+  // TODO(tapted): Investigate deleting this when MD is default.
+  gfx::Insets title_margins_;
+
   // Insets applied to the |anchor_view_| bounds.
   gfx::Insets anchor_view_insets_;
 
   // Specifies whether the bubble (or its border) handles mouse events, etc.
   bool accept_events_;
-  bool border_accepts_events_;
 
   // If true (defaults to true), the arrow may be mirrored and moved to fit the
   // bubble on screen better. It would be a no-op if the bubble has no arrow.

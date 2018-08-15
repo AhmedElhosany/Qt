@@ -7,12 +7,12 @@
 #include <stddef.h>
 
 #include "content/browser/bad_message.h"
+#include "content/browser/devtools/grit/devtools_resources_map.h"
 #include "content/common/devtools_messages.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
-#include "grit/devtools_resources_map.h"
 
 namespace content {
 
@@ -29,6 +29,15 @@ DevToolsFrontendHost* DevToolsFrontendHost::Create(
     const HandleMessageCallback& handle_message_callback) {
   return new DevToolsFrontendHostImpl(frontend_main_frame,
                                       handle_message_callback);
+}
+
+// static
+void DevToolsFrontendHost::SetupExtensionsAPI(
+    RenderFrameHost* frame,
+    const std::string& extension_api) {
+  DCHECK(frame->GetParent());
+  frame->Send(new DevToolsMsg_SetupDevToolsClient(frame->GetRoutingID(),
+                                                  extension_api));
 }
 
 // static

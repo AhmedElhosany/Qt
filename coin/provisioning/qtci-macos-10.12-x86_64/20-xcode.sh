@@ -44,6 +44,9 @@
 
 set -ex
 
+# shellcheck source=../common/unix/try_catch.sh
+source "${BASH_SOURCE%/*}/../common/unix/try_catch.sh"
+
 # shellcheck source=../common/macos/install_xcode.sh
 source "${BASH_SOURCE%/*}/../common/macos/install_xcode.sh"
 

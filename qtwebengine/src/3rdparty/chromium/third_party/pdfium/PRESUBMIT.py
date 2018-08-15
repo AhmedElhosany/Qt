@@ -12,19 +12,13 @@ LINT_FILTERS = [
   # Rvalue ref checks are unreliable.
   '-build/c++11',
   # Need to fix header names not matching cpp names.
-  '-build/include',
-  # Need to fix header names not matching cpp names.
   '-build/include_order',
   # Too many to fix at the moment.
   '-readability/casting',
   # Need to refactor large methods to fix.
   '-readability/fn_size',
-  # Need to fix errors when making methods explicit.
-  '-runtime/explicit',
   # Lots of usage to fix first.
   '-runtime/int',
-  # Need to fix two snprintf TODOs
-  '-runtime/printf',
   # Lots of non-const references need to be fixed
   '-runtime/references',
   # We are not thread safe, so this will never pass.
@@ -245,7 +239,7 @@ def _CheckIncludeOrder(input_api, output_api):
 
   warnings = []
   for f in input_api.AffectedFiles(file_filter=FileFilterIncludeOrder):
-    if f.LocalPath().endswith(('.cc', '.h', '.mm')):
+    if f.LocalPath().endswith(('.cc', '.cpp', '.h', '.mm')):
       changed_linenums = set(line_num for line_num, _ in f.ChangedContents())
       warnings.extend(_CheckIncludeOrderInFile(input_api, f, changed_linenums))
 
@@ -255,6 +249,48 @@ def _CheckIncludeOrder(input_api, output_api):
                                                       warnings))
   return results
 
+def _CheckTestDuplicates(input_api, output_api):
+  """Checks that pixel and javascript tests don't contain duplicates.
+  We use .in and .pdf files, having both can cause race conditions on the bots,
+  which run the tests in parallel.
+  """
+  tests_added = []
+  results = []
+  for f in input_api.AffectedFiles():
+    if not f.LocalPath().startswith(('testing/resources/pixel/',
+        'testing/resources/javascript/')):
+      continue
+    end_len = 0
+    if f.LocalPath().endswith('.in'):
+      end_len = 3
+    elif f.LocalPath().endswith('.pdf'):
+      end_len = 4
+    else:
+      continue
+    path = f.LocalPath()[:-end_len]
+    if path in tests_added:
+      results.append(output_api.PresubmitError(
+          'Remove %s to prevent shadowing %s' % (path + '.pdf',
+            path + '.in')))
+    else:
+      tests_added.append(path)
+  return results
+
+def _CheckPNGFormat(input_api, output_api):
+  """Checks that .png files have a format that will be considered valid by our
+  test runners. If a file ends with .png, then it must be of the form
+  NAME_expected(_(win|mac|linux))?.pdf.#.png"""
+  expected_pattern = input_api.re.compile(
+      r'.+_expected(_(win|mac|linux))?\.pdf\.\d+.png')
+  results = []
+  for f in input_api.AffectedFiles(include_deletes=False):
+    if not f.LocalPath().endswith('.png'):
+      continue
+    if expected_pattern.match(f.LocalPath()):
+      continue
+    results.append(output_api.PresubmitError(
+        'PNG file %s does not have the correct format' % f.LocalPath()))
+  return results
 
 def CheckChangeOnUpload(input_api, output_api):
   results = []
@@ -263,5 +299,7 @@ def CheckChangeOnUpload(input_api, output_api):
   results += input_api.canned_checks.CheckChangeLintsClean(
       input_api, output_api, None, LINT_FILTERS)
   results += _CheckIncludeOrder(input_api, output_api)
+  results += _CheckTestDuplicates(input_api, output_api)
+  results += _CheckPNGFormat(input_api, output_api)
 
   return results

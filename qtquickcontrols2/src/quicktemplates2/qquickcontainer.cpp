@@ -253,19 +253,33 @@ void QQuickContainerPrivate::insertItem(int index, QQuickItem *item)
 
     q->itemAdded(index, item);
 
-    if (contentModel->count() == 1 && currentIndex == -1)
+    int count = contentModel->count();
+    for (int i = index + 1; i < count; ++i)
+        q->itemMoved(i, itemAt(i));
+
+    if (count == 1 && currentIndex == -1)
         q->setCurrentIndex(index);
 
     updatingCurrent = false;
 }
 
-void QQuickContainerPrivate::moveItem(int from, int to)
+void QQuickContainerPrivate::moveItem(int from, int to, QQuickItem *item)
 {
     Q_Q(QQuickContainer);
     int oldCurrent = currentIndex;
     contentModel->move(from, to);
 
     updatingCurrent = true;
+
+    q->itemMoved(to, item);
+
+    if (from < to) {
+        for (int i = from; i < to; ++i)
+            q->itemMoved(i, itemAt(i));
+    } else {
+        for (int i = from; i > to; --i)
+            q->itemMoved(i, itemAt(i));
+    }
 
     if (from == oldCurrent)
         q->setCurrentIndex(to);
@@ -299,6 +313,10 @@ void QQuickContainerPrivate::removeItem(int index, QQuickItem *item)
     contentModel->remove(index);
 
     q->itemRemoved(index, item);
+
+    int count = contentModel->count();
+    for (int i = index; i < count; ++i)
+        q->itemMoved(i, itemAt(i));
 
     if (currentChanged)
         emit q->currentIndexChanged();
@@ -363,8 +381,8 @@ void QQuickContainerPrivate::itemDestroyed(QQuickItem *item)
 
 void QQuickContainerPrivate::contentData_append(QQmlListProperty<QObject> *prop, QObject *obj)
 {
-    QQuickContainerPrivate *p = static_cast<QQuickContainerPrivate *>(prop->data);
     QQuickContainer *q = static_cast<QQuickContainer *>(prop->object);
+    QQuickContainerPrivate *p = QQuickContainerPrivate::get(q);
     QQuickItem *item = qobject_cast<QQuickItem *>(obj);
     if (item) {
         if (QQuickItemPrivate::get(item)->isTransparentForPositioner())
@@ -378,20 +396,20 @@ void QQuickContainerPrivate::contentData_append(QQmlListProperty<QObject> *prop,
 
 int QQuickContainerPrivate::contentData_count(QQmlListProperty<QObject> *prop)
 {
-    QQuickContainerPrivate *p = static_cast<QQuickContainerPrivate *>(prop->data);
-    return p->contentData.count();
+    QQuickContainer *q = static_cast<QQuickContainer *>(prop->object);
+    return QQuickContainerPrivate::get(q)->contentData.count();
 }
 
 QObject *QQuickContainerPrivate::contentData_at(QQmlListProperty<QObject> *prop, int index)
 {
-    QQuickContainerPrivate *p = static_cast<QQuickContainerPrivate *>(prop->data);
-    return p->contentData.value(index);
+    QQuickContainer *q = static_cast<QQuickContainer *>(prop->object);
+    return QQuickContainerPrivate::get(q)->contentData.value(index);
 }
 
 void QQuickContainerPrivate::contentData_clear(QQmlListProperty<QObject> *prop)
 {
-    QQuickContainerPrivate *p = static_cast<QQuickContainerPrivate *>(prop->data);
-    p->contentData.clear();
+    QQuickContainer *q = static_cast<QQuickContainer *>(prop->object);
+    return QQuickContainerPrivate::get(q)->contentData.clear();
 }
 
 void QQuickContainerPrivate::contentChildren_append(QQmlListProperty<QQuickItem> *prop, QQuickItem *item)
@@ -402,8 +420,8 @@ void QQuickContainerPrivate::contentChildren_append(QQmlListProperty<QQuickItem>
 
 int QQuickContainerPrivate::contentChildren_count(QQmlListProperty<QQuickItem> *prop)
 {
-    QQuickContainerPrivate *p = static_cast<QQuickContainerPrivate *>(prop->data);
-    return p->contentModel->count();
+    QQuickContainer *q = static_cast<QQuickContainer *>(prop->object);
+    return QQuickContainerPrivate::get(q)->contentModel->count();
 }
 
 QQuickItem *QQuickContainerPrivate::contentChildren_at(QQmlListProperty<QQuickItem> *prop, int index)
@@ -414,8 +432,8 @@ QQuickItem *QQuickContainerPrivate::contentChildren_at(QQmlListProperty<QQuickIt
 
 void QQuickContainerPrivate::contentChildren_clear(QQmlListProperty<QQuickItem> *prop)
 {
-    QQuickContainerPrivate *p = static_cast<QQuickContainerPrivate *>(prop->data);
-    p->contentModel->clear();
+    QQuickContainer *q = static_cast<QQuickContainer *>(prop->object);
+    return QQuickContainerPrivate::get(q)->contentModel->clear();
 }
 
 QQuickContainer::QQuickContainer(QQuickItem *parent)
@@ -491,7 +509,7 @@ void QQuickContainer::insertItem(int index, QQuickItem *item)
         if (oldIndex < index)
             --index;
         if (oldIndex != index)
-            d->moveItem(oldIndex, index);
+            d->moveItem(oldIndex, index, item);
     } else {
         d->insertItem(index, item);
     }
@@ -512,26 +530,65 @@ void QQuickContainer::moveItem(int from, int to)
         to = count - 1;
 
     if (from != to)
-        d->moveItem(from, to);
+        d->moveItem(from, to, d->itemAt(from));
 }
 
 /*!
+    \deprecated
     \qmlmethod void QtQuick.Controls::Container::removeItem(int index)
 
-    Removes an item at \a index.
+    Use Container::removeItem(Item) or Container::takeItem(int) instead.
+*/
+void QQuickContainer::removeItem(const QVariant &var)
+{
+    if (var.userType() == QMetaType::Nullptr)
+        return;
+
+    if (QQuickItem *item = var.value<QQuickItem *>())
+        removeItem(item);
+    else
+        takeItem(var.toInt());
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlmethod void QtQuick.Controls::Container::removeItem(Item item)
+
+    Removes and destroys the specified \a item.
+*/
+void QQuickContainer::removeItem(QQuickItem *item)
+{
+    Q_D(QQuickContainer);
+    if (!item)
+        return;
+
+    const int index = d->contentModel->indexOf(item, nullptr);
+    if (index == -1)
+        return;
+
+    d->removeItem(index, item);
+    item->deleteLater();
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlmethod Item QtQuick.Controls::Container::takeItem(int index)
+
+    Removes and returns the item at \a index.
 
     \note The ownership of the item is transferred to the caller.
 */
-void QQuickContainer::removeItem(int index)
+QQuickItem *QQuickContainer::takeItem(int index)
 {
     Q_D(QQuickContainer);
     const int count = d->contentModel->count();
     if (index < 0 || index >= count)
-        return;
+        return nullptr;
 
     QQuickItem *item = itemAt(index);
     if (item)
         d->removeItem(index, item);
+    return item;
 }
 
 /*!
@@ -580,7 +637,7 @@ QQmlListProperty<QObject> QQuickContainer::contentData()
     Q_D(QQuickContainer);
     if (!d->contentItem)
         d->executeContentItem();
-    return QQmlListProperty<QObject>(this, d,
+    return QQmlListProperty<QObject>(this, nullptr,
                                      QQuickContainerPrivate::contentData_append,
                                      QQuickContainerPrivate::contentData_count,
                                      QQuickContainerPrivate::contentData_at,
@@ -603,8 +660,7 @@ QQmlListProperty<QObject> QQuickContainer::contentData()
 */
 QQmlListProperty<QQuickItem> QQuickContainer::contentChildren()
 {
-    Q_D(QQuickContainer);
-    return QQmlListProperty<QQuickItem>(this, d,
+    return QQmlListProperty<QQuickItem>(this, nullptr,
                                         QQuickContainerPrivate::contentChildren_append,
                                         QQuickContainerPrivate::contentChildren_count,
                                         QQuickContainerPrivate::contentChildren_at,
@@ -754,6 +810,12 @@ bool QQuickContainer::isContent(QQuickItem *item) const
 }
 
 void QQuickContainer::itemAdded(int index, QQuickItem *item)
+{
+    Q_UNUSED(index);
+    Q_UNUSED(item);
+}
+
+void QQuickContainer::itemMoved(int index, QQuickItem *item)
 {
     Q_UNUSED(index);
     Q_UNUSED(item);

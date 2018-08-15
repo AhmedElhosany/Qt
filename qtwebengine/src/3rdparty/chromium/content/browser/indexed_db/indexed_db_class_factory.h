@@ -19,6 +19,7 @@
 
 namespace leveldb {
 class Iterator;
+class Snapshot;
 }  // namespace leveldb
 
 namespace content {
@@ -43,19 +44,21 @@ class CONTENT_EXPORT IndexedDBClassFactory {
 
   virtual scoped_refptr<IndexedDBDatabase> CreateIndexedDBDatabase(
       const base::string16& name,
-      IndexedDBBackingStore* backing_store,
-      IndexedDBFactory* factory,
+      scoped_refptr<IndexedDBBackingStore> backing_store,
+      scoped_refptr<IndexedDBFactory> factory,
       const IndexedDBDatabase::Identifier& unique_identifier);
 
-  virtual IndexedDBTransaction* CreateIndexedDBTransaction(
+  virtual std::unique_ptr<IndexedDBTransaction> CreateIndexedDBTransaction(
       int64_t id,
-      base::WeakPtr<IndexedDBConnection> connection,
+      IndexedDBConnection* connection,
       const std::set<int64_t>& scope,
       blink::WebIDBTransactionMode mode,
       IndexedDBBackingStore::Transaction* backing_store_transaction);
 
   virtual std::unique_ptr<LevelDBIteratorImpl> CreateIteratorImpl(
-      std::unique_ptr<leveldb::Iterator> iterator);
+      std::unique_ptr<leveldb::Iterator> iterator,
+      LevelDBDatabase* db,
+      const leveldb::Snapshot* snapshot);
 
   virtual scoped_refptr<LevelDBTransaction> CreateLevelDBTransaction(
       LevelDBDatabase* db);
@@ -63,7 +66,7 @@ class CONTENT_EXPORT IndexedDBClassFactory {
  protected:
   IndexedDBClassFactory() {}
   virtual ~IndexedDBClassFactory() {}
-  friend struct base::DefaultLazyInstanceTraits<IndexedDBClassFactory>;
+  friend struct base::LazyInstanceTraitsBase<IndexedDBClassFactory>;
 };
 
 }  // namespace content

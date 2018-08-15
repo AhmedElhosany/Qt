@@ -30,252 +30,301 @@
 
 #include "core/dom/MutationObserver.h"
 
+#include <algorithm>
 #include "bindings/core/v8/ExceptionState.h"
-#include "bindings/core/v8/Microtask.h"
 #include "core/dom/MutationCallback.h"
 #include "core/dom/MutationObserverInit.h"
 #include "core/dom/MutationObserverRegistration.h"
 #include "core/dom/MutationRecord.h"
 #include "core/dom/Node.h"
-#include "core/inspector/InspectorInstrumentation.h"
-#include <algorithm>
+#include "core/html/HTMLSlotElement.h"
+#include "core/probe/CoreProbes.h"
+#include "platform/bindings/Microtask.h"
 
 namespace blink {
 
-static unsigned s_observerPriority = 0;
+static unsigned g_observer_priority = 0;
 
 struct MutationObserver::ObserverLessThan {
   bool operator()(const Member<MutationObserver>& lhs,
                   const Member<MutationObserver>& rhs) {
-    return lhs->m_priority < rhs->m_priority;
+    return lhs->priority_ < rhs->priority_;
   }
 };
 
-MutationObserver* MutationObserver::create(MutationCallback* callback) {
-  DCHECK(isMainThread());
+MutationObserver* MutationObserver::Create(MutationCallback* callback) {
+  DCHECK(IsMainThread());
   return new MutationObserver(callback);
 }
 
 MutationObserver::MutationObserver(MutationCallback* callback)
-    : m_callback(callback), m_priority(s_observerPriority++) {}
+    : callback_(this, callback), priority_(g_observer_priority++) {}
 
 MutationObserver::~MutationObserver() {
-  cancelInspectorAsyncTasks();
+  CancelInspectorAsyncTasks();
 }
 
 void MutationObserver::observe(Node* node,
-                               const MutationObserverInit& observerInit,
-                               ExceptionState& exceptionState) {
+                               const MutationObserverInit& observer_init,
+                               ExceptionState& exception_state) {
   DCHECK(node);
 
   MutationObserverOptions options = 0;
 
-  if (observerInit.hasAttributeOldValue() && observerInit.attributeOldValue())
-    options |= AttributeOldValue;
+  if (observer_init.hasAttributeOldValue() && observer_init.attributeOldValue())
+    options |= kAttributeOldValue;
 
-  HashSet<AtomicString> attributeFilter;
-  if (observerInit.hasAttributeFilter()) {
-    const Vector<String>& sequence = observerInit.attributeFilter();
-    for (unsigned i = 0; i < sequence.size(); ++i)
-      attributeFilter.add(AtomicString(sequence[i]));
-    options |= AttributeFilter;
+  HashSet<AtomicString> attribute_filter;
+  if (observer_init.hasAttributeFilter()) {
+    for (const auto& name : observer_init.attributeFilter())
+      attribute_filter.insert(AtomicString(name));
+    options |= kAttributeFilter;
   }
 
-  bool attributes = observerInit.hasAttributes() && observerInit.attributes();
-  if (attributes ||
-      (!observerInit.hasAttributes() && (observerInit.hasAttributeOldValue() ||
-                                         observerInit.hasAttributeFilter())))
-    options |= Attributes;
+  bool attributes = observer_init.hasAttributes() && observer_init.attributes();
+  if (attributes || (!observer_init.hasAttributes() &&
+                     (observer_init.hasAttributeOldValue() ||
+                      observer_init.hasAttributeFilter())))
+    options |= kAttributes;
 
-  if (observerInit.hasCharacterDataOldValue() &&
-      observerInit.characterDataOldValue())
-    options |= CharacterDataOldValue;
+  if (observer_init.hasCharacterDataOldValue() &&
+      observer_init.characterDataOldValue())
+    options |= kCharacterDataOldValue;
 
-  bool characterData =
-      observerInit.hasCharacterData() && observerInit.characterData();
-  if (characterData || (!observerInit.hasCharacterData() &&
-                        observerInit.hasCharacterDataOldValue()))
-    options |= CharacterData;
+  bool character_data =
+      observer_init.hasCharacterData() && observer_init.characterData();
+  if (character_data || (!observer_init.hasCharacterData() &&
+                         observer_init.hasCharacterDataOldValue()))
+    options |= kCharacterData;
 
-  if (observerInit.childList())
-    options |= ChildList;
+  if (observer_init.childList())
+    options |= kChildList;
 
-  if (observerInit.subtree())
-    options |= Subtree;
+  if (observer_init.subtree())
+    options |= kSubtree;
 
-  if (!(options & Attributes)) {
-    if (options & AttributeOldValue) {
-      exceptionState.throwTypeError(
+  if (!(options & kAttributes)) {
+    if (options & kAttributeOldValue) {
+      exception_state.ThrowTypeError(
           "The options object may only set 'attributeOldValue' to true when "
           "'attributes' is true or not present.");
       return;
     }
-    if (options & AttributeFilter) {
-      exceptionState.throwTypeError(
+    if (options & kAttributeFilter) {
+      exception_state.ThrowTypeError(
           "The options object may only set 'attributeFilter' when 'attributes' "
           "is true or not present.");
       return;
     }
   }
-  if (!((options & CharacterData) || !(options & CharacterDataOldValue))) {
-    exceptionState.throwTypeError(
+  if (!((options & kCharacterData) || !(options & kCharacterDataOldValue))) {
+    exception_state.ThrowTypeError(
         "The options object may only set 'characterDataOldValue' to true when "
         "'characterData' is true or not present.");
     return;
   }
 
-  if (!(options & (Attributes | CharacterData | ChildList))) {
-    exceptionState.throwTypeError(
+  if (!(options & (kAttributes | kCharacterData | kChildList))) {
+    exception_state.ThrowTypeError(
         "The options object must set at least one of 'attributes', "
         "'characterData', or 'childList' to true.");
     return;
   }
 
-  node->registerMutationObserver(*this, options, attributeFilter);
+  node->RegisterMutationObserver(*this, options, attribute_filter);
 }
 
 MutationRecordVector MutationObserver::takeRecords() {
   MutationRecordVector records;
-  cancelInspectorAsyncTasks();
-  records.swap(m_records);
+  CancelInspectorAsyncTasks();
+  swap(records_, records, this);
   return records;
 }
 
 void MutationObserver::disconnect() {
-  cancelInspectorAsyncTasks();
-  m_records.clear();
-  MutationObserverRegistrationSet registrations(m_registrations);
+  CancelInspectorAsyncTasks();
+  records_.clear();
+  MutationObserverRegistrationSet registrations(registrations_);
   for (auto& registration : registrations) {
     // The registration may be already unregistered while iteration.
     // Only call unregister if it is still in the original set.
-    if (m_registrations.contains(registration))
-      registration->unregister();
+    if (registrations_.Contains(registration))
+      registration->Unregister();
   }
-  DCHECK(m_registrations.isEmpty());
+  DCHECK(registrations_.IsEmpty());
 }
 
-void MutationObserver::observationStarted(
+void MutationObserver::ObservationStarted(
     MutationObserverRegistration* registration) {
-  DCHECK(!m_registrations.contains(registration));
-  m_registrations.add(registration);
+  DCHECK(!registrations_.Contains(registration));
+  registrations_.insert(registration);
 }
 
-void MutationObserver::observationEnded(
+void MutationObserver::ObservationEnded(
     MutationObserverRegistration* registration) {
-  DCHECK(m_registrations.contains(registration));
-  m_registrations.remove(registration);
+  DCHECK(registrations_.Contains(registration));
+  registrations_.erase(registration);
 }
 
-static MutationObserverSet& activeMutationObservers() {
-  DEFINE_STATIC_LOCAL(MutationObserverSet, activeObservers,
+static MutationObserverSet& ActiveMutationObservers() {
+  DEFINE_STATIC_LOCAL(MutationObserverSet, active_observers,
                       (new MutationObserverSet));
-  return activeObservers;
+  return active_observers;
 }
 
-static MutationObserverSet& suspendedMutationObservers() {
-  DEFINE_STATIC_LOCAL(MutationObserverSet, suspendedObservers,
+using SlotChangeList = HeapVector<Member<HTMLSlotElement>>;
+
+// TODO(hayato): We should have a SlotChangeList for each unit of related
+// similar-origin browsing context.
+// https://html.spec.whatwg.org/multipage/browsers.html#unit-of-related-similar-origin-browsing-contexts
+static SlotChangeList& ActiveSlotChangeList() {
+  DEFINE_STATIC_LOCAL(SlotChangeList, slot_change_list, (new SlotChangeList));
+  return slot_change_list;
+}
+
+static MutationObserverSet& SuspendedMutationObservers() {
+  DEFINE_STATIC_LOCAL(MutationObserverSet, suspended_observers,
                       (new MutationObserverSet));
-  return suspendedObservers;
+  return suspended_observers;
 }
 
-static void activateObserver(MutationObserver* observer) {
-  if (activeMutationObservers().isEmpty())
-    Microtask::enqueueMicrotask(WTF::bind(&MutationObserver::deliverMutations));
-
-  activeMutationObservers().add(observer);
+static void EnsureEnqueueMicrotask() {
+  if (ActiveMutationObservers().IsEmpty() && ActiveSlotChangeList().IsEmpty())
+    Microtask::EnqueueMicrotask(WTF::Bind(&MutationObserver::DeliverMutations));
 }
 
-void MutationObserver::enqueueMutationRecord(MutationRecord* mutation) {
-  DCHECK(isMainThread());
-  m_records.append(mutation);
-  activateObserver(this);
-  InspectorInstrumentation::asyncTaskScheduled(
-      m_callback->getExecutionContext(), mutation->type(), mutation);
+void MutationObserver::EnqueueSlotChange(HTMLSlotElement& slot) {
+  DCHECK(IsMainThread());
+  EnsureEnqueueMicrotask();
+  ActiveSlotChangeList().push_back(&slot);
 }
 
-void MutationObserver::setHasTransientRegistration() {
-  DCHECK(isMainThread());
-  activateObserver(this);
+void MutationObserver::CleanSlotChangeList(Document& document) {
+  SlotChangeList kept;
+  kept.ReserveCapacity(ActiveSlotChangeList().size());
+  for (auto& slot : ActiveSlotChangeList()) {
+    if (slot->GetDocument() != document)
+      kept.push_back(slot);
+  }
+  ActiveSlotChangeList().swap(kept);
 }
 
-HeapHashSet<Member<Node>> MutationObserver::getObservedNodes() const {
-  HeapHashSet<Member<Node>> observedNodes;
-  for (const auto& registration : m_registrations)
-    registration->addRegistrationNodesToSet(observedNodes);
-  return observedNodes;
+static void ActivateObserver(MutationObserver* observer) {
+  EnsureEnqueueMicrotask();
+  ActiveMutationObservers().insert(observer);
 }
 
-bool MutationObserver::shouldBeSuspended() const {
-  return m_callback->getExecutionContext() &&
-         m_callback->getExecutionContext()->activeDOMObjectsAreSuspended();
+void MutationObserver::EnqueueMutationRecord(MutationRecord* mutation) {
+  DCHECK(IsMainThread());
+  records_.push_back(TraceWrapperMember<MutationRecord>(this, mutation));
+  ActivateObserver(this);
+  probe::AsyncTaskScheduled(callback_->GetExecutionContext(), mutation->type(),
+                            mutation);
 }
 
-void MutationObserver::cancelInspectorAsyncTasks() {
-  for (auto& record : m_records)
-    InspectorInstrumentation::asyncTaskCanceled(
-        m_callback->getExecutionContext(), record);
+void MutationObserver::SetHasTransientRegistration() {
+  DCHECK(IsMainThread());
+  ActivateObserver(this);
 }
 
-void MutationObserver::deliver() {
-  DCHECK(!shouldBeSuspended());
+HeapHashSet<Member<Node>> MutationObserver::GetObservedNodes() const {
+  HeapHashSet<Member<Node>> observed_nodes;
+  for (const auto& registration : registrations_)
+    registration->AddRegistrationNodesToSet(observed_nodes);
+  return observed_nodes;
+}
+
+bool MutationObserver::ShouldBeSuspended() const {
+  return callback_->GetExecutionContext() &&
+         callback_->GetExecutionContext()->IsContextSuspended();
+}
+
+void MutationObserver::CancelInspectorAsyncTasks() {
+  for (auto& record : records_)
+    probe::AsyncTaskCanceled(callback_->GetExecutionContext(), record);
+}
+
+void MutationObserver::Deliver() {
+  DCHECK(!ShouldBeSuspended());
 
   // Calling clearTransientRegistrations() can modify m_registrations, so it's
   // necessary to make a copy of the transient registrations before operating on
   // them.
-  HeapVector<Member<MutationObserverRegistration>, 1> transientRegistrations;
-  for (auto& registration : m_registrations) {
-    if (registration->hasTransientRegistrations())
-      transientRegistrations.append(registration);
+  HeapVector<Member<MutationObserverRegistration>, 1> transient_registrations;
+  for (auto& registration : registrations_) {
+    if (registration->HasTransientRegistrations())
+      transient_registrations.push_back(registration);
   }
-  for (size_t i = 0; i < transientRegistrations.size(); ++i)
-    transientRegistrations[i]->clearTransientRegistrations();
+  for (const auto& registration : transient_registrations)
+    registration->ClearTransientRegistrations();
 
-  if (m_records.isEmpty())
+  if (records_.IsEmpty())
     return;
 
   MutationRecordVector records;
-  records.swap(m_records);
+  swap(records_, records, this);
 
   // Report the first (earliest) stack as the async cause.
-  InspectorInstrumentation::AsyncTask asyncTask(
-      m_callback->getExecutionContext(), records.first());
-  m_callback->call(records, this);
+  probe::AsyncTask async_task(callback_->GetExecutionContext(),
+                              records.front());
+  callback_->Call(records, this);
 }
 
-void MutationObserver::resumeSuspendedObservers() {
-  DCHECK(isMainThread());
-  if (suspendedMutationObservers().isEmpty())
+void MutationObserver::ResumeSuspendedObservers() {
+  DCHECK(IsMainThread());
+  if (SuspendedMutationObservers().IsEmpty())
     return;
 
   MutationObserverVector suspended;
-  copyToVector(suspendedMutationObservers(), suspended);
-  for (size_t i = 0; i < suspended.size(); ++i) {
-    if (!suspended[i]->shouldBeSuspended()) {
-      suspendedMutationObservers().remove(suspended[i]);
-      activateObserver(suspended[i]);
+  CopyToVector(SuspendedMutationObservers(), suspended);
+  for (const auto& observer : suspended) {
+    if (!observer->ShouldBeSuspended()) {
+      SuspendedMutationObservers().erase(observer);
+      ActivateObserver(observer);
     }
   }
 }
 
-void MutationObserver::deliverMutations() {
-  DCHECK(isMainThread());
+void MutationObserver::DeliverMutations() {
+  // These steps are defined in DOM Standard's "notify mutation observers".
+  // https://dom.spec.whatwg.org/#notify-mutation-observers
+  DCHECK(IsMainThread());
+
   MutationObserverVector observers;
-  copyToVector(activeMutationObservers(), observers);
-  activeMutationObservers().clear();
+  CopyToVector(ActiveMutationObservers(), observers);
+  ActiveMutationObservers().clear();
+
+  SlotChangeList slots;
+  slots.swap(ActiveSlotChangeList());
+  for (const auto& slot : slots)
+    slot->ClearSlotChangeEventEnqueued();
+
   std::sort(observers.begin(), observers.end(), ObserverLessThan());
-  for (size_t i = 0; i < observers.size(); ++i) {
-    if (observers[i]->shouldBeSuspended())
-      suspendedMutationObservers().add(observers[i]);
+  for (const auto& observer : observers) {
+    if (observer->ShouldBeSuspended())
+      SuspendedMutationObservers().insert(observer);
     else
-      observers[i]->deliver();
+      observer->Deliver();
   }
+  for (const auto& slot : slots)
+    slot->DispatchSlotChangeEvent();
+}
+
+ExecutionContext* MutationObserver::GetExecutionContext() const {
+  return callback_->GetExecutionContext();
 }
 
 DEFINE_TRACE(MutationObserver) {
-  visitor->trace(m_callback);
-  visitor->trace(m_records);
-  visitor->trace(m_registrations);
-  visitor->trace(m_callback);
+  visitor->Trace(callback_);
+  visitor->Trace(records_);
+  visitor->Trace(registrations_);
+  visitor->Trace(callback_);
+}
+
+DEFINE_TRACE_WRAPPERS(MutationObserver) {
+  visitor->TraceWrappers(callback_);
+  for (auto record : records_)
+    visitor->TraceWrappers(record);
 }
 
 }  // namespace blink

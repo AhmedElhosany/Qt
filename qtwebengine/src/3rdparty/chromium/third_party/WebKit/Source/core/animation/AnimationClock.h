@@ -32,35 +32,45 @@
 #define AnimationClock_h
 
 #include "core/CoreExport.h"
-#include "wtf/Allocator.h"
-#include "wtf/CurrentTime.h"
-#include "wtf/Noncopyable.h"
+#include "platform/wtf/Allocator.h"
+#include "platform/wtf/CurrentTime.h"
+#include "platform/wtf/Noncopyable.h"
+
 #include <limits>
 
 namespace blink {
 
+// Maintains a stationary clock time during script execution.  Tries to track
+// the glass time (the moment photons leave the screen) of the current animation
+// frame.
 class CORE_EXPORT AnimationClock {
   DISALLOW_NEW();
   WTF_MAKE_NONCOPYABLE(AnimationClock);
 
  public:
-  explicit AnimationClock(WTF::TimeFunction monotonicallyIncreasingTime =
-                              WTF::monotonicallyIncreasingTime)
-      : m_monotonicallyIncreasingTime(monotonicallyIncreasingTime),
-        m_time(0),
-        m_currentTask(std::numeric_limits<unsigned>::max()) {}
+  explicit AnimationClock(WTF::TimeFunction monotonically_increasing_time =
+                              WTF::MonotonicallyIncreasingTime)
+      : monotonically_increasing_time_(monotonically_increasing_time),
+        time_(0),
+        task_for_which_time_was_calculated_(
+            std::numeric_limits<unsigned>::max()) {}
 
-  void updateTime(double time);
-  double currentTime();
-  void resetTimeForTesting(double time = 0);
+  void UpdateTime(double time);
+  double CurrentTime();
+  void ResetTimeForTesting(double time = 0);
+  void DisableSyntheticTimeForTesting() {
+    monotonically_increasing_time_ = nullptr;
+  }
 
-  static void notifyTaskStart() { ++s_currentTask; }
+  // notifyTaskStart should be called right before the main message loop starts
+  // to run the next task from the message queue.
+  static void NotifyTaskStart() { ++currently_running_task_; }
 
  private:
-  WTF::TimeFunction m_monotonicallyIncreasingTime;
-  double m_time;
-  unsigned m_currentTask;
-  static unsigned s_currentTask;
+  WTF::TimeFunction monotonically_increasing_time_;
+  double time_;
+  unsigned task_for_which_time_was_calculated_;
+  static unsigned currently_running_task_;
 };
 
 }  // namespace blink

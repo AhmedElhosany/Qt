@@ -15,6 +15,7 @@
 #include "components/signin/core/browser/account_fetcher_service.h"
 #include "components/signin/core/browser/account_info.h"
 #include "components/signin/core/browser/account_tracker_service.h"
+#include "components/signin/core/browser/child_account_info_fetcher.h"
 #include "components/signin/core/browser/fake_account_fetcher_service.h"
 #include "components/signin/core/browser/test_signin_client.h"
 #include "components/signin/core/common/signin_pref_names.h"
@@ -255,6 +256,8 @@ class AccountTrackerServiceTest : public testing::Test {
   ~AccountTrackerServiceTest() override {}
 
   void SetUp() override {
+    ChildAccountInfoFetcher::InitializeForTests();
+
     fake_oauth2_token_service_.reset(new FakeOAuth2TokenService());
 
     pref_service_.registry()->RegisterListPref(
@@ -678,13 +681,13 @@ TEST_F(AccountTrackerServiceTest, SeedAccountInfoFull) {
   info.full_name = AccountIdToFullName("alpha");
   info.account_id = account_tracker()->SeedAccountInfo(info);
 
-  // Validate that seeding an unexisting account works and doesn't send a
-  // notification if the info isn't full.
+  // Validate that seeding an unexisting account works and sends a notification.
   AccountInfo stored_info = account_tracker()->GetAccountInfo(info.account_id);
   EXPECT_EQ(info.gaia, stored_info.gaia);
   EXPECT_EQ(info.email, stored_info.email);
   EXPECT_EQ(info.full_name, stored_info.full_name);
-  EXPECT_TRUE(observer.CheckEvents());
+  EXPECT_TRUE(
+      observer.CheckEvents(TrackingEvent(UPDATED, info.account_id, info.gaia)));
 
   // Validate that seeding new full informations to an existing account works
   // and sends a notification.

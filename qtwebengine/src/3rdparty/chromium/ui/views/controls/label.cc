@@ -22,33 +22,51 @@
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/default_style.h"
-#include "ui/base/material_design/material_design_controller.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/background.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/native_cursor.h"
 #include "ui/views/selection_controller.h"
 
 namespace views {
-// static
+namespace {
+// Returns additional Insets applied to |label->GetContentsBounds()| to obtain
+// the text bounds. GetContentsBounds() includes the Border, but not any
+// additional insets used by the Label (e.g. for a focus ring).
+gfx::Insets NonBorderInsets(const Label& label) {
+  return label.GetInsets() - label.View::GetInsets();
+}
+}  // namespace
+
 const char Label::kViewClassName[] = "Label";
-const int Label::kFocusBorderPadding = 1;
 
 Label::Label() : Label(base::string16()) {
 }
 
-Label::Label(const base::string16& text) : Label(text, GetDefaultFontList()) {
+Label::Label(const base::string16& text)
+    : Label(text, style::CONTEXT_LABEL, style::STYLE_PRIMARY) {}
+
+Label::Label(const base::string16& text, int text_context, int text_style)
+    : text_context_(text_context), context_menu_contents_(this) {
+  Init(text, style::GetFont(text_context, text_style));
+  SetLineHeight(style::GetLineHeight(text_context, text_style));
+
+  // If an explicit style is given, ignore color changes due to the NativeTheme.
+  if (text_style != style::STYLE_PRIMARY) {
+    SetEnabledColor(
+        style::GetColor(text_context, text_style, GetNativeTheme()));
+  }
 }
 
-Label::Label(const base::string16& text, const gfx::FontList& font_list)
-    : context_menu_contents_(this) {
-  Init(text, font_list);
+Label::Label(const base::string16& text, const CustomFont& font)
+    : text_context_(style::CONTEXT_LABEL), context_menu_contents_(this) {
+  Init(text, font.font_list);
 }
 
 Label::~Label() {
@@ -56,8 +74,7 @@ Label::~Label() {
 
 // static
 const gfx::FontList& Label::GetDefaultFontList() {
-  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  return rb.GetFontListWithDelta(ui::kLabelFontSizeDelta);
+  return style::GetFont(style::CONTEXT_LABEL, style::STYLE_PRIMARY);
 }
 
 void Label::SetFontList(const gfx::FontList& font_list) {
@@ -92,15 +109,6 @@ void Label::SetEnabledColor(SkColor color) {
   RecalculateColors();
 }
 
-void Label::SetDisabledColor(SkColor color) {
-  if (disabled_color_set_ && requested_disabled_color_ == color)
-    return;
-  is_first_paint_text_ = true;
-  requested_disabled_color_ = color;
-  disabled_color_set_ = true;
-  RecalculateColors();
-}
-
 void Label::SetBackgroundColor(SkColor color) {
   if (background_color_set_ && background_color_ == color)
     return;
@@ -129,7 +137,8 @@ void Label::SetSelectionBackgroundColor(SkColor color) {
 }
 
 void Label::SetShadows(const gfx::ShadowValues& shadows) {
-  // TODO(mukai): early exit if the specified shadows are same.
+  if (render_text_->shadows() == shadows)
+    return;
   is_first_paint_text_ = true;
   render_text_->set_shadows(shadows);
   ResetLayout();
@@ -175,8 +184,6 @@ void Label::SetMultiLine(bool multi_line) {
   if (render_text_->MultilineSupported())
     render_text_->SetMultiline(multi_line);
   render_text_->SetReplaceNewlineCharsWithSymbols(!multi_line);
-  if (multi_line)
-    SetSelectable(false);
   ResetLayout();
 }
 
@@ -250,7 +257,7 @@ base::string16 Label::GetDisplayTextForTesting() {
 }
 
 bool Label::IsSelectionSupported() const {
-  return !multi_line() && !obscured() && render_text_->IsSelectionSupported();
+  return !obscured() && render_text_->IsSelectionSupported();
 }
 
 bool Label::SetSelectable(bool value) {
@@ -299,20 +306,11 @@ void Label::SelectRange(const gfx::Range& range) {
     SchedulePaint();
 }
 
-gfx::Insets Label::GetInsets() const {
-  gfx::Insets insets = View::GetInsets();
-  if (focus_behavior() != FocusBehavior::NEVER) {
-    insets += gfx::Insets(kFocusBorderPadding, kFocusBorderPadding,
-                          kFocusBorderPadding, kFocusBorderPadding);
-  }
-  return insets;
-}
-
 int Label::GetBaseline() const {
   return GetInsets().top() + font_list().GetBaseline();
 }
 
-gfx::Size Label::GetPreferredSize() const {
+gfx::Size Label::CalculatePreferredSize() const {
   // Return a size of (0, 0) if the label is not visible and if the
   // |collapse_when_hidden_| flag is set.
   // TODO(munjal): This logic probably belongs to the View class. But for now,
@@ -397,9 +395,12 @@ bool Label::CanProcessEventsWithinSubtree() const {
   return !!GetRenderTextForSelectionController();
 }
 
+WordLookupClient* Label::GetWordLookupClient() {
+  return this;
+}
+
 void Label::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   node_data->role = ui::AX_ROLE_STATIC_TEXT;
-  node_data->AddStateFlag(ui::AX_STATE_READ_ONLY);
   // Note that |render_text_| is never elided (see the comment in Init() too).
   node_data->SetName(render_text_->GetDisplayText());
 }
@@ -422,11 +423,6 @@ bool Label::GetTooltipText(const gfx::Point& p, base::string16* tooltip) const {
   return false;
 }
 
-void Label::OnEnabledChanged() {
-  ApplyTextColors();
-  View::OnEnabledChanged();
-}
-
 std::unique_ptr<gfx::RenderText> Label::CreateRenderText(
     const base::string16& text,
     gfx::HorizontalAlignment alignment,
@@ -446,10 +442,54 @@ std::unique_ptr<gfx::RenderText> Label::CreateRenderText(
   return render_text;
 }
 
+void Label::PaintFocusRing(gfx::Canvas* canvas) const {
+  // No focus ring by default.
+}
+
+gfx::Rect Label::GetFocusRingBounds() const {
+  MaybeBuildRenderTextLines();
+
+  gfx::Rect focus_bounds;
+  if (lines_.empty()) {
+    focus_bounds = gfx::Rect(GetTextSize());
+  } else {
+    for (size_t i = 0; i < lines_.size(); ++i) {
+      gfx::Point origin;
+      origin += lines_[i]->GetLineOffset(0);
+      focus_bounds.Union(gfx::Rect(origin, lines_[i]->GetStringSize()));
+    }
+  }
+
+  focus_bounds.Inset(-NonBorderInsets(*this));
+  focus_bounds.Intersect(GetLocalBounds());
+  return focus_bounds;
+}
+
 void Label::PaintText(gfx::Canvas* canvas) {
   MaybeBuildRenderTextLines();
+
   for (size_t i = 0; i < lines_.size(); ++i)
     lines_[i]->Draw(canvas);
+
+#if DCHECK_IS_ON()
+  // Attempt to ensure that if we're using subpixel rendering, we're painting
+  // to an opaque background. What we don't want to find is an ancestor in the
+  // hierarchy that paints to a non-opaque layer.
+  if (lines_.empty() || lines_[0]->subpixel_rendering_suppressed())
+    return;
+
+  for (View* view = this; view; view = view->parent()) {
+    if (view->background() &&
+        SkColorGetA(view->background()->get_color()) == SK_AlphaOPAQUE)
+      break;
+
+    if (view->layer() && view->layer()->fills_bounds_opaquely()) {
+      DLOG(WARNING) << "Ancestor view has a non-opaque layer: "
+                    << view->GetClassName() << " with ID " << view->id();
+      break;
+    }
+  }
+#endif
 }
 
 void Label::OnBoundsChanged(const gfx::Rect& previous_bounds) {
@@ -471,13 +511,8 @@ void Label::OnPaint(gfx::Canvas* canvas) {
     PaintText(canvas);
   }
 
-  // Check for IsAccessibilityFocusable() to prevent drawing a focus rect for
-  // non-focusable labels with selection, which are given focus explicitly in
-  // OnMousePressed.
-  if (HasFocus() && !ui::MaterialDesignController::IsSecondaryUiMaterial() &&
-      IsAccessibilityFocusable()) {
-    canvas->DrawFocusRect(GetFocusBounds());
-  }
+  if (HasFocus())
+    PaintFocusRing(canvas);
 }
 
 void Label::OnNativeThemeChanged(const ui::NativeTheme* theme) {
@@ -511,6 +546,8 @@ bool Label::OnMousePressed(const ui::MouseEvent& event) {
   if (!GetRenderTextForSelectionController())
     return false;
 
+  const bool had_focus = HasFocus();
+
   // RequestFocus() won't work when the label has FocusBehavior::NEVER. Hence
   // explicitly set the focused view.
   // TODO(karandeepb): If a widget with a label having FocusBehavior::NEVER as
@@ -519,16 +556,18 @@ bool Label::OnMousePressed(const ui::MouseEvent& event) {
   // when the widget gets focus again. Fix this.
   // Tracked in https://crbug.com/630365.
   if ((event.IsOnlyLeftMouseButton() || event.IsOnlyRightMouseButton()) &&
-      GetFocusManager()) {
+      GetFocusManager() && !had_focus) {
     GetFocusManager()->SetFocusedView(this);
   }
 
 #if defined(OS_LINUX) && !defined(OS_CHROMEOS)
-  if (event.IsOnlyMiddleMouseButton() && GetFocusManager())
+  if (event.IsOnlyMiddleMouseButton() && GetFocusManager() && !had_focus)
     GetFocusManager()->SetFocusedView(this);
 #endif
 
-  return selection_controller_->OnMousePressed(event, false);
+  return selection_controller_->OnMousePressed(
+      event, false, had_focus ? SelectionController::FOCUSED
+                              : SelectionController::UNFOCUSED);
 }
 
 bool Label::OnMouseDragged(const ui::MouseEvent& event) {
@@ -627,12 +666,21 @@ void Label::ShowContextMenuForView(View* source,
     return;
 
   context_menu_runner_.reset(
-      new MenuRunner(&context_menu_contents_, MenuRunner::HAS_MNEMONICS |
-                                                  MenuRunner::CONTEXT_MENU |
-                                                  MenuRunner::ASYNC));
-  ignore_result(context_menu_runner_->RunMenuAt(
-      GetWidget(), nullptr, gfx::Rect(point, gfx::Size()), MENU_ANCHOR_TOPLEFT,
-      source_type));
+      new MenuRunner(&context_menu_contents_,
+                     MenuRunner::HAS_MNEMONICS | MenuRunner::CONTEXT_MENU));
+  context_menu_runner_->RunMenuAt(GetWidget(), nullptr,
+                                  gfx::Rect(point, gfx::Size()),
+                                  MENU_ANCHOR_TOPLEFT, source_type);
+}
+
+bool Label::GetDecoratedWordAtPoint(const gfx::Point& point,
+                                    gfx::DecoratedText* decorated_word,
+                                    gfx::Point* baseline_point) {
+  gfx::RenderText* render_text = GetRenderTextForSelectionController();
+  return render_text
+             ? render_text->GetDecoratedWordAtPoint(point, decorated_word,
+                                                    baseline_point)
+             : false;
 }
 
 gfx::RenderText* Label::GetRenderTextForSelectionController() {
@@ -766,7 +814,7 @@ void Label::Init(const base::string16& text, const gfx::FontList& font_list) {
 
   elide_behavior_ = gfx::ELIDE_TAIL;
   stored_selection_range_ = gfx::Range::InvalidRange();
-  enabled_color_set_ = disabled_color_set_ = background_color_set_ = false;
+  enabled_color_set_ = background_color_set_ = false;
   selection_text_color_set_ = selection_background_color_set_ = false;
   subpixel_rendering_enabled_ = true;
   auto_color_readability_ = true;
@@ -801,10 +849,10 @@ void Label::MaybeBuildRenderTextLines() const {
     return;
 
   gfx::Rect rect = GetContentsBounds();
-  if (focus_behavior() != FocusBehavior::NEVER)
-    rect.Inset(kFocusBorderPadding, kFocusBorderPadding);
+  rect.Inset(NonBorderInsets(*this));
   if (rect.IsEmpty())
     return;
+
   rect.Inset(-gfx::ShadowValue::GetMargin(shadows()));
 
   gfx::HorizontalAlignment alignment = horizontal_alignment();
@@ -860,25 +908,6 @@ void Label::MaybeBuildRenderTextLines() const {
   ApplyTextColors();
 }
 
-gfx::Rect Label::GetFocusBounds() const {
-  MaybeBuildRenderTextLines();
-
-  gfx::Rect focus_bounds;
-  if (lines_.empty()) {
-    focus_bounds = gfx::Rect(GetTextSize());
-  } else {
-    for (size_t i = 0; i < lines_.size(); ++i) {
-      gfx::Point origin;
-      origin += lines_[i]->GetLineOffset(0);
-      focus_bounds.Union(gfx::Rect(origin, lines_[i]->GetStringSize()));
-    }
-  }
-
-  focus_bounds.Inset(-kFocusBorderPadding, -kFocusBorderPadding);
-  focus_bounds.Intersect(GetLocalBounds());
-  return focus_bounds;
-}
-
 std::vector<base::string16> Label::GetLinesForWidth(int width) const {
   std::vector<base::string16> lines;
   // |width| can be 0 when getting the default text size, in that case
@@ -931,10 +960,6 @@ void Label::RecalculateColors() {
       color_utils::GetReadableColor(requested_enabled_color_,
                                     background_color_) :
       requested_enabled_color_;
-  actual_disabled_color_ = auto_color_readability_ ?
-      color_utils::GetReadableColor(requested_disabled_color_,
-                                    background_color_) :
-      requested_disabled_color_;
   actual_selection_text_color_ =
       auto_color_readability_
           ? color_utils::GetReadableColor(requested_selection_text_color_,
@@ -946,11 +971,11 @@ void Label::RecalculateColors() {
 }
 
 void Label::ApplyTextColors() const {
-  SkColor color = enabled() ? actual_enabled_color_ : actual_disabled_color_;
   bool subpixel_rendering_suppressed =
-      SkColorGetA(background_color_) != 0xFF || !subpixel_rendering_enabled_;
+      SkColorGetA(background_color_) != SK_AlphaOPAQUE ||
+      !subpixel_rendering_enabled_;
   for (size_t i = 0; i < lines_.size(); ++i) {
-    lines_[i]->SetColor(color);
+    lines_[i]->SetColor(actual_enabled_color_);
     lines_[i]->set_selection_color(actual_selection_text_color_);
     lines_[i]->set_selection_background_focused_color(
         selection_background_color_);
@@ -960,12 +985,8 @@ void Label::ApplyTextColors() const {
 
 void Label::UpdateColorsFromTheme(const ui::NativeTheme* theme) {
   if (!enabled_color_set_) {
-    requested_enabled_color_ = theme->GetSystemColor(
-        ui::NativeTheme::kColorId_LabelEnabledColor);
-  }
-  if (!disabled_color_set_) {
-    requested_disabled_color_ = theme->GetSystemColor(
-        ui::NativeTheme::kColorId_LabelDisabledColor);
+    requested_enabled_color_ =
+        style::GetColor(text_context_, style::STYLE_PRIMARY, theme);
   }
   if (!background_color_set_) {
     background_color_ =

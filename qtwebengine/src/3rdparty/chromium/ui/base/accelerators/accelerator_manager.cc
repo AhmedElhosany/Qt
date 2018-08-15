@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "base/logging.h"
+#include "base/stl_util.h"
 #include "ui/base/accelerators/accelerator_manager_delegate.h"
 
 namespace ui {
@@ -17,33 +18,43 @@ AcceleratorManager::AcceleratorManager(AcceleratorManagerDelegate* delegate)
 AcceleratorManager::~AcceleratorManager() {
 }
 
-void AcceleratorManager::Register(const Accelerator& accelerator,
-                                  HandlerPriority priority,
-                                  AcceleratorTarget* target) {
+void AcceleratorManager::Register(
+    const std::vector<ui::Accelerator>& accelerators,
+    HandlerPriority priority,
+    AcceleratorTarget* target) {
   DCHECK(target);
-  AcceleratorTargetList& targets = accelerators_[accelerator].second;
-  DCHECK(std::find(targets.begin(), targets.end(), target) == targets.end())
-      << "Registering the same target multiple times";
-  const bool is_first_target_for_accelerator = targets.empty();
 
-  // All priority accelerators go to the front of the line.
-  if (priority == kHighPriority) {
-    DCHECK(!accelerators_[accelerator].first)
-        << "Only one high-priority handler can be registered";
-    targets.push_front(target);
-    // Mark that we have a priority accelerator at the front.
-    accelerators_[accelerator].first = true;
-  } else {
-    // We are registering a normal priority handler. If no priority accelerator
-    // handler has been registered before us, just add the new handler to the
-    // front. Otherwise, register it after the first (only) priority handler.
-    if (!accelerators_[accelerator].first)
+  // Accelerators which haven't already been registered with any target.
+  std::vector<ui::Accelerator> new_accelerators;
+
+  for (const ui::Accelerator& accelerator : accelerators) {
+    AcceleratorTargetList& targets = accelerators_[accelerator].second;
+    DCHECK(!base::ContainsValue(targets, target))
+        << "Registering the same target multiple times";
+    const bool is_first_target_for_accelerator = targets.empty();
+
+    // All priority accelerators go to the front of the line.
+    if (priority == kHighPriority) {
+      DCHECK(!accelerators_[accelerator].first)
+          << "Only one high-priority handler can be registered";
       targets.push_front(target);
-    else
-      targets.insert(++targets.begin(), target);
+      // Mark that we have a priority accelerator at the front.
+      accelerators_[accelerator].first = true;
+    } else {
+      // We are registering a normal priority handler. If no priority
+      // accelerator handler has been registered before us, just add the new
+      // handler to the front. Otherwise, register it after the first (only)
+      // priority handler.
+      if (!accelerators_[accelerator].first)
+        targets.push_front(target);
+      else
+        targets.insert(++targets.begin(), target);
+    }
+    if (is_first_target_for_accelerator)
+      new_accelerators.push_back(accelerator);
   }
-  if (is_first_target_for_accelerator && delegate_)
-    delegate_->OnAcceleratorRegistered(accelerator);
+  if (delegate_ && !new_accelerators.empty())
+    delegate_->OnAcceleratorsRegistered(new_accelerators);
 }
 
 void AcceleratorManager::Unregister(const Accelerator& accelerator,
@@ -61,9 +72,7 @@ void AcceleratorManager::UnregisterAll(AcceleratorTarget* target) {
   for (AcceleratorMap::iterator map_iter = accelerators_.begin();
        map_iter != accelerators_.end();) {
     AcceleratorTargetList* targets = &map_iter->second.second;
-    AcceleratorTargetList::iterator target_iter =
-        std::find(targets->begin(), targets->end(), target);
-    if (target_iter == targets->end()) {
+    if (!base::ContainsValue(*targets, target)) {
       ++map_iter;
     } else {
       auto tmp_iter = map_iter;

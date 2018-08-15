@@ -665,7 +665,7 @@ ReturnedValue Runtime::method_getElement(ExecutionEngine *engine, const Value &o
                 Heap::Object *o = static_cast<Heap::Object *>(b);
                 if (o->arrayData && o->arrayData->type == Heap::ArrayData::Simple) {
                     Heap::SimpleArrayData *s = o->arrayData.cast<Heap::SimpleArrayData>();
-                    if (idx < s->len)
+                    if (idx < s->values.size)
                         if (!s->data(idx).isEmpty())
                             return s->data(idx).asReturnedValue();
                 }
@@ -688,8 +688,8 @@ static Q_NEVER_INLINE void setElementFallback(ExecutionEngine *engine, const Val
     if (index.asArrayIndex(idx)) {
         if (o->d()->arrayData && o->d()->arrayData->type == Heap::ArrayData::Simple) {
             Heap::SimpleArrayData *s = o->d()->arrayData.cast<Heap::SimpleArrayData>();
-            if (idx < s->len) {
-                s->data(idx) = value;
+            if (idx < s->values.size) {
+                s->setData(engine, idx, value);
                 return;
             }
         }
@@ -710,8 +710,8 @@ void Runtime::method_setElement(ExecutionEngine *engine, const Value &object, co
                 Heap::Object *o = static_cast<Heap::Object *>(b);
                 if (o->arrayData && o->arrayData->type == Heap::ArrayData::Simple) {
                     Heap::SimpleArrayData *s = o->arrayData.cast<Heap::SimpleArrayData>();
-                    if (idx < s->len) {
-                        s->data(idx) = value;
+                    if (idx < s->values.size) {
+                        s->setData(engine, idx, value);
                         return;
                     }
                 }
@@ -1064,8 +1064,6 @@ ReturnedValue Runtime::method_callQmlScopeObjectProperty(ExecutionEngine *engine
         return engine->throwTypeError(error);
     }
 
-    auto scopeObj = static_cast<const QmlContext &>(callData->thisObject).d()->qml->scopeObject;
-    callData->thisObject = QObjectWrapper::wrap(engine, scopeObj);
     o->call(scope, callData);
     return scope.result.asReturnedValue();
 }
@@ -1079,8 +1077,6 @@ ReturnedValue Runtime::method_callQmlContextObjectProperty(ExecutionEngine *engi
         return engine->throwTypeError(error);
     }
 
-    auto scopeObj = static_cast<const QmlContext &>(callData->thisObject).d()->qml->context->contextData()->contextObject;
-    callData->thisObject = QObjectWrapper::wrap(engine, scopeObj);
     o->call(scope, callData);
     return scope.result.asReturnedValue();
 }
@@ -1381,7 +1377,7 @@ ReturnedValue Runtime::method_objectLiteral(ExecutionEngine *engine, const QV4::
     }
 
     for (uint i = 0; i < klass->size; ++i)
-        *o->propertyData(i) = *args++;
+        o->setProperty(i, *args++);
 
     if (arrayValueCount > 0) {
         ScopedValue entry(scope);
@@ -1525,7 +1521,7 @@ ReturnedValue Runtime::method_getQmlContextObjectProperty(ExecutionEngine *engin
 ReturnedValue Runtime::method_getQmlSingletonQObjectProperty(ExecutionEngine *engine, const Value &object, int propertyIndex, bool captureRequired)
 {
     Scope scope(engine);
-    QV4::Scoped<QmlTypeWrapper> wrapper(scope, object);
+    QV4::Scoped<QQmlTypeWrapper> wrapper(scope, object);
     if (!wrapper) {
         scope.engine->throwTypeError(QStringLiteral("Cannot read property of null"));
         return Encode::undefined();

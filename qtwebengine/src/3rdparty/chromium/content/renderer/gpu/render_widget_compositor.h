@@ -19,7 +19,6 @@
 #include "cc/trees/layer_tree_settings.h"
 #include "cc/trees/swap_promise_monitor.h"
 #include "content/common/content_export.h"
-#include "content/public/renderer/remote_proto_channel.h"
 #include "content/renderer/gpu/compositor_dependencies.h"
 #include "third_party/WebKit/public/platform/WebLayerTreeView.h"
 #include "ui/gfx/geometry/rect.h"
@@ -33,10 +32,9 @@ namespace cc {
 class AnimationHost;
 class InputHandler;
 class Layer;
+class LayerTreeFrameSink;
 class LayerTreeHost;
-namespace proto {
-class CompositorMessage;
-}
+class MutatorHost;
 }
 
 namespace gfx {
@@ -50,18 +48,19 @@ class LatencyInfo;
 namespace content {
 
 class RenderWidgetCompositorDelegate;
+struct ScreenInfo;
 
 class CONTENT_EXPORT RenderWidgetCompositor
     : NON_EXPORTED_BASE(public blink::WebLayerTreeView),
       NON_EXPORTED_BASE(public cc::LayerTreeHostClient),
-      NON_EXPORTED_BASE(public cc::LayerTreeHostSingleThreadClient),
-      public RemoteProtoChannel {
+      NON_EXPORTED_BASE(public cc::LayerTreeHostSingleThreadClient) {
+  using ReportTimeCallback = base::Callback<void(bool, double)>;
+
  public:
   // Attempt to construct and initialize a compositor instance for the widget
   // with the given settings. Returns NULL if initialization fails.
   static std::unique_ptr<RenderWidgetCompositor> Create(
       RenderWidgetCompositorDelegate* delegate,
-      float device_scale_factor,
       CompositorDependencies* compositor_deps);
 
   ~RenderWidgetCompositor() override;
@@ -69,13 +68,26 @@ class CONTENT_EXPORT RenderWidgetCompositor
   static cc::LayerTreeSettings GenerateLayerTreeSettings(
       const base::CommandLine& cmd,
       CompositorDependencies* compositor_deps,
-      float device_scale_factor);
+      float device_scale_factor,
+      bool is_for_subframe,
+      const ScreenInfo& screen_info);
+  static std::unique_ptr<cc::LayerTreeHost> CreateLayerTreeHost(
+      cc::LayerTreeHostClient* client,
+      cc::LayerTreeHostSingleThreadClient* single_thread_client,
+      cc::MutatorHost* mutator_host,
+      CompositorDependencies* deps,
+      float device_scale_factor,
+      const ScreenInfo& screen_info);
+
+  void Initialize(std::unique_ptr<cc::LayerTreeHost> layer_tree_host,
+                  std::unique_ptr<cc::AnimationHost> animation_host);
+
   static cc::ManagedMemoryPolicy GetGpuMemoryPolicy(
-      const cc::ManagedMemoryPolicy& policy);
+      const cc::ManagedMemoryPolicy& policy,
+      const ScreenInfo& screen_info);
 
   void SetNeverVisible();
   const base::WeakPtr<cc::InputHandler>& GetInputHandler();
-  bool BeginMainFrameRequested() const;
   void SetNeedsDisplayOnAllLayers();
   void SetRasterizeOnlyVisibleContent();
   void SetNeedsRedrawRect(gfx::Rect damage_rect);
@@ -93,8 +105,6 @@ class CONTENT_EXPORT RenderWidgetCompositor
   // LayerTreeHost.
   void QueueSwapPromise(std::unique_ptr<cc::SwapPromise> swap_promise);
   int GetSourceFrameNumber() const;
-  void SetNeedsUpdateLayers();
-  void SetNeedsCommit();
   void NotifyInputThrottledUntilCommit();
   const cc::Layer* GetRootLayer() const;
   int ScheduleMicroBenchmark(
@@ -102,110 +112,104 @@ class CONTENT_EXPORT RenderWidgetCompositor
       std::unique_ptr<base::Value> value,
       const base::Callback<void(std::unique_ptr<base::Value>)>& callback);
   bool SendMessageToMicroBenchmark(int id, std::unique_ptr<base::Value> value);
-  void SetFrameSinkId(const cc::FrameSinkId& frame_sink_id);
-  void OnHandleCompositorProto(const std::vector<uint8_t>& proto);
+  void SetFrameSinkId(const viz::FrameSinkId& frame_sink_id);
   void SetPaintedDeviceScaleFactor(float device_scale);
-  void SetDeviceColorSpace(const gfx::ColorSpace& color_space);
-  void SetContentSourceId(uint32_t);
+  void SetRasterColorSpace(const gfx::ColorSpace& color_space);
+  void SetIsForOopif(bool is_for_oopif);
+  void SetContentSourceId(uint32_t source_id);
+  void SetLocalSurfaceId(const viz::LocalSurfaceId& local_surface_id);
 
   // WebLayerTreeView implementation.
-  void setRootLayer(const blink::WebLayer& layer) override;
-  void clearRootLayer() override;
-  void attachCompositorAnimationTimeline(
-      cc::AnimationTimeline* compositor_timeline) override;
-  void detachCompositorAnimationTimeline(
-      cc::AnimationTimeline* compositor_timeline) override;
-  void setViewportSize(const blink::WebSize& device_viewport_size) override;
-  blink::WebSize getViewportSize() const override;
+  viz::FrameSinkId GetFrameSinkId() override;
+  void SetRootLayer(const blink::WebLayer& layer) override;
+  void ClearRootLayer() override;
+  cc::AnimationHost* CompositorAnimationHost() override;
+  void SetViewportSize(const blink::WebSize& device_viewport_size) override;
+  blink::WebSize GetViewportSize() const override;
   virtual blink::WebFloatPoint adjustEventPointForPinchZoom(
       const blink::WebFloatPoint& point) const;
-  void setDeviceScaleFactor(float device_scale) override;
-  void setBackgroundColor(blink::WebColor color) override;
-  void setHasTransparentBackground(bool transparent) override;
-  void setVisible(bool visible) override;
-  void setPageScaleFactorAndLimits(float page_scale_factor,
+  void SetDeviceScaleFactor(float device_scale) override;
+  void SetBackgroundColor(blink::WebColor color) override;
+  void SetVisible(bool visible) override;
+  void SetPageScaleFactorAndLimits(float page_scale_factor,
                                    float minimum,
                                    float maximum) override;
-  void startPageScaleAnimation(const blink::WebPoint& destination,
+  void StartPageScaleAnimation(const blink::WebPoint& destination,
                                bool use_anchor,
                                float new_page_scale,
                                double duration_sec) override;
-  bool hasPendingPageScaleAnimation() const override;
-  void heuristicsForGpuRasterizationUpdated(bool matches_heuristics) override;
-  void setNeedsBeginFrame() override;
-  void setNeedsCompositorUpdate() override;
-  void didStopFlinging() override;
-  void layoutAndPaintAsync(
+  bool HasPendingPageScaleAnimation() const override;
+  void HeuristicsForGpuRasterizationUpdated(bool matches_heuristics) override;
+  void SetNeedsBeginFrame() override;
+  void DidStopFlinging() override;
+  void LayoutAndPaintAsync(
       blink::WebLayoutAndPaintAsyncCallback* callback) override;
-  void compositeAndReadbackAsync(
+  void CompositeAndReadbackAsync(
       blink::WebCompositeAndReadbackAsyncCallback* callback) override;
-  void setDeferCommits(bool defer_commits) override;
-  void registerViewportLayers(
-      const blink::WebLayer* overscrollElasticityLayer,
-      const blink::WebLayer* pageScaleLayer,
-      const blink::WebLayer* innerViewportScrollLayer,
-      const blink::WebLayer* outerViewportScrollLayer) override;
-  void clearViewportLayers() override;
-  void registerSelection(const blink::WebSelection& selection) override;
-  void clearSelection() override;
-  void setMutatorClient(
+  void SetDeferCommits(bool defer_commits) override;
+  void RegisterViewportLayers(
+      const blink::WebLayerTreeView::ViewportLayers& viewport_layers) override;
+  void ClearViewportLayers() override;
+  void RegisterSelection(const blink::WebSelection& selection) override;
+  void ClearSelection() override;
+  void SetMutatorClient(
       std::unique_ptr<blink::WebCompositorMutatorClient>) override;
-  void forceRecalculateRasterScales() override;
-  void setEventListenerProperties(
+  void ForceRecalculateRasterScales() override;
+  void SetEventListenerProperties(
       blink::WebEventListenerClass eventClass,
       blink::WebEventListenerProperties properties) override;
-  blink::WebEventListenerProperties eventListenerProperties(
+  void UpdateEventRectsForSubframeIfNecessary() override;
+  blink::WebEventListenerProperties EventListenerProperties(
       blink::WebEventListenerClass eventClass) const override;
-  void setHaveScrollEventHandlers(bool) override;
-  bool haveScrollEventHandlers() const override;
-  int layerTreeId() const override;
-  void setShowFPSCounter(bool show) override;
-  void setShowPaintRects(bool show) override;
-  void setShowDebugBorders(bool show) override;
-  void setShowScrollBottleneckRects(bool show) override;
+  void SetHaveScrollEventHandlers(bool) override;
+  bool HaveScrollEventHandlers() const override;
+  int LayerTreeId() const override;
+  void SetShowFPSCounter(bool show) override;
+  void SetShowPaintRects(bool show) override;
+  void SetShowDebugBorders(bool show) override;
+  void SetShowScrollBottleneckRects(bool show) override;
+  void NotifySwapTime(ReportTimeCallback callback) override;
 
-  void updateBrowserControlsState(blink::WebBrowserControlsState constraints,
+  void UpdateBrowserControlsState(blink::WebBrowserControlsState constraints,
                                   blink::WebBrowserControlsState current,
                                   bool animate) override;
-  void setBrowserControlsHeight(float height, bool shrink) override;
-  void setBrowserControlsShownRatio(float) override;
+  void SetBrowserControlsHeight(float height, bool shrink) override;
+  void SetBrowserControlsShownRatio(float) override;
   // TODO(ianwen): Move this method to WebLayerTreeView and implement main
   // thread scrolling.
   virtual void setBottomControlsHeight(float height);
+  void RequestDecode(const PaintImage& image,
+                     const base::Callback<void(bool)>& callback) override;
 
   // cc::LayerTreeHostClient implementation.
   void WillBeginMainFrame() override;
   void DidBeginMainFrame() override;
   void BeginMainFrame(const cc::BeginFrameArgs& args) override;
   void BeginMainFrameNotExpectedSoon() override;
+  void BeginMainFrameNotExpectedUntil(base::TimeTicks time) override;
   void UpdateLayerTreeHost() override;
   void ApplyViewportDeltas(const gfx::Vector2dF& inner_delta,
                            const gfx::Vector2dF& outer_delta,
                            const gfx::Vector2dF& elastic_overscroll_delta,
                            float page_scale,
                            float top_controls_delta) override;
-  void RequestNewCompositorFrameSink() override;
-  void DidInitializeCompositorFrameSink() override;
-  void DidFailToInitializeCompositorFrameSink() override;
+  void RecordWheelAndTouchScrollingCount(bool has_scrolled_by_wheel,
+                                         bool has_scrolled_by_touch) override;
+  void RequestNewLayerTreeFrameSink() override;
+  void DidInitializeLayerTreeFrameSink() override;
+  void DidFailToInitializeLayerTreeFrameSink() override;
   void WillCommit() override;
   void DidCommit() override;
   void DidCommitAndDrawFrame() override;
   void DidReceiveCompositorFrameAck() override;
   void DidCompletePageScaleAnimation() override;
+  bool IsForSubframe() override;
 
   // cc::LayerTreeHostSingleThreadClient implementation.
   void RequestScheduleAnimation() override;
   void DidSubmitCompositorFrame() override;
-  void DidLoseCompositorFrameSink() override;
-
-  // RemoteProtoChannel implementation.
-  void SetProtoReceiver(ProtoReceiver* receiver) override;
-  void SendCompositorProto(const cc::proto::CompositorMessage& proto) override;
-
-  enum {
-    COMPOSITOR_FRAME_SINK_RETRIES_BEFORE_FALLBACK = 4,
-    MAX_COMPOSITOR_FRAME_SINK_RETRIES = 5,
-  };
+  void DidLoseLayerTreeFrameSink() override;
+  void RequestBeginMainFrameNotExpected(bool new_state) override;
 
  protected:
   friend class RenderViewImplScaleFactorTest;
@@ -213,28 +217,32 @@ class CONTENT_EXPORT RenderWidgetCompositor
   RenderWidgetCompositor(RenderWidgetCompositorDelegate* delegate,
                          CompositorDependencies* compositor_deps);
 
-  void Initialize(float device_scale_factor);
   cc::LayerTreeHost* layer_tree_host() { return layer_tree_host_.get(); }
 
  private:
+  void SetLayerTreeFrameSink(
+      std::unique_ptr<cc::LayerTreeFrameSink> layer_tree_frame_sink);
   void LayoutAndUpdateLayers();
   void InvokeLayoutAndPaintCallback();
   bool CompositeIsSynchronous() const;
   void SynchronouslyComposite();
 
-  int num_failed_recreate_attempts_;
+  bool attempt_software_fallback_ = false;
   RenderWidgetCompositorDelegate* const delegate_;
   CompositorDependencies* const compositor_deps_;
   const bool threaded_;
   std::unique_ptr<cc::AnimationHost> animation_host_;
   std::unique_ptr<cc::LayerTreeHost> layer_tree_host_;
   bool never_visible_;
+  bool is_for_oopif_;
 
   blink::WebLayoutAndPaintAsyncCallback* layout_and_paint_async_callback_;
 
-  RemoteProtoChannel::ProtoReceiver* remote_proto_channel_receiver_;
+  viz::FrameSinkId frame_sink_id_;
 
   base::WeakPtrFactory<RenderWidgetCompositor> weak_factory_;
+
+  DISALLOW_COPY_AND_ASSIGN(RenderWidgetCompositor);
 };
 
 }  // namespace content

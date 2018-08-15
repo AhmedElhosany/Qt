@@ -37,6 +37,7 @@
 #include <QtQml/QQmlComponent>
 #include <QtQuick/private/qquickrectangle_p.h>
 #include <QtQuick/private/qquickloader_p.h>
+#include <QtQuick/private/qquickmousearea_p.h>
 #include "../../shared/util.h"
 #include "../shared/visualtestutil.h"
 #include "../shared/viewtestutil.h"
@@ -291,70 +292,6 @@ protected:
     }
 };
 
-class MouseRecordingWindow : public QQuickWindow
-{
-public:
-    explicit MouseRecordingWindow(QWindow *parent = nullptr) : QQuickWindow(parent) { }
-
-protected:
-    void mousePressEvent(QMouseEvent *event) override {
-        qCDebug(lcTests) << event;
-        m_mouseEvents << *event;
-        QQuickWindow::mousePressEvent(event);
-    }
-    void mouseMoveEvent(QMouseEvent *event) override {
-        qCDebug(lcTests) << event;
-        m_mouseEvents << *event;
-        QQuickWindow::mouseMoveEvent(event);
-    }
-    void mouseReleaseEvent(QMouseEvent *event) override {
-        qCDebug(lcTests) << event;
-        m_mouseEvents << *event;
-        QQuickWindow::mouseReleaseEvent(event);
-    }
-
-public:
-    QList<QMouseEvent> m_mouseEvents;
-};
-
-class MouseRecordingItem : public QQuickItem
-{
-public:
-    MouseRecordingItem(bool acceptTouch, QQuickItem *parent = nullptr)
-        : QQuickItem(parent)
-        , m_acceptTouch(acceptTouch)
-    {
-        setSize(QSizeF(300, 300));
-        setAcceptedMouseButtons(Qt::LeftButton);
-    }
-
-protected:
-    void touchEvent(QTouchEvent* event) override {
-        event->setAccepted(m_acceptTouch);
-        m_touchEvents << *event;
-        qCDebug(lcTests) << "accepted?" << event->isAccepted() << event;
-    }
-    void mousePressEvent(QMouseEvent *event) override {
-        qCDebug(lcTests) << event;
-        m_mouseEvents << *event;
-    }
-    void mouseMoveEvent(QMouseEvent *event) override {
-        qCDebug(lcTests) << event;
-        m_mouseEvents << *event;
-    }
-    void mouseReleaseEvent(QMouseEvent *event) override {
-        qCDebug(lcTests) << event;
-        m_mouseEvents << *event;
-    }
-
-public:
-    QList<QMouseEvent> m_mouseEvents;
-    QList<QTouchEvent> m_touchEvents;
-
-private:
-    bool m_acceptTouch;
-};
-
 class tst_qquickwindow : public QQmlDataTest
 {
     Q_OBJECT
@@ -393,8 +330,6 @@ private slots:
     void mergeTouchPointLists();
 
     void mouseFromTouch_basic();
-    void synthMouseFromTouch_data();
-    void synthMouseFromTouch();
 
     void clearWindow();
 
@@ -455,6 +390,7 @@ private slots:
 
     void testHoverChildMouseEventFilter();
     void testHoverTimestamp();
+    void test_circleMapItem();
 
     void pointerEventTypeAndPointCount();
 
@@ -463,6 +399,9 @@ private slots:
     void testDragEventPropertyPropagation();
 
     void findChild();
+
+    void testChildMouseEventFilter();
+    void testChildMouseEventFilter_data();
 
 private:
     QTouchDevice *touchDevice;
@@ -766,8 +705,9 @@ void tst_qquickwindow::touchEvent_propagation()
 
     // single touch to top item, should be received by middle item
     QTest::touchEvent(window, touchDevice).press(0, pointInTopItem, window);
-    QTRY_COMPARE(middleItem->lastEvent.touchPoints.count(), 1);
+    QTest::qWait(50);
     QVERIFY(topItem->lastEvent.touchPoints.isEmpty());
+    QCOMPARE(middleItem->lastEvent.touchPoints.count(), 1);
     QVERIFY(bottomItem->lastEvent.touchPoints.isEmpty());
     COMPARE_TOUCH_DATA(middleItem->lastEvent, makeTouchData(QEvent::TouchBegin, window, Qt::TouchPointPressed,
             makeTouchPoint(middleItem, middleItem->mapFromItem(topItem, pos))));
@@ -776,8 +716,9 @@ void tst_qquickwindow::touchEvent_propagation()
     // touch top and middle items, middle item should get both events
     QTest::touchEvent(window, touchDevice).press(0, pointInTopItem, window)
             .press(1, pointInMiddleItem, window);
-    QTRY_COMPARE(middleItem->lastEvent.touchPoints.count(), 2);
+    QTest::qWait(50);
     QVERIFY(topItem->lastEvent.touchPoints.isEmpty());
+    QCOMPARE(middleItem->lastEvent.touchPoints.count(), 2);
     QVERIFY(bottomItem->lastEvent.touchPoints.isEmpty());
     COMPARE_TOUCH_DATA(middleItem->lastEvent, makeTouchData(QEvent::TouchBegin, window, Qt::TouchPointPressed,
            (QList<QTouchEvent::TouchPoint>() << makeTouchPoint(middleItem, middleItem->mapFromItem(topItem, pos))
@@ -795,9 +736,10 @@ void tst_qquickwindow::touchEvent_propagation()
     // touch top and middle items, bottom item should get all events
     QTest::touchEvent(window, touchDevice).press(0, pointInTopItem, window)
             .press(1, pointInMiddleItem, window);
-    QTRY_COMPARE(bottomItem->lastEvent.touchPoints.count(), 2);
+    QTest::qWait(50);
     QVERIFY(topItem->lastEvent.touchPoints.isEmpty());
     QVERIFY(middleItem->lastEvent.touchPoints.isEmpty());
+    QCOMPARE(bottomItem->lastEvent.touchPoints.count(), 2);
     COMPARE_TOUCH_DATA(bottomItem->lastEvent, makeTouchData(QEvent::TouchBegin, window, Qt::TouchPointPressed,
             (QList<QTouchEvent::TouchPoint>() << makeTouchPoint(bottomItem, bottomItem->mapFromItem(topItem, pos))
                                               << makeTouchPoint(bottomItem, bottomItem->mapFromItem(middleItem, pos)) )));
@@ -1190,45 +1132,6 @@ void tst_qquickwindow::mouseFromTouch_basic()
     delete item;
 }
 
-void tst_qquickwindow::synthMouseFromTouch_data()
-{
-    QTest::addColumn<bool>("synthMouse"); // AA_SynthesizeMouseForUnhandledTouchEvents
-    QTest::addColumn<bool>("acceptTouch"); // QQuickItem::touchEvent: setAccepted()
-
-    QTest::newRow("no synth, accept") << false << true; // suitable for touch-capable UIs
-    QTest::newRow("no synth, don't accept") << false << false;
-    QTest::newRow("synth and accept") << true << true;
-    QTest::newRow("synth, don't accept") << true << false; // the default
-}
-
-void tst_qquickwindow::synthMouseFromTouch()
-{
-    QFETCH(bool, synthMouse);
-    QFETCH(bool, acceptTouch);
-
-    QCoreApplication::setAttribute(Qt::AA_SynthesizeMouseForUnhandledTouchEvents, synthMouse);
-    QScopedPointer<MouseRecordingWindow> window(new MouseRecordingWindow);
-    QScopedPointer<MouseRecordingItem> item(new MouseRecordingItem(acceptTouch, nullptr));
-    item->setParentItem(window->contentItem());
-    window->resize(250, 250);
-    window->setPosition(100, 100);
-    window->setTitle(QTest::currentTestFunction());
-    window->show();
-    QVERIFY(QTest::qWaitForWindowActive(window.data()));
-
-    QPoint p1 = QPoint(20, 20);
-    QPoint p2 = QPoint(30, 30);
-    QTest::touchEvent(window.data(), touchDevice).press(0, p1, window.data());
-    QTest::touchEvent(window.data(), touchDevice).move(0, p2, window.data());
-    QTest::touchEvent(window.data(), touchDevice).release(0, p2, window.data());
-
-    QCOMPARE(item->m_touchEvents.count(), 3);
-    QCOMPARE(item->m_mouseEvents.count(), acceptTouch ? 0 : 3);
-    QCOMPARE(window->m_mouseEvents.count(), 0);
-    for (const QMouseEvent &ev : item->m_mouseEvents)
-        QCOMPARE(ev.source(), Qt::MouseEventSynthesizedByQt);
-}
-
 void tst_qquickwindow::clearWindow()
 {
     QQuickWindow *window = new QQuickWindow;
@@ -1261,6 +1164,11 @@ void tst_qquickwindow::mouseFiltering()
     bottomItem->setObjectName("Bottom Item");
     bottomItem->setSize(QSizeF(150, 150));
 
+    TestTouchItem *siblingItem = new TestTouchItem(bottomItem);
+    siblingItem->setObjectName("Sibling of Middle Item");
+    siblingItem->setPosition(QPointF(90, 25));
+    siblingItem->setSize(QSizeF(150, 150));
+
     TestTouchItem *middleItem = new TestTouchItem(bottomItem);
     middleItem->setObjectName("Middle Item");
     middleItem->setPosition(QPointF(50, 50));
@@ -1283,6 +1191,38 @@ void tst_qquickwindow::mouseFiltering()
     QTRY_COMPARE(middleItem->mousePressCount, 1);
     QTRY_COMPARE(bottomItem->mousePressCount, 2);
     QTRY_COMPARE(topItem->mousePressCount, 3);
+    QCOMPARE(siblingItem->mousePressCount, 0);
+
+    QTest::mouseRelease(window, Qt::LeftButton, 0, pos);
+    topItem->clearMouseEventCounters();
+    middleItem->clearMouseEventCounters();
+    bottomItem->clearMouseEventCounters();
+    siblingItem->clearMouseEventCounters();
+
+    // Repeat, but this time have the top item accept the press
+    topItem->acceptMouseEvents = true;
+
+    QTest::mousePress(window, Qt::LeftButton, 0, pos);
+
+    // Mouse filtering propagates down the stack, so the
+    // correct order is
+    // 1. middleItem filters event
+    // 2. bottomItem filters event
+    // 3. topItem receives event
+    QTRY_COMPARE(middleItem->mousePressCount, 1);
+    QTRY_COMPARE(bottomItem->mousePressCount, 2);
+    QTRY_COMPARE(topItem->mousePressCount, 3);
+    QCOMPARE(siblingItem->mousePressCount, 0);
+
+    pos += QPoint(50, 50);
+    QTest::mouseMove(window, pos);
+
+    // The top item has grabbed, so the move goes there, but again
+    // all the ancestors can filter, even when the mouse is outside their bounds
+    QTRY_COMPARE(middleItem->mouseMoveCount, 1);
+    QTRY_COMPARE(bottomItem->mouseMoveCount, 2);
+    QTRY_COMPARE(topItem->mouseMoveCount, 3);
+    QCOMPARE(siblingItem->mouseMoveCount, 0);
 
     // clean up mouse press state for the next tests
     QTest::mouseRelease(window, Qt::LeftButton, 0, pos);
@@ -1529,12 +1469,6 @@ void tst_qquickwindow::headless()
         if (isGL)
             QVERIFY(!window->isSceneGraphInitialized());
     }
-#if QT_CONFIG(opengl)
-    if (QGuiApplication::platformName() == QLatin1String("windows")
-        && QOpenGLContext::openGLModuleType() == QOpenGLContext::LibGLES) {
-        QSKIP("Crashes on Windows/ANGLE, QTBUG-42967");
-    }
-#endif
     // Destroy the native windowing system buffers
     window->destroy();
     QVERIFY(!window->handle());
@@ -2691,6 +2625,84 @@ void tst_qquickwindow::testHoverTimestamp()
     QCOMPARE(hoverConsumer->hoverTimestamps.last(), 5UL);
 }
 
+class CircleItem : public QQuickRectangle
+{
+public:
+    CircleItem(QQuickItem *parent = 0) : QQuickRectangle(parent) { }
+
+    void setRadius(qreal radius) {
+        const qreal diameter = radius*2;
+        setWidth(diameter);
+        setHeight(diameter);
+    }
+
+    bool childMouseEventFilter(QQuickItem *item, QEvent *event) override
+    {
+        Q_UNUSED(item)
+        if (event->type() == QEvent::MouseButtonPress && !contains(static_cast<QMouseEvent*>(event)->pos())) {
+            // This is an evil hack: in case of items that are not rectangles, we never accept the event.
+            // Instead the events are now delivered to QDeclarativeGeoMapItemBase which doesn't to anything with them.
+            // The map below it still works since it filters events and steals the events at some point.
+            event->setAccepted(false);
+            return true;
+        }
+        return false;
+    }
+
+    virtual bool contains(const QPointF &pos) const override {
+        // returns true if the point is inside the the embedded circle inside the (square) rect
+        const float radius = (float)width()/2;
+        const QVector2D center(radius, radius);
+        const QVector2D dx = QVector2D(pos) - center;
+        const bool ret = dx.lengthSquared() < radius*radius;
+        return ret;
+    }
+};
+
+void tst_qquickwindow::test_circleMapItem()
+{
+    QQuickWindow window;
+
+    window.resize(250, 250);
+    window.setPosition(100, 100);
+    window.setTitle(QTest::currentTestFunction());
+
+    QQuickItem *root = window.contentItem();
+    QQuickMouseArea *mab = new QQuickMouseArea(root);
+    mab->setObjectName("Bottom MouseArea");
+    mab->setSize(QSizeF(100, 100));
+
+    CircleItem *topItem = new CircleItem(root);
+    topItem->setFiltersChildMouseEvents(true);
+    topItem->setColor(Qt::green);
+    topItem->setObjectName("Top Item");
+    topItem->setPosition(QPointF(30, 30));
+    topItem->setRadius(20);
+    QQuickMouseArea *mat = new QQuickMouseArea(topItem);
+    mat->setObjectName("Top Item/MouseArea");
+    mat->setSize(QSizeF(40, 40));
+
+    QSignalSpy bottomSpy(mab, SIGNAL(clicked(QQuickMouseEvent *)));
+    QSignalSpy topSpy(mat, SIGNAL(clicked(QQuickMouseEvent *)));
+
+    window.show();
+    QTest::qWaitForWindowExposed(&window);
+    QTest::qWait(1000);
+
+    QPoint pos(50, 50);
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::KeyboardModifiers(), pos);
+
+    QCOMPARE(topSpy.count(), 1);
+    QCOMPARE(bottomSpy.count(), 0);
+
+    // Outside the "Circles" "input area", but on top of the bottomItem rectangle
+    pos = QPoint(66, 66);
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::KeyboardModifiers(), pos);
+
+    QCOMPARE(bottomSpy.count(), 1);
+    QCOMPARE(topSpy.count(), 1);
+}
+
 void tst_qquickwindow::pointerEventTypeAndPointCount()
 {
     QPointF localPosition(33, 66);
@@ -2704,20 +2716,18 @@ void tst_qquickwindow::pointerEventTypeAndPointCount()
 
     QQuickPointerMouseEvent pme;
     pme.reset(&me);
-    QVERIFY(pme.isValid());
     QCOMPARE(pme.asMouseEvent(localPosition), &me);
     QVERIFY(pme.asPointerMouseEvent());
     QVERIFY(!pme.asPointerTouchEvent());
     QVERIFY(!pme.asPointerTabletEvent());
 //    QVERIFY(!pe->asTabletEvent()); // TODO
     QCOMPARE(pme.pointCount(), 1);
-    QCOMPARE(pme.point(0)->scenePos(), scenePosition);
+    QCOMPARE(pme.point(0)->scenePosition(), scenePosition);
     QCOMPARE(pme.asMouseEvent(localPosition)->localPos(), localPosition);
     QCOMPARE(pme.asMouseEvent(localPosition)->screenPos(), screenPosition);
 
     QQuickPointerTouchEvent pte;
     pte.reset(&te);
-    QVERIFY(pte.isValid());
     QCOMPARE(pte.asTouchEvent(), &te);
     QVERIFY(!pte.asPointerMouseEvent());
     QVERIFY(pte.asPointerTouchEvent());
@@ -3036,6 +3046,365 @@ void tst_qquickwindow::findChild()
     QVERIFY(!window.contentItem()->findChild<QObject *>("viewChild")); // sibling
     QCOMPARE(window.contentItem()->findChild<QObject *>("contentItemChild"), contentItemChild);
 }
+
+class DeliveryRecord : public QPair<QString, QString>
+{
+public:
+    DeliveryRecord(const QString &filter, const QString &receiver) : QPair(filter, receiver) { }
+    DeliveryRecord(const QString &receiver) : QPair(QString(), receiver) { }
+    DeliveryRecord() : QPair() { }
+    QString toString() const {
+        if (second.isEmpty())
+            return QLatin1String("Delivery(no receiver)");
+        else if (first.isEmpty())
+            return QString(QLatin1String("Delivery(to '%1')")).arg(second);
+        else
+            return QString(QLatin1String("Delivery('%1' filtering for '%2')")).arg(first).arg(second);
+    }
+};
+
+Q_DECLARE_METATYPE(DeliveryRecord)
+
+QDebug operator<<(QDebug dbg, const DeliveryRecord &pair)
+{
+    dbg << pair.toString();
+    return dbg;
+}
+
+typedef QVector<DeliveryRecord> DeliveryRecordVector;
+
+class EventItem : public QQuickRectangle
+{
+    Q_OBJECT
+public:
+    EventItem(QQuickItem *parent)
+        : QQuickRectangle(parent)
+        , m_eventAccepts(true)
+        , m_filterReturns(true)
+        , m_filterAccepts(true)
+        , m_filterNotPreAccepted(false)
+    {
+        QSizeF psize(parent->width(), parent->height());
+        psize -= QSizeF(20, 20);
+        setWidth(psize.width());
+        setHeight(psize.height());
+        setPosition(QPointF(10, 10));
+    }
+
+    void setFilterReturns(bool filterReturns) { m_filterReturns = filterReturns; }
+    void setFilterAccepts(bool accepts) { m_filterAccepts = accepts; }
+    void setEventAccepts(bool accepts) { m_eventAccepts = accepts; }
+
+    /*!
+     * \internal
+     *
+     * returns false if any of the calls to childMouseEventFilter had the wrong
+     * preconditions. If all calls had the expected precondition, returns true.
+     */
+    bool testFilterPreConditions() const { return !m_filterNotPreAccepted; }
+    static QVector<DeliveryRecord> &deliveryList() { return m_deliveryList; }
+    static QSet<QEvent::Type> &includedEventTypes()
+    {
+        if (m_includedEventTypes.isEmpty())
+            m_includedEventTypes << QEvent::MouseButtonPress;
+        return m_includedEventTypes;
+    }
+    static void setExpectedDeliveryList(const QVector<DeliveryRecord> &v) { m_expectedDeliveryList = v; }
+
+protected:
+    bool childMouseEventFilter(QQuickItem *i, QEvent *e) override
+    {
+        appendEvent(this, i, e);
+        switch (e->type()) {
+        case QEvent::MouseButtonPress:
+            if (!e->isAccepted())
+                m_filterNotPreAccepted = true;
+            e->setAccepted(m_filterAccepts);
+            // qCDebug(lcTests) << objectName() << i->objectName();
+            return m_filterReturns;
+        default:
+            break;
+        }
+        return QQuickRectangle::childMouseEventFilter(i, e);
+    }
+
+    bool event(QEvent *e) override
+    {
+        appendEvent(nullptr, this, e);
+        switch (e->type()) {
+        case QEvent::MouseButtonPress:
+            // qCDebug(lcTests) << objectName();
+            e->setAccepted(m_eventAccepts);
+            return true;
+        default:
+            break;
+        }
+        return QQuickRectangle::event(e);
+    }
+
+private:
+    static void appendEvent(QQuickItem *filter, QQuickItem *receiver, QEvent *event) {
+        if (includedEventTypes().contains(event->type())) {
+            auto record = DeliveryRecord(filter ? filter->objectName() : QString(), receiver ? receiver->objectName() : QString());
+            int i = m_deliveryList.count();
+            if (m_expectedDeliveryList.count() > i && m_expectedDeliveryList[i] == record)
+                qCDebug(lcTests).noquote().nospace() << i << ": " << record;
+            else
+                qCDebug(lcTests).noquote().nospace() << i << ": " << record
+                     << ", expected " << (m_expectedDeliveryList.count() > i ? m_expectedDeliveryList[i].toString() : QLatin1String("nothing")) << " <---";
+            m_deliveryList << record;
+        }
+    }
+    bool m_eventAccepts;
+    bool m_filterReturns;
+    bool m_filterAccepts;
+    bool m_filterNotPreAccepted;
+
+    // list of (filtering-parent . receiver) pairs
+    static DeliveryRecordVector m_expectedDeliveryList;
+    static DeliveryRecordVector m_deliveryList;
+    static QSet<QEvent::Type> m_includedEventTypes;
+};
+
+DeliveryRecordVector EventItem::m_expectedDeliveryList;
+DeliveryRecordVector EventItem::m_deliveryList;
+QSet<QEvent::Type> EventItem::m_includedEventTypes;
+
+typedef QVector<const char*> CharStarVector;
+
+Q_DECLARE_METATYPE(CharStarVector)
+
+struct InputState {
+    struct {
+        // event() behavior
+        bool eventAccepts;
+        // filterChildMouse behavior
+        bool returns;
+        bool accepts;
+        bool filtersChildMouseEvent;
+    } r[4];
+};
+
+Q_DECLARE_METATYPE(InputState)
+
+void tst_qquickwindow::testChildMouseEventFilter_data()
+{
+    // HIERARCHY:
+    // r0->r1->r2->r3
+    //
+    QTest::addColumn<QPoint>("mousePos");
+    QTest::addColumn<InputState>("inputState");
+    QTest::addColumn<DeliveryRecordVector>("expectedDeliveryOrder");
+
+    QTest::newRow("if filtered and rejected, do not deliver it to the item that filtered it")
+        << QPoint(100, 100)
+        << InputState({
+              //  | event() |   child mouse filter
+              //  +---------+---------+---------+---------
+            { //  | accepts | returns | accepts | filtersChildMouseEvent
+                  { false,    false,    false,    false},
+                  { true,     false,    false,    false},
+                  { false,    true,     false,    true},
+                  { false,    false,    false,    false}
+            }
+        })
+        << (DeliveryRecordVector()
+            << DeliveryRecord("r2", "r3")
+            //<< DeliveryRecord("r3")       // it got filtered -> do not deliver
+            // DeliveryRecord("r2")         // r2 filtered it -> do not deliver
+            << DeliveryRecord("r1")
+            );
+
+    QTest::newRow("no filtering, no accepting")
+        << QPoint(100, 100)
+        << InputState({
+              //  | event() |   child mouse filter
+              //  +---------+---------+---------+---------
+            { //  | accepts | returns | accepts | filtersChildMouseEvent
+                  { false,    false,    false,    false},
+                  { false ,   false,    false,    false},
+                  { false,    false,    false,    false},
+                  { false,    false,    false,    false}
+            }
+        })
+        << (DeliveryRecordVector()
+            << DeliveryRecord("r3")
+            << DeliveryRecord("r2")
+            << DeliveryRecord("r1")
+            << DeliveryRecord("r0")
+            << DeliveryRecord("root")
+            );
+
+    QTest::newRow("all filtering, no accepting")
+        << QPoint(100, 100)
+        << InputState({
+              //  | event() |   child mouse filter
+              //  +---------+---------+---------+---------
+            { //  | accepts | returns | accepts | filtersChildMouseEvent
+                  { false,    false,    false,    true},
+                  { false,    false,    false,    true},
+                  { false,    false,    false,    true},
+                  { false,    false,    false,    true}
+            }
+        })
+        << (DeliveryRecordVector()
+            << DeliveryRecord("r2", "r3")
+            << DeliveryRecord("r1", "r3")
+            << DeliveryRecord("r0", "r3")
+            << DeliveryRecord("r3")
+            << DeliveryRecord("r1", "r2")
+            << DeliveryRecord("r0", "r2")
+            << DeliveryRecord("r2")
+            << DeliveryRecord("r0", "r1")
+            << DeliveryRecord("r1")
+            << DeliveryRecord("r0")
+            << DeliveryRecord("root")
+            );
+
+
+    QTest::newRow("some filtering, no accepting")
+        << QPoint(100, 100)
+        << InputState({
+              //  | event() |   child mouse filter
+              //  +---------+---------+---------+---------
+            { //  | accepts | returns | accepts | filtersChildMouseEvent
+                  { false,    false,    false,    true},
+                  { false,    false,    false,    true},
+                  { false,    false,    false,    false},
+                  { false,    false,    false,    false}
+            }
+        })
+        << (DeliveryRecordVector()
+            << DeliveryRecord("r1", "r3")
+            << DeliveryRecord("r0", "r3")
+            << DeliveryRecord("r3")
+            << DeliveryRecord("r1", "r2")
+            << DeliveryRecord("r0", "r2")
+            << DeliveryRecord("r2")
+            << DeliveryRecord("r0", "r1")
+            << DeliveryRecord("r1")
+            << DeliveryRecord("r0")
+            << DeliveryRecord("root")
+            );
+
+    QTest::newRow("r1 accepts")
+        << QPoint(100, 100)
+        << InputState({
+              //  | event() |   child mouse filter
+              //  +---------+---------+---------+---------
+            { //  | accepts | returns | accepts | filtersChildMouseEvent
+                  { false,    false,    false,    true},
+                  { true ,    false,    false,    true},
+                  { false,    false,    false,    false},
+                  { false,    false,    false,    false}
+            }
+        })
+        << (DeliveryRecordVector()
+            << DeliveryRecord("r1", "r3")
+            << DeliveryRecord("r0", "r3")
+            << DeliveryRecord("r3")
+            << DeliveryRecord("r1", "r2")
+            << DeliveryRecord("r0", "r2")
+            << DeliveryRecord("r2")
+            << DeliveryRecord("r0", "r1")
+            << DeliveryRecord("r1")
+            );
+
+    QTest::newRow("r1 rejects and filters")
+        << QPoint(100, 100)
+        << InputState({
+              //  | event() |   child mouse filter
+              //  +---------+---------+---------+---------
+            { //  | accepts | returns | accepts | filtersChildMouseEvent
+                  { false,    false,    false,    true},
+                  { false ,    true,    false,    true},
+                  { false,    false,    false,    false},
+                  { false,    false,    false,    false}
+            }
+        })
+        << (DeliveryRecordVector()
+            << DeliveryRecord("r1", "r3")
+            << DeliveryRecord("r0", "r3")
+//            << DeliveryRecord("r3")   // since it got filtered we don't deliver to r3
+            << DeliveryRecord("r1", "r2")
+            << DeliveryRecord("r0", "r2")
+//            << DeliveryRecord("r2"   // since it got filtered we don't deliver to r2
+            << DeliveryRecord("r0", "r1")
+//            << DeliveryRecord("r1")  // since it acted as a filter and returned true, we don't deliver to r1
+            << DeliveryRecord("r0")
+            << DeliveryRecord("root")
+            );
+
+}
+
+void tst_qquickwindow::testChildMouseEventFilter()
+{
+    QFETCH(QPoint, mousePos);
+    QFETCH(InputState, inputState);
+    QFETCH(DeliveryRecordVector, expectedDeliveryOrder);
+
+    EventItem::setExpectedDeliveryList(expectedDeliveryOrder);
+
+    QQuickWindow window;
+    window.resize(500, 809);
+    QQuickItem *root = window.contentItem();
+    root->setAcceptedMouseButtons(Qt::LeftButton);
+
+    root->setObjectName("root");
+    EventFilter *rootFilter = new EventFilter;
+    root->installEventFilter(rootFilter);
+
+    // Create 4 items; each item a child of the previous item.
+    EventItem *r[4];
+    r[0] = new EventItem(root);
+    r[0]->setColor(QColor(0x404040));
+    r[0]->setWidth(200);
+    r[0]->setHeight(200);
+
+    r[1] = new EventItem(r[0]);
+    r[1]->setColor(QColor(0x606060));
+
+    r[2] = new EventItem(r[1]);
+    r[2]->setColor(Qt::red);
+
+    r[3] = new EventItem(r[2]);
+    r[3]->setColor(Qt::green);
+
+    for (uint i = 0; i < sizeof(r)/sizeof(EventItem*); ++i) {
+        r[i]->setEventAccepts(inputState.r[i].eventAccepts);
+        r[i]->setFilterReturns(inputState.r[i].returns);
+        r[i]->setFilterAccepts(inputState.r[i].accepts);
+        r[i]->setFiltersChildMouseEvents(inputState.r[i].filtersChildMouseEvent);
+        r[i]->setObjectName(QString::fromLatin1("r%1").arg(i));
+        r[i]->setAcceptedMouseButtons(Qt::LeftButton);
+    }
+
+    window.show();
+    window.requestActivate();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+
+    DeliveryRecordVector &actualDeliveryOrder = EventItem::deliveryList();
+    actualDeliveryOrder.clear();
+    QTest::mousePress(&window, Qt::LeftButton, 0, mousePos);
+
+    // Check if event got delivered to the root item. If so, append it to the list of items the event got delivered to
+    if (rootFilter->events.contains(QEvent::MouseButtonPress))
+        actualDeliveryOrder.append(DeliveryRecord("root"));
+
+    for (int i = 0; i < qMax(actualDeliveryOrder.count(), expectedDeliveryOrder.count()); ++i) {
+        const DeliveryRecord expectedNames = expectedDeliveryOrder.value(i);
+        const DeliveryRecord actualNames = actualDeliveryOrder.value(i);
+        QCOMPARE(actualNames.toString(), expectedNames.toString());
+    }
+
+    for (EventItem *item : r) {
+        QVERIFY(item->testFilterPreConditions());
+    }
+
+    // "restore" mouse state
+    QTest::mouseRelease(&window, Qt::LeftButton, 0, mousePos);
+}
+
 
 QTEST_MAIN(tst_qquickwindow)
 

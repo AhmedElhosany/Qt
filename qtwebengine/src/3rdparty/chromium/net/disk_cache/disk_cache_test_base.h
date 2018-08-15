@@ -55,7 +55,6 @@ class DiskCacheTest : public PlatformTest {
 
  private:
   base::ScopedTempDir temp_dir_;
-  std::unique_ptr<base::MessageLoop> message_loop_;
 };
 
 // Provides basic support for cache related tests.
@@ -131,6 +130,8 @@ class DiskCacheTestWithCache : public DiskCacheTest {
   int DoomEntriesBetween(const base::Time initial_time,
                          const base::Time end_time);
   int CalculateSizeOfAllEntries();
+  int CalculateSizeOfEntriesBetween(const base::Time initial_time,
+                                    const base::Time end_time);
   int DoomEntriesSince(const base::Time initial_time);
   std::unique_ptr<TestIterator> CreateIterator();
   void FlushQueueForTest();

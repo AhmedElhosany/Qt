@@ -45,7 +45,37 @@ bool VerifyNoBlockForFunctionCall(const FunctionCallNode* function,
   return false;
 }
 
+// This key is set as a scope property on the scope of a declare_args() block,
+// in order to prevent reading a variable defined earlier in the same call
+// (see `gn help declare_args` for more).
+const void *kInDeclareArgsKey = nullptr;
+
 }  // namespace
+
+
+bool EnsureNotReadingFromSameDeclareArgs(const ParseNode* node,
+                                         const Scope* cur_scope,
+                                         const Scope* val_scope,
+                                         Err* err) {
+  // If the value didn't come from a scope at all, we're safe.
+  if (!val_scope)
+    return true;
+
+  const Scope* val_args_scope = nullptr;
+  val_scope->GetProperty(&kInDeclareArgsKey, &val_args_scope);
+
+  const Scope* cur_args_scope = nullptr;
+  cur_scope->GetProperty(&kInDeclareArgsKey, &cur_args_scope);
+  if (!val_args_scope || !cur_args_scope || (val_args_scope != cur_args_scope))
+    return true;
+
+  *err = Err(node,
+      "Reading a variable defined in the same declare_args() call.\n"
+      "\n"
+      "If you need to set the value of one arg based on another, put\n"
+      "them in two separate declare_args() calls, one after the other.\n");
+  return false;
+}
 
 bool EnsureNotProcessingImport(const ParseNode* node,
                                const Scope* scope,
@@ -307,7 +337,8 @@ Value RunConfig(const FunctionCallNode* function,
     g_scheduler->Log("Defining config", label.GetUserVisibleName(true));
 
   // Create the new config.
-  std::unique_ptr<Config> config(new Config(scope->settings(), label));
+  std::unique_ptr<Config> config(
+      new Config(scope->settings(), label, scope->input_files()));
   config->set_defined_from(function);
   if (!Visibility::FillItemVisibility(config.get(), scope, err))
     return Value();
@@ -335,7 +366,7 @@ Value RunConfig(const FunctionCallNode* function,
     *err = Err(function, "Can't define a config in this context.");
     return Value();
   }
-  collector->push_back(config.release());
+  collector->push_back(std::move(config));
 
   return Value();
 }
@@ -357,8 +388,9 @@ const char kDeclareArgs_Help[] =
 
   The precise behavior of declare args is:
 
-   1. The declare_arg block executes. Any variables in the enclosing scope are
-      available for reading.
+   1. The declare_args() block executes. Any variable defined in the enclosing
+      scope is available for reading, but any variable defined earlier in
+      the current scope is not (since the overrides haven't been applied yet).
 
    2. At the end of executing the block, any variables set within that scope
       are saved globally as build arguments, with their current values being
@@ -377,12 +409,10 @@ const char kDeclareArgs_Help[] =
       like [], "", or -1, and after the declare_args block, call exec_script if
       the value is unset by the user.
 
-    - Any code inside of the declare_args block will see the default values of
-      previous variables defined in the block rather than the user-overridden
-      value. This can be surprising because you will be used to seeing the
-      overridden value. If you need to make the default value of one arg
-      dependent on the possibly-overridden value of another, write two separate
-      declare_args blocks:
+    - Because you cannot read the value of a variable defined in the same
+      block, if you need to make the default value of one arg depend
+      on the possibly-overridden value of another, write two separate
+      declare_args() blocks:
 
         declare_args() {
           enable_foo = true
@@ -400,7 +430,7 @@ Example
   }
 
   If you want to override the (default disabled) Doom Melon:
-    gn --args="enable_doom_melon=true enable_teleporter=false"
+    gn --args="enable_doom_melon=true enable_teleporter=true"
   This also sets the teleporter, but it's already defaulted to on so it will
   have no effect.
 )";
@@ -415,6 +445,7 @@ Value RunDeclareArgs(Scope* scope,
     return Value();
 
   Scope block_scope(scope);
+  block_scope.SetProperty(&kInDeclareArgsKey, &block_scope);
   block->Execute(&block_scope, err);
   if (err->has_error())
     return Value();
@@ -608,6 +639,122 @@ Value RunImport(Scope* scope,
   return Value();
 }
 
+// not_needed -----------------------------------------------------------------
+
+const char kNotNeeded[] = "not_needed";
+const char kNotNeeded_HelpShort[] =
+    "not_needed: Mark variables from scope as not needed.";
+const char kNotNeeded_Help[] =
+    R"(not_needed: Mark variables from scope as not needed.
+
+  not_needed(variable_list_or_star, variable_to_ignore_list = [])
+  not_needed(from_scope, variable_list_or_star,
+             variable_to_ignore_list = [])
+
+  Mark the variables in the current or given scope as not needed, which means
+  you will not get an error about unused variables for these. The
+  variable_to_ignore_list allows excluding variables from "all matches" if
+  variable_list_or_star is "*".
+
+Example
+
+  not_needed("*", [ "config" ])
+  not_needed([ "data_deps", "deps" ])
+  not_needed(invoker, "*", [ "config" ])
+  not_needed(invoker, [ "data_deps", "deps" ])
+)";
+
+Value RunNotNeeded(Scope* scope,
+                   const FunctionCallNode* function,
+                   const ListNode* args_list,
+                   Err* err) {
+  const auto& args_vector = args_list->contents();
+  if (args_vector.size() < 1 && args_vector.size() > 3) {
+    *err = Err(function, "Wrong number of arguments.",
+               "Expecting one, two or three arguments.");
+    return Value();
+  }
+  auto args_cur = args_vector.begin();
+
+  Value* value = nullptr;  // Value to use, may point to result_value.
+  Value result_value;      // Storage for the "evaluate" case.
+  const IdentifierNode* identifier = (*args_cur)->AsIdentifier();
+  if (identifier) {
+    // Optimize the common case where the input scope is an identifier. This
+    // prevents a copy of a potentially large Scope object.
+    value = scope->GetMutableValue(identifier->value().value(),
+                                   Scope::SEARCH_NESTED, true);
+    if (!value) {
+      *err = Err(identifier, "Undefined identifier.");
+      return Value();
+    }
+  } else {
+    // Non-optimized case, just evaluate the argument.
+    result_value = (*args_cur)->Execute(scope, err);
+    if (err->has_error())
+      return Value();
+    value = &result_value;
+  }
+  args_cur++;
+
+  // Extract the source scope if different from current one.
+  Scope* source = scope;
+  if (value->type() == Value::SCOPE) {
+    source = value->scope_value();
+    result_value = (*args_cur)->Execute(scope, err);
+    if (err->has_error())
+      return Value();
+    value = &result_value;
+    args_cur++;
+  }
+
+  // Extract the exclusion list if defined.
+  Value exclusion_value;
+  std::set<std::string> exclusion_set;
+  if (args_cur != args_vector.end()) {
+    exclusion_value = (*args_cur)->Execute(source, err);
+    if (err->has_error())
+      return Value();
+
+    if (exclusion_value.type() != Value::LIST) {
+      *err = Err(exclusion_value, "Not a valid list of variables to exclude.",
+                 "Expecting a list of strings.");
+      return Value();
+    }
+
+    for (const Value& cur : exclusion_value.list_value()) {
+      if (!cur.VerifyTypeIs(Value::STRING, err))
+        return Value();
+
+      exclusion_set.insert(cur.string_value());
+    }
+  }
+
+  if (value->type() == Value::STRING) {
+    if (value->string_value() == "*") {
+      source->MarkAllUsed(exclusion_set);
+      return Value();
+    }
+  } else if (value->type() == Value::LIST) {
+    if (exclusion_value.type() != Value::NONE) {
+      *err = Err(exclusion_value, "Not supported with a variable list.",
+                 "Exclusion list can only be used with the string \"*\".");
+      return Value();
+    }
+    for (const Value& cur : value->list_value()) {
+      if (!cur.VerifyTypeIs(Value::STRING, err))
+        return Value();
+      source->MarkUsed(cur.string_value());
+    }
+    return Value();
+  }
+
+  // Not the right type of argument.
+  *err = Err(*value, "Not a valid list of variables.",
+             "Expecting either the string \"*\" or a list of strings.");
+  return Value();
+}
+
 // set_sources_assignment_filter -----------------------------------------------
 
 const char kSetSourcesAssignmentFilter[] = "set_sources_assignment_filter";
@@ -762,7 +909,8 @@ Value RunPool(const FunctionCallNode* function,
   }
 
   // Create the new pool.
-  std::unique_ptr<Pool> pool(new Pool(scope->settings(), label));
+  std::unique_ptr<Pool> pool(
+      new Pool(scope->settings(), label, scope->input_files()));
   pool->set_depth(depth->int_value());
 
   // Save the generated item.
@@ -771,7 +919,7 @@ Value RunPool(const FunctionCallNode* function,
     *err = Err(function, "Can't define a pool in this context.");
     return Value();
   }
-  collector->push_back(pool.release());
+  collector->push_back(std::move(pool));
 
   return Value();
 }
@@ -1010,6 +1158,7 @@ struct FunctionInfoInitializer {
     INSERT_FUNCTION(GetPathInfo, false)
     INSERT_FUNCTION(GetTargetOutputs, false)
     INSERT_FUNCTION(Import, false)
+    INSERT_FUNCTION(NotNeeded, false)
     INSERT_FUNCTION(Pool, false)
     INSERT_FUNCTION(Print, false)
     INSERT_FUNCTION(ProcessFileTemplate, false)
@@ -1040,21 +1189,21 @@ Value RunFunction(Scope* scope,
                   Err* err) {
   const Token& name = function->function();
 
+  std::string template_name = function->function().value().as_string();
+  const Template* templ = scope->GetTemplate(template_name);
+  if (templ) {
+    Value args = args_list->Execute(scope, err);
+    if (err->has_error())
+      return Value();
+    return templ->Invoke(scope, function, template_name, args.list_value(),
+                         block, err);
+  }
+
+  // No template matching this, check for a built-in function.
   const FunctionInfoMap& function_map = GetFunctions();
   FunctionInfoMap::const_iterator found_function =
       function_map.find(name.value());
   if (found_function == function_map.end()) {
-    // No built-in function matching this, check for a template.
-    std::string template_name = function->function().value().as_string();
-    const Template* templ = scope->GetTemplate(template_name);
-    if (templ) {
-      Value args = args_list->Execute(scope, err);
-      if (err->has_error())
-        return Value();
-      return templ->Invoke(scope, function, template_name, args.list_value(),
-                           block, err);
-    }
-
     *err = Err(name, "Unknown function.");
     return Value();
   }

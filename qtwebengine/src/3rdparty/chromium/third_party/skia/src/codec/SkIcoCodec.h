@@ -4,10 +4,13 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+#ifndef SkIcoCodec_DEFINED
+#define SkIcoCodec_DEFINED
 
 #include "SkCodec.h"
 #include "SkImageInfo.h"
 #include "SkStream.h"
+#include "SkTArray.h"
 #include "SkTypes.h"
 
 /*
@@ -22,7 +25,7 @@ public:
      * Creates an Ico decoder
      * Reads enough of the stream to determine the image format
      */
-    static SkCodec* NewFromStream(SkStream*);
+    static SkCodec* NewFromStream(SkStream*, Result*);
 
 protected:
 
@@ -37,25 +40,25 @@ protected:
      * Initiates the Ico decode
      */
     Result onGetPixels(const SkImageInfo& dstInfo, void* dst, size_t dstRowBytes, const Options&,
-            SkPMColor*, int*, int*) override;
+            int*) override;
 
-    SkEncodedFormat onGetEncodedFormat() const override {
-        return kICO_SkEncodedFormat;
+    SkEncodedImageFormat onGetEncodedFormat() const override {
+        return SkEncodedImageFormat::kICO;
     }
 
     SkScanlineOrder onGetScanlineOrder() const override;
 
 private:
 
-    Result onStartScanlineDecode(const SkImageInfo& dstInfo, const SkCodec::Options& options,
-            SkPMColor inputColorPtr[], int* inputColorCount) override;
+    Result onStartScanlineDecode(const SkImageInfo& dstInfo,
+            const SkCodec::Options& options) override;
 
     int onGetScanlines(void* dst, int count, size_t rowBytes) override;
 
     bool onSkipScanlines(int count) override;
 
     Result onStartIncrementalDecode(const SkImageInfo& dstInfo, void* pixels, size_t rowBytes,
-            const SkCodec::Options&, SkPMColor*, int*) override;
+            const SkCodec::Options&) override;
 
     Result onIncrementalDecode(int* rowsDecoded) override;
 
@@ -99,3 +102,4 @@ private:
 
     typedef SkCodec INHERITED;
 };
+#endif  // SkIcoCodec_DEFINED

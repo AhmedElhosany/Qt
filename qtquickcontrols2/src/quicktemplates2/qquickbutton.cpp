@@ -57,6 +57,10 @@ QT_BEGIN_NAMESPACE
     a question. Typical buttons are \e OK, \e Apply, \e Cancel, \e Close,
     \e Yes, \e No, and \e Help.
 
+    Button inherits its API from AbstractButton. For instance, you can set
+    \l {AbstractButton::text}{text}, display an \l {Icons in Qt Quick Controls 2}{icon},
+    and react to \l {AbstractButton::clicked}{clicks} using the AbstractButton API.
+
     A button emits the signal \l {AbstractButton::}{clicked()} when it is activated by the user.
     Connect to this signal to perform the button's action. Buttons also
     provide the signals \l {AbstractButton::}{canceled()}, \l {AbstractButton::}{doubleClicked()}, \l {AbstractButton::}{pressed()},
@@ -117,6 +121,11 @@ void QQuickButton::buttonChange(ButtonChange change)
 QFont QQuickButton::defaultFont() const
 {
     return QQuickControlPrivate::themeFont(QPlatformTheme::PushButtonFont);
+}
+
+QPalette QQuickButton::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::ButtonPalette);
 }
 
 /*!

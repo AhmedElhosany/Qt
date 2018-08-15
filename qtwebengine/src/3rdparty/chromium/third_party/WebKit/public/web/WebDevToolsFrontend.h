@@ -31,20 +31,18 @@
 #ifndef WebDevToolsFrontend_h
 #define WebDevToolsFrontend_h
 
-#include "../platform/WebCommon.h"
+#include "public/platform/WebCommon.h"
 
 namespace blink {
 
 class WebDevToolsFrontendClient;
 class WebLocalFrame;
-class WebString;
-class WebView;
 
 // WebDevToolsFrontend represents DevTools client sitting in the Glue. It
 // provides direct and delegate Apis to the host.
 class WebDevToolsFrontend {
  public:
-  BLINK_EXPORT static WebDevToolsFrontend* create(WebLocalFrame*,
+  BLINK_EXPORT static WebDevToolsFrontend* Create(WebLocalFrame*,
                                                   WebDevToolsFrontendClient*);
 
   virtual ~WebDevToolsFrontend() {}

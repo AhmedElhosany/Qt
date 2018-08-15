@@ -13,7 +13,7 @@
 
 class SkSVGContainer : public SkSVGTransformableNode {
 public:
-    virtual ~SkSVGContainer() = default;
+    ~SkSVGContainer() override = default;
 
     void appendChild(sk_sp<SkSVGNode>) override;
 
@@ -21,6 +21,8 @@ protected:
     explicit SkSVGContainer(SkSVGTag);
 
     void onRender(const SkSVGRenderContext&) const override;
+
+    SkPath onAsPath(const SkSVGRenderContext&) const override;
 
     bool hasChildren() const final;
 

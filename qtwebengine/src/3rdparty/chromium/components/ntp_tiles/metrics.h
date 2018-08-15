@@ -5,52 +5,34 @@
 #ifndef COMPONENTS_NTP_TILES_METRICS_H_
 #define COMPONENTS_NTP_TILES_METRICS_H_
 
+#include <utility>
 #include <vector>
 
 #include "components/ntp_tiles/ntp_tile.h"
+#include "components/ntp_tiles/tile_visual_type.h"
+#include "url/gurl.h"
+
+namespace rappor {
+class RapporService;
+}  // namespace rappor
 
 namespace ntp_tiles {
 namespace metrics {
 
-// The visual type of a most visited tile.
-//
-// These values must stay in sync with the MostVisitedTileType enum
-// in histograms.xml.
-//
-// A Java counterpart will be generated for this enum.
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ntp
-enum MostVisitedTileType {
-  // The icon or thumbnail hasn't loaded yet.
-  NONE,
-  // The item displays a site's actual favicon or touch icon.
-  ICON_REAL,
-  // The item displays a color derived from the site's favicon or touch icon.
-  ICON_COLOR,
-  // The item displays a default gray box in place of an icon.
-  ICON_DEFAULT,
-  // The number of different tile types that get recorded. Entries below this
-  // are not recorded in UMA.
-  NUM_RECORDED_TILE_TYPES,
-  // The item displays a thumbnail of the page. Used on desktop.
-  THUMBNAIL,
-};
-
-// Records an impression of an individual tile.
-void RecordTileImpression(int index, NTPTileSource source);
-
-// Records an impression of the page itself, after all tiles have loaded.
+// Records an NTP impression, after all tiles have loaded.
 void RecordPageImpression(int number_of_tiles);
 
-// Records the visual types (see above) of all visible tiles.
-// TODO(treib): Merge this with RecordPageImpression.
-void RecordImpressionTileTypes(
-    const std::vector<MostVisitedTileType>& tile_types,
-    const std::vector<NTPTileSource>& sources);
+// Records a tile impression at |index| (zero based) created by |source|. This
+// should be called only after the visual |type| of the tile has been
+// determined. If |rappor_service| is null, no rappor metrics will be reported.
+void RecordTileImpression(int index,
+                          TileSource source,
+                          TileVisualType type,
+                          const GURL& url,
+                          rappor::RapporService* rappor_service);
 
 // Records a click on a tile.
-void RecordTileClick(int index,
-                     NTPTileSource source,
-                     MostVisitedTileType tile_type);
+void RecordTileClick(int index, TileSource source, TileVisualType tile_type);
 
 }  // namespace metrics
 }  // namespace ntp_tiles

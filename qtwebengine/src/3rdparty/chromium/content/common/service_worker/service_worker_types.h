@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "base/strings/string_util.h"
@@ -17,6 +18,7 @@
 #include "content/public/common/referrer.h"
 #include "content/public/common/request_context_frame_type.h"
 #include "content/public/common/request_context_type.h"
+#include "content/public/common/service_worker_modes.h"
 #include "third_party/WebKit/public/platform/WebPageVisibilityState.h"
 #include "third_party/WebKit/public/platform/modules/serviceworker/WebServiceWorkerClientType.h"
 #include "third_party/WebKit/public/platform/modules/serviceworker/WebServiceWorkerResponseError.h"
@@ -44,7 +46,6 @@ extern const char kFetchScriptError[];
 // Constants for invalid identifiers.
 static const int kInvalidServiceWorkerHandleId = -1;
 static const int kInvalidServiceWorkerRegistrationHandleId = -1;
-static const int kInvalidServiceWorkerProviderId = -1;
 static const int64_t kInvalidServiceWorkerRegistrationId = -1;
 static const int64_t kInvalidServiceWorkerVersionId = -1;
 static const int64_t kInvalidServiceWorkerResourceId = -1;
@@ -52,7 +53,8 @@ static const int kInvalidEmbeddedWorkerThreadId = -1;
 
 // The HTTP cache is bypassed for Service Worker scripts if the last network
 // fetch occurred over 24 hours ago.
-static const int kServiceWorkerScriptMaxCacheAgeInHours = 24;
+static constexpr base::TimeDelta kServiceWorkerScriptMaxCacheAge =
+    base::TimeDelta::FromHours(24);
 
 // ServiceWorker provider type.
 enum ServiceWorkerProviderType {
@@ -68,46 +70,6 @@ enum ServiceWorkerProviderType {
 
   SERVICE_WORKER_PROVIDER_TYPE_LAST =
       SERVICE_WORKER_PROVIDER_FOR_CONTROLLER
-};
-
-// The enum entries below are written to histograms and thus cannot be deleted
-// or reordered.
-// New entries must be added immediately before the end.
-enum FetchRequestMode {
-  FETCH_REQUEST_MODE_SAME_ORIGIN,
-  FETCH_REQUEST_MODE_NO_CORS,
-  FETCH_REQUEST_MODE_CORS,
-  FETCH_REQUEST_MODE_CORS_WITH_FORCED_PREFLIGHT,
-  FETCH_REQUEST_MODE_NAVIGATE,
-  FETCH_REQUEST_MODE_LAST = FETCH_REQUEST_MODE_NAVIGATE
-};
-
-enum FetchCredentialsMode {
-  FETCH_CREDENTIALS_MODE_OMIT,
-  FETCH_CREDENTIALS_MODE_SAME_ORIGIN,
-  FETCH_CREDENTIALS_MODE_INCLUDE,
-  FETCH_CREDENTIALS_MODE_PASSWORD,
-  FETCH_CREDENTIALS_MODE_LAST = FETCH_CREDENTIALS_MODE_PASSWORD
-};
-
-enum class FetchRedirectMode {
-  FOLLOW_MODE,
-  ERROR_MODE,
-  MANUAL_MODE,
-  LAST = MANUAL_MODE
-};
-
-// Indicates which types of ServiceWorkers should skip handling a request.
-enum class SkipServiceWorker {
-  // Request can be handled both by a controlling same-origin worker and
-  // a cross-origin foreign fetch service worker.
-  NONE,
-  // Request should not be handled by a same-origin controlling worker,
-  // but can be intercepted by a foreign fetch service worker.
-  CONTROLLING,
-  // Request should skip all possible service workers.
-  ALL,
-  LAST = ALL
 };
 
 // Indicates how the service worker handled a fetch event.
@@ -161,6 +123,7 @@ struct CONTENT_EXPORT ServiceWorkerFetchRequest {
   Referrer referrer;
   FetchCredentialsMode credentials_mode;
   FetchRedirectMode redirect_mode;
+  std::string integrity;
   std::string client_id;
   bool is_reload;
   ServiceWorkerFetchType fetch_type;
@@ -170,32 +133,33 @@ struct CONTENT_EXPORT ServiceWorkerFetchRequest {
 struct CONTENT_EXPORT ServiceWorkerResponse {
   ServiceWorkerResponse();
   ServiceWorkerResponse(
-      const GURL& url,
+      std::unique_ptr<std::vector<GURL>> url_list,
       int status_code,
       const std::string& status_text,
       blink::WebServiceWorkerResponseType response_type,
-      const ServiceWorkerHeaderMap& headers,
+      std::unique_ptr<ServiceWorkerHeaderMap> headers,
       const std::string& blob_uuid,
       uint64_t blob_size,
-      const GURL& stream_url,
       blink::WebServiceWorkerResponseError error,
       base::Time response_time,
       bool is_in_cache_storage,
       const std::string& cache_storage_cache_name,
-      const ServiceWorkerHeaderList& cors_exposed_header_names);
+      std::unique_ptr<ServiceWorkerHeaderList> cors_exposed_header_names);
   ServiceWorkerResponse(const ServiceWorkerResponse& other);
   ~ServiceWorkerResponse();
   size_t EstimatedStructSize();
 
   // Be sure to update EstimatedSize() when adding members.
-  GURL url;
+  std::vector<GURL> url_list;
   int status_code;
   std::string status_text;
   blink::WebServiceWorkerResponseType response_type;
   ServiceWorkerHeaderMap headers;
+  // |blob_uuid| and |blob_size| are set when the body is a blob. For other
+  // types of responses, the body is provided separately in Mojo IPC via
+  // ServiceWorkerFetchResponseCallback.
   std::string blob_uuid;
   uint64_t blob_size;
-  GURL stream_url;
   blink::WebServiceWorkerResponseError error;
   base::Time response_time;
   bool is_in_cache_storage = false;
@@ -217,10 +181,19 @@ struct CONTENT_EXPORT ServiceWorkerObjectInfo {
   int64_t version_id;
 };
 
+// Represents options for register():
+// https://w3c.github.io/ServiceWorker/#dictdef-registrationoptions
+struct CONTENT_EXPORT ServiceWorkerRegistrationOptions {
+  ServiceWorkerRegistrationOptions() = default;
+  explicit ServiceWorkerRegistrationOptions(const GURL& scope);
+  GURL scope;
+  // TODO(yuryu): Other values will be added as they are supported later.
+};
+
 struct CONTENT_EXPORT ServiceWorkerRegistrationObjectInfo {
   ServiceWorkerRegistrationObjectInfo();
   int handle_id;
-  GURL scope;
+  ServiceWorkerRegistrationOptions options;
   int64_t registration_id;
 };
 

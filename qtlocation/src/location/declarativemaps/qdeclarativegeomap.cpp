@@ -46,6 +46,7 @@
 #include <QtPositioning/QGeoCircle>
 #include <QtPositioning/QGeoRectangle>
 #include <QtPositioning/QGeoPath>
+#include <QtPositioning/QGeoPolygon>
 #include <QtQuick/QQuickWindow>
 #include <QtQuick/QSGRectangleNode>
 #include <QtQuick/private/qquickwindow_p.h>
@@ -189,7 +190,11 @@ QDeclarativeGeoMap::QDeclarativeGeoMap(QQuickItem *parent)
 
     m_activeMapType = new QDeclarativeGeoMapType(QGeoMapType(QGeoMapType::NoMap,
                                                              tr("No Map"),
-                                                             tr("No Map"), false, false, 0, QByteArrayLiteral("")), this);
+                                                             tr("No Map"),
+                                                             false, false,
+                                                             0,
+                                                             QByteArrayLiteral(""),
+                                                             QGeoCameraCapabilities()), this);
     m_cameraData.setCenter(QGeoCoordinate(51.5073,-0.1277)); //London city center
     m_cameraData.setZoomLevel(8.0);
 
@@ -217,8 +222,18 @@ QDeclarativeGeoMap::~QDeclarativeGeoMap()
         m_map->clearMapItems();
     }
 
-    if (!m_mapViews.isEmpty())
-        qDeleteAll(m_mapViews);
+    // This forces the destruction of the associated items now, not when QObject destructor is called, at which point
+    // QDeclarativeGeoMap is long gone
+    if (!m_mapViews.isEmpty()) {
+        for (QDeclarativeGeoMapItemView *v : qAsConst(m_mapViews)) {
+            if (!v)
+                continue;
+            if (v->parent() == this)
+                delete v;
+            else
+                v->removeInstantiatedItems();
+        }
+    }
     // remove any map items associations
     for (int i = 0; i < m_mapItems.count(); ++i) {
         if (m_mapItems.at(i))
@@ -692,7 +707,12 @@ void QDeclarativeGeoMap::mappingManagerInitialized()
         } else {
             m_activeMapType = new QDeclarativeGeoMapType(QGeoMapType(QGeoMapType::NoMap,
                                                                      tr("No Map"),
-                                                                     tr("No Map"), false, false, 0, QByteArrayLiteral("")), this);
+                                                                     tr("No Map"),
+                                                                     false,
+                                                                     false,
+                                                                     0,
+                                                                     QByteArrayLiteral(""),
+                                                                     QGeoCameraCapabilities()), this);
         }
     }
 
@@ -790,8 +810,8 @@ QDeclarativeGeoServiceProvider *QDeclarativeGeoMap::plugin() const
 */
 void QDeclarativeGeoMap::setMinimumZoomLevel(qreal minimumZoomLevel, bool userSet)
 {
+
     if (minimumZoomLevel >= 0) {
-        qreal oldUserMinimumZoomLevel = m_userMinimumZoomLevel;
         if (userSet)
             m_userMinimumZoomLevel = minimumZoomLevel;
         qreal oldMinimumZoomLevel = this->minimumZoomLevel();
@@ -800,15 +820,12 @@ void QDeclarativeGeoMap::setMinimumZoomLevel(qreal minimumZoomLevel, bool userSe
         if (m_map)
              minimumZoomLevel = qMax<qreal>(minimumZoomLevel, m_map->minimumZoom());
 
-        // minimumZoomLevel is, at this point, the implicit minimum zoom level
         m_gestureArea->setMinimumZoomLevel(minimumZoomLevel);
 
         if (zoomLevel() < minimumZoomLevel && (m_gestureArea->enabled() || !m_cameraCapabilities.overzoomEnabled()))
             setZoomLevel(minimumZoomLevel);
 
-        if (qIsNaN(m_userMinimumZoomLevel) && oldMinimumZoomLevel != minimumZoomLevel)
-            emit minimumZoomLevelChanged();
-        else if (userSet && oldUserMinimumZoomLevel != m_userMinimumZoomLevel)
+        if (oldMinimumZoomLevel != minimumZoomLevel)
             emit minimumZoomLevelChanged();
     }
 }
@@ -829,26 +846,7 @@ void QDeclarativeGeoMap::setMinimumZoomLevel(qreal minimumZoomLevel, bool userSe
 
 qreal QDeclarativeGeoMap::minimumZoomLevel() const
 {
-    if (!qIsNaN(m_userMinimumZoomLevel))
-        return m_userMinimumZoomLevel;
-    else
-        return m_gestureArea->minimumZoomLevel();
-}
-
-/*!
-    \internal
-*/
-qreal QDeclarativeGeoMap::implicitMinimumZoomLevel() const
-{
     return m_gestureArea->minimumZoomLevel();
-}
-
-/*!
-    \internal
-*/
-qreal QDeclarativeGeoMap::effectiveMinimumZoomLevel() const
-{
-    return qMax<qreal>(minimumZoomLevel(), implicitMinimumZoomLevel());
 }
 
 /*!
@@ -916,15 +914,14 @@ void QDeclarativeGeoMap::setZoomLevel(qreal zoomLevel)
 */
 void QDeclarativeGeoMap::setZoomLevel(qreal zoomLevel, bool overzoom)
 {
-    const qreal oldZoom = m_cameraData.zoomLevel();
-    if (oldZoom == zoomLevel || zoomLevel < 0)
+    if (m_cameraData.zoomLevel() == zoomLevel || zoomLevel < 0)
         return;
 
     //small optimization to avoid double setCameraData
     bool centerHasChanged = false;
 
     if (m_initialized) {
-        m_cameraData.setZoomLevel(qBound<qreal>(overzoom ? m_map->minimumZoom() : effectiveMinimumZoomLevel(),
+        m_cameraData.setZoomLevel(qBound<qreal>(overzoom ? m_map->minimumZoom() : minimumZoomLevel(),
                                                 zoomLevel,
                                                 overzoom ? 30 : maximumZoomLevel()));
         m_maximumViewportLatitude = m_map->maximumCenterLatitudeAtZoom(m_cameraData);
@@ -941,8 +938,7 @@ void QDeclarativeGeoMap::setZoomLevel(qreal zoomLevel, bool overzoom)
 
     if (centerHasChanged)
         emit centerChanged(m_cameraData.center());
-    if (oldZoom != m_cameraData.zoomLevel())
-        emit zoomLevelChanged(m_cameraData.zoomLevel());
+    emit zoomLevelChanged(m_cameraData.zoomLevel());
 }
 
 qreal QDeclarativeGeoMap::zoomLevel() const
@@ -1272,22 +1268,22 @@ QGeoShape QDeclarativeGeoMap::visibleRegion() const
         return m_visibleRegion;
 
     const QList<QDoubleVector2D> &visibleRegion = m_map->geoProjection().visibleRegion();
-    QGeoPath path;
+    QGeoPolygon poly;
     for (int i = 0; i < visibleRegion.size(); ++i) {
          const QDoubleVector2D &c = visibleRegion.at(i);
         // If a segment spans more than half of the map longitudinally, split in 2.
         if (i && qAbs(visibleRegion.at(i-1).x() - c.x()) >= 0.5) { // This assumes a segment is never >= 1.0 (whole map span)
             QDoubleVector2D extraPoint = (visibleRegion.at(i-1) + c) * 0.5;
-            path.addCoordinate(m_map->geoProjection().wrappedMapProjectionToGeo(extraPoint));
+            poly.addCoordinate(m_map->geoProjection().wrappedMapProjectionToGeo(extraPoint));
         }
-        path.addCoordinate(m_map->geoProjection().wrappedMapProjectionToGeo(c));
+        poly.addCoordinate(m_map->geoProjection().wrappedMapProjectionToGeo(c));
     }
     if (visibleRegion.size() >= 2 && qAbs(visibleRegion.last().x() - visibleRegion.first().x()) >= 0.5) {
         QDoubleVector2D extraPoint = (visibleRegion.last() + visibleRegion.first()) * 0.5;
-        path.addCoordinate(m_map->geoProjection().wrappedMapProjectionToGeo(extraPoint));
+        poly.addCoordinate(m_map->geoProjection().wrappedMapProjectionToGeo(extraPoint));
     }
 
-    return path.boundingGeoRectangle();
+    return poly;
 }
 
 /*!
@@ -1401,6 +1397,61 @@ void QDeclarativeGeoMap::fitViewportToGeoShape()
 QQmlListProperty<QDeclarativeGeoMapType> QDeclarativeGeoMap::supportedMapTypes()
 {
     return QQmlListProperty<QDeclarativeGeoMapType>(this, m_supportedMapTypes);
+}
+
+/*!
+    \qmlmethod void QtLocation::Map::setBearing(real bearing, coordinate coordinate)
+
+    Sets the bearing for the map to \a bearing, rotating it around \a coordinate.
+    If the Plugin used for the Map supports bearing, the valid range for \a bearing is between 0 and 360.
+    If the Plugin used for the Map does not support bearing, or if the map is tilted and \a coordinate happens
+    to be behind the camera, or if the map is not ready (see \l mapReady), calling this method will have no effect.
+
+    The release of this API with Qt 5.10 is a Technology Preview.
+
+    \since 5.10
+*/
+void QDeclarativeGeoMap::setBearing(qreal bearing, const QGeoCoordinate &coordinate)
+{
+    if (!m_map)
+        return;
+
+    const QDoubleVector2D coordWrapped = m_map->geoProjection().geoToWrappedMapProjection(coordinate);
+    if (!m_map->geoProjection().isProjectable(coordWrapped))
+        return;
+
+    const QPointF rotationPoint = m_map->geoProjection().wrappedMapProjectionToItemPosition(coordWrapped).toPointF();
+
+    // First set bearing
+    setBearing(bearing);
+    // then reanchor
+    setCenter(m_map->geoProjection().anchorCoordinateToPoint(coordinate, rotationPoint));
+}
+
+/*!
+    \qmlmethod void QtLocation::Map::alignCoordinateToPoint(coordinate coordinate, QPointF point)
+
+    Aligns \a coordinate to \a point.
+    This method effectively extends the functionality offered by the \l center qml property, allowing
+    to align a coordinate to point of the Map element other than its center.
+    This is useful in those applications where the center of the scene (e.g., a cursor) is not to be
+    placed exactly in the center of the map.
+
+    If the map is tilted, and \a coordinate happens to be behind the camera, or if the map is not ready
+    (see \l mapReady), calling this method will have no effect.
+
+    The release of this API with Qt 5.10 is a Technology Preview.
+
+    \sa center
+
+    \since 5.10
+*/
+void QDeclarativeGeoMap::alignCoordinateToPoint(const QGeoCoordinate &coordinate, const QPointF &point)
+{
+    if (!m_map)
+        return;
+
+    setCenter(m_map->geoProjection().anchorCoordinateToPoint(coordinate, point));
 }
 
 /*!
@@ -1893,6 +1944,47 @@ void QDeclarativeGeoMap::removeMapItemGroup(QDeclarativeGeoMapItemGroup *itemGro
 }
 
 /*!
+    \qmlmethod void QtLocation::Map::removeMapItemView(MapItemView itemView)
+
+    Removes \a itemView and the items instantiated by it from the Map.
+
+    \sa MapItemView, addMapItemView
+
+    \since 5.10
+*/
+void QDeclarativeGeoMap::removeMapItemView(QDeclarativeGeoMapItemView *itemView)
+{
+    if (!itemView || itemView->map_ != this) // can't remove a view that is already added to another map
+        return;
+
+    itemView->removeInstantiatedItems();
+    itemView->map_ = 0;
+    // it can be removed from the list at this point, since no operations that require a Map have to be done
+    // anymore on destruction.
+    m_mapViews.removeOne(itemView);
+}
+
+/*!
+    \qmlmethod void QtLocation::Map::addMapItemView(MapItemView itemView)
+
+    Adds \a itemView to the Map.
+
+    \sa MapItemView, removeMapItemView
+
+    \since 5.10
+*/
+void QDeclarativeGeoMap::addMapItemView(QDeclarativeGeoMapItemView *itemView)
+{
+    if (!itemView || itemView->map_) // can't add a view twice
+        return;
+
+    // Not appending it to m_mapViews because it seems unnecessary even if the
+    // itemView is a child of this (in which case it would be destroyed
+    m_mapViews.append(itemView);
+    setupMapView(itemView);
+}
+
+/*!
     \qmlproperty MapType QtLocation::Map::activeMapType
 
     \brief Access to the currently active \l{MapType}{map type}.
@@ -2160,7 +2252,7 @@ bool QDeclarativeGeoMap::sendTouchEvent(QTouchEvent *event)
 
     auto touchPointGrabberItem = [touchDevice, windowPriv](const QTouchEvent::TouchPoint &point) -> QQuickItem* {
         if (QQuickEventPoint *eventPointer = windowPriv->pointerEventInstance(touchDevice)->pointById(point.id()))
-            return eventPointer->grabber();
+            return eventPointer->grabberItem();
         return nullptr;
     };
 

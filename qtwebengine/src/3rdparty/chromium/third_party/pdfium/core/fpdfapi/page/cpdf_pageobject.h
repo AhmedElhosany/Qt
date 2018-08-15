@@ -31,7 +31,6 @@ class CPDF_PageObject : public CPDF_GraphicStates {
   CPDF_PageObject();
   ~CPDF_PageObject() override;
 
-  virtual CPDF_PageObject* Clone() const = 0;
   virtual Type GetType() const = 0;
   virtual void Transform(const CFX_Matrix& matrix) = 0;
   virtual bool IsText() const;
@@ -50,14 +49,20 @@ class CPDF_PageObject : public CPDF_GraphicStates {
   virtual CPDF_FormObject* AsForm();
   virtual const CPDF_FormObject* AsForm() const;
 
+  void SetDirty(bool value) { m_bDirty = value; }
+  bool IsDirty() const { return m_bDirty; }
   void TransformClipPath(CFX_Matrix& matrix);
   void TransformGeneralState(CFX_Matrix& matrix);
+
+  CFX_FloatRect GetRect() const {
+    return CFX_FloatRect(m_Left, m_Bottom, m_Right, m_Top);
+  }
   FX_RECT GetBBox(const CFX_Matrix* pMatrix) const;
 
-  FX_FLOAT m_Left;
-  FX_FLOAT m_Right;
-  FX_FLOAT m_Top;
-  FX_FLOAT m_Bottom;
+  float m_Left;
+  float m_Right;
+  float m_Top;
+  float m_Bottom;
   CPDF_ContentMark m_ContentMark;
 
  protected:
@@ -66,6 +71,8 @@ class CPDF_PageObject : public CPDF_GraphicStates {
  private:
   CPDF_PageObject(const CPDF_PageObject& src) = delete;
   void operator=(const CPDF_PageObject& src) = delete;
+
+  bool m_bDirty;
 };
 
 #endif  // CORE_FPDFAPI_PAGE_CPDF_PAGEOBJECT_H_

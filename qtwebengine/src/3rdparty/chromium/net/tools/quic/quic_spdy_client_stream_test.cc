@@ -7,26 +7,18 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "base/strings/string_number_conversions.h"
 #include "net/quic/core/quic_utils.h"
 #include "net/quic/core/spdy_utils.h"
+#include "net/quic/platform/api/quic_logging.h"
+#include "net/quic/platform/api/quic_socket_address.h"
+#include "net/quic/platform/api/quic_test.h"
+#include "net/quic/platform/api/quic_text_utils.h"
 #include "net/quic/test_tools/crypto_test_utils.h"
+#include "net/quic/test_tools/quic_spdy_session_peer.h"
 #include "net/quic/test_tools/quic_test_utils.h"
 #include "net/tools/quic/quic_client_session.h"
-#include "testing/gmock/include/gmock/gmock.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 using base::IntToString;
-using net::test::CryptoTestUtils;
-using net::test::DefaultQuicConfig;
-using net::test::MockQuicConnection;
-using net::test::MockQuicConnectionHelper;
-using net::test::SupportedVersions;
-using net::test::kClientDataStreamId1;
-using net::test::kServerDataStreamId1;
-using net::test::kInitialSessionFlowControlWindowForTest;
-using net::test::kInitialStreamFlowControlWindowForTest;
-
 using std::string;
 using testing::StrictMock;
 using testing::TestWithParam;
@@ -46,7 +38,7 @@ class MockQuicClientSession : public QuicClientSession {
             QuicServerId("example.com", 443, PRIVACY_MODE_DISABLED),
             &crypto_config_,
             push_promise_index),
-        crypto_config_(CryptoTestUtils::ProofVerifierForTesting()) {}
+        crypto_config_(crypto_test_utils::ProofVerifierForTesting()) {}
   ~MockQuicClientSession() override {}
 
   MOCK_METHOD1(CloseStream, void(QuicStreamId stream_id));
@@ -57,7 +49,7 @@ class MockQuicClientSession : public QuicClientSession {
   DISALLOW_COPY_AND_ASSIGN(MockQuicClientSession);
 };
 
-class QuicSpdyClientStreamTest : public ::testing::Test {
+class QuicSpdyClientStreamTest : public QuicTest {
  public:
   class StreamVisitor;
 
@@ -72,14 +64,16 @@ class QuicSpdyClientStreamTest : public ::testing::Test {
     headers_[":status"] = "200";
     headers_["content-length"] = "11";
 
-    stream_.reset(new QuicSpdyClientStream(kClientDataStreamId1, &session_));
+    stream_.reset(new QuicSpdyClientStream(
+        QuicSpdySessionPeer::GetNthClientInitiatedStreamId(session_, 0),
+        &session_));
     stream_visitor_.reset(new StreamVisitor());
     stream_->set_visitor(stream_visitor_.get());
   }
 
   class StreamVisitor : public QuicSpdyClientStream::Visitor {
     void OnClose(QuicSpdyStream* stream) override {
-      DVLOG(1) << "stream " << stream->id();
+      QUIC_DVLOG(1) << "stream " << stream->id();
     }
   };
 
@@ -117,6 +111,19 @@ TEST_F(QuicSpdyClientStreamTest, TestFraming) {
   EXPECT_EQ(body_, stream_->data());
 }
 
+TEST_F(QuicSpdyClientStreamTest, TestFraming100Continue) {
+  headers_[":status"] = "100";
+  auto headers = AsHeaderList(headers_);
+  stream_->OnStreamHeaderList(false, headers.uncompressed_header_bytes(),
+                              headers);
+  stream_->OnStreamFrame(
+      QuicStreamFrame(stream_->id(), /*fin=*/false, /*offset=*/0, body_));
+  EXPECT_EQ("100", stream_->preliminary_headers().find(":status")->second);
+  EXPECT_EQ(0u, stream_->response_headers().size());
+  EXPECT_EQ(100, stream_->response_code());
+  EXPECT_EQ("", stream_->data());
+}
+
 TEST_F(QuicSpdyClientStreamTest, TestFramingOnePacket) {
   auto headers = AsHeaderList(headers_);
   stream_->OnStreamHeaderList(false, headers.uncompressed_header_bytes(),
@@ -147,14 +154,6 @@ TEST_F(QuicSpdyClientStreamTest, DISABLED_TestFramingExtraData) {
   EXPECT_NE(QUIC_STREAM_NO_ERROR, stream_->stream_error());
 }
 
-TEST_F(QuicSpdyClientStreamTest, TestNoBidirectionalStreaming) {
-  QuicStreamFrame frame(kClientDataStreamId1, false, 3, StringPiece("asd"));
-
-  EXPECT_FALSE(stream_->write_side_closed());
-  stream_->OnStreamFrame(frame);
-  EXPECT_TRUE(stream_->write_side_closed());
-}
-
 TEST_F(QuicSpdyClientStreamTest, ReceivingTrailers) {
   // Test that receiving trailing headers, containing a final offset, results in
   // the stream being closed at that byte offset.
@@ -168,16 +167,17 @@ TEST_F(QuicSpdyClientStreamTest, ReceivingTrailers) {
   // promised by the final offset field.
   SpdyHeaderBlock trailer_block;
   trailer_block["trailer key"] = "trailer value";
-  trailer_block[kFinalOffsetHeaderKey] = IntToString(body_.size());
+  trailer_block[kFinalOffsetHeaderKey] =
+      QuicTextUtils::Uint64ToString(body_.size());
   auto trailers = AsHeaderList(trailer_block);
   stream_->OnStreamHeaderList(true, trailers.uncompressed_header_bytes(),
                               trailers);
 
   // Now send the body, which should close the stream as the FIN has been
   // received, as well as all data.
-  EXPECT_CALL(session_, CloseStream(stream_->id()));
   stream_->OnStreamFrame(
       QuicStreamFrame(stream_->id(), /*fin=*/false, /*offset=*/0, body_));
+  EXPECT_TRUE(stream_->reading_stopped());
 }
 
 }  // namespace

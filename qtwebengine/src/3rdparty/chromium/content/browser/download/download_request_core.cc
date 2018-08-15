@@ -24,6 +24,7 @@
 #include "content/browser/download/download_request_handle.h"
 #include "content/browser/download/download_stats.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
+#include "content/browser/service_manager/service_manager_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_interrupt_reasons.h"
 #include "content/public/browser/download_item.h"
@@ -31,15 +32,18 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/browser/web_contents.h"
-#include "device/power_save_blocker/power_save_blocker.h"
 #include "net/base/elements_upload_data_stream.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/base/upload_bytes_element_reader.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/url_request_context.h"
+#include "services/device/public/interfaces/constants.mojom.h"
+#include "services/device/public/interfaces/wake_lock_provider.mojom.h"
+#include "services/service_manager/public/cpp/connector.h"
 
 namespace content {
 
@@ -61,6 +65,8 @@ class DownloadRequestData : public base::SupportsUserData::Data {
     return std::move(save_info_);
   }
   uint32_t download_id() const { return download_id_; }
+  std::string guid() const { return guid_; }
+  bool is_transient() const { return transient_; }
   const DownloadUrlParameters::OnStartedCallback& callback() const {
     return on_started_callback_;
   }
@@ -70,6 +76,8 @@ class DownloadRequestData : public base::SupportsUserData::Data {
 
   std::unique_ptr<DownloadSaveInfo> save_info_;
   uint32_t download_id_ = DownloadItem::kInvalidId;
+  std::string guid_;
+  bool transient_ = false;
   DownloadUrlParameters::OnStartedCallback on_started_callback_;
 };
 
@@ -80,12 +88,14 @@ const int DownloadRequestData::kKey = 0;
 void DownloadRequestData::Attach(net::URLRequest* request,
                                  DownloadUrlParameters* parameters,
                                  uint32_t download_id) {
-  DownloadRequestData* request_data = new DownloadRequestData;
+  auto request_data = base::MakeUnique<DownloadRequestData>();
   request_data->save_info_.reset(
       new DownloadSaveInfo(parameters->GetSaveInfo()));
   request_data->download_id_ = download_id;
+  request_data->guid_ = parameters->guid();
+  request_data->transient_ = parameters->is_transient();
   request_data->on_started_callback_ = parameters->callback();
-  request->SetUserData(&kKey, request_data);
+  request->SetUserData(&kKey, std::move(request_data));
 }
 
 // static
@@ -110,6 +120,7 @@ std::unique_ptr<net::URLRequest> DownloadRequestCore::CreateRequestOnIOThread(
   DCHECK(download_id == DownloadItem::kInvalidId ||
          !params->content_initiated())
       << "Content initiated downloads shouldn't specify a download ID";
+  DCHECK(params->offset() >= 0);
 
   // ResourceDispatcherHost{Base} is-not-a URLRequest::Delegate, and
   // DownloadUrlParameters can-not include resource_dispatcher_host_impl.h, so
@@ -117,7 +128,8 @@ std::unique_ptr<net::URLRequest> DownloadRequestCore::CreateRequestOnIOThread(
   std::unique_ptr<net::URLRequest> request(
       params->url_request_context_getter()
           ->GetURLRequestContext()
-          ->CreateRequest(params->url(), net::DEFAULT_PRIORITY, nullptr));
+          ->CreateRequest(params->url(), net::DEFAULT_PRIORITY, nullptr,
+                          params->GetNetworkTrafficAnnotation()));
   request->set_method(params->method());
 
   if (!params->post_body().empty()) {
@@ -155,31 +167,16 @@ std::unique_ptr<net::URLRequest> DownloadRequestCore::CreateRequestOnIOThread(
   }
   request->SetLoadFlags(load_flags);
 
-  bool has_last_modified = !params->last_modified().empty();
-  bool has_etag = !params->etag().empty();
+  // Add partial requests headers.
+  AddPartialRequestHeaders(request.get(), params);
 
-  // If we've asked for a range, we want to make sure that we only get that
-  // range if our current copy of the information is good.  We shouldn't be
-  // asked to continue if we don't have a verifier.
-  DCHECK(params->offset() == 0 || has_etag || has_last_modified);
-
-  // If we're not at the beginning of the file, retrieve only the remaining
-  // portion.
-  if (params->offset() > 0 && (has_etag || has_last_modified)) {
-    request->SetExtraRequestHeaderByName(
-        "Range", base::StringPrintf("bytes=%" PRId64 "-", params->offset()),
-        true);
-
-    // In accordance with RFC 2616 Section 14.27, use If-Range to specify that
-    // the server return the entire entity if the validator doesn't match.
-    // Last-Modified can be used in the absence of ETag as a validator if the
-    // response headers satisfied the HttpUtil::HasStrongValidators() predicate.
-    //
-    // This function assumes that HasStrongValidators() was true and that the
-    // ETag and Last-Modified header values supplied are valid.
-    request->SetExtraRequestHeaderByName(
-        "If-Range", has_etag ? params->etag() : params->last_modified(), true);
-  }
+  // Downloads are treated as top level navigations. Hence the first-party
+  // origin for cookies is always based on the target URL and is updated on
+  // redirects.
+  request->set_first_party_for_cookies(params->url());
+  request->set_first_party_url_policy(
+      net::URLRequest::UPDATE_FIRST_PARTY_URL_ON_REDIRECT);
+  request->set_initiator(params->initiator());
 
   for (const auto& header : params->request_headers())
     request->SetExtraRequestHeaderByName(header.first, header.second,
@@ -190,11 +187,12 @@ std::unique_ptr<net::URLRequest> DownloadRequestCore::CreateRequestOnIOThread(
 }
 
 DownloadRequestCore::DownloadRequestCore(net::URLRequest* request,
-                                         Delegate* delegate)
+                                         Delegate* delegate,
+                                         bool is_parallel_request)
     : delegate_(delegate),
       request_(request),
       download_id_(DownloadItem::kInvalidId),
-      last_buffer_size_(0),
+      transient_(false),
       bytes_read_(0),
       pause_count_(0),
       was_deferred_(false),
@@ -203,16 +201,32 @@ DownloadRequestCore::DownloadRequestCore(net::URLRequest* request,
       abort_reason_(DOWNLOAD_INTERRUPT_REASON_NONE) {
   DCHECK(request_);
   DCHECK(delegate_);
-  RecordDownloadCount(UNTHROTTLED_COUNT);
-  power_save_blocker_.reset(new device::PowerSaveBlocker(
-      device::PowerSaveBlocker::kPowerSaveBlockPreventAppSuspension,
-      device::PowerSaveBlocker::kReasonOther, "Download in progress",
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::UI),
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::FILE)));
+  if (!is_parallel_request)
+    RecordDownloadCount(UNTHROTTLED_COUNT);
+
+  // Request Wake Lock.
+  service_manager::Connector* connector =
+      ServiceManagerContext::GetConnectorForIOThread();
+  // |connector| might be nullptr in some testing contexts, in which the
+  // service manager connection isn't initialized.
+  if (connector) {
+    device::mojom::WakeLockProviderPtr wake_lock_provider;
+    connector->BindInterface(device::mojom::kServiceName,
+                             mojo::MakeRequest(&wake_lock_provider));
+    wake_lock_provider->GetWakeLockWithoutContext(
+        device::mojom::WakeLockType::PreventAppSuspension,
+        device::mojom::WakeLockReason::ReasonOther, "Download in progress",
+        mojo::MakeRequest(&wake_lock_));
+
+    wake_lock_->RequestWakeLock();
+  }
+
   DownloadRequestData* request_data = DownloadRequestData::Get(request_);
   if (request_data) {
     save_info_ = request_data->TakeSaveInfo();
     download_id_ = request_data->download_id();
+    guid_ = request_data->guid();
+    transient_ = request_data->is_transient();
     on_started_callback_ = request_data->callback();
     DownloadRequestData::Detach(request_);
     is_partial_request_ = save_info_->offset > 0;
@@ -226,9 +240,6 @@ DownloadRequestCore::~DownloadRequestCore() {
   // Remove output stream callback if a stream exists.
   if (stream_writer_)
     stream_writer_->RegisterCallback(base::Closure());
-
-  UMA_HISTOGRAM_TIMES("SB2.DownloadDuration",
-                      base::TimeTicks::Now() - download_start_time_);
 }
 
 std::unique_ptr<DownloadCreateInfo>
@@ -240,10 +251,16 @@ DownloadRequestCore::CreateDownloadCreateInfo(DownloadInterruptReason result) {
 
   if (result == DOWNLOAD_INTERRUPT_REASON_NONE)
     create_info->remote_address = request()->GetSocketAddress().host();
+  create_info->method = request()->method();
+  create_info->connection_info = request()->response_info().connection_info;
   create_info->url_chain = request()->url_chain();
   create_info->referrer_url = GURL(request()->referrer());
   create_info->result = result;
   create_info->download_id = download_id_;
+  create_info->guid = guid_;
+  create_info->transient = transient_;
+  create_info->response_headers = request()->response_headers();
+  create_info->offset = create_info->save_info->offset;
   return create_info;
 }
 
@@ -258,6 +275,11 @@ bool DownloadRequestCore::OnResponseStarted(
           ? HandleSuccessfulServerResponse(*request()->response_headers(),
                                            save_info_.get())
           : DOWNLOAD_INTERRUPT_REASON_NONE;
+
+  if (request()->response_headers()) {
+    RecordDownloadHttpResponseCode(
+        request()->response_headers()->response_code());
+  }
 
   std::unique_ptr<DownloadCreateInfo> create_info =
       CreateDownloadCreateInfo(result);
@@ -300,7 +322,7 @@ bool DownloadRequestCore::OnResponseStarted(
   const net::HttpResponseHeaders* headers = request()->response_headers();
   if (headers) {
     if (headers->HasStrongValidators()) {
-      // If we don't have strong validators as per RFC 2616 section 13.3.3, then
+      // If we don't have strong validators as per RFC 7232 section 2, then
       // we neither store nor use them for range requests.
       if (!headers->EnumerateHeader(nullptr, "Last-Modified",
                                     &create_info->last_modified))
@@ -317,19 +339,26 @@ bool DownloadRequestCore::OnResponseStarted(
 
     if (!headers->GetMimeType(&create_info->original_mime_type))
       create_info->original_mime_type.clear();
+
+    create_info->accept_range =
+        headers->HasHeaderValue("Accept-Ranges", "bytes");
   }
 
-  // Blink verifies that the requester of this download is allowed to set a
-  // suggested name for the security origin of the download URL. However, this
-  // assumption doesn't hold if there were cross origin redirects. Therefore,
-  // clear the suggested_name for such requests.
-  if (create_info->url_chain.size() > 1 &&
-      create_info->url_chain.front().GetOrigin() !=
-          create_info->url_chain.back().GetOrigin())
+  // GURL::GetOrigin() doesn't support getting the inner origin of a blob URL.
+  // However, requesting a cross origin blob URL would have resulted in a
+  // network error, so we'll just ignore them here. Furthermore, we consider
+  // data: and about: schemes as same origin regardless of the initiator.
+  if (request()->initiator().has_value() &&
+      !create_info->url_chain.back().SchemeIsBlob() &&
+      !create_info->url_chain.back().SchemeIs(url::kAboutScheme) &&
+      !create_info->url_chain.back().SchemeIs(url::kDataScheme) &&
+      request()->initiator()->GetURL() !=
+          create_info->url_chain.back().GetOrigin()) {
     create_info->save_info->suggested_name.clear();
+  }
 
-  RecordDownloadMimeType(create_info->mime_type);
   RecordDownloadContentDisposition(create_info->content_disposition);
+  RecordDownloadSourcePageTransitionType(create_info->transition_type);
 
   delegate_->OnStart(std::move(create_info), std::move(stream_reader),
                      base::ResetAndReturn(&on_started_callback_));
@@ -351,14 +380,12 @@ bool DownloadRequestCore::OnRequestRedirected() {
 // Create a new buffer, which will be handed to the download thread for file
 // writing and deletion.
 bool DownloadRequestCore::OnWillRead(scoped_refptr<net::IOBuffer>* buf,
-                                     int* buf_size,
-                                     int min_size) {
+                                     int* buf_size) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(buf && buf_size);
   DCHECK(!read_buffer_.get());
 
-  *buf_size = min_size < 0 ? kReadBufSize : min_size;
-  last_buffer_size_ = *buf_size;
+  *buf_size = kReadBufSize;
   read_buffer_ = new net::IOBuffer(*buf_size);
   *buf = read_buffer_.get();
   return true;
@@ -368,20 +395,6 @@ bool DownloadRequestCore::OnWillRead(scoped_refptr<net::IOBuffer>* buf,
 bool DownloadRequestCore::OnReadCompleted(int bytes_read, bool* defer) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(read_buffer_.get());
-
-  base::TimeTicks now(base::TimeTicks::Now());
-  if (!last_read_time_.is_null()) {
-    double seconds_since_last_read = (now - last_read_time_).InSecondsF();
-    if (now == last_read_time_)
-      // Use 1/10 ms as a "very small number" so that we avoid
-      // divide-by-zero error and still record a very high potential bandwidth.
-      seconds_since_last_read = 0.00001;
-
-    double actual_bandwidth = (bytes_read) / seconds_since_last_read;
-    double potential_bandwidth = last_buffer_size_ / seconds_since_last_read;
-    RecordBandwidth(actual_bandwidth, potential_bandwidth);
-  }
-  last_read_time_ = now;
 
   if (!bytes_read)
     return true;
@@ -393,7 +406,7 @@ bool DownloadRequestCore::OnReadCompleted(int bytes_read, bool* defer) {
   if (!stream_writer_->Write(read_buffer_, bytes_read)) {
     PauseRequest();
     *defer = was_deferred_ = true;
-    last_stream_pause_time_ = now;
+    last_stream_pause_time_ = base::TimeTicks::Now();
   }
 
   read_buffer_ = NULL;  // Drop our reference.
@@ -419,7 +432,13 @@ void DownloadRequestCore::OnResponseCompleted(
             << " status.error() = " << status.error()
             << " response_code = " << response_code;
 
-  DownloadInterruptReason reason = HandleRequestStatus(status);
+  bool has_strong_validators = false;
+  if (request()->response_headers()) {
+    has_strong_validators =
+        request()->response_headers()->HasStrongValidators();
+  }
+  DownloadInterruptReason reason = HandleRequestStatus(
+      status, has_strong_validators);
 
   if (status.error() == net::ERR_ABORTED) {
     // ERR_ABORTED == something outside of the network
@@ -443,12 +462,9 @@ void DownloadRequestCore::OnResponseCompleted(
   }
 
   std::string accept_ranges;
-  bool has_strong_validators = false;
   if (request()->response_headers()) {
     request()->response_headers()->EnumerateHeader(nullptr, "Accept-Ranges",
                                                    &accept_ranges);
-    has_strong_validators =
-        request()->response_headers()->HasStrongValidators();
   }
   RecordAcceptsRanges(accept_ranges, bytes_read_, has_strong_validators);
   RecordNetworkBlockage(base::TimeTicks::Now() - download_start_time_,
@@ -521,7 +537,7 @@ std::string DownloadRequestCore::DebugString() const {
 
 // static
 DownloadInterruptReason DownloadRequestCore::HandleRequestStatus(
-    const net::URLRequestStatus& status) {
+    const net::URLRequestStatus& status, bool has_strong_validators) {
   net::Error error_code = net::OK;
   if (!status.is_success()) {
     error_code = static_cast<net::Error>(status.error());  // Normal case.
@@ -530,12 +546,23 @@ DownloadInterruptReason DownloadRequestCore::HandleRequestStatus(
       error_code = net::ERR_FAILED;
   }
 
-  // ERR_CONTENT_LENGTH_MISMATCH is allowed since a number of servers in the
-  // wild close the connection too early by mistake. Other browsers - IE9,
-  // Firefox 11.0, and Safari 5.1.4 - treat downloads as complete in both cases,
-  // so we follow their lead.
-  if (error_code == net::ERR_CONTENT_LENGTH_MISMATCH)
+  // ERR_CONTENT_LENGTH_MISMATCH can be caused by 1 of the following reasons:
+  // 1. Server or proxy closes the connection too early.
+  // 2. The content-length header is wrong.
+  // If the download has strong validators, we can interrupt the download
+  // and let it resume automatically. Otherwise, resuming the download will
+  // cause it to restart and the download may never complete if the error was
+  // caused by reason 2. As a result, downloads without strong validators are
+  // treated as completed here.
+  // TODO(qinmin): check the metrics from downloads with strong validators,
+  // and decide whether we should interrupt downloads without strong validators
+  // rather than complete them.
+  if (error_code == net::ERR_CONTENT_LENGTH_MISMATCH &&
+      !has_strong_validators) {
     error_code = net::OK;
+    RecordDownloadCount(COMPLETED_WITH_CONTENT_LENGTH_MISMATCH_COUNT);
+  }
+
   DownloadInterruptReason reason = ConvertNetErrorToInterruptReason(
       error_code, DOWNLOAD_INTERRUPT_FROM_NETWORK);
 
@@ -556,7 +583,7 @@ DownloadInterruptReason DownloadRequestCore::HandleSuccessfulServerResponse(
 
     case net::HTTP_CREATED:
     case net::HTTP_ACCEPTED:
-      // Per RFC 2616 the entity being transferred is metadata about the
+      // Per RFC 7231 the entity being transferred is metadata about the
       // resource at the target URL and not the resource at that URL (or the
       // resource that would be at the URL once processing is completed in the
       // case of HTTP_ACCEPTED). However, we currently don't have special
@@ -566,7 +593,7 @@ DownloadInterruptReason DownloadRequestCore::HandleSuccessfulServerResponse(
 
     case net::HTTP_NO_CONTENT:
     case net::HTTP_RESET_CONTENT:
-    // These two status codes don't have an entity (or rather RFC 2616
+    // These two status codes don't have an entity (or rather RFC 7231
     // requires that there be no entity). They are treated the same as the
     // resource not being found since there is no entity to download.
 
@@ -591,16 +618,25 @@ DownloadInterruptReason DownloadRequestCore::HandleSuccessfulServerResponse(
     default:  // All other errors.
       // Redirection and informational codes should have been handled earlier
       // in the stack.
+      // TODO(xingliu): Handle HTTP_PRECONDITION_FAILED and resurrect
+      // DOWNLOAD_INTERRUPT_REASON_SERVER_PRECONDITION for range requests.
+      // This will change extensions::api::download::InterruptReason.
       DCHECK_NE(3, http_headers.response_code() / 100);
       DCHECK_NE(1, http_headers.response_code() / 100);
       return DOWNLOAD_INTERRUPT_REASON_SERVER_FAILED;
   }
 
-  if (save_info && save_info->offset > 0) {
-    // The caller is expecting a partial response.
-
+  // The caller is expecting a partial response.
+  if (save_info && (save_info->offset > 0 || save_info->length > 0)) {
     if (http_headers.response_code() != net::HTTP_PARTIAL_CONTENT) {
-      // Requested a partial range, but received the entire response.
+      // Server should send partial content when "If-Match" or
+      // "If-Unmodified-Since" check passes, and the range request header has
+      // last byte position. e.g. "Range:bytes=50-99".
+      if (save_info->length != DownloadSaveInfo::kLengthFullContent)
+        return DOWNLOAD_INTERRUPT_REASON_SERVER_BAD_CONTENT;
+
+      // Requested a partial range, but received the entire response, when
+      // the range request header is "Range:bytes={offset}-".
       save_info->offset = 0;
       save_info->hash_of_partial_file.clear();
       save_info->hash_state.reset();
@@ -610,11 +646,13 @@ DownloadInterruptReason DownloadRequestCore::HandleSuccessfulServerResponse(
     int64_t first_byte = -1;
     int64_t last_byte = -1;
     int64_t length = -1;
-    if (!http_headers.GetContentRange(&first_byte, &last_byte, &length))
+    if (!http_headers.GetContentRangeFor206(&first_byte, &last_byte, &length))
       return DOWNLOAD_INTERRUPT_REASON_SERVER_BAD_CONTENT;
     DCHECK_GE(first_byte, 0);
 
-    if (first_byte != save_info->offset) {
+    if (first_byte != save_info->offset ||
+        (save_info->length > 0 &&
+         last_byte != save_info->offset + save_info->length - 1)) {
       // The server returned a different range than the one we requested. Assume
       // the response is bad.
       //
@@ -631,6 +669,65 @@ DownloadInterruptReason DownloadRequestCore::HandleSuccessfulServerResponse(
     return DOWNLOAD_INTERRUPT_REASON_SERVER_BAD_CONTENT;
 
   return DOWNLOAD_INTERRUPT_REASON_NONE;
+}
+
+// static
+void DownloadRequestCore::AddPartialRequestHeaders(
+    net::URLRequest* request,
+    DownloadUrlParameters* params) {
+  if (params->offset() == 0 &&
+      params->length() == DownloadSaveInfo::kLengthFullContent)
+    return;
+
+  bool has_last_modified = !params->last_modified().empty();
+  bool has_etag = !params->etag().empty();
+
+  // Strong validator(i.e. etag or last modified) is required in range requests
+  // for download resumption and parallel download.
+  DCHECK(has_etag || has_last_modified);
+  if (!has_etag && !has_last_modified) {
+    DVLOG(1) << "Creating partial request without strong validators.";
+    return;
+  }
+
+  // Add "Range" header.
+  std::string range_header =
+      (params->length() == DownloadSaveInfo::kLengthFullContent)
+          ? base::StringPrintf("bytes=%" PRId64 "-", params->offset())
+          : base::StringPrintf("bytes=%" PRId64 "-%" PRId64, params->offset(),
+                               params->offset() + params->length() - 1);
+  request->SetExtraRequestHeaderByName(net::HttpRequestHeaders::kRange,
+                                       range_header, true);
+
+  // Add "If-Range" headers.
+  if (params->use_if_range()) {
+    // In accordance with RFC 7233 Section 3.2, use If-Range to specify that
+    // the server return the entire entity if the validator doesn't match.
+    // Last-Modified can be used in the absence of ETag as a validator if the
+    // response headers satisfied the HttpUtil::HasStrongValidators()
+    // predicate.
+    //
+    // This function assumes that HasStrongValidators() was true and that the
+    // ETag and Last-Modified header values supplied are valid.
+    request->SetExtraRequestHeaderByName(
+        net::HttpRequestHeaders::kIfRange,
+        has_etag ? params->etag() : params->last_modified(), true);
+    return;
+  }
+
+  // Add "If-Match"/"If-Unmodified-Since" headers.
+  if (has_etag) {
+    request->SetExtraRequestHeaderByName(net::HttpRequestHeaders::kIfMatch,
+                                         params->etag(), true);
+  }
+  // According to RFC 7232 section 3.4, "If-Unmodified-Since" is mainly for
+  // old servers that didn't implement "If-Match" and must be ignored when
+  // "If-Match" presents.
+  if (has_last_modified) {
+    request->SetExtraRequestHeaderByName(
+        net::HttpRequestHeaders::kIfUnmodifiedSince, params->last_modified(),
+        true);
+  }
 }
 
 }  // namespace content

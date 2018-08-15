@@ -21,7 +21,7 @@
 
 namespace {
 
-base::StaticAtomicSequenceNumber g_ref_num;
+base::AtomicSequenceNumber g_ref_num;
 
 // Create a reference number for identifying IPC messages in traces. The return
 // values has the reference number stored in the upper 24 bits, leaving the low
@@ -82,7 +82,7 @@ Message::Message(const Message& other) : base::Pickle(other) {
 
 void Message::Init() {
   dispatch_error_ = false;
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
   received_time_ = 0;
   dont_log_ = false;
   log_data_ = NULL;
@@ -109,7 +109,7 @@ void Message::EnsureMessageAttachmentSet() {
     attachment_set_ = new MessageAttachmentSet;
 }
 
-#ifdef IPC_MESSAGE_LOG_ENABLED
+#if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
 void Message::set_sent_time(int64_t time) {
   DCHECK((header()->flags & HAS_SENT_TIME_BIT) == 0);
   header()->flags |= HAS_SENT_TIME_BIT;
@@ -128,7 +128,7 @@ int64_t Message::sent_time() const {
 void Message::set_received_time(int64_t time) const {
   received_time_ = time;
 }
-#endif
+#endif  // BUILDFLAG(IPC_MESSAGE_LOG_ENABLED)
 
 Message::NextMessageInfo::NextMessageInfo()
     : message_size(0), message_found(false), pickle_end(nullptr),
@@ -166,18 +166,14 @@ void Message::FindNext(const char* range_start,
 
 bool Message::WriteAttachment(
     scoped_refptr<base::Pickle::Attachment> attachment) {
-  bool brokerable;
   size_t index;
   bool success = attachment_set()->AddAttachment(
       make_scoped_refptr(static_cast<MessageAttachment*>(attachment.get())),
-      &index, &brokerable);
+      &index);
   DCHECK(success);
 
   // NOTE: If you add more data to the pickle, make sure to update
   // PickleSizer::AddAttachment.
-
-  // Write the type of descriptor.
-  WriteBool(brokerable);
 
   // Write the index of the descriptor so that we don't have to
   // keep the current descriptor as extra decoding state when deserialising.
@@ -189,10 +185,6 @@ bool Message::WriteAttachment(
 bool Message::ReadAttachment(
     base::PickleIterator* iter,
     scoped_refptr<base::Pickle::Attachment>* attachment) const {
-  bool brokerable;
-  if (!iter->ReadBool(&brokerable))
-    return false;
-
   int index;
   if (!iter->ReadInt(&index))
     return false;
@@ -201,24 +193,13 @@ bool Message::ReadAttachment(
   if (!attachment_set)
     return false;
 
-  *attachment = brokerable
-                    ? attachment_set->GetBrokerableAttachmentAt(index)
-                    : attachment_set->GetNonBrokerableAttachmentAt(index);
+  *attachment = attachment_set->GetAttachmentAt(index);
 
   return nullptr != attachment->get();
 }
 
 bool Message::HasAttachments() const {
   return attachment_set_.get() && !attachment_set_->empty();
-}
-
-bool Message::HasMojoHandles() const {
-  return attachment_set_.get() && attachment_set_->num_mojo_handles() > 0;
-}
-
-bool Message::HasBrokerableAttachments() const {
-  return attachment_set_.get() &&
-         attachment_set_->num_brokerable_attachments() > 0;
 }
 
 }  // namespace IPC

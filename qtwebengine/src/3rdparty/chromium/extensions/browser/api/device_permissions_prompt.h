@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef EXTENSIONS_BROWSER_DEVICE_PERMISSIONS_PROMPT_H_
-#define EXTENSIONS_BROWSER_DEVICE_PERMISSIONS_PROMPT_H_
+#ifndef EXTENSIONS_BROWSER_API_DEVICE_PERMISSIONS_PROMPT_H_
+#define EXTENSIONS_BROWSER_API_DEVICE_PERMISSIONS_PROMPT_H_
 
 #include <stddef.h>
 
@@ -15,6 +15,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string16.h"
+#include "device/usb/public/interfaces/device_manager.mojom.h"
 
 namespace content {
 class BrowserContext;
@@ -25,7 +26,6 @@ namespace device {
 class HidDeviceFilter;
 class HidDeviceInfo;
 class UsbDevice;
-class UsbDeviceFilter;
 }
 
 namespace extensions {
@@ -68,7 +68,10 @@ class DevicePermissionsPrompt {
     // implementation should register an observer.
     class Observer {
      public:
-      virtual void OnDevicesChanged() = 0;
+      virtual void OnDeviceAdded(size_t index,
+                                 const base::string16& device_name) = 0;
+      virtual void OnDeviceRemoved(size_t index,
+                                   const base::string16& device_name) = 0;
 
      protected:
       virtual ~Observer();
@@ -81,8 +84,6 @@ class DevicePermissionsPrompt {
     // Only one observer may be registered at a time.
     virtual void SetObserver(Observer* observer);
 
-    virtual base::string16 GetHeading() const = 0;
-    base::string16 GetPromptMessage() const;
     size_t GetDeviceCount() const { return devices_.size(); }
     base::string16 GetDeviceName(size_t index) const;
     base::string16 GetDeviceSerialNumber(size_t index) const;
@@ -128,7 +129,7 @@ class DevicePermissionsPrompt {
   void AskForUsbDevices(const Extension* extension,
                         content::BrowserContext* context,
                         bool multiple,
-                        const std::vector<device::UsbDeviceFilter>& filters,
+                        std::vector<device::mojom::UsbDeviceFilterPtr> filters,
                         const UsbDevicesCallback& callback);
 
   void AskForHidDevices(const Extension* extension,

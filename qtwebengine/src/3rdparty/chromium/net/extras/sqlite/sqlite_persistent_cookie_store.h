@@ -15,8 +15,6 @@
 #include "base/memory/ref_counted.h"
 #include "net/cookies/cookie_monster.h"
 
-class Task;
-
 namespace base {
 class FilePath;
 class SequencedTaskRunner;
@@ -64,7 +62,7 @@ class SQLitePersistentCookieStore
   void UpdateCookieAccessTime(const CanonicalCookie& cc) override;
   void DeleteCookie(const CanonicalCookie& cc) override;
   void SetForceKeepSessionState() override;
-  void Flush(const base::Closure& callback) override;
+  void Flush(base::OnceClosure callback) override;
 
  private:
   ~SQLitePersistentCookieStore() override;

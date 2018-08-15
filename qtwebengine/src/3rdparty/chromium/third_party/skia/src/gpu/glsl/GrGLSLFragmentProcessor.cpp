@@ -26,7 +26,6 @@ void GrGLSLFragmentProcessor::emitChild(int childIndex, const char* inputColor, 
 
 void GrGLSLFragmentProcessor::emitChild(int childIndex, const char* inputColor,
                                         SkString* outputColor, EmitArgs& args) {
-
     SkASSERT(outputColor);
     GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
     outputColor->append(fragBuilder->getMangleString());
@@ -36,6 +35,7 @@ void GrGLSLFragmentProcessor::emitChild(int childIndex, const char* inputColor,
 
 void GrGLSLFragmentProcessor::internalEmitChild(int childIndex, const char* inputColor,
                                                 const char* outputColor, EmitArgs& args) {
+    SkASSERT(inputColor);
     GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
 
     fragBuilder->onBeforeChildProcEmitCode();  // call first so mangleString is updated
@@ -48,17 +48,18 @@ void GrGLSLFragmentProcessor::internalEmitChild(int childIndex, const char* inpu
                              fragBuilder->getMangleString().c_str(), childProc.name());
     TransformedCoordVars coordVars = args.fTransformedCoords.childInputs(childIndex);
     TextureSamplers textureSamplers = args.fTexSamplers.childInputs(childIndex);
-    BufferSamplers bufferSamplers = args.fBufferSamplers.childInputs(childIndex);
+    TexelBuffers texelBuffers = args.fTexelBuffers.childInputs(childIndex);
+    ImageStorages imageStorages = args.fImageStorages.childInputs(childIndex);
     EmitArgs childArgs(fragBuilder,
                        args.fUniformHandler,
-                       args.fGLSLCaps,
+                       args.fShaderCaps,
                        childProc,
                        outputColor,
                        inputColor,
                        coordVars,
                        textureSamplers,
-                       bufferSamplers,
-                       args.fGpImplementsDistanceVector);
+                       texelBuffers,
+                       imageStorages);
     this->childProcessor(childIndex)->emitCode(childArgs);
     fragBuilder->codeAppend("}\n");
 

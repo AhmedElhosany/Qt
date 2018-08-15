@@ -8,13 +8,14 @@
 #ifndef SkBlitter_DEFINED
 #define SkBlitter_DEFINED
 
+#include "SkAutoMalloc.h"
 #include "SkBitmapProcShader.h"
 #include "SkColor.h"
 #include "SkRect.h"
 #include "SkRegion.h"
-#include "SkShader.h"
-#include "SkTypes.h"
+#include "SkShaderBase.h"
 
+class SkArenaAlloc;
 class SkMatrix;
 class SkPaint;
 class SkPixmap;
@@ -108,12 +109,6 @@ public:
     virtual bool isNullBlitter() const;
 
     /**
-     *  Special methods for SkShaderBlitter. On all other classes this is a no-op.
-     */
-    virtual bool resetShaderContext(const SkShader::ContextRec&);
-    virtual SkShader::Context* getShaderContext() const;
-
-    /**
      * Special methods for blitters that can blit more than one row at a time.
      * This function returns the number of rows that this blitter could optimally
      * process at a time. It is still required to support blitting one scanline
@@ -143,17 +138,19 @@ public:
     static SkBlitter* Choose(const SkPixmap& dst,
                              const SkMatrix& matrix,
                              const SkPaint& paint,
-                             SkTBlitterAllocator*,
+                             SkArenaAlloc*,
                              bool drawCoverage = false);
 
     static SkBlitter* ChooseSprite(const SkPixmap& dst,
                                    const SkPaint&,
                                    const SkPixmap& src,
                                    int left, int top,
-                                   SkTBlitterAllocator*);
+                                   SkArenaAlloc*);
     ///@}
 
-    static SkShader::ContextRec::DstType PreferredShaderDest(const SkImageInfo&);
+    static SkShaderBase::ContextRec::DstType PreferredShaderDest(const SkImageInfo&);
+
+    static bool UseRasterPipelineBlitter(const SkPixmap&, const SkPaint&, const SkMatrix&);
 
 protected:
     SkAutoMalloc fBlitMemory;
@@ -258,6 +255,8 @@ public:
                               SkAlpha leftAlpha, SkAlpha rightAlpha) override;
     void blitMask(const SkMask&, const SkIRect& clip) override;
     const SkPixmap* justAnOpaqueColor(uint32_t* value) override;
+    void blitAntiH2(int x, int y, U8CPU a0, U8CPU a1) override;
+    void blitAntiV2(int x, int y, U8CPU a0, U8CPU a1) override;
 
     int requestRowsPreserved() const override {
         return fBlitter->requestRowsPreserved();

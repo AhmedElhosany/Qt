@@ -72,6 +72,9 @@ public:
     void init();
     QWaylandDisplay *display() const;
 
+    QString manufacturer() const override;
+    QString model() const override;
+
     QRect geometry() const override;
     int depth() const override;
     QImage::Format format() const override;
@@ -92,7 +95,7 @@ public:
 
 #if QT_CONFIG(cursor)
     QPlatformCursor *cursor() const override;
-    QWaylandCursor *waylandCursor() const { return mWaylandCursor; };
+    QWaylandCursor *waylandCursor() const { return mWaylandCursor; }
 #endif
 
     uint32_t outputId() const { return m_outputId; }
@@ -114,6 +117,8 @@ private:
 
     int m_outputId;
     QWaylandDisplay *mWaylandDisplay;
+    QString mManufacturer;
+    QString mModel;
     QRect mGeometry;
     int mScale;
     int mDepth;

@@ -5,6 +5,7 @@
 #ifndef UI_VIEWS_CONTROLS_BUTTON_LABEL_BUTTON_H_
 #define UI_VIEWS_CONTROLS_BUTTON_LABEL_BUTTON_H_
 
+#include <array>
 #include <memory>
 
 #include "base/compiler_specific.h"
@@ -16,12 +17,13 @@
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/native_theme_delegate.h"
+#include "ui/views/style/typography.h"
 
 namespace views {
 
 class InkDropContainerView;
 class LabelButtonBorder;
-class Painter;
+class LabelButtonLabel;
 
 // LabelButton is a button with text and an icon, it's not focusable by default.
 class VIEWS_EXPORT LabelButton : public CustomButton,
@@ -32,7 +34,12 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
 
   static const char kViewClassName[];
 
-  LabelButton(ButtonListener* listener, const base::string16& text);
+  // Creates a LabelButton with ButtonPressed() events sent to |listener| and
+  // label |text|. |button_context| is a value from views::style::TextContext
+  // and determines the appearance of |text|.
+  LabelButton(ButtonListener* listener,
+              const base::string16& text,
+              int button_context = style::CONTEXT_BUTTON);
   ~LabelButton() override;
 
   // Gets or sets the image shown for the specified button state.
@@ -56,14 +63,6 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
   // Sets whether subpixel rendering is used on the label.
   void SetTextSubpixelRenderingEnabled(bool enabled);
 
-  // Gets or sets the font list used by this button.
-  const gfx::FontList& GetFontList() const;
-  // TODO(estade): make this function protected.
-  virtual void SetFontList(const gfx::FontList& font_list);
-
-  // Adjusts the font size up or down by the given amount.
-  virtual void AdjustFontSize(int font_size_delta);
-
   // Sets the elide behavior of this button.
   void SetElideBehavior(gfx::ElideBehavior elide_behavior);
 
@@ -80,16 +79,15 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
   void SetIsDefault(bool is_default);
 
   // Gets or sets the button's overall style; the default is |STYLE_TEXTBUTTON|.
+  // DEPRECATED: ButtonStyle is deprecated. Use MdTextButton in place of
+  // |STYLE_BUTTON|.
   ButtonStyle style() const { return style_; }
-  void SetStyle(ButtonStyle style);
+  void SetStyleDeprecated(ButtonStyle style);
 
   // Sets the spacing between the image and the text. Shrinking the spacing
   // will not shrink the overall button size, as it is monotonically increasing.
   // Call SetMinSize(gfx::Size()) to clear the size if needed.
   void SetImageLabelSpacing(int spacing);
-
-  void SetFocusPainter(std::unique_ptr<Painter> focus_painter);
-  Painter* focus_painter() { return focus_painter_.get(); }
 
   // Creates the default border for this button. This can be overridden by
   // subclasses.
@@ -97,7 +95,7 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
 
   // View:
   void SetBorder(std::unique_ptr<Border> border) override;
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   int GetHeightForWidth(int w) const override;
   void Layout() override;
   const char* GetClassName() const override;
@@ -110,7 +108,10 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
 
  protected:
   ImageView* image() const { return image_; }
-  Label* label() const { return label_; }
+  Label* label() const;
+  InkDropContainerView* ink_drop_container() const {
+    return ink_drop_container_;
+  }
 
   bool explicitly_set_normal_color() const {
     return explicitly_set_colors_[STATE_NORMAL];
@@ -120,14 +121,17 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
   // these bounds if they need room to do manual painting.
   virtual gfx::Rect GetChildAreaBounds();
 
+  // Returns true if the CreateInkDrop*() methods should create flood fill ink
+  // drop components.
+  virtual bool ShouldUseFloodFillInkDrop() const;
+
   // View:
-  void OnPaint(gfx::Canvas* canvas) override;
   void OnFocus() override;
   void OnBlur() override;
   void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
 
   // CustomButton:
-  void StateChanged() override;
+  void StateChanged(ButtonState old_state) override;
 
   // Fills |params| with information about the button.
   virtual void GetExtraParams(ui::NativeTheme::ExtraParams* params) const;
@@ -149,14 +153,14 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
   // NativeThemeDelegate:
   gfx::Rect GetThemePaintRect() const override;
 
- private:
-  FRIEND_TEST_ALL_PREFIXES(LabelButtonTest, Init);
-  FRIEND_TEST_ALL_PREFIXES(LabelButtonTest, Label);
-  FRIEND_TEST_ALL_PREFIXES(LabelButtonTest, Image);
-  FRIEND_TEST_ALL_PREFIXES(LabelButtonTest, LabelAndImage);
-  FRIEND_TEST_ALL_PREFIXES(LabelButtonTest, FontList);
-  FRIEND_TEST_ALL_PREFIXES(LabelButtonTest, ResetColorsFromNativeTheme);
+  const std::array<bool, STATE_COUNT>& explicitly_set_colors() const {
+    return explicitly_set_colors_;
+  }
+  void set_explicitly_set_colors(const std::array<bool, STATE_COUNT>& colors) {
+    explicitly_set_colors_ = colors;
+  }
 
+ private:
   void SetTextInternal(const base::string16& text);
 
   // View:
@@ -181,29 +185,26 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
   // correct for the current background.
   void ResetLabelEnabledColor();
 
-  // Returns true if the CreateInkDrop*() methods should create flood fill ink
-  // drop components.
-  bool UseFloodFillInkDrop() const;
-
   // The image and label shown in the button.
   ImageView* image_;
-  Label* label_;
+  LabelButtonLabel* label_;
 
   // A separate view is necessary to hold the ink drop layer so that it can
   // be stacked below |image_| and on top of |label_|, without resorting to
   // drawing |label_| on a layer (which can mess with subpixel anti-aliasing).
   InkDropContainerView* ink_drop_container_;
 
-  // The cached font lists in the normal and bold style.
+  // The cached font lists in the normal and default button style. The latter
+  // may be bold.
   gfx::FontList cached_normal_font_list_;
-  gfx::FontList cached_bold_font_list_;
+  gfx::FontList cached_default_button_font_list_;
 
   // The images and colors for each button state.
   gfx::ImageSkia button_state_images_[STATE_COUNT];
   SkColor button_state_colors_[STATE_COUNT];
 
   // Used to track whether SetTextColor() has been invoked.
-  bool explicitly_set_colors_[STATE_COUNT];
+  std::array<bool, STATE_COUNT> explicitly_set_colors_;
 
   // |min_size_| increases monotonically with the preferred size.
   mutable gfx::Size min_size_;
@@ -233,8 +234,6 @@ class VIEWS_EXPORT LabelButton : public CustomButton,
   // text direction) while |this| is laid out as ALIGN_LEFT (alignment matches
   // UI direction).
   gfx::HorizontalAlignment horizontal_alignment_;
-
-  std::unique_ptr<Painter> focus_painter_;
 
   DISALLOW_COPY_AND_ASSIGN(LabelButton);
 };

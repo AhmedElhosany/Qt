@@ -11,15 +11,15 @@
 
 #include "base/callback.h"
 #include "base/macros.h"
+#include "third_party/WebKit/public/platform/WebCachePolicy.h"
 #include "third_party/WebKit/public/platform/WebURLRequest.h"
 #include "url/gurl.h"
 
 class SkBitmap;
 
 namespace blink {
-class WebFrame;
+class WebLocalFrame;
 class WebURLResponse;
-enum class WebCachePolicy;
 }
 
 namespace content {
@@ -35,7 +35,7 @@ class MultiResolutionImageResourceFetcher {
 
   MultiResolutionImageResourceFetcher(
       const GURL& image_url,
-      blink::WebFrame* frame,
+      blink::WebLocalFrame* frame,
       int id,
       blink::WebURLRequest::RequestContext request_context,
       blink::WebCachePolicy cache_policy,
@@ -51,6 +51,9 @@ class MultiResolutionImageResourceFetcher {
 
   // HTTP status code upon fetch completion.
   int http_status_code() const { return http_status_code_; }
+
+  // Called when associated RenderFrame is destructed.
+  void OnRenderFrameDestruct();
 
  private:
   // ResourceFetcher::Callback. Decodes the image and invokes callback_.

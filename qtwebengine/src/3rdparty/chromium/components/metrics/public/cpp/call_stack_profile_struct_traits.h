@@ -5,9 +5,11 @@
 // Defines StructTraits specializations for translating between mojo types and
 // base::StackSamplingProfiler types, with data validity checks.
 
-#ifndef COMPONENTS_METRICS_CALL_STACK_PROFILE_STRUCT_TRAITS_H_
-#define COMPONENTS_METRICS_CALL_STACK_PROFILE_STRUCT_TRAITS_H_
+#ifndef COMPONENTS_METRICS_PUBLIC_CPP_CALL_STACK_PROFILE_STRUCT_TRAITS_H_
+#define COMPONENTS_METRICS_PUBLIC_CPP_CALL_STACK_PROFILE_STRUCT_TRAITS_H_
 
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -34,13 +36,9 @@ struct StructTraits<metrics::mojom::CallStackModuleDataView,
 
   static bool Read(metrics::mojom::CallStackModuleDataView data,
                    base::StackSamplingProfiler::Module* out) {
-    // Linux has the longest build id at 40 bytes.
-    static const size_t kMaxIDSize = 40;
-
     std::string id;
     base::FilePath filename;
-    if (!data.ReadId(&id) || id.size() > kMaxIDSize ||
-        !data.ReadFilename(&filename))
+    if (!data.ReadId(&id) || !data.ReadFilename(&filename))
       return false;
 
     *out =
@@ -80,6 +78,31 @@ struct StructTraits<metrics::mojom::CallStackFrameDataView,
 };
 
 template <>
+struct StructTraits<metrics::mojom::CallStackSampleDataView,
+                    base::StackSamplingProfiler::Sample> {
+  static const std::vector<base::StackSamplingProfiler::Frame>& frames(
+      const base::StackSamplingProfiler::Sample& sample) {
+    return sample.frames;
+  }
+  static int32_t process_milestones(
+      const base::StackSamplingProfiler::Sample& sample) {
+    return sample.process_milestones;
+  }
+
+  static bool Read(metrics::mojom::CallStackSampleDataView data,
+                   base::StackSamplingProfiler::Sample* out) {
+    std::vector<base::StackSamplingProfiler::Frame> frames;
+    if (!data.ReadFrames(&frames))
+      return false;
+
+    *out = base::StackSamplingProfiler::Sample();
+    out->frames = std::move(frames);
+    out->process_milestones = data.process_milestones();
+    return true;
+  }
+};
+
+template <>
 struct StructTraits<metrics::mojom::CallStackProfileDataView,
                     base::StackSamplingProfiler::CallStackProfile> {
   static const std::vector<base::StackSamplingProfiler::Module>& modules(
@@ -103,7 +126,7 @@ struct StructTraits<metrics::mojom::CallStackProfileDataView,
       std::vector<base::StackSamplingProfiler::Sample> samples,
       size_t module_count) {
     for (const base::StackSamplingProfiler::Sample& sample : samples) {
-      for (const base::StackSamplingProfiler::Frame& frame : sample) {
+      for (const base::StackSamplingProfiler::Frame& frame : sample.frames) {
         if (frame.module_index >= module_count &&
             frame.module_index !=
                 base::StackSamplingProfiler::Frame::kUnknownModuleIndex)
@@ -115,10 +138,21 @@ struct StructTraits<metrics::mojom::CallStackProfileDataView,
 
   static bool Read(metrics::mojom::CallStackProfileDataView data,
                    base::StackSamplingProfiler::CallStackProfile* out) {
-    return data.ReadModules(&out->modules) && data.ReadSamples(&out->samples) &&
-        data.ReadProfileDuration(&out->profile_duration) &&
-        data.ReadSamplingPeriod(&out->sampling_period) &&
-        ValidateSamples(out->samples, out->modules.size());
+    std::vector<base::StackSamplingProfiler::Module> modules;
+    std::vector<base::StackSamplingProfiler::Sample> samples;
+    base::TimeDelta profile_duration, sampling_period;
+    if (!data.ReadModules(&modules) || !data.ReadSamples(&samples) ||
+        !data.ReadProfileDuration(&profile_duration) ||
+        !data.ReadSamplingPeriod(&sampling_period) ||
+        !ValidateSamples(samples, modules.size()))
+      return false;
+
+    *out = base::StackSamplingProfiler::CallStackProfile();
+    out->modules = std::move(modules);
+    out->samples = std::move(samples);
+    out->profile_duration = profile_duration;
+    out->sampling_period = sampling_period;
+    return true;
   }
 };
 
@@ -275,6 +309,8 @@ struct EnumTraits<metrics::mojom::Trigger,
         return metrics::mojom::Trigger::JANKY_TASK;
       case metrics::CallStackProfileParams::Trigger::THREAD_HUNG:
         return metrics::mojom::Trigger::THREAD_HUNG;
+      case metrics::CallStackProfileParams::Trigger::PERIODIC_COLLECTION:
+        return metrics::mojom::Trigger::PERIODIC_COLLECTION;
     }
     NOTREACHED();
     return metrics::mojom::Trigger::UNKNOWN;
@@ -294,6 +330,9 @@ struct EnumTraits<metrics::mojom::Trigger,
         return true;
       case metrics::mojom::Trigger::THREAD_HUNG:
         *out = metrics::CallStackProfileParams::Trigger::THREAD_HUNG;
+        return true;
+      case metrics::mojom::Trigger::PERIODIC_COLLECTION:
+        *out = metrics::CallStackProfileParams::Trigger::PERIODIC_COLLECTION;
         return true;
     }
     return false;
@@ -339,7 +378,6 @@ struct StructTraits<metrics::mojom::CallStackProfileParamsDataView,
 template <>
 struct EnumTraits<metrics::mojom::SampleOrderingSpec,
                   metrics::CallStackProfileParams::SampleOrderingSpec> {
-
   static metrics::mojom::SampleOrderingSpec ToMojom(
       metrics::CallStackProfileParams::SampleOrderingSpec spec) {
     switch (spec) {
@@ -368,6 +406,6 @@ struct EnumTraits<metrics::mojom::SampleOrderingSpec,
   }
 };
 
-}  // mojo
+}  // namespace mojo
 
-#endif  // COMPONENTS_METRICS_CALL_STACK_PROFILE_STRUCT_TRAITS_H_
+#endif  // COMPONENTS_METRICS_PUBLIC_CPP_CALL_STACK_PROFILE_STRUCT_TRAITS_H_

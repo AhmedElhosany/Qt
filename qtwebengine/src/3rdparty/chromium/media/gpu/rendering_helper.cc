@@ -47,7 +47,7 @@
 
 #if defined(USE_OZONE)
 #if defined(OS_CHROMEOS)
-#include "ui/display/chromeos/display_configurator.h"
+#include "ui/display/manager/chromeos/display_configurator.h"
 #include "ui/display/types/native_display_delegate.h"
 #endif  // defined(OS_CHROMEOS)
 #include "ui/ozone/public/ozone_platform.h"
@@ -86,23 +86,24 @@ void WaitForSwapAck(const base::Closure& callback, gfx::SwapResult result) {
 
 #if defined(USE_OZONE)
 
-class DisplayConfiguratorObserver : public ui::DisplayConfigurator::Observer {
+class DisplayConfiguratorObserver
+    : public display::DisplayConfigurator::Observer {
  public:
   explicit DisplayConfiguratorObserver(base::RunLoop* loop) : loop_(loop) {}
   ~DisplayConfiguratorObserver() override {}
 
  private:
-  // ui::DisplayConfigurator::Observer overrides:
+  // display::DisplayConfigurator::Observer overrides:
   void OnDisplayModeChanged(
-      const ui::DisplayConfigurator::DisplayStateList& outputs) override {
+      const display::DisplayConfigurator::DisplayStateList& outputs) override {
     if (!loop_)
       return;
     loop_->Quit();
     loop_ = nullptr;
   }
   void OnDisplayModeChangeFailed(
-      const ui::DisplayConfigurator::DisplayStateList& outputs,
-      ui::MultipleDisplayState failed_new_state) override {
+      const display::DisplayConfigurator::DisplayStateList& outputs,
+      display::MultipleDisplayState failed_new_state) override {
     LOG(FATAL) << "Could not configure display";
   }
 
@@ -130,7 +131,7 @@ class RenderingHelper::StubOzoneDelegate : public ui::PlatformWindowDelegate {
 
   void OnWindowStateChanged(ui::PlatformWindowState new_state) override {}
 
-  void OnLostCapture() override{};
+  void OnLostCapture() override {}
 
   void OnAcceleratedWidgetAvailable(gfx::AcceleratedWidget widget,
                                     float device_pixel_ratio) override {
@@ -139,7 +140,7 @@ class RenderingHelper::StubOzoneDelegate : public ui::PlatformWindowDelegate {
 
   void OnAcceleratedWidgetDestroyed() override { NOTREACHED(); }
 
-  void OnActivationChanged(bool active) override{};
+  void OnActivationChanged(bool active) override {}
 
   gfx::AcceleratedWidget accelerated_widget() const {
     return accelerated_widget_;
@@ -195,6 +196,12 @@ void RenderingHelper::InitializeOneOff(base::WaitableEvent* done) {
                               gl::kGLImplementationDesktopName);
 #else
   cmd_line->AppendSwitchASCII(switches::kUseGL, gl::kGLImplementationEGLName);
+#endif
+
+#if defined(USE_OZONE)
+  ui::OzonePlatform::InitParams params;
+  params.single_process = true;
+  ui::OzonePlatform::InitializeForGPU(params);
 #endif
 
   if (!gl::init::InitializeGLOneOff())
@@ -257,7 +264,7 @@ void RenderingHelper::Setup() {
   // the same size.
   base::RunLoop wait_display_setup;
   DisplayConfiguratorObserver display_setup_observer(&wait_display_setup);
-  display_configurator_.reset(new ui::DisplayConfigurator());
+  display_configurator_.reset(new display::DisplayConfigurator());
   display_configurator_->SetDelegateForTesting(0);
   display_configurator_->AddObserver(&display_setup_observer);
   display_configurator_->Init(
@@ -397,12 +404,22 @@ void RenderingHelper::Initialize(const RenderingHelperParams& params,
   // in the vertex shader for this to be rendered the right way up.
   // In the case of thumbnail rendering we use the same vertex shader
   // to render the FBO the screen, where we do not want this flipping.
+  // Vertices are 2 floats for position and 2 floats for texcoord each.
   static const float kVertices[] = {
-      -1.f, 1.f, -1.f, -1.f, 1.f, 1.f, 1.f, -1.f,
+      -1, 1,  0, 1,  // Vertex 0
+      -1, -1, 0, 0,  // Vertex 1
+      1,  1,  1, 1,  // Vertex 2
+      1,  -1, 1, 0,  // Vertex 3
   };
-  static const float kTextureCoords[] = {
-      0, 1, 0, 0, 1, 1, 1, 0,
-  };
+  static const GLvoid* kVertexPositionOffset = 0;
+  static const GLvoid* kVertexTexcoordOffset =
+      reinterpret_cast<GLvoid*>(sizeof(float) * 2);
+  static const GLsizei kVertexStride = sizeof(float) * 4;
+
+  glGenBuffersARB(1, &vertex_buffer_);
+  glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(kVertices), kVertices, GL_STATIC_DRAW);
+
   static const char kVertexShader[] =
       STRINGIZE(varying vec2 interp_tc; attribute vec4 in_pos;
                 attribute vec2 in_tc; uniform bool tex_flip; void main() {
@@ -464,10 +481,15 @@ void RenderingHelper::Initialize(const RenderingHelperParams& params,
   }
   int pos_location = glGetAttribLocation(program_, "in_pos");
   glEnableVertexAttribArray(pos_location);
-  glVertexAttribPointer(pos_location, 2, GL_FLOAT, GL_FALSE, 0, kVertices);
+  glVertexAttribPointer(pos_location, 2, GL_FLOAT, GL_FALSE, kVertexStride,
+                        kVertexPositionOffset);
   int tc_location = glGetAttribLocation(program_, "in_tc");
   glEnableVertexAttribArray(tc_location);
-  glVertexAttribPointer(tc_location, 2, GL_FLOAT, GL_FALSE, 0, kTextureCoords);
+  glVertexAttribPointer(tc_location, 2, GL_FLOAT, GL_FALSE, kVertexStride,
+                        kVertexTexcoordOffset);
+
+  // Unbind the vertex buffer
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
 
   if (!frame_duration_.is_zero()) {
     int warm_up_iterations = params.warm_up_iterations;
@@ -545,6 +567,8 @@ void RenderingHelper::UnInitialize(base::WaitableEvent* done) {
     glDeleteTextures(1, &thumbnails_texture_id_);
     glDeleteFramebuffersEXT(1, &thumbnails_fbo_id_);
   }
+
+  glDeleteBuffersARB(1, &vertex_buffer_);
 
   gl_context_->ReleaseCurrent(gl_surface_.get());
   gl_context_ = NULL;
@@ -686,37 +710,20 @@ void RenderingHelper::Clear() {
   thumbnails_texture_id_ = 0;
 }
 
-void RenderingHelper::GetThumbnailsAsRGB(std::vector<unsigned char>* rgb,
-                                         bool* alpha_solid,
-                                         base::WaitableEvent* done) {
+void RenderingHelper::GetThumbnailsAsRGBA(std::vector<unsigned char>* rgba,
+                                          base::WaitableEvent* done) {
   CHECK(render_as_thumbnails_);
 
   const size_t num_pixels = thumbnails_fbo_size_.GetArea();
-  std::vector<unsigned char> rgba;
-  rgba.resize(num_pixels * 4);
+  rgba->resize(num_pixels * 4);
   glBindFramebufferEXT(GL_FRAMEBUFFER, thumbnails_fbo_id_);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   // We can only count on GL_RGBA/GL_UNSIGNED_BYTE support.
-  glReadPixels(0, 0,
-               thumbnails_fbo_size_.width(), thumbnails_fbo_size_.height(),
-               GL_RGBA,
-               GL_UNSIGNED_BYTE,
-               &rgba[0]);
+  glReadPixels(0, 0, thumbnails_fbo_size_.width(),
+               thumbnails_fbo_size_.height(), GL_RGBA, GL_UNSIGNED_BYTE,
+               &(*rgba)[0]);
   glBindFramebufferEXT(GL_FRAMEBUFFER,
                        gl_surface_->GetBackingFramebufferObject());
-  rgb->resize(num_pixels * 3);
-  // Drop the alpha channel, but check as we go that it is all 0xff.
-  bool solid = true;
-  unsigned char* rgb_ptr = &((*rgb)[0]);
-  unsigned char* rgba_ptr = &rgba[0];
-  for (size_t i = 0; i < num_pixels; ++i) {
-    *rgb_ptr++ = *rgba_ptr++;
-    *rgb_ptr++ = *rgba_ptr++;
-    *rgb_ptr++ = *rgba_ptr++;
-    solid = solid && (*rgba_ptr == 0xff);
-    rgba_ptr++;
-  }
-  *alpha_solid = solid;
 
   done->Signal();
 }
@@ -740,7 +747,7 @@ void RenderingHelper::RenderContent() {
         static_cast<base::WaitableEvent*>(NULL)));
   }
 
-  int tex_flip = 1;
+  int tex_flip = !gl_surface_->FlipsVertically();
 #if defined(USE_OZONE)
   // Ozone surfaceless renders flipped from normal GL, so there's no need to
   // do an extra flip.

@@ -40,6 +40,7 @@
 #include <QtNetwork/qnetworkreply.h>
 #include <QtNetwork/qnetworkrequest.h>
 #include <QtNetwork/qnetworkaccessmanager.h>
+#include <QtNetwork/qhttpmultipart.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -137,11 +138,11 @@ const QString Key::tokenType =          QStringLiteral("token_type");
 QAbstractOAuth2Private::QAbstractOAuth2Private(const QPair<QString, QString> &clientCredentials,
                                                const QUrl &authorizationUrl,
                                                QNetworkAccessManager *manager) :
-    QAbstractOAuthPrivate(authorizationUrl, manager), clientCredentials(clientCredentials)
-{}
-
-QAbstractOAuth2Private::QAbstractOAuth2Private(QNetworkAccessManager *manager) :
-    QAbstractOAuthPrivate(manager)
+    QAbstractOAuthPrivate("qt.networkauth.oauth2",
+                          authorizationUrl,
+                          clientCredentials.first,
+                          manager),
+    clientIdentifierSharedKey(clientCredentials.second)
 {}
 
 QAbstractOAuth2Private::~QAbstractOAuth2Private()
@@ -184,12 +185,24 @@ QAbstractOAuth2::QAbstractOAuth2(QObject *parent) :
     sets \a manager as the network access manager.
 */
 QAbstractOAuth2::QAbstractOAuth2(QNetworkAccessManager *manager, QObject *parent) :
-    QAbstractOAuth(*new QAbstractOAuth2Private(manager), parent)
+    QAbstractOAuth(*new QAbstractOAuth2Private(qMakePair(QString(), QString()),
+                                               QUrl(),
+                                               manager),
+                   parent)
 {}
 
 QAbstractOAuth2::QAbstractOAuth2(QAbstractOAuth2Private &dd, QObject *parent) :
     QAbstractOAuth(dd, parent)
 {}
+
+void QAbstractOAuth2::setResponseType(const QString &responseType)
+{
+    Q_D(QAbstractOAuth2);
+    if (d->responseType != responseType) {
+        d->responseType = responseType;
+        Q_EMIT responseTypeChanged(responseType);
+    }
+}
 
 /*!
     Destroys the QAbstractOAuth2 instance.
@@ -205,7 +218,7 @@ QUrl QAbstractOAuth2::createAuthenticatedUrl(const QUrl &url, const QVariantMap 
 {
     Q_D(const QAbstractOAuth2);
     if (Q_UNLIKELY(d->token.isEmpty())) {
-        qWarning("QAbstractOAuth2::createAuthenticatedUrl: Empty access token");
+        qCWarning(d->loggingCategory, "Empty access token");
         return QUrl();
     }
     QUrl ret = url;
@@ -261,8 +274,53 @@ QNetworkReply *QAbstractOAuth2::post(const QUrl &url, const QVariantMap &paramet
 {
     Q_D(QAbstractOAuth2);
     const auto data = d->convertParameters(parameters);
+    return post(url, data);
+}
+
+QNetworkReply *QAbstractOAuth2::post(const QUrl &url, const QByteArray &data)
+{
+    Q_D(QAbstractOAuth2);
     QNetworkReply *reply = d->networkAccessManager()->post(d->createRequest(url), data);
     connect(reply, &QNetworkReply::finished, [this, reply]() { emit finished(reply); });
+    return reply;
+}
+
+QNetworkReply *QAbstractOAuth2::post(const QUrl &url, QHttpMultiPart *multiPart)
+{
+    Q_D(QAbstractOAuth2);
+    QNetworkReply *reply = d->networkAccessManager()->post(d->createRequest(url), multiPart);
+    connect(reply, &QNetworkReply::finished, [this, reply]() { emit finished(reply); });
+    return reply;
+}
+
+/*!
+    Sends an authenticated PUT request and returns a new
+    QNetworkReply. The \a url and \a parameters are used to create
+    the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc2616#section-9.6}
+    {Hypertext Transfer Protocol -- HTTP/1.1: PUT}
+*/
+QNetworkReply *QAbstractOAuth2::put(const QUrl &url, const QVariantMap &parameters)
+{
+    Q_D(QAbstractOAuth2);
+    const auto data = d->convertParameters(parameters);
+    return put(url, data);
+}
+
+QNetworkReply *QAbstractOAuth2::put(const QUrl &url, const QByteArray &data)
+{
+    Q_D(QAbstractOAuth2);
+    QNetworkReply *reply = d->networkAccessManager()->put(d->createRequest(url), data);
+    connect(reply, &QNetworkReply::finished, std::bind(&QAbstractOAuth::finished, this, reply));
+    return reply;
+}
+
+QNetworkReply *QAbstractOAuth2::put(const QUrl &url, QHttpMultiPart *multiPart)
+{
+    Q_D(QAbstractOAuth2);
+    QNetworkReply *reply = d->networkAccessManager()->put(d->createRequest(url), multiPart);
+    connect(reply, &QNetworkReply::finished, std::bind(&QAbstractOAuth::finished, this, reply));
     return reply;
 }
 
@@ -313,48 +371,28 @@ void QAbstractOAuth2::setUserAgent(const QString &userAgent)
     }
 }
 
-QString QAbstractOAuth2::clientIdentifier() const
+/*!
+    Returns the \l {https://tools.ietf.org/html/rfc6749#section-3.1.1}
+    {response_type} used.
+*/
+QString QAbstractOAuth2::responseType() const
 {
     Q_D(const QAbstractOAuth2);
-    return d->clientCredentials.first;
-}
-
-void QAbstractOAuth2::setClientIdentifier(const QString &clientIdentifier)
-{
-    Q_D(QAbstractOAuth2);
-    if (d->clientCredentials.first != clientIdentifier) {
-        d->clientCredentials.first = clientIdentifier;
-        Q_EMIT clientIdentifierChanged(clientIdentifier);
-    }
+    return d->responseType;
 }
 
 QString QAbstractOAuth2::clientIdentifierSharedKey() const
 {
     Q_D(const QAbstractOAuth2);
-    return d->clientCredentials.second;
+    return d->clientIdentifierSharedKey;
 }
 
 void QAbstractOAuth2::setClientIdentifierSharedKey(const QString &clientIdentifierSharedKey)
 {
     Q_D(QAbstractOAuth2);
-    if (d->clientCredentials.second != clientIdentifierSharedKey) {
-        d->clientCredentials.second = clientIdentifierSharedKey;
+    if (d->clientIdentifierSharedKey != clientIdentifierSharedKey) {
+        d->clientIdentifierSharedKey = clientIdentifierSharedKey;
         Q_EMIT clientIdentifierSharedKeyChanged(clientIdentifierSharedKey);
-    }
-}
-
-QString QAbstractOAuth2::token() const
-{
-    Q_D(const QAbstractOAuth2);
-    return d->token;
-}
-
-void QAbstractOAuth2::setToken(const QString &token)
-{
-    Q_D(QAbstractOAuth2);
-    if (d->token != token) {
-        d->token = token;
-        Q_EMIT tokenChanged(token);
     }
 }
 
@@ -377,6 +415,34 @@ QDateTime QAbstractOAuth2::expirationAt() const
 {
     Q_D(const QAbstractOAuth2);
     return d->expiresAt;
+}
+
+/*!
+    \brief Gets the current refresh token.
+
+    Refresh tokens usually have longer lifespans than access tokens,
+    so it makes sense to save them for later use.
+
+    Returns the current refresh token or an empty string, if
+    there is no refresh token available.
+*/
+QString QAbstractOAuth2::refreshToken() const
+{
+    Q_D(const QAbstractOAuth2);
+    return  d->refreshToken;
+}
+
+/*!
+   \brief Sets the new refresh token \a refreshToken to be used.
+
+    A custom refresh token can be used to refresh the access token via this method and then
+    the access token can be refreshed via QOAuth2AuthorizationCodeFlow::refreshAccessToken().
+
+*/
+void QAbstractOAuth2::setRefreshToken(const QString &refreshToken)
+{
+    Q_D(QAbstractOAuth2);
+    d->refreshToken = refreshToken;
 }
 
 QT_END_NAMESPACE

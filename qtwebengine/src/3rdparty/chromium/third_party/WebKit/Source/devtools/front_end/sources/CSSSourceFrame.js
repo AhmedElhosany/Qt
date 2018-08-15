@@ -31,14 +31,14 @@
 /**
  * @unrestricted
  */
-Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
+Sources.CSSSourceFrame = class extends SourceFrame.UISourceCodeFrame {
   /**
    * @param {!Workspace.UISourceCode} uiSourceCode
    */
   constructor(uiSourceCode) {
     super(uiSourceCode);
     this._registerShortcuts();
-    this._swatchPopoverHelper = new UI.SwatchPopoverHelper();
+    this._swatchPopoverHelper = new InlineEditor.SwatchPopoverHelper();
     this._muteSwatchProcessing = false;
     this.configureAutocomplete(
         {suggestionsCallback: this._cssSuggestions.bind(this), isWordChar: this._isWordChar.bind(this)});
@@ -49,7 +49,7 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
   }
 
   _registerShortcuts() {
-    var shortcutKeys = Components.ShortcutsScreen.SourcesPanelShortcuts;
+    var shortcutKeys = UI.ShortcutsScreen.SourcesPanelShortcuts;
     for (var i = 0; i < shortcutKeys.IncreaseCSSUnitByOne.length; ++i)
       this.addShortcut(shortcutKeys.IncreaseCSSUnitByOne[i].key, this._handleUnitModification.bind(this, 1));
     for (var i = 0; i < shortcutKeys.DecreaseCSSUnitByOne.length; ++i)
@@ -90,7 +90,7 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
       return false;
 
     var cssUnitRange =
-        new Common.TextRange(selection.startLine, token.startColumn, selection.startLine, token.endColumn);
+        new TextUtils.TextRange(selection.startLine, token.startColumn, selection.startLine, token.endColumn);
     var cssUnitText = this.textEditor.text(cssUnitRange);
     var newUnitText = this._modifyUnit(cssUnitText, change);
     if (!newUnitText)
@@ -110,16 +110,15 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
     var swatches = [];
     var swatchPositions = [];
 
-    var regexes = [
-      SDK.CSSMetadata.VariableRegex, SDK.CSSMetadata.URLRegex, Common.Geometry.CubicBezier.Regex, Common.Color.Regex
-    ];
+    var regexes =
+        [SDK.CSSMetadata.VariableRegex, SDK.CSSMetadata.URLRegex, UI.Geometry.CubicBezier.Regex, Common.Color.Regex];
     var handlers = new Map();
     handlers.set(Common.Color.Regex, this._createColorSwatch.bind(this));
-    handlers.set(Common.Geometry.CubicBezier.Regex, this._createBezierSwatch.bind(this));
+    handlers.set(UI.Geometry.CubicBezier.Regex, this._createBezierSwatch.bind(this));
 
     for (var lineNumber = startLine; lineNumber <= endLine; lineNumber++) {
       var line = this.textEditor.line(lineNumber).substring(0, Sources.CSSSourceFrame.maxSwatchProcessingLength);
-      var results = Common.TextUtils.splitStringByRegexes(line, regexes);
+      var results = TextUtils.TextUtils.splitStringByRegexes(line, regexes);
       for (var i = 0; i < results.length; i++) {
         var result = results[i];
         if (result.regexIndex === -1 || !handlers.has(regexes[result.regexIndex]))
@@ -134,7 +133,7 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
         if (!swatch)
           continue;
         swatches.push(swatch);
-        swatchPositions.push(Common.TextRange.createFromLocation(lineNumber, result.position));
+        swatchPositions.push(TextUtils.TextRange.createFromLocation(lineNumber, result.position));
       }
     }
     this.textEditor.operation(putSwatchesInline.bind(this));
@@ -143,7 +142,7 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
      * @this {Sources.CSSSourceFrame}
      */
     function putSwatchesInline() {
-      var clearRange = new Common.TextRange(startLine, 0, endLine, this.textEditor.line(endLine).length);
+      var clearRange = new TextUtils.TextRange(startLine, 0, endLine, this.textEditor.line(endLine).length);
       this.textEditor.bookmarks(clearRange, Sources.CSSSourceFrame.SwatchBookmark).forEach(marker => marker.clear());
 
       for (var i = 0; i < swatches.length; i++) {
@@ -158,13 +157,13 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
 
   /**
    * @param {string} text
-   * @return {?UI.ColorSwatch}
+   * @return {?InlineEditor.ColorSwatch}
    */
   _createColorSwatch(text) {
     var color = Common.Color.parse(text);
     if (!color)
       return null;
-    var swatch = UI.ColorSwatch.create();
+    var swatch = InlineEditor.ColorSwatch.create();
     swatch.setColor(color);
     swatch.iconElement().title = Common.UIString('Open color picker.');
     swatch.iconElement().addEventListener('click', this._swatchIconClicked.bind(this, swatch), false);
@@ -174,12 +173,12 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
 
   /**
    * @param {string} text
-   * @return {?UI.BezierSwatch}
+   * @return {?InlineEditor.BezierSwatch}
    */
   _createBezierSwatch(text) {
-    if (!Common.Geometry.CubicBezier.parse(text))
+    if (!UI.Geometry.CubicBezier.parse(text))
       return null;
-    var swatch = UI.BezierSwatch.create();
+    var swatch = InlineEditor.BezierSwatch.create();
     swatch.setBezierText(text);
     swatch.iconElement().title = Common.UIString('Open cubic bezier editor.');
     swatch.iconElement().addEventListener('click', this._swatchIconClicked.bind(this, swatch), false);
@@ -201,20 +200,20 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
     this._editedSwatchTextRange.endColumn += swatch.textContent.length;
     this._currentSwatch = swatch;
 
-    if (swatch instanceof UI.ColorSwatch)
+    if (swatch instanceof InlineEditor.ColorSwatch)
       this._showSpectrum(swatch);
-    else if (swatch instanceof UI.BezierSwatch)
+    else if (swatch instanceof InlineEditor.BezierSwatch)
       this._showBezierEditor(swatch);
   }
 
   /**
-   * @param {!UI.ColorSwatch} swatch
+   * @param {!InlineEditor.ColorSwatch} swatch
    */
   _showSpectrum(swatch) {
     if (!this._spectrum) {
-      this._spectrum = new Components.Spectrum();
-      this._spectrum.addEventListener(Components.Spectrum.Events.SizeChanged, this._spectrumResized, this);
-      this._spectrum.addEventListener(Components.Spectrum.Events.ColorChanged, this._spectrumChanged, this);
+      this._spectrum = new ColorPicker.Spectrum();
+      this._spectrum.addEventListener(ColorPicker.Spectrum.Events.SizeChanged, this._spectrumResized, this);
+      this._spectrum.addEventListener(ColorPicker.Spectrum.Events.ColorChanged, this._spectrumChanged, this);
     }
     this._spectrum.setColor(swatch.color(), swatch.format());
     this._swatchPopoverHelper.show(this._spectrum, swatch.iconElement(), this._swatchPopoverHidden.bind(this));
@@ -240,17 +239,17 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
   }
 
   /**
-   * @param {!UI.BezierSwatch} swatch
+   * @param {!InlineEditor.BezierSwatch} swatch
    */
   _showBezierEditor(swatch) {
     if (!this._bezierEditor) {
-      this._bezierEditor = new UI.BezierEditor();
-      this._bezierEditor.addEventListener(UI.BezierEditor.Events.BezierChanged, this._bezierChanged, this);
+      this._bezierEditor = new InlineEditor.BezierEditor();
+      this._bezierEditor.addEventListener(InlineEditor.BezierEditor.Events.BezierChanged, this._bezierChanged, this);
     }
-    var cubicBezier = Common.Geometry.CubicBezier.parse(swatch.bezierText());
+    var cubicBezier = UI.Geometry.CubicBezier.parse(swatch.bezierText());
     if (!cubicBezier) {
       cubicBezier =
-          /** @type {!Common.Geometry.CubicBezier} */ (Common.Geometry.CubicBezier.parse('linear'));
+          /** @type {!UI.Geometry.CubicBezier} */ (UI.Geometry.CubicBezier.parse('linear'));
     }
     this._bezierEditor.setBezier(cubicBezier);
     this._swatchPopoverHelper.show(this._bezierEditor, swatch.iconElement(), this._swatchPopoverHidden.bind(this));
@@ -270,7 +269,7 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
    */
   _changeSwatchText(text) {
     this._hadSwatchChange = true;
-    this._textEditor.editRange(this._editedSwatchTextRange, text, '*swatch-text-changed');
+    this.textEditor.editRange(this._editedSwatchTextRange, text, '*swatch-text-changed');
     this._editedSwatchTextRange.endColumn = this._editedSwatchTextRange.startColumn + text.length;
   }
 
@@ -294,8 +293,8 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
 
   /**
    * @override
-   * @param {!Common.TextRange} oldRange
-   * @param {!Common.TextRange} newRange
+   * @param {!TextUtils.TextRange} oldRange
+   * @param {!TextUtils.TextRange} newRange
    */
   onTextChanged(oldRange, newRange) {
     super.onTextChanged(oldRange, newRange);
@@ -308,16 +307,16 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
    * @return {boolean}
    */
   _isWordChar(char) {
-    return Common.TextUtils.isWordChar(char) || char === '.' || char === '-' || char === '$';
+    return TextUtils.TextUtils.isWordChar(char) || char === '.' || char === '-' || char === '$';
   }
 
   /**
-   * @param {!Common.TextRange} prefixRange
-   * @param {!Common.TextRange} substituteRange
+   * @param {!TextUtils.TextRange} prefixRange
+   * @param {!TextUtils.TextRange} substituteRange
    * @return {?Promise.<!UI.SuggestBox.Suggestions>}
    */
   _cssSuggestions(prefixRange, substituteRange) {
-    var prefix = this._textEditor.text(prefixRange);
+    var prefix = this.textEditor.text(prefixRange);
     if (prefix.startsWith('$'))
       return null;
 
@@ -325,10 +324,10 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
     if (!propertyToken)
       return null;
 
-    var line = this._textEditor.line(prefixRange.startLine);
+    var line = this.textEditor.line(prefixRange.startLine);
     var tokenContent = line.substring(propertyToken.startColumn, propertyToken.endColumn);
     var propertyValues = SDK.cssMetadata().propertyValues(tokenContent);
-    return Promise.resolve(propertyValues.filter(value => value.startsWith(prefix)).map(value => ({title: value})));
+    return Promise.resolve(propertyValues.filter(value => value.startsWith(prefix)).map(value => ({text: value})));
   }
 
   /**
@@ -339,11 +338,11 @@ Sources.CSSSourceFrame = class extends Sources.UISourceCodeFrame {
   _backtrackPropertyToken(lineNumber, columnNumber) {
     var backtrackDepth = 10;
     var tokenPosition = columnNumber;
-    var line = this._textEditor.line(lineNumber);
+    var line = this.textEditor.line(lineNumber);
     var seenColon = false;
 
     for (var i = 0; i < backtrackDepth && tokenPosition >= 0; ++i) {
-      var token = this._textEditor.tokenAtTextPosition(lineNumber, tokenPosition);
+      var token = this.textEditor.tokenAtTextPosition(lineNumber, tokenPosition);
       if (!token)
         return null;
       if (token.type === 'css-property')

@@ -36,17 +36,19 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 int GetDataVersion(PrefService* prefs);
 
 // Returns the prepopulated URLs for the current country.
-// |default_search_provider_index| is set to the index of the default search
-// provider within the returned vector.
+// If |default_search_provider_index| is non-null, it is set to the index of the
+// default search provider within the returned vector.
 std::vector<std::unique_ptr<TemplateURLData>> GetPrepopulatedEngines(
     PrefService* prefs,
     size_t* default_search_provider_index);
 
+// Returns the prepopulated search engine with the given |prepopulated_id|.
+std::unique_ptr<TemplateURLData> GetPrepopulatedEngine(PrefService* prefs,
+                                                       int prepopulated_id);
+
 #if defined(OS_ANDROID)
-// Returns the prepopulated URLs associated with |locale|, if it differs from
-// the current country.  |locale| should be a two-character uppercase ISO 3166-1
-// country code. If the given locale is the same as the existing locale, returns
-// an empty vector.
+// Returns the prepopulated URLs associated with |locale|.  |locale| should be a
+// two-character uppercase ISO 3166-1 country code.
 std::vector<std::unique_ptr<TemplateURLData>> GetLocalPrepopulatedEngines(
     const std::string& locale,
     PrefService* prefs);
@@ -54,10 +56,6 @@ std::vector<std::unique_ptr<TemplateURLData>> GetLocalPrepopulatedEngines(
 
 // Returns all prepopulated engines for all locales. Used only by tests.
 std::vector<const PrepopulatedEngine*> GetAllPrepopulatedEngines();
-
-// Returns a TemplateURLData for the specified prepopulated engine.
-std::unique_ptr<TemplateURLData> MakeTemplateURLDataFromPrepopulatedEngine(
-    const PrepopulatedEngine& engine);
 
 // Removes prepopulated engines and their version stored in user prefs.
 void ClearPrepopulatedEnginesInPrefs(PrefService* prefs);

@@ -55,10 +55,6 @@ typedef intptr_t GrGLInterfaceCallbackData;
  */
 const SK_API GrGLInterface* GrGLCreateNullInterface(bool enableNVPR = false);
 
-/** Function that returns a new interface identical to "interface" but without support for
-    GL_NV_path_rendering. */
-const GrGLInterface* GrGLInterfaceRemoveNVPR(const GrGLInterface*);
-
 /** Function that returns a new interface identical to "interface" but with support for
     test version of GL_EXT_debug_marker. */
 const GrGLInterface* GrGLInterfaceAddTestDebugMarker(const GrGLInterface*,
@@ -129,6 +125,8 @@ public:
         GrGLFunction<GrGLClearProc> fClear;
         GrGLFunction<GrGLClearColorProc> fClearColor;
         GrGLFunction<GrGLClearStencilProc> fClearStencil;
+        GrGLFunction<GrGLClearTexImageProc> fClearTexImage;
+        GrGLFunction<GrGLClearTexSubImageProc> fClearTexSubImage;
         GrGLFunction<GrGLColorMaskProc> fColorMask;
         GrGLFunction<GrGLCompileShaderProc> fCompileShader;
         GrGLFunction<GrGLCompressedTexImage2DProc> fCompressedTexImage2D;
@@ -213,6 +211,7 @@ public:
         GrGLFunction<GrGLMultiDrawArraysIndirectProc> fMultiDrawArraysIndirect;
         GrGLFunction<GrGLMultiDrawElementsIndirectProc> fMultiDrawElementsIndirect;
         GrGLFunction<GrGLPixelStoreiProc> fPixelStorei;
+        GrGLFunction<GrGLPolygonModeProc> fPolygonMode;
         GrGLFunction<GrGLPopGroupMarkerProc> fPopGroupMarker;
         GrGLFunction<GrGLPushGroupMarkerProc> fPushGroupMarker;
         GrGLFunction<GrGLQueryCounterProc> fQueryCounter;
@@ -458,7 +457,11 @@ public:
         /* ARB_sync */
         GrGLFunction<GrGLFenceSyncProc> fFenceSync;
         GrGLFunction<GrGLClientWaitSyncProc> fClientWaitSync;
+        GrGLFunction<GrGLWaitSyncProc> fWaitSync;
         GrGLFunction<GrGLDeleteSyncProc> fDeleteSync;
+
+        /* ARB_internalforamt_query */
+        GrGLFunction<GrGLGetInternalformativProc> fGetInternalformativ;
 
         /* KHR_debug */
         GrGLFunction<GrGLDebugMessageControlProc> fDebugMessageControl;

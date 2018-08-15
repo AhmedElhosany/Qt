@@ -39,12 +39,12 @@ class CertDatabase::Notifier {
                                       base::Unretained(this)));
   }
 
-  // Should be called from the |task_runner_|'s thread. Use Shutdown()
-  // to shutdown on arbitrary threads.
+  // Should be called from the |task_runner_|'s sequence. Use Shutdown()
+  // to shutdown on arbitrary sequence.
   ~Notifier() {
     DCHECK(called_shutdown_);
-    // Only unregister from the same thread where registration was performed.
-    if (registered_ && task_runner_->RunsTasksOnCurrentThread())
+    // Only unregister from the same sequence where registration was performed.
+    if (registered_ && task_runner_->RunsTasksInCurrentSequence())
       SecKeychainRemoveCallback(&Notifier::KeychainCallback);
   }
 
@@ -104,7 +104,7 @@ OSStatus CertDatabase::Notifier::KeychainCallback(
   switch (keychain_event) {
     case kSecKeychainListChangedEvent:
     case kSecTrustSettingsChangedEvent:
-      that->cert_db_->NotifyObserversCertDBChanged(NULL);
+      that->cert_db_->NotifyObserversCertDBChanged();
       break;
 
     default:

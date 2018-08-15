@@ -7,8 +7,7 @@
 
 #include <string>
 
-// TODO(beng): replace with forward decl once RootWindow is renamed.
-#include "ui/aura/window.h"
+#include "base/strings/string16.h"
 #include "ui/keyboard/keyboard_export.h"
 
 namespace aura {
@@ -18,14 +17,6 @@ class WindowTreeHost;
 class GURL;
 
 namespace keyboard {
-
-// Enumeration of swipe directions.
-enum CursorMoveDirection {
-  kCursorMoveRight = 0x01,
-  kCursorMoveLeft = 0x02,
-  kCursorMoveUp = 0x04,
-  kCursorMoveDown = 0x08
-};
 
 // An enumeration of different keyboard control events that should be logged.
 enum KeyboardControlEvent {
@@ -59,12 +50,6 @@ enum KeyboardState {
   KEYBOARD_STATE_DISABLED,
 };
 
-// Gets the calculated keyboard bounds from |root_bounds|. The keyboard height
-// is specified by |keyboard_height|. This should be only called when keyboard
-// is in FULL_WDITH mode.
-KEYBOARD_EXPORT gfx::Rect FullWidthKeyboardBoundsFromRootBounds(
-    const gfx::Rect& root_bounds, int keyboard_height);
-
 // Sets the state of the a11y onscreen keyboard.
 KEYBOARD_EXPORT void SetAccessibilityKeyboardEnabled(bool enabled);
 
@@ -95,8 +80,8 @@ KEYBOARD_EXPORT std::string GetKeyboardLayout();
 // Returns true if the virtual keyboard is enabled.
 KEYBOARD_EXPORT bool IsKeyboardEnabled();
 
-// Returns true if smart deployment of the virtual keyboard is enabled.
-KEYBOARD_EXPORT bool IsSmartDeployEnabled();
+// Returns true if the virtual keyboard is currently visible.
+KEYBOARD_EXPORT bool IsKeyboardVisible();
 
 // Returns true if keyboard overscroll mode is enabled.
 KEYBOARD_EXPORT bool IsKeyboardOverscrollEnabled();
@@ -112,6 +97,13 @@ KEYBOARD_EXPORT void SetKeyboardShowOverride(KeyboardShowOverride override);
 // virtual keyboard window.
 KEYBOARD_EXPORT bool IsInputViewEnabled();
 
+// Sets whehther the keyboards is in restricted state - state where advanced
+// virtual keyboard features are disabled.
+KEYBOARD_EXPORT void SetKeyboardRestricted(bool restricted);
+
+// Returns whether the keyboard is in restricted state.
+KEYBOARD_EXPORT bool GetKeyboardRestricted();
+
 // Returns true if experimental features are enabled for IME input-views.
 KEYBOARD_EXPORT bool IsExperimentalInputViewEnabled();
 
@@ -124,18 +116,14 @@ KEYBOARD_EXPORT bool IsGestureTypingEnabled();
 // Returns true if gesture editing option is enabled for virtual keyboard.
 KEYBOARD_EXPORT bool IsGestureEditingEnabled();
 
-// Returns true if voice input is enabled for the keyboard.
+// Returns true if voice input is not disabled for the keyboard by the command
+// line switch. It's up to the client to check if there is an input device
+// available.
 KEYBOARD_EXPORT bool IsVoiceInputEnabled();
 
 // Insert |text| into the active TextInputClient if there is one. Returns true
 // if |text| was successfully inserted.
 KEYBOARD_EXPORT bool InsertText(const base::string16& text);
-
-// Move cursor when swipe on the virtualkeyboard. Returns true if cursor was
-// successfully moved according to |swipe_direction|.
-KEYBOARD_EXPORT bool MoveCursor(int swipe_direction,
-                                int modifier_flags,
-                                aura::WindowTreeHost* host);
 
 // Sends a fabricated key event, where |type| is the event type, |key_value|
 // is the unicode value of the character, |key_code| is the legacy key code

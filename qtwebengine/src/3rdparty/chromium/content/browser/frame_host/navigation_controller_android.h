@@ -54,9 +54,6 @@ class CONTENT_EXPORT NavigationControllerAndroid {
   void Reload(JNIEnv* env,
               const base::android::JavaParamRef<jobject>& obj,
               jboolean check_for_repost);
-  void ReloadToRefreshContent(JNIEnv* env,
-                              jobject obj,
-                              jboolean check_for_repost);
   void ReloadBypassingCache(JNIEnv* env,
                             const base::android::JavaParamRef<jobject>& obj,
                             jboolean check_for_repost);
@@ -130,7 +127,8 @@ class CONTENT_EXPORT NavigationControllerAndroid {
       const base::android::JavaParamRef<jobject>& obj);
   void CopyStateFrom(JNIEnv* env,
                      const base::android::JavaParamRef<jobject>& obj,
-                     jlong source_native_navigation_controller_android);
+                     jlong source_native_navigation_controller_android,
+                     jboolean needs_reload);
   void CopyStateFromAndPrune(JNIEnv* env,
                              const base::android::JavaParamRef<jobject>& obj,
                              jlong source_native_navigation_controller_android,

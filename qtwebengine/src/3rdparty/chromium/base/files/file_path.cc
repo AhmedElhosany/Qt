@@ -174,6 +174,7 @@ FilePath::FilePath() {
 
 FilePath::FilePath(const FilePath& that) : path_(that.path_) {
 }
+FilePath::FilePath(FilePath&& that) noexcept = default;
 
 FilePath::FilePath(StringPieceType path) {
   path.CopyToString(&path_);
@@ -190,6 +191,8 @@ FilePath& FilePath::operator=(const FilePath& that) {
   return *this;
 }
 
+FilePath& FilePath::operator=(FilePath&& that) = default;
+
 bool FilePath::operator==(const FilePath& that) const {
 #if defined(FILE_PATH_USES_DRIVE_LETTERS)
   return EqualDriveLetterCaseInsensitive(this->path_, that.path_);
@@ -204,6 +207,10 @@ bool FilePath::operator!=(const FilePath& that) const {
 #else  // defined(FILE_PATH_USES_DRIVE_LETTERS)
   return path_ != that.path_;
 #endif  // defined(FILE_PATH_USES_DRIVE_LETTERS)
+}
+
+std::ostream& operator<<(std::ostream& out, const FilePath& file_path) {
+  return out << file_path.value();
 }
 
 // static
@@ -485,7 +492,7 @@ FilePath FilePath::Append(StringPieceType component) const {
 
   DCHECK(!IsPathAbsolute(appended));
 
-  if (path_.compare(kCurrentDirectory) == 0) {
+  if (path_.compare(kCurrentDirectory) == 0 && !appended.empty()) {
     // Append normally doesn't do any normalization, but as a special case,
     // when appending to kCurrentDirectory, just return a new path for the
     // component argument.  Appending component to kCurrentDirectory would

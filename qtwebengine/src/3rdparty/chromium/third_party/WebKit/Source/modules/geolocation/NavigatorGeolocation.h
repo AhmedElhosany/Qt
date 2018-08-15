@@ -20,35 +20,33 @@
 #ifndef NavigatorGeolocation_h
 #define NavigatorGeolocation_h
 
-#include "core/frame/DOMWindowProperty.h"
+#include "core/frame/Navigator.h"
 #include "platform/Supplementable.h"
 #include "platform/heap/Handle.h"
 
 namespace blink {
 
-class LocalFrame;
 class Geolocation;
 class Navigator;
 
 class NavigatorGeolocation final
     : public GarbageCollected<NavigatorGeolocation>,
-      public Supplement<Navigator>,
-      public DOMWindowProperty {
+      public Supplement<Navigator> {
   USING_GARBAGE_COLLECTED_MIXIN(NavigatorGeolocation);
 
  public:
-  static NavigatorGeolocation& from(Navigator&);
+  static NavigatorGeolocation& From(Navigator&);
   static Geolocation* geolocation(Navigator&);
   Geolocation* geolocation();
 
   DECLARE_TRACE();
 
  private:
-  explicit NavigatorGeolocation(LocalFrame*);
+  explicit NavigatorGeolocation(Navigator&);
 
-  static const char* supplementName();
+  static const char* SupplementName();
 
-  Member<Geolocation> m_geolocation;
+  Member<Geolocation> geolocation_;
 };
 
 }  // namespace blink

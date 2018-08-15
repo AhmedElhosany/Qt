@@ -94,7 +94,8 @@ void PaintedScrollbarLayerImpl::AppendQuads(
 
   SharedQuadState* shared_quad_state =
       render_pass->CreateAndAppendSharedQuadState();
-  PopulateScaledSharedQuadState(shared_quad_state, internal_contents_scale_);
+  PopulateScaledSharedQuadState(shared_quad_state, internal_contents_scale_,
+                                internal_contents_scale_);
 
   AppendDebugBorderQuad(render_pass, internal_content_bounds_,
                         shared_quad_state, append_quads_data);
@@ -206,6 +207,11 @@ bool PaintedScrollbarLayerImpl::IsThumbResizable() const {
 
 const char* PaintedScrollbarLayerImpl::LayerTypeAsString() const {
   return "cc::PaintedScrollbarLayerImpl";
+}
+
+LayerTreeSettings::ScrollbarAnimator
+PaintedScrollbarLayerImpl::GetScrollbarAnimator() const {
+  return LayerTreeSettings::NO_ANIMATOR;
 }
 
 }  // namespace cc

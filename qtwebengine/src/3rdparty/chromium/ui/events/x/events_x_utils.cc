@@ -474,6 +474,9 @@ int EventFlagsFromXEvent(const XEvent& xev) {
       return flags;
     }
     case EnterNotify:
+      // EnterNotify creates ET_MOUSE_MOVED. Mark as synthesized as this is not
+      // a real mouse move event.
+      return GetEventFlagsFromXState(xev.xcrossing.state) | EF_IS_SYNTHESIZED;
     case LeaveNotify:
       return GetEventFlagsFromXState(xev.xcrossing.state);
     case MotionNotify:
@@ -725,6 +728,9 @@ float GetTouchAngleFromXEvent(const XEvent& xev) {
 }
 
 float GetTouchForceFromXEvent(const XEvent& xev) {
+  XIDeviceEvent* event = static_cast<XIDeviceEvent*>(xev.xcookie.data);
+  if (event->evtype == XI_TouchEnd)
+    return 0.0;
   double force = 0.0;
   force = GetTouchParamFromXEvent(
       xev, ui::DeviceDataManagerX11::DT_TOUCH_PRESSURE, 0.0);

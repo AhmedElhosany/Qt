@@ -12,12 +12,14 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_forward.h"
 #include "base/macros.h"
 #include "ui/aura/aura_export.h"
 #include "ui/aura/window.h"
 
 namespace gfx {
 class Rect;
+class Size;
 }
 
 namespace aura {
@@ -29,8 +31,19 @@ namespace aura {
 // Window properties.
 class AURA_EXPORT PropertyConverter {
  public:
+  // All primitive values are stored using this type.
+  using PrimitiveType = int64_t;
+
   PropertyConverter();
   ~PropertyConverter();
+
+  // Creates a validation callback for use in RegisterProperty() which will
+  // accept any value.
+  static base::RepeatingCallback<bool(int64_t)> CreateAcceptAnyValueCallback();
+
+  // Returns true if RegisterProperty() has been called with the specified
+  // transport name.
+  bool IsTransportNameRegistered(const std::string& name) const;
 
   // Maps a property on the Window to a property pushed to the server. Return
   // true if the property should be sent to the server, false if the property
@@ -52,31 +65,80 @@ class AURA_EXPORT PropertyConverter {
       const std::string& transport_name,
       const std::vector<uint8_t>* transport_data);
 
+  // Returns the value for a particular transport value. All primitives are
+  // serialized as a PrimitiveType, so this function may be used for any
+  // primitive. Returns true on success and sets |value| accordingly. A return
+  // value of false indicates the value isn't known or the property type isn't
+  // primitive.
+  bool GetPropertyValueFromTransportValue(
+      const std::string& transport_name,
+      const std::vector<uint8_t>& transport_data,
+      PrimitiveType* value);
+
   // Register a property to support conversion between mus and aura.
-  template<typename T>
-  void RegisterProperty(const WindowProperty<T>* property,
-                        const char* transport_name) {
-    primitive_properties_[property] =
-        PropertyNames(property->name, transport_name);
+  // |validator| is a callback used to validate incoming values from
+  // transport_data; if it returns false, the value is rejected.
+  template <typename T>
+  void RegisterPrimitiveProperty(
+      const WindowProperty<T>* property,
+      const char* transport_name,
+      const base::RepeatingCallback<bool(int64_t)>& validator) {
+    PrimitiveProperty primitive_property;
+    primitive_property.property_name = property->name;
+    primitive_property.transport_name = transport_name;
+    primitive_property.default_value =
+        ui::ClassPropertyCaster<T>::ToInt64(property->default_value);
+    primitive_property.validator = validator;
+    primitive_properties_[property] = primitive_property;
+    transport_names_.insert(transport_name);
   }
 
-  // Specializations for properties to pointer types supporting mojo conversion.
-  void RegisterProperty(const WindowProperty<gfx::Rect*>* property,
-                        const char* transport_name);
-  void RegisterProperty(const WindowProperty<std::string*>* property,
-                        const char* transport_name);
+  // Register owned properties to support conversion between mus and aura.
+  void RegisterImageSkiaProperty(
+      const WindowProperty<gfx::ImageSkia*>* property,
+      const char* transport_name);
+  void RegisterRectProperty(const WindowProperty<gfx::Rect*>* property,
+                            const char* transport_name);
+  void RegisterSizeProperty(const WindowProperty<gfx::Size*>* property,
+                            const char* transport_name);
+  void RegisterStringProperty(const WindowProperty<std::string*>* property,
+                              const char* transport_name);
+  void RegisterString16Property(const WindowProperty<base::string16*>* property,
+                                const char* transport_name);
 
  private:
-  // A pair with the aura::WindowProperty::name and the mus property name.
-  using PropertyNames = std::pair<const char*, const char*>;
-  // A map of aura::WindowProperty<T> to its aura and mus property names.
+  // Contains data needed to store and convert primitive-type properties.
+  struct AURA_EXPORT PrimitiveProperty {
+    PrimitiveProperty();
+    PrimitiveProperty(const PrimitiveProperty& property);
+    ~PrimitiveProperty();
+
+    // The aura::WindowProperty::name used for storage.
+    const char* property_name = nullptr;
+    // The mus property name used for transport.
+    const char* transport_name = nullptr;
+    // The aura::WindowProperty::default_value stored using PrimitiveType.
+    PrimitiveType default_value = 0;
+    // A callback used to validate incoming values.
+    base::RepeatingCallback<bool(int64_t)> validator;
+  };
+
+  // A map of aura::WindowProperty<T> to PrimitiveProperty structs.
   // This supports the internal codepaths for primitive types, eg. T=bool.
-  std::map<const void*, PropertyNames> primitive_properties_;
+  std::map<const void*, PrimitiveProperty> primitive_properties_;
 
   // Maps of aura::WindowProperty<T> to their mus property names.
   // This supports types that can be serialized for Mojo, eg. T=std::string*.
+  std::map<const WindowProperty<gfx::ImageSkia*>*, const char*>
+      image_properties_;
   std::map<const WindowProperty<gfx::Rect*>*, const char*> rect_properties_;
+  std::map<const WindowProperty<gfx::Size*>*, const char*> size_properties_;
   std::map<const WindowProperty<std::string*>*, const char*> string_properties_;
+  std::map<const WindowProperty<base::string16*>*, const char*>
+      string16_properties_;
+
+  // Set of transport names supplied to RegisterProperty().
+  std::set<std::string> transport_names_;
 
   DISALLOW_COPY_AND_ASSIGN(PropertyConverter);
 };

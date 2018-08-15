@@ -62,11 +62,11 @@ QT_BEGIN_NAMESPACE
 
 namespace QV4 {
 
-struct QmlContextWrapper;
+struct QQmlContextWrapper;
 
 namespace Heap {
 
-struct QmlContextWrapper : Object {
+struct QQmlContextWrapper : Object {
     void init(QQmlContextData *context, QObject *scopeObject);
     void destroy();
     bool readOnly;
@@ -76,17 +76,20 @@ struct QmlContextWrapper : Object {
     QQmlQPointer<QObject> scopeObject;
 };
 
-struct QmlContext : ExecutionContext {
-    void init(QV4::ExecutionContext *outerContext, QV4::QmlContextWrapper *qml);
+#define QmlContextMembers(class, Member) \
+    Member(class, Pointer, QQmlContextWrapper *, qml)
 
-    Pointer<QmlContextWrapper> qml;
+DECLARE_HEAP_OBJECT(QmlContext, ExecutionContext) {
+    DECLARE_MARK_TABLE(QmlContext);
+
+    void init(QV4::ExecutionContext *outerContext, QV4::QQmlContextWrapper *qml);
 };
 
 }
 
-struct Q_QML_EXPORT QmlContextWrapper : Object
+struct Q_QML_EXPORT QQmlContextWrapper : Object
 {
-    V4_OBJECT2(QmlContextWrapper, Object)
+    V4_OBJECT2(QQmlContextWrapper, Object)
     V4_NEEDS_DESTROY
     V4_INTERNALCLASS(QmlContextWrapper)
 
@@ -96,7 +99,7 @@ struct Q_QML_EXPORT QmlContextWrapper : Object
     void setReadOnly(bool b) { d()->readOnly = b; }
 
     static ReturnedValue get(const Managed *m, String *name, bool *hasProperty);
-    static void put(Managed *m, String *name, const Value &value);
+    static bool put(Managed *m, String *name, const Value &value);
 };
 
 struct Q_QML_EXPORT QmlContext : public ExecutionContext

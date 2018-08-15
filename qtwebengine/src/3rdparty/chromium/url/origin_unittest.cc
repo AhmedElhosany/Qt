@@ -90,19 +90,10 @@ TEST(OriginTest, ConstructFromTuple) {
                     << test_case.port;
     }
     SCOPED_TRACE(scope_message);
-
-    url::Origin origin_without_suborigin =
-        url::Origin::CreateFromNormalizedTuple(test_case.scheme, test_case.host,
-                                               test_case.port);
-
     url::Origin origin_with_suborigin =
         url::Origin::CreateFromNormalizedTupleWithSuborigin(
             test_case.scheme, test_case.host, test_case.port,
             test_case.suborigin);
-
-    EXPECT_EQ(test_case.scheme, origin_without_suborigin.scheme());
-    EXPECT_EQ(test_case.host, origin_without_suborigin.host());
-    EXPECT_EQ(test_case.port, origin_without_suborigin.port());
 
     EXPECT_EQ(test_case.scheme, origin_with_suborigin.scheme());
     EXPECT_EQ(test_case.host, origin_with_suborigin.host());
@@ -271,7 +262,7 @@ TEST(OriginTest, SuboriginSerialization) {
       "https-so://.", "https-so://foo", "https-so://.foo", "https-so://foo.",
   };
 
-  for (const auto& test_case : failure_cases) {
+  for (auto* test_case : failure_cases) {
     SCOPED_TRACE(test_case);
     GURL url(test_case);
     EXPECT_TRUE(url.is_valid());
@@ -372,7 +363,7 @@ TEST(OriginTest, UnsafelyCreate) {
     SCOPED_TRACE(testing::Message() << test.scheme << "://" << test.host << ":"
                                     << test.port);
     url::Origin origin = url::Origin::UnsafelyCreateOriginWithoutNormalization(
-        test.scheme, test.host, test.port);
+        test.scheme, test.host, test.port, "");
     EXPECT_EQ(test.scheme, origin.scheme());
     EXPECT_EQ(test.host, origin.host());
     EXPECT_EQ(test.port, origin.port());
@@ -409,7 +400,7 @@ TEST(OriginTest, UnsafelyCreateUniqueOnInvalidInput) {
     SCOPED_TRACE(testing::Message() << test.scheme << "://" << test.host << ":"
                                     << test.port);
     url::Origin origin = url::Origin::UnsafelyCreateOriginWithoutNormalization(
-        test.scheme, test.host, test.port);
+        test.scheme, test.host, test.port, "");
     EXPECT_EQ("", origin.scheme());
     EXPECT_EQ("", origin.host());
     EXPECT_EQ(0, origin.port());
@@ -439,7 +430,7 @@ TEST(OriginTest, UnsafelyCreateUniqueViaEmbeddedNulls) {
                                     << test.port);
     url::Origin origin = url::Origin::UnsafelyCreateOriginWithoutNormalization(
         std::string(test.scheme, test.scheme_length),
-        std::string(test.host, test.host_length), test.port);
+        std::string(test.host, test.host_length), test.port, "");
     EXPECT_EQ("", origin.scheme());
     EXPECT_EQ("", origin.host());
     EXPECT_EQ(0, origin.port());

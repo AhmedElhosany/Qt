@@ -62,8 +62,7 @@ class COMPOSITOR_EXPORT LayerAnimator
     IMMEDIATELY_SET_NEW_TARGET,
     IMMEDIATELY_ANIMATE_TO_NEW_TARGET,
     ENQUEUE_NEW_ANIMATION,
-    REPLACE_QUEUED_ANIMATIONS,
-    BLEND_WITH_CURRENT_ANIMATION
+    REPLACE_QUEUED_ANIMATIONS
   };
 
   explicit LayerAnimator(base::TimeDelta transition_duration);
@@ -101,6 +100,11 @@ class COMPOSITOR_EXPORT LayerAnimator
   // Sets the color on the delegate. May cause an implicit animation.
   virtual void SetColor(SkColor color);
   SkColor GetTargetColor() const;
+
+  // Sets the color temperature on the delegate. May cause an implicit
+  // animation.
+  virtual void SetTemperature(float temperature);
+  float GetTargetTemperature() const;
 
   // Returns the default length of animations, including adjustment for slow
   // animation mode if set.
@@ -362,6 +366,10 @@ class COMPOSITOR_EXPORT LayerAnimator
   void AttachLayerToAnimationPlayer(int layer_id);
   void DetachLayerFromAnimationPlayer();
 
+  void set_animation_metrics_reporter(AnimationMetricsReporter* reporter) {
+    animation_metrics_reporter_ = reporter;
+  }
+
   // This is the queue of animations to run.
   AnimationQueue animation_queue_;
 
@@ -400,6 +408,9 @@ class COMPOSITOR_EXPORT LayerAnimator
   // Prevents timer adjustments in case when we start multiple animations
   // with preemption strategies that discard previous animations.
   bool adding_animations_;
+
+  // Helper to output UMA performance metrics.
+  AnimationMetricsReporter* animation_metrics_reporter_;
 
   // Observers are notified when layer animations end, are scheduled or are
   // aborted.

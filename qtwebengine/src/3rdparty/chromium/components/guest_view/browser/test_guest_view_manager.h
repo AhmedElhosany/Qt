@@ -11,7 +11,6 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/linked_ptr.h"
 #include "components/guest_view/browser/guest_view_manager.h"
 #include "components/guest_view/browser/guest_view_manager_factory.h"
 #include "content/public/test/test_utils.h"
@@ -35,6 +34,8 @@ class TestGuestViewManager : public GuestViewManager {
   void WaitForSingleViewGarbageCollected();
 
   content::WebContents* GetLastGuestCreated();
+
+  void WaitUntilAttached(content::WebContents* web_contents);
 
   // Returns the number of guests currently still alive at the time of calling
   // this method.
@@ -88,6 +89,10 @@ class TestGuestViewManager : public GuestViewManager {
   void EmbedderProcessDestroyed(int embedder_process_id) override;
   void ViewGarbageCollected(int embedder_process_id,
                             int view_instance_id) override;
+  void AttachGuest(int embedder_process_id,
+                   int element_instance_id,
+                   int guest_instance_id,
+                   const base::DictionaryValue& attach_params) override;
 
   void WaitForViewGarbageCollected();
 
@@ -100,10 +105,12 @@ class TestGuestViewManager : public GuestViewManager {
   int num_views_garbage_collected_;
   bool waiting_for_guests_created_;
 
-  std::vector<linked_ptr<content::WebContentsDestroyedWatcher>>
+  std::vector<std::unique_ptr<content::WebContentsDestroyedWatcher>>
       guest_web_contents_watchers_;
   scoped_refptr<content::MessageLoopRunner> created_message_loop_runner_;
   scoped_refptr<content::MessageLoopRunner> num_created_message_loop_runner_;
+  GuestViewBase* waiting_for_attach_;
+  scoped_refptr<content::MessageLoopRunner> attached_message_loop_runner_;
   scoped_refptr<content::MessageLoopRunner> gc_message_loop_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(TestGuestViewManager);

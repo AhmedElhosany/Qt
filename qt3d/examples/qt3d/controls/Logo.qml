@@ -56,6 +56,18 @@ import Qt3D.Extras 2.0
 Entity {
     id: sceneRoot
 
+    readonly property double cameraZ: camera.position.z
+
+    function viewAll() {
+        camera.viewAll()
+    }
+    function viewLogo() {
+        camera.viewEntity(logoEntity)
+    }
+    function setPositionZ(z) {
+        camera.position = Qt.vector3d( 0.0, 0.0, z )
+    }
+
     Camera {
         id: camera
         projectionType: CameraLens.PerspectiveProjection
@@ -63,7 +75,7 @@ Entity {
         aspectRatio: 4/3
         nearPlane : 0.1
         farPlane : 1000.0
-        position: Qt.vector3d( 0.0, 0.0, viewCenter_z.value )
+        position: Qt.vector3d( 0.0, 0.0, 7.5 )
         upVector: Qt.vector3d( 0.0, 1.0, 0.0 )
         viewCenter: Qt.vector3d( 0.0, 0.0, 0.0 )
     }
@@ -79,8 +91,8 @@ Entity {
 
     PhongMaterial {
         id: material
-        ambient: Qt.rgba( color_r.value/255, color_g.value/255, color_b.value/255, 1.0 )
-        diffuse: Qt.rgba( 0.1, 0.1, 0.1, 0.5 )
+        diffuse: Qt.rgba( color_r.value/255, color_g.value/255, color_b.value/255, 1.0 )
+        ambient: Qt.rgba( 0.1, 0.1, 0.1, 1.0 )
         shininess: shining.value
     }
 
@@ -97,5 +109,17 @@ Entity {
     Entity {
         id: logoEntity
         components: [ logoMesh, material, logoTransform ]
+    }
+
+    Entity {
+        components: [
+            PointLight {
+                color: "white"
+                intensity: 0.6
+            },
+            Transform {
+                translation: Qt.vector3d(0, 0, 10)
+            }
+        ]
     }
 }

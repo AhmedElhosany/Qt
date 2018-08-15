@@ -41,6 +41,7 @@
 #include "device/geolocation/geolocation_provider.h"
 #include "device/geolocation/geoposition.h"
 #include "gpu/config/gpu_info.h"
+#include "ppapi/features/features.h"
 #include "third_party/WebKit/public/platform/WebRect.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -85,7 +86,7 @@ void AddFontsToFingerprint(const base::ListValue& fonts,
     // Each item in the list is a two-element list such that the first element
     // is the font family and the second is the font name.
     const base::ListValue* font_description = NULL;
-    bool success = it->GetAsList(&font_description);
+    bool success = it.GetAsList(&font_description);
     DCHECK(success);
 
     std::string font_name;
@@ -293,7 +294,7 @@ FingerprintDataLoader::FingerprintDataLoader(
     gpu_data_manager_->RequestCompleteGpuInfoIfNeeded();
   }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
   // Load plugin data.
   content::PluginService::GetInstance()->GetPlugins(
       base::Bind(&FingerprintDataLoader::OnGotPlugins,
@@ -325,7 +326,7 @@ void FingerprintDataLoader::OnGpuInfoUpdate() {
 
 void FingerprintDataLoader::OnGotFonts(std::unique_ptr<base::ListValue> fonts) {
   DCHECK(!fonts_);
-  fonts_.reset(fonts.release());
+  fonts_ = std::move(fonts);
   MaybeFillFingerprint();
 }
 

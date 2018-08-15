@@ -15,7 +15,8 @@ Emulation.DeviceModeWrapper = class extends UI.VBox {
     /** @type {?Emulation.DeviceModeView} */
     this._deviceModeView = null;
     this._toggleDeviceModeAction = UI.actionRegistry.action('emulation.toggle-device-mode');
-    this._showDeviceModeSetting = Common.settings.createSetting('emulation.showDeviceMode', false);
+    var model = self.singleton(Emulation.DeviceModeModel);
+    this._showDeviceModeSetting = model.enabledSetting();
     this._showDeviceModeSetting.addChangeListener(this._update.bind(this, false));
     this._update(true);
   }
@@ -25,12 +26,17 @@ Emulation.DeviceModeWrapper = class extends UI.VBox {
   }
 
   /**
+   * @param {boolean=} fullSize
    * @return {boolean}
    */
-  _captureScreenshot() {
+  _captureScreenshot(fullSize) {
     if (!this._deviceModeView)
-      return false;
-    this._deviceModeView.captureScreenshot();
+      this._deviceModeView = new Emulation.DeviceModeView();
+    this._deviceModeView.setNonEmulatedAvailableSize(this._inspectedPagePlaceholder.element);
+    if (fullSize)
+      this._deviceModeView.captureFullSizeScreenshot();
+    else
+      this._deviceModeView.captureScreenshot();
     return true;
   }
 
@@ -49,12 +55,12 @@ Emulation.DeviceModeWrapper = class extends UI.VBox {
       if (!this._deviceModeView)
         this._deviceModeView = new Emulation.DeviceModeView();
       this._deviceModeView.show(this.element);
-      this._inspectedPagePlaceholder.clearMinimumSizeAndMargins();
+      this._inspectedPagePlaceholder.clearMinimumSize();
       this._inspectedPagePlaceholder.show(this._deviceModeView.element);
     } else {
       if (this._deviceModeView)
         this._deviceModeView.detach();
-      this._inspectedPagePlaceholder.restoreMinimumSizeAndMargins();
+      this._inspectedPagePlaceholder.restoreMinimumSize();
       this._inspectedPagePlaceholder.show(this.element);
     }
   }
@@ -76,12 +82,17 @@ Emulation.DeviceModeWrapper.ActionDelegate = class {
    */
   handleAction(context, actionId) {
     if (Emulation.DeviceModeView._wrapperInstance) {
-      if (actionId === 'emulation.toggle-device-mode') {
-        Emulation.DeviceModeView._wrapperInstance._toggleDeviceMode();
-        return true;
+      switch (actionId) {
+        case 'emulation.capture-screenshot':
+          return Emulation.DeviceModeView._wrapperInstance._captureScreenshot();
+
+        case 'emulation.capture-full-height-screenshot':
+          return Emulation.DeviceModeView._wrapperInstance._captureScreenshot(true);
+
+        case 'emulation.toggle-device-mode':
+          Emulation.DeviceModeView._wrapperInstance._toggleDeviceMode();
+          return true;
       }
-      if (actionId === 'emulation.capture-screenshot')
-        return Emulation.DeviceModeView._wrapperInstance._captureScreenshot();
     }
     return false;
   }

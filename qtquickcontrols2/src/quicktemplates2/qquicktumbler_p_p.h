@@ -50,10 +50,9 @@
 
 #include <QtQuick/private/qquickitemchangelistener_p.h>
 #include <QtQuickTemplates2/private/qquickcontrol_p_p.h>
+#include <QtQuickTemplates2/private/qquicktumbler_p.h>
 
 QT_BEGIN_NAMESPACE
-
-class QQuickTumbler;
 
 class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickTumblerPrivate : public QQuickControlPrivate, public QQuickItemChangeListener
 {
@@ -85,6 +84,10 @@ public:
     QQuickItem *view;
     QQuickItem *viewContentItem;
     ContentItemType viewContentItemType;
+    union {
+        qreal viewOffset; // PathView
+        qreal viewContentY; // ListView
+    };
     int currentIndex;
     int pendingCurrentIndex;
     bool ignoreCurrentIndexChanges;
@@ -95,7 +98,10 @@ public:
     void _q_updateItemWidths();
     void _q_onViewCurrentIndexChanged();
     void _q_onViewCountChanged();
-    void _q_calculateAttachedDisplacements();
+    void _q_onViewOffsetChanged();
+    void _q_onViewContentYChanged();
+
+    void calculateDisplacements();
 
     void disconnectFromView();
     void setupViewData(QQuickItem *newControlContentItem);
@@ -109,21 +115,25 @@ public:
 
     void itemChildAdded(QQuickItem *, QQuickItem *) override;
     void itemChildRemoved(QQuickItem *, QQuickItem *) override;
+    void itemGeometryChanged(QQuickItem *, QQuickGeometryChange , const QRectF &) override;
 };
 
-class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickTumblerAttachedPrivate : public QObjectPrivate, public QQuickItemChangeListener
+class QQuickTumblerAttachedPrivate : public QObjectPrivate
 {
     Q_DECLARE_PUBLIC(QQuickTumblerAttached)
 
 public:
     QQuickTumblerAttachedPrivate();
 
+    static QQuickTumblerAttachedPrivate *get(QQuickTumblerAttached *attached)
+    {
+        return attached->d_func();
+    }
+
     void init(QQuickItem *delegateItem);
 
-    void _q_calculateDisplacement();
+    void calculateDisplacement();
     void emitIfDisplacementChanged(qreal oldDisplacement, qreal newDisplacement);
-
-    static QQuickTumblerAttachedPrivate *get(QQuickTumblerAttached *attached);
 
     // The Tumbler that contains the delegate. Required to calculated the displacement.
     QPointer<QQuickTumbler> tumbler;

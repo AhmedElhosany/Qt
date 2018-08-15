@@ -608,6 +608,24 @@ QT_BEGIN_NAMESPACE
 */
 
 /*!
+    \fn QChar::QChar(char16_t ch)
+    \since 5.10
+
+    Constructs a QChar corresponding to the UTF-16 character \a ch.
+
+    \note This constructor is not available on MSVC 2013.
+*/
+
+/*!
+    \fn QChar::QChar(wchar_t ch)
+    \since 5.10
+
+    Constructs a QChar corresponding to the wide character \a ch.
+
+    \note This constructor is only available on Windows.
+*/
+
+/*!
     \fn QChar::QChar(char ch)
 
     Constructs a QChar corresponding to ASCII/Latin-1 character \a ch.
@@ -1530,6 +1548,11 @@ static inline uint foldCase(uint ch, uint &last) Q_DECL_NOTHROW
 static inline ushort foldCase(ushort ch) Q_DECL_NOTHROW
 {
     return convertCase_helper<QUnicodeTables::CasefoldTraits>(ch);
+}
+
+static inline QChar foldCase(QChar ch) Q_DECL_NOTHROW
+{
+    return QChar(foldCase(ch.unicode()));
 }
 
 /*!

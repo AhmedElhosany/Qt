@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.BusyIndicator {
     id: control
@@ -50,6 +50,9 @@ T.BusyIndicator {
     contentItem: BusyIndicatorImpl {
         implicitWidth: 48
         implicitHeight: 48
+
+        pen: control.palette.dark
+        fill: control.palette.dark
 
         running: control.running
         opacity: control.running ? 1 : 0

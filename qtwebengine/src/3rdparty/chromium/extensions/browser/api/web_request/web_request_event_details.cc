@@ -4,15 +4,20 @@
 
 #include "extensions/browser/api/web_request/web_request_event_details.h"
 
+#include <utility>
+
 #include "base/callback.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/resource_request_info.h"
+#include "content/public/browser/websocket_handshake_request_info.h"
 #include "content/public/common/child_process_host.h"
 #include "extensions/browser/api/web_request/upload_data_presenter.h"
 #include "extensions/browser/api/web_request/web_request_api_constants.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
+#include "extensions/browser/api/web_request/web_request_resource_type.h"
 #include "ipc/ipc_message.h"
 #include "net/base/auth.h"
 #include "net/base/upload_data_stream.h"
@@ -32,16 +37,24 @@ WebRequestEventDetails::WebRequestEventDetails(const net::URLRequest* request,
     : extra_info_spec_(extra_info_spec),
       render_process_id_(content::ChildProcessHost::kInvalidUniqueID),
       render_frame_id_(MSG_ROUTING_NONE) {
-  content::ResourceType resource_type = content::RESOURCE_TYPE_LAST_TYPE;
+  auto resource_type = GetWebRequestResourceType(request);
   const content::ResourceRequestInfo* info =
       content::ResourceRequestInfo::ForRequest(request);
   if (info) {
     render_process_id_ = info->GetChildID();
     render_frame_id_ = info->GetRenderFrameID();
-    resource_type = info->GetResourceType();
+  } else if (resource_type == WebRequestResourceType::WEB_SOCKET) {
+    // TODO(pkalinnikov): Consider embedding WebSocketHandshakeRequestInfo into
+    // UrlRequestUserData.
+    const content::WebSocketHandshakeRequestInfo* ws_info =
+        content::WebSocketHandshakeRequestInfo::ForRequest(request);
+    if (ws_info) {
+      render_process_id_ = ws_info->GetChildId();
+      render_frame_id_ = ws_info->GetRenderFrameId();
+    }
   } else {
-    // Fallback for requests that are not allocated by a ResourceDispatcherHost,
-    // such as the TemplateURLFetcher.
+    // Fallback for requests that are not allocated by a
+    // ResourceDispatcherHost, such as the TemplateURLFetcher.
     content::ResourceRequestInfo::GetRenderFrameForRequest(
         request, &render_process_id_, &render_frame_id_);
   }
@@ -50,7 +63,8 @@ WebRequestEventDetails::WebRequestEventDetails(const net::URLRequest* request,
   dict_.SetString(keys::kRequestIdKey,
                   base::Uint64ToString(request->identifier()));
   dict_.SetDouble(keys::kTimeStampKey, base::Time::Now().ToDoubleT() * 1000);
-  dict_.SetString(keys::kTypeKey, helpers::ResourceTypeToString(resource_type));
+  dict_.SetString(keys::kTypeKey,
+                  WebRequestResourceTypeToString(resource_type));
   dict_.SetString(keys::kUrlKey, request->url().spec());
 }
 
@@ -115,10 +129,10 @@ void WebRequestEventDetails::SetAuthInfo(
     dict_.SetString(keys::kSchemeKey, auth_info.scheme);
   if (!auth_info.realm.empty())
     dict_.SetString(keys::kRealmKey, auth_info.realm);
-  base::DictionaryValue* challenger = new base::DictionaryValue();
+  auto challenger = base::MakeUnique<base::DictionaryValue>();
   challenger->SetString(keys::kHostKey, auth_info.challenger.host());
   challenger->SetInteger(keys::kPortKey, auth_info.challenger.port());
-  dict_.Set(keys::kChallengerKey, challenger);
+  dict_.Set(keys::kChallengerKey, std::move(challenger));
 }
 
 void WebRequestEventDetails::SetResponseHeaders(
@@ -182,12 +196,19 @@ void WebRequestEventDetails::DetermineFrameDataOnIO(
 std::unique_ptr<base::DictionaryValue> WebRequestEventDetails::GetFilteredDict(
     int extra_info_spec) const {
   std::unique_ptr<base::DictionaryValue> result = dict_.CreateDeepCopy();
-  if ((extra_info_spec & ExtraInfoSpec::REQUEST_BODY) && request_body_)
-    result->Set(keys::kRequestBodyKey, request_body_->CreateDeepCopy());
-  if ((extra_info_spec & ExtraInfoSpec::REQUEST_HEADERS) && request_headers_)
-    result->Set(keys::kRequestHeadersKey, request_headers_->CreateDeepCopy());
-  if ((extra_info_spec & ExtraInfoSpec::RESPONSE_HEADERS) && response_headers_)
-    result->Set(keys::kResponseHeadersKey, response_headers_->CreateDeepCopy());
+  if ((extra_info_spec & ExtraInfoSpec::REQUEST_BODY) && request_body_) {
+    result->Set(keys::kRequestBodyKey,
+                base::MakeUnique<base::Value>(*request_body_));
+  }
+  if ((extra_info_spec & ExtraInfoSpec::REQUEST_HEADERS) && request_headers_) {
+    result->Set(keys::kRequestHeadersKey,
+                base::MakeUnique<base::Value>(*request_headers_));
+  }
+  if ((extra_info_spec & ExtraInfoSpec::RESPONSE_HEADERS) &&
+      response_headers_) {
+    result->Set(keys::kResponseHeadersKey,
+                base::MakeUnique<base::Value>(*response_headers_));
+  }
   return result;
 }
 

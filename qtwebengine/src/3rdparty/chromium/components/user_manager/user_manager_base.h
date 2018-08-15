@@ -22,11 +22,9 @@
 #include "components/user_manager/user_manager_export.h"
 #include "components/user_manager/user_type.h"
 
-class PrefService;
 class PrefRegistrySimple;
 
 namespace base {
-class DictionaryValue;
 class ListValue;
 class TaskRunner;
 }
@@ -58,6 +56,7 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   void SwitchActiveUser(const AccountId& account_id) override;
   void SwitchToLastActiveUser() override;
   void OnSessionStarted() override;
+  void OnProfileInitialized(User* user) override;
   void RemoveUser(const AccountId& account_id,
                   RemoveUserDelegate* delegate) override;
   void RemoveUserFromList(const AccountId& account_id) override;
@@ -106,7 +105,13 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   void RemoveSessionStateObserver(
       UserManager::UserSessionStateObserver* obs) override;
   void NotifyLocalStateChanged() override;
+  void NotifyUserImageChanged(const User& user) override;
+  void NotifyUserProfileImageUpdateFailed(const User& user) override;
+  void NotifyUserProfileImageUpdated(
+      const User& user,
+      const gfx::ImageSkia& profile_image) override;
   void ChangeUserChildStatus(User* user, bool is_child) override;
+  void ResetProfileEverInitialized(const AccountId& account_id) override;
   void Initialize() override;
 
   // This method updates "User was added to the device in this session nad is
@@ -127,6 +132,10 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   // Returns true if trusted device policies have successfully been retrieved
   // and ephemeral users are enabled.
   virtual bool AreEphemeralUsersEnabled() const = 0;
+
+  void AddUserRecordForTesting(User* user) {
+    return AddUserRecord(user);
+  }
 
  protected:
   // Adds |user| to users list, and adds it to front of LRU list. It is assumed
@@ -247,8 +256,6 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
 
   // Getters/setters for private members.
 
-  virtual void SetCurrentUserIsOwner(bool is_current_user_owner);
-
   virtual bool GetEphemeralUsersEnabled() const;
   virtual void SetEphemeralUsersEnabled(bool enabled);
 
@@ -308,6 +315,10 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
   // be enforced during the user's next sign-in from local state preferences.
   bool LoadForceOnlineSignin(const AccountId& account_id) const;
 
+  // Read a flag indicating whether session initialization has completed at
+  // least once.
+  bool LoadSessionInitialized(const AccountId& account_id) const;
+
   // Notifies observers that merge session state had changed.
   void NotifyMergeSessionStateChanged();
 
@@ -336,11 +347,6 @@ class USER_MANAGER_EXPORT UserManagerBase : public UserManager {
 
   // Indicates stage of loading user from prefs.
   UserLoadStage user_loading_stage_ = STAGE_NOT_LOADED;
-
-  // Cached flag of whether currently logged-in user is owner or not.
-  // May be accessed on different threads, requires locking.
-  bool is_current_user_owner_ = false;
-  mutable base::Lock is_current_user_owner_lock_;
 
   // Cached flag of whether the currently logged-in user existed before this
   // login.

@@ -6,8 +6,7 @@
 
 #include "components/ui_devtools/devtools_server.h"
 
-namespace ui {
-namespace devtools {
+namespace ui_devtools {
 
 UiDevToolsClient::UiDevToolsClient(const std::string& name,
                                    UiDevToolsServer* server)
@@ -51,19 +50,21 @@ void UiDevToolsClient::DisableAllAgents() {
     agent->Disable();
 }
 
-void UiDevToolsClient::sendProtocolResponse(int callId, const String& message) {
+void UiDevToolsClient::sendProtocolResponse(
+    int callId,
+    std::unique_ptr<protocol::Serializable> message) {
   if (connected())
-    server_->SendOverWebSocket(connection_id_, message);
+    server_->SendOverWebSocket(connection_id_, message->serialize());
 }
 
-void UiDevToolsClient::sendProtocolNotification(const String& message) {
+void UiDevToolsClient::sendProtocolNotification(
+    std::unique_ptr<protocol::Serializable> message) {
   if (connected())
-    server_->SendOverWebSocket(connection_id_, message);
+    server_->SendOverWebSocket(connection_id_, message->serialize());
 }
 
 void UiDevToolsClient::flushProtocolNotifications() {
   NOTIMPLEMENTED();
 }
 
-}  // namespace devtools
-}  // namespace ui
+}  // namespace ui_devtools

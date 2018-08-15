@@ -16,22 +16,23 @@
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_image.h"
 #include "ui/gl/gl_implementation.h"
+#include "ui/gl/gl_surface_format.h"
 #include "ui/gl/gl_switches.h"
 
 namespace gl {
 
 namespace {
-base::LazyInstance<base::ThreadLocalPointer<GLSurface> >::Leaky
+base::LazyInstance<base::ThreadLocalPointer<GLSurface>>::Leaky
     current_surface_ = LAZY_INSTANCE_INITIALIZER;
 }  // namespace
 
 GLSurface::GLSurface() {}
 
 bool GLSurface::Initialize() {
-  return Initialize(SURFACE_DEFAULT);
+  return Initialize(GLSurfaceFormat());
 }
 
-bool GLSurface::Initialize(GLSurface::Format format) {
+bool GLSurface::Initialize(GLSurfaceFormat format) {
   return true;
 }
 
@@ -51,7 +52,7 @@ bool GLSurface::DeferDraws() {
   return false;
 }
 
-bool GLSurface::SupportsSwapBuffersWithDamage() {
+bool GLSurface::SupportsSwapBuffersWithBounds() {
   return false;
 }
 
@@ -75,10 +76,8 @@ void GLSurface::SwapBuffersAsync(const SwapCompletionCallback& callback) {
   NOTREACHED();
 }
 
-gfx::SwapResult GLSurface::SwapBuffersWithDamage(int x,
-                                                 int y,
-                                                 int width,
-                                                 int height) {
+gfx::SwapResult GLSurface::SwapBuffersWithBounds(
+    const std::vector<gfx::Rect>& rects) {
   return gfx::SwapResult::SWAP_FAILED;
 }
 
@@ -134,11 +133,6 @@ unsigned long GLSurface::GetCompatibilityKey() {
   return 0;
 }
 
-GLSurface::Format GLSurface::GetFormat() {
-  NOTIMPLEMENTED();
-  return SURFACE_DEFAULT;
-}
-
 gfx::VSyncProvider* GLSurface::GetVSyncProvider() {
   return NULL;
 }
@@ -162,6 +156,16 @@ void GLSurface::ScheduleCALayerInUseQuery(
   NOTIMPLEMENTED();
 }
 
+bool GLSurface::ScheduleDCLayer(const ui::DCRendererLayerParams& params) {
+  NOTIMPLEMENTED();
+  return false;
+}
+
+bool GLSurface::SetEnableDCLayers(bool enable) {
+  NOTIMPLEMENTED();
+  return false;
+}
+
 bool GLSurface::IsSurfaceless() const {
   return false;
 }
@@ -172,6 +176,28 @@ bool GLSurface::FlipsVertically() const {
 
 bool GLSurface::BuffersFlipped() const {
   return false;
+}
+
+bool GLSurface::SupportsDCLayers() const {
+  return false;
+}
+
+bool GLSurface::SetDrawRectangle(const gfx::Rect& rect) {
+  return false;
+}
+
+gfx::Vector2d GLSurface::GetDrawOffset() const {
+  return gfx::Vector2d();
+}
+
+void GLSurface::WaitForSnapshotRendering() {
+  // By default, just executing the SwapBuffers is normally enough.
+}
+
+void GLSurface::SetRelyOnImplicitSync() {
+  // Some GLSurface derived classes might not implement this workaround while
+  // still being allocated on devices where the workaround is enabled.
+  // It is fine to ignore this call in those cases.
 }
 
 GLSurface* GLSurface::GetCurrent() {
@@ -200,12 +226,9 @@ bool GLSurface::ExtensionsContain(const char* c_extensions, const char* name) {
   return extensions.find(delimited_name) != std::string::npos;
 }
 
-void GLSurface::OnSetSwapInterval(int interval) {
-}
-
 GLSurfaceAdapter::GLSurfaceAdapter(GLSurface* surface) : surface_(surface) {}
 
-bool GLSurfaceAdapter::Initialize(GLSurface::Format format) {
+bool GLSurfaceAdapter::Initialize(GLSurfaceFormat format) {
   return surface_->Initialize(format);
 }
 
@@ -240,11 +263,9 @@ void GLSurfaceAdapter::SwapBuffersAsync(
   surface_->SwapBuffersAsync(callback);
 }
 
-gfx::SwapResult GLSurfaceAdapter::SwapBuffersWithDamage(int x,
-                                                        int y,
-                                                        int width,
-                                                        int height) {
-  return surface_->SwapBuffersWithDamage(x, y, width, height);
+gfx::SwapResult GLSurfaceAdapter::SwapBuffersWithBounds(
+    const std::vector<gfx::Rect>& rects) {
+  return surface_->SwapBuffersWithBounds(rects);
 }
 
 gfx::SwapResult GLSurfaceAdapter::PostSubBuffer(int x,
@@ -272,8 +293,8 @@ void GLSurfaceAdapter::CommitOverlayPlanesAsync(
   surface_->CommitOverlayPlanesAsync(callback);
 }
 
-bool GLSurfaceAdapter::SupportsSwapBuffersWithDamage() {
-  return surface_->SupportsSwapBuffersWithDamage();
+bool GLSurfaceAdapter::SupportsSwapBuffersWithBounds() {
+  return surface_->SupportsSwapBuffersWithBounds();
 }
 
 bool GLSurfaceAdapter::SupportsPostSubBuffer() {
@@ -328,7 +349,7 @@ unsigned long GLSurfaceAdapter::GetCompatibilityKey() {
   return surface_->GetCompatibilityKey();
 }
 
-GLSurface::Format GLSurfaceAdapter::GetFormat() {
+GLSurfaceFormat GLSurfaceAdapter::GetFormat() {
   return surface_->GetFormat();
 }
 
@@ -345,6 +366,15 @@ bool GLSurfaceAdapter::ScheduleOverlayPlane(int z_order,
       z_order, transform, image, bounds_rect, crop_rect);
 }
 
+bool GLSurfaceAdapter::ScheduleDCLayer(
+    const ui::DCRendererLayerParams& params) {
+  return surface_->ScheduleDCLayer(params);
+}
+
+bool GLSurfaceAdapter::SetEnableDCLayers(bool enable) {
+  return surface_->SetEnableDCLayers(enable);
+}
+
 bool GLSurfaceAdapter::IsSurfaceless() const {
   return surface_->IsSurfaceless();
 }
@@ -357,12 +387,37 @@ bool GLSurfaceAdapter::BuffersFlipped() const {
   return surface_->BuffersFlipped();
 }
 
+bool GLSurfaceAdapter::SupportsDCLayers() const {
+  return surface_->SupportsDCLayers();
+}
+
+bool GLSurfaceAdapter::SetDrawRectangle(const gfx::Rect& rect) {
+  return surface_->SetDrawRectangle(rect);
+}
+
+gfx::Vector2d GLSurfaceAdapter::GetDrawOffset() const {
+  return surface_->GetDrawOffset();
+}
+
+void GLSurfaceAdapter::WaitForSnapshotRendering() {
+  surface_->WaitForSnapshotRendering();
+}
+
+void GLSurfaceAdapter::SetRelyOnImplicitSync() {
+  surface_->SetRelyOnImplicitSync();
+}
+
 GLSurfaceAdapter::~GLSurfaceAdapter() {}
 
-scoped_refptr<GLSurface> InitializeGLSurface(scoped_refptr<GLSurface> surface) {
-  if (!surface->Initialize())
+scoped_refptr<GLSurface> InitializeGLSurfaceWithFormat(
+    scoped_refptr<GLSurface> surface, GLSurfaceFormat format) {
+  if (!surface->Initialize(format))
     return nullptr;
   return surface;
+}
+
+scoped_refptr<GLSurface> InitializeGLSurface(scoped_refptr<GLSurface> surface) {
+  return InitializeGLSurfaceWithFormat(surface, GLSurfaceFormat());
 }
 
 GLSurface::CALayerInUseQuery::CALayerInUseQuery() = default;

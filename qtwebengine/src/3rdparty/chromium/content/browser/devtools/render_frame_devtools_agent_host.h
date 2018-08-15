@@ -9,11 +9,13 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
+#include "base/containers/flat_set.h"
 #include "base/macros.h"
 #include "build/build_config.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "net/base/net_errors.h"
 
 #if defined(OS_ANDROID)
 #include "ui/android/view_android.h"
@@ -24,51 +26,41 @@ class CompositorFrameMetadata;
 }
 
 #if defined(OS_ANDROID)
-namespace device {
-class PowerSaveBlocker;
-}  // namespace device
+#include "services/device/public/interfaces/wake_lock.mojom.h"
 #endif
 
 namespace content {
 
 class BrowserContext;
 class DevToolsFrameTraceRecorder;
-class DevToolsProtocolHandler;
 class FrameTreeNode;
 class NavigationHandle;
+class NavigationHandleImpl;
 class NavigationThrottle;
 class RenderFrameHostImpl;
-
-namespace devtools {
-namespace dom { class DOMHandler; }
-namespace emulation { class EmulationHandler; }
-namespace input { class InputHandler; }
-namespace inspector { class InspectorHandler; }
-namespace io { class IOHandler; }
-namespace network { class NetworkHandler; }
-namespace page { class PageHandler; }
-namespace schema { class SchemaHandler; }
-namespace security { class SecurityHandler; }
-namespace service_worker { class ServiceWorkerHandler; }
-namespace storage { class StorageHandler; }
-namespace target { class TargetHandler; }
-namespace tracing { class TracingHandler; }
-}
+struct BeginNavigationParams;
+struct CommonNavigationParams;
 
 class CONTENT_EXPORT RenderFrameDevToolsAgentHost
     : public DevToolsAgentHostImpl,
       private WebContentsObserver {
  public:
   static void AddAllAgentHosts(DevToolsAgentHost::List* result);
+  static scoped_refptr<DevToolsAgentHost> GetOrCreateFor(
+      FrameTreeNode* frame_tree_node);
 
   static void OnCancelPendingNavigation(RenderFrameHost* pending,
                                         RenderFrameHost* current);
   static void OnBeforeNavigation(RenderFrameHost* current,
                                  RenderFrameHost* pending);
-  static void OnBeforeNavigation(NavigationHandle* navigation_handle);
+  static void OnFailedNavigation(RenderFrameHost* host,
+                                 const CommonNavigationParams& common_params,
+                                 const BeginNavigationParams& begin_params,
+                                 net::Error error_code);
   static std::unique_ptr<NavigationThrottle> CreateThrottleForNavigation(
       NavigationHandle* navigation_handle);
   static bool IsNetworkHandlerEnabled(FrameTreeNode* frame_tree_node);
+  static std::string UserAgentOverride(FrameTreeNode* frame_tree_node);
 
   static void WebContentsCreated(WebContents* web_contents);
 
@@ -76,11 +68,9 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
       RenderFrameHost* frame_host,
       cc::CompositorFrameMetadata frame_metadata);
 
-  bool HasRenderFrameHost(RenderFrameHost* host);
-
   FrameTreeNode* frame_tree_node() { return frame_tree_node_; }
 
-  // DevTooolsAgentHost overrides.
+  // DevToolsAgentHost overrides.
   void DisconnectWebContents() override;
   void ConnectWebContents(WebContents* web_contents) override;
   BrowserContext* GetBrowserContext() override;
@@ -97,25 +87,21 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   bool Close() override;
   base::TimeTicks GetLastActivityTime() override;
 
-  bool DispatchProtocolMessage(const std::string& message) override;
-
  private:
   friend class DevToolsAgentHost;
-  explicit RenderFrameDevToolsAgentHost(RenderFrameHostImpl*);
+  explicit RenderFrameDevToolsAgentHost(FrameTreeNode*);
   ~RenderFrameDevToolsAgentHost() override;
 
-  static scoped_refptr<DevToolsAgentHost> GetOrCreateFor(
-      RenderFrameHostImpl* host);
-  static void AppendAgentHostForFrameIfApplicable(
-      DevToolsAgentHost::List* result,
-      RenderFrameHost* host);
-
   // DevToolsAgentHostImpl overrides.
-  void Attach() override;
-  void Detach() override;
-  void InspectElement(int x, int y) override;
+  void AttachSession(DevToolsSession* session) override;
+  void DetachSession(int session_id) override;
+  void InspectElement(DevToolsSession* session, int x, int y) override;
+  bool DispatchProtocolMessage(
+      DevToolsSession* session,
+      const std::string& message) override;
 
   // WebContentsObserver overrides.
+  void DidStartNavigation(NavigationHandle* navigation_handle) override;
   void ReadyToCommitNavigation(NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
   void RenderFrameHostChanged(RenderFrameHost* old_host,
@@ -125,27 +111,14 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   void RenderProcessGone(base::TerminationStatus status) override;
   bool OnMessageReceived(const IPC::Message& message,
                          RenderFrameHost* render_frame_host) override;
-  bool OnMessageReceived(const IPC::Message& message) override;
   void DidAttachInterstitialPage() override;
   void DidDetachInterstitialPage() override;
-  void DidCommitProvisionalLoadForFrame(
-      RenderFrameHost* render_frame_host,
-      const GURL& url,
-      ui::PageTransition transition_type) override;
-  void DidFailProvisionalLoad(
-      RenderFrameHost* render_frame_host,
-      const GURL& validated_url,
-      int error_code,
-      const base::string16& error_description,
-      bool was_ignored_by_handler) override;
   void WasShown() override;
   void WasHidden() override;
+  void DidReceiveCompositorFrame() override;
 
   void AboutToNavigateRenderFrame(RenderFrameHost* old_host,
                                   RenderFrameHost* new_host);
-  void AboutToNavigate(NavigationHandle* navigation_handle);
-
-  void DispatchBufferedProtocolMessagesIfNecessary();
 
   void SetPending(RenderFrameHostImpl* host);
   void CommitPending();
@@ -154,8 +127,8 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
 
   bool IsChildFrame();
 
-  void OnClientAttached();
-  void OnClientDetached();
+  void OnClientsAttached();
+  void OnClientsDetached();
 
   void RenderFrameCrashed();
   void OnSwapCompositorFrame(const IPC::Message& message);
@@ -166,8 +139,17 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   void DestroyOnRenderFrameGone();
 
   bool CheckConsistency();
+  void UpdateFrameHost(RenderFrameHostImpl* frame_host);
+  void MaybeReattachToRenderFrame();
+  void GrantPolicy(RenderFrameHostImpl* host);
+  void RevokePolicy(RenderFrameHostImpl* host);
 
-  void CreatePowerSaveBlocker();
+  // TODO(dgozman): remove together with old navigation code.
+  DevToolsSession* SingleSession();
+
+#if defined(OS_ANDROID)
+  device::mojom::WakeLock* GetWakeLock();
+#endif
 
   void SynchronousSwapCompositorFrame(
       cc::CompositorFrameMetadata frame_metadata);
@@ -178,46 +160,30 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   std::unique_ptr<FrameHostHolder> pending_;
 
   // Stores per-host state between DisconnectWebContents and ConnectWebContents.
-  std::unique_ptr<FrameHostHolder> disconnected_;
+  std::string disconnected_cookie_;
 
-  std::unique_ptr<devtools::dom::DOMHandler> dom_handler_;
-  std::unique_ptr<devtools::input::InputHandler> input_handler_;
-  std::unique_ptr<devtools::inspector::InspectorHandler> inspector_handler_;
-  std::unique_ptr<devtools::io::IOHandler> io_handler_;
-  std::unique_ptr<devtools::network::NetworkHandler> network_handler_;
-  std::unique_ptr<devtools::page::PageHandler> page_handler_;
-  std::unique_ptr<devtools::schema::SchemaHandler> schema_handler_;
-  std::unique_ptr<devtools::security::SecurityHandler> security_handler_;
-  std::unique_ptr<devtools::service_worker::ServiceWorkerHandler>
-      service_worker_handler_;
-  std::unique_ptr<devtools::storage::StorageHandler>
-      storage_handler_;
-  std::unique_ptr<devtools::target::TargetHandler> target_handler_;
-  std::unique_ptr<devtools::tracing::TracingHandler> tracing_handler_;
-  std::unique_ptr<devtools::emulation::EmulationHandler> emulation_handler_;
   std::unique_ptr<DevToolsFrameTraceRecorder> frame_trace_recorder_;
 #if defined(OS_ANDROID)
-  std::unique_ptr<device::PowerSaveBlocker> power_save_blocker_;
+  device::mojom::WakeLockPtr wake_lock_;
 #endif
-  std::unique_ptr<DevToolsProtocolHandler> protocol_handler_;
   RenderFrameHostImpl* handlers_frame_host_;
   bool current_frame_crashed_;
 
   // PlzNavigate
 
-  // Handle that caused the setting of pending_.
-  NavigationHandle* pending_handle_;
+  // The active host we are talking to.
+  RenderFrameHostImpl* frame_host_ = nullptr;
+  base::flat_set<NavigationHandleImpl*> navigation_handles_;
+  bool render_frame_alive_ = false;
 
-  // List of handles currently navigating.
-  std::set<NavigationHandle*> navigating_handles_;
-
-  struct PendingMessage {
-    int session_id;
+  // These messages were queued after suspending, not sent to the agent,
+  // and will be sent after resuming.
+  struct Message {
+    int call_id;
     std::string method;
     std::string message;
   };
-  // <call_id> -> PendingMessage
-  std::map<int, PendingMessage> in_navigation_protocol_message_buffer_;
+  std::map<int, std::vector<Message>> suspended_messages_by_session_id_;
 
   // The FrameTreeNode associated with this agent.
   FrameTreeNode* frame_tree_node_;

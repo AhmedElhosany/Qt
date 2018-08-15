@@ -103,6 +103,14 @@ const BookmarkNode::MetaInfoMap* BookmarkNode::GetMetaInfoMap() const {
   return meta_info_map_.get();
 }
 
+const base::string16& BookmarkNode::GetTitledUrlNodeTitle() const {
+  return GetTitle();
+}
+
+const GURL& BookmarkNode::GetTitledUrlNodeUrl() const {
+  return url_;
+}
+
 void BookmarkNode::Initialize(int64_t id) {
   id_ = id;
   type_ = url_.is_empty() ? FOLDER : URL;
@@ -115,7 +123,7 @@ void BookmarkNode::Initialize(int64_t id) {
 }
 
 void BookmarkNode::InvalidateFavicon() {
-  icon_url_ = GURL();
+  icon_url_.reset();
   favicon_ = gfx::Image();
   favicon_type_ = favicon_base::INVALID_ICON;
   favicon_state_ = INVALID_FAVICON;

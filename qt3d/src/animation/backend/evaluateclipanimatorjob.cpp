@@ -56,28 +56,34 @@ void EvaluateClipAnimatorJob::run()
 {
     Q_ASSERT(m_handler);
 
-    const qint64 globalTime = m_handler->simulationTime();
-    //qDebug() << Q_FUNC_INFO << "t_global =" << globalTime;
-
     ClipAnimator *clipAnimator = m_handler->clipAnimatorManager()->data(m_clipAnimatorHandle);
     Q_ASSERT(clipAnimator);
+    if (!clipAnimator->isRunning())
+        return;
+
+    qint64 globalTimeNS = m_handler->simulationTime();
+    qint64 nsSincePreviousFrame = clipAnimator->nsSincePreviousFrame(globalTimeNS);
+
+    Clock *clock = m_handler->clockManager()->lookupResource(clipAnimator->clockId());
 
     // Evaluate the fcurves
     AnimationClip *clip = m_handler->animationClipLoaderManager()->lookupResource(clipAnimator->clipId());
     Q_ASSERT(clip);
     // Prepare for evaluation (convert global time to local time ....)
-    const AnimatorEvaluationData animatorEvaluationData = evaluationDataForAnimator(clipAnimator, globalTime);
+    const AnimatorEvaluationData animatorEvaluationData = evaluationDataForAnimator(clipAnimator, clock, nsSincePreviousFrame);
     const ClipEvaluationData preEvaluationDataForClip = evaluationDataForClip(clip, animatorEvaluationData);
     const ClipResults rawClipResults = evaluateClipAtLocalTime(clip, preEvaluationDataForClip.localTime);
 
     // Reformat the clip results into the layout used by this animator/blend tree
-    ComponentIndices format = clipAnimator->formatIndices();
-    ClipResults formattedClipResults = formatClipResults(rawClipResults, format);
+    const ClipFormat clipFormat = clipAnimator->clipFormat();
+    ClipResults formattedClipResults = formatClipResults(rawClipResults, clipFormat.sourceClipIndices);
 
     if (preEvaluationDataForClip.isFinalFrame)
         clipAnimator->setRunning(false);
 
     clipAnimator->setCurrentLoop(preEvaluationDataForClip.currentLoop);
+    clipAnimator->setLastGlobalTimeNS(globalTimeNS);
+    clipAnimator->setLastLocalTime(preEvaluationDataForClip.localTime);
 
     // Prepare property changes (if finalFrame it also prepares the change for the running property for the frontend)
     const QVector<Qt3DCore::QSceneChangePtr> changes = preparePropertyChanges(clipAnimator->peerId(),
@@ -88,6 +94,10 @@ void EvaluateClipAnimatorJob::run()
     // Send the property changes
     clipAnimator->sendPropertyChanges(changes);
 
+    // Trigger callbacks either on this thread or by notifying the gui thread.
+    const QVector<AnimationCallbackAndValue> callbacks = prepareCallbacks(clipAnimator->mappingData(),
+                                                                          formattedClipResults);
+    clipAnimator->sendCallbacks(callbacks);
 }
 
 } // namespace Animation

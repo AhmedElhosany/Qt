@@ -20,25 +20,37 @@
 #define PDF_USE_XFA
 #endif  // PDF_ENABLE_XFA
 
+// PDF object types
+#define FPDF_OBJECT_UNKNOWN 0
+#define FPDF_OBJECT_BOOLEAN 1
+#define FPDF_OBJECT_NUMBER 2
+#define FPDF_OBJECT_STRING 3
+#define FPDF_OBJECT_NAME 4
+#define FPDF_OBJECT_ARRAY 5
+#define FPDF_OBJECT_DICTIONARY 6
+#define FPDF_OBJECT_STREAM 7
+#define FPDF_OBJECT_NULLOBJ 8
+#define FPDF_OBJECT_REFERENCE 9
+
 // PDF types
 typedef void* FPDF_ACTION;
+typedef void* FPDF_ANNOTATION;
+typedef void* FPDF_ATTACHMENT;
 typedef void* FPDF_BITMAP;
 typedef void* FPDF_BOOKMARK;
 typedef void* FPDF_CLIPPATH;
 typedef void* FPDF_DEST;
-typedef void* FPDF_DOCSCHHANDLE;
 typedef void* FPDF_DOCUMENT;
 typedef void* FPDF_FONT;
-typedef void* FPDF_HMODULE;
 typedef void* FPDF_LINK;
-typedef void* FPDF_MODULEMGR;
 typedef void* FPDF_PAGE;
 typedef void* FPDF_PAGELINK;
 typedef void* FPDF_PAGEOBJECT;  // Page object(text, path, etc)
 typedef void* FPDF_PAGERANGE;
-typedef void* FPDF_PATH;
 typedef void* FPDF_RECORDER;
 typedef void* FPDF_SCHHANDLE;
+typedef void* FPDF_STRUCTELEMENT;
+typedef void* FPDF_STRUCTTREE;
 typedef void* FPDF_TEXTPAGE;
 
 #ifdef PDF_ENABLE_XFA
@@ -123,6 +135,12 @@ typedef struct _FS_RECTF_ {
 
 // Const Pointer to FS_RECTF structure.
 typedef const FS_RECTF* FS_LPCRECTF;
+
+// Annotation subtype.
+typedef int FPDF_ANNOTATION_SUBTYPE;
+
+// Dictionary value types.
+typedef int FPDF_OBJECT_TYPE;
 
 #if defined(_WIN32) && defined(FPDFSDK_EXPORTS)
 // On Windows system, functions are exported in a DLL
@@ -211,7 +229,8 @@ DLLEXPORT void STDCALL FPDF_DestroyLibrary();
 DLLEXPORT void STDCALL FPDF_SetSandBoxPolicy(FPDF_DWORD policy,
                                              FPDF_BOOL enable);
 
-#if defined(_WIN32) && defined(PDFIUM_PRINT_TEXT_WITH_GDI)
+#if defined(_WIN32)
+#if defined(PDFIUM_PRINT_TEXT_WITH_GDI)
 // Pointer to a helper function to make |font| with |text| of |text_length|
 // accessible when printing text with GDI. This is useful in sandboxed
 // environments where PDFium's access to GDI may be restricted.
@@ -237,7 +256,33 @@ FPDF_SetTypefaceAccessibleFunc(PDFiumEnsureTypefaceCharactersAccessible func);
 // Return value:
 //          None.
 DLLEXPORT void STDCALL FPDF_SetPrintTextWithGDI(FPDF_BOOL use_gdi);
-#endif
+#endif  // PDFIUM_PRINT_TEXT_WITH_GDI
+
+// Function: FPDF_SetPrintPostscriptLevel
+//          Set postscript printing level when printing on Windows.
+//          Experimental API.
+// Parameters:
+//          postscript_level- 0 to disable postscript printing,
+//                            2 to print with postscript level 2,
+//                            3 to print with postscript level 3.
+//                            All other values are invalid.
+// Return value:
+//          True if successful, false if unsuccessful (typically invalid input).
+DLLEXPORT FPDF_BOOL STDCALL FPDF_SetPrintPostscriptLevel(int postscript_level);
+
+// Function: FPDF_SetPrintMode
+//          Set printing mode when printing on Windows.
+//          Experimental API.
+// Parameters:
+//          mode - FPDF_PRINTMODE_EMF to output EMF (default)
+//                 FPDF_PRINTMODE_TEXTONLY to output text only (for charstream
+//                 devices)
+//                 FPDF_PRINTMODE_POSTSCRIPT2 to output level 2 postscript
+//                 FPDF_PRINTMODE_POSTSCRIPT3 to output level 3 postscript
+// Return value:
+//          True if successful, false if unsuccessful (typically invalid input).
+DLLEXPORT FPDF_BOOL STDCALL FPDF_SetPrintMode(int mode);
+#endif  // defined(_WIN32)
 
 // Function: FPDF_LoadDocument
 //          Open and load a PDF document.
@@ -594,11 +639,11 @@ DLLEXPORT void STDCALL FPDF_RenderPage(HDC dc,
 //                            1 (rotated 90 degrees clockwise)
 //                            2 (rotated 180 degrees)
 //                            3 (rotated 90 degrees counter-clockwise)
-//          flags       -   0 for normal display, or combination of flags
-//                          defined above. With FPDF_ANNOT flag, it renders all
-//                          annotations that does not require user-interaction,
-//                          which are all annotations except widget and popup
-//                          annotations.
+//          flags       -   0 for normal display, or combination of the Page
+//                          Rendering flags defined above. With the FPDF_ANNOT
+//                          flag, it renders all annotations that do not require
+//                          user-interaction, which are all annotations except
+//                          widget and popup annotations.
 // Return value:
 //          None.
 DLLEXPORT void STDCALL FPDF_RenderPageBitmap(FPDF_BITMAP bitmap,
@@ -609,6 +654,28 @@ DLLEXPORT void STDCALL FPDF_RenderPageBitmap(FPDF_BITMAP bitmap,
                                              int size_y,
                                              int rotate,
                                              int flags);
+
+// Function: FPDF_RenderPageBitmapWithMatrix
+//          Render contents of a page to a device independent bitmap.
+// Parameters:
+//          bitmap      -   Handle to the device independent bitmap (as the
+//                          output buffer). The bitmap handle can be created
+//                          by FPDFBitmap_Create.
+//          page        -   Handle to the page. Returned by FPDF_LoadPage
+//          matrix      -   The transform matrix.
+//          clipping    -   The rect to clip to.
+//          flags       -   0 for normal display, or combination of the Page
+//                          Rendering flags defined above. With the FPDF_ANNOT
+//                          flag, it renders all annotations that do not require
+//                          user-interaction, which are all annotations except
+//                          widget and popup annotations.
+// Return value:
+//          None.
+DLLEXPORT void STDCALL FPDF_RenderPageBitmapWithMatrix(FPDF_BITMAP bitmap,
+                                                       FPDF_PAGE page,
+                                                       const FS_MATRIX* matrix,
+                                                       const FS_RECTF* clipping,
+                                                       int flags);
 
 #ifdef _SKIA_SUPPORT_
 DLLEXPORT FPDF_RECORDER STDCALL FPDF_RenderPageSkp(FPDF_PAGE page,

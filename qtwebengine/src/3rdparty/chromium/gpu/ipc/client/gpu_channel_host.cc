@@ -25,7 +25,7 @@ namespace gpu {
 namespace {
 
 // Global atomic to generate unique transfer buffer IDs.
-base::StaticAtomicSequenceNumber g_next_transfer_buffer_id;
+base::AtomicSequenceNumber g_next_transfer_buffer_id;
 
 }  // namespace
 
@@ -70,7 +70,6 @@ GpuChannelHost::GpuChannelHost(
       gpu_memory_buffer_manager_(gpu_memory_buffer_manager) {
   next_image_id_.GetNext();
   next_route_id_.GetNext();
-  next_stream_id_.GetNext();
 }
 
 void GpuChannelHost::Connect(const IPC::ChannelHandle& channel_handle,
@@ -134,6 +133,7 @@ uint32_t GpuChannelHost::OrderingBarrier(
     int32_t put_offset,
     uint32_t flush_count,
     const std::vector<ui::LatencyInfo>& latency_info,
+    const std::vector<SyncToken>& sync_token_fences,
     bool put_offset_changed,
     bool do_flush,
     uint32_t* highest_verified_flush_id) {
@@ -153,6 +153,9 @@ uint32_t GpuChannelHost::OrderingBarrier(
     flush_info.flush_id = flush_id;
     flush_info.latency_info.insert(flush_info.latency_info.end(),
                                    latency_info.begin(), latency_info.end());
+    flush_info.sync_token_fences.insert(flush_info.sync_token_fences.end(),
+                                        sync_token_fences.begin(),
+                                        sync_token_fences.end());
 
     if (do_flush)
       InternalFlush(&flush_info);
@@ -180,8 +183,9 @@ void GpuChannelHost::InternalFlush(StreamFlushInfo* flush_info) {
   DCHECK_LT(flush_info->flushed_stream_flush_id, flush_info->flush_id);
   Send(new GpuCommandBufferMsg_AsyncFlush(
       flush_info->route_id, flush_info->put_offset, flush_info->flush_count,
-      flush_info->latency_info));
+      flush_info->latency_info, flush_info->sync_token_fences));
   flush_info->latency_info.clear();
+  flush_info->sync_token_fences.clear();
   flush_info->flush_pending = false;
 
   flush_info->flushed_stream_flush_id = flush_info->flush_id;
@@ -220,9 +224,9 @@ void GpuChannelHost::RemoveRoute(int route_id) {
 }
 
 base::SharedMemoryHandle GpuChannelHost::ShareToGpuProcess(
-    base::SharedMemoryHandle source_handle) {
+    const base::SharedMemoryHandle& source_handle) {
   if (IsLost())
-    return base::SharedMemory::NULLHandle();
+    return base::SharedMemoryHandle();
 
   return base::SharedMemory::DuplicateHandle(source_handle);
 }
@@ -232,65 +236,12 @@ int32_t GpuChannelHost::ReserveTransferBufferId() {
   return g_next_transfer_buffer_id.GetNext() + 1;
 }
 
-gfx::GpuMemoryBufferHandle GpuChannelHost::ShareGpuMemoryBufferToGpuProcess(
-    const gfx::GpuMemoryBufferHandle& source_handle,
-    bool* requires_sync_point) {
-  switch (source_handle.type) {
-    case gfx::SHARED_MEMORY_BUFFER: {
-      gfx::GpuMemoryBufferHandle handle;
-      handle.type = gfx::SHARED_MEMORY_BUFFER;
-      handle.handle = ShareToGpuProcess(source_handle.handle);
-      handle.offset = source_handle.offset;
-      handle.stride = source_handle.stride;
-      *requires_sync_point = false;
-      return handle;
-    }
-#if defined(USE_OZONE)
-    case gfx::OZONE_NATIVE_PIXMAP: {
-      std::vector<base::ScopedFD> scoped_fds;
-      for (auto& fd : source_handle.native_pixmap_handle.fds) {
-        base::ScopedFD scoped_fd(HANDLE_EINTR(dup(fd.fd)));
-        if (!scoped_fd.is_valid()) {
-          PLOG(ERROR) << "dup";
-          return gfx::GpuMemoryBufferHandle();
-        }
-        scoped_fds.emplace_back(std::move(scoped_fd));
-      }
-      gfx::GpuMemoryBufferHandle handle;
-      handle.type = gfx::OZONE_NATIVE_PIXMAP;
-      handle.id = source_handle.id;
-      for (auto& scoped_fd : scoped_fds) {
-        handle.native_pixmap_handle.fds.emplace_back(scoped_fd.release(),
-                                                     true /* auto_close */);
-      }
-      handle.native_pixmap_handle.planes =
-          source_handle.native_pixmap_handle.planes;
-      *requires_sync_point = false;
-      return handle;
-    }
-#endif
-    case gfx::IO_SURFACE_BUFFER:
-      *requires_sync_point = true;
-      return source_handle;
-    default:
-      NOTREACHED();
-      return gfx::GpuMemoryBufferHandle();
-  }
-}
-
 int32_t GpuChannelHost::ReserveImageId() {
   return next_image_id_.GetNext();
 }
 
 int32_t GpuChannelHost::GenerateRouteID() {
   return next_route_id_.GetNext();
-}
-
-int32_t GpuChannelHost::GenerateStreamID() {
-  const int32_t stream_id = next_stream_id_.GetNext();
-  DCHECK_NE(gpu::GPU_STREAM_INVALID, stream_id);
-  DCHECK_NE(gpu::GPU_STREAM_DEFAULT, stream_id);
-  return stream_id;
 }
 
 uint32_t GpuChannelHost::ValidateFlushIDReachedServer(int32_t stream_id,

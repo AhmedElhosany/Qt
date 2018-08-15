@@ -27,23 +27,21 @@ namespace blink {
 
 inline SVGViewElement::SVGViewElement(Document& document)
     : SVGElement(SVGNames::viewTag, document), SVGFitToViewBox(this) {
-  UseCounter::count(document, UseCounter::SVGViewElement);
+  UseCounter::Count(document, WebFeature::kSVGViewElement);
 }
 
 DEFINE_NODE_FACTORY(SVGViewElement)
 
 DEFINE_TRACE(SVGViewElement) {
-  SVGElement::trace(visitor);
-  SVGFitToViewBox::trace(visitor);
+  SVGElement::Trace(visitor);
+  SVGFitToViewBox::Trace(visitor);
 }
 
-void SVGViewElement::parseAttribute(const QualifiedName& name,
-                                    const AtomicString& oldValue,
-                                    const AtomicString& value) {
-  if (SVGZoomAndPan::parseAttribute(name, value))
+void SVGViewElement::ParseAttribute(const AttributeModificationParams& params) {
+  if (SVGZoomAndPan::ParseAttribute(params.name, params.new_value))
     return;
 
-  SVGElement::parseAttribute(name, oldValue, value);
+  SVGElement::ParseAttribute(params);
 }
 
 }  // namespace blink

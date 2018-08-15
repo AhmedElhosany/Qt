@@ -36,23 +36,24 @@
 #include "core/loader/DocumentLoader.h"
 #include "core/loader/FrameLoaderTypes.h"
 
+// Legacy support for NT1(https://www.w3.org/TR/navigation-timing/).
 namespace blink {
 
 PerformanceNavigation::PerformanceNavigation(LocalFrame* frame)
-    : DOMWindowProperty(frame) {}
+    : DOMWindowClient(frame) {}
 
 unsigned short PerformanceNavigation::type() const {
-  if (!frame())
+  if (!GetFrame())
     return kTypeNavigate;
 
-  DocumentLoader* documentLoader = frame()->loader().documentLoader();
-  if (!documentLoader)
+  DocumentLoader* document_loader = GetFrame()->Loader().GetDocumentLoader();
+  if (!document_loader)
     return kTypeNavigate;
 
-  switch (documentLoader->getNavigationType()) {
-    case NavigationTypeReload:
+  switch (document_loader->GetNavigationType()) {
+    case kNavigationTypeReload:
       return kTypeReload;
-    case NavigationTypeBackForward:
+    case kNavigationTypeBackForward:
       return kTypeBackForward;
     default:
       return kTypeNavigate;
@@ -60,30 +61,30 @@ unsigned short PerformanceNavigation::type() const {
 }
 
 unsigned short PerformanceNavigation::redirectCount() const {
-  if (!frame())
+  if (!GetFrame())
     return 0;
 
-  DocumentLoader* loader = frame()->loader().documentLoader();
+  DocumentLoader* loader = GetFrame()->Loader().GetDocumentLoader();
   if (!loader)
     return 0;
 
-  const DocumentLoadTiming& timing = loader->timing();
-  if (timing.hasCrossOriginRedirect())
+  const DocumentLoadTiming& timing = loader->GetTiming();
+  if (timing.HasCrossOriginRedirect())
     return 0;
 
-  return timing.redirectCount();
+  return timing.RedirectCount();
 }
 
 ScriptValue PerformanceNavigation::toJSONForBinding(
-    ScriptState* scriptState) const {
-  V8ObjectBuilder result(scriptState);
-  result.addNumber("type", type());
-  result.addNumber("redirectCount", redirectCount());
-  return result.scriptValue();
+    ScriptState* script_state) const {
+  V8ObjectBuilder result(script_state);
+  result.AddNumber("type", type());
+  result.AddNumber("redirectCount", redirectCount());
+  return result.GetScriptValue();
 }
 
 DEFINE_TRACE(PerformanceNavigation) {
-  DOMWindowProperty::trace(visitor);
+  DOMWindowClient::Trace(visitor);
 }
 
 }  // namespace blink

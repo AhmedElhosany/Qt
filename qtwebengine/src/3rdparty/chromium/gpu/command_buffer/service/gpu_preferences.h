@@ -11,6 +11,7 @@
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/gpu_export.h"
+#include "media/media_features.h"
 
 namespace gpu {
 
@@ -43,6 +44,9 @@ struct GPU_EXPORT GpuPreferences {
   // Prioritizes the UI's command stream in the GPU process.
   bool ui_prioritize_in_gpu_process = false;
 
+  // Enable the GPU process scheduler.
+  bool enable_gpu_scheduler = false;
+
   // Disables hardware acceleration of video decode, where available.
   bool disable_accelerated_video_decode = false;
 
@@ -51,7 +55,7 @@ struct GPU_EXPORT GpuPreferences {
   bool disable_vaapi_accelerated_video_encode = false;
 #endif
 
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   // Disables HW encode acceleration for WebRTC.
   bool disable_web_rtc_hw_encoding = false;
 #endif

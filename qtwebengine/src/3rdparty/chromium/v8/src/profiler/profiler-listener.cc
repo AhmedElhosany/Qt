@@ -5,6 +5,7 @@
 #include "src/profiler/profiler-listener.h"
 
 #include "src/deoptimizer.h"
+#include "src/objects-inl.h"
 #include "src/profiler/cpu-profiler.h"
 #include "src/profiler/profile-generator-inl.h"
 #include "src/source-position-table.h"
@@ -84,9 +85,9 @@ void ProfilerListener::CodeCreateEvent(CodeEventListener::LogEventsAndTags tag,
   CodeEventsContainer evt_rec(CodeEventRecord::CODE_CREATION);
   CodeCreateEventRecord* rec = &evt_rec.CodeCreateEventRecord_;
   rec->start = abstract_code->address();
-  Script* script = Script::cast(shared->script());
   JITLineInfoTable* line_table = NULL;
-  if (script) {
+  if (shared->script()->IsScript()) {
+    Script* script = Script::cast(shared->script());
     line_table = new JITLineInfoTable();
     int offset = abstract_code->IsCode() ? Code::kHeaderSize
                                          : BytecodeArray::kHeaderSize;
@@ -144,7 +145,7 @@ void ProfilerListener::CodeDisableOptEvent(AbstractCode* code,
   DispatchCodeEvent(evt_rec);
 }
 
-void ProfilerListener::CodeDeoptEvent(Code* code, Address pc,
+void ProfilerListener::CodeDeoptEvent(Code* code, DeoptKind kind, Address pc,
                                       int fp_to_sp_delta) {
   CodeEventsContainer evt_rec(CodeEventRecord::CODE_DEOPT);
   CodeDeoptEventRecord* rec = &evt_rec.CodeDeoptEventRecord_;
@@ -219,8 +220,7 @@ void ProfilerListener::RecordInliningInfo(CodeEntry* entry,
     while (it.HasNext() &&
            Translation::BEGIN !=
                (opcode = static_cast<Translation::Opcode>(it.Next()))) {
-      if (opcode != Translation::JS_FRAME &&
-          opcode != Translation::INTERPRETED_FRAME) {
+      if (opcode != Translation::INTERPRETED_FRAME) {
         it.Skip(Translation::NumberOfOperandsFor(opcode));
         continue;
       }
@@ -269,8 +269,9 @@ void ProfilerListener::RecordDeoptInlinedFrames(CodeEntry* entry,
       std::vector<CpuProfileDeoptFrame> inlined_frames;
       for (SourcePositionInfo& pos_info : last_position.InliningStack(code)) {
         DCHECK(pos_info.position.ScriptOffset() != kNoSourcePosition);
-        size_t offset = static_cast<size_t>(pos_info.position.ScriptOffset());
+        if (!pos_info.function->script()->IsScript()) continue;
         int script_id = Script::cast(pos_info.function->script())->id();
+        size_t offset = static_cast<size_t>(pos_info.position.ScriptOffset());
         inlined_frames.push_back(CpuProfileDeoptFrame({script_id, offset}));
       }
       if (!inlined_frames.empty() &&

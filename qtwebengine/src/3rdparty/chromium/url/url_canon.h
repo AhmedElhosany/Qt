@@ -117,6 +117,12 @@ class CanonOutputT {
     cur_len_ += str_len;
   }
 
+  void ReserveSizeIfNeeded(int estimated_size) {
+    // Reserve a bit extra to account for escaped chars.
+    if (estimated_size > buffer_len_)
+      Resize(estimated_size + 8);
+  }
+
  protected:
   // Grows the given buffer so that it can fit at least |min_additional|
   // characters. Returns true if the buffer could be resized, false on OOM.
@@ -225,14 +231,21 @@ class URL_EXPORT CharsetConverter {
 //
 // Therefore, callers should not use the buffer, since it may actually be empty,
 // use the computed pointer and |*output_len| instead.
-URL_EXPORT const char* RemoveURLWhitespace(const char* input, int input_len,
+//
+// If |input| contained both removable whitespace and a raw `<` character,
+// |potentially_dangling_markup| will be set to `true`. Otherwise, it will be
+// left untouched.
+URL_EXPORT const char* RemoveURLWhitespace(const char* input,
+                                           int input_len,
                                            CanonOutputT<char>* buffer,
-                                           int* output_len);
+                                           int* output_len,
+                                           bool* potentially_dangling_markup);
 URL_EXPORT const base::char16* RemoveURLWhitespace(
     const base::char16* input,
     int input_len,
     CanonOutputT<base::char16>* buffer,
-    int* output_len);
+    int* output_len,
+    bool* potentially_dangling_markup);
 
 // IDN ------------------------------------------------------------------------
 

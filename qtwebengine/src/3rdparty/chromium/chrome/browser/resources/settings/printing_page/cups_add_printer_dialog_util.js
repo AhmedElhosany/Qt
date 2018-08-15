@@ -55,7 +55,7 @@ Polymer({
   },
 
   /**
-   * @param {Event} event
+   * @param {!Event} event
    * @private
    */
   onTap_: function(event) {
@@ -86,7 +86,7 @@ Polymer({
   },
 
   /** @private */
-  onBlur_: function() {
+  onChange_: function() {
     this.$.searchIcon.hidden = true;
     this.$.dropdownIcon.hidden = false;
   },
@@ -104,6 +104,10 @@ Polymer({
 /** 'add-printer-dialog' is the template of the Add Printer dialog. */
 Polymer({
   is: 'add-printer-dialog',
+
+  behaviors: [
+    CrScrollableBehavior,
+  ],
 
   /** @private */
   attached: function() {

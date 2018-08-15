@@ -5,58 +5,24 @@
 #ifndef PropertyRegistry_h
 #define PropertyRegistry_h
 
-#include "core/css/CSSSyntaxDescriptor.h"
-#include "core/css/CSSValue.h"
-#include "core/css/CSSVariableData.h"
-#include "wtf/HashMap.h"
-#include "wtf/RefPtr.h"
-#include "wtf/text/AtomicString.h"
-#include "wtf/text/AtomicStringHash.h"
+#include "core/css/PropertyRegistration.h"
+#include "platform/wtf/text/AtomicString.h"
+#include "platform/wtf/text/AtomicStringHash.h"
 
 namespace blink {
 
 class PropertyRegistry : public GarbageCollected<PropertyRegistry> {
  public:
-  static PropertyRegistry* create() { return new PropertyRegistry(); }
+  static PropertyRegistry* Create() { return new PropertyRegistry(); }
 
-  class Registration : public GarbageCollectedFinalized<Registration> {
-   public:
-    Registration(const CSSSyntaxDescriptor& syntax,
-                 bool inherits,
-                 const CSSValue* initial,
-                 PassRefPtr<CSSVariableData> initialVariableData)
-        : m_syntax(syntax),
-          m_inherits(inherits),
-          m_initial(initial),
-          m_initialVariableData(initialVariableData) {}
+  void RegisterProperty(const AtomicString&, PropertyRegistration&);
+  const PropertyRegistration* Registration(const AtomicString&) const;
+  size_t RegistrationCount() const { return registrations_.size(); }
 
-    const CSSSyntaxDescriptor& syntax() const { return m_syntax; }
-    bool inherits() const { return m_inherits; }
-    const CSSValue* initial() const { return m_initial; }
-    CSSVariableData* initialVariableData() const {
-      return m_initialVariableData.get();
-    }
-
-    DEFINE_INLINE_TRACE() { visitor->trace(m_initial); }
-
-   private:
-    const CSSSyntaxDescriptor m_syntax;
-    const bool m_inherits;
-    const Member<const CSSValue> m_initial;
-    const RefPtr<CSSVariableData> m_initialVariableData;
-  };
-
-  void registerProperty(const AtomicString&,
-                        const CSSSyntaxDescriptor&,
-                        bool inherits,
-                        const CSSValue* initial,
-                        PassRefPtr<CSSVariableData> initialVariableData);
-  const Registration* registration(const AtomicString&) const;
-
-  DEFINE_INLINE_TRACE() { visitor->trace(m_registrations); }
+  DEFINE_INLINE_TRACE() { visitor->Trace(registrations_); }
 
  private:
-  HeapHashMap<AtomicString, Member<Registration>> m_registrations;
+  HeapHashMap<AtomicString, Member<PropertyRegistration>> registrations_;
 };
 
 }  // namespace blink

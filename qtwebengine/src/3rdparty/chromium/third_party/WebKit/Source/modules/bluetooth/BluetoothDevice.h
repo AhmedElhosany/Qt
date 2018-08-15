@@ -5,27 +5,24 @@
 #ifndef BluetoothDevice_h
 #define BluetoothDevice_h
 
-#include "bindings/core/v8/ScriptWrappable.h"
+#include <memory>
 #include "core/dom/ContextLifecycleObserver.h"
 #include "modules/EventTargetModules.h"
 #include "modules/bluetooth/BluetoothRemoteGATTServer.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Heap.h"
-#include "public/platform/modules/bluetooth/WebBluetoothDevice.h"
-#include "public/platform/modules/bluetooth/WebBluetoothDeviceInit.h"
-#include "wtf/text/WTFString.h"
-#include <memory>
+#include "platform/wtf/text/WTFString.h"
+#include "public/platform/modules/bluetooth/web_bluetooth.mojom-blink.h"
 
 namespace blink {
 
+class Bluetooth;
 class BluetoothAttributeInstanceMap;
 class BluetoothRemoteGATTCharacteristic;
+class BluetoothRemoteGATTDescriptor;
 class BluetoothRemoteGATTServer;
 class BluetoothRemoteGATTService;
-class ScriptPromise;
 class ScriptPromiseResolver;
-
-struct WebBluetoothRemoteGATTCharacteristicInit;
-struct WebBluetoothRemoteGATTService;
 
 // BluetoothDevice represents a physical bluetooth device in the DOM. See IDL.
 //
@@ -34,30 +31,36 @@ struct WebBluetoothRemoteGATTService;
 // "Interface required by CallbackPromiseAdapter" section and the
 // CallbackPromiseAdapter class comments.
 class BluetoothDevice final : public EventTargetWithInlineData,
-                              public ContextLifecycleObserver,
-                              public WebBluetoothDevice {
-  USING_PRE_FINALIZER(BluetoothDevice, dispose);
+                              public ContextLifecycleObserver {
   DEFINE_WRAPPERTYPEINFO();
   USING_GARBAGE_COLLECTED_MIXIN(BluetoothDevice);
 
  public:
-  BluetoothDevice(ExecutionContext*, std::unique_ptr<WebBluetoothDeviceInit>);
+  BluetoothDevice(ExecutionContext*,
+                  mojom::blink::WebBluetoothDevicePtr,
+                  Bluetooth*);
 
   // Interface required by CallbackPromiseAdapter:
-  using WebType = std::unique_ptr<WebBluetoothDeviceInit>;
-  static BluetoothDevice* take(ScriptPromiseResolver*,
-                               std::unique_ptr<WebBluetoothDeviceInit>);
+  static BluetoothDevice* Take(ScriptPromiseResolver*,
+                               mojom::blink::WebBluetoothDevicePtr,
+                               Bluetooth*);
 
-  BluetoothRemoteGATTService* getOrCreateBluetoothRemoteGATTService(
-      std::unique_ptr<WebBluetoothRemoteGATTService>);
-  bool isValidService(const String& serviceInstanceId);
+  BluetoothRemoteGATTService* GetOrCreateRemoteGATTService(
+      mojom::blink::WebBluetoothRemoteGATTServicePtr,
+      bool is_primary,
+      const String& device_instance_id);
+  bool IsValidService(const String& service_instance_id);
 
-  BluetoothRemoteGATTCharacteristic*
-  getOrCreateBluetoothRemoteGATTCharacteristic(
+  BluetoothRemoteGATTCharacteristic* GetOrCreateRemoteGATTCharacteristic(
       ExecutionContext*,
-      std::unique_ptr<WebBluetoothRemoteGATTCharacteristicInit>,
+      mojom::blink::WebBluetoothRemoteGATTCharacteristicPtr,
       BluetoothRemoteGATTService*);
-  bool isValidCharacteristic(const String& characteristicInstanceId);
+  bool IsValidCharacteristic(const String& characteristic_instance_id);
+
+  BluetoothRemoteGATTDescriptor* GetOrCreateBluetoothRemoteGATTDescriptor(
+      mojom::blink::WebBluetoothRemoteGATTDescriptorPtr,
+      BluetoothRemoteGATTCharacteristic*);
+  bool IsValidDescriptor(const String& descriptor_instance_id);
 
   // We should disconnect from the device in all of the following cases:
   // 1. When the object gets GarbageCollected e.g. it went out of scope.
@@ -68,46 +71,38 @@ class BluetoothDevice final : public EventTargetWithInlineData,
   // events on navigator.bluetooth and still remain connected even if the
   // BluetoothDevice object is garbage collected.
 
-  // USING_PRE_FINALIZER interface.
-  // Called before the object gets garbage collected.
-  void dispose();
-
-  // ContextLifecycleObserver interface.
-  void contextDestroyed() override;
-
-  // If gatt is connected then sets gatt.connected to false and disconnects.
-  // This function only performs the necessary steps to ensure a device
-  // disconnects therefore it should only be used when the object is being
-  // garbage collected or the context is being destroyed.
-  void disconnectGATTIfConnected();
-
   // Performs necessary cleanup when a device disconnects and fires
   // gattserverdisconnected event.
-  void cleanupDisconnectedDeviceAndFireEvent();
+  void ClearAttributeInstanceMapAndFireEvent();
 
   // EventTarget methods:
-  const AtomicString& interfaceName() const override;
-  ExecutionContext* getExecutionContext() const override;
+  const AtomicString& InterfaceName() const override;
+  ExecutionContext* GetExecutionContext() const override;
 
-  // WebBluetoothDevice interface:
-  void dispatchGattServerDisconnected() override;
+  Bluetooth* GetBluetooth() { return bluetooth_; }
 
   // Interface required by Garbage Collection:
   DECLARE_VIRTUAL_TRACE();
 
   // IDL exposed interface:
-  String id() { return m_webDevice->id; }
-  String name() { return m_webDevice->name; }
-  BluetoothRemoteGATTServer* gatt() { return m_gatt; }
+  String id() { return device_->id; }
+  String name() { return device_->name; }
+  BluetoothRemoteGATTServer* gatt() { return gatt_; }
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(gattserverdisconnected);
 
+ protected:
+  // EventTarget overrides:
+  void AddedEventListener(const AtomicString& eventType,
+                          RegisteredEventListener&) override;
+
  private:
   // Holds all GATT Attributes associated with this BluetoothDevice.
-  Member<BluetoothAttributeInstanceMap> m_attributeInstanceMap;
+  Member<BluetoothAttributeInstanceMap> attribute_instance_map_;
 
-  std::unique_ptr<WebBluetoothDeviceInit> m_webDevice;
-  Member<BluetoothRemoteGATTServer> m_gatt;
+  mojom::blink::WebBluetoothDevicePtr device_;
+  Member<BluetoothRemoteGATTServer> gatt_;
+  Member<Bluetooth> bluetooth_;
 };
 
 }  // namespace blink

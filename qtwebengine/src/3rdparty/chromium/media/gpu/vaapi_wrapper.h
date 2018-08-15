@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "base/files/file.h"
-#include "base/lazy_instance.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
@@ -37,7 +36,7 @@
 #endif  // USE_X11
 
 #if defined(USE_OZONE)
-namespace ui {
+namespace gfx {
 class NativePixmap;
 }
 #endif
@@ -119,13 +118,7 @@ class MEDIA_GPU_EXPORT VaapiWrapper
   // transferred to the caller. It differs from surfaces created using
   // CreateSurfaces(), where VaapiWrapper is the owner of the surfaces.
   scoped_refptr<VASurface> CreateVASurfaceForPixmap(
-      const scoped_refptr<ui::NativePixmap>& pixmap);
-
-  // Use VPP to process |source_pixmap| to |target_pixmap| with scaling and
-  // color space conversion.
-  bool ProcessPixmap(const scoped_refptr<ui::NativePixmap>& source_pixmap,
-                     scoped_refptr<ui::NativePixmap> target_pixmap);
-
+      const scoped_refptr<gfx::NativePixmap>& pixmap);
 #endif
 
   // Submit parameters or slice data of |va_buffer_type|, copying them from
@@ -257,11 +250,6 @@ class MEDIA_GPU_EXPORT VaapiWrapper
 #endif  // USE_OZONE
 
    private:
-    friend class base::LazyInstance<VADisplayState>;
-
-    // Returns true if the VAAPI version is less than the specified version.
-    bool VAAPIVersionLessThan(int major, int minor);
-
     // Protected by |va_lock_|.
     int refcount_;
 
@@ -292,6 +280,9 @@ class MEDIA_GPU_EXPORT VaapiWrapper
   void Deinitialize();
   bool VaInitialize(const base::Closure& report_error_to_uma_cb);
   bool GetSupportedVaProfiles(std::vector<VAProfile>* profiles);
+
+  // Free all memory allocated in CreateSurfaces.
+  void DestroySurfaces_Locked();
 
   // Check if |va_profile| supports |entrypoint| or not. |va_lock_| must be
   // held on entry.
@@ -345,6 +336,10 @@ class MEDIA_GPU_EXPORT VaapiWrapper
   static VAProfile ProfileToVAProfile(VideoCodecProfile profile,
                                       CodecMode mode);
 
+  // Singleton accessors.
+  static VADisplayState* GetDisplayState();
+  static LazyProfileInfos* GetProfileInfos();
+
   // Pointer to VADisplayState's member |va_lock_|. Guaranteed to be valid for
   // the lifetime of VaapiWrapper.
   base::Lock* va_lock_;
@@ -354,9 +349,6 @@ class MEDIA_GPU_EXPORT VaapiWrapper
 
   // VA format of surfaces with va_surface_ids_.
   unsigned int va_surface_format_;
-
-  // Singleton instance of VADisplayState.
-  static base::LazyInstance<VADisplayState> va_display_state_;
 
   // VA handles.
   // All valid after successful Initialize() and until Deinitialize().
@@ -383,10 +375,6 @@ class MEDIA_GPU_EXPORT VaapiWrapper
   VAConfigID va_vpp_config_id_;
   VAContextID va_vpp_context_id_;
   VABufferID va_vpp_buffer_id_;
-
-  // Singleton variable to store supported profile information for encode and
-  // decode.
-  static base::LazyInstance<LazyProfileInfos> profile_infos_;
 
   DISALLOW_COPY_AND_ASSIGN(VaapiWrapper);
 };

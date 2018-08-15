@@ -51,8 +51,9 @@
 #if BUILDFLAG(ENABLE_BASIC_PRINTING)
 #include "chrome/browser/printing/print_job_manager.h"
 #endif // defined(ENABLE_BASIC_PRINTING)
+#include "components/web_cache/browser/web_cache_manager.h"
 #include "content/browser/devtools/devtools_http_handler.h"
-#include "content/browser/gpu/gpu_process_host.h"
+#include "content/browser/gpu/gpu_main_thread_factory.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/utility_process_host_impl.h"
 #include "content/gpu/in_process_gpu_thread.h"
@@ -61,15 +62,18 @@
 #include "content/public/browser/browser_main_runner.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
 #include "content/renderer/in_process_renderer_thread.h"
 #include "content/utility/in_process_utility_thread.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
+#include "gpu/ipc/host/gpu_switches.h"
 #include "net/base/port_util.h"
+#include "ppapi/features/features.h"
 #include "ui/events/event_switches.h"
-#include "ui/native_theme/native_theme_switches.h"
+#include "ui/native_theme/native_theme_features.h"
 #include "ui/gl/gl_switches.h"
 #if defined(OS_WIN)
 #include "sandbox/win/src/sandbox_types.h"
@@ -163,7 +167,7 @@ bool usingQtQuick2DRenderer()
     return device != QLatin1String("default");
 }
 #endif //QT_NO_OPENGL
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 void dummyGetPluginCallback(const std::vector<content::WebPluginInfo>&)
 {
 }
@@ -197,7 +201,8 @@ void WebEngineContext::destroy()
 {
     if (m_devtoolsServer)
         m_devtoolsServer->stop();
-    base::MessagePump::Delegate *delegate = m_runLoop->loop_;
+    base::MessagePump::Delegate *delegate =
+            static_cast<base::MessageLoop *>(m_runLoop->delegate_);
     // Flush the UI message loop before quitting.
     while (delegate->DoWork()) { }
 
@@ -295,8 +300,10 @@ WebEngineContext::WebEngineContext()
         appArgs.append(QString::fromLocal8Bit(qgetenv(kChromiumFlagsEnv)).split(' '));
     }
 
+#ifdef Q_OS_WIN
     bool enableWebGLSoftwareRendering =
             appArgs.removeAll(QStringLiteral("--enable-webgl-software-rendering"));
+#endif
 
     bool useEmbeddedSwitches = false;
 #if defined(QTWEBENGINE_EMBEDDED_SWITCHES)
@@ -331,13 +338,15 @@ WebEngineContext::WebEngineContext()
     }
 
     parsedCommandLine->AppendSwitch(switches::kEnableThreadedCompositing);
-    parsedCommandLine->AppendSwitch(switches::kInProcessGPU);
     // These are currently only default on OS X, and we don't support them:
     parsedCommandLine->AppendSwitch(switches::kDisableZeroCopy);
     parsedCommandLine->AppendSwitch(switches::kDisableGpuMemoryBufferCompositorResources);
 
     // Enabled on OS X and Linux but currently not working. It worked in 5.7 on OS X.
     parsedCommandLine->AppendSwitch(switches::kDisableGpuMemoryBufferVideoFrames);
+
+    // The Mojo local-storage is currently pretty broken and saves in $$PWD/Local\ Storage
+    parsedCommandLine->AppendSwitch(switches::kDisableMojoLocalStorage);
 
     // Shared workers are not safe until Chromium 64
     parsedCommandLine->AppendSwitch(switches::kDisableSharedWorkers);
@@ -348,6 +357,8 @@ WebEngineContext::WebEngineContext()
     parsedCommandLine->AppendSwitch(switches::kDisableAcceleratedVideoDecode);
     // Same problem with Pepper using OpenGL images.
     parsedCommandLine->AppendSwitch(switches::kDisablePepper3DImageChromium);
+    // Same problem with select popups.
+    parsedCommandLine->AppendSwitch(switches::kDisableNativeGpuMemoryBuffers);
 #endif
 
 #if defined(Q_OS_WIN)
@@ -361,10 +372,15 @@ WebEngineContext::WebEngineContext()
     parsedCommandLine->AppendSwitch(switches::kDisableES3GLContext);
 #endif
 
+    // Needed to allow navigations within pages that were set using setHtml(). One example is
+    // tst_QWebEnginePage::acceptNavigationRequest.
+    // This is deprecated behavior, and will be removed in a future Chromium version, as per
+    // upstream Chromium commit ba52f56207a4b9d70b34880fbff2352e71a06422.
+    parsedCommandLine->AppendSwitchASCII(switches::kEnableFeatures,
+                                         features::kAllowContentInitiatedDataUrlNavigations.name);
+
     if (useEmbeddedSwitches) {
-        // Inspired by the Android port's default switches
-        if (!parsedCommandLine->HasSwitch(switches::kDisableOverlayScrollbar))
-            parsedCommandLine->AppendSwitch(switches::kEnableOverlayScrollbar);
+        parsedCommandLine->AppendSwitchASCII(switches::kEnableFeatures, features::kOverlayScrollbar.name);
         if (!parsedCommandLine->HasSwitch(switches::kDisablePinch))
             parsedCommandLine->AppendSwitch(switches::kEnablePinch);
         parsedCommandLine->AppendSwitch(switches::kEnableViewport);
@@ -448,23 +464,33 @@ WebEngineContext::WebEngineContext()
                     }
                 }
             }
+
+            if (qt_gl_global_share_context()->format().profile() == QSurfaceFormat::CompatibilityProfile)
+                parsedCommandLine->AppendSwitch(switches::kCreateDefaultGLContext);
         } else {
             qWarning("WebEngineContext used before QtWebEngine::initialize() or OpenGL context creation failed.");
         }
     }
 #endif
 
-    if (glType)
+    if (glType) {
         parsedCommandLine->AppendSwitchASCII(switches::kUseGL, glType);
-    else
+        parsedCommandLine->AppendSwitch(switches::kInProcessGPU);
+#ifdef Q_OS_WIN
+        if (enableWebGLSoftwareRendering)
+            parsedCommandLine->AppendSwitch(switches::kDisableGpuRasterization);
+#endif
+    } else {
         parsedCommandLine->AppendSwitch(switches::kDisableGpu);
+    }
 
     content::UtilityProcessHostImpl::RegisterUtilityMainThreadFactory(content::CreateInProcessUtilityThread);
     content::RenderProcessHostImpl::RegisterRendererMainThreadFactory(content::CreateInProcessRendererThread);
-    content::GpuProcessHost::RegisterGpuMainThreadFactory(content::CreateInProcessGpuThread);
+    content::RegisterGpuMainThreadFactory(content::CreateInProcessGpuThread);
+
+    mojo::edk::Init();
 
     content::ContentMainParams contentMainParams(m_mainDelegate.get());
-    contentMainParams.setup_signal_handlers = false;
 #if defined(OS_WIN)
     sandbox::SandboxInterfaceInfo sandbox_info = {0};
     content::InitializeSandboxInfo(&sandbox_info);
@@ -484,6 +510,9 @@ WebEngineContext::WebEngineContext()
     // first gets referenced on the IO thread.
     MediaCaptureDevicesDispatcher::GetInstance();
 
+    // Initialize WebCacheManager here to ensure its subscription to render process creation events.
+    web_cache::WebCacheManager::GetInstance();
+
     base::ThreadRestrictions::SetIOAllowed(true);
 
     if (parsedCommandLine->HasSwitch(switches::kExplicitlyAllowedPorts)) {
@@ -491,7 +520,7 @@ WebEngineContext::WebEngineContext()
         net::SetExplicitlyAllowedPorts(allowedPorts);
     }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
     // Creating pepper plugins from the page (which calls PluginService::GetPluginInfoArray)
     // might fail unless the page queried the list of available plugins at least once
     // (which ends up calling PluginService::GetPlugins). Since the plugins list can only

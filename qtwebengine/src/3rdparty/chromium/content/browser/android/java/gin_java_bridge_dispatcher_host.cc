@@ -110,9 +110,10 @@ GinJavaBoundObject::ObjectID GinJavaBridgeDispatcherHost::AddObject(
       is_named ? GinJavaBoundObject::CreateNamed(ref, safe_annotation_clazz)
                : GinJavaBoundObject::CreateTransient(ref, safe_annotation_clazz,
                                                      holder);
-  GinJavaBoundObject::ObjectID object_id = next_object_id_++;
+  GinJavaBoundObject::ObjectID object_id;
   {
     base::AutoLock locker(objects_lock_);
+    object_id = next_object_id_++;
     objects_[object_id] = new_object;
   }
 #if DCHECK_IS_ON()
@@ -329,7 +330,7 @@ void GinJavaBridgeDispatcherHost::OnInvokeMethod(
   DCHECK(routing_id != MSG_ROUTING_NONE);
   scoped_refptr<GinJavaBoundObject> object = FindObject(object_id);
   if (!object.get()) {
-    wrapped_result->Append(base::Value::CreateNullValue());
+    wrapped_result->Append(base::MakeUnique<base::Value>());
     *error_code = kGinJavaBridgeUnknownObjectId;
     return;
   }
@@ -356,10 +357,9 @@ void GinJavaBridgeDispatcherHost::OnInvokeMethod(
                                      routing_id);
     }
     wrapped_result->Append(
-        GinJavaBridgeValue::CreateObjectIDValue(
-            returned_object_id).release());
+        GinJavaBridgeValue::CreateObjectIDValue(returned_object_id));
   } else {
-    wrapped_result->Append(base::Value::CreateNullValue());
+    wrapped_result->Append(base::MakeUnique<base::Value>());
   }
 }
 

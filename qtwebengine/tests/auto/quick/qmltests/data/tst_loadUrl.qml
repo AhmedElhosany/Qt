@@ -231,9 +231,11 @@ TestWebEngineView {
             loadRequest = loadRequestArray[2];
             compare(loadRequest.status, WebEngineView.LoadStartedStatus);
             compare(loadRequest.activeUrl, aboutBlank);
+            compare(loadRequest.url, bogusSite)
             loadRequest = loadRequestArray[3];
             compare(loadRequest.status, WebEngineView.LoadSucceededStatus);
             compare(loadRequest.activeUrl, bogusSite);
+            compare(loadRequest.url, bogusSite)
             webEngineView.clear();
         }
 

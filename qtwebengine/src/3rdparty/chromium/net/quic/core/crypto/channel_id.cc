@@ -4,15 +4,13 @@
 
 #include "net/quic/core/crypto/channel_id.h"
 
-#include "crypto/openssl_util.h"
+#include <cstdint>
+
 #include "third_party/boringssl/src/include/openssl/bn.h"
 #include "third_party/boringssl/src/include/openssl/ec.h"
-#include "third_party/boringssl/src/include/openssl/ec_key.h"
 #include "third_party/boringssl/src/include/openssl/ecdsa.h"
 #include "third_party/boringssl/src/include/openssl/nid.h"
 #include "third_party/boringssl/src/include/openssl/sha.h"
-
-using base::StringPiece;
 
 namespace net {
 
@@ -22,16 +20,16 @@ const char ChannelIDVerifier::kContextStr[] = "QUIC ChannelID";
 const char ChannelIDVerifier::kClientToServerStr[] = "client -> server";
 
 // static
-bool ChannelIDVerifier::Verify(StringPiece key,
-                               StringPiece signed_data,
-                               StringPiece signature) {
+bool ChannelIDVerifier::Verify(QuicStringPiece key,
+                               QuicStringPiece signed_data,
+                               QuicStringPiece signature) {
   return VerifyRaw(key, signed_data, signature, true);
 }
 
 // static
-bool ChannelIDVerifier::VerifyRaw(StringPiece key,
-                                  StringPiece signed_data,
-                                  StringPiece signature,
+bool ChannelIDVerifier::VerifyRaw(QuicStringPiece key,
+                                  QuicStringPiece signed_data,
+                                  QuicStringPiece signature,
                                   bool is_channel_id_signature) {
   if (key.size() != 32 * 2 || signature.size() != 32 * 2) {
     return false;
@@ -39,7 +37,7 @@ bool ChannelIDVerifier::VerifyRaw(StringPiece key,
 
   bssl::UniquePtr<EC_GROUP> p256(
       EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1));
-  if (!p256) {
+  if (p256.get() == nullptr) {
     return false;
   }
 

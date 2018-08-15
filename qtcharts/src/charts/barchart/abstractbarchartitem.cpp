@@ -720,11 +720,6 @@ void AbstractBarChartItem::calculateSeriesPositionAdjustmentAndWidth()
     }
 }
 
-ChartAnimation *AbstractBarChartItem::animation() const
-{
-    return m_animation;
-}
-
 #include "moc_abstractbarchartitem_p.cpp"
 
 QT_CHARTS_END_NAMESPACE

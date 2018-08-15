@@ -7,11 +7,15 @@
 
 #include <algorithm>
 #include <fstream>
+#include <initializer_list>
 #include <set>
 #include <utility>
 #include <vector>
 
 #include "base/base_paths.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
+#include "base/callback_helpers.h"
 #include "base/environment.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -35,7 +39,6 @@
 #include <tchar.h>
 #include <winioctl.h>
 #include "base/win/scoped_handle.h"
-#include "base/win/windows_version.h"
 #endif
 
 #if defined(OS_POSIX)
@@ -160,6 +163,8 @@ class ReparsePoint {
 
 #endif
 
+// Fuchsia doesn't support file permissions.
+#if !defined(OS_FUCHSIA)
 #if defined(OS_POSIX)
 // Provide a simple way to change the permissions bits on |path| in tests.
 // ASSERT failures will return, but not stop the test.  Caller should wrap
@@ -177,6 +182,48 @@ void ChangePosixFilePermissions(const FilePath& path,
   ASSERT_TRUE(SetPosixFilePermissions(path, mode));
 }
 #endif  // defined(OS_POSIX)
+
+// Sets the source file to read-only.
+void SetReadOnly(const FilePath& path, bool read_only) {
+#if defined(OS_WIN)
+  // On Windows, it involves setting/removing the 'readonly' bit.
+  DWORD attrs = GetFileAttributes(path.value().c_str());
+  ASSERT_NE(INVALID_FILE_ATTRIBUTES, attrs);
+  ASSERT_TRUE(SetFileAttributes(
+      path.value().c_str(), read_only ? (attrs | FILE_ATTRIBUTE_READONLY)
+                                      : (attrs & ~FILE_ATTRIBUTE_READONLY)));
+
+  DWORD expected =
+      read_only
+          ? ((attrs & (FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_DIRECTORY)) |
+             FILE_ATTRIBUTE_READONLY)
+          : (attrs & (FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_DIRECTORY));
+
+  // Ignore FILE_ATTRIBUTE_NOT_CONTENT_INDEXED if present.
+  attrs = GetFileAttributes(path.value().c_str()) &
+          ~FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+  ASSERT_EQ(expected, attrs);
+#else
+  // On all other platforms, it involves removing/setting the write bit.
+  mode_t mode = read_only ? S_IRUSR : (S_IRUSR | S_IWUSR);
+  EXPECT_TRUE(SetPosixFilePermissions(
+      path, DirectoryExists(path) ? (mode | S_IXUSR) : mode));
+#endif  // defined(OS_WIN)
+}
+
+bool IsReadOnly(const FilePath& path) {
+#if defined(OS_WIN)
+  DWORD attrs = GetFileAttributes(path.value().c_str());
+  EXPECT_NE(INVALID_FILE_ATTRIBUTES, attrs);
+  return attrs & FILE_ATTRIBUTE_READONLY;
+#else
+  int mode = 0;
+  EXPECT_TRUE(GetPosixFilePermissions(path, &mode));
+  return !(mode & S_IWUSR);
+#endif  // defined(OS_WIN)
+}
+
+#endif  // defined(OS_FUCHSIA)
 
 const wchar_t bogus_content[] = L"I'm cannon fodder.";
 
@@ -244,6 +291,30 @@ std::wstring ReadTextFile(const FilePath& filename) {
   file.getline(contents, arraysize(contents));
   file.close();
   return std::wstring(contents);
+}
+
+// Sets |is_inheritable| to indicate whether or not |stream| is set up to be
+// inerhited into child processes (i.e., HANDLE_FLAG_INHERIT is set on the
+// underlying handle on Windows, or FD_CLOEXEC is not set on the underlying file
+// descriptor on POSIX). Calls to this function must be wrapped with
+// ASSERT_NO_FATAL_FAILURE to properly abort tests in case of fatal failure.
+void GetIsInheritable(FILE* stream, bool* is_inheritable) {
+#if defined(OS_WIN)
+  HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)));
+  ASSERT_NE(INVALID_HANDLE_VALUE, handle);
+
+  DWORD info = 0;
+  ASSERT_EQ(TRUE, ::GetHandleInformation(handle, &info));
+  *is_inheritable = ((info & HANDLE_FLAG_INHERIT) != 0);
+#elif defined(OS_POSIX)
+  int fd = fileno(stream);
+  ASSERT_NE(-1, fd);
+  int flags = fcntl(fd, F_GETFD, 0);
+  ASSERT_NE(-1, flags);
+  *is_inheritable = ((flags & FD_CLOEXEC) == 0);
+#else
+#error Not implemented
+#endif
 }
 
 TEST_F(FileUtilTest, FileAndDirectorySize) {
@@ -548,7 +619,7 @@ TEST_F(FileUtilTest, CreateTemporaryFileInDirLongPathTest) {
 
 #endif  // defined(OS_WIN)
 
-#if defined(OS_POSIX)
+#if !defined(OS_FUCHSIA) && defined(OS_POSIX)
 
 TEST_F(FileUtilTest, CreateAndReadSymlinks) {
   FilePath link_from = temp_dir_.GetPath().Append(FPL("from_file"));
@@ -623,51 +694,7 @@ TEST_F(FileUtilTest, NormalizeFilePathSymlinks) {
   // Infinite loop!
   EXPECT_FALSE(NormalizeFilePath(link_from, &normalized_path));
 }
-#endif  // defined(OS_POSIX)
 
-TEST_F(FileUtilTest, DeleteNonExistent) {
-  FilePath non_existent =
-      temp_dir_.GetPath().AppendASCII("bogus_file_dne.foobar");
-  ASSERT_FALSE(PathExists(non_existent));
-
-  EXPECT_TRUE(DeleteFile(non_existent, false));
-  ASSERT_FALSE(PathExists(non_existent));
-  EXPECT_TRUE(DeleteFile(non_existent, true));
-  ASSERT_FALSE(PathExists(non_existent));
-}
-
-TEST_F(FileUtilTest, DeleteNonExistentWithNonExistentParent) {
-  FilePath non_existent = temp_dir_.GetPath().AppendASCII("bogus_topdir");
-  non_existent = non_existent.AppendASCII("bogus_subdir");
-  ASSERT_FALSE(PathExists(non_existent));
-
-  EXPECT_TRUE(DeleteFile(non_existent, false));
-  ASSERT_FALSE(PathExists(non_existent));
-  EXPECT_TRUE(DeleteFile(non_existent, true));
-  ASSERT_FALSE(PathExists(non_existent));
-}
-
-TEST_F(FileUtilTest, DeleteFile) {
-  // Create a file
-  FilePath file_name = temp_dir_.GetPath().Append(FPL("Test DeleteFile 1.txt"));
-  CreateTextFile(file_name, bogus_content);
-  ASSERT_TRUE(PathExists(file_name));
-
-  // Make sure it's deleted
-  EXPECT_TRUE(DeleteFile(file_name, false));
-  EXPECT_FALSE(PathExists(file_name));
-
-  // Test recursive case, create a new file
-  file_name = temp_dir_.GetPath().Append(FPL("Test DeleteFile 2.txt"));
-  CreateTextFile(file_name, bogus_content);
-  ASSERT_TRUE(PathExists(file_name));
-
-  // Make sure it's deleted
-  EXPECT_TRUE(DeleteFile(file_name, true));
-  EXPECT_FALSE(PathExists(file_name));
-}
-
-#if defined(OS_POSIX)
 TEST_F(FileUtilTest, DeleteSymlinkToExistentFile) {
   // Create a file.
   FilePath file_name = temp_dir_.GetPath().Append(FPL("Test DeleteFile 2.txt"));
@@ -880,7 +907,105 @@ TEST_F(FileUtilTest, ExecutableExistsInPath) {
   EXPECT_FALSE(ExecutableExistsInPath(env.get(), kDneFileName));
 }
 
-#endif  // defined(OS_POSIX)
+#endif  // !defined(OS_FUCHSIA) && defined(OS_POSIX)
+
+#if !defined(OS_FUCHSIA)
+
+TEST_F(FileUtilTest, CopyFileACL) {
+  // While FileUtilTest.CopyFile asserts the content is correctly copied over,
+  // this test case asserts the access control bits are meeting expectations in
+  // CopyFile().
+  FilePath src = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("src.txt"));
+  const std::wstring file_contents(L"Gooooooooooooooooooooogle");
+  CreateTextFile(src, file_contents);
+
+  // Set the source file to read-only.
+  ASSERT_FALSE(IsReadOnly(src));
+  SetReadOnly(src, true);
+  ASSERT_TRUE(IsReadOnly(src));
+
+  // Copy the file.
+  FilePath dst = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("dst.txt"));
+  ASSERT_TRUE(CopyFile(src, dst));
+  EXPECT_EQ(file_contents, ReadTextFile(dst));
+
+  ASSERT_FALSE(IsReadOnly(dst));
+}
+
+TEST_F(FileUtilTest, CopyDirectoryACL) {
+  // Create source directories.
+  FilePath src = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("src"));
+  FilePath src_subdir = src.Append(FILE_PATH_LITERAL("subdir"));
+  CreateDirectory(src_subdir);
+  ASSERT_TRUE(PathExists(src_subdir));
+
+  // Create a file under the directory.
+  FilePath src_file = src.Append(FILE_PATH_LITERAL("src.txt"));
+  CreateTextFile(src_file, L"Gooooooooooooooooooooogle");
+  SetReadOnly(src_file, true);
+  ASSERT_TRUE(IsReadOnly(src_file));
+
+  // Make directory read-only.
+  SetReadOnly(src_subdir, true);
+  ASSERT_TRUE(IsReadOnly(src_subdir));
+
+  // Copy the directory recursively.
+  FilePath dst = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("dst"));
+  FilePath dst_file = dst.Append(FILE_PATH_LITERAL("src.txt"));
+  EXPECT_TRUE(CopyDirectory(src, dst, true));
+
+  FilePath dst_subdir = dst.Append(FILE_PATH_LITERAL("subdir"));
+  ASSERT_FALSE(IsReadOnly(dst_subdir));
+  ASSERT_FALSE(IsReadOnly(dst_file));
+
+  // Give write permissions to allow deletion.
+  SetReadOnly(src_subdir, false);
+  ASSERT_FALSE(IsReadOnly(src_subdir));
+}
+
+#endif  // !defined(OS_FUCHSIA)
+
+TEST_F(FileUtilTest, DeleteNonExistent) {
+  FilePath non_existent =
+      temp_dir_.GetPath().AppendASCII("bogus_file_dne.foobar");
+  ASSERT_FALSE(PathExists(non_existent));
+
+  EXPECT_TRUE(DeleteFile(non_existent, false));
+  ASSERT_FALSE(PathExists(non_existent));
+  EXPECT_TRUE(DeleteFile(non_existent, true));
+  ASSERT_FALSE(PathExists(non_existent));
+}
+
+TEST_F(FileUtilTest, DeleteNonExistentWithNonExistentParent) {
+  FilePath non_existent = temp_dir_.GetPath().AppendASCII("bogus_topdir");
+  non_existent = non_existent.AppendASCII("bogus_subdir");
+  ASSERT_FALSE(PathExists(non_existent));
+
+  EXPECT_TRUE(DeleteFile(non_existent, false));
+  ASSERT_FALSE(PathExists(non_existent));
+  EXPECT_TRUE(DeleteFile(non_existent, true));
+  ASSERT_FALSE(PathExists(non_existent));
+}
+
+TEST_F(FileUtilTest, DeleteFile) {
+  // Create a file
+  FilePath file_name = temp_dir_.GetPath().Append(FPL("Test DeleteFile 1.txt"));
+  CreateTextFile(file_name, bogus_content);
+  ASSERT_TRUE(PathExists(file_name));
+
+  // Make sure it's deleted
+  EXPECT_TRUE(DeleteFile(file_name, false));
+  EXPECT_FALSE(PathExists(file_name));
+
+  // Test recursive case, create a new file
+  file_name = temp_dir_.GetPath().Append(FPL("Test DeleteFile 2.txt"));
+  CreateTextFile(file_name, bogus_content);
+  ASSERT_TRUE(PathExists(file_name));
+
+  // Make sure it's deleted
+  EXPECT_TRUE(DeleteFile(file_name, true));
+  EXPECT_FALSE(PathExists(file_name));
+}
 
 #if defined(OS_WIN)
 // Tests that the Delete function works for wild cards, especially
@@ -1425,77 +1550,6 @@ TEST_F(FileUtilTest, CopyDirectoryWithTrailingSeparators) {
   EXPECT_TRUE(PathExists(file_name_to));
 }
 
-// Sets the source file to read-only.
-void SetReadOnly(const FilePath& path, bool read_only) {
-#if defined(OS_WIN)
-  // On Windows, it involves setting/removing the 'readonly' bit.
-  DWORD attrs = GetFileAttributes(path.value().c_str());
-  ASSERT_NE(INVALID_FILE_ATTRIBUTES, attrs);
-  ASSERT_TRUE(SetFileAttributes(
-      path.value().c_str(),
-      read_only ? (attrs | FILE_ATTRIBUTE_READONLY) :
-          (attrs & ~FILE_ATTRIBUTE_READONLY)));
-
-  DWORD expected = read_only ?
-      ((attrs & (FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_DIRECTORY)) |
-          FILE_ATTRIBUTE_READONLY) :
-      (attrs & (FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_DIRECTORY));
-
-  // Ignore FILE_ATTRIBUTE_NOT_CONTENT_INDEXED if present.
-  attrs = GetFileAttributes(path.value().c_str()) &
-          ~FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
-  ASSERT_EQ(expected, attrs);
-#else
-  // On all other platforms, it involves removing/setting the write bit.
-  mode_t mode = read_only ? S_IRUSR : (S_IRUSR | S_IWUSR);
-  EXPECT_TRUE(SetPosixFilePermissions(
-      path, DirectoryExists(path) ? (mode | S_IXUSR) : mode));
-#endif
-}
-
-bool IsReadOnly(const FilePath& path) {
-#if defined(OS_WIN)
-  DWORD attrs = GetFileAttributes(path.value().c_str());
-  EXPECT_NE(INVALID_FILE_ATTRIBUTES, attrs);
-  return attrs & FILE_ATTRIBUTE_READONLY;
-#else
-  int mode = 0;
-  EXPECT_TRUE(GetPosixFilePermissions(path, &mode));
-  return !(mode & S_IWUSR);
-#endif
-}
-
-TEST_F(FileUtilTest, CopyDirectoryACL) {
-  // Create source directories.
-  FilePath src = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("src"));
-  FilePath src_subdir = src.Append(FILE_PATH_LITERAL("subdir"));
-  CreateDirectory(src_subdir);
-  ASSERT_TRUE(PathExists(src_subdir));
-
-  // Create a file under the directory.
-  FilePath src_file = src.Append(FILE_PATH_LITERAL("src.txt"));
-  CreateTextFile(src_file, L"Gooooooooooooooooooooogle");
-  SetReadOnly(src_file, true);
-  ASSERT_TRUE(IsReadOnly(src_file));
-
-  // Make directory read-only.
-  SetReadOnly(src_subdir, true);
-  ASSERT_TRUE(IsReadOnly(src_subdir));
-
-  // Copy the directory recursively.
-  FilePath dst = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("dst"));
-  FilePath dst_file = dst.Append(FILE_PATH_LITERAL("src.txt"));
-  EXPECT_TRUE(CopyDirectory(src, dst, true));
-
-  FilePath dst_subdir = dst.Append(FILE_PATH_LITERAL("subdir"));
-  ASSERT_FALSE(IsReadOnly(dst_subdir));
-  ASSERT_FALSE(IsReadOnly(dst_file));
-
-  // Give write permissions to allow deletion.
-  SetReadOnly(src_subdir, false);
-  ASSERT_FALSE(IsReadOnly(src_subdir));
-}
-
 TEST_F(FileUtilTest, CopyFile) {
   // Create a directory
   FilePath dir_name_from =
@@ -1531,27 +1585,6 @@ TEST_F(FileUtilTest, CopyFile) {
   EXPECT_EQ(file_contents, read_contents);
   EXPECT_FALSE(PathExists(dest_file2_test));
   EXPECT_FALSE(PathExists(dest_file2));
-}
-
-TEST_F(FileUtilTest, CopyFileACL) {
-  // While FileUtilTest.CopyFile asserts the content is correctly copied over,
-  // this test case asserts the access control bits are meeting expectations in
-  // CopyFile().
-  FilePath src = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("src.txt"));
-  const std::wstring file_contents(L"Gooooooooooooooooooooogle");
-  CreateTextFile(src, file_contents);
-
-  // Set the source file to read-only.
-  ASSERT_FALSE(IsReadOnly(src));
-  SetReadOnly(src, true);
-  ASSERT_TRUE(IsReadOnly(src));
-
-  // Copy the file.
-  FilePath dst = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("dst.txt"));
-  ASSERT_TRUE(CopyFile(src, dst));
-  EXPECT_EQ(file_contents, ReadTextFile(dst));
-
-  ASSERT_FALSE(IsReadOnly(dst));
 }
 
 // file_util winds up using autoreleased objects on the Mac, so this needs
@@ -1710,6 +1743,26 @@ TEST_F(FileUtilTest, GetTempDirTest) {
   }
 }
 #endif  // OS_WIN
+
+// Test that files opened by OpenFile are not set up for inheritance into child
+// procs.
+TEST_F(FileUtilTest, OpenFileNoInheritance) {
+  FilePath file_path(temp_dir_.GetPath().Append(FPL("a_file")));
+
+  for (const char* mode : {"wb", "r,ccs=UTF-8"}) {
+    SCOPED_TRACE(mode);
+    ASSERT_NO_FATAL_FAILURE(CreateTextFile(file_path, L"Geepers"));
+    FILE* file = OpenFile(file_path, mode);
+    ASSERT_NE(nullptr, file);
+    {
+      ScopedClosureRunner file_closer(Bind(IgnoreResult(&CloseFile), file));
+      bool is_inheritable = true;
+      ASSERT_NO_FATAL_FAILURE(GetIsInheritable(file, &is_inheritable));
+      EXPECT_FALSE(is_inheritable);
+    }
+    ASSERT_TRUE(DeleteFile(file_path, false));
+  }
+}
 
 TEST_F(FileUtilTest, CreateTemporaryFileTest) {
   FilePath temp_files[3];
@@ -1980,18 +2033,16 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
     ReparsePoint reparse_point(dir1, dir2);
     EXPECT_TRUE(reparse_point.IsValid());
 
-    if ((win::GetVersion() >= win::VERSION_VISTA)) {
-      // There can be a delay for the enumeration code to see the change on
-      // the file system so skip this test for XP.
-      // Enumerate the reparse point.
-      FileEnumerator f6(dir1, true, FILES_AND_DIRECTORIES);
-      FindResultCollector c6(&f6);
-      FilePath inner2 = dir1.Append(FPL("inner"));
-      EXPECT_TRUE(c6.HasFile(inner2));
-      EXPECT_TRUE(c6.HasFile(inner2.Append(FPL("innerfile.txt"))));
-      EXPECT_TRUE(c6.HasFile(dir1.Append(FPL("dir2file.txt"))));
-      EXPECT_EQ(3, c6.size());
-    }
+    // There can be a delay for the enumeration code to see the change on
+    // the file system so skip this test for XP.
+    // Enumerate the reparse point.
+    FileEnumerator f6(dir1, true, FILES_AND_DIRECTORIES);
+    FindResultCollector c6(&f6);
+    FilePath inner2 = dir1.Append(FPL("inner"));
+    EXPECT_TRUE(c6.HasFile(inner2));
+    EXPECT_TRUE(c6.HasFile(inner2.Append(FPL("innerfile.txt"))));
+    EXPECT_TRUE(c6.HasFile(dir1.Append(FPL("dir2file.txt"))));
+    EXPECT_EQ(3, c6.size());
 
     // No changes for non recursive operation.
     FileEnumerator f7(temp_dir_.GetPath(), false, FILES_AND_DIRECTORIES);
@@ -2164,7 +2215,8 @@ TEST_F(FileUtilTest, TouchFile) {
 
   FilePath foobar(data_dir.Append(FILE_PATH_LITERAL("foobar.txt")));
   std::string data("hello");
-  ASSERT_TRUE(WriteFile(foobar, data.c_str(), data.length()));
+  ASSERT_EQ(static_cast<int>(data.length()),
+            WriteFile(foobar, data.c_str(), data.length()));
 
   Time access_time;
   // This timestamp is divisible by one day (in local timezone),
@@ -2181,8 +2233,11 @@ TEST_F(FileUtilTest, TouchFile) {
   ASSERT_TRUE(TouchFile(foobar, access_time, modification_time));
   File::Info file_info;
   ASSERT_TRUE(GetFileInfo(foobar, &file_info));
+#if !defined(OS_FUCHSIA)
+  // Access time is not supported on Fuchsia, see https://crbug.com/735233.
   EXPECT_EQ(access_time.ToInternalValue(),
             file_info.last_accessed.ToInternalValue());
+#endif
   EXPECT_EQ(modification_time.ToInternalValue(),
             file_info.last_modified.ToInternalValue());
 }
@@ -2199,12 +2254,41 @@ TEST_F(FileUtilTest, IsDirectoryEmpty) {
 
   FilePath foo(empty_dir.Append(FILE_PATH_LITERAL("foo.txt")));
   std::string bar("baz");
-  ASSERT_TRUE(WriteFile(foo, bar.c_str(), bar.length()));
+  ASSERT_EQ(static_cast<int>(bar.length()),
+            WriteFile(foo, bar.c_str(), bar.length()));
 
   EXPECT_FALSE(IsDirectoryEmpty(empty_dir));
 }
 
 #if defined(OS_POSIX)
+
+TEST_F(FileUtilTest, SetNonBlocking) {
+  const int kInvalidFd = 99999;
+  EXPECT_FALSE(SetNonBlocking(kInvalidFd));
+
+  base::FilePath path;
+  ASSERT_TRUE(PathService::Get(base::DIR_TEST_DATA, &path));
+  path = path.Append(FPL("file_util")).Append(FPL("original.txt"));
+  ScopedFD fd(open(path.value().c_str(), O_RDONLY));
+  ASSERT_GE(fd.get(), 0);
+  EXPECT_TRUE(SetNonBlocking(fd.get()));
+}
+
+TEST_F(FileUtilTest, SetCloseOnExec) {
+  const int kInvalidFd = 99999;
+  EXPECT_FALSE(SetCloseOnExec(kInvalidFd));
+
+  base::FilePath path;
+  ASSERT_TRUE(PathService::Get(base::DIR_TEST_DATA, &path));
+  path = path.Append(FPL("file_util")).Append(FPL("original.txt"));
+  ScopedFD fd(open(path.value().c_str(), O_RDONLY));
+  ASSERT_GE(fd.get(), 0);
+  EXPECT_TRUE(SetCloseOnExec(fd.get()));
+}
+
+#endif
+
+#if defined(OS_POSIX) && !defined(OS_FUCHSIA)
 
 // Testing VerifyPathControlledByAdmin() is hard, because there is no
 // way a test can make a file owned by root, or change file paths
@@ -2488,6 +2572,8 @@ TEST_F(VerifyPathControlledByUserTest, WriteBitChecks) {
   EXPECT_TRUE(VerifyPathControlledByUser(sub_dir_, text_file_, uid_, ok_gids_));
 }
 
+#endif  // defined(OS_POSIX) && !defined(OS_FUCHSIA)
+
 #if defined(OS_ANDROID)
 TEST_F(FileUtilTest, ValidContentUriTest) {
   // Get the test image path.
@@ -2532,6 +2618,8 @@ TEST_F(FileUtilTest, NonExistentContentUriTest) {
   EXPECT_FALSE(file.IsValid());
 }
 #endif
+
+#if defined(OS_POSIX)
 
 TEST(ScopedFD, ScopedFDDoesClose) {
   int fds[2];

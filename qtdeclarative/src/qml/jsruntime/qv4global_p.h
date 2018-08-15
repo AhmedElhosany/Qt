@@ -178,6 +178,7 @@ namespace Heap {
     struct DataView;
     struct TypedArray;
 
+    template <typename T, size_t> struct Pointer;
 }
 
 class MemoryManager;
@@ -192,9 +193,12 @@ struct ScriptFunction;
 struct InternalClass;
 struct Property;
 struct Value;
+template<size_t> struct HeapValue;
+template<size_t> struct ValueArray;
 struct Lookup;
 struct ArrayData;
 struct VTable;
+struct Function;
 
 struct BooleanObject;
 struct NumberObject;
@@ -252,6 +256,7 @@ enum PropertyFlag {
     Attr_NotEnumerable = 0x4,
     Attr_NotConfigurable = 0x8,
     Attr_ReadOnly = Attr_NotWritable|Attr_NotEnumerable|Attr_NotConfigurable,
+    Attr_ReadOnly_ButConfigurable = Attr_NotWritable|Attr_NotEnumerable,
     Attr_Invalid = 0xff
 };
 

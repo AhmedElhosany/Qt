@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.Tumbler {
     id: control
@@ -46,9 +46,9 @@ T.Tumbler {
 
     delegate: Text {
         text: modelData
-        color: control.visualFocus ? Default.focusColor : Default.textDarkColor
+        color: control.visualFocus ? control.palette.highlight : control.palette.text
         font: control.font
-        opacity: (1.0 - Math.abs(Tumbler.displacement) / (control.visibleItemCount / 2)) * (control.enabled ? 1 : 0.6)
+        opacity: 1.0 - Math.abs(Tumbler.displacement) / (control.visibleItemCount / 2)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
     }

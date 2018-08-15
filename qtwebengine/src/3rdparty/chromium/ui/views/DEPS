@@ -1,4 +1,7 @@
 include_rules = [
+  "+cc/paint",
+  "+components/vector_icons",
+  "+services/ui/public/interfaces",
   "+skia/ext",
   "+third_party/iaccessible2",
   "+third_party/skia",
@@ -25,7 +28,13 @@ specific_include_rules = {
   "examples_browser_main_parts\.cc": [
     "+ui/wm/test"
   ],
+  "run_all_unittests_main\.cc": [
+    "+mojo/edk/embedder",
+  ],
   "view_unittest\.cc": [
     "+cc/playback"
   ],
+  "views_test_suite\.cc": [
+    "+gpu/ipc/service",
+  ]
 }

@@ -6,6 +6,7 @@
 
 #include <set>
 
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync/driver/sync_client.h"
 #include "components/sync_sessions/sync_sessions_client.h"
@@ -19,7 +20,11 @@ SessionDataTypeController::SessionDataTypeController(
     syncer::SyncClient* sync_client,
     syncer::LocalDeviceInfoProvider* local_device,
     const char* history_disabled_pref_name)
-    : UIDataTypeController(syncer::SESSIONS, dump_stack, sync_client),
+    : AsyncDirectoryTypeController(syncer::SESSIONS,
+                                   dump_stack,
+                                   sync_client,
+                                   syncer::GROUP_UI,
+                                   base::ThreadTaskRunnerHandle::Get()),
       sync_client_(sync_client),
       local_device_(local_device),
       history_disabled_pref_name_(history_disabled_pref_name),
@@ -39,11 +44,10 @@ bool SessionDataTypeController::StartModels() {
   DCHECK(CalledOnValidThread());
   SyncedWindowDelegatesGetter* synced_window_getter =
       sync_client_->GetSyncSessionsClient()->GetSyncedWindowDelegatesGetter();
-  std::set<const SyncedWindowDelegate*> window =
+  SyncedWindowDelegatesGetter::SyncedWindowDelegateMap windows =
       synced_window_getter->GetSyncedWindowDelegates();
-  for (std::set<const SyncedWindowDelegate*>::const_iterator i = window.begin();
-       i != window.end(); ++i) {
-    if ((*i)->IsSessionRestoreInProgress()) {
+  for (const auto& window_iter_pair : windows) {
+    if (window_iter_pair.second->IsSessionRestoreInProgress()) {
       waiting_on_session_restore_ = true;
       break;
     }
@@ -81,7 +85,7 @@ bool SessionDataTypeController::IsWaiting() {
 }
 
 void SessionDataTypeController::MaybeCompleteLoading() {
-  if (state_ == MODEL_STARTING && !IsWaiting()) {
+  if (state() == MODEL_STARTING && !IsWaiting()) {
     OnModelLoaded();
   }
 }

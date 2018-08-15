@@ -39,11 +39,6 @@ Item {
         Item { id: itemB; objectName: "itemB"; x: 100; y: 100 }
     }
 
-    Component {
-        id: itemComponent
-        Item { x: 150; y: 150 }
-    }
-
     function mapAToB(x, y) {
         var pos = itemA.mapToItem(itemB, x, y)
         return Qt.point(pos.x, pos.y)
@@ -71,18 +66,6 @@ Item {
 
     function mapAFromGlobal(x, y) {
         var pos = itemA.mapFromGlobal(x, y)
-        return Qt.point(pos.x, pos.y)
-    }
-
-    function mapOrphanToGlobal(x, y) {
-        var obj = itemComponent.createObject(null);
-        var pos = obj.mapToGlobal(x, y)
-        return Qt.point(pos.x, pos.y)
-    }
-
-    function mapOrphanFromGlobal(x, y) {
-        var obj = itemComponent.createObject(null);
-        var pos = obj.mapFromGlobal(x, y)
         return Qt.point(pos.x, pos.y)
     }
 

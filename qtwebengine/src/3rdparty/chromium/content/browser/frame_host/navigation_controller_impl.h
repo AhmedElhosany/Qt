@@ -83,13 +83,10 @@ class CONTENT_EXPORT NavigationControllerImpl
   void ContinuePendingReload() override;
   bool IsInitialNavigation() const override;
   bool IsInitialBlankNavigation() const override;
-  void Reload(bool check_for_repost) override;
-  void ReloadToRefreshContent(bool check_for_repost) override;
-  void ReloadBypassingCache(bool check_for_repost) override;
-  void ReloadOriginalRequestURL(bool check_for_repost) override;
-  void ReloadDisableLoFi(bool check_for_repost) override;
+  void Reload(ReloadType reload_type, bool check_for_repost) override;
   void NotifyEntryChanged(const NavigationEntry* entry) override;
-  void CopyStateFrom(const NavigationController& source) override;
+  void CopyStateFrom(const NavigationController& source,
+                     bool needs_reload) override;
   void CopyStateFromAndPrune(NavigationController* source,
                              bool replace_entry) override;
   bool CanPruneAllButLastCommitted() override;
@@ -205,6 +202,10 @@ class CONTENT_EXPORT NavigationControllerImpl
   // entry is being discarded because it failed to load.
   void DiscardPendingEntry(bool was_failure);
 
+  // Sets a flag on the pending NavigationEntryImpl instance if any that the
+  // navigation failed due to an SSL error.
+  void SetPendingNavigationSSLError(bool error);
+
  private:
   friend class RestoreHelper;
 
@@ -276,13 +277,14 @@ class CONTENT_EXPORT NavigationControllerImpl
   void RendererDidNavigateToNewPage(
       RenderFrameHostImpl* rfh,
       const FrameHostMsg_DidCommitProvisionalLoad_Params& params,
-      bool is_in_page,
+      bool is_same_document,
       bool replace_entry,
       NavigationHandleImpl* handle);
   void RendererDidNavigateToExistingPage(
       RenderFrameHostImpl* rfh,
       const FrameHostMsg_DidCommitProvisionalLoad_Params& params,
-      bool is_in_page,
+      bool is_same_document,
+      bool was_restored,
       NavigationHandleImpl* handle);
   void RendererDidNavigateToSamePage(
       RenderFrameHostImpl* rfh,
@@ -291,15 +293,11 @@ class CONTENT_EXPORT NavigationControllerImpl
   void RendererDidNavigateNewSubframe(
       RenderFrameHostImpl* rfh,
       const FrameHostMsg_DidCommitProvisionalLoad_Params& params,
-      bool is_in_page,
+      bool is_same_document,
       bool replace_entry);
   bool RendererDidNavigateAutoSubframe(
       RenderFrameHostImpl* rfh,
       const FrameHostMsg_DidCommitProvisionalLoad_Params& params);
-
-  // Helper function for code shared between Reload() and
-  // ReloadBypassingCache().
-  void ReloadInternal(bool check_for_repost, ReloadType reload_type);
 
   // Actually issues the navigation held in pending_entry.
   void NavigateToPendingEntry(ReloadType reload_type);
@@ -366,9 +364,13 @@ class CONTENT_EXPORT NavigationControllerImpl
   // displayed tab is.
   //
   // This may refer to an item in the entries_ list if the pending_entry_index_
-  // == -1, or it may be its own entry that should be deleted. Be careful with
+  // != -1, or it may be its own entry that should be deleted. Be careful with
   // the memory management.
   NavigationEntryImpl* pending_entry_;
+
+  // Navigations could occur in succession. This field holds the last pending
+  // entry for which we haven't received a response yet.
+  NavigationEntryImpl* last_pending_entry_;
 
   // If a new entry fails loading, details about it are temporarily held here
   // until the error page is shown (or 0 otherwise).
@@ -393,6 +395,13 @@ class CONTENT_EXPORT NavigationControllerImpl
   // temporarily (until the next navigation).  Any index pointing to an entry
   // after the transient entry will become invalid if you navigate forward.
   int transient_entry_index_;
+
+  // The index of the last pending entry if it is in entries, or -1 if it was
+  // created by LoadURL.
+  int last_pending_entry_index_;
+
+  // The index of the last transient entry. Defaults to -1.
+  int last_transient_entry_index_;
 
   // The delegate associated with the controller. Possibly NULL during
   // setup.

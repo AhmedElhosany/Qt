@@ -10,15 +10,18 @@
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/extensions/api/easy_unlock_private/easy_unlock_private_connection.h"
 #include "chrome/common/extensions/api/easy_unlock_private.h"
-#include "components/proximity_auth/connection.h"
-#include "components/proximity_auth/wire_message.h"
+#include "components/cryptauth/connection.h"
+#include "components/cryptauth/wire_message.h"
 #include "extensions/browser/event_router.h"
 
-using proximity_auth::Connection;
-using proximity_auth::WireMessage;
+using cryptauth::Connection;
+using cryptauth::WireMessage;
 
 namespace extensions {
 namespace {
+
+const char kEasyUnlockFeatureName[] = "easy_unlock";
+
 api::easy_unlock_private::ConnectionStatus ToApiConnectionStatus(
     Connection::Status status) {
   switch (status) {
@@ -31,6 +34,7 @@ api::easy_unlock_private::ConnectionStatus ToApiConnectionStatus(
   }
   return api::easy_unlock_private::CONNECTION_STATUS_NONE;
 }
+
 }  // namespace
 
 EasyUnlockPrivateConnectionManager::EasyUnlockPrivateConnectionManager(
@@ -95,10 +99,10 @@ bool EasyUnlockPrivateConnectionManager::Disconnect(const Extension* extension,
 bool EasyUnlockPrivateConnectionManager::SendMessage(
     const Extension* extension,
     int connection_id,
-    const std::string& payload) {
+    const std::string& message_body) {
   Connection* connection = GetConnection(extension->id(), connection_id);
   if (connection && connection->IsConnected()) {
-    connection->SendMessage(base::MakeUnique<WireMessage>(payload));
+    connection->SendMessage(base::MakeUnique<WireMessage>(message_body));
     return true;
   }
   return false;
@@ -126,7 +130,7 @@ void EasyUnlockPrivateConnectionManager::OnMessageReceived(
   std::string event_name = api::easy_unlock_private::OnDataReceived::kEventName;
   events::HistogramValue histogram_value =
       events::EASY_UNLOCK_PRIVATE_ON_DATA_RECEIVED;
-  std::vector<char> data(message.payload().begin(), message.payload().end());
+  std::vector<char> data(message.body().begin(), message.body().end());
   std::unique_ptr<base::ListValue> args =
       api::easy_unlock_private::OnDataReceived::Create(0, data);
   DispatchConnectionEvent(event_name, histogram_value, &connection,
@@ -137,6 +141,11 @@ void EasyUnlockPrivateConnectionManager::OnSendCompleted(
     const Connection& connection,
     const WireMessage& message,
     bool success) {
+  if (message.feature() != std::string(kEasyUnlockFeatureName)) {
+    // Only process messages sent as part of EasyUnlock.
+    return;
+  }
+
   std::string event_name =
       api::easy_unlock_private::OnSendCompleted::kEventName;
   events::HistogramValue histogram_value =
@@ -163,7 +172,7 @@ void EasyUnlockPrivateConnectionManager::DispatchConnectionEvent(
     std::unique_ptr<base::ListValue> args_copy(args->DeepCopy());
     int connection_index = 0;
     args_copy->Set(connection_index,
-                   base::MakeUnique<base::FundamentalValue>(connection_id));
+                   base::MakeUnique<base::Value>(connection_id));
     std::unique_ptr<Event> event(
         new Event(histogram_value, event_name, std::move(args_copy)));
     EventRouter::Get(browser_context_)

@@ -65,20 +65,8 @@ TabletCanvas::TabletCanvas()
   , m_deviceDown(false)
 {
     resize(500, 500);
-    initPixmap();
     setAutoFillBackground(true);
     setAttribute(Qt::WA_TabletTracking);
-}
-
-void TabletCanvas::initPixmap()
-{
-    QPixmap newPixmap = QPixmap(width(), height());
-    newPixmap.fill(Qt::white);
-    QPainter painter(&newPixmap);
-    if (!m_pixmap.isNull())
-        painter.drawPixmap(0, 0, m_pixmap);
-    painter.end();
-    m_pixmap = newPixmap;
 }
 //! [0]
 
@@ -105,23 +93,26 @@ bool TabletCanvas::loadImage(const QString &file)
 //! [3]
 void TabletCanvas::tabletEvent(QTabletEvent *event)
 {
-
     switch (event->type()) {
         case QEvent::TabletPress:
             if (!m_deviceDown) {
                 m_deviceDown = true;
                 lastPoint.pos = event->posF();
+                lastPoint.pressure = event->pressure();
                 lastPoint.rotation = event->rotation();
             }
             break;
         case QEvent::TabletMove:
+#ifndef Q_OS_IOS
             if (event->device() == QTabletEvent::RotationStylus)
                 updateCursor(event);
+#endif
             if (m_deviceDown) {
                 updateBrush(event);
                 QPainter painter(&m_pixmap);
                 paintPixmap(painter, event);
                 lastPoint.pos = event->posF();
+                lastPoint.pressure = event->pressure();
                 lastPoint.rotation = event->rotation();
             }
             break;
@@ -138,8 +129,23 @@ void TabletCanvas::tabletEvent(QTabletEvent *event)
 //! [3]
 
 //! [4]
+void TabletCanvas::initPixmap()
+{
+    qreal dpr = devicePixelRatioF();
+    QPixmap newPixmap = QPixmap(width() * dpr, height() * dpr);
+    newPixmap.setDevicePixelRatio(dpr);
+    newPixmap.fill(Qt::white);
+    QPainter painter(&newPixmap);
+    if (!m_pixmap.isNull())
+        painter.drawPixmap(0, 0, m_pixmap);
+    painter.end();
+    m_pixmap = newPixmap;
+}
+
 void TabletCanvas::paintEvent(QPaintEvent *)
 {
+    if (m_pixmap.isNull())
+        initPixmap();
     QPainter painter(this);
     painter.drawPixmap(0, 0, m_pixmap);
 }
@@ -171,13 +177,14 @@ void TabletCanvas::paintPixmap(QPainter &painter, QTabletEvent *event)
                 painter.setPen(Qt::NoPen);
                 painter.setBrush(m_brush);
                 QPolygonF poly;
-                qreal halfWidth = m_pen.widthF();
-                QPointF brushAdjust(qSin(qDegreesToRadians(lastPoint.rotation)) * halfWidth,
-                                    qCos(qDegreesToRadians(lastPoint.rotation)) * halfWidth);
+                qreal halfWidth = pressureToWidth(lastPoint.pressure);
+                QPointF brushAdjust(qSin(qDegreesToRadians(-lastPoint.rotation)) * halfWidth,
+                                    qCos(qDegreesToRadians(-lastPoint.rotation)) * halfWidth);
                 poly << lastPoint.pos + brushAdjust;
                 poly << lastPoint.pos - brushAdjust;
-                brushAdjust = QPointF(qSin(qDegreesToRadians(event->rotation())) * halfWidth,
-                                      qCos(qDegreesToRadians(event->rotation())) * halfWidth);
+                halfWidth = m_pen.widthF();
+                brushAdjust = QPointF(qSin(qDegreesToRadians(-event->rotation())) * halfWidth,
+                                      qCos(qDegreesToRadians(-event->rotation())) * halfWidth);
                 poly << event->posF() - brushAdjust;
                 poly << event->posF() + brushAdjust;
                 painter.drawConvexPolygon(poly);
@@ -214,6 +221,11 @@ void TabletCanvas::paintPixmap(QPainter &painter, QTabletEvent *event)
     }
 }
 //! [5]
+
+qreal TabletCanvas::pressureToWidth(qreal pressure)
+{
+    return pressure * 10 + 1;
+}
 
 //! [7]
 void TabletCanvas::updateBrush(const QTabletEvent *event)
@@ -260,7 +272,7 @@ void TabletCanvas::updateBrush(const QTabletEvent *event)
 //! [9] //! [10]
     switch (m_lineWidthValuator) {
         case PressureValuator:
-            m_pen.setWidthF(event->pressure() * 10 + 1);
+            m_pen.setWidthF(pressureToWidth(event->pressure()));
             break;
         case TiltValuator:
             m_pen.setWidthF(maximum(abs(vValue - 127), abs(hValue - 127)) / 12);
@@ -305,7 +317,7 @@ void TabletCanvas::updateCursor(const QTabletEvent *event)
                 QPainter painter(&img);
                 QTransform transform = painter.transform();
                 transform.translate(16, 16);
-                transform.rotate(-event->rotation());
+                transform.rotate(event->rotation());
                 painter.setTransform(transform);
                 painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
                 painter.drawImage(-24, -24, origImg);

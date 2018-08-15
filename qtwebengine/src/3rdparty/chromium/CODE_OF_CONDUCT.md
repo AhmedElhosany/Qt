@@ -2,9 +2,10 @@
 
 Google and the Chromium team are committed to preserving and fostering a
 diverse, welcoming community. Below is our community code of conduct, which
-applies to our repos and organizations, mailing lists, blog content, and any
-other Chromium-supported communication group, as well as any private
-communication initiated in the context of these spaces.
+applies to our repos and organizations, issue trackers, mailing lists,
+blog content, and any other Chromium-supported communication group, as
+well as any private communication initiated in the context of these
+spaces.
 
 Simply put, community discussions should be
 
@@ -28,14 +29,6 @@ You are empowered to politely engage when you feel that you or others are
 disrespected. The person making you feel uncomfortable may not be aware of what
 they are doing - politely bringing their behavior to their attention is
 encouraged.
-
-If you are uncomfortable speaking up, or feel that your concerns are not being
-duly considered, you can email community@chromium.org to request involvement
-from a community manager. You may also email any of the community managers
-directly. All concerns shared with community managers will be kept
-confidential. In cases where a public response is deemed necessary, the
-identities of victims and reporters will remain confidential unless those
-individuals instruct us otherwise.
 
 If you are uncomfortable speaking up, or feel that your concerns are not being
 duly considered, you can email community@chromium.org, dknox@google.com, or

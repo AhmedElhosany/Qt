@@ -15,7 +15,6 @@ namespace metrics {
 
 class ChromeUserMetricsExtension;
 class SystemProfileProto;
-class SystemProfileProto_Stability;
 
 // MetricsProvider is an interface allowing different parts of the UMA protos to
 // be filled out by different classes.
@@ -42,6 +41,14 @@ class MetricsProvider {
   // histograms in this callback, as the application may be killed without
   // further notification after this callback.
   virtual void OnAppEnterBackground();
+
+  // Provides a complete and independent system profile + metrics for uploading.
+  // Any histograms added to the |snapshot_manager| will also be included. A
+  // return of false indicates there are none. Will be called repeatedly until
+  // there is nothing else.
+  virtual bool ProvideIndependentMetrics(
+      SystemProfileProto* system_profile_proto,
+      base::HistogramSnapshotManager* snapshot_manager);
 
   // Provides additional metrics into the system profile.
   virtual void ProvideSystemProfileMetrics(
@@ -76,10 +83,6 @@ class MetricsProvider {
   // collected right before upload.
   virtual void ProvideGeneralMetrics(
       ChromeUserMetricsExtension* uma_proto);
-
-  // Called during regular collection to explicitly merge histogram deltas
-  // to the global StatisticsRecorder.
-  virtual void MergeHistogramDeltas();
 
   // Called during regular collection to explicitly load histogram snapshots
   // using a snapshot manager. PrepareDeltas() will have already been called

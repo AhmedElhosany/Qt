@@ -27,10 +27,8 @@
 #include "net/quic/core/crypto/crypto_protocol.h"
 #include "net/ssl/ssl_config_service.h"
 
-using base::StringPiece;
 using base::StringPrintf;
 using std::string;
-using std::vector;
 
 namespace net {
 
@@ -70,7 +68,7 @@ class ProofVerifierChromium::Job {
       const uint16_t port,
       const std::string& server_config,
       QuicVersion quic_version,
-      base::StringPiece chlo_hash,
+      QuicStringPiece chlo_hash,
       const std::vector<std::string>& certs,
       const std::string& cert_sct,
       const std::string& signature,
@@ -96,7 +94,7 @@ class ProofVerifierChromium::Job {
   };
 
   // Convert |certs| to |cert_|(X509Certificate). Returns true if successful.
-  bool GetX509Certificate(const vector<string>& certs,
+  bool GetX509Certificate(const std::vector<string>& certs,
                           std::string* error_details,
                           std::unique_ptr<ProofVerifyDetails>* verify_details);
 
@@ -115,7 +113,7 @@ class ProofVerifierChromium::Job {
 
   bool VerifySignature(const std::string& signed_data,
                        QuicVersion quic_version,
-                       StringPiece chlo_hash,
+                       QuicStringPiece chlo_hash,
                        const std::string& signature,
                        const std::string& cert);
 
@@ -201,8 +199,8 @@ QuicAsyncStatus ProofVerifierChromium::Job::VerifyProof(
     const uint16_t port,
     const string& server_config,
     QuicVersion quic_version,
-    StringPiece chlo_hash,
-    const vector<string>& certs,
+    QuicStringPiece chlo_hash,
+    const std::vector<string>& certs,
     const std::string& cert_sct,
     const string& signature,
     std::string* error_details,
@@ -226,14 +224,12 @@ QuicAsyncStatus ProofVerifierChromium::Job::VerifyProof(
   if (!GetX509Certificate(certs, error_details, verify_details))
     return QUIC_FAILURE;
 
-  if (!cert_sct.empty()) {
-    // Note that this is a completely synchronous operation: The CT Log Verifier
-    // gets all the data it needs for SCT verification and does not do any
-    // external communication.
-    cert_transparency_verifier_->Verify(cert_.get(), std::string(), cert_sct,
-                                        &verify_details_->ct_verify_result.scts,
-                                        net_log_);
-  }
+  // Note that this is a completely synchronous operation: The CT Log Verifier
+  // gets all the data it needs for SCT verification and does not do any
+  // external communication.
+  cert_transparency_verifier_->Verify(cert_.get(), std::string(), cert_sct,
+                                      &verify_details_->ct_verify_result.scts,
+                                      net_log_);
 
   // We call VerifySignature first to avoid copying of server_config and
   // signature.
@@ -254,7 +250,7 @@ QuicAsyncStatus ProofVerifierChromium::Job::VerifyProof(
 
 QuicAsyncStatus ProofVerifierChromium::Job::VerifyCertChain(
     const string& hostname,
-    const vector<string>& certs,
+    const std::vector<string>& certs,
     std::string* error_details,
     std::unique_ptr<ProofVerifyDetails>* verify_details,
     std::unique_ptr<ProofVerifierCallback> callback) {
@@ -283,7 +279,7 @@ QuicAsyncStatus ProofVerifierChromium::Job::VerifyCertChain(
 }
 
 bool ProofVerifierChromium::Job::GetX509Certificate(
-    const vector<string>& certs,
+    const std::vector<string>& certs,
     std::string* error_details,
     std::unique_ptr<ProofVerifyDetails>* verify_details) {
   if (certs.empty()) {
@@ -295,9 +291,9 @@ bool ProofVerifierChromium::Job::GetX509Certificate(
   }
 
   // Convert certs to X509Certificate.
-  vector<StringPiece> cert_pieces(certs.size());
+  std::vector<QuicStringPiece> cert_pieces(certs.size());
   for (unsigned i = 0; i < certs.size(); i++) {
-    cert_pieces[i] = base::StringPiece(certs[i]);
+    cert_pieces[i] = QuicStringPiece(certs[i]);
   }
   cert_ = X509Certificate::CreateFromDERCertChain(cert_pieces);
   if (!cert_.get()) {
@@ -389,8 +385,6 @@ int ProofVerifierChromium::Job::DoVerifyCertComplete(int result) {
       verify_details_->cert_verify_result;
   const CertStatus cert_status = cert_verify_result.cert_status;
   verify_details_->ct_verify_result.ct_policies_applied = result == OK;
-  verify_details_->ct_verify_result.ev_policy_compliance =
-      ct::EVPolicyCompliance::EV_POLICY_DOES_NOT_APPLY;
 
   // If the connection was good, check HPKP and CT status simultaneously,
   // but prefer to treat the HPKP error as more serious, if there was one.
@@ -399,38 +393,28 @@ int ProofVerifierChromium::Job::DoVerifyCertComplete(int result) {
        (IsCertificateError(result) && IsCertStatusMinorError(cert_status)))) {
     SCTList verified_scts = ct::SCTsMatchingStatus(
         verify_details_->ct_verify_result.scts, ct::SCT_STATUS_OK);
-    if ((cert_verify_result.cert_status & CERT_STATUS_IS_EV)) {
-      ct::EVPolicyCompliance ev_policy_compliance =
-          policy_enforcer_->DoesConformToCTEVPolicy(
-              cert_verify_result.verified_cert.get(),
-              SSLConfigService::GetEVCertsWhitelist().get(), verified_scts,
-              net_log_);
-      verify_details_->ct_verify_result.ev_policy_compliance =
-          ev_policy_compliance;
-      if (ev_policy_compliance !=
-              ct::EVPolicyCompliance::EV_POLICY_DOES_NOT_APPLY &&
-          ev_policy_compliance !=
-              ct::EVPolicyCompliance::EV_POLICY_COMPLIES_VIA_WHITELIST &&
-          ev_policy_compliance !=
-              ct::EVPolicyCompliance::EV_POLICY_COMPLIES_VIA_SCTS) {
-        verify_details_->cert_verify_result.cert_status |=
-            CERT_STATUS_CT_COMPLIANCE_FAILED;
-        verify_details_->cert_verify_result.cert_status &= ~CERT_STATUS_IS_EV;
-      }
-    }
 
     verify_details_->ct_verify_result.cert_policy_compliance =
         policy_enforcer_->DoesConformToCertPolicy(
             cert_verify_result.verified_cert.get(), verified_scts, net_log_);
+    if ((verify_details_->cert_verify_result.cert_status & CERT_STATUS_IS_EV) &&
+        (verify_details_->ct_verify_result.cert_policy_compliance !=
+         ct::CertPolicyCompliance::CERT_POLICY_COMPLIES_VIA_SCTS)) {
+      verify_details_->cert_verify_result.cert_status |=
+          CERT_STATUS_CT_COMPLIANCE_FAILED;
+      verify_details_->cert_verify_result.cert_status &= ~CERT_STATUS_IS_EV;
+    }
 
     int ct_result = OK;
-    if (verify_details_->ct_verify_result.cert_policy_compliance !=
-            ct::CertPolicyCompliance::CERT_POLICY_COMPLIES_VIA_SCTS &&
-        verify_details_->ct_verify_result.cert_policy_compliance !=
-            ct::CertPolicyCompliance::CERT_POLICY_BUILD_NOT_TIMELY &&
-        transport_security_state_->ShouldRequireCT(
-            hostname_, cert_verify_result.verified_cert.get(),
-            cert_verify_result.public_key_hashes)) {
+    if (transport_security_state_->CheckCTRequirements(
+            HostPortPair(hostname_, port_),
+            cert_verify_result.is_issued_by_known_root,
+            cert_verify_result.public_key_hashes,
+            cert_verify_result.verified_cert.get(), cert_.get(),
+            verify_details_->ct_verify_result.scts,
+            TransportSecurityState::ENABLE_EXPECT_CT_REPORTS,
+            verify_details_->ct_verify_result.cert_policy_compliance) !=
+        TransportSecurityState::CT_REQUIREMENTS_MET) {
       verify_details_->cert_verify_result.cert_status |=
           CERT_STATUS_CERTIFICATE_TRANSPARENCY_REQUIRED;
       ct_result = ERR_CERTIFICATE_TRANSPARENCY_REQUIRED;
@@ -475,10 +459,10 @@ int ProofVerifierChromium::Job::DoVerifyCertComplete(int result) {
 
 bool ProofVerifierChromium::Job::VerifySignature(const string& signed_data,
                                                  QuicVersion quic_version,
-                                                 StringPiece chlo_hash,
+                                                 QuicStringPiece chlo_hash,
                                                  const string& signature,
                                                  const string& cert) {
-  StringPiece spki;
+  QuicStringPiece spki;
   if (!asn1::ExtractSPKIFromDERCert(cert, &spki)) {
     DLOG(WARNING) << "ExtractSPKIFromDERCert failed";
     return false;
@@ -559,7 +543,7 @@ QuicAsyncStatus ProofVerifierChromium::VerifyProof(
     const uint16_t port,
     const std::string& server_config,
     QuicVersion quic_version,
-    base::StringPiece chlo_hash,
+    QuicStringPiece chlo_hash,
     const std::vector<std::string>& certs,
     const std::string& cert_sct,
     const std::string& signature,

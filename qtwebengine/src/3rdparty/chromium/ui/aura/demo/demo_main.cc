@@ -14,8 +14,8 @@
 #include "base/power_monitor/power_monitor_device_source.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
-#include "cc/surfaces/surface_manager.h"
-#include "third_party/skia/include/core/SkXfermode.h"
+#include "components/viz/host/host_frame_sink_manager.h"
+#include "third_party/skia/include/core/SkBlendMode.h"
 #include "ui/aura/client/default_capture_client.h"
 #include "ui/aura/client/window_parenting_client.h"
 #include "ui/aura/env.h"
@@ -72,14 +72,14 @@ class DemoWindowDelegate : public aura::WindowDelegate {
   void OnCaptureLost() override {}
   void OnPaint(const ui::PaintContext& context) override {
     ui::PaintRecorder recorder(context, window_bounds_.size());
-    recorder.canvas()->DrawColor(color_, SkXfermode::kSrc_Mode);
+    recorder.canvas()->DrawColor(color_, SkBlendMode::kSrc);
     gfx::Rect r;
     recorder.canvas()->GetClipBounds(&r);
     // Fill with a non-solid color so that the compositor will exercise its
     // texture upload path.
     while (!r.IsEmpty()) {
       r.Inset(2, 2);
-      recorder.canvas()->FillRect(r, color_, SkXfermode::kXor_Mode);
+      recorder.canvas()->FillRect(r, color_, SkBlendMode::kXor);
     }
   }
   void OnDeviceScaleFactorChanged(float device_scale_factor) override {}
@@ -107,8 +107,7 @@ class DemoWindowParentingClient : public aura::client::WindowParentingClient {
   }
 
   // Overridden from aura::client::WindowParentingClient:
-  aura::Window* GetDefaultParent(aura::Window* context,
-                                 aura::Window* window,
+  aura::Window* GetDefaultParent(aura::Window* window,
                                  const gfx::Rect& bounds) override {
     if (!capture_client_) {
       capture_client_.reset(
@@ -139,11 +138,10 @@ int DemoMain() {
 #endif
 
   // The ContextFactory must exist before any Compositors are created.
-  bool context_factory_for_test = false;
-  cc::SurfaceManager surface_manager;
-  std::unique_ptr<ui::InProcessContextFactory> context_factory(
-      new ui::InProcessContextFactory(context_factory_for_test,
-                                      &surface_manager));
+  viz::HostFrameSinkManager host_frame_sink_manager;
+  viz::FrameSinkManagerImpl frame_sink_manager;
+  auto context_factory = base::MakeUnique<ui::InProcessContextFactory>(
+      &host_frame_sink_manager, &frame_sink_manager);
   context_factory->set_use_test_surface(false);
 
   // Create the message-loop here before creating the root window.
@@ -154,6 +152,7 @@ int DemoMain() {
 
   std::unique_ptr<aura::Env> env = aura::Env::CreateInstance();
   env->set_context_factory(context_factory.get());
+  env->set_context_factory_private(context_factory.get());
   std::unique_ptr<aura::TestScreen> test_screen(
       aura::TestScreen::Create(gfx::Size()));
   display::Screen::SetScreenInstance(test_screen.get());

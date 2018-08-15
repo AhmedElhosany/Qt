@@ -28,7 +28,6 @@ class SingleThreadTaskRunner;
 
 namespace autofill {
 
-class AutofillChange;
 class AutofillEntry;
 class AutofillProfile;
 class AutofillWebDataBackend;
@@ -86,6 +85,7 @@ class AutofillWebDataService : public AutofillWebData,
   void AddCreditCard(const CreditCard& credit_card) override;
   void UpdateCreditCard(const CreditCard& credit_card) override;
   void RemoveCreditCard(const std::string& guid) override;
+  void AddFullServerCreditCard(const CreditCard& credit_card) override;
   WebDataServiceBase::Handle GetCreditCards(
       WebDataServiceConsumer* consumer) override;
 
@@ -98,9 +98,8 @@ class AutofillWebDataService : public AutofillWebData,
 
   void ClearAllServerData();
 
-  void UpdateServerCardUsageStats(const CreditCard& credit_card) override;
-  void UpdateServerAddressUsageStats(const AutofillProfile& profile) override;
-  void UpdateServerCardBillingAddress(const CreditCard& credit_card) override;
+  void UpdateServerCardMetadata(const CreditCard& credit_card) override;
+  void UpdateServerAddressMetadata(const AutofillProfile& profile) override;
 
   void RemoveAutofillDataModifiedBetween(const base::Time& delete_begin,
                                          const base::Time& delete_end) override;

@@ -9,33 +9,32 @@
 #define NET_TOOLS_QUIC_QUIC_DISPATCHER_H_
 
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 #include "base/macros.h"
-#include "net/base/ip_endpoint.h"
-#include "net/base/linked_hash_map.h"
 #include "net/quic/core/crypto/quic_compressed_certs_cache.h"
 #include "net/quic/core/crypto/quic_random.h"
 #include "net/quic/core/quic_blocked_writer_interface.h"
 #include "net/quic/core/quic_buffered_packet_store.h"
 #include "net/quic/core/quic_connection.h"
 #include "net/quic/core/quic_crypto_server_stream.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/quic/core/quic_session.h"
+#include "net/quic/core/quic_version_manager.h"
+#include "net/quic/platform/api/quic_containers.h"
+#include "net/quic/platform/api/quic_socket_address.h"
 
 #include "net/tools/quic/quic_process_packet_interface.h"
 #include "net/tools/quic/quic_time_wait_list_manager.h"
 #include "net/tools/quic/stateless_rejector.h"
 
 namespace net {
-
-class QuicConfig;
-class QuicCryptoServerConfig;
-
 namespace test {
 class QuicDispatcherPeer;
 }  // namespace test
+
+class QuicConfig;
+class QuicCryptoServerConfig;
 
 class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
                        public ProcessPacketInterface,
@@ -44,10 +43,7 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
                        public QuicBufferedPacketStore::VisitorInterface {
  public:
   // Ideally we'd have a linked_hash_set: the  boolean is unused.
-  typedef linked_hash_map<QuicBlockedWriterInterface*,
-                          bool,
-                          QuicBlockedWriterInterfacePtrHash>
-      WriteBlockedList;
+  typedef QuicLinkedHashMap<QuicBlockedWriterInterface*, bool> WriteBlockedList;
 
   QuicDispatcher(const QuicConfig& config,
                  const QuicCryptoServerConfig* crypto_config,
@@ -63,8 +59,8 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
 
   // Process the incoming packet by creating a new session, passing it to
   // an existing session, or passing it to the time wait list.
-  void ProcessPacket(const IPEndPoint& server_address,
-                     const IPEndPoint& client_address,
+  void ProcessPacket(const QuicSocketAddress& server_address,
+                     const QuicSocketAddress& client_address,
                      const QuicReceivedPacket& packet) override;
 
   // Called when the socket becomes writable to allow queued writes to happen.
@@ -88,14 +84,18 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   // Queues the blocked writer for later resumption.
   void OnWriteBlocked(QuicBlockedWriterInterface* blocked_writer) override;
 
+  // QuicSession::Visitor interface implementation (via inheritance of
+  // QuicTimeWaitListManager::Visitor):
+  // Collects reset error code received on streams.
+  void OnRstStreamReceived(const QuicRstStreamFrame& frame) override;
+
   // QuicTimeWaitListManager::Visitor interface implementation
-  // Called whenever the time wait std::list manager adds a new connection to
-  // the
-  // time-wait std::list.
+  // Called whenever the time wait list manager adds a new connection to the
+  // time-wait list.
   void OnConnectionAddedToTimeWaitList(QuicConnectionId connection_id) override;
 
   using SessionMap =
-      std::unordered_map<QuicConnectionId, std::unique_ptr<QuicSession>>;
+      QuicUnorderedMap<QuicConnectionId, std::unique_ptr<QuicSession>>;
 
   const SessionMap& session_map() const { return session_map_; }
 
@@ -145,7 +145,6 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   bool OnGoAwayFrame(const QuicGoAwayFrame& frame) override;
   bool OnWindowUpdateFrame(const QuicWindowUpdateFrame& frame) override;
   bool OnBlockedFrame(const QuicBlockedFrame& frame) override;
-  bool OnPathCloseFrame(const QuicPathCloseFrame& frame) override;
   void OnPacketComplete() override;
 
   // QuicBufferedPacketStore::VisitorInterface implementation.
@@ -160,8 +159,10 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   virtual bool HasChlosBuffered() const;
 
  protected:
-  virtual QuicSession* CreateQuicSession(QuicConnectionId connection_id,
-                                         const IPEndPoint& client_address) = 0;
+  virtual QuicSession* CreateQuicSession(
+      QuicConnectionId connection_id,
+      const QuicSocketAddress& client_address,
+      QuicStringPiece alpn) = 0;
 
   // Called when a connection is rejected statelessly.
   virtual void OnConnectionRejectedStatelessly();
@@ -205,6 +206,10 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   // and delivers any buffered packets for that connection id.
   void ProcessChlo();
 
+  // Returns client address used for stateless rejector to generate and validate
+  // source address token.
+  virtual const QuicSocketAddress GetClientAddress() const;
+
   QuicTimeWaitListManager* time_wait_list_manager() {
     return time_wait_list_manager_.get();
   }
@@ -212,8 +217,12 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   const QuicVersionVector& GetSupportedVersions();
 
   QuicConnectionId current_connection_id() { return current_connection_id_; }
-  const IPEndPoint& current_server_address() { return current_server_address_; }
-  const IPEndPoint& current_client_address() { return current_client_address_; }
+  const QuicSocketAddress& current_server_address() {
+    return current_server_address_;
+  }
+  const QuicSocketAddress& current_client_address() {
+    return current_client_address_;
+  }
   const QuicReceivedPacket& current_packet() { return *current_packet_; }
 
   const QuicConfig& config() const { return config_; }
@@ -269,18 +278,20 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
       QuicBufferedPacketStore::EnqueuePacketResult result,
       QuicConnectionId connection_id);
 
- private:
-  friend class net::test::QuicDispatcherPeer;
-  friend class StatelessRejectorProcessDoneCallback;
-
-  typedef std::unordered_set<QuicConnectionId> QuicConnectionIdSet;
-
   // Removes the session from the session map and write blocked list, and adds
   // the ConnectionId to the time-wait list.  If |session_closed_statelessly| is
   // true, any future packets for the ConnectionId will be black-holed.
-  void CleanUpSession(SessionMap::iterator it,
-                      QuicConnection* connection,
-                      bool session_closed_statelessly);
+  virtual void CleanUpSession(SessionMap::iterator it,
+                              QuicConnection* connection,
+                              bool session_closed_statelessly);
+
+  void StopAcceptingNewConnections();
+
+ private:
+  friend class test::QuicDispatcherPeer;
+  friend class StatelessRejectorProcessDoneCallback;
+
+  typedef QuicUnorderedSet<QuicConnectionId> QuicConnectionIdSet;
 
   bool HandlePacketForTimeWait(const QuicPacketPublicHeader& header);
 
@@ -289,7 +300,7 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   // fate which describes what subsequent processing should be performed on the
   // packets, like ValidityChecks, and invokes ProcessUnauthenticatedHeaderFate.
   void MaybeRejectStatelessly(QuicConnectionId connection_id,
-                              const QuicPacketHeader& header);
+                              QuicVersion version);
 
   // Deliver |packets| to |session| for further processing.
   void DeliverPacketsToSession(
@@ -299,23 +310,20 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   // Perform the appropriate actions on the current packet based on |fate| -
   // either process, buffer, or drop it.
   void ProcessUnauthenticatedHeaderFate(QuicPacketFate fate,
-                                        QuicConnectionId connection_id,
-                                        QuicPacketNumber packet_number);
+                                        QuicConnectionId connection_id);
 
   // Invoked when StatelessRejector::Process completes.
   void OnStatelessRejectorProcessDone(
       std::unique_ptr<StatelessRejector> rejector,
-      const IPEndPoint& current_client_address,
-      const IPEndPoint& current_server_address,
+      const QuicSocketAddress& current_client_address,
+      const QuicSocketAddress& current_server_address,
       std::unique_ptr<QuicReceivedPacket> current_packet,
-      QuicPacketNumber packet_number,
       QuicVersion first_version);
 
   // Examine the state of the rejector and decide what to do with the current
   // packet.
   void ProcessStatelessRejectorState(
       std::unique_ptr<StatelessRejector> rejector,
-      QuicPacketNumber packet_number,
       QuicVersion first_version);
 
   void set_new_sessions_allowed_per_event_loop(
@@ -338,7 +346,7 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   // Entity that manages connection_ids in time wait state.
   std::unique_ptr<QuicTimeWaitListManager> time_wait_list_manager_;
 
-  // The std::list of closed but not-yet-deleted sessions.
+  // The list of closed but not-yet-deleted sessions.
   std::vector<std::unique_ptr<QuicSession>> closed_session_list_;
 
   // The helper used for all connections.
@@ -366,9 +374,11 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   QuicConnectionIdSet temporarily_buffered_connections_;
 
   // Information about the packet currently being handled.
-  IPEndPoint current_client_address_;
-  IPEndPoint current_server_address_;
+  QuicSocketAddress current_client_address_;
+  QuicSocketAddress current_server_address_;
   const QuicReceivedPacket* current_packet_;
+  // If |current_packet_| is a CHLO packet, the extracted alpn.
+  std::string current_alpn_;
   QuicConnectionId current_connection_id_;
 
   // Used to get the supported versions based on flag. Does not own.
@@ -383,6 +393,9 @@ class QuicDispatcher : public QuicTimeWaitListManager::Visitor,
   // A backward counter of how many new sessions can be create within current
   // event loop. When reaches 0, it means can't create sessions for now.
   int16_t new_sessions_allowed_per_event_loop_;
+
+  // True if this dispatcher is not draining.
+  bool accept_new_connections_;
 
   DISALLOW_COPY_AND_ASSIGN(QuicDispatcher);
 };

@@ -6,6 +6,7 @@
 
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
@@ -22,21 +23,27 @@ CaptivePortalDetector::CaptivePortalDetector(
 }
 
 CaptivePortalDetector::~CaptivePortalDetector() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
 void CaptivePortalDetector::DetectCaptivePortal(
     const GURL& url,
-    const DetectionCallback& detection_callback) {
-  DCHECK(CalledOnValidThread());
+    const DetectionCallback& detection_callback,
+    const net::NetworkTrafficAnnotationTag& traffic_annotation) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!FetchingURL());
   DCHECK(detection_callback_.is_null());
 
   detection_callback_ = detection_callback;
 
   // The first 0 means this can use a TestURLFetcherFactory in unit tests.
-  url_fetcher_ = net::URLFetcher::Create(0, url, net::URLFetcher::GET, this);
+  url_fetcher_ = net::URLFetcher::Create(0, url, net::URLFetcher::GET, this,
+                                         traffic_annotation);
   url_fetcher_->SetAutomaticallyRetryOn5xx(false);
   url_fetcher_->SetRequestContext(request_context_.get());
+  data_use_measurement::DataUseUserData::AttachToFetcher(
+      url_fetcher_.get(),
+      data_use_measurement::DataUseUserData::CAPTIVE_PORTAL);
 
   // Can't safely use net::LOAD_DISABLE_CERT_REVOCATION_CHECKING here,
   // since then the connection may be reused without checking the cert.
@@ -54,7 +61,7 @@ void CaptivePortalDetector::Cancel() {
 }
 
 void CaptivePortalDetector::OnURLFetchComplete(const net::URLFetcher* source) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(FetchingURL());
   DCHECK_EQ(url_fetcher_.get(), source);
   DCHECK(!detection_callback_.is_null());

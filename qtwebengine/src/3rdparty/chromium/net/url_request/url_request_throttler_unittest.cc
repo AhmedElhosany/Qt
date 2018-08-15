@@ -8,12 +8,12 @@
 #include "base/pickle.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/test/histogram_tester.h"
 #include "base/time/time.h"
 #include "net/base/load_flags.h"
 #include "net/base/request_priority.h"
 #include "net/base/test_completion_callback.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_test_util.h"
@@ -161,7 +161,10 @@ struct GurlAndString {
 class URLRequestThrottlerEntryTest : public testing::Test {
  protected:
   URLRequestThrottlerEntryTest()
-      : request_(context_.CreateRequest(GURL(), DEFAULT_PRIORITY, NULL)) {}
+      : request_(context_.CreateRequest(GURL(),
+                                        DEFAULT_PRIORITY,
+                                        NULL,
+                                        TRAFFIC_ANNOTATION_FOR_TESTS)) {}
 
   void SetUp() override;
 
@@ -309,7 +312,10 @@ TEST_F(URLRequestThrottlerEntryTest, SlidingWindow) {
 class URLRequestThrottlerManagerTest : public testing::Test {
  protected:
   URLRequestThrottlerManagerTest()
-      : request_(context_.CreateRequest(GURL(), DEFAULT_PRIORITY, NULL)) {}
+      : request_(context_.CreateRequest(GURL(),
+                                        DEFAULT_PRIORITY,
+                                        NULL,
+                                        TRAFFIC_ANNOTATION_FOR_TESTS)) {}
 
   void SetUp() override { request_->SetLoadFlags(0); }
 

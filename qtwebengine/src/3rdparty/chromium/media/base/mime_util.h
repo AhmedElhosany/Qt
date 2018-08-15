@@ -8,7 +8,9 @@
 #include <string>
 #include <vector>
 
+#include "media/base/audio_codecs.h"
 #include "media/base/media_export.h"
+#include "media/base/video_codecs.h"
 
 namespace media {
 
@@ -16,14 +18,39 @@ namespace media {
 // supported/recognized MIME types.
 MEDIA_EXPORT bool IsSupportedMediaMimeType(const std::string& mime_type);
 
-// Parses a codec string, populating |codecs_out| with the prefix of each codec
-// in the string |codecs_in|. For example, passed "aaa.b.c,dd.eee", if
+// Splits various codecs into |codecs_out|, conditionally stripping the profile
+// and level info when |strip| == true. For example, passed "aaa.b.c,dd.eee", if
 // |strip| == true |codecs_out| will contain {"aaa", "dd"}, if |strip| == false
 // |codecs_out| will contain {"aaa.b.c", "dd.eee"}.
 // See http://www.ietf.org/rfc/rfc4281.txt.
-MEDIA_EXPORT void ParseCodecString(const std::string& codecs,
-                                   std::vector<std::string>* codecs_out,
-                                   bool strip);
+MEDIA_EXPORT void SplitCodecsToVector(const std::string& codecs,
+                                      std::vector<std::string>* codecs_out,
+                                      bool strip);
+
+// Returns true if successfully parsed the given |mime_type| and |codec_id|,
+// setting |out_*| arguments to the parsed video codec, profile, and level.
+// |out_is_ambiguous| will be true when the codec string is incomplete such that
+// some guessing was required to decide the codec, profile, or level.
+// Returns false if parsing fails (invalid string, or unrecognized video codec),
+// in which case values for |out_*| arguments are undefined.
+MEDIA_EXPORT bool ParseVideoCodecString(const std::string& mime_type,
+                                        const std::string& codec_id,
+                                        bool* out_is_ambiguous,
+                                        VideoCodec* out_codec,
+                                        VideoCodecProfile* out_profile,
+                                        uint8_t* out_level,
+                                        VideoColorSpace* out_colorspace);
+
+// Returns true if successfully parsed the given |mime_type| and |codec_id|,
+// setting |out_audio_codec| to found codec. |out_is_ambiguous| will be true
+// when the codec string is incomplete such that some guessing was required to
+// decide the codec.
+// Returns false if parsing fails (invalid string, or unrecognized audio codec),
+// in which case values for |out_*| arguments are undefined.
+MEDIA_EXPORT bool ParseAudioCodecString(const std::string& mime_type,
+                                        const std::string& codec_id,
+                                        bool* out_is_ambiguous,
+                                        AudioCodec* out_codec);
 
 // Indicates that the MIME type and (possible codec string) are supported.
 enum SupportsType {

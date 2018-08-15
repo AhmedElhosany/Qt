@@ -11,6 +11,7 @@
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/rand_util.h"
@@ -20,6 +21,7 @@
 #include "base/time/tick_clock.h"
 #include "build/build_config.h"
 #include "components/client_update_protocol/ecdsa.h"
+#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/network_time/network_time_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -27,14 +29,22 @@
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_response_writer.h"
 #include "net/url_request/url_request_context_getter.h"
 
 namespace network_time {
 
+// Network time queries are enabled on all desktop platforms except ChromeOS,
+// which uses tlsdated to set the system time.
+#if defined(OS_ANDROID) || defined(OS_CHROMEOS) || defined(OS_IOS)
 const base::Feature kNetworkTimeServiceQuerying{
     "NetworkTimeServiceQuerying", base::FEATURE_DISABLED_BY_DEFAULT};
+#else
+const base::Feature kNetworkTimeServiceQuerying{
+    "NetworkTimeServiceQuerying", base::FEATURE_ENABLED_BY_DEFAULT};
+#endif
 
 namespace {
 
@@ -108,7 +118,7 @@ const char kVariationsServiceRandomQueryProbability[] =
 //   not be issued (i.e. StartTimeFetch() will not start time queries.)
 //
 // - "on-demand-only": Time queries will not be issued except when
-//   StartTimeFetch() is called.
+//   StartTimeFetch() is called. This is the default value.
 //
 // - "background-and-on-demand": Time queries will be issued both in the
 //   background as needed and also on-demand.
@@ -187,7 +197,8 @@ void RecordFetchValidHistogram(bool valid) {
 // static
 void NetworkTimeTracker::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kNetworkTimeMapping,
-                                   new base::DictionaryValue());
+                                   base::MakeUnique<base::DictionaryValue>());
+  registry->RegisterBooleanPref(prefs::kNetworkTimeQueriesEnabled, true);
 }
 
 NetworkTimeTracker::NetworkTimeTracker(
@@ -302,7 +313,7 @@ NetworkTimeTracker::FetchBehavior NetworkTimeTracker::GetFetchBehavior() const {
   } else if (param == "background-and-on-demand") {
     return FETCHES_IN_BACKGROUND_AND_ON_DEMAND;
   }
-  return FETCH_BEHAVIOR_UNKNOWN;
+  return FETCHES_ON_DEMAND_ONLY;
 }
 
 void NetworkTimeTracker::SetTimeServerURLForTesting(const GURL& url) {
@@ -458,12 +469,39 @@ void NetworkTimeTracker::CheckTime() {
   replacements.SetQueryStr(query_string);
   url = url.ReplaceComponents(replacements);
 
+  net::NetworkTrafficAnnotationTag traffic_annotation =
+      net::DefineNetworkTrafficAnnotation("network_time_component", R"(
+        semantics {
+          sender: "Network Time Component"
+          description:
+            "Sends a request to a Google server to retrieve the current "
+            "timestamp."
+          trigger:
+            "A request can be sent to retrieve the current time when the user "
+            "encounters an SSL date error, or in the background if Chromium "
+            "determines that it doesn't have an accurate timestamp."
+          data: "None"
+          destination: GOOGLE_OWNED_SERVICE
+        }
+        policy {
+          cookies_allowed: false
+          setting: "This feature cannot be disabled by settings."
+          chrome_policy {
+            BrowserNetworkTimeQueriesEnabled {
+                BrowserNetworkTimeQueriesEnabled: false
+            }
+          }
+        })");
   // This cancels any outstanding fetch.
-  time_fetcher_ = net::URLFetcher::Create(url, net::URLFetcher::GET, this);
+  time_fetcher_ = net::URLFetcher::Create(url, net::URLFetcher::GET, this,
+                                          traffic_annotation);
   if (!time_fetcher_) {
     DVLOG(1) << "tried to make fetch happen; failed";
     return;
   }
+  data_use_measurement::DataUseUserData::AttachToFetcher(
+      time_fetcher_.get(),
+      data_use_measurement::DataUseUserData::NETWORK_TIME_TRACKER);
   time_fetcher_->SaveResponseWithWriter(
       std::unique_ptr<net::URLFetcherResponseWriter>(
           new SizeLimitingStringWriter(max_response_size_)));
@@ -534,8 +572,19 @@ bool NetworkTimeTracker::UpdateTimeFromResponse() {
   base::TimeDelta resolution =
       base::TimeDelta::FromMilliseconds(1) +
       base::TimeDelta::FromSeconds(kTimeServerMaxSkewSeconds);
+
+  // Record histograms for the latency of the time query and the time delta
+  // between time fetches.
   base::TimeDelta latency = tick_clock_->NowTicks() - fetch_started_;
   UMA_HISTOGRAM_TIMES("NetworkTimeTracker.TimeQueryLatency", latency);
+  if (!last_fetched_time_.is_null()) {
+    UMA_HISTOGRAM_CUSTOM_TIMES("NetworkTimeTracker.TimeBetweenFetches",
+                               current_time - last_fetched_time_,
+                               base::TimeDelta::FromHours(1),
+                               base::TimeDelta::FromDays(7), 50);
+  }
+  last_fetched_time_ = current_time;
+
   UpdateNetworkTime(current_time, resolution, latency, tick_clock_->NowTicks());
   return true;
 }
@@ -581,6 +630,11 @@ void NetworkTimeTracker::QueueCheckTime(base::TimeDelta delay) {
 bool NetworkTimeTracker::ShouldIssueTimeQuery() {
   // Do not query the time service if not enabled via Variations Service.
   if (!AreTimeFetchesEnabled()) {
+    return false;
+  }
+
+  // Do not query the time service if queries are disabled by policy.
+  if (!pref_service_->GetBoolean(prefs::kNetworkTimeQueriesEnabled)) {
     return false;
   }
 

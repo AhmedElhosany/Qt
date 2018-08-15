@@ -38,98 +38,81 @@
 
 namespace blink {
 
-void FileWriterSync::write(Blob* data, ExceptionState& exceptionState) {
-  ASSERT(data);
-  ASSERT(writer());
-  ASSERT(m_complete);
+void FileWriterSync::write(Blob* data, ExceptionState& exception_state) {
+  DCHECK(data);
+  DCHECK(Writer());
+  DCHECK(complete_);
 
-  prepareForWrite();
-  writer()->write(position(), data->uuid());
-  ASSERT(m_complete);
-  if (m_error) {
-    FileError::throwDOMException(exceptionState, m_error);
+  PrepareForWrite();
+  Writer()->Write(position(), data->Uuid());
+  DCHECK(complete_);
+  if (error_) {
+    FileError::ThrowDOMException(exception_state, error_);
     return;
   }
-  setPosition(position() + data->size());
+  SetPosition(position() + data->size());
   if (position() > length())
-    setLength(position());
+    SetLength(position());
 }
 
-void FileWriterSync::seek(long long position, ExceptionState& exceptionState) {
-  ASSERT(writer());
-  ASSERT(m_complete);
-  seekInternal(position);
+void FileWriterSync::seek(long long position, ExceptionState& exception_state) {
+  DCHECK(Writer());
+  DCHECK(complete_);
+  SeekInternal(position);
 }
 
 void FileWriterSync::truncate(long long offset,
-                              ExceptionState& exceptionState) {
-  ASSERT(writer());
-  ASSERT(m_complete);
+                              ExceptionState& exception_state) {
+  DCHECK(Writer());
+  DCHECK(complete_);
   if (offset < 0) {
-    exceptionState.throwDOMException(InvalidStateError,
-                                     FileError::invalidStateErrorMessage);
+    exception_state.ThrowDOMException(kInvalidStateError,
+                                      FileError::kInvalidStateErrorMessage);
     return;
   }
-  prepareForWrite();
-  writer()->truncate(offset);
-  ASSERT(m_complete);
-  if (m_error) {
-    FileError::throwDOMException(exceptionState, m_error);
+  PrepareForWrite();
+  Writer()->Truncate(offset);
+  DCHECK(complete_);
+  if (error_) {
+    FileError::ThrowDOMException(exception_state, error_);
     return;
   }
   if (offset < position())
-    setPosition(offset);
-  setLength(offset);
+    SetPosition(offset);
+  SetLength(offset);
 }
 
-void FileWriterSync::didWrite(long long bytes, bool complete) {
-  DCHECK_EQ(FileError::kOK, m_error);
-#if DCHECK_IS_ON()
-  DCHECK(!m_complete);
-  m_complete = complete;
-#endif
+void FileWriterSync::DidWrite(long long bytes, bool complete) {
+  DCHECK_EQ(FileError::kOK, error_);
+  DCHECK(!complete_);
+  complete_ = complete;
 }
 
-void FileWriterSync::didTruncate() {
-  DCHECK_EQ(FileError::kOK, m_error);
-#if DCHECK_IS_ON()
-  DCHECK(!m_complete);
-  m_complete = true;
-#endif
+void FileWriterSync::DidTruncate() {
+  DCHECK_EQ(FileError::kOK, error_);
+  DCHECK(!complete_);
+  complete_ = true;
 }
 
-void FileWriterSync::didFail(WebFileError error) {
-  DCHECK_EQ(FileError::kOK, m_error);
-  m_error = static_cast<FileError::ErrorCode>(error);
-#if DCHECK_IS_ON()
-  DCHECK(!m_complete);
-  m_complete = true;
-#endif
+void FileWriterSync::DidFail(WebFileError error) {
+  DCHECK_EQ(FileError::kOK, error_);
+  error_ = static_cast<FileError::ErrorCode>(error);
+  DCHECK(!complete_);
+  complete_ = true;
 }
 
-FileWriterSync::FileWriterSync()
-    : m_error(FileError::kOK)
-#if DCHECK_IS_ON()
-      ,
-      m_complete(true)
-#endif
-{
-}
+FileWriterSync::FileWriterSync() : error_(FileError::kOK), complete_(true) {}
 
-void FileWriterSync::prepareForWrite() {
-#if DCHECK_IS_ON()
-  DCHECK(m_complete);
-#endif
-  m_error = FileError::kOK;
-#if DCHECK_IS_ON()
-  m_complete = false;
-#endif
+void FileWriterSync::PrepareForWrite() {
+  DCHECK(complete_);
+  error_ = FileError::kOK;
+  complete_ = false;
 }
 
 FileWriterSync::~FileWriterSync() {}
 
 DEFINE_TRACE(FileWriterSync) {
-  FileWriterBase::trace(visitor);
+  FileWriterBase::Trace(visitor);
 }
 
 }  // namespace blink

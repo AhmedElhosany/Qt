@@ -13,8 +13,10 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/supports_user_data.h"
+#include "base/values.h"
 #include "content/browser/webui/url_data_manager.h"
 #include "content/public/browser/url_data_source.h"
+#include "net/http/http_response_headers.h"
 #include "net/url_request/url_request_job_factory.h"
 
 class GURL;
@@ -41,23 +43,46 @@ class URLDataManagerBackend : public base::SupportsUserData::Data {
   URLDataManagerBackend();
   ~URLDataManagerBackend() override;
 
-  // Invoked to create the protocol handler for chrome://. |is_incognito| should
-  // be set for incognito profiles. Called on the UI thread.
+  // Invoked to create the protocol handler for chrome://. Called on the UI
+  // thread.
   CONTENT_EXPORT static std::unique_ptr<
       net::URLRequestJobFactory::ProtocolHandler>
-  CreateProtocolHandler(content::ResourceContext* resource_context,
-                        bool is_incognito,
+  CreateProtocolHandler(ResourceContext* resource_context,
                         ChromeBlobStorageContext* blob_storage_context);
 
   // Adds a DataSource to the collection of data sources.
   void AddDataSource(URLDataSourceImpl* source);
 
+  void UpdateWebUIDataSource(const std::string& source_name,
+                             const base::DictionaryValue& update);
+
   // DataSource invokes this. Sends the data to the URLRequest. |bytes| may be
   // null, which signals an error handling the request.
   void DataAvailable(RequestID request_id, base::RefCountedMemory* bytes);
 
-  static net::URLRequestJob* Factory(net::URLRequest* request,
-                                     const std::string& scheme);
+  // Look up the data source for the request. Returns the source if it is found,
+  // else NULL.
+  URLDataSourceImpl* GetDataSourceFromURL(const GURL& url);
+
+  // Creates and sets the response headers for the given request.
+  static scoped_refptr<net::HttpResponseHeaders> GetHeaders(
+      URLDataSourceImpl* source,
+      const std::string& path,
+      const std::string& origin);
+
+  // Returns whether |url| passes some sanity checks and is a valid GURL.
+  static bool CheckURLIsValid(const GURL& url);
+
+  // Parse |url| to get the path which will be used to resolve the request. The
+  // path is the remaining portion after the scheme and hostname.
+  static void URLToRequestPath(const GURL& url, std::string* path);
+
+  // Check if the given integer is a valid network error code.
+  static bool IsValidNetworkErrorCode(int error_code);
+
+  // Returns the schemes that are used by WebUI (i.e. the set from content and
+  // its embedder).
+  static std::vector<std::string> GetWebUISchemes();
 
  private:
   friend class URLRequestChromeJob;
@@ -76,7 +101,6 @@ class URLDataManagerBackend : public base::SupportsUserData::Data {
   static void CallStartRequest(
       scoped_refptr<URLDataSourceImpl> source,
       const std::string& path,
-      int child_id,
       const ResourceRequestInfo::WebContentsGetter& wc_getter,
       int request_id);
 
@@ -87,10 +111,6 @@ class URLDataManagerBackend : public base::SupportsUserData::Data {
   // Called by ~URLRequestChromeJob to verify that |pending_requests_| is kept
   // up to date.
   bool HasPendingJob(URLRequestChromeJob* job) const;
-
-  // Look up the data source for the request. Returns the source if it is found,
-  // else NULL.
-  URLDataSourceImpl* GetDataSourceFromURL(const GURL& url);
 
   // Custom sources of data, keyed by source path (e.g. "favicon").
   DataSourceMap data_sources_;
@@ -106,11 +126,9 @@ class URLDataManagerBackend : public base::SupportsUserData::Data {
   DISALLOW_COPY_AND_ASSIGN(URLDataManagerBackend);
 };
 
-// Creates protocol handler for chrome-devtools://. |is_incognito| should be
-// set for incognito profiles.
-net::URLRequestJobFactory::ProtocolHandler*
-CreateDevToolsProtocolHandler(content::ResourceContext* resource_context,
-                              bool is_incognito);
+// Creates protocol handler for chrome-devtools://.
+net::URLRequestJobFactory::ProtocolHandler* CreateDevToolsProtocolHandler(
+    ResourceContext* resource_context);
 
 }  // namespace content
 

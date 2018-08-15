@@ -7,46 +7,33 @@
 
 #include <memory>
 
+#include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "platform/PlatformExport.h"
 #include "platform/WebTaskRunner.h"
-#include "public/platform/WebCommon.h"
 
 namespace blink {
 namespace scheduler {
 class TaskQueue;
 
-class BLINK_PLATFORM_EXPORT WebTaskRunnerImpl : public WebTaskRunner {
+class PLATFORM_EXPORT WebTaskRunnerImpl : public WebTaskRunner {
  public:
-  explicit WebTaskRunnerImpl(scoped_refptr<TaskQueue> task_queue);
-
-  ~WebTaskRunnerImpl() override;
+  static RefPtr<WebTaskRunnerImpl> Create(scoped_refptr<TaskQueue> task_queue);
 
   // WebTaskRunner implementation:
-  void postTask(const WebTraceLocation& web_location,
-                WebTaskRunner::Task* task) override;
-  void postDelayedTask(const WebTraceLocation& web_location,
-                       WebTaskRunner::Task* task,
-                       double delayMs) override;
-  void postDelayedTask(const WebTraceLocation&,
-                       const base::Closure&,
-                       double delayMs) override;
-  bool runsTasksOnCurrentThread() override;
-  double virtualTimeSeconds() const override;
-  double monotonicallyIncreasingVirtualTimeSeconds() const override;
-  std::unique_ptr<WebTaskRunner> clone() override;
-  base::SingleThreadTaskRunner* toSingleThreadTaskRunner() override;
+  bool RunsTasksInCurrentSequence() override;
+  double VirtualTimeSeconds() const override;
+  double MonotonicallyIncreasingVirtualTimeSeconds() const override;
+  base::SingleThreadTaskRunner* ToSingleThreadTaskRunner() override;
 
-  // WebTaskRunner::Task should be wrapped by base::Passed() when
-  // used with base::Bind(). See https://crbug.com/551356.
-  // runTask() is a helper to call WebTaskRunner::Task::run from
-  // std::unique_ptr<WebTaskRunner::Task>.
-  // runTask() is placed here because std::unique_ptr<> cannot be used from
-  // Blink.
-  static void runTask(std::unique_ptr<WebTaskRunner::Task>);
+  TaskQueue* GetTaskQueue() const { return task_queue_.get(); }
 
  private:
+  explicit WebTaskRunnerImpl(scoped_refptr<TaskQueue> task_queue);
+  ~WebTaskRunnerImpl() override;
+
   base::TimeTicks Now() const;
 
   scoped_refptr<TaskQueue> task_queue_;

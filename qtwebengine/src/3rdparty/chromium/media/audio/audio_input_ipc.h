@@ -14,13 +14,6 @@
 
 namespace media {
 
-enum AudioInputIPCDelegateState {
-  AUDIO_INPUT_IPC_DELEGATE_STATE_RECORDING,
-  AUDIO_INPUT_IPC_DELEGATE_STATE_STOPPED,
-  AUDIO_INPUT_IPC_DELEGATE_STATE_ERROR,
-  AUDIO_INPUT_IPC_DELEGATE_STATE_LAST = AUDIO_INPUT_IPC_DELEGATE_STATE_ERROR,
-};
-
 // Contains IPC notifications for the state of the server side
 // (AudioInputController) audio state changes and when an AudioInputController
 // has been created.  Implemented by AudioInputDevice.
@@ -37,13 +30,14 @@ class MEDIA_EXPORT AudioInputIPCDelegate {
   virtual void OnStreamCreated(base::SharedMemoryHandle handle,
                                base::SyncSocket::Handle socket_handle,
                                int length,
-                               int total_segments) = 0;
+                               int total_segments,
+                               bool initially_muted) = 0;
 
   // Called when state of an audio stream has changed.
-  virtual void OnStateChanged(AudioInputIPCDelegateState state) = 0;
+  virtual void OnError() = 0;
 
-  // Called when the input stream volume has changed.
-  virtual void OnVolume(double volume) = 0;
+  // Called when an audio stream is muted or unmuted.
+  virtual void OnMuted(bool is_muted) = 0;
 
   // Called when the AudioInputIPC object is going away and/or when the
   // IPC channel has been closed and no more IPC requests can be made.

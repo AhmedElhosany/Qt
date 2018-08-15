@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/single_thread_task_runner.h"
 #include "content/common/content_export.h"
 #include "content/renderer/media/android/stream_texture_factory.h"
 #include "gpu/command_buffer/common/mailbox.h"
@@ -55,14 +56,15 @@ class CONTENT_EXPORT StreamTextureWrapperImpl
   // Additional threading considerations:
   //   - Can be called from any thread.
   //   - Initialization will be posted to |main_task_runner_|.
-  //   - |init_cb| will be run on the calling thread.
+  //   - |init_cb| will be run on the calling thread, and will be passed a bool
+  //     indicating whether the initialization was successful.
   //   - New frames will be signaled on |compositor_task_runner| via |client|'s
   //     DidReceiveFrame() method.
   void Initialize(
       const base::Closure& received_frame_cb,
       const gfx::Size& natural_size,
       scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner,
-      const base::Closure& init_cb) override;
+      const StreamTextureWrapperInitCB& init_cb) override;
 
   // Should be called when the Video size changes.
   // Can be called from any thread, but runs on |main_task_runner_|.
@@ -92,7 +94,7 @@ class CONTENT_EXPORT StreamTextureWrapperImpl
   void Destroy() override;
 
   void InitializeOnMainThread(const base::Closure& received_frame_cb,
-                              const base::Closure& init_cb);
+                              const StreamTextureWrapperInitCB& init_cb);
 
   void ReallocateVideoFrame(const gfx::Size& natural_size);
 

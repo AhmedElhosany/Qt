@@ -50,7 +50,7 @@
 
 import QtQuick 2.2
 import QtTest 1.0
-import QtQuick.Controls 2.2
+import QtQuick.Controls 2.3
 
 TestCase {
     id: testCase
@@ -429,5 +429,84 @@ TestCase {
 
         control.highlighted = true
         verify(control.highlighted)
+    }
+
+    function test_spacing() {
+        var control = createTemporaryObject(button, testCase, { text: "Some long, long, long text" })
+        verify(control)
+        verify(control.contentItem.implicitWidth + control.leftPadding + control.rightPadding > control.background.implicitWidth)
+
+        var textLabel = findChild(control.contentItem, "label")
+        verify(textLabel)
+
+        // The implicitWidth of the IconLabel that all buttons use as their contentItem
+        // should be equal to the implicitWidth of the Text while no icon is set.
+        compare(control.contentItem.implicitWidth, textLabel.implicitWidth)
+
+        // That means that spacing shouldn't affect it.
+        control.spacing += 100
+        compare(control.contentItem.implicitWidth, textLabel.implicitWidth)
+
+        // The implicitWidth of the Button itself should, therefore, also never include spacing while no icon is set.
+        compare(control.implicitWidth, textLabel.implicitWidth + control.leftPadding + control.rightPadding)
+    }
+
+    function test_display_data() {
+        return [
+            { "tag": "IconOnly", display: Button.IconOnly },
+            { "tag": "TextOnly", display: Button.TextOnly },
+            { "tag": "TextUnderIcon", display: Button.TextUnderIcon },
+            { "tag": "TextBesideIcon", display: Button.TextBesideIcon },
+            { "tag": "IconOnly, mirrored", display: Button.IconOnly, mirrored: true },
+            { "tag": "TextOnly, mirrored", display: Button.TextOnly, mirrored: true },
+            { "tag": "TextUnderIcon, mirrored", display: Button.TextUnderIcon, mirrored: true },
+            { "tag": "TextBesideIcon, mirrored", display: Button.TextBesideIcon, mirrored: true }
+        ]
+    }
+
+    function test_display(data) {
+        var control = createTemporaryObject(button, testCase, {
+            text: "Button",
+            display: data.display,
+            "icon.source": "qrc:/qt-project.org/imports/QtQuick/Controls.2/images/check.png",
+            "LayoutMirroring.enabled": !!data.mirrored
+        })
+        verify(control)
+        compare(control.icon.source, "qrc:/qt-project.org/imports/QtQuick/Controls.2/images/check.png")
+
+        var iconImage = findChild(control.contentItem, "image")
+        var textLabel = findChild(control.contentItem, "label")
+
+        switch (control.display) {
+        case Button.IconOnly:
+            verify(iconImage)
+            verify(!textLabel)
+            compare(iconImage.x, (control.availableWidth - iconImage.width) / 2)
+            compare(iconImage.y, (control.availableHeight - iconImage.height) / 2)
+            break;
+        case Button.TextOnly:
+            verify(!iconImage)
+            verify(textLabel)
+            compare(textLabel.x, (control.availableWidth - textLabel.width) / 2)
+            compare(textLabel.y, (control.availableHeight - textLabel.height) / 2)
+            break;
+        case Button.TextUnderIcon:
+            verify(iconImage)
+            verify(textLabel)
+            compare(iconImage.x, (control.availableWidth - iconImage.width) / 2)
+            compare(textLabel.x, (control.availableWidth - textLabel.width) / 2)
+            verify(iconImage.y < textLabel.y)
+            break;
+        case Button.TextBesideIcon:
+            verify(iconImage)
+            verify(textLabel)
+            if (control.mirrored)
+                verify(textLabel.x < iconImage.x)
+            else
+                verify(iconImage.x < textLabel.x)
+            compare(iconImage.y, (control.availableHeight - iconImage.height) / 2)
+            compare(textLabel.y, (control.availableHeight - textLabel.height) / 2)
+            break;
+        }
     }
 }

@@ -201,23 +201,22 @@ public:
     QXmlStreamSimpleStack<NamespaceDeclaration> namespaceDeclarations;
     QString tagStackStringStorage;
     int tagStackStringStorageSize;
+    int initialTagStackStringStorageSize;
     bool tagsDone;
 
     inline QStringRef addToStringStorage(const QStringRef &s) {
-        int pos = tagStackStringStorageSize;
-        int sz = s.size();
-        if (pos != tagStackStringStorage.size())
-            tagStackStringStorage.resize(pos);
-        tagStackStringStorage.insert(pos, s.unicode(), sz);
-        tagStackStringStorageSize += sz;
-        return QStringRef(&tagStackStringStorage, pos, sz);
+        return addToStringStorage(qToStringViewIgnoringNull(s));
     }
     inline QStringRef addToStringStorage(const QString &s) {
+        return addToStringStorage(qToStringViewIgnoringNull(s));
+    }
+    QStringRef addToStringStorage(QStringView s)
+    {
         int pos = tagStackStringStorageSize;
         int sz = s.size();
         if (pos != tagStackStringStorage.size())
             tagStackStringStorage.resize(pos);
-        tagStackStringStorage.insert(pos, s.unicode(), sz);
+        tagStackStringStorage.append(s.data(), sz);
         tagStackStringStorageSize += sz;
         return QStringRef(&tagStackStringStorage, pos, sz);
     }
@@ -259,20 +258,24 @@ public:
     int readBufferPos;
     QXmlStreamSimpleStack<uint> putStack;
     struct Entity {
-        Entity(const QString& str = QString())
-            :value(str), external(false), unparsed(false), literal(false),
+        Entity() = default;
+        Entity(const QString &name, const QString &value)
+          :  name(name), value(value), external(false), unparsed(false), literal(false),
              hasBeenParsed(false), isCurrentlyReferenced(false){}
-        static inline Entity createLiteral(const QString &entity)
-            { Entity result(entity); result.literal = result.hasBeenParsed = true; return result; }
-        QString value;
+        static inline Entity createLiteral(QLatin1String name, QLatin1String value)
+            { Entity result(name, value); result.literal = result.hasBeenParsed = true; return result; }
+        QString name, value;
         uint external : 1;
         uint unparsed : 1;
         uint literal : 1;
         uint hasBeenParsed : 1;
         uint isCurrentlyReferenced : 1;
     };
-    QHash<QString, Entity> entityHash;
-    QHash<QString, Entity> parameterEntityHash;
+    // these hash tables use a QStringView as a key to avoid creating QStrings
+    // just for lookup. The keys are usually views into Entity::name and thus
+    // are guaranteed to have the same lifetime as the referenced data:
+    QHash<QStringView, Entity> entityHash;
+    QHash<QStringView, Entity> parameterEntityHash;
     QXmlStreamSimpleStack<Entity *>entityReferenceStack;
     inline bool referenceEntity(Entity &entity) {
         if (entity.isCurrentlyReferenced) {
@@ -425,6 +428,11 @@ public:
         const Value &symbol = sym(index);
         return QStringRef(&textBuffer, symbol.pos + symbol.prefix, symbol.len - symbol.prefix);
     }
+    QStringView symView(int index) const
+    {
+        const Value &symbol = sym(index);
+        return QStringView(textBuffer.data() + symbol.pos, symbol.len).mid(symbol.prefix);
+    }
     inline QStringRef symName(int index) {
         const Value &symbol = sym(index);
         return QStringRef(&textBuffer, symbol.pos, symbol.len);
@@ -455,7 +463,7 @@ public:
 
 
     short token;
-    ushort token_char;
+    uint token_char;
 
     uint filterCarriageReturn();
     inline uint getChar();
@@ -466,7 +474,7 @@ public:
     void putStringLiteral(const QString &s);
     void putReplacement(const QString &s);
     void putReplacementInAttributeValue(const QString &s);
-    ushort getChar_helper();
+    uint getChar_helper();
 
     bool scanUntil(const char *str, short tokenToInject = -1);
     bool scanString(const char *str, short tokenToInject, bool requireSpace = true);
@@ -525,10 +533,8 @@ bool QXmlStreamReaderPrivate::parse()
         prefix.clear();
         qualifiedName.clear();
         namespaceUri.clear();
-        if (publicNamespaceDeclarations.size())
-            publicNamespaceDeclarations.clear();
-        if (attributes.size())
-            attributes.resize(0);
+        publicNamespaceDeclarations.clear();
+        attributes.clear();
         if (isEmptyElement) {
             setType(QXmlStreamReader::EndElement);
             Tag &tag = tagStack_pop();
@@ -553,7 +559,7 @@ bool QXmlStreamReaderPrivate::parse()
         dtdName.clear();
         dtdPublicId.clear();
         dtdSystemId.clear();
-        // fall through
+        Q_FALLTHROUGH();
     case QXmlStreamReader::Comment:
     case QXmlStreamReader::Characters:
         isCDATA = false;
@@ -579,13 +585,13 @@ bool QXmlStreamReaderPrivate::parse()
         documentVersion.clear();
         documentEncoding.clear();
 #ifndef QT_NO_TEXTCODEC
-        if (decoder->hasFailure()) {
+        if (decoder && decoder->hasFailure()) {
             raiseWellFormedError(QXmlStream::tr("Encountered incorrectly encoded content."));
             readBuffer.clear();
             return false;
         }
 #endif
-        // fall through
+        Q_FALLTHROUGH();
     default:
         clearTextBuffer();
         ;
@@ -610,8 +616,8 @@ bool QXmlStreamReaderPrivate::parse()
         if (token == -1 && - TERMINAL_COUNT != action_index[act]) {
             uint cu = getChar();
             token = NOTOKEN;
-            token_char = cu;
-            if (cu & 0xff0000) {
+            token_char = cu == ~0U ? cu : ushort(cu);
+            if ((cu != ~0U) && (cu & 0xff0000)) {
                 token = cu >> 16;
             } else switch (token_char) {
             case 0xfffe:
@@ -629,8 +635,8 @@ bool QXmlStreamReaderPrivate::parse()
                 } else {
                     break;
                 }
-                // fall through
-            case '\0': {
+                Q_FALLTHROUGH();
+            case ~0U: {
                 token = EOF_SYMBOL;
                 if (!tagsDone && !inParseEntity) {
                     int a = t_action(act, token);
@@ -644,6 +650,7 @@ bool QXmlStreamReaderPrivate::parse()
             case '\n':
                 ++lineNumber;
                 lastLineStart = characterOffset + readBufferPos;
+                Q_FALLTHROUGH();
             case ' ':
             case '\t':
                 token = SPACE;
@@ -1127,7 +1134,7 @@ entity_decl ::= entity_decl_external NDATA name space_opt RANGLE;
             if (entityDeclaration.parameter)
                 raiseWellFormedError(QXmlStream::tr("NDATA in parameter entity declaration."));
         }
-        //fall through
+        Q_FALLTHROUGH();
 ./
 
 entity_decl ::= entity_decl_external space_opt RANGLE;
@@ -1144,13 +1151,13 @@ entity_decl ::= entity_decl_start entity_value space_opt RANGLE;
             EntityDeclaration &entityDeclaration = entityDeclarations.top();
             if (!entityDeclaration.external)
                 entityDeclaration.value = symString(2);
-            QString entityName = entityDeclaration.name.toString();
-            QHash<QString, Entity> &hash = entityDeclaration.parameter ? parameterEntityHash : entityHash;
-            if (!hash.contains(entityName)) {
-                Entity entity(entityDeclaration.value.toString());
+            auto &hash = entityDeclaration.parameter ? parameterEntityHash : entityHash;
+            if (!hash.contains(qToStringViewIgnoringNull(entityDeclaration.name))) {
+                Entity entity(entityDeclaration.name.toString(),
+                              entityDeclaration.value.toString());
                 entity.unparsed = (!entityDeclaration.notationName.isNull());
                 entity.external = entityDeclaration.external;
-                hash.insert(entityName, entity);
+                hash.insert(qToStringViewIgnoringNull(entity.name), entity);
             }
         } break;
 ./
@@ -1164,12 +1171,12 @@ processing_instruction ::= LANGLE QUESTIONMARK name space;
             processingInstructionTarget = symString(3);
             if (scanUntil("?>")) {
                 processingInstructionData = QStringRef(&textBuffer, pos, textBuffer.size() - pos - 2);
-                const QString piTarget(processingInstructionTarget.toString());
-                if (!piTarget.compare(QLatin1String("xml"), Qt::CaseInsensitive)) {
+                if (!processingInstructionTarget.compare(QLatin1String("xml"), Qt::CaseInsensitive)) {
                     raiseWellFormedError(QXmlStream::tr("XML declaration not at start of document."));
                 }
-                else if(!QXmlUtils::isNCName(piTarget))
-                    raiseWellFormedError(QXmlStream::tr("%1 is an invalid processing instruction name.").arg(piTarget));
+                else if (!QXmlUtils::isNCName(processingInstructionTarget))
+                    raiseWellFormedError(QXmlStream::tr("%1 is an invalid processing instruction name.")
+                                         .arg(processingInstructionTarget));
             } else if (type != QXmlStreamReader::Invalid){
                 resume($rule_number);
                 return false;
@@ -1182,7 +1189,7 @@ processing_instruction ::= LANGLE QUESTIONMARK name QUESTIONMARK RANGLE;
         case $rule_number:
             setType(QXmlStreamReader::ProcessingInstruction);
             processingInstructionTarget = symString(3);
-            if (!processingInstructionTarget.toString().compare(QLatin1String("xml"), Qt::CaseInsensitive))
+            if (!processingInstructionTarget.compare(QLatin1String("xml"), Qt::CaseInsensitive))
                 raiseWellFormedError(QXmlStream::tr("Invalid processing instruction name."));
         break;
 ./
@@ -1281,7 +1288,7 @@ scan_content_char ::= content_char;
 /.
         case $rule_number:
             isWhitespace = false;
-            // fall through
+            Q_FALLTHROUGH();
 ./
 
 scan_content_char ::= SPACE;
@@ -1379,8 +1386,8 @@ literal_content ::= literal_content_start;
 public_literal ::= literal;
 /.
         case $rule_number: {
-            if (!QXmlUtils::isPublicID(symString(1).toString())) {
-                raiseWellFormedError(QXmlStream::tr("%1 is an invalid PUBLIC identifier.").arg(symString(1).toString()));
+            if (!QXmlUtils::isPublicID(symString(1))) {
+                raiseWellFormedError(QXmlStream::tr("%1 is an invalid PUBLIC identifier.").arg(symString(1)));
                 resume($rule_number);
                 return false;
             }
@@ -1567,7 +1574,7 @@ empty_element_tag ::= stag_start attribute_list_opt SLASH RANGLE;
 /.
         case $rule_number:
             isEmptyElement = true;
-        // fall through
+            Q_FALLTHROUGH();
 ./
 
 
@@ -1614,7 +1621,7 @@ entity_ref ::= AMPERSAND name SEMICOLON;
 /.
         case $rule_number: {
             sym(1).len += sym(2).len + 1;
-            QString reference = symString(2).toString();
+            QStringView reference = symView(2);
             if (entityHash.contains(reference)) {
                 Entity &entity = entityHash[reference];
                 if (entity.unparsed) {
@@ -1635,7 +1642,7 @@ entity_ref ::= AMPERSAND name SEMICOLON;
             }
 
             if (entityResolver) {
-                QString replacementText = resolveUndeclaredEntity(reference);
+                QString replacementText = resolveUndeclaredEntity(reference.toString());
                 if (!replacementText.isNull()) {
                     putReplacement(replacementText);
                     textBuffer.chop(2 + sym(2).len);
@@ -1656,7 +1663,7 @@ pereference ::= PERCENT name SEMICOLON;
 /.
         case $rule_number: {
             sym(1).len += sym(2).len + 1;
-            QString reference = symString(2).toString();
+            QStringView reference = symView(2);
             if (parameterEntityHash.contains(reference)) {
                 referenceToParameterEntityDetected = true;
                 Entity &entity = parameterEntityHash[reference];
@@ -1669,7 +1676,7 @@ pereference ::= PERCENT name SEMICOLON;
                     clearSym();
                 }
             } else if (entitiesMustBeDeclared()) {
-                raiseWellFormedError(QXmlStream::tr("Entity '%1' not declared.").arg(symString(2).toString()));
+                raiseWellFormedError(QXmlStream::tr("Entity '%1' not declared.").arg(symString(2)));
             }
         } break;
 ./
@@ -1687,7 +1694,7 @@ entity_ref_in_attribute_value ::= AMPERSAND name SEMICOLON;
 /.
         case $rule_number: {
             sym(1).len += sym(2).len + 1;
-            QString reference = symString(2).toString();
+            QStringView reference = symView(2);
             if (entityHash.contains(reference)) {
                 Entity &entity = entityHash[reference];
                 if (entity.unparsed || entity.value.isNull()) {
@@ -1708,7 +1715,7 @@ entity_ref_in_attribute_value ::= AMPERSAND name SEMICOLON;
             }
 
             if (entityResolver) {
-                QString replacementText = resolveUndeclaredEntity(reference);
+                QString replacementText = resolveUndeclaredEntity(reference.toString());
                 if (!replacementText.isNull()) {
                     putReplacement(replacementText);
                     textBuffer.chop(2 + sym(2).len);

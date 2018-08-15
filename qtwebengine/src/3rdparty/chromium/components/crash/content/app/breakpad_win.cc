@@ -121,36 +121,14 @@ extern "C" void __declspec(dllexport) __cdecl DumpProcessWithoutCrash() {
 
 namespace {
 
-// We need to prevent ICF from folding DumpForHangDebuggingThread() and
-// DumpProcessWithoutCrashThread() together, since that makes them
-// indistinguishable in crash dumps. We do this by making the function
-// bodies unique, and prevent optimization from shuffling things around.
-MSVC_DISABLE_OPTIMIZE()
-MSVC_PUSH_DISABLE_WARNING(4748)
-
 DWORD WINAPI DumpProcessWithoutCrashThread(void*) {
   DumpProcessWithoutCrash();
   return 0;
 }
 
-// The following two functions do exactly the same thing as the two above. But
-// we want the signatures to be different so that we can easily track them in
-// crash reports.
-// TODO(yzshen): Remove when enough information is collected and the hang rate
-// of pepper/renderer processes is reduced.
-DWORD WINAPI DumpForHangDebuggingThread(void*) {
-  DumpProcessWithoutCrash();
-  VLOG(1) << "dumped for hang debugging";
-  return 0;
-}
-
-MSVC_POP_WARNING()
-MSVC_ENABLE_OPTIMIZE()
-
 }  // namespace
 
-// Injects a thread into a remote process to dump state when there is no crash.
-extern "C" HANDLE __declspec(dllexport) __cdecl InjectDumpProcessWithoutCrash(
+extern "C" HANDLE __declspec(dllexport) __cdecl InjectDumpForHungInput(
     HANDLE process,
     void* serialized_crash_keys) {
   // |serialized_crash_keys| is not propagated in breakpad but is in crashpad
@@ -159,10 +137,13 @@ extern "C" HANDLE __declspec(dllexport) __cdecl InjectDumpProcessWithoutCrash(
                             0, 0, NULL);
 }
 
-extern "C" HANDLE __declspec(dllexport) __cdecl
-InjectDumpForHangDebugging(HANDLE process) {
-  return CreateRemoteThread(process, NULL, 0, DumpForHangDebuggingThread,
-                            0, 0, NULL);
+extern "C" HANDLE __declspec(
+    dllexport) __cdecl InjectDumpForHungInputNoCrashKeys(HANDLE process,
+                                                         int reason) {
+  // |reason| is not propagated in breakpad but is in crashpad since breakpad
+  // is deprecated.
+  return CreateRemoteThread(process, NULL, 0, DumpProcessWithoutCrashThread, 0,
+                            0, NULL);
 }
 
 // Returns a string containing a list of all modifiers for the loaded profile.
@@ -275,10 +256,10 @@ long WINAPI ChromeExceptionFilter(EXCEPTION_POINTERS* info) {
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
-// Exception filter for the service process used when breakpad is not enabled.
-// We just display the "Do you want to restart" message and then die
-// (without calling the previous filter).
-long WINAPI ServiceExceptionFilter(EXCEPTION_POINTERS* info) {
+// Exception filter for the Cloud Print service process used when breakpad is
+// not enabled. We just display the "Do you want to restart" message and then
+// die (without calling the previous filter).
+long WINAPI CloudPrintServiceExceptionFilter(EXCEPTION_POINTERS* info) {
   DumpDoneCallback(NULL, NULL, NULL, info, NULL, false);
   return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -540,9 +521,6 @@ void InitCrashReporter(const std::string& process_type_switch) {
   exe_path[0] = 0;
   GetModuleFileNameW(NULL, exe_path, MAX_PATH);
 
-  bool is_per_user_install =
-      GetCrashReporterClient()->GetIsPerUserInstall(exe_path);
-
   // This is intentionally leaked.
   CrashKeysWin* keeper = new CrashKeysWin();
 
@@ -571,11 +549,11 @@ void InitCrashReporter(const std::string& process_type_switch) {
     default_filter = &ChromeExceptionFilter;
   } else if (process_type == L"service") {
     callback = &DumpDoneCallback;
-    default_filter = &ServiceExceptionFilter;
+    default_filter = &CloudPrintServiceExceptionFilter;
   }
 
   if (GetCrashReporterClient()->ShouldCreatePipeName(process_type))
-    InitPipeNameEnvVar(is_per_user_install);
+    InitPipeNameEnvVar(GetCrashReporterClient()->GetIsPerUserInstall());
 
   std::unique_ptr<base::Environment> env(base::Environment::Create());
   std::string pipe_name_ascii;
@@ -607,8 +585,7 @@ void InitCrashReporter(const std::string& process_type_switch) {
   // Capture full memory if explicitly instructed to.
   if (command.HasSwitch(switches::kFullMemoryCrashReport))
     dump_type = kFullDumpType;
-  else if (GetCrashReporterClient()->GetShouldDumpLargerDumps(
-               is_per_user_install))
+  else if (GetCrashReporterClient()->GetShouldDumpLargerDumps())
     dump_type = kLargerDumpType;
 
   g_breakpad = new google_breakpad::ExceptionHandler(temp_dir, &FilterCallback,

@@ -34,7 +34,7 @@ if (use_qt) {
       ":lib",
       "//base",
       "//base:i18n",
-      "//build/config/sanitizers:deps",
+      "//build/config:exe_and_shlib_deps",
       "//third_party/hunspell",
     ]
   }
@@ -55,7 +55,7 @@ if (use_qt) {
       ":lib",
       "//base",
       "//base:i18n",
-      "//build/config/sanitizers:deps",
+      "//build/config:exe_and_shlib_deps",
       "//build/win:default_exe_manifest",
       "//third_party/hunspell",
     ]

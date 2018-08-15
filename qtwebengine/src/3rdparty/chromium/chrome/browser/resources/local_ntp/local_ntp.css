@@ -28,15 +28,6 @@ body.hide-fakebox-logo #fakebox {
   visibility: hidden;
 }
 
-body.fakebox-disable #fakebox {
-  border-color: rgb(238, 238, 238);
-  cursor: default;
-}
-
-body.fakebox-disable #fakebox > input {
-  cursor: default;
-}
-
 #logo {
   background-image: url(../../../../ui/webui/resources/images/google_logo.svg);
   background-repeat: no-repeat;
@@ -44,6 +35,10 @@ body.fakebox-disable #fakebox > input {
   margin-bottom: 24px;
   margin-top: 157px;
   width: 272px;
+}
+
+.non-google-page #logo {
+  display: none;
 }
 
 body.alternate-logo #logo {
@@ -55,30 +50,28 @@ body.alternate-logo #logo {
 }
 
 #fakebox {
-  -webkit-transform: translate3d(0, 0, 0);
-  -webkit-transition: -webkit-transform 100ms linear, border-color 100ms linear;
   background-color: #fff;
-  border: 1px solid rgb(185, 185, 185);
-  border-radius: 1px;
-  border-top-color: rgb(160, 160, 160);
+  border-radius: 2px;
+  box-shadow: 0 2px 2px 0 rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.08);
   cursor: text;
   font-size: 18px;
-  height: 36px;
+  height: 44px;
   line-height: 36px;
   max-width: 672px;
+  outline: none;
   position: relative;
-  /* #fakebox width (here and below) should be 2px less than #mv-tiles
-     to account for its border. */
-  width: 298px;
+  transition: box-shadow 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* #fakebox width is set dynamically from JS. */
+  width: 300px;
 }
 
-#fakebox:hover {
-  border: 1px solid rgb(169, 169, 169);
-  border-top-color: rgb(144, 144, 144);
+.non-google-page #fakebox {
+  display: none;
 }
 
+#fakebox:hover,
 body.fakebox-focused #fakebox {
-  border: 1px solid rgb(77, 144, 254);
+  box-shadow: 0 3px 8px 0 rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 #fakebox > input {
@@ -100,18 +93,18 @@ html[dir=rtl] #fakebox > input {
 }
 
 #fakebox-text {
-  bottom: 0;
-  color: #bbb;
+  bottom: 4px;
+  color: rgba(0, 0, 0, 0.38);
   font-family: arial, sans-serif;
   font-size: 16px;
-  left: 9px;
+  left: 13px;
   margin-top: 1px;
   overflow: hidden;
   position: absolute;
-  right: 9px;
+  right: 13px;
   text-align: initial;
   text-overflow: ellipsis;
-  top: 0;
+  top: 4px;
   vertical-align: middle;
   visibility: inherit;
   white-space: nowrap;
@@ -119,25 +112,25 @@ html[dir=rtl] #fakebox > input {
 
 html[dir=rtl] #fakebox-text {
   left: auto;
-  right: 9px;
+  right: 13px;
 }
 
 #cursor {
   background: #333;
-  bottom: 5px;
-  left: 9px;
+  bottom: 12px;
+  left: 13px;
   position: absolute;
-  top: 5px;
+  top: 12px;
   visibility: hidden;
   width: 1px;
 }
 
 html[dir=rtl] #cursor {
   left: auto;
-  right: 9px;
+  right: 13px;
 }
 
-@-webkit-keyframes blink {
+@keyframes blink {
   0% {
     opacity: 1;
   }
@@ -156,7 +149,7 @@ body.fakebox-drag-focused #cursor {
 }
 
 body.fakebox-focused #cursor {
-  -webkit-animation: blink 1.3s step-end infinite;
+  animation: blink 1.3s step-end infinite;
   visibility: inherit;
 }
 
@@ -166,40 +159,19 @@ body.fakebox-focused #cursor {
   text-align: -webkit-center;
 }
 
-.icon-ntp #most-visited {
-  margin-top: calc(100px - 36px);
-}
-
 /* Non-Google pages have no Fakebox, so don't need top margin. */
 .non-google-page #most-visited {
   margin-top: 0;
 }
 
 #mv-tiles {
+  /* Two rows of tiles of 128px each, 16px of spacing between the rows, and
+   * 4px/8px of margin on top and bottom respectively. If you change this, also
+   * change the corresponding values in most_visited_single.css. */
+  height: calc(2*128px + 16px + 4px + 8px);
   margin: 0;
   position: relative;
   text-align: -webkit-auto;
-}
-
-.thumb-ntp #mv-tiles {
-  /* we need a 16px margin and the tiles have 130px height. */
-  height: calc(2*130px + 16px);
-  line-height: calc(130px + 16px);
-}
-
-.icon-ntp #mv-tiles {
-  background: rgba(255,255,255,0.2);
-  border-radius: 4px;
-  height: calc(2 * 112px);
-  padding: calc(36px - 18px) calc(36px - 18px - 12px);
-}
-
-.icon-ntp.dark #mv-tiles {
-  background: rgba(0,0,0,0.4);
-}
-
-.default-theme.icon-ntp #mv-tiles {
-  background: none;
 }
 
 #mv-notice-x {
@@ -240,10 +212,6 @@ html[dir=rtl] #mv-notice-x {
   padding: 10px 0;
 }
 
-.icon-ntp #mv-notice {
-  margin-top: 30px;
-}
-
 #mv-notice span {
   cursor: default;
   display: inline-block;
@@ -262,8 +230,7 @@ html[dir=rtl] #mv-notice-x {
 }
 
 #mv-notice-links span:hover,
-#mv-notice-links span:focus,
-#recent-tabs:hover {
+#mv-notice-links span:focus {
   text-decoration: underline;
 }
 
@@ -276,9 +243,9 @@ html[dir=rtl] #mv-notice-x {
 }
 
 #mv-notice.mv-notice-delayed-hide {
-  -webkit-transition-delay: 10s;
-  -webkit-transition-property: opacity;
   opacity: 0;
+  transition-delay: 10s;
+  transition-property: opacity;
 }
 
 #mv-notice.mv-notice-hide {
@@ -306,28 +273,18 @@ html[dir=rtl] #attribution,
   text-align: right;
 }
 
-#recent-tabs {
-  background: #fff;
-  border: 1px solid #c0c0c0;
-  border-radius: 2px;
-  bottom: 0;
-  color: rgb(17, 85, 204);
-  cursor: pointer;
-  font-family: Arial;
-  font-size: 14px;
-  opacity: 0.9;
-  padding: 3px;
-  position: fixed;
-  right: 8px;
-}
-
-html[dir=rtl] #recent-tabs {
-  left: 8px;
-  right: auto;
-}
-
 #mv-single {
   border: none;
   height: 100%;
   width: 100%;
+}
+
+#one-google {
+  position: fixed;
+  transition: opacity 130ms;
+  z-index: 1;
+}
+
+#one-google.hidden {
+  opacity: 0;
 }

@@ -13,12 +13,12 @@
 
 #include <string>  // size_t
 
-#include "webrtc/base/constructormagic.h"
+#include "webrtc/api/audio_codecs/audio_decoder.h"
 #include "webrtc/common_audio/vad/include/webrtc_vad.h"
 #include "webrtc/common_types.h"  // NULL
-#include "webrtc/modules/audio_coding/codecs/audio_decoder.h"
 #include "webrtc/modules/audio_coding/neteq/defines.h"
 #include "webrtc/modules/audio_coding/neteq/packet.h"
+#include "webrtc/rtc_base/constructormagic.h"
 #include "webrtc/typedefs.h"
 
 namespace webrtc {

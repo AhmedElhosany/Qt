@@ -6,22 +6,24 @@
 #define CONTENT_RENDERER_MEDIA_WEBRTC_RTC_STATS_H_
 
 #include "base/memory/ref_counted.h"
+#include "content/common/content_export.h"
 #include "third_party/WebKit/public/platform/WebRTCStats.h"
 #include "third_party/webrtc/api/stats/rtcstats.h"
 #include "third_party/webrtc/api/stats/rtcstatsreport.h"
 
 namespace content {
 
-class RTCStatsReport : public blink::WebRTCStatsReport {
+class CONTENT_EXPORT RTCStatsReport : public blink::WebRTCStatsReport {
  public:
   RTCStatsReport(
       const scoped_refptr<const webrtc::RTCStatsReport>& stats_report);
   ~RTCStatsReport() override;
-  std::unique_ptr<blink::WebRTCStatsReport> copyHandle() const override;
+  std::unique_ptr<blink::WebRTCStatsReport> CopyHandle() const override;
 
-  std::unique_ptr<blink::WebRTCStats> getStats(
+  std::unique_ptr<blink::WebRTCStats> GetStats(
       blink::WebString id) const override;
-  std::unique_ptr<blink::WebRTCStats> next() override;
+  std::unique_ptr<blink::WebRTCStats> Next() override;
+  size_t Size() const override;
 
  private:
   const scoped_refptr<const webrtc::RTCStatsReport> stats_report_;
@@ -29,18 +31,18 @@ class RTCStatsReport : public blink::WebRTCStatsReport {
   const webrtc::RTCStatsReport::ConstIterator end_;
 };
 
-class RTCStats : public blink::WebRTCStats {
+class CONTENT_EXPORT RTCStats : public blink::WebRTCStats {
  public:
   RTCStats(const scoped_refptr<const webrtc::RTCStatsReport>& stats_owner,
            const webrtc::RTCStats* stats);
   ~RTCStats() override;
 
-  blink::WebString id() const override;
-  blink::WebString type() const override;
-  double timestamp() const override;
+  blink::WebString Id() const override;
+  blink::WebString GetType() const override;
+  double Timestamp() const override;
 
-  size_t membersCount() const override;
-  std::unique_ptr<blink::WebRTCStatsMember> getMember(size_t i) const override;
+  size_t MembersCount() const override;
+  std::unique_ptr<blink::WebRTCStatsMember> GetMember(size_t i) const override;
 
  private:
   // Reference to keep the report that owns |stats_| alive.
@@ -51,30 +53,30 @@ class RTCStats : public blink::WebRTCStats {
   const std::vector<const webrtc::RTCStatsMemberInterface*> stats_members_;
 };
 
-class RTCStatsMember : public blink::WebRTCStatsMember {
+class CONTENT_EXPORT RTCStatsMember : public blink::WebRTCStatsMember {
  public:
   RTCStatsMember(const scoped_refptr<const webrtc::RTCStatsReport>& stats_owner,
                  const webrtc::RTCStatsMemberInterface* member);
   ~RTCStatsMember() override;
 
-  blink::WebString name() const override;
-  blink::WebRTCStatsMemberType type() const override;
-  bool isDefined() const override;
+  blink::WebString GetName() const override;
+  blink::WebRTCStatsMemberType GetType() const override;
+  bool IsDefined() const override;
 
-  bool valueBool() const override;
-  int32_t valueInt32() const override;
-  uint32_t valueUint32() const override;
-  int64_t valueInt64() const override;
-  uint64_t valueUint64() const override;
-  double valueDouble() const override;
-  blink::WebString valueString() const override;
-  blink::WebVector<int> valueSequenceBool() const override;
-  blink::WebVector<int32_t> valueSequenceInt32() const override;
-  blink::WebVector<uint32_t> valueSequenceUint32() const override;
-  blink::WebVector<int64_t> valueSequenceInt64() const override;
-  blink::WebVector<uint64_t> valueSequenceUint64() const override;
-  blink::WebVector<double> valueSequenceDouble() const override;
-  blink::WebVector<blink::WebString> valueSequenceString() const override;
+  bool ValueBool() const override;
+  int32_t ValueInt32() const override;
+  uint32_t ValueUint32() const override;
+  int64_t ValueInt64() const override;
+  uint64_t ValueUint64() const override;
+  double ValueDouble() const override;
+  blink::WebString ValueString() const override;
+  blink::WebVector<int> ValueSequenceBool() const override;
+  blink::WebVector<int32_t> ValueSequenceInt32() const override;
+  blink::WebVector<uint32_t> ValueSequenceUint32() const override;
+  blink::WebVector<int64_t> ValueSequenceInt64() const override;
+  blink::WebVector<uint64_t> ValueSequenceUint64() const override;
+  blink::WebVector<double> ValueSequenceDouble() const override;
+  blink::WebVector<blink::WebString> ValueSequenceString() const override;
 
  private:
   // Reference to keep the report that owns |member_|'s stats object alive.
@@ -82,6 +84,8 @@ class RTCStatsMember : public blink::WebRTCStatsMember {
   // Pointer to member of a stats object that is owned by |stats_owner_|.
   const webrtc::RTCStatsMemberInterface* const member_;
 };
+
+CONTENT_EXPORT void WhitelistStatsForTesting(const char* type);
 
 }  // namespace content
 

@@ -5,10 +5,11 @@
 #include <memory>
 
 #include "base/callback.h"
-#include "base/debug/leak_annotations.h"
 #include "base/files/file_util.h"
+#include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/task_runner_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/safe_browsing_db/v4_database.h"
 #include "content/public/browser/browser_thread.h"
@@ -22,10 +23,36 @@ namespace {
 
 const char kV4DatabaseSizeMetric[] = "SafeBrowsing.V4Database.Size";
 
+// The factory that controls the creation of the V4Database object.
+base::LazyInstance<std::unique_ptr<V4DatabaseFactory>>::Leaky g_db_factory =
+    LAZY_INSTANCE_INITIALIZER;
+
+// The factory that controls the creation of V4Store objects.
+base::LazyInstance<std::unique_ptr<V4StoreFactory>>::Leaky g_store_factory =
+    LAZY_INSTANCE_INITIALIZER;
+
+// Verifies the checksums on a collection of stores.
+// Returns the IDs of stores whose checksums failed to verify.
+std::vector<ListIdentifier> VerifyChecksums(
+    std::vector<std::pair<ListIdentifier, V4Store*>> stores) {
+  std::vector<ListIdentifier> stores_to_reset;
+  for (const auto& store_map_iter : stores) {
+    if (!store_map_iter.second->VerifyChecksum()) {
+      stores_to_reset.push_back(store_map_iter.first);
+    }
+  }
+  return stores_to_reset;
+}
+
 }  // namespace
 
-// static
-V4StoreFactory* V4Database::factory_ = NULL;
+std::unique_ptr<V4Database> V4DatabaseFactory::Create(
+    const scoped_refptr<base::SequencedTaskRunner>& db_task_runner,
+    std::unique_ptr<StoreMap> store_map) {
+  // Not using MakeUnique since the constructor of V4Database is protected.
+  return std::unique_ptr<V4Database>(
+      new V4Database(db_task_runner, std::move(store_map)));
+}
 
 // static
 void V4Database::Create(
@@ -52,16 +79,13 @@ void V4Database::CreateOnTaskRunner(
     const scoped_refptr<base::SingleThreadTaskRunner>& callback_task_runner,
     NewDatabaseReadyCallback new_db_callback,
     const TimeTicks create_start_time) {
-  DCHECK(db_task_runner->RunsTasksOnCurrentThread());
+  DCHECK(db_task_runner->RunsTasksInCurrentSequence());
 
-  if (!factory_) {
-    factory_ = new V4StoreFactory();
-    ANNOTATE_LEAKING_OBJECT_PTR(factory_);
-  }
+  if (!g_store_factory.Get())
+    g_store_factory.Get() = base::MakeUnique<V4StoreFactory>();
 
-  if (!base::CreateDirectory(base_path)) {
+  if (!base::CreateDirectory(base_path))
     NOTREACHED();
-  }
 
   std::unique_ptr<StoreMap> store_map = base::MakeUnique<StoreMap>();
   for (const auto& it : list_infos) {
@@ -71,11 +95,15 @@ void V4Database::CreateOnTaskRunner(
     }
 
     const base::FilePath store_path = base_path.AppendASCII(it.filename());
-    (*store_map)[it.list_id()].reset(
-        factory_->CreateV4Store(db_task_runner, store_path));
+    (*store_map)[it.list_id()] =
+        g_store_factory.Get()->CreateV4Store(db_task_runner, store_path);
   }
-  std::unique_ptr<V4Database> v4_database(
-      new V4Database(db_task_runner, std::move(store_map)));
+
+  if (!g_db_factory.Get())
+    g_db_factory.Get() = base::MakeUnique<V4DatabaseFactory>();
+
+  std::unique_ptr<V4Database> v4_database =
+      g_db_factory.Get()->Create(db_task_runner, std::move(store_map));
 
   // Database is done loading, pass it to the new_db_callback on the caller's
   // thread. This would unblock resource loads.
@@ -86,13 +114,26 @@ void V4Database::CreateOnTaskRunner(
                       TimeTicks::Now() - create_start_time);
 }
 
+// static
+void V4Database::RegisterDatabaseFactoryForTest(
+    std::unique_ptr<V4DatabaseFactory> factory) {
+  g_db_factory.Get() = std::move(factory);
+}
+
+// static
+void V4Database::RegisterStoreFactoryForTest(
+    std::unique_ptr<V4StoreFactory> factory) {
+  g_store_factory.Get() = std::move(factory);
+}
+
 V4Database::V4Database(
     const scoped_refptr<base::SequencedTaskRunner>& db_task_runner,
     std::unique_ptr<StoreMap> store_map)
-    : db_task_runner_(db_task_runner),
-      store_map_(std::move(store_map)),
-      pending_store_updates_(0) {
-  DCHECK(db_task_runner->RunsTasksOnCurrentThread());
+    : store_map_(std::move(store_map)),
+      db_task_runner_(db_task_runner),
+      pending_store_updates_(0),
+      weak_factory_on_io_(this) {
+  DCHECK(db_task_runner->RunsTasksInCurrentSequence());
 }
 
 // static
@@ -100,12 +141,13 @@ void V4Database::Destroy(std::unique_ptr<V4Database> v4_database) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   V4Database* v4_database_raw = v4_database.release();
   if (v4_database_raw) {
+    v4_database_raw->weak_factory_on_io_.InvalidateWeakPtrs();
     v4_database_raw->db_task_runner_->DeleteSoon(FROM_HERE, v4_database_raw);
   }
 }
 
 V4Database::~V4Database() {
-  DCHECK(db_task_runner_->RunsTasksOnCurrentThread());
+  DCHECK(db_task_runner_->RunsTasksInCurrentSequence());
 }
 
 void V4Database::ApplyUpdate(
@@ -130,8 +172,9 @@ void V4Database::ApplyUpdate(
       if (old_store->state() != response->new_client_state()) {
         // A different state implies there are updates to process.
         pending_store_updates_++;
-        UpdatedStoreReadyCallback store_ready_callback = base::Bind(
-            &V4Database::UpdatedStoreReady, base::Unretained(this), identifier);
+        UpdatedStoreReadyCallback store_ready_callback =
+            base::Bind(&V4Database::UpdatedStoreReady,
+                       weak_factory_on_io_.GetWeakPtr(), identifier);
         db_task_runner_->PostTask(
             FROM_HERE,
             base::Bind(&V4Store::ApplyUpdate, base::Unretained(old_store.get()),
@@ -175,15 +218,22 @@ std::unique_ptr<StoreStateMap> V4Database::GetStoreStateMap() {
   return store_state_map;
 }
 
-bool V4Database::AreStoresAvailable(
+bool V4Database::AreAnyStoresAvailable(
     const StoresToCheck& stores_to_check) const {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   for (const ListIdentifier& identifier : stores_to_check) {
-    const auto& store_pair = store_map_->find(identifier);
-    if (store_pair == store_map_->end())
-      return false;  // Store not in our list
-    if (!store_pair->second->HasValidData())
-      return false;  // Store never properly populated.
+    if (IsStoreAvailable(identifier))
+      return true;
+  }
+  return false;
+}
+
+bool V4Database::AreAllStoresAvailable(
+    const StoresToCheck& stores_to_check) const {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  for (const ListIdentifier& identifier : stores_to_check) {
+    if (!IsStoreAvailable(identifier))
+      return false;
   }
   return true;
 }
@@ -195,6 +245,8 @@ void V4Database::GetStoresMatchingFullHash(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   matched_store_and_hash_prefixes->clear();
   for (const ListIdentifier& identifier : stores_to_check) {
+    if (!IsStoreAvailable(identifier))
+      continue;
     const auto& store_pair = store_map_->find(identifier);
     DCHECK(store_pair != store_map_->end());
     const std::unique_ptr<V4Store>& store = store_pair->second;
@@ -216,27 +268,32 @@ void V4Database::ResetStores(
 void V4Database::VerifyChecksum(
     DatabaseReadyForUpdatesCallback db_ready_for_updates_callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  // TODO(vakh): Consider using PostTaskAndReply instead.
-  const scoped_refptr<base::SingleThreadTaskRunner> callback_task_runner =
-      base::ThreadTaskRunnerHandle::Get();
-  db_task_runner_->PostTask(
-      FROM_HERE, base::Bind(&V4Database::VerifyChecksumOnTaskRunner,
-                            base::Unretained(this), callback_task_runner,
-                            db_ready_for_updates_callback));
-}
 
-void V4Database::VerifyChecksumOnTaskRunner(
-    const scoped_refptr<base::SingleThreadTaskRunner>& callback_task_runner,
-    DatabaseReadyForUpdatesCallback db_ready_for_updates_callback) {
-  std::vector<ListIdentifier> stores_to_reset;
-  for (const auto& store_map_iter : *store_map_) {
-    if (!store_map_iter.second->VerifyChecksum()) {
-      stores_to_reset.push_back(store_map_iter.first);
-    }
+  // Make a threadsafe copy of store_map_ w/raw pointers that we can hand to
+  // the DB thread. The V4Stores ptrs are guaranteed to be valid because their
+  // deletion would be sequenced on the DB thread, after this posted task is
+  // serviced.
+  std::vector<std::pair<ListIdentifier, V4Store*>> stores;
+  for (const auto& next_store : *store_map_) {
+    stores.push_back(std::make_pair(next_store.first, next_store.second.get()));
   }
 
-  callback_task_runner->PostTask(
-      FROM_HERE, base::Bind(db_ready_for_updates_callback, stores_to_reset));
+  base::PostTaskAndReplyWithResult(db_task_runner_.get(), FROM_HERE,
+                                   base::Bind(&VerifyChecksums, stores),
+                                   db_ready_for_updates_callback);
+}
+
+bool V4Database::IsStoreAvailable(const ListIdentifier& identifier) const {
+  const auto& store_pair = store_map_->find(identifier);
+  if (store_pair == store_map_->end()) {
+    // Store not in our list
+    return false;
+  }
+  if (!store_pair->second->HasValidData()) {
+    // Store never properly populated
+    return false;
+  }
+  return true;
 }
 
 void V4Database::RecordFileSizeHistograms() {

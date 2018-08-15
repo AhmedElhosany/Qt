@@ -61,7 +61,7 @@ static constexpr rx::FastCopyFunctionMap NoCopyFunctions;
 
 constexpr Format g_formatInfoTable[] = {{
     // clang-format off
-    {{ Format::ID::NONE, GL_NONE, GL_NONE, nullptr, NoCopyFunctions, nullptr, GL_NONE, 0, 0, 0, 0, 0, 0 }},
+    {{ Format::ID::NONE, GL_NONE, GL_NONE, nullptr, NoCopyFunctions, nullptr, nullptr, GL_NONE, 0, 0, 0, 0, 0, 0 }},
 {angle_format_info_cases}    // clang-format on
 }};
 
@@ -110,10 +110,7 @@ def get_mip_generation_function(angle_format):
         return 'nullptr'
     return 'GenerateMip<' + channel_struct + '>'
 
-def get_color_read_function(angle_format):
-    channel_struct = get_channel_struct(angle_format)
-    if channel_struct == None:
-        return 'nullptr'
+def get_color_read_write_component_type(angle_format):
     component_type_map = {
         'uint': 'GLuint',
         'int': 'GLint',
@@ -121,51 +118,25 @@ def get_color_read_function(angle_format):
         'snorm': 'GLfloat',
         'float': 'GLfloat'
     }
-    return 'ReadColor<' + channel_struct + ', '+ component_type_map[angle_format['componentType']] + '>'
+    return component_type_map[angle_format['componentType']]
 
-format_entry_template = """    {{ Format::ID::{id}, {glInternalFormat}, {fboImplementationInternalFormat}, {mipGenerationFunction}, {fastCopyFunctions}, {colorReadFunction}, {namedComponentType}, {R}, {G}, {B}, {A}, {D}, {S} }},
+def get_color_read_function(angle_format):
+    channel_struct = get_channel_struct(angle_format)
+    if channel_struct == None:
+        return 'nullptr'
+    read_component_type = get_color_read_write_component_type(angle_format)
+    return 'ReadColor<' + channel_struct + ', '+ read_component_type + '>'
+
+def get_color_write_function(angle_format):
+    channel_struct = get_channel_struct(angle_format)
+    if channel_struct == None:
+        return 'nullptr'
+    write_component_type = get_color_read_write_component_type(angle_format)
+    return 'WriteColor<' + channel_struct + ', '+ write_component_type + '>'
+
+
+format_entry_template = """    {{ Format::ID::{id}, {glInternalFormat}, {fboImplementationInternalFormat}, {mipGenerationFunction}, {fastCopyFunctions}, {colorReadFunction}, {colorWriteFunction}, {namedComponentType}, {R}, {G}, {B}, {A}, {D}, {S} }},
 """
-
-def get_component_type(format_id):
-    if "SNORM" in format_id:
-        return "snorm"
-    elif "UNORM" in format_id:
-        return "unorm"
-    elif "FLOAT" in format_id:
-        return "float"
-    elif "UINT" in format_id:
-        return "uint"
-    elif "SINT" in format_id:
-        return "int"
-    elif format_id == "NONE":
-        return "none"
-    elif "SRGB" in format_id:
-        return "unorm"
-    else:
-        raise ValueError("Unknown component type for " + format_id)
-
-def get_channel_tokens(format_id):
-    r = re.compile(r'([ABDGLRS][\d]+)')
-    return filter(r.match, r.split(format_id))
-
-def get_channels(format_id):
-    channels = ''
-    tokens = get_channel_tokens(format_id)
-    if len(tokens) == 0:
-        return None
-    for token in tokens:
-        channels += token[0].lower()
-
-    return channels
-
-def get_bits(format_id):
-    bits = {}
-    tokens = get_channel_tokens(format_id)
-    if len(tokens) == 0:
-        return None
-    for token in tokens:
-        bits[token[0]] = int(token[1:])
-    return bits
 
 def get_named_component_type(component_type):
     if component_type == "snorm":
@@ -202,17 +173,18 @@ def json_to_table_data(format_id, json, angle_to_gl):
         parsed["fboImplementationInternalFormat"] = parsed["glInternalFormat"]
 
     if "componentType" not in parsed:
-        parsed["componentType"] = get_component_type(format_id)
+        parsed["componentType"] = angle_format.get_component_type(format_id)
 
     if "channels" not in parsed:
-        parsed["channels"] = get_channels(format_id)
+        parsed["channels"] = angle_format.get_channels(format_id)
 
     if "bits" not in parsed:
-        parsed["bits"] = get_bits(format_id)
+        parsed["bits"] = angle_format.get_bits(format_id)
 
     # Derived values.
     parsed["mipGenerationFunction"] = get_mip_generation_function(parsed)
     parsed["colorReadFunction"] = get_color_read_function(parsed)
+    parsed["colorWriteFunction"] = get_color_write_function(parsed)
 
     for channel in "ABDGLRS":
         if parsed["bits"] != None and channel in parsed["bits"]:

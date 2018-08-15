@@ -14,9 +14,10 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "cc/resources/shared_bitmap.h"
-#include "cc/resources/texture_mailbox.h"
-#include "content/child/child_shared_bitmap_manager.h"
+#include "cc/paint/paint_flags.h"
+#include "components/viz/client/client_shared_bitmap_manager.h"
+#include "components/viz/common/quads/shared_bitmap.h"
+#include "components/viz/common/quads/texture_mailbox.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/renderer_ppapi_host.h"
 #include "content/renderer/pepper/gfx_conversion.h"
@@ -105,8 +106,6 @@ void ConvertImageData(PPB_ImageData_Impl* src_image,
 
   SkBitmap src_bitmap(src_image->GetMappedBitmap());
   SkBitmap dest_bitmap(dest_image->GetMappedBitmap());
-  SkAutoLockPixels src_lock(src_bitmap);
-  SkAutoLockPixels dest_lock(dest_bitmap);
   if (src_rect.width() == src_image->width() &&
       dest_rect.width() == dest_image->width()) {
     // Fast path if the full frame can be converted at once.
@@ -327,7 +326,7 @@ void PepperGraphics2DHost::Paint(blink::WebCanvas* canvas,
   gfx::Rect invalidate_rect = plugin_rect;
   invalidate_rect.Intersect(paint_rect);
   SkRect sk_invalidate_rect = gfx::RectToSkRect(invalidate_rect);
-  SkAutoCanvasRestore auto_restore(canvas, true);
+  cc::PaintCanvasAutoRestore auto_restore(canvas, true);
   canvas->clipRect(sk_invalidate_rect);
   gfx::Size pixel_image_size(image_data_->width(), image_data_->height());
   gfx::Size image_size = gfx::ScaleToFlooredSize(pixel_image_size, scale_);
@@ -343,22 +342,22 @@ void PepperGraphics2DHost::Paint(blink::WebCanvas* canvas,
     // show white (typically less jarring) rather than black or uninitialized.
     // We don't do this for non-full-frame plugins since we specifically want
     // the page background to show through.
-    SkAutoCanvasRestore auto_restore(canvas, true);
+    cc::PaintCanvasAutoRestore auto_restore(canvas, true);
     SkRect image_data_rect =
         gfx::RectToSkRect(gfx::Rect(plugin_rect.origin(), image_size));
-    canvas->clipRect(image_data_rect, SkRegion::kDifference_Op);
+    canvas->clipRect(image_data_rect, SkClipOp::kDifference);
 
-    SkPaint paint;
-    paint.setBlendMode(SkBlendMode::kSrc);
-    paint.setColor(SK_ColorWHITE);
-    canvas->drawRect(sk_invalidate_rect, paint);
+    cc::PaintFlags flags;
+    flags.setBlendMode(SkBlendMode::kSrc);
+    flags.setColor(SK_ColorWHITE);
+    canvas->drawRect(sk_invalidate_rect, flags);
   }
 
-  SkPaint paint;
+  cc::PaintFlags flags;
   if (is_always_opaque_) {
     // When we know the device is opaque, we can disable blending for slightly
     // more optimized painting.
-    paint.setBlendMode(SkBlendMode::kSrc);
+    flags.setBlendMode(SkBlendMode::kSrc);
   }
 
   SkPoint pixel_origin(PointToSkPoint(plugin_rect.origin()));
@@ -367,7 +366,7 @@ void PepperGraphics2DHost::Paint(blink::WebCanvas* canvas,
     pixel_origin.scale(1.0f / scale_);
   }
   canvas->drawBitmap(backing_bitmap, pixel_origin.x(), pixel_origin.y(),
-                     &paint);
+                     &flags);
 }
 
 void PepperGraphics2DHost::ViewInitiatedPaint() {
@@ -547,7 +546,7 @@ int32_t PepperGraphics2DHost::OnHostMsgReadImageData(
 }
 
 void PepperGraphics2DHost::ReleaseCallback(
-    std::unique_ptr<cc::SharedBitmap> bitmap,
+    std::unique_ptr<viz::SharedBitmap> bitmap,
     const gfx::Size& bitmap_size,
     const gpu::SyncToken& sync_token,
     bool lost_resource) {
@@ -560,13 +559,13 @@ void PepperGraphics2DHost::ReleaseCallback(
 }
 
 bool PepperGraphics2DHost::PrepareTextureMailbox(
-    cc::TextureMailbox* mailbox,
+    viz::TextureMailbox* mailbox,
     std::unique_ptr<cc::SingleReleaseCallback>* release_callback) {
   if (!texture_mailbox_modified_)
     return false;
   // TODO(jbauman): Send image_data_ through mailbox to avoid copy.
   gfx::Size pixel_image_size(image_data_->width(), image_data_->height());
-  std::unique_ptr<cc::SharedBitmap> shared_bitmap;
+  std::unique_ptr<viz::SharedBitmap> shared_bitmap;
   if (cached_bitmap_) {
     if (cached_bitmap_size_ == pixel_image_size)
       shared_bitmap = std::move(cached_bitmap_);
@@ -581,12 +580,11 @@ bool PepperGraphics2DHost::PrepareTextureMailbox(
   if (!shared_bitmap)
     return false;
   void* src = image_data_->Map();
-  memcpy(shared_bitmap->pixels(),
-         src,
-         cc::SharedBitmap::CheckedSizeInBytes(pixel_image_size));
+  memcpy(shared_bitmap->pixels(), src,
+         viz::SharedBitmap::CheckedSizeInBytes(pixel_image_size));
   image_data_->Unmap();
 
-  *mailbox = cc::TextureMailbox(shared_bitmap.get(), pixel_image_size);
+  *mailbox = viz::TextureMailbox(shared_bitmap.get(), pixel_image_size);
   *release_callback = cc::SingleReleaseCallback::Create(
       base::Bind(&PepperGraphics2DHost::ReleaseCallback,
                  this->AsWeakPtr(),

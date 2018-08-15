@@ -15,8 +15,8 @@
 #include "vpx/vpx_decoder.h"
 #include "vpx/vpx_frame_buffer.h"
 
-#include "webrtc/base/checks.h"
-#include "webrtc/base/logging.h"
+#include "webrtc/rtc_base/checks.h"
+#include "webrtc/rtc_base/logging.h"
 
 namespace webrtc {
 
@@ -53,7 +53,7 @@ bool Vp9FrameBufferPool::InitializeVpxUsePool(
 
 rtc::scoped_refptr<Vp9FrameBufferPool::Vp9FrameBuffer>
 Vp9FrameBufferPool::GetFrameBuffer(size_t min_size) {
-  RTC_DCHECK_GT(min_size, 0u);
+  RTC_DCHECK_GT(min_size, 0);
   rtc::scoped_refptr<Vp9FrameBuffer> available_buffer = nullptr;
   {
     rtc::CritScope cs(&buffers_lock_);

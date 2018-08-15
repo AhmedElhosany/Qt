@@ -55,11 +55,11 @@
 
 QT_BEGIN_NAMESPACE
 
-QV4::CallContext *QV4DataCollector::findContext(int frame)
+QV4::SimpleCallContext *QV4DataCollector::findContext(int frame)
 {
     QV4::ExecutionContext *ctx = engine()->currentContext;
     while (ctx) {
-        QV4::CallContext *cCtxt = ctx->asCallContext();
+        QV4::SimpleCallContext *cCtxt = ctx->asSimpleCallContext();
         if (cCtxt && cCtxt->d()->v4Function) {
             if (frame < 1)
                 return cCtxt;
@@ -71,7 +71,7 @@ QV4::CallContext *QV4DataCollector::findContext(int frame)
     return 0;
 }
 
-QV4::Heap::CallContext *QV4DataCollector::findScope(QV4::ExecutionContext *ctxt, int scope)
+QV4::Heap::SimpleCallContext *QV4DataCollector::findScope(QV4::ExecutionContext *ctxt, int scope)
 {
     if (!ctxt)
         return 0;
@@ -81,7 +81,7 @@ QV4::Heap::CallContext *QV4DataCollector::findScope(QV4::ExecutionContext *ctxt,
     for (; scope > 0 && ctx; --scope)
         ctx = ctx->d()->outer;
 
-    return (ctx && ctx->d()) ? ctx->asCallContext()->d() : 0;
+    return (ctx && ctx->d()) ? ctx->asSimpleCallContext()->d() : 0;
 }
 
 QVector<QV4::Heap::ExecutionContext::ContextType> QV4DataCollector::getScopeTypes(int frame)
@@ -89,7 +89,7 @@ QVector<QV4::Heap::ExecutionContext::ContextType> QV4DataCollector::getScopeType
     QVector<QV4::Heap::ExecutionContext::ContextType> types;
 
     QV4::Scope scope(engine());
-    QV4::CallContext *sctxt = findContext(frame);
+    QV4::SimpleCallContext *sctxt = findContext(frame);
     if (!sctxt || sctxt->d()->type < QV4::Heap::ExecutionContext::Type_QmlContext)
         return types;
 
@@ -149,8 +149,6 @@ const QV4::Object *collectProperty(const QV4::ScopedValue &value, QV4::Execution
         dict.insert(valueKey, QJsonValue::Undefined);
         return 0;
     case QV4::Value::Null_Type:
-        // "null" is not the correct type, but we leave this in until QtC can deal with "object"
-        dict.insert(QStringLiteral("type"), QStringLiteral("null"));
         dict.insert(valueKey, QJsonValue::Null);
         return 0;
     case QV4::Value::Boolean_Type:
@@ -297,9 +295,11 @@ bool QV4DataCollector::collectScope(QJsonObject *dict, int frameNr, int scopeNr)
     QV4::ScopedObject scopeObject(scope, engine()->newObject());
 
     Q_ASSERT(names.size() == collectedRefs.size());
-    for (int i = 0, ei = collectedRefs.size(); i != ei; ++i)
-        scopeObject->put(engine(), names.at(i),
-                         QV4::Value::fromReturnedValue(getValue(collectedRefs.at(i))));
+    QV4::ScopedString propName(scope);
+    for (int i = 0, ei = collectedRefs.size(); i != ei; ++i) {
+        propName = engine()->newString(names.at(i));
+        scopeObject->put(propName, QV4::Value::fromReturnedValue(getValue(collectedRefs.at(i))));
+    }
 
     Ref scopeObjectRef = addRef(scopeObject);
     if (m_redundantRefs) {
@@ -338,7 +338,7 @@ QJsonObject QV4DataCollector::buildFrame(const QV4::StackFrame &stackFrame, int 
     QV4::Scope scope(engine());
     QV4::ScopedContext ctxt(scope, findContext(frameNr));
     while (ctxt) {
-        if (QV4::CallContext *cCtxt = ctxt->asCallContext()) {
+        if (QV4::SimpleCallContext *cCtxt = ctxt->asSimpleCallContext()) {
             if (cCtxt->d()->activation)
                 break;
         }
@@ -346,7 +346,7 @@ QJsonObject QV4DataCollector::buildFrame(const QV4::StackFrame &stackFrame, int 
     }
 
     if (ctxt) {
-        QV4::ScopedValue o(scope, ctxt->asCallContext()->d()->activation);
+        QV4::ScopedValue o(scope, ctxt->asSimpleCallContext()->d()->activation);
         frame[QLatin1String("receiver")] = toRef(collect(o));
     }
 
@@ -398,8 +398,8 @@ QV4DataCollector::Ref QV4DataCollector::addRef(QV4::Value value, bool deduplicat
 {
     class ExceptionStateSaver
     {
-        quint32 *hasExceptionLoc;
-        quint32 hadException;
+        quint8 *hasExceptionLoc;
+        quint8 hadException;
 
     public:
         ExceptionStateSaver(QV4::ExecutionEngine *engine)

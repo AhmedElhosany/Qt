@@ -59,7 +59,7 @@ Function::Function(ExecutionEngine *engine, CompiledData::CompilationUnit *unit,
         , hasQmlDependencies(function->hasQmlDependencies())
 {
     internalClass = engine->internalClasses[EngineBase::Class_Empty];
-    const CompiledData::LEUInt32 *formalsIndices = compiledFunction->formalsTable();
+    const quint32_le *formalsIndices = compiledFunction->formalsTable();
     // iterate backwards, so we get the right ordering for duplicate names
     Scope scope(engine);
     ScopedString arg(scope);
@@ -78,14 +78,11 @@ Function::Function(ExecutionEngine *engine, CompiledData::CompilationUnit *unit,
     }
     nFormals = compiledFunction->nFormals;
 
-    const CompiledData::LEUInt32 *localsIndices = compiledFunction->localsTable();
+    const quint32_le *localsIndices = compiledFunction->localsTable();
     for (quint32 i = 0; i < compiledFunction->nLocals; ++i)
         internalClass = internalClass->addMember(engine->identifierTable->identifier(compilationUnit->runtimeStrings[localsIndices[i]]), Attr_NotConfigurable);
 
-    activationRequired = compiledFunction->nInnerFunctions > 0 || (compiledFunction->flags & (CompiledData::Function::HasDirectEval | CompiledData::Function::UsesArgumentsObject));
-
-    canUseSimpleCall = !needsActivation() && !(compiledFunction->flags & CompiledData::Function::HasCatchOrWith) &&
-                       !(compiledFunction->nFormals > QV4::Global::ReservedArgumentCount) && !isNamedExpression();
+    canUseSimpleCall = compiledFunction->flags & CompiledData::Function::CanUseSimpleCall;
 }
 
 Function::~Function()
@@ -113,11 +110,11 @@ void Function::updateInternalClass(ExecutionEngine *engine, const QList<QByteArr
     }
     nFormals = parameters.size();
 
-    const CompiledData::LEUInt32 *localsIndices = compiledFunction->localsTable();
+    const quint32_le *localsIndices = compiledFunction->localsTable();
     for (quint32 i = 0; i < compiledFunction->nLocals; ++i)
         internalClass = internalClass->addMember(engine->identifierTable->identifier(compilationUnit->runtimeStrings[localsIndices[i]]), Attr_NotConfigurable);
 
-    activationRequired = true;
+    canUseSimpleCall = false;
 }
 
 QT_END_NAMESPACE

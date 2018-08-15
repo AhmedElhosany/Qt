@@ -51,6 +51,8 @@ struct vp9_extracfg {
   vpx_color_range_t color_range;
   int render_width;
   int render_height;
+  unsigned int row_mt;
+  unsigned int motion_vector_unit_test;
 };
 
 static struct vp9_extracfg default_extra_cfg = {
@@ -82,6 +84,8 @@ static struct vp9_extracfg default_extra_cfg = {
   0,                     // color range
   0,                     // render width
   0,                     // render height
+  0,                     // row_mt
+  0,                     // motion_vector_unit_test
 };
 
 struct vpx_codec_alg_priv {
@@ -157,6 +161,7 @@ static vpx_codec_err_t validate_config(vpx_codec_alg_priv_t *ctx,
   RANGE_CHECK_HI(cfg, rc_max_quantizer, 63);
   RANGE_CHECK_HI(cfg, rc_min_quantizer, cfg->rc_max_quantizer);
   RANGE_CHECK_BOOL(extra_cfg, lossless);
+  RANGE_CHECK_BOOL(extra_cfg, frame_parallel_decoding_mode);
   RANGE_CHECK(extra_cfg, aq_mode, 0, AQ_MODE_COUNT - 2);
   RANGE_CHECK(extra_cfg, alt_ref_aq, 0, 1);
   RANGE_CHECK(extra_cfg, frame_periodic_boost, 0, 1);
@@ -171,7 +176,11 @@ static vpx_codec_err_t validate_config(vpx_codec_alg_priv_t *ctx,
   RANGE_CHECK_HI(cfg, rc_dropframe_thresh, 100);
   RANGE_CHECK_HI(cfg, rc_resize_up_thresh, 100);
   RANGE_CHECK_HI(cfg, rc_resize_down_thresh, 100);
+#if CONFIG_REALTIME_ONLY
+  RANGE_CHECK(cfg, g_pass, VPX_RC_ONE_PASS, VPX_RC_ONE_PASS);
+#else
   RANGE_CHECK(cfg, g_pass, VPX_RC_ONE_PASS, VPX_RC_LAST_PASS);
+#endif
   RANGE_CHECK(extra_cfg, min_gf_interval, 0, (MAX_LAG_BUFFERS - 1));
   RANGE_CHECK(extra_cfg, max_gf_interval, 0, (MAX_LAG_BUFFERS - 1));
   if (extra_cfg->max_gf_interval > 0) {
@@ -244,6 +253,8 @@ static vpx_codec_err_t validate_config(vpx_codec_alg_priv_t *ctx,
         "kf_min_dist not supported in auto mode, use 0 "
         "or kf_max_dist instead.");
 
+  RANGE_CHECK(extra_cfg, row_mt, 0, 1);
+  RANGE_CHECK(extra_cfg, motion_vector_unit_test, 0, 2);
   RANGE_CHECK(extra_cfg, enable_auto_alt_ref, 0, 2);
   RANGE_CHECK(extra_cfg, cpu_used, -8, 8);
   RANGE_CHECK_HI(extra_cfg, noise_sensitivity, 6);
@@ -262,6 +273,7 @@ static vpx_codec_err_t validate_config(vpx_codec_alg_priv_t *ctx,
   if (extra_cfg->tuning == VP8_TUNE_SSIM)
     ERROR("Option --tune=ssim is not currently supported in VP9.");
 
+#if !CONFIG_REALTIME_ONLY
   if (cfg->g_pass == VPX_RC_LAST_PASS) {
     const size_t packet_sz = sizeof(FIRSTPASS_STATS);
     const int n_packets = (int)(cfg->rc_twopass_stats_in.sz / packet_sz);
@@ -313,6 +325,7 @@ static vpx_codec_err_t validate_config(vpx_codec_alg_priv_t *ctx,
         ERROR("rc_twopass_stats_in missing EOS stats packet");
     }
   }
+#endif  // !CONFIG_REALTIME_ONLY
 
 #if !CONFIG_VP9_HIGHBITDEPTH
   if (cfg->g_profile > (unsigned int)PROFILE_1) {
@@ -387,6 +400,60 @@ static int get_image_bps(const vpx_image_t *img) {
     default: assert(0 && "Invalid image format"); break;
   }
   return 0;
+}
+
+// Modify the encoder config for the target level.
+static void config_target_level(VP9EncoderConfig *oxcf) {
+  double max_average_bitrate;  // in bits per second
+  int max_over_shoot_pct;
+  const int target_level_index = get_level_index(oxcf->target_level);
+
+  vpx_clear_system_state();
+  assert(target_level_index >= 0);
+  assert(target_level_index < VP9_LEVELS);
+
+  // Maximum target bit-rate is level_limit * 80%.
+  max_average_bitrate =
+      vp9_level_defs[target_level_index].average_bitrate * 800.0;
+  if ((double)oxcf->target_bandwidth > max_average_bitrate)
+    oxcf->target_bandwidth = (int64_t)(max_average_bitrate);
+  if (oxcf->ss_number_layers == 1 && oxcf->pass != 0)
+    oxcf->ss_target_bitrate[0] = (int)oxcf->target_bandwidth;
+
+  // Adjust max over-shoot percentage.
+  max_over_shoot_pct =
+      (int)((max_average_bitrate * 1.10 - (double)oxcf->target_bandwidth) *
+            100 / (double)(oxcf->target_bandwidth));
+  if (oxcf->over_shoot_pct > max_over_shoot_pct)
+    oxcf->over_shoot_pct = max_over_shoot_pct;
+
+  // Adjust worst allowed quantizer.
+  oxcf->worst_allowed_q = vp9_quantizer_to_qindex(63);
+
+  // Adjust minimum art-ref distance.
+  // min_gf_interval should be no less than min_altref_distance + 1,
+  // as the encoder may produce bitstream with alt-ref distance being
+  // min_gf_interval - 1.
+  if (oxcf->min_gf_interval <=
+      (int)vp9_level_defs[target_level_index].min_altref_distance) {
+    oxcf->min_gf_interval =
+        (int)vp9_level_defs[target_level_index].min_altref_distance + 1;
+    // If oxcf->max_gf_interval == 0, it will be assigned with a default value
+    // in vp9_rc_set_gf_interval_range().
+    if (oxcf->max_gf_interval != 0) {
+      oxcf->max_gf_interval =
+          VPXMAX(oxcf->max_gf_interval, oxcf->min_gf_interval);
+    }
+  }
+
+  // Adjust maximum column tiles.
+  if (vp9_level_defs[target_level_index].max_col_tiles <
+      (1 << oxcf->tile_columns)) {
+    while (oxcf->tile_columns > 0 &&
+           vp9_level_defs[target_level_index].max_col_tiles <
+               (1 << oxcf->tile_columns))
+      --oxcf->tile_columns;
+  }
 }
 
 static vpx_codec_err_t set_encoder_config(
@@ -509,6 +576,9 @@ static vpx_codec_err_t set_encoder_config(
 
   oxcf->target_level = extra_cfg->target_level;
 
+  oxcf->row_mt = extra_cfg->row_mt;
+  oxcf->motion_vector_unit_test = extra_cfg->motion_vector_unit_test;
+
   for (sl = 0; sl < oxcf->ss_number_layers; ++sl) {
 #if CONFIG_SPATIAL_SVC
     oxcf->ss_enable_auto_arf[sl] = cfg->ss_enable_auto_alt_ref[sl];
@@ -532,6 +602,8 @@ static vpx_codec_err_t set_encoder_config(
   } else if (oxcf->ts_number_layers == 1) {
     oxcf->ts_rate_decimator[0] = 1;
   }
+
+  if (get_level_index(oxcf->target_level) >= 0) config_target_level(oxcf);
   /*
   printf("Current VP9 Settings: \n");
   printf("target_bandwidth: %d\n", oxcf->target_bandwidth);
@@ -795,6 +867,21 @@ static vpx_codec_err_t ctrl_set_target_level(vpx_codec_alg_priv_t *ctx,
   return update_extra_cfg(ctx, &extra_cfg);
 }
 
+static vpx_codec_err_t ctrl_set_row_mt(vpx_codec_alg_priv_t *ctx,
+                                       va_list args) {
+  struct vp9_extracfg extra_cfg = ctx->extra_cfg;
+  extra_cfg.row_mt = CAST(VP9E_SET_ROW_MT, args);
+  return update_extra_cfg(ctx, &extra_cfg);
+}
+
+static vpx_codec_err_t ctrl_enable_motion_vector_unit_test(
+    vpx_codec_alg_priv_t *ctx, va_list args) {
+  struct vp9_extracfg extra_cfg = ctx->extra_cfg;
+  extra_cfg.motion_vector_unit_test =
+      CAST(VP9E_ENABLE_MOTION_VECTOR_UNIT_TEST, args);
+  return update_extra_cfg(ctx, &extra_cfg);
+}
+
 static vpx_codec_err_t ctrl_get_level(vpx_codec_alg_priv_t *ctx, va_list args) {
   int *const arg = va_arg(args, int *);
   if (arg == NULL) return VPX_CODEC_INVALID_PARAM;
@@ -816,12 +903,6 @@ static vpx_codec_err_t encoder_init(vpx_codec_ctx_t *ctx,
     ctx->priv->enc.total_encoders = 1;
     priv->buffer_pool = (BufferPool *)vpx_calloc(1, sizeof(BufferPool));
     if (priv->buffer_pool == NULL) return VPX_CODEC_MEM_ERROR;
-
-#if CONFIG_MULTITHREAD
-    if (pthread_mutex_init(&priv->buffer_pool->pool_mutex, NULL)) {
-      return VPX_CODEC_MEM_ERROR;
-    }
-#endif
 
     if (ctx->config.enc) {
       // Update the reference to the config structure to an internal copy.
@@ -854,9 +935,6 @@ static vpx_codec_err_t encoder_init(vpx_codec_ctx_t *ctx,
 static vpx_codec_err_t encoder_destroy(vpx_codec_alg_priv_t *ctx) {
   free(ctx->cx_data);
   vp9_remove_compressor(ctx->cpi);
-#if CONFIG_MULTITHREAD
-  pthread_mutex_destroy(&ctx->buffer_pool->pool_mutex);
-#endif
   vpx_free(ctx->buffer_pool);
   vpx_free(ctx);
   return VPX_CODEC_OK;
@@ -867,6 +945,10 @@ static void pick_quickcompress_mode(vpx_codec_alg_priv_t *ctx,
                                     unsigned long deadline) {
   MODE new_mode = BEST;
 
+#if CONFIG_REALTIME_ONLY
+  (void)duration;
+  deadline = VPX_DL_REALTIME;
+#else
   switch (ctx->cfg.g_pass) {
     case VPX_RC_ONE_PASS:
       if (deadline > 0) {
@@ -887,6 +969,7 @@ static void pick_quickcompress_mode(vpx_codec_alg_priv_t *ctx,
     case VPX_RC_FIRST_PASS: break;
     case VPX_RC_LAST_PASS: new_mode = deadline > 0 ? GOOD : BEST; break;
   }
+#endif  // CONFIG_REALTIME_ONLY
 
   if (deadline == VPX_DL_REALTIME) {
     ctx->oxcf.pass = 0;
@@ -1002,6 +1085,28 @@ static vpx_codec_err_t encoder_encode(vpx_codec_alg_priv_t *ctx,
 
   if (cpi == NULL) return VPX_CODEC_INVALID_PARAM;
 
+  if (cpi->oxcf.pass == 2 && cpi->level_constraint.level_index >= 0 &&
+      !cpi->level_constraint.rc_config_updated) {
+    SVC *const svc = &cpi->svc;
+    const int is_two_pass_svc =
+        (svc->number_spatial_layers > 1) || (svc->number_temporal_layers > 1);
+    const VP9EncoderConfig *const oxcf = &cpi->oxcf;
+    TWO_PASS *const twopass = &cpi->twopass;
+    FIRSTPASS_STATS *stats = &twopass->total_stats;
+    if (is_two_pass_svc) {
+      const double frame_rate = 10000000.0 * stats->count / stats->duration;
+      vp9_update_spatial_layer_framerate(cpi, frame_rate);
+      twopass->bits_left =
+          (int64_t)(stats->duration *
+                    svc->layer_context[svc->spatial_layer_id].target_bandwidth /
+                    10000000.0);
+    } else {
+      twopass->bits_left =
+          (int64_t)(stats->duration * oxcf->target_bandwidth / 10000000.0);
+    }
+    cpi->level_constraint.rc_config_updated = 1;
+  }
+
   if (img != NULL) {
     res = validate_img(ctx, img);
     if (res == VPX_CODEC_OK) {
@@ -1039,7 +1144,7 @@ static vpx_codec_err_t encoder_encode(vpx_codec_alg_priv_t *ctx,
   }
   cpi->common.error.setjmp = 1;
 
-  vp9_apply_encoding_flags(cpi, flags);
+  if (res == VPX_CODEC_OK) vp9_apply_encoding_flags(cpi, flags);
 
   // Handle fixed keyframe intervals
   if (ctx->cfg.kf_mode == VPX_KF_AUTO &&
@@ -1367,6 +1472,9 @@ static vpx_codec_err_t ctrl_set_svc(vpx_codec_alg_priv_t *ctx, va_list args) {
       cfg->ss_number_layers > 1 && cfg->ts_number_layers > 1) {
     return VPX_CODEC_INVALID_PARAM;
   }
+
+  vp9_set_row_mt(ctx->cpi);
+
   return VPX_CODEC_OK;
 }
 
@@ -1525,6 +1633,8 @@ static vpx_codec_ctrl_fn_map_t encoder_ctrl_maps[] = {
   { VP9E_SET_SVC_REF_FRAME_CONFIG, ctrl_set_svc_ref_frame_config },
   { VP9E_SET_RENDER_SIZE, ctrl_set_render_size },
   { VP9E_SET_TARGET_LEVEL, ctrl_set_target_level },
+  { VP9E_SET_ROW_MT, ctrl_set_row_mt },
+  { VP9E_ENABLE_MOTION_VECTOR_UNIT_TEST, ctrl_enable_motion_vector_unit_test },
 
   // Getters
   { VP8E_GET_LAST_QUANTIZER, ctrl_get_quantizer },

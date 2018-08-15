@@ -4,18 +4,17 @@
 
 #include "net/android/network_library.h"
 
-#include "base/android/context_utils.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/logging.h"
 #include "jni/AndroidNetworkLibrary_jni.h"
+#include "net/dns/dns_protocol.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
 using base::android::ConvertUTF8ToJavaString;
-using base::android::GetApplicationContext;
 using base::android::ScopedJavaLocalRef;
 using base::android::ToJavaArrayOfByteArray;
 using base::android::ToJavaByteArray;
@@ -72,11 +71,17 @@ bool StoreKeyPair(const uint8_t* public_key,
       ToJavaByteArray(env, public_key, public_len);
   ScopedJavaLocalRef<jbyteArray> private_array =
       ToJavaByteArray(env, private_key, private_len);
-  jboolean ret = Java_AndroidNetworkLibrary_storeKeyPair(
-      env, GetApplicationContext(), public_array, private_array);
+  jboolean ret =
+      Java_AndroidNetworkLibrary_storeKeyPair(env, public_array, private_array);
   LOG_IF(WARNING, !ret) <<
       "Call to Java_AndroidNetworkLibrary_storeKeyPair failed";
   return ret;
+}
+
+bool IsCleartextPermitted(const std::string& host) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jstring> host_string = ConvertUTF8ToJavaString(env, host);
+  return Java_AndroidNetworkLibrary_isCleartextPermitted(env, host_string);
 }
 
 bool HaveOnlyLoopbackAddresses() {
@@ -103,35 +108,50 @@ bool GetMimeTypeFromExtension(const std::string& extension,
 std::string GetTelephonyNetworkCountryIso() {
   return base::android::ConvertJavaStringToUTF8(
       Java_AndroidNetworkLibrary_getNetworkCountryIso(
-          base::android::AttachCurrentThread(),
-          base::android::GetApplicationContext()));
+          base::android::AttachCurrentThread()));
 }
 
 std::string GetTelephonyNetworkOperator() {
   return base::android::ConvertJavaStringToUTF8(
       Java_AndroidNetworkLibrary_getNetworkOperator(
-          base::android::AttachCurrentThread(),
-          base::android::GetApplicationContext()));
+          base::android::AttachCurrentThread()));
 }
 
 std::string GetTelephonySimOperator() {
   return base::android::ConvertJavaStringToUTF8(
       Java_AndroidNetworkLibrary_getSimOperator(
-          base::android::AttachCurrentThread(),
-          base::android::GetApplicationContext()));
+          base::android::AttachCurrentThread()));
 }
 
 bool GetIsRoaming() {
   return Java_AndroidNetworkLibrary_getIsRoaming(
-      base::android::AttachCurrentThread(),
-      base::android::GetApplicationContext());
+      base::android::AttachCurrentThread());
+}
+
+bool GetIsCaptivePortal() {
+  return Java_AndroidNetworkLibrary_getIsCaptivePortal(
+      base::android::AttachCurrentThread());
 }
 
 std::string GetWifiSSID() {
   return base::android::ConvertJavaStringToUTF8(
       Java_AndroidNetworkLibrary_getWifiSSID(
-          base::android::AttachCurrentThread(),
-          base::android::GetApplicationContext()));
+          base::android::AttachCurrentThread()));
+}
+
+void GetDnsServers(std::vector<IPEndPoint>* dns_servers) {
+  JNIEnv* env = AttachCurrentThread();
+  std::vector<std::string> dns_servers_strings;
+  base::android::JavaArrayOfByteArrayToStringVector(
+      env, Java_AndroidNetworkLibrary_getDnsServers(env).obj(),
+      &dns_servers_strings);
+  for (const std::string& dns_address_string : dns_servers_strings) {
+    IPAddress dns_address(
+        reinterpret_cast<const uint8_t*>(dns_address_string.c_str()),
+        dns_address_string.size());
+    IPEndPoint dns_server(dns_address, dns_protocol::kDefaultPort);
+    dns_servers->push_back(dns_server);
+  }
 }
 
 }  // namespace android

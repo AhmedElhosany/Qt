@@ -13,7 +13,9 @@
 #include "ui/message_center/message_center_observer.h"
 #include "ui/message_center/notification_list.h"
 #include "ui/message_center/views/message_center_controller.h"
+#include "ui/message_center/views/message_list_view.h"
 #include "ui/message_center/views/message_view.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
 
 namespace gfx {
@@ -34,22 +36,25 @@ class NotifierSettingsView;
 // button bar, settings view, scrol view, and message list view.  Acts as a
 // controller for the message list view, passing data back and forth to message
 // center.
-class MESSAGE_CENTER_EXPORT MessageCenterView : public views::View,
-                                                public MessageCenterObserver,
-                                                public MessageCenterController,
-                                                public gfx::AnimationDelegate {
+class MESSAGE_CENTER_EXPORT MessageCenterView
+    : public views::View,
+      public MessageCenterObserver,
+      public MessageCenterController,
+      public MessageListView::Observer,
+      public gfx::AnimationDelegate,
+      public views::FocusChangeListener {
  public:
   MessageCenterView(MessageCenter* message_center,
                     MessageCenterTray* tray,
                     int max_height,
-                    bool initially_settings_visible,
-                    bool top_down);
+                    bool initially_settings_visible);
   ~MessageCenterView() override;
+
+  void Init();
 
   void SetNotifications(const NotificationList::Notifications& notifications);
 
   void ClearAllClosableNotifications();
-  void OnAllNotificationsCleared();
 
   size_t NumMessageViewsForTest() const;
 
@@ -60,10 +65,18 @@ class MESSAGE_CENTER_EXPORT MessageCenterView : public views::View,
 
   void SetIsClosing(bool is_closing);
 
+  // Overridden from views::FocusChangeListener
+  void OnWillChangeFocus(views::View* before, views::View* now) override {}
+  void OnDidChangeFocus(views::View* before, views::View* now) override;
+
  protected:
+  // Potentially sets the reposition target, and then returns whether or not it
+  // was was set.
+  virtual bool SetRepositionTarget();
+
   // Overridden from views::View:
   void Layout() override;
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   int GetHeightForWidth(int width) const override;
   bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
@@ -85,6 +98,10 @@ class MESSAGE_CENTER_EXPORT MessageCenterView : public views::View,
   void ClickOnNotificationButton(const std::string& notification_id,
                                  int button_index) override;
   void ClickOnSettingsButton(const std::string& notification_id) override;
+  void UpdateNotificationSize(const std::string& notification_id) override;
+
+  // Overridden from MessageListView::Observer:
+  void OnAllNotificationsCleared() override;
 
   // Overridden from gfx::AnimationDelegate:
   void AnimationEnded(const gfx::Animation* animation) override;
@@ -103,7 +120,9 @@ class MESSAGE_CENTER_EXPORT MessageCenterView : public views::View,
   void Update(bool animate);
   void SetVisibilityMode(Mode mode, bool animate);
   void UpdateButtonBarStatus();
+  void EnableCloseAllIfAppropriate();
   void SetNotificationViewForTest(MessageView* view);
+  void UpdateNotification(const std::string& notification_id);
 
   MessageCenter* message_center_;  // Weak reference.
   MessageCenterTray* tray_;  // Weak reference.
@@ -118,7 +137,6 @@ class MESSAGE_CENTER_EXPORT MessageCenterView : public views::View,
   std::unique_ptr<MessageListView> message_list_view_;
   NotifierSettingsView* settings_view_;
   MessageCenterButtonBar* button_bar_;
-  bool top_down_;
 
   // Data for transition animation between settings view and message list.
   bool settings_visible_;
@@ -138,13 +156,15 @@ class MESSAGE_CENTER_EXPORT MessageCenterView : public views::View,
   // ignored.
   bool is_closing_;
 
-  bool is_clearing_ = false;
+  bool is_clearing_all_notifications_ = false;
   bool is_locked_ = false;
 
   // Current view mode. During animation, it is the target mode.
   Mode mode_ = Mode::BUTTONS_ONLY;
 
   std::unique_ptr<MessageViewContextMenuController> context_menu_controller_;
+
+  views::FocusManager* focus_manager_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(MessageCenterView);
 };

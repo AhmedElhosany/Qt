@@ -20,10 +20,9 @@
 #include "SkReadBuffer.h"
 #include "SkReader32.h"
 #include "SkRefCnt.h"
-#include "SkShader.h"
+#include "SkShaderBase.h"
 #include "SkTHash.h"
 #include "SkWriteBuffer.h"
-#include "SkXfermodePriv.h"
 
 class SkBitmap;
 class SkImage;
@@ -56,7 +55,6 @@ public:
         kImageFilterUniqueID_Version       = 31,
         kRemoveAndroidPaintOpts_Version    = 32,
         kFlattenCreateProc_Version         = 33,
-        */
         kRemoveColorTableAlpha_Version     = 36,
         kDropShadowMode_Version            = 37,
         kPictureImageFilterResolution_Version = 38,
@@ -71,6 +69,11 @@ public:
         kGradientShaderFloatColor_Version  = 49,
         kXfermodeToBlendMode_Version       = 50,
         kXfermodeToBlendMode2_Version      = 51,
+         */
+        kTextBlobImplicitRunCount_Version  = 52,
+        kComposeShaderCanLerp_Version      = 54,
+        kNoModesInMergeImageFilter_Verison = 55,
+        kTileModeInBlurImageFilter_Version = 56,
     };
 
     /**
@@ -106,8 +109,6 @@ public:
     bool isPtr64Bit() const { return SkToBool(fFlags & kPtrIs64Bit_Flag); }
     bool isValidating() const { return SkToBool(fFlags & kValidation_Flag); }
 
-    SkReader32* getReader32() { return &fReader; }
-
     size_t size() { return fReader.size(); }
     size_t offset() { return fReader.offset(); }
     bool eof() { return fReader.eof(); }
@@ -131,6 +132,7 @@ public:
     virtual void readColor4f(SkColor4f* color);
     virtual void readPoint(SkPoint* point);
     SkPoint readPoint() { SkPoint p; this->readPoint(&p); return p; }
+    virtual void readPoint3(SkPoint3* point);
     virtual void readMatrix(SkMatrix* matrix);
     virtual void readIRect(SkIRect* rect);
     virtual void readRect(SkRect* rect);
@@ -150,8 +152,7 @@ public:
     sk_sp<SkMaskFilter> readMaskFilter() { return this->readFlattenable<SkMaskFilter>(); }
     sk_sp<SkPathEffect> readPathEffect() { return this->readFlattenable<SkPathEffect>(); }
     sk_sp<SkRasterizer> readRasterizer() { return this->readFlattenable<SkRasterizer>(); }
-    sk_sp<SkShader> readShader() { return this->readFlattenable<SkShader>(); }
-    sk_sp<SkXfermode> readXfermode() { return this->readFlattenable<SkXfermode>(); }
+    sk_sp<SkShader> readShader() { return this->readFlattenable<SkShaderBase>(); }
 
     // binary data and arrays
     virtual bool readByteArray(void* value, size_t size);

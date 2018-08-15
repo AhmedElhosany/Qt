@@ -75,7 +75,6 @@ QPropertyNodeAddedChange::QPropertyNodeAddedChange(QNodeId subjectId, QNode *nod
     : QStaticPropertyValueAddedChangeBase(*new QPropertyNodeAddedChangePrivate, subjectId)
 {
     Q_D(QPropertyNodeAddedChange);
-    Q_ASSERT(node);
     d->m_addedNodeIdTypePair = QNodeIdTypePair(node->id(), QNodePrivate::findStaticMetaObject(node->metaObject()));
 
     // Ensure the node has issued a node creation change. We can end
@@ -85,7 +84,8 @@ QPropertyNodeAddedChange::QPropertyNodeAddedChange(QNodeId subjectId, QNode *nod
     // loop will still be blocked. So force it here and we catch this
     // eventuality in the _q_postConstructorInit() function so that we
     // do not repeat the creation and new child scene change events.
-    QNodePrivate::get(node)->_q_postConstructorInit();
+    if (node)
+        QNodePrivate::get(node)->_q_postConstructorInit();
 }
 
 /*! \internal */

@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,23 +19,18 @@
 #include "components/metrics/metrics_service_client.h"
 #include "components/metrics/proto/chrome_user_metrics_extension.pb.h"
 
-class PrefRegistrySimple;
 class PrefService;
 
 namespace base {
-class DictionaryValue;
 class HistogramSamples;
 }
 
-namespace content {
-struct WebPluginInfo;
-}
-
-namespace variations {
-struct ActiveGroupId;
-}
-
 namespace metrics {
+
+namespace internal {
+extern const int kOmniboxEventLimit;
+extern const int kUserActionEventLimit;
+}
 
 class MetricsProvider;
 class MetricsServiceClient;
@@ -44,6 +40,7 @@ class MetricsLog {
   enum LogType {
     INITIAL_STABILITY_LOG,  // The initial log containing stability stats.
     ONGOING_LOG,            // Subsequent logs in a session.
+    INDEPENDENT_LOG,        // An independent log from a previous session.
   };
 
   // Creates a new metrics log of the specified type.
@@ -79,6 +76,10 @@ class MetricsLog {
   // always incrementing for use in measuring time durations.
   static int64_t GetCurrentTime();
 
+  // Record core profile settings into the SystemProfileProto.
+  static void RecordCoreSystemProfile(MetricsServiceClient* client,
+                                      SystemProfileProto* system_profile);
+
   // Records a user-initiated action.
   void RecordUserAction(const std::string& key);
 
@@ -86,6 +87,9 @@ class MetricsLog {
   void RecordHistogramDelta(const std::string& histogram_name,
                             const base::HistogramSamples& snapshot);
 
+
+  // TODO(rkaplow): I think this can be a little refactored as it currently
+  // records a pretty arbitrary set of things.
   // Records the current operating environment, including metrics provided by
   // the specified set of |metrics_providers|.  Takes the list of synthetic
   // trial IDs as a parameter. A synthetic trial is one that is set up
@@ -93,10 +97,14 @@ class MetricsLog {
   // synthetic trial such that the group is determined by the pref value. The
   // current environment is returned serialized as a string.
   std::string RecordEnvironment(
-      const std::vector<MetricsProvider*>& metrics_providers,
-      const std::vector<variations::ActiveGroupId>& synthetic_trials,
+      const std::vector<std::unique_ptr<MetricsProvider>>& metrics_providers,
       int64_t install_date,
       int64_t metrics_reporting_enabled_date);
+
+  // Loads a saved system profile and the associated metrics into the log.
+  // Returns true on success. Keep calling it with fresh logs until it returns
+  // false.
+  bool LoadIndependentMetrics(MetricsProvider* metrics_provider);
 
   // Loads the environment proto that was saved by the last RecordEnvironment()
   // call from prefs. On success, returns true and |app_version| contains the
@@ -114,17 +122,21 @@ class MetricsLog {
   // as number of incomplete shutdowns as well as extra breakpad and debugger
   // stats.
   void RecordStabilityMetrics(
-      const std::vector<MetricsProvider*>& metrics_providers,
+      const std::vector<std::unique_ptr<MetricsProvider>>& metrics_providers,
       base::TimeDelta incremental_uptime,
       base::TimeDelta uptime);
 
   // Records general metrics based on the specified |metrics_providers|.
   void RecordGeneralMetrics(
-      const std::vector<MetricsProvider*>& metrics_providers);
+      const std::vector<std::unique_ptr<MetricsProvider>>& metrics_providers);
 
   // Stop writing to this record and generate the encoded representation.
   // None of the Record* methods can be called after this is called.
   void CloseLog();
+
+  // Truncate some of the fields within the log that we want to restrict in
+  // size due to bandwidth concerns.
+  void TruncateEvents();
 
   // Fills |encoded_log| with the serialized protobuf representation of the
   // record.  Must only be called after CloseLog() has been called.
@@ -134,20 +146,10 @@ class MetricsLog {
     return creation_time_;
   }
 
-  int num_events() const {
-    return uma_proto_.omnibox_event_size() +
-           uma_proto_.user_action_event_size();
-  }
-
   LogType log_type() const { return log_type_; }
 
  protected:
   // Exposed for the sake of mocking/accessing in test code.
-
-  // Fills |field_trial_ids| with the list of initialized field trials name and
-  // group ids.
-  virtual void GetFieldTrialIds(
-      std::vector<variations::ActiveGroupId>* field_trial_ids) const;
 
   ChromeUserMetricsExtension* uma_proto() { return &uma_proto_; }
 
@@ -170,15 +172,11 @@ class MetricsLog {
   // call to RecordStabilityMetrics().
   bool HasStabilityMetrics() const;
 
-  // Within the stability group, write required attributes.
-  void WriteRequiredStabilityAttributes(PrefService* pref);
-
   // Within the stability group, write attributes that need to be updated asap
   // and can't be delayed until the user decides to restart chromium.
   // Delaying these stats would bias metrics away from happy long lived
   // chromium processes (ones that don't crash, and keep on running).
-  void WriteRealtimeStabilityAttributes(PrefService* pref,
-                                        base::TimeDelta incremental_uptime,
+  void WriteRealtimeStabilityAttributes(base::TimeDelta incremental_uptime,
                                         base::TimeDelta uptime);
 
   // closed_ is true when record has been packed up for sending, and should

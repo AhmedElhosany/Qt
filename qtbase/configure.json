@@ -442,6 +442,11 @@
                 ]
             }
         },
+        "aesni": {
+            "label": "AES new instructions",
+            "type": "compile",
+            "test": "common/aesni"
+        },
         "f16c": {
             "label": "F16C instructions",
             "type": "compile",
@@ -459,6 +464,16 @@
                     "QMAKE_CXXFLAGS += $$QMAKE_CFLAGS_F16C"
                 ]
             }
+        },
+        "rdrnd": {
+            "label": "RDRAND instruction",
+            "type": "compile",
+            "test": "common/rdrnd"
+        },
+        "shani": {
+            "label": "SHA new instructions",
+            "type": "compile",
+            "test": "common/shani"
         },
         "avx": {
             "label": "AVX instructions",
@@ -852,7 +867,7 @@
         "sanitizer": {
             "label": "Sanitizers",
             "condition": "features.sanitize_address || features.sanitize_thread || features.sanitize_memory || features.sanitize_undefined",
-            "output": [ "publicConfig" ]
+            "output": [ "sanitizer", "publicConfig" ]
         },
         "GNUmake": {
             "label": "GNU make",
@@ -997,6 +1012,7 @@
             "condition": "features.avx && tests.avx2",
             "output": [
                 "privateConfig",
+                "privateFeature",
                 { "type": "define", "name": "QT_COMPILER_SUPPORTS_AVX2", "value": 1 }
             ]
         },
@@ -1070,6 +1086,30 @@
             "output": [
                 "privateConfig",
                 { "type": "define", "name": "QT_COMPILER_SUPPORTS_AVX512VBMI", "value": 1 }
+            ]
+        },
+        "aesni": {
+            "label": "AES",
+            "condition": "features.sse2 && tests.aesni",
+            "output": [
+                "privateConfig",
+                { "type": "define", "name": "QT_COMPILER_SUPPORTS_AES", "value": 1 }
+            ]
+        },
+        "rdrnd": {
+            "label": "RDRAND",
+            "condition": "tests.rdrnd",
+            "output": [
+                "privateConfig",
+                { "type": "define", "name": "QT_COMPILER_SUPPORTS_RDRND", "value": 1 }
+            ]
+        },
+        "shani": {
+            "label": "SHA",
+            "condition": "features.sse2 && tests.shani",
+            "output": [
+                "privateConfig",
+                { "type": "define", "name": "QT_COMPILER_SUPPORTS_SHA", "value": 1 }
             ]
         },
         "mips_dsp": {
@@ -1350,13 +1390,19 @@ Configure with '-qreal float' to create a build that is binary-compatible with 5
                         {
                             "message": "AVX",
                             "type": "featureList",
-                            "args": "avx avx2 f16c",
+                            "args": "avx avx2",
                             "condition": "(arch.i386 || arch.x86_64)"
                         },
                         {
                             "message": "AVX512",
                             "type": "featureList",
                             "args": "avx512f avx512er avx512cd avx512pf avx512dq avx512bw avx512vl avx512ifma avx512vbmi",
+                            "condition": "(arch.i386 || arch.x86_64)"
+                        },
+                        {
+                            "message": "Other x86",
+                            "type": "featureList",
+                            "args": "aesni f16c rdrnd shani",
                             "condition": "(arch.i386 || arch.x86_64)"
                         },
                         {

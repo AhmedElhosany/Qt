@@ -6,8 +6,9 @@
 
 #include <memory>
 
-#include "base/logging.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
+#include "net/quic/platform/api/quic_logging.h"
+#include "net/quic/platform/api/quic_test.h"
 #include "net/quic/test_tools/mock_clock.h"
 #include "net/quic/test_tools/quic_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,7 +23,7 @@ namespace test {
 const QuicByteCount kBytesInFlight = 1024;
 const int kInitialBurstPackets = 10;
 
-class PacingSenderTest : public ::testing::Test {
+class PacingSenderTest : public QuicTest {
  protected:
   PacingSenderTest()
       : zero_time_(QuicTime::Delta::Zero()),
@@ -50,9 +51,9 @@ class PacingSenderTest : public ::testing::Test {
       pacing_sender_->OnCongestionEvent(true, 1234, clock_.Now(), empty,
                                         lost_packets);
     } else if (burst_size != kInitialBurstPackets) {
-      LOG(FATAL) << "Unsupported burst_size " << burst_size
-                 << " specificied, only 0 and " << kInitialBurstPackets
-                 << " are supported.";
+      QUIC_LOG(FATAL) << "Unsupported burst_size " << burst_size
+                      << " specificied, only 0 and " << kInitialBurstPackets
+                      << " are supported.";
     }
   }
 

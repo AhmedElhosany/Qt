@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/stl_util.h"
 #include "tools/gn/functions.h"
 #include "tools/gn/parse_tree.h"
 #include "tools/gn/scope.h"
@@ -93,8 +94,14 @@ Value RunProcessFileTemplate(Scope* scope,
     return Value();
   }
 
+  auto& types = subst.required_types();
+  if (base::ContainsValue(types, SUBSTITUTION_SOURCE_TARGET_RELATIVE)) {
+    *err = Err(template_arg, "Not a valid substitution type for the function.");
+    return Value();
+  }
+
   SubstitutionWriter::ApplyListToSourcesAsString(
-      scope->settings(), subst, input_files, &result_files);
+      nullptr, scope->settings(), subst, input_files, &result_files);
 
   // Convert the list of strings to the return Value.
   Value ret(function, Value::LIST);

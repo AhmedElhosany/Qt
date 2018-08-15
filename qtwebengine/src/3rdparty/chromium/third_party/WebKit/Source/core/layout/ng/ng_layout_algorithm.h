@@ -6,59 +6,73 @@
 #define NGLayoutAlgorithm_h
 
 #include "core/CoreExport.h"
-#include "platform/heap/Handle.h"
-#include "wtf/Allocator.h"
-#include "wtf/Noncopyable.h"
+#include "core/layout/ng/ng_floats_utils.h"
+#include "core/layout/ng/ng_fragment_builder.h"
+#include "core/layout/ng/ng_min_max_content_size.h"
+#include "platform/wtf/Allocator.h"
+#include "platform/wtf/Optional.h"
 
 namespace blink {
 
-struct MinAndMaxContentSizes;
-class NGBox;
+class ComputedStyle;
 class NGConstraintSpace;
-class NGFragmentBase;
-class NGPhysicalFragmentBase;
-class NGPhysicalFragment;
-
-enum NGLayoutStatus { NotFinished, ChildAlgorithmRequired, NewFragment };
+class NGLayoutResult;
 
 // Base class for all LayoutNG algorithms.
-class CORE_EXPORT NGLayoutAlgorithm
-    : public GarbageCollectedFinalized<NGLayoutAlgorithm> {
-  WTF_MAKE_NONCOPYABLE(NGLayoutAlgorithm);
-
+template <typename NGInputNodeType, typename NGBreakTokenType>
+class CORE_EXPORT NGLayoutAlgorithm {
+  STACK_ALLOCATED();
  public:
-  NGLayoutAlgorithm() {}
+  NGLayoutAlgorithm(NGInputNodeType node,
+                    NGConstraintSpace* space,
+                    NGBreakTokenType* break_token)
+      : node_(node),
+        constraint_space_(space),
+        break_token_(break_token),
+        container_builder_(NGPhysicalFragment::kFragmentBox, node) {}
+
   virtual ~NGLayoutAlgorithm() {}
 
-  // Actual layout function. Lays out the children and descendents within the
-  // constraints given by the NGConstraintSpace. Returns a fragment with the
-  // resulting layout information.
-  // This function can not be const because for interruptible layout, we have
-  // to be able to store state information.
-  // If this function returns NotFinished, it has to be called again.
-  // If it returns ChildAlgorithmRequired, the NGBox out parameter will
-  // be set with the NGBox that needs to be layed out next.
-  // If it returns NewFragment, the NGPhysicalFragmentBase out parameter
-  // will contain the new fragment.
-  virtual NGLayoutStatus Layout(NGFragmentBase*,
-                                NGPhysicalFragmentBase**,
-                                NGLayoutAlgorithm**) = 0;
-
-  enum MinAndMaxState { Success, Pending, NotImplemented };
+  // Actual layout function. Lays out the children and descendants within the
+  // constraints given by the NGConstraintSpace. Returns a layout result with
+  // the resulting layout information.
+  // TODO(layout-dev): attempt to make this function const.
+  virtual RefPtr<NGLayoutResult> Layout() = 0;
 
   // Computes the min-content and max-content intrinsic sizes for the given box.
-  // The result will not take any min-width. max-width or width properties into
-  // account. Implementations can return NotImpplemented in which case the
-  // caller is expected ot synthesize this value from the overflow rect returned
-  // from Layout called with a available width of 0 and LayoutUnit::max(),
-  // respectively.
-  // A Pending return value has the same meaning as a false return from layout,
-  // i.e. it is a request to call this function again.
-  virtual MinAndMaxState ComputeMinAndMaxContentSizes(MinAndMaxContentSizes*) {
-    return NotImplemented;
+  // The result will not take any min-width, max-width or width properties into
+  // account. If the return value is empty, the caller is expected to synthesize
+  // this value from the overflow rect returned from Layout called with an
+  // available width of 0 and LayoutUnit::max(), respectively.
+  virtual Optional<MinMaxContentSize> ComputeMinMaxContentSize() const {
+    return WTF::nullopt;
   }
 
-  DEFINE_INLINE_VIRTUAL_TRACE() {}
+ protected:
+  const NGConstraintSpace& ConstraintSpace() const {
+    DCHECK(constraint_space_);
+    return *constraint_space_;
+  }
+  NGConstraintSpace* MutableConstraintSpace() { return constraint_space_; }
+
+  const ComputedStyle& Style() const { return node_.Style(); }
+
+  NGLogicalOffset ContainerBfcOffset() const {
+    DCHECK(container_builder_.BfcOffset().has_value());
+    return container_builder_.BfcOffset().value();
+  }
+
+  virtual NGInputNodeType Node() const { return node_; }
+
+  NGBreakTokenType* BreakToken() const { return break_token_; }
+
+  NGInputNodeType node_;
+  NGConstraintSpace* constraint_space_;
+
+  // The break token from which we are currently resuming layout.
+  NGBreakTokenType* break_token_;
+
+  NGFragmentBuilder container_builder_;
 };
 
 }  // namespace blink

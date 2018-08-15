@@ -20,12 +20,22 @@
 #include "media/formats/mp4/rcheck.h"
 #include "media/media_features.h"
 
+#if BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+#include "media/formats/mp4/dolby_vision.h"
+#endif
+
 #if BUILDFLAG(ENABLE_HEVC_DEMUXING)
 #include "media/formats/mp4/hevc.h"
 #endif
 
 namespace media {
 namespace mp4 {
+
+namespace {
+
+const size_t kKeyIdSize = 16;
+
+}  // namespace
 
 FileType::FileType() {}
 FileType::FileType(const FileType& other) = default;
@@ -121,9 +131,9 @@ bool SampleAuxiliaryInformationOffset::Parse(BoxReader* reader) {
   RCHECK(reader->Read4(&count));
   int bytes_per_offset = reader->version() == 1 ? 8 : 4;
 
+  // Cast |count| to size_t before multiplying to support maximum platform size.
   base::CheckedNumeric<size_t> bytes_needed =
-      base::CheckedNumeric<size_t>(bytes_per_offset);
-  bytes_needed *= count;
+      base::CheckMul(bytes_per_offset, static_cast<size_t>(count));
   RCHECK_MEDIA_LOGGED(bytes_needed.IsValid(), reader->media_log(),
                       "Extreme SAIO count exceeds implementation limit.");
   RCHECK(reader->HasBytes(bytes_needed.ValueOrDie()));
@@ -170,8 +180,10 @@ bool SampleEncryptionEntry::Parse(BufferReader* reader,
                                   uint8_t iv_size,
                                   bool has_subsamples) {
   // According to ISO/IEC FDIS 23001-7: CENC spec, IV should be either
-  // 64-bit (8-byte) or 128-bit (16-byte).
-  RCHECK(iv_size == 8 || iv_size == 16);
+  // 64-bit (8-byte) or 128-bit (16-byte). The 3rd Edition allows |iv_size|
+  // to be 0, for the case of a "constant IV". In this case, the existence of
+  // the constant IV must be ensured by the caller.
+  RCHECK(iv_size == 0 || iv_size == 8 || iv_size == 16);
 
   memset(initialization_vector, 0, sizeof(initialization_vector));
   for (uint8_t i = 0; i < iv_size; i++)
@@ -246,7 +258,15 @@ bool SchemeType::Parse(BoxReader* reader) {
 }
 
 TrackEncryption::TrackEncryption()
-  : is_encrypted(false), default_iv_size(0) {
+    : is_encrypted(false),
+      default_iv_size(0)
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+      ,
+      default_crypt_byte_block(0),
+      default_skip_byte_block(0),
+      default_constant_iv_size(0)
+#endif
+{
 }
 TrackEncryption::TrackEncryption(const TrackEncryption& other) = default;
 TrackEncryption::~TrackEncryption() {}
@@ -254,14 +274,31 @@ FourCC TrackEncryption::BoxType() const { return FOURCC_TENC; }
 
 bool TrackEncryption::Parse(BoxReader* reader) {
   uint8_t flag;
+  uint8_t possible_pattern_info;
   RCHECK(reader->ReadFullBoxHeader() &&
-         reader->SkipBytes(2) &&
-         reader->Read1(&flag) &&
+         reader->SkipBytes(1) &&  // skip reserved byte
+         reader->Read1(&possible_pattern_info) && reader->Read1(&flag) &&
          reader->Read1(&default_iv_size) &&
-         reader->ReadVec(&default_kid, 16));
+         reader->ReadVec(&default_kid, kKeyIdSize));
   is_encrypted = (flag != 0);
   if (is_encrypted) {
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+    if (reader->version() > 0) {
+      default_crypt_byte_block = (possible_pattern_info >> 4) & 0x0f;
+      default_skip_byte_block = possible_pattern_info & 0x0f;
+    }
+    if (default_iv_size == 0) {
+      RCHECK(reader->Read1(&default_constant_iv_size));
+      RCHECK(default_constant_iv_size == 8 || default_constant_iv_size == 16);
+      memset(default_constant_iv, 0, sizeof(default_constant_iv));
+      for (uint8_t i = 0; i < default_constant_iv_size; i++)
+        RCHECK(reader->Read1(default_constant_iv + i));
+    } else {
+      RCHECK(default_iv_size == 8 || default_iv_size == 16);
+    }
+#else
     RCHECK(default_iv_size == 8 || default_iv_size == 16);
+#endif
   } else {
     RCHECK(default_iv_size == 0);
   }
@@ -287,13 +324,24 @@ bool ProtectionSchemeInfo::Parse(BoxReader* reader) {
   RCHECK(reader->ScanChildren() &&
          reader->ReadChild(&format) &&
          reader->ReadChild(&type));
-  if (type.type == FOURCC_CENC)
+  if (HasSupportedScheme())
     RCHECK(reader->ReadChild(&info));
   // Other protection schemes are silently ignored. Since the protection scheme
   // type can't be determined until this box is opened, we return 'true' for
-  // non-CENC protection scheme types. It is the parent box's responsibility to
+  // unsupported protection schemes. It is the parent box's responsibility to
   // ensure that this scheme type is a supported one.
   return true;
+}
+
+bool ProtectionSchemeInfo::HasSupportedScheme() const {
+  FourCC fourCC = type.type;
+  if (fourCC == FOURCC_CENC)
+    return true;
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+  if (fourCC == FOURCC_CBCS)
+    return true;
+#endif
+  return false;
 }
 
 MovieHeader::MovieHeader()
@@ -441,9 +489,9 @@ bool EditList::Parse(BoxReader* reader) {
 
   const size_t bytes_per_edit = reader->version() == 1 ? 20 : 12;
 
+  // Cast |count| to size_t before multiplying to support maximum platform size.
   base::CheckedNumeric<size_t> bytes_needed =
-      base::CheckedNumeric<size_t>(bytes_per_edit);
-  bytes_needed *= count;
+      base::CheckMul(bytes_per_edit, static_cast<size_t>(count));
   RCHECK_MEDIA_LOGGED(bytes_needed.IsValid(), reader->media_log(),
                       "Extreme ELST count exceeds implementation limit.");
   RCHECK(reader->HasBytes(bytes_needed.ValueOrDie()));
@@ -539,12 +587,13 @@ bool AVCDecoderConfigurationRecord::Parse(BoxReader* reader) {
 
 bool AVCDecoderConfigurationRecord::Parse(const uint8_t* data, int data_size) {
   BufferReader reader(data, data_size);
-  return ParseInternal(&reader, new MediaLog());
+  // TODO(wolenetz): Questionable MediaLog usage, http://crbug.com/712310
+  MediaLog media_log;
+  return ParseInternal(&reader, &media_log);
 }
 
-bool AVCDecoderConfigurationRecord::ParseInternal(
-    BufferReader* reader,
-    const scoped_refptr<MediaLog>& media_log) {
+bool AVCDecoderConfigurationRecord::ParseInternal(BufferReader* reader,
+                                                  MediaLog* media_log) {
   RCHECK(reader->Read1(&version) && version == 1 &&
          reader->Read1(&profile_indication) &&
          reader->Read1(&profile_compatibility) &&
@@ -566,11 +615,6 @@ bool AVCDecoderConfigurationRecord::ParseInternal(
     RCHECK(reader->Read2(&sps_length) &&
            reader->ReadVec(&sps_list[i], sps_length));
     RCHECK(sps_list[i].size() > 4);
-
-    if (media_log.get()) {
-      MEDIA_LOG(INFO, media_log) << "Video codec: avc1."
-                                 << base::HexEncode(sps_list[i].data() + 1, 3);
-    }
   }
 
   uint8_t num_pps;
@@ -662,13 +706,15 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
          reader->Read2(&height) &&
          reader->SkipBytes(50));
 
-  RCHECK(reader->ScanChildren() &&
-         reader->MaybeReadChild(&pixel_aspect));
+  RCHECK(reader->ScanChildren());
+  if (reader->HasChild(&pixel_aspect)) {
+    RCHECK(reader->MaybeReadChild(&pixel_aspect));
+  }
 
   if (format == FOURCC_ENCV) {
     // Continue scanning until a recognized protection scheme is found, or until
     // we run out of protection schemes.
-    while (sinf.type.type != FOURCC_CENC) {
+    while (!sinf.HasSupportedScheme()) {
       if (!reader->ReadChild(&sinf))
         return false;
     }
@@ -679,8 +725,7 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
   switch (actual_format) {
     case FOURCC_AVC1:
     case FOURCC_AVC3: {
-      DVLOG(2) << __FUNCTION__
-               << " reading AVCDecoderConfigurationRecord (avcC)";
+      DVLOG(2) << __func__ << " reading AVCDecoderConfigurationRecord (avcC)";
       std::unique_ptr<AVCDecoderConfigurationRecord> avcConfig(
           new AVCDecoderConfigurationRecord());
       RCHECK(reader->ReadChild(avcConfig.get()));
@@ -689,13 +734,23 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
           avcConfig->profile_indication);
       frame_bitstream_converter =
           make_scoped_refptr(new AVCBitstreamConverter(std::move(avcConfig)));
+#if BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+      // It can be Dolby Vision stream if there is DVCC box.
+      DolbyVisionConfiguration dvccConfig;
+      if (reader->HasChild(&dvccConfig) && reader->ReadChild(&dvccConfig)) {
+        DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC)";
+        static_cast<AVCBitstreamConverter*>(frame_bitstream_converter.get())
+            ->DisablePostAnnexbValidation();
+        video_codec = kCodecDolbyVision;
+        video_codec_profile = dvccConfig.codec_profile;
+      }
+#endif  // BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
       break;
     }
 #if BUILDFLAG(ENABLE_HEVC_DEMUXING)
     case FOURCC_HEV1:
     case FOURCC_HVC1: {
-      DVLOG(2) << __FUNCTION__
-               << " parsing HEVCDecoderConfigurationRecord (hvcC)";
+      DVLOG(2) << __func__ << " parsing HEVCDecoderConfigurationRecord (hvcC)";
       std::unique_ptr<HEVCDecoderConfigurationRecord> hevcConfig(
           new HEVCDecoderConfigurationRecord());
       RCHECK(reader->ReadChild(hevcConfig.get()));
@@ -703,28 +758,65 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
       video_codec_profile = hevcConfig->GetVideoProfile();
       frame_bitstream_converter =
           make_scoped_refptr(new HEVCBitstreamConverter(std::move(hevcConfig)));
+#if BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+      // It can be Dolby Vision stream if there is DVCC box.
+      DolbyVisionConfiguration dvccConfig;
+      if (reader->HasChild(&dvccConfig) && reader->ReadChild(&dvccConfig)) {
+        DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC)";
+        video_codec = kCodecDolbyVision;
+        video_codec_profile = dvccConfig.codec_profile;
+      }
+#endif  // BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
       break;
     }
-#endif
-    case FOURCC_VP09:
-      if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-              switches::kEnableVp9InMp4)) {
-        DVLOG(2) << __FUNCTION__
-                 << " parsing VPCodecConfigurationRecord (vpcC)";
-        std::unique_ptr<VPCodecConfigurationRecord> vp_config(
-            new VPCodecConfigurationRecord());
-        RCHECK(reader->ReadChild(vp_config.get()));
-        frame_bitstream_converter = nullptr;
-        video_codec = kCodecVP9;
-        video_codec_profile = vp_config->profile;
-      } else {
-        MEDIA_LOG(ERROR, reader->media_log()) << "VP9 in MP4 is not enabled.";
-        return false;
-      }
+#endif  // BUILDFLAG(ENABLE_HEVC_DEMUXING)
+#if BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+    case FOURCC_DVA1:
+    case FOURCC_DVAV: {
+      DVLOG(2) << __func__ << " reading AVCDecoderConfigurationRecord (avcC)";
+      std::unique_ptr<AVCDecoderConfigurationRecord> avcConfig(
+          new AVCDecoderConfigurationRecord());
+      RCHECK(reader->ReadChild(avcConfig.get()));
+      frame_bitstream_converter =
+          make_scoped_refptr(new AVCBitstreamConverter(std::move(avcConfig)));
+      DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC)";
+      DolbyVisionConfiguration dvccConfig;
+      RCHECK(reader->ReadChild(&dvccConfig));
+      video_codec = kCodecDolbyVision;
+      video_codec_profile = dvccConfig.codec_profile;
       break;
+    }
+#if BUILDFLAG(ENABLE_HEVC_DEMUXING)
+    case FOURCC_DVH1:
+    case FOURCC_DVHE: {
+      DVLOG(2) << __func__ << " reading HEVCDecoderConfigurationRecord (hvcC)";
+      std::unique_ptr<HEVCDecoderConfigurationRecord> hevcConfig(
+          new HEVCDecoderConfigurationRecord());
+      RCHECK(reader->ReadChild(hevcConfig.get()));
+      frame_bitstream_converter =
+          make_scoped_refptr(new HEVCBitstreamConverter(std::move(hevcConfig)));
+      DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC)";
+      DolbyVisionConfiguration dvccConfig;
+      RCHECK(reader->ReadChild(&dvccConfig));
+      video_codec = kCodecDolbyVision;
+      video_codec_profile = dvccConfig.codec_profile;
+      break;
+    }
+#endif  // BUILDFLAG(ENABLE_HEVC_DEMUXING)
+#endif  // BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+    case FOURCC_VP09: {
+      DVLOG(2) << __func__ << " parsing VPCodecConfigurationRecord (vpcC)";
+      std::unique_ptr<VPCodecConfigurationRecord> vp_config(
+          new VPCodecConfigurationRecord());
+      RCHECK(reader->ReadChild(vp_config.get()));
+      frame_bitstream_converter = nullptr;
+      video_codec = kCodecVP9;
+      video_codec_profile = vp_config->profile;
+      break;
+    }
     default:
       // Unknown/unsupported format
-      MEDIA_LOG(ERROR, reader->media_log()) << __FUNCTION__
+      MEDIA_LOG(ERROR, reader->media_log()) << __func__
                                             << " unsupported video format "
                                             << FourCCToString(actual_format);
       return false;
@@ -742,11 +834,17 @@ bool VideoSampleEntry::IsFormatValid() const {
 #if BUILDFLAG(ENABLE_HEVC_DEMUXING)
     case FOURCC_HEV1:
     case FOURCC_HVC1:
-#endif
-      return true;
+#if BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+    case FOURCC_DVH1:
+    case FOURCC_DVHE:
+#endif  // BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+#endif  // BUILDFLAG(ENABLE_HEVC_DEMUXING)
+#if BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
+    case FOURCC_DVA1:
+    case FOURCC_DVAV:
+#endif  // BUILDFLAG(ENABLE_DOLBY_VISION_DEMUXING)
     case FOURCC_VP09:
-      return base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableVp9InMp4);
+      return true;
     default:
       return false;
   }
@@ -773,11 +871,6 @@ bool ElementaryStreamDescriptor::Parse(BoxReader* reader) {
   RCHECK(es_desc.Parse(data));
 
   object_type = es_desc.object_type();
-
-  if (object_type != 0x40) {
-    MEDIA_LOG(INFO, reader->media_log()) << "Audio codec: mp4a." << std::hex
-                                         << static_cast<int>(object_type);
-  }
 
   if (es_desc.IsAAC(object_type))
     RCHECK(aac.Parse(es_desc.decoder_specific_info(), reader->media_log()));
@@ -818,7 +911,7 @@ bool AudioSampleEntry::Parse(BoxReader* reader) {
   if (format == FOURCC_ENCA) {
     // Continue scanning until a recognized protection scheme is found, or until
     // we run out of protection schemes.
-    while (sinf.type.type != FOURCC_CENC) {
+    while (!sinf.HasSupportedScheme()) {
       if (!reader->ReadChild(&sinf))
         return false;
     }
@@ -1037,7 +1130,10 @@ bool TrackFragmentHeader::Parse(BoxReader* reader) {
   // the wild don't set it.
   //
   //  RCHECK((flags & 0x020000) && !(flags & 0x1));
-  RCHECK(!(reader->flags() & 0x1));
+  RCHECK_MEDIA_LOGGED(!(reader->flags() & 0x1), reader->media_log(),
+                      "TFHD base-data-offset not allowed by MSE. See "
+                      "https://www.w3.org/TR/mse-byte-stream-format-isobmff/"
+                      "#movie-fragment-relative-addressing");
 
   if (reader->flags() & 0x2) {
     RCHECK(reader->Read4(&sample_description_index));
@@ -1099,9 +1195,10 @@ bool TrackFragmentRun::Parse(BoxReader* reader) {
       sample_flags_present + sample_composition_time_offsets_present;
   const size_t bytes_per_field = 4;
 
-  base::CheckedNumeric<size_t> bytes_needed(fields);
-  bytes_needed *= bytes_per_field;
-  bytes_needed *= sample_count;
+  // Cast |sample_count| to size_t before multiplying to support maximum
+  // platform size.
+  base::CheckedNumeric<size_t> bytes_needed = base::CheckMul(
+      fields, bytes_per_field, static_cast<size_t>(sample_count));
   RCHECK_MEDIA_LOGGED(
       bytes_needed.IsValid(), reader->media_log(),
       "Extreme TRUN sample count exceeds implementation limit.");
@@ -1167,9 +1264,9 @@ bool SampleToGroup::Parse(BoxReader* reader) {
   RCHECK(reader->Read4(&count));
 
   const size_t bytes_per_entry = 8;
+  // Cast |count| to size_t before multiplying to support maximum platform size.
   base::CheckedNumeric<size_t> bytes_needed =
-      base::CheckedNumeric<size_t>(bytes_per_entry);
-  bytes_needed *= count;
+      base::CheckMul(bytes_per_entry, static_cast<size_t>(count));
   RCHECK_MEDIA_LOGGED(bytes_needed.IsValid(), reader->media_log(),
                       "Extreme SBGP count exceeds implementation limit.");
   RCHECK(reader->HasBytes(bytes_needed.ValueOrDie()));
@@ -1184,10 +1281,49 @@ bool SampleToGroup::Parse(BoxReader* reader) {
 }
 
 CencSampleEncryptionInfoEntry::CencSampleEncryptionInfoEntry()
-    : is_encrypted(false), iv_size(0) {}
+    : is_encrypted(false),
+      iv_size(0)
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+      ,
+      crypt_byte_block(0),
+      skip_byte_block(0),
+      constant_iv_size(0)
+#endif
+{
+}
 CencSampleEncryptionInfoEntry::CencSampleEncryptionInfoEntry(
     const CencSampleEncryptionInfoEntry& other) = default;
 CencSampleEncryptionInfoEntry::~CencSampleEncryptionInfoEntry() {}
+
+bool CencSampleEncryptionInfoEntry::Parse(BoxReader* reader) {
+  uint8_t flag;
+  uint8_t possible_pattern_info;
+  RCHECK(reader->SkipBytes(1) &&  // reserved.
+         reader->Read1(&possible_pattern_info) && reader->Read1(&flag) &&
+         reader->Read1(&iv_size) && reader->ReadVec(&key_id, kKeyIdSize));
+
+  is_encrypted = (flag != 0);
+  if (is_encrypted) {
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+    crypt_byte_block = (possible_pattern_info >> 4) & 0x0f;
+    skip_byte_block = possible_pattern_info & 0x0f;
+    if (iv_size == 0) {
+      RCHECK(reader->Read1(&constant_iv_size));
+      RCHECK(constant_iv_size == 8 || constant_iv_size == 16);
+      memset(constant_iv, 0, sizeof(constant_iv));
+      for (uint8_t i = 0; i < constant_iv_size; i++)
+        RCHECK(reader->Read1(constant_iv + i));
+    } else {
+      RCHECK(iv_size == 8 || iv_size == 16);
+    }
+#else
+    RCHECK(iv_size == 8 || iv_size == 16);
+#endif
+  } else {
+    RCHECK(iv_size == 0);
+  }
+  return true;
+}
 
 SampleGroupDescription::SampleGroupDescription() : grouping_type(0) {}
 SampleGroupDescription::SampleGroupDescription(
@@ -1207,7 +1343,6 @@ bool SampleGroupDescription::Parse(BoxReader* reader) {
 
   const uint8_t version = reader->version();
 
-  const size_t kKeyIdSize = 16;
   const size_t kEntrySize = sizeof(uint32_t) + kKeyIdSize;
   uint32_t default_length = 0;
   if (version == 1) {
@@ -1222,9 +1357,9 @@ bool SampleGroupDescription::Parse(BoxReader* reader) {
   // potentially huge entries vector. In reality each entry will require a
   // variable number of bytes in excess of 2.
   const int bytes_per_entry = 2;
+  // Cast |count| to size_t before multiplying to support maximum platform size.
   base::CheckedNumeric<size_t> bytes_needed =
-      base::CheckedNumeric<size_t>(bytes_per_entry);
-  bytes_needed *= count;
+      base::CheckMul(bytes_per_entry, static_cast<size_t>(count));
   RCHECK_MEDIA_LOGGED(bytes_needed.IsValid(), reader->media_log(),
                       "Extreme SGPD count exceeds implementation limit.");
   RCHECK(reader->HasBytes(bytes_needed.ValueOrDie()));
@@ -1239,19 +1374,7 @@ bool SampleGroupDescription::Parse(BoxReader* reader) {
         RCHECK(description_length >= kEntrySize);
       }
     }
-
-    uint8_t flag;
-    RCHECK(reader->SkipBytes(2) &&  // reserved.
-           reader->Read1(&flag) &&
-           reader->Read1(&entries[i].iv_size) &&
-           reader->ReadVec(&entries[i].key_id, kKeyIdSize));
-
-    entries[i].is_encrypted = (flag != 0);
-    if (entries[i].is_encrypted) {
-      RCHECK(entries[i].iv_size == 8 || entries[i].iv_size == 16);
-    } else {
-      RCHECK(entries[i].iv_size == 0);
-    }
+    RCHECK(entries[i].Parse(reader));
   }
   return true;
 }

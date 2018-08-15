@@ -92,9 +92,9 @@ KeyboardStyle {
                 verticalAlignment: Text.AlignVCenter
                 anchors.fill: parent
                 anchors.leftMargin: keyContentMargin
-                anchors.topMargin: control.smallTextVisible ? keyContentMargin * 1.2 : keyContentMargin
+                anchors.topMargin: keyContentMargin
                 anchors.rightMargin: keyContentMargin
-                anchors.bottomMargin: control.smallTextVisible ? keyContentMargin * 0.8 : keyContentMargin
+                anchors.bottomMargin: keyContentMargin
                 font {
                     family: fontFamily
                     weight: Font.Normal
@@ -757,7 +757,34 @@ KeyboardStyle {
             Text {
                 id: hwrInputModeIndicator
                 visible: control.patternRecognitionMode === InputEngine.HandwritingRecoginition
-                text: InputContext.inputEngine.inputMode === InputEngine.Latin ? "Abc" : "123"
+                text: {
+                    switch (InputContext.inputEngine.inputMode) {
+                    case InputEngine.Numeric:
+                        if (["ar", "fa"].indexOf(InputContext.locale.substring(0, 2)) !== -1)
+                            return "\u0660\u0661\u0662"
+                        // Fallthrough
+                    case InputEngine.Dialable:
+                        return "123"
+                    case InputEngine.Greek:
+                        return "ΑΒΓ"
+                    case InputEngine.Cyrillic:
+                        return "АБВ"
+                    case InputEngine.Arabic:
+                        if (InputContext.locale.substring(0, 2) === "fa")
+                            return "\u0627\u200C\u0628\u200C\u067E"
+                        return "\u0623\u200C\u0628\u200C\u062C"
+                    case InputEngine.Hebrew:
+                        return "\u05D0\u05D1\u05D2"
+                    case InputEngine.ChineseHandwriting:
+                        return "中文"
+                    case InputEngine.JapaneseHandwriting:
+                        return "日本語"
+                    case InputEngine.KoreanHandwriting:
+                        return "한국어"
+                    default:
+                        return "Abc"
+                    }
+                }
                 color: "white"
                 anchors.left: parent.left
                 anchors.top: parent.top
@@ -786,22 +813,41 @@ KeyboardStyle {
                 ctx.strokeStyle = Qt.rgba(0xFF, 0xFF, 0xFF)
                 ctx.clearRect(0, 0, width, height)
                 var i
+                var margin = Math.round(30 * scaleHint)
                 if (control.horizontalRulers) {
                     for (i = 0; i < control.horizontalRulers.length; i++) {
                         ctx.beginPath()
-                        ctx.moveTo(0, control.horizontalRulers[i])
-                        ctx.lineTo(width, control.horizontalRulers[i])
+                        var y = Math.round(control.horizontalRulers[i])
+                        var rightMargin = Math.round(width - margin)
+                        if (i + 1 === control.horizontalRulers.length) {
+                            ctx.moveTo(margin, y)
+                            ctx.lineTo(rightMargin, y)
+                        } else {
+                            var dashLen = Math.round(20 * scaleHint)
+                            for (var dash = margin, dashCount = 0;
+                                 dash < rightMargin; dash += dashLen, dashCount++) {
+                                if ((dashCount & 1) === 0) {
+                                    ctx.moveTo(dash, y)
+                                    ctx.lineTo(Math.min(dash + dashLen, rightMargin), y)
+                                }
+                            }
+                        }
                         ctx.stroke()
                     }
                 }
                 if (control.verticalRulers) {
                     for (i = 0; i < control.verticalRulers.length; i++) {
                         ctx.beginPath()
-                        ctx.moveTo(control.verticalRulers[i], 0)
-                        ctx.lineTo(control.verticalRulers[i], height)
+                        ctx.moveTo(control.verticalRulers[i], margin)
+                        ctx.lineTo(control.verticalRulers[i], Math.round(height - margin))
                         ctx.stroke()
                     }
                 }
+            }
+            Connections {
+                target: control
+                onHorizontalRulersChanged: traceInputKeyGuideLines.requestPaint()
+                onVerticalRulersChanged: traceInputKeyGuideLines.requestPaint()
             }
         }
     }

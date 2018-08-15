@@ -260,7 +260,7 @@
    */
   TestSuite.prototype.testScriptsTabIsPopulatedOnInspectedPageRefresh = function() {
     var test = this;
-    var debuggerModel = SDK.DebuggerModel.fromTarget(SDK.targetManager.mainTarget());
+    var debuggerModel = SDK.targetManager.mainTarget().model(SDK.DebuggerModel);
     debuggerModel.addEventListener(SDK.DebuggerModel.Events.GlobalObjectCleared, waitUntilScriptIsParsed);
 
     this.showPanel('elements').then(function() {
@@ -301,12 +301,6 @@
    */
   TestSuite.prototype.testNoScriptDuplicatesOnPanelSwitch = function() {
     var test = this;
-
-    // There should be two scripts: one for the main page and another
-    // one which is source of console API(see
-    // InjectedScript._ensureCommandLineAPIInstalled).
-    var expectedScriptsCount = 2;
-    var parsedScripts = [];
 
     function switchToElementsTab() {
       test.showPanel('elements').then(function() {
@@ -351,7 +345,7 @@
   // Tests that debugger works correctly if pause event occurs when DevTools
   // frontend is being loaded.
   TestSuite.prototype.testPauseWhenLoadingDevTools = function() {
-    var debuggerModel = SDK.DebuggerModel.fromTarget(SDK.targetManager.mainTarget());
+    var debuggerModel = SDK.targetManager.mainTarget().model(SDK.DebuggerModel);
     if (debuggerModel.debuggerPausedDetails)
       return;
 
@@ -395,12 +389,12 @@
   TestSuite.prototype.testNetworkSize = function() {
     var test = this;
 
-    function finishResource(resource, finishTime) {
-      test.assertEquals(25, resource.resourceSize, 'Incorrect total data length');
+    function finishRequest(request, finishTime) {
+      test.assertEquals(25, request.resourceSize, 'Incorrect total data length');
       test.releaseControl();
     }
 
-    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishResource);
+    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishRequest);
 
     // Reload inspected page to sniff network events
     test.evaluateInConsole_('window.location.reload(true);', function(resultText) {});
@@ -414,12 +408,12 @@
   TestSuite.prototype.testNetworkSyncSize = function() {
     var test = this;
 
-    function finishResource(resource, finishTime) {
-      test.assertEquals(25, resource.resourceSize, 'Incorrect total data length');
+    function finishRequest(request, finishTime) {
+      test.assertEquals(25, request.resourceSize, 'Incorrect total data length');
       test.releaseControl();
     }
 
-    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishResource);
+    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishRequest);
 
     // Send synchronous XHR to sniff network events
     test.evaluateInConsole_(
@@ -434,16 +428,16 @@
   TestSuite.prototype.testNetworkRawHeadersText = function() {
     var test = this;
 
-    function finishResource(resource, finishTime) {
-      if (!resource.responseHeadersText)
+    function finishRequest(request, finishTime) {
+      if (!request.responseHeadersText)
         test.fail('Failure: resource does not have response headers text');
-      var index = resource.responseHeadersText.indexOf('Date:');
+      var index = request.responseHeadersText.indexOf('Date:');
       test.assertEquals(
-          112, resource.responseHeadersText.substring(index).length, 'Incorrect response headers text length');
+          112, request.responseHeadersText.substring(index).length, 'Incorrect response headers text length');
       test.releaseControl();
     }
 
-    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishResource);
+    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishRequest);
 
     // Reload inspected page to sniff network events
     test.evaluateInConsole_('window.location.reload(true);', function(resultText) {});
@@ -457,28 +451,28 @@
   TestSuite.prototype.testNetworkTiming = function() {
     var test = this;
 
-    function finishResource(resource, finishTime) {
+    function finishRequest(request, finishTime) {
       // Setting relaxed expectations to reduce flakiness.
       // Server sends headers after 100ms, then sends data during another 100ms.
       // We expect these times to be measured at least as 70ms.
       test.assertTrue(
-          resource.timing.receiveHeadersEnd - resource.timing.connectStart >= 70,
+          request.timing.receiveHeadersEnd - request.timing.connectStart >= 70,
           'Time between receiveHeadersEnd and connectStart should be >=70ms, but was ' +
-              'receiveHeadersEnd=' + resource.timing.receiveHeadersEnd + ', connectStart=' +
-              resource.timing.connectStart + '.');
+              'receiveHeadersEnd=' + request.timing.receiveHeadersEnd + ', connectStart=' +
+              request.timing.connectStart + '.');
       test.assertTrue(
-          resource.responseReceivedTime - resource.startTime >= 0.07,
+          request.responseReceivedTime - request.startTime >= 0.07,
           'Time between responseReceivedTime and startTime should be >=0.07s, but was ' +
-              'responseReceivedTime=' + resource.responseReceivedTime + ', startTime=' + resource.startTime + '.');
+              'responseReceivedTime=' + request.responseReceivedTime + ', startTime=' + request.startTime + '.');
       test.assertTrue(
-          resource.endTime - resource.startTime >= 0.14,
+          request.endTime - request.startTime >= 0.14,
           'Time between endTime and startTime should be >=0.14s, but was ' +
-              'endtime=' + resource.endTime + ', startTime=' + resource.startTime + '.');
+              'endtime=' + request.endTime + ', startTime=' + request.startTime + '.');
 
       test.releaseControl();
     }
 
-    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishResource);
+    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishRequest);
 
     // Reload inspected page to sniff network events
     test.evaluateInConsole_('window.location.reload(true);', function(resultText) {});
@@ -488,29 +482,29 @@
 
   TestSuite.prototype.testPushTimes = function(url) {
     var test = this;
-    var pendingResourceCount = 2;
+    var pendingRequestCount = 2;
 
-    function finishResource(resource, finishTime) {
+    function finishRequest(request, finishTime) {
       test.assertTrue(
-          typeof resource.timing.pushStart === 'number' && resource.timing.pushStart > 0,
-          `pushStart is invalid: ${resource.timing.pushStart}`);
-      test.assertTrue(typeof resource.timing.pushEnd === 'number', `pushEnd is invalid: ${resource.timing.pushEnd}`);
-      test.assertTrue(resource.timing.pushStart < resource.startTime, 'pushStart should be before startTime');
-      if (resource.url.endsWith('?pushUseNullEndTime')) {
-        test.assertTrue(resource.timing.pushEnd === 0, `pushEnd should be 0 but is ${resource.timing.pushEnd}`);
+          typeof request.timing.pushStart === 'number' && request.timing.pushStart > 0,
+          `pushStart is invalid: ${request.timing.pushStart}`);
+      test.assertTrue(typeof request.timing.pushEnd === 'number', `pushEnd is invalid: ${request.timing.pushEnd}`);
+      test.assertTrue(request.timing.pushStart < request.startTime, 'pushStart should be before startTime');
+      if (request.url().endsWith('?pushUseNullEndTime')) {
+        test.assertTrue(request.timing.pushEnd === 0, `pushEnd should be 0 but is ${request.timing.pushEnd}`);
       } else {
         test.assertTrue(
-            resource.timing.pushStart < resource.timing.pushEnd,
-            `pushStart should be before pushEnd (${resource.timing.pushStart} >= ${resource.timing.pushEnd})`);
+            request.timing.pushStart < request.timing.pushEnd,
+            `pushStart should be before pushEnd (${request.timing.pushStart} >= ${request.timing.pushEnd})`);
         // The below assertion is just due to the way we generate times in the moch URLRequestJob and is not generally an invariant.
-        test.assertTrue(resource.timing.pushEnd < resource.endTime, 'pushEnd should be before endTime');
-        test.assertTrue(resource.startTime < resource.timing.pushEnd, 'pushEnd should be after startTime');
+        test.assertTrue(request.timing.pushEnd < request.endTime, 'pushEnd should be before endTime');
+        test.assertTrue(request.startTime < request.timing.pushEnd, 'pushEnd should be after startTime');
       }
-      if (!--pendingResourceCount)
+      if (!--pendingRequestCount)
         test.releaseControl();
     }
 
-    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishResource, true);
+    this.addSniffer(SDK.NetworkDispatcher.prototype, '_finishNetworkRequest', finishRequest, true);
 
     test.evaluateInConsole_('addImage(\'' + url + '\')', function(resultText) {});
     test.evaluateInConsole_('addImage(\'' + url + '?pushUseNullEndTime\')', function(resultText) {});
@@ -520,22 +514,23 @@
   TestSuite.prototype.testConsoleOnNavigateBack = function() {
 
     function filteredMessages() {
-      return SDK.multitargetConsoleModel.messages().filter(
-          a => a.source !== SDK.ConsoleMessage.MessageSource.Violation);
+      return ConsoleModel.consoleModel.messages().filter(
+          a => a.source !== ConsoleModel.ConsoleMessage.MessageSource.Violation);
     }
 
     if (filteredMessages().length === 1) {
       firstConsoleMessageReceived.call(this, null);
     } else {
-      SDK.multitargetConsoleModel.addEventListener(
-          SDK.ConsoleModel.Events.MessageAdded, firstConsoleMessageReceived, this);
+      ConsoleModel.consoleModel.addEventListener(
+          ConsoleModel.ConsoleModel.Events.MessageAdded, firstConsoleMessageReceived, this);
     }
 
+
     function firstConsoleMessageReceived(event) {
-      if (event && event.data.source === SDK.ConsoleMessage.MessageSource.Violation)
+      if (event && event.data.source === ConsoleModel.ConsoleMessage.MessageSource.Violation)
         return;
-      SDK.multitargetConsoleModel.removeEventListener(
-          SDK.ConsoleModel.Events.MessageAdded, firstConsoleMessageReceived, this);
+      ConsoleModel.consoleModel.removeEventListener(
+          ConsoleModel.ConsoleModel.Events.MessageAdded, firstConsoleMessageReceived, this);
       this.evaluateInConsole_('clickLink();', didClickLink.bind(this));
     }
 
@@ -573,8 +568,7 @@
     this._waitForTargets(2, callback.bind(this));
 
     function callback() {
-      var target = SDK.targetManager.targets(SDK.Target.Capability.JS)[0];
-      InspectorBackendClass.deprecatedRunAfterPendingDispatches(this.releaseControl.bind(this));
+      Protocol.InspectorBackend.deprecatedRunAfterPendingDispatches(this.releaseControl.bind(this));
     }
   };
 
@@ -583,8 +577,7 @@
     this._waitForTargets(2, callback.bind(this));
 
     function callback() {
-      var target = SDK.targetManager.targets(SDK.Target.Capability.JS)[0];
-      var debuggerModel = SDK.DebuggerModel.fromTarget(target);
+      var debuggerModel = SDK.targetManager.models(SDK.DebuggerModel)[0];
       if (debuggerModel.isPaused()) {
         this.releaseControl();
         return;
@@ -604,7 +597,7 @@
   };
 
   TestSuite.prototype.waitForDebuggerPaused = function() {
-    var debuggerModel = SDK.DebuggerModel.fromTarget(SDK.targetManager.mainTarget());
+    var debuggerModel = SDK.targetManager.mainTarget().model(SDK.DebuggerModel);
     if (debuggerModel.debuggerPausedDetails)
       return;
 
@@ -619,19 +612,16 @@
 
   // Regression test for crbug.com/370035.
   TestSuite.prototype.testDeviceMetricsOverrides = function() {
-    const dumpPageMetrics = function() {
+    function dumpPageMetrics() {
       return JSON.stringify(
           {width: window.innerWidth, height: window.innerHeight, deviceScaleFactor: window.devicePixelRatio});
-    };
+    }
 
     var test = this;
 
-    function testOverrides(params, metrics, callback) {
-      SDK.targetManager.mainTarget().emulationAgent().invoke_setDeviceMetricsOverride(params, getMetrics);
-
-      function getMetrics() {
-        test.evaluateInConsole_('(' + dumpPageMetrics.toString() + ')()', checkMetrics);
-      }
+    async function testOverrides(params, metrics, callback) {
+      await SDK.targetManager.mainTarget().emulationAgent().invoke_setDeviceMetricsOverride(params);
+      test.evaluateInConsole_('(' + dumpPageMetrics.toString() + ')()', checkMetrics);
 
       function checkMetrics(consoleResult) {
         test.assertEquals(
@@ -692,12 +682,13 @@
 
         messages.splice(index, 1);
         if (!messages.length) {
-          SDK.multitargetConsoleModel.removeEventListener(SDK.ConsoleModel.Events.MessageAdded, onConsoleMessage, this);
+          ConsoleModel.consoleModel.removeEventListener(
+              ConsoleModel.ConsoleModel.Events.MessageAdded, onConsoleMessage, this);
           next();
         }
       }
 
-      SDK.multitargetConsoleModel.addEventListener(SDK.ConsoleModel.Events.MessageAdded, onConsoleMessage, this);
+      ConsoleModel.consoleModel.addEventListener(ConsoleModel.ConsoleModel.Events.MessageAdded, onConsoleMessage, this);
       SDK.multitargetNetworkManager.setNetworkConditions(preset);
     }
 
@@ -706,20 +697,20 @@
 
     function step1() {
       testPreset(
-          Components.NetworkConditionsSelector._presets[0],
+          MobileThrottling.networkPresets[2],
           ['offline event: online = false', 'connection change event: type = none; downlinkMax = 0'], step2);
     }
 
     function step2() {
       testPreset(
-          Components.NetworkConditionsSelector._presets[2],
-          ['online event: online = true', 'connection change event: type = cellular; downlinkMax = 0.244140625'],
-          step3);
+          MobileThrottling.networkPresets[1],
+          ['online event: online = true', 'connection change event: type = cellular; downlinkMax = 0.390625'], step3);
     }
 
     function step3() {
       testPreset(
-          Components.NetworkConditionsSelector._presets[8], ['connection change event: type = wifi; downlinkMax = 30'],
+          MobileThrottling.networkPresets[0],
+          ['connection change event: type = cellular; downlinkMax = 1.4400000000000002'],
           test.releaseControl.bind(test));
     }
   };
@@ -751,7 +742,7 @@
 
     function onTimelineDone() {
       captureFilmStripSetting.set(false);
-      var filmStripModel = new Components.FilmStripModel(UI.panels.timeline._tracingModel);
+      var filmStripModel = UI.panels.timeline._performanceModel.filmStripModel();
       var frames = filmStripModel.frames();
       test.assertTrue(frames.length > 4 && typeof frames.length === 'number');
       loadFrameImages(frames);
@@ -815,9 +806,9 @@
     setTimeout(reset, 0);
 
     function createSettings() {
-      var localSetting = Common.settings.createSetting('local', undefined, true);
+      var localSetting = Common.settings.createLocalSetting('local', undefined);
       localSetting.set({s: 'local', n: 1});
-      var globalSetting = Common.settings.createSetting('global', undefined, false);
+      var globalSetting = Common.settings.createSetting('global', undefined);
       globalSetting.set({s: 'global', n: 2});
     }
 
@@ -829,11 +820,11 @@
     function gotPreferences(prefs) {
       Main.Main._instanceForTest._createSettings(prefs);
 
-      var localSetting = Common.settings.createSetting('local', undefined, true);
+      var localSetting = Common.settings.createLocalSetting('local', undefined);
       test.assertEquals('object', typeof localSetting.get());
       test.assertEquals('local', localSetting.get().s);
       test.assertEquals(1, localSetting.get().n);
-      var globalSetting = Common.settings.createSetting('global', undefined, false);
+      var globalSetting = Common.settings.createSetting('global', undefined);
       test.assertEquals('object', typeof globalSetting.get());
       test.assertEquals('global', globalSetting.get().s);
       test.assertEquals(2, globalSetting.get().n);
@@ -842,7 +833,7 @@
   };
 
   TestSuite.prototype.testWindowInitializedOnNavigateBack = function() {
-    var messages = SDK.multitargetConsoleModel.messages();
+    var messages = ConsoleModel.consoleModel.messages();
     this.assertEquals(1, messages.length);
     var text = messages[0].messageText;
     if (text.indexOf('Uncaught') !== -1)
@@ -856,23 +847,18 @@
 
     function onExecutionContexts() {
       var consoleView = Console.ConsoleView.instance();
-      var options = consoleView._consoleContextSelector._selectElement.options;
+      var selector = consoleView._consoleContextSelector;
       var values = [];
-      for (var i = 0; i < options.length; ++i)
-        values.push(options[i].value.trim());
+      for (var item of selector._items)
+        values.push(selector.titleFor(item));
       test.assertEquals('top', values[0]);
       test.assertEquals('Simple content script', values[1]);
       test.releaseControl();
     }
   };
 
-  TestSuite.prototype.testDevToolsSharedWorker = function() {
-    this.takeControl();
-    Bindings.TempFile.ensureTempStorageCleared().then(() => this.releaseControl());
-  };
-
   TestSuite.prototype.waitForTestResultsInConsole = function() {
-    var messages = SDK.multitargetConsoleModel.messages();
+    var messages = ConsoleModel.consoleModel.messages();
     for (var i = 0; i < messages.length; ++i) {
       var text = messages[i].messageText;
       if (text === 'PASS')
@@ -889,7 +875,7 @@
         this.fail(text);
     }
 
-    SDK.multitargetConsoleModel.addEventListener(SDK.ConsoleModel.Events.MessageAdded, onConsoleMessage, this);
+    ConsoleModel.consoleModel.addEventListener(ConsoleModel.ConsoleModel.Events.MessageAdded, onConsoleMessage, this);
     this.takeControl();
   };
 
@@ -914,7 +900,7 @@
     var test = this;
     this.showPanel('timeline').then(function() {
       var timeline = UI.panels.timeline;
-      test._overrideMethod(timeline, 'recordingStarted', callback);
+      test._overrideMethod(timeline, '_recordingStarted', callback);
       timeline._toggleRecording();
     });
   };
@@ -933,12 +919,12 @@
         Array.prototype.slice.call(arguments, 1, -1).map(arg => JSON.stringify(arg)).join(',') + ',';
     this.evaluateInConsole_(
         `${functionName}(${argsString} function() { console.log('${doneMessage}'); });`, function() {});
-    SDK.multitargetConsoleModel.addEventListener(SDK.ConsoleModel.Events.MessageAdded, onConsoleMessage);
+    ConsoleModel.consoleModel.addEventListener(ConsoleModel.ConsoleModel.Events.MessageAdded, onConsoleMessage);
 
     function onConsoleMessage(event) {
       var text = event.data.messageText;
       if (text === doneMessage) {
-        SDK.multitargetConsoleModel.removeEventListener(SDK.ConsoleModel.Events.MessageAdded, onConsoleMessage);
+        ConsoleModel.consoleModel.removeEventListener(ConsoleModel.ConsoleModel.Events.MessageAdded, onConsoleMessage);
         callback();
       }
     }
@@ -964,7 +950,7 @@
 
   TestSuite.prototype.checkInputEventsPresent = function() {
     var expectedEvents = new Set(arguments);
-    var model = UI.panels.timeline._model;
+    var model = UI.panels.timeline._performanceModel.timelineModel();
     var asyncEvents = model.mainThreadAsyncEvents();
     var input = asyncEvents.get(TimelineModel.TimelineModel.AsyncEventGroup.input) || [];
     var prefix = 'InputLatency::';
@@ -1003,7 +989,7 @@
      * @param {!Workspace.UISourceCode} uiSourceCode
      */
     function filterOutService(uiSourceCode) {
-      return !uiSourceCode.isFromServiceProject();
+      return !uiSourceCode.project().isServiceProject();
     }
 
     var uiSourceCodes = Workspace.workspace.uiSourceCodes();
@@ -1097,7 +1083,7 @@
   };
 
   TestSuite.prototype._waitForExecutionContexts = function(n, callback) {
-    var runtimeModel = SDK.targetManager.mainTarget().runtimeModel;
+    var runtimeModel = SDK.targetManager.mainTarget().model(SDK.RuntimeModel);
     checkForExecutionContexts.call(this);
 
     function checkForExecutionContexts() {

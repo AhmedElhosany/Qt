@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include "base/json/json_reader.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/test/simple_test_clock.h"
 #include "base/values.h"
@@ -36,7 +37,7 @@ class AlarmDelegate : public AlarmManager::Delegate {
   ~AlarmDelegate() override {}
   void OnAlarm(const std::string& extension_id, const Alarm& alarm) override {
     alarms_seen.push_back(alarm.js_alarm->name);
-    if (base::MessageLoop::current()->is_running())
+    if (base::RunLoop::IsRunningOnCurrentThread())
       base::MessageLoop::current()->QuitWhenIdle();
   }
 
@@ -294,9 +295,9 @@ TEST_F(ExtensionAlarmsTest, CreateDupe) {
 
 TEST_F(ExtensionAlarmsTest, CreateDelayBelowMinimum) {
   // Create an alarm with delay below the minimum accepted value.
-  IPC::TestSink& sink =
-      static_cast<content::MockRenderProcessHost*>(
-          contents()->GetRenderViewHost()->GetProcess())->sink();
+  IPC::TestSink& sink = static_cast<content::MockRenderProcessHost*>(
+                            contents()->GetMainFrame()->GetProcess())
+                            ->sink();
   size_t initial_message_count = sink.message_count();
   CreateAlarm("[\"negative\", {\"delayInMinutes\": -0.2}]");
   // A new message should have been added.

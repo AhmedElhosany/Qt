@@ -1,4 +1,5 @@
 /*
+
 * Copyright 2016 Google Inc.
 *
 * Use of this source code is governed by a BSD-style license that can be
@@ -46,16 +47,20 @@ int main(int argc, char**argv) {
             (void) select(count, &in_fds, NULL, NULL, &tv);
         }
 
-        // Handle XEvents (if any) and flush the input 
+        // Handle XEvents (if any) and flush the input
         int count = XPending(display);
         while (count-- && !done) {
             XEvent event;
             XNextEvent(display, &event);
 
             sk_app::Window_unix* win = sk_app::Window_unix::gWindowMap.find(event.xany.window);
+            if (!win) {
+                continue;
+            }
+
             // paint and resize events get collapsed
             switch (event.type) {
-            case Expose: 
+            case Expose:
                 win->markPendingPaint();
                 pendingWindows.add(win);
                 break;

@@ -41,6 +41,7 @@
 
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/download_manager.h"
 
 #include "browser_context_qt.h"
@@ -192,6 +193,16 @@ void BrowserContextAdapter::removeClient(BrowserContextAdapterClient *adapterCli
 void BrowserContextAdapter::cancelDownload(quint32 downloadId)
 {
     downloadManagerDelegate()->cancelDownload(downloadId);
+}
+
+void BrowserContextAdapter::pauseDownload(quint32 downloadId)
+{
+    downloadManagerDelegate()->pauseDownload(downloadId);
+}
+
+void BrowserContextAdapter::resumeDownload(quint32 downloadId)
+{
+    downloadManagerDelegate()->resumeDownload(downloadId);
 }
 
 QSharedPointer<BrowserContextAdapter> BrowserContextAdapter::defaultContext()
@@ -500,8 +511,10 @@ void BrowserContextAdapter::setHttpAcceptLanguage(const QString &httpAcceptLangu
 
 void BrowserContextAdapter::clearHttpCache()
 {
-    if (m_browserContext->url_request_getter_.get())
-        m_browserContext->url_request_getter_->clearHttpCache();
+    content::BrowsingDataRemover *remover = content::BrowserContext::GetBrowsingDataRemover(m_browserContext.data());
+    remover->Remove(base::Time(), base::Time::Max(),
+        content::BrowsingDataRemover::DATA_TYPE_CACHE,
+        content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB | content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB);
 }
 
 void BrowserContextAdapter::setSpellCheckLanguages(const QStringList &languages)

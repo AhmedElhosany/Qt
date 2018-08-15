@@ -1,4 +1,5 @@
 QT += charts
+requires(qtConfig(combobox))
 
 HEADERS += \
     themewidget.h
@@ -9,3 +10,6 @@ SOURCES += \
 
 target.path = $$[QT_INSTALL_EXAMPLES]/charts/chartthemes
 INSTALLS += target
+
+FORMS += \
+    themewidget.ui

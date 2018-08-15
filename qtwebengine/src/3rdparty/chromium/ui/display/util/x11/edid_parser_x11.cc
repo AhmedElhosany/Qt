@@ -10,6 +10,7 @@
 
 #include "base/strings/string_util.h"
 #include "ui/display/util/edid_parser.h"
+#include "ui/gfx/x/x11_atom_cache.h"
 #include "ui/gfx/x/x11_types.h"
 
 namespace display {
@@ -28,14 +29,14 @@ bool IsRandRAvailable() {
 // Returns true if EDID property is successfully obtained. Otherwise returns
 // false and does not touch |edid|.
 bool GetEDIDProperty(XID output, std::vector<uint8_t>* edid) {
+  Display* display = gfx::GetXDisplay();
+  if (!display)
+    return false;
+
   if (!IsRandRAvailable())
     return false;
 
-  Display* display = gfx::GetXDisplay();
-
-  static Atom edid_property = XInternAtom(
-      gfx::GetXDisplay(),
-      RR_PROPERTY_RANDR_EDID, false);
+  Atom edid_property = gfx::GetAtom(RR_PROPERTY_RANDR_EDID);
 
   bool has_edid_property = false;
   int num_properties = 0;

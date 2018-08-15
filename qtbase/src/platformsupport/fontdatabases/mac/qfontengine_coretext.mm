@@ -192,14 +192,6 @@ public:
         : QCoreTextFontEngine(font, def)
         , m_fontData(fontData)
     {}
-    QFontEngine *cloneWithSize(qreal pixelSize) const
-    {
-        QFontDef newFontDef = fontDef;
-        newFontDef.pixelSize = pixelSize;
-        newFontDef.pointSize = pixelSize * 72.0 / qt_defaultDpi();
-
-        return new QCoreTextRawFontEngine(cgFont, newFontDef, m_fontData);
-    }
     QByteArray m_fontData;
 };
 
@@ -838,7 +830,7 @@ void QCoreTextFontEngine::getUnscaledGlyph(glyph_t glyph, QPainterPath *path, gl
 
 QFixed QCoreTextFontEngine::emSquareSize() const
 {
-    return QFixed(int(CTFontGetUnitsPerEm(ctfont)));
+    return QFixed::QFixed(int(CTFontGetUnitsPerEm(ctfont)));
 }
 
 QFontEngine *QCoreTextFontEngine::cloneWithSize(qreal pixelSize) const

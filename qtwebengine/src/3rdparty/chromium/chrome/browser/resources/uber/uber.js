@@ -297,7 +297,7 @@ cr.define('uber', function() {
    */
   function invokeMethodOnPage(pageId, method, opt_params) {
     var frame = $(pageId).querySelector('iframe');
-    if (!frame || !frame.dataset.ready) {
+    if (!frame || !frame.hasAttribute('ready')) {
       queuedInvokes[pageId] = (queuedInvokes[pageId] || []);
       queuedInvokes[pageId].push([method, opt_params]);
     } else {
@@ -313,7 +313,7 @@ cr.define('uber', function() {
   function pageReady(origin) {
     var frame = getIframeFromOrigin(origin);
     var container = frame.parentNode;
-    frame.dataset.ready = true;
+    frame.setAttribute('ready', '');
     var queue = queuedInvokes[container.id] || [];
     queuedInvokes[container.id] = undefined;
     for (var i = 0; i < queue.length; i++) {
@@ -345,7 +345,7 @@ cr.define('uber', function() {
       // content frame is as we don't have access to its contentWindow's
       // location, so just replace every time until necessary to do otherwise.
       frame.contentWindow.location.replace(sourceUrl);
-      frame.dataset.ready = false;
+      frame.removeAttribute('ready');
     }
 
     // If the last selected container is already showing, ignore the rest.
@@ -426,7 +426,7 @@ cr.define('uber', function() {
       var navWidth = Math.max(0, +navFrame.dataset.width + scrollOffset);
       navFrame.style.width = navWidth + 'px';
     } else {
-      navFrame.style.webkitTransform = 'translateX(' + -scrollOffset + 'px)';
+      navFrame.style.transform = 'translateX(' + -scrollOffset + 'px)';
     }
   }
 
@@ -459,7 +459,7 @@ cr.define('uber', function() {
         container.hidden = true;
         container.setAttribute('aria-hidden', 'true');
       }
-      container.addEventListener('webkitTransitionEnd', function(event) {
+      container.addEventListener('transitionend', function(event) {
         if (!event.target.classList.contains('selected'))
           event.target.hidden = true;
       });

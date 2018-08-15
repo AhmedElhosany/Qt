@@ -37,6 +37,16 @@
           'U_STATIC_IMPLEMENTATION',
         ],
       }],
+      ['OS=="win"', {
+        'defines': [
+          'UCHAR_TYPE=wchar_t',
+        ],
+	'cflags': [ '/utf-8' ],
+      },{
+        'defines': [
+          'UCHAR_TYPE=uint16_t',
+        ],
+      }],
       ['(OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris" \
          or OS=="netbsd" or OS=="mac" or OS=="android" or OS=="qnx") and \
         (target_arch=="arm" or target_arch=="ia32" or \
@@ -105,7 +115,8 @@
               } , { # else: OS != android
                 'conditions': [
                   # Big Endian
-                  [ 'v8_host_byteorder=="big"', {
+                  [ 'v8_host_byteorder=="big" or target_arch=="mips" or \
+                     target_arch=="mips64"', {
                     'files': [
                       'common/icudtb.dat',
                     ],
@@ -123,7 +134,8 @@
           'target_name': 'data_assembly',
           'type': 'none',
           'conditions': [
-            [ 'v8_host_byteorder=="big"', { # Big Endian
+            [ 'v8_host_byteorder=="big" or target_arch=="mips" or \
+               target_arch=="mips64"', { # Big Endian
               'data_assembly_inputs': [
                 'common/icudtb.dat',
               ],
@@ -186,10 +198,15 @@
              '<(SHARED_INTERMEDIATE_DIR)/third_party/icu/icudtb_dat.S',
           ],
           'conditions': [
-            [ 'v8_host_byteorder=="big"', {
-              'sources!': ['<(SHARED_INTERMEDIATE_DIR)/third_party/icu/icudtl_dat.S'],
+            [ 'v8_host_byteorder=="big" or target_arch=="mips" or \
+               target_arch=="mips64"', {
+              'sources!': [
+                '<(SHARED_INTERMEDIATE_DIR)/third_party/icu/icudtl_dat.S'
+              ],
             }, {
-              'sources!': ['<(SHARED_INTERMEDIATE_DIR)/third_party/icu/icudtb_dat.S'],
+              'sources!': [
+                '<(SHARED_INTERMEDIATE_DIR)/third_party/icu/icudtb_dat.S'
+              ],
             }],
             [ 'use_system_icu==1 and want_separate_host_toolset==1', {
               'toolsets': ['host'],
@@ -421,7 +438,7 @@
             }],
             [ 'OS == "win" or icu_use_data_file_flag==1', {
               'sources': [
-                'source/stubdata/stubdata.c',
+                'source/stubdata/stubdata.cpp',
               ],
               'defines': [
                 'U_ICUDATAENTRY_IN_COMMON',
@@ -590,10 +607,13 @@
               'unicode/bytestriebuilder.h',
               'unicode/bytestrie.h',
               'unicode/caniter.h',
+              'unicode/casemap.h',
+              'unicode/char16ptr.h',
               'unicode/chariter.h',
               'unicode/dbbi.h',
               'unicode/docmain.h',
               'unicode/dtintrv.h',
+              'unicode/edits.h',
               'unicode/enumset.h',
               'unicode/errorcode.h',
               'unicode/filteredbrk.h',

@@ -6,46 +6,42 @@
 #define DEVICE_VR_ANDROID_GVR_DEVICE_H
 
 #include "base/macros.h"
-#include "base/memory/weak_ptr.h"
 #include "device/vr/vr_device.h"
-
-namespace gvr {
-class GvrApi;
-}  // namespace gvr
 
 namespace device {
 
 class GvrDeviceProvider;
 class GvrDelegate;
+class VRDisplayImpl;
 
-class GvrDevice : public VRDevice {
+class DEVICE_VR_EXPORT GvrDevice : public VRDevice {
  public:
-  GvrDevice(GvrDeviceProvider* provider,
-            const base::WeakPtr<GvrDelegate>& delegate);
+  GvrDevice(GvrDeviceProvider* provider);
   ~GvrDevice() override;
 
   // VRDevice
-  mojom::VRDisplayInfoPtr GetVRDevice() override;
-  mojom::VRPosePtr GetPose() override;
-  void ResetPose() override;
+  void CreateVRDisplayInfo(
+      const base::Callback<void(mojom::VRDisplayInfoPtr)>& on_created) override;
 
-  void RequestPresent(const base::Callback<void(bool)>& callback) override;
+  void RequestPresent(mojom::VRSubmitFrameClientPtr submit_client,
+                      mojom::VRPresentationProviderRequest request,
+                      const base::Callback<void(bool)>& callback) override;
   void SetSecureOrigin(bool secure_origin) override;
   void ExitPresent() override;
+  void GetNextMagicWindowPose(
+      VRDisplayImpl* display,
+      mojom::VRDisplay::GetNextMagicWindowPoseCallback callback) override;
+  void OnDisplayAdded(VRDisplayImpl* display) override;
+  void OnDisplayRemoved(VRDisplayImpl* display) override;
+  void OnListeningForActivateChanged(VRDisplayImpl* display) override;
 
-  void SubmitFrame(mojom::VRPosePtr pose) override;
-  void UpdateLayerBounds(mojom::VRLayerBoundsPtr left_bounds,
-                         mojom::VRLayerBoundsPtr right_bounds) override;
-
-  void SetDelegate(const base::WeakPtr<GvrDelegate>& delegate);
+  void OnDelegateChanged();
 
  private:
-  gvr::GvrApi* GetGvrApi();
+  GvrDelegate* GetGvrDelegate();
 
-  base::WeakPtr<GvrDelegate> delegate_;
   GvrDeviceProvider* gvr_provider_;
   bool secure_origin_ = false;
-  uint32_t pose_index_ = 1;
 
   DISALLOW_COPY_AND_ASSIGN(GvrDevice);
 };

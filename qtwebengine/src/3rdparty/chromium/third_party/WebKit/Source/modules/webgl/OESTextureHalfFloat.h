@@ -34,12 +34,11 @@ class OESTextureHalfFloat final : public WebGLExtension {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static OESTextureHalfFloat* create(WebGLRenderingContextBase*);
-  static bool supported(WebGLRenderingContextBase*);
-  static const char* extensionName();
+  static OESTextureHalfFloat* Create(WebGLRenderingContextBase*);
+  static bool Supported(WebGLRenderingContextBase*);
+  static const char* ExtensionName();
 
-  ~OESTextureHalfFloat() override;
-  WebGLExtensionName name() const override;
+  WebGLExtensionName GetName() const override;
 
  private:
   explicit OESTextureHalfFloat(WebGLRenderingContextBase*);

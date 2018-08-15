@@ -12,6 +12,10 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/message_center/message_center_export.h"
 
+namespace gfx {
+class ImageSkia;
+}
+
 namespace message_center {
 
 // Exported values /////////////////////////////////////////////////////////////
@@ -58,7 +62,6 @@ const int kCheckboxSizeWithPadding = 24;
 
 // DIP dimensions (H = horizontal, V = vertical).
 
-const int kControlButtonSize = 29;  // Square size of close & expand buttons.
 const int kIconToTextPadding = 16;  // H space between icon & title/message.
 const int kTextTopPadding = 12;     // V space between text elements.
 const int kIconBottomPadding = 16;  // Minimum non-zero V space between icon
@@ -68,6 +71,9 @@ const int kTextRightPadding = 23;
 const int kTextLeftPadding = kNotificationIconSize + kIconToTextPadding;
 const int kContextMessageViewWidth =
     kNotificationWidth - kTextLeftPadding - kTextRightPadding;
+// space between buttons and frame.
+const int kControlButtonPadding = 2;
+const int kControlButtonBorderSize = 6;
 
 // Text sizes.
 const int kTitleFontSize = 14;             // For title only.
@@ -90,6 +96,9 @@ const SkColor kFocusBorderColor = SkColorSetRGB(64, 128, 250);
 const SkColor kSmallImageMaskForegroundColor = SK_ColorWHITE;
 // Background of small icon image.
 const SkColor kSmallImageMaskBackgroundColor = SkColorSetRGB(0xa3, 0xa3, 0xa3);
+// Background of the close button and the settings button
+const SkColor kControlButtonBackgroundColor =
+    SkColorSetA(SK_ColorWHITE, 0.9 * 0xff);
 
 // Limits.
 
@@ -99,15 +108,15 @@ MESSAGE_CENTER_EXPORT gfx::Size GetImageSizeForContainerSize(
     const gfx::Size& container_size,
     const gfx::Size& image_size);
 
-const size_t kNotificationMaximumItems = 5;     // For list notifications.
+// For list notifications.
+// Not used when --enabled-new-style-notification is set.
+const size_t kNotificationMaximumItems = 5;
 
-// Timing.
+// Timing. Web Notifications always use high-priority timings. Given the absence
+// of a notification center on non-Chrome OS platforms, this improves users'
+// ability to interact with the toasts.
 const int kAutocloseDefaultDelaySeconds = 8;
 const int kAutocloseHighPriorityDelaySeconds = 25;
-// Web notifications use a larger timeout for now, which improves re-engagement.
-// TODO(johnme): Use Finch to experiment with different values, then consider
-// replacing kAutocloseDefaultDelaySeconds with this (https://crbug.com/530697)
-const int kAutocloseWebPageDelaySeconds = 20;
 
 // Buttons.
 const int kButtonHeight = 38;              // In DIPs.
@@ -134,6 +143,10 @@ const int kMaxTitleLines = 2;
 const int kMessageCollapsedLineLimit = 2;
 const int kMessageExpandedLineLimit = 5;
 const int kContextMessageLineLimit = 1;
+
+// Icons.
+MESSAGE_CENTER_EXPORT gfx::ImageSkia GetCloseIcon();
+MESSAGE_CENTER_EXPORT gfx::ImageSkia GetSettingsIcon();
 
 // Around notifications ////////////////////////////////////////////////////////
 

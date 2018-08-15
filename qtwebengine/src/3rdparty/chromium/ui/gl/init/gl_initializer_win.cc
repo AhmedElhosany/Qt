@@ -9,9 +9,7 @@
 #include "base/at_exit.h"
 #include "base/base_paths.h"
 #include "base/bind.h"
-#include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/native_library.h"
 #include "base/path_service.h"
@@ -19,8 +17,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/trace_event/trace_event.h"
 #include "base/win/windows_version.h"
-// TODO(jmadill): Apply to all platforms eventually
-#include "ui/gl/angle_platform_impl.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_egl_api_implementation.h"
 #include "ui/gl/gl_features.h"
@@ -45,12 +41,6 @@ const wchar_t kEGLLibrary[] = L"libegl.dll";
 const wchar_t kGLESv2Library[] = L"libglesv2d.dll";
 const wchar_t kEGLLibrary[] = L"libegld.dll";
 #endif
-
-// TODO(jmadill): Apply to all platforms eventually
-base::LazyInstance<ANGLEPlatformImpl> g_angle_platform_impl =
-    LAZY_INSTANCE_INITIALIZER;
-
-ANGLEPlatformShutdownFunc g_angle_platform_shutdown = nullptr;
 
 bool LoadD3DXLibrary(const base::FilePath& module_path,
                      const base::FilePath::StringType& name) {
@@ -101,7 +91,7 @@ bool InitializeStaticOSMesaInternal() {
   return true;
 }
 
-bool InitializeStaticEGLInternal() {
+bool InitializeStaticEGLInternal(GLImplementation implementation) {
   base::FilePath module_path;
   if (!PathService::Get(base::DIR_MODULE, &module_path))
     return false;
@@ -113,17 +103,14 @@ bool InitializeStaticEGLInternal() {
   LoadD3DXLibrary(module_path, kD3DCompiler);
 
   base::FilePath gles_path;
-  const base::CommandLine* command_line =
-      base::CommandLine::ForCurrentProcess();
-  bool using_swift_shader =
-      command_line->GetSwitchValueASCII(switches::kUseGL) ==
-      kGLImplementationSwiftShaderName;
-  if (using_swift_shader) {
-    if (!command_line->HasSwitch(switches::kSwiftShaderPath))
-      return false;
-    gles_path = command_line->GetSwitchValuePath(switches::kSwiftShaderPath);
+  if (implementation == kGLImplementationSwiftShaderGL) {
+#if BUILDFLAG(ENABLE_SWIFTSHADER)
+    gles_path = module_path.Append(L"swiftshader/");
     // Preload library
     LoadLibrary(L"ddraw.dll");
+#else
+    return false;
+#endif
   } else {
     gles_path = module_path;
   }
@@ -146,34 +133,6 @@ bool InitializeStaticEGLInternal() {
     DVLOG(1) << kEGLLibrary << "not found.";
     base::UnloadNativeLibrary(gles_library);
     return false;
-  }
-
-#if BUILDFLAG(ENABLE_SWIFTSHADER)
-  if (using_swift_shader) {
-    // Register key so that SwiftShader doesn't display watermark logo.
-    typedef void (__stdcall *RegisterFunc)(const char* key);
-    RegisterFunc reg = reinterpret_cast<RegisterFunc>(
-      base::GetFunctionPointerFromNativeLibrary(gles_library, "Register"));
-    if (reg) {
-      reg("SS3GCKK6B448CF63");
-    }
-  }
-#endif
-
-  if (!using_swift_shader) {
-    // Init ANGLE platform here, before we call GetPlatformDisplay().
-    // TODO(jmadill): Apply to all platforms eventually
-    ANGLEPlatformInitializeFunc angle_platform_init =
-        reinterpret_cast<ANGLEPlatformInitializeFunc>(
-            base::GetFunctionPointerFromNativeLibrary(
-                gles_library, "ANGLEPlatformInitialize"));
-    if (angle_platform_init) {
-      angle_platform_init(&g_angle_platform_impl.Get());
-
-      g_angle_platform_shutdown = reinterpret_cast<ANGLEPlatformShutdownFunc>(
-          base::GetFunctionPointerFromNativeLibrary(gles_library,
-                                                    "ANGLEPlatformShutdown"));
-    }
   }
 
   GLGetProcAddressProc get_proc_address =
@@ -289,6 +248,7 @@ bool InitializeGLOneOffPlatform() {
         return false;
       }
       break;
+    case kGLImplementationSwiftShaderGL:
     case kGLImplementationEGLGLES2:
       if (!GLSurfaceEGL::InitializeOneOff(GetDC(nullptr))) {
         LOG(ERROR) << "GLSurfaceEGL::InitializeOneOff failed.";
@@ -297,6 +257,7 @@ bool InitializeGLOneOffPlatform() {
       break;
     case kGLImplementationOSMesaGL:
     case kGLImplementationMockGL:
+    case kGLImplementationStubGL:
       break;
     default:
       NOTREACHED();
@@ -320,12 +281,14 @@ bool InitializeStaticGLBindings(GLImplementation implementation) {
   switch (implementation) {
     case kGLImplementationOSMesaGL:
       return InitializeStaticOSMesaInternal();
+    case kGLImplementationSwiftShaderGL:
     case kGLImplementationEGLGLES2:
-      return InitializeStaticEGLInternal();
+      return InitializeStaticEGLInternal(implementation);
     case kGLImplementationDesktopGL:
       return InitializeStaticWGLInternal();
     case kGLImplementationMockGL:
-      SetGLImplementation(kGLImplementationMockGL);
+    case kGLImplementationStubGL:
+      SetGLImplementation(implementation);
       InitializeStaticGLBindingsGL();
       return true;
     default:
@@ -342,16 +305,12 @@ void InitializeDebugGLBindings() {
   InitializeDebugGLBindingsWGL();
 }
 
-void ClearGLBindingsPlatform() {
-  // TODO(jmadill): Apply to all platforms eventually
-  if (g_angle_platform_shutdown) {
-    g_angle_platform_shutdown();
-  }
-
-  ClearGLBindingsEGL();
-  ClearGLBindingsGL();
-  ClearGLBindingsOSMESA();
-  ClearGLBindingsWGL();
+void ShutdownGLPlatform() {
+  GLSurfaceEGL::ShutdownOneOff();
+  ClearBindingsEGL();
+  ClearBindingsGL();
+  ClearBindingsOSMESA();
+  ClearBindingsWGL();
 }
 
 }  // namespace init

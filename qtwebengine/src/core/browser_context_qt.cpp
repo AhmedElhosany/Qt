@@ -40,6 +40,7 @@
 #include "browser_context_qt.h"
 
 #include "browser_context_adapter.h"
+#include "browsing_data_remover_delegate_qt.h"
 #include "download_manager_delegate_qt.h"
 #include "permission_manager_qt.h"
 #include "qtwebenginecoreglobal_p.h"
@@ -57,7 +58,7 @@
 #include "base/base_paths.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
-#include "components/prefs/testing_pref_store.h"
+#include "components/prefs/in_memory_pref_store.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/pref_service_factory.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -72,9 +73,8 @@ namespace QtWebEngineCore {
 
 BrowserContextQt::BrowserContextQt(BrowserContextAdapter *adapter)
     : m_adapter(adapter),
-      m_prefStore(new TestingPrefStore())
+      m_prefStore(new InMemoryPrefStore())
 {
-    m_prefStore->SetInitializationCompleted();
     PrefServiceFactory factory;
     factory.set_user_prefs(m_prefStore);
     scoped_refptr<PrefRegistrySimple> registry(new PrefRegistrySimple());
@@ -82,7 +82,7 @@ BrowserContextQt::BrowserContextQt(BrowserContextAdapter *adapter)
 #if BUILDFLAG(ENABLE_SPELLCHECK)
     // Initial spellcheck settings
     registry->RegisterStringPref(prefs::kAcceptLanguages, std::string());
-    registry->RegisterListPref(spellcheck::prefs::kSpellCheckDictionaries, new base::ListValue());
+    registry->RegisterListPref(spellcheck::prefs::kSpellCheckDictionaries, base::MakeUnique<base::ListValue>());
     registry->RegisterStringPref(spellcheck::prefs::kSpellCheckDictionary, std::string());
     registry->RegisterBooleanPref(spellcheck::prefs::kEnableSpellcheck, false);
     registry->RegisterBooleanPref(spellcheck::prefs::kSpellCheckUseSpellingService, false);
@@ -183,6 +183,11 @@ content::BackgroundSyncController* BrowserContextQt::GetBackgroundSyncController
     return nullptr;
 }
 
+content::BrowsingDataRemoverDelegate *BrowserContextQt::GetBrowsingDataRemoverDelegate()
+{
+    return new BrowsingDataRemoverDelegateQt;
+}
+
 content::PermissionManager *BrowserContextQt::GetPermissionManager()
 {
     if (!permissionManager)
@@ -206,7 +211,7 @@ net::URLRequestContextGetter *BrowserContextQt::CreateRequestContextForStoragePa
 }
 
 #if BUILDFLAG(ENABLE_SPELLCHECK)
-void BrowserContextQt::failedToLoadDictionary(const std::string &language)
+void BrowserContextQt::FailedToLoadDictionary(const std::string &language)
 {
     Q_ASSERT(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
     qWarning() << "Could not load dictionary for:" << toQt(language) << endl
@@ -229,7 +234,7 @@ QStringList BrowserContextQt::spellCheckLanguages() const
     QStringList spellcheck_dictionaries;
     for (const auto &value : *m_prefService->GetList(spellcheck::prefs::kSpellCheckDictionaries)) {
         std::string dictionary;
-        if (value->GetAsString(&dictionary))
+        if (value.GetAsString(&dictionary))
             spellcheck_dictionaries.append(QString::fromStdString(dictionary));
     }
 

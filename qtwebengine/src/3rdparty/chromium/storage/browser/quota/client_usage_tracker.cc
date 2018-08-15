@@ -76,6 +76,7 @@ ClientUsageTracker::ClientUsageTracker(
 }
 
 ClientUsageTracker::~ClientUsageTracker() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (special_storage_policy_.get())
     special_storage_policy_->RemoveObserver(this);
 }
@@ -163,6 +164,15 @@ void ClientUsageTracker::UpdateUsageCache(const GURL& origin, int64_t delta) {
   // We don't know about this host yet, so populate our cache for it.
   GetHostUsage(host, base::Bind(&ClientUsageTracker::DidGetHostUsageAfterUpdate,
                                 AsWeakPtr(), origin));
+}
+
+int64_t ClientUsageTracker::GetCachedUsage() const {
+  int64_t usage = 0;
+  for (const auto& host_and_usage_map : cached_usage_by_host_) {
+    for (const auto& origin_and_usage : host_and_usage_map.second)
+      usage += origin_and_usage.second;
+  }
+  return usage;
 }
 
 void ClientUsageTracker::GetCachedHostsUsage(
@@ -414,7 +424,7 @@ bool ClientUsageTracker::IsUsageCacheEnabledForOrigin(
 
 void ClientUsageTracker::OnGranted(const GURL& origin,
                                    int change_flags) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (change_flags & SpecialStoragePolicy::STORAGE_UNLIMITED) {
     int64_t usage = 0;
     if (GetCachedOriginUsage(origin, &usage)) {
@@ -431,7 +441,7 @@ void ClientUsageTracker::OnGranted(const GURL& origin,
 
 void ClientUsageTracker::OnRevoked(const GURL& origin,
                                    int change_flags) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (change_flags & SpecialStoragePolicy::STORAGE_UNLIMITED) {
     int64_t usage = 0;
     if (GetCachedOriginUsage(origin, &usage)) {
@@ -447,7 +457,7 @@ void ClientUsageTracker::OnRevoked(const GURL& origin,
 }
 
 void ClientUsageTracker::OnCleared() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   global_limited_usage_ += global_unlimited_usage_;
   global_unlimited_usage_ = 0;
 

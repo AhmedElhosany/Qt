@@ -11,14 +11,14 @@
 
 #if SK_SUPPORT_GPU
 
-#include "GrRenderTargetContextPriv.h"
 #include "GrContext.h"
+#include "GrRenderTargetContextPriv.h"
 #include "SkBitmap.h"
 #include "SkGr.h"
 #include "SkGradientShader.h"
-#include "batches/GrDrawBatch.h"
-#include "batches/GrRectBatchFactory.h"
 #include "effects/GrTextureDomain.h"
+#include "ops/GrDrawOp.h"
+#include "ops/GrRectOpFactory.h"
 
 namespace skiagm {
 /**
@@ -43,7 +43,10 @@ protected:
     }
 
     void onOnceBeforeDraw() override {
-        fBmp.allocN32Pixels(kTargetWidth, kTargetHeight);
+        // TODO: do this with surfaces & images and gpu backend
+        SkImageInfo ii = SkImageInfo::Make(kTargetWidth, kTargetHeight, kN32_SkColorType,
+                                           kPremul_SkAlphaType);
+        fBmp.allocPixels(ii);
         SkCanvas canvas(fBmp);
         canvas.clear(0x00000000);
         SkPaint paint;
@@ -82,26 +85,29 @@ protected:
             return;
         }
 
-        sk_sp<GrTexture> texture(
-            GrRefCachedBitmapTexture(context, fBmp, GrTextureParams::ClampNoFilter(),
-                                     SkDestinationSurfaceColorMode::kGammaAndColorSpaceAware));
-        if (!texture) {
+        GrSurfaceDesc desc;
+        desc.fWidth = fBmp.width();
+        desc.fHeight = fBmp.height();
+        desc.fConfig = SkImageInfo2GrPixelConfig(fBmp.info(), *context->caps());
+
+        sk_sp<GrTextureProxy> proxy(GrSurfaceProxy::MakeDeferred(context->resourceProvider(),
+                                                                 desc, SkBudgeted::kYes,
+                                                                 fBmp.getPixels(),
+                                                                 fBmp.rowBytes()));
+        if (!proxy) {
             return;
         }
 
         SkTArray<SkMatrix> textureMatrices;
-        textureMatrices.push_back().setIDiv(texture->width(), texture->height());
-        textureMatrices.push_back() = textureMatrices[0];
-        textureMatrices.back().postScale(1.5f, 0.85f);
-        textureMatrices.push_back() = textureMatrices[0];
-        textureMatrices.back().preRotate(45.f, texture->width() / 2.f, texture->height() / 2.f);
+        textureMatrices.push_back() = SkMatrix::I();
+        textureMatrices.push_back() = SkMatrix::MakeScale(1.5f, 0.85f);
+        textureMatrices.push_back();
+        textureMatrices.back().setRotate(45.f, proxy->width() / 2.f, proxy->height() / 2.f);
 
         const SkIRect texelDomains[] = {
             fBmp.bounds(),
-            SkIRect::MakeXYWH(fBmp.width() / 4,
-                              fBmp.height() / 4,
-                              fBmp.width() / 2,
-                              fBmp.height() / 2),
+            SkIRect::MakeXYWH(fBmp.width() / 4, fBmp.height() / 4,
+                              fBmp.width() / 2, fBmp.height() / 2),
         };
 
         SkRect renderRect = SkRect::Make(fBmp.bounds());
@@ -114,23 +120,22 @@ protected:
                 for (int m = 0; m < GrTextureDomain::kModeCount; ++m) {
                     GrTextureDomain::Mode mode = (GrTextureDomain::Mode) m;
                     GrPaint grPaint;
-                    grPaint.setXPFactory(GrPorterDuffXPFactory::Make(SkBlendMode::kSrc));
+                    grPaint.setXPFactory(GrPorterDuffXPFactory::Get(SkBlendMode::kSrc));
                     sk_sp<GrFragmentProcessor> fp(
-                        GrTextureDomainEffect::Make(texture.get(), nullptr, textureMatrices[tm],
-                                                GrTextureDomain::MakeTexelDomain(texture.get(),
-                                                                                 texelDomains[d]),
-                                                mode, GrTextureParams::kNone_FilterMode));
+                        GrTextureDomainEffect::Make(
+                                   proxy,
+                                   nullptr, textureMatrices[tm],
+                                   GrTextureDomain::MakeTexelDomainForMode(texelDomains[d], mode),
+                                   mode, GrSamplerParams::kNone_FilterMode));
 
                     if (!fp) {
                         continue;
                     }
                     const SkMatrix viewMatrix = SkMatrix::MakeTrans(x, y);
                     grPaint.addColorFragmentProcessor(std::move(fp));
-
-                    sk_sp<GrDrawBatch> batch(
-                            GrRectBatchFactory::CreateNonAAFill(GrColor_WHITE, viewMatrix,
-                                                                renderRect, nullptr, nullptr));
-                    renderTargetContext->priv().testingOnly_drawBatch(grPaint, batch.get());
+                    renderTargetContext->priv().testingOnly_addDrawOp(
+                            GrRectOpFactory::MakeNonAAFill(std::move(grPaint), viewMatrix,
+                                                           renderRect, GrAAType::kNone));
                     x += renderRect.width() + kTestPad;
                 }
                 y += renderRect.height() + kTestPad;

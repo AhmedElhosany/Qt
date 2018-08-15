@@ -2194,7 +2194,7 @@ QAbstractItemViewPrivate::position(const QPoint &pos, const QRect &rect, const Q
 {
     QAbstractItemView::DropIndicatorPosition r = QAbstractItemView::OnViewport;
     if (!overwrite) {
-        const int margin = 2;
+        const int margin = qBound(2, qRound(qreal(rect.height()) / 5.5), 12);
         if (pos.y() - rect.top() < margin) {
             r = QAbstractItemView::AboveItem;
         } else if (rect.bottom() - pos.y() < margin) {
@@ -2255,7 +2255,7 @@ void QAbstractItemView::focusInEvent(QFocusEvent *event)
 
 /*!
     This function is called with the given \a event when the widget
-    looses the focus. By default, the event is ignored.
+    loses the focus. By default, the event is ignored.
 
     \sa clearFocus(), focusInEvent()
 */
@@ -3135,7 +3135,7 @@ int QAbstractItemView::sizeHintForColumn(int column) const
     Opens a persistent editor on the item at the given \a index.
     If no editor exists, the delegate will create a new editor.
 
-    \sa closePersistentEditor()
+    \sa closePersistentEditor(), isPersistentEditorOpen()
 */
 void QAbstractItemView::openPersistentEditor(const QModelIndex &index)
 {
@@ -3154,7 +3154,7 @@ void QAbstractItemView::openPersistentEditor(const QModelIndex &index)
 /*!
     Closes the persistent editor for the item at the given \a index.
 
-    \sa openPersistentEditor()
+    \sa openPersistentEditor(), isPersistentEditorOpen()
 */
 void QAbstractItemView::closePersistentEditor(const QModelIndex &index)
 {
@@ -3166,6 +3166,19 @@ void QAbstractItemView::closePersistentEditor(const QModelIndex &index)
         d->removeEditor(editor);
         d->releaseEditor(editor, index);
     }
+}
+
+/*!
+    \since 5.10
+
+    Returns whether a persistent editor is open for the item at index \a index.
+
+    \sa openPersistentEditor(), closePersistentEditor()
+*/
+bool QAbstractItemView::isPersistentEditorOpen(const QModelIndex &index) const
+{
+    Q_D(const QAbstractItemView);
+    return d->editorForIndex(index).widget;
 }
 
 /*!
@@ -4418,8 +4431,7 @@ QItemViewPaintPairs QAbstractItemViewPrivate::draggablePaintPairs(const QModelIn
     for (const auto &index : indexes) {
         const QRect current = q->visualRect(index);
         if (current.intersects(viewportRect)) {
-            QItemViewPaintPair p = { current, index };
-            ret += p;
+            ret.append({current, index});
             rect |= current;
         }
     }

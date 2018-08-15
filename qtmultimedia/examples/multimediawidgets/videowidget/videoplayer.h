@@ -51,10 +51,8 @@
 #ifndef VIDEOPLAYER_H
 #define VIDEOPLAYER_H
 
-#include <qmediaplayer.h>
-
-#include <QtGui/QMovie>
-#include <QtWidgets/QWidget>
+#include <QMediaPlayer>
+#include <QWidget>
 
 QT_BEGIN_NAMESPACE
 class QAbstractButton;
@@ -67,7 +65,7 @@ class VideoPlayer : public QWidget
 {
     Q_OBJECT
 public:
-    VideoPlayer(QWidget *parent = 0);
+    VideoPlayer(QWidget *parent = nullptr);
     ~VideoPlayer();
 
     void setUrl(const QUrl &url);
@@ -84,10 +82,10 @@ private slots:
     void handleError();
 
 private:
-    QMediaPlayer mediaPlayer;
-    QAbstractButton *playButton;
-    QSlider *positionSlider;
-    QLabel *errorLabel;
+    QMediaPlayer* m_mediaPlayer;
+    QAbstractButton *m_playButton;
+    QSlider *m_positionSlider;
+    QLabel *m_errorLabel;
 };
 
 #endif

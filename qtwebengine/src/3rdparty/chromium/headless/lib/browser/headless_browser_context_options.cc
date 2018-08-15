@@ -35,12 +35,20 @@ HeadlessBrowserContextOptions::HeadlessBrowserContextOptions(
     HeadlessBrowser::Options* options)
     : browser_options_(options) {}
 
-const std::string& HeadlessBrowserContextOptions::user_agent() const {
-  return ReturnOverriddenValue(user_agent_, browser_options_->user_agent);
+const std::string& HeadlessBrowserContextOptions::product_name_and_version()
+    const {
+  return ReturnOverriddenValue(product_name_and_version_,
+                               browser_options_->product_name_and_version);
 }
 
-const net::HostPortPair& HeadlessBrowserContextOptions::proxy_server() const {
-  return ReturnOverriddenValue(proxy_server_, browser_options_->proxy_server);
+const std::string& HeadlessBrowserContextOptions::user_agent() const {
+  return browser_options_->user_agent;
+}
+
+const net::ProxyConfig* HeadlessBrowserContextOptions::proxy_config() const {
+  if (proxy_config_)
+    return proxy_config_.get();
+  return browser_options_->proxy_config.get();
 }
 
 const std::string& HeadlessBrowserContextOptions::host_resolver_rules() const {
@@ -61,6 +69,13 @@ bool HeadlessBrowserContextOptions::incognito_mode() const {
                                browser_options_->incognito_mode);
 }
 
+const base::Callback<void(WebPreferences*)>&
+HeadlessBrowserContextOptions::override_web_preferences_callback() const {
+  return ReturnOverriddenValue(
+      override_web_preferences_callback_,
+      browser_options_->override_web_preferences_callback);
+}
+
 const ProtocolHandlerMap& HeadlessBrowserContextOptions::protocol_handlers()
     const {
   return protocol_handlers_;
@@ -68,11 +83,6 @@ const ProtocolHandlerMap& HeadlessBrowserContextOptions::protocol_handlers()
 
 ProtocolHandlerMap HeadlessBrowserContextOptions::TakeProtocolHandlers() {
   return std::move(protocol_handlers_);
-}
-
-const base::Callback<void(WebPreferences*)>&
-HeadlessBrowserContextOptions::override_web_preferences_callback() const {
-  return override_web_preferences_callback_;
 }
 
 }  // namespace headless

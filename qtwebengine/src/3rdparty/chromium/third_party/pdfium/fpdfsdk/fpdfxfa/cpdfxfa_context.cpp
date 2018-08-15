@@ -6,6 +6,9 @@
 
 #include "fpdfsdk/fpdfxfa/cpdfxfa_context.h"
 
+#include <algorithm>
+#include <utility>
+
 #include "core/fpdfapi/parser/cpdf_document.h"
 #include "fpdfsdk/cpdfsdk_formfillenvironment.h"
 #include "fpdfsdk/cpdfsdk_interform.h"
@@ -17,13 +20,15 @@
 #include "fpdfsdk/javascript/ijs_runtime.h"
 #include "public/fpdf_formfill.h"
 #include "third_party/base/ptr_util.h"
+#include "third_party/base/stl_util.h"
+#include "xfa/fxfa/cxfa_deffontmgr.h"
 #include "xfa/fxfa/cxfa_eventparam.h"
-#include "xfa/fxfa/xfa_ffapp.h"
-#include "xfa/fxfa/xfa_ffdoc.h"
-#include "xfa/fxfa/xfa_ffdocview.h"
-#include "xfa/fxfa/xfa_ffpageview.h"
-#include "xfa/fxfa/xfa_ffwidgethandler.h"
-#include "xfa/fxfa/xfa_fontmgr.h"
+#include "xfa/fxfa/cxfa_ffapp.h"
+#include "xfa/fxfa/cxfa_ffdoc.h"
+#include "xfa/fxfa/cxfa_ffdocview.h"
+#include "xfa/fxfa/cxfa_ffpageview.h"
+#include "xfa/fxfa/cxfa_ffwidgethandler.h"
+#include "xfa/fxfa/cxfa_fontmgr.h"
 
 #ifndef _WIN32
 extern void SetLastError(int err);
@@ -31,7 +36,7 @@ extern int GetLastError();
 #endif
 
 CPDFXFA_Context::CPDFXFA_Context(std::unique_ptr<CPDF_Document> pPDFDoc)
-    : m_iDocType(DOCTYPE_PDF),
+    : m_iDocType(XFA_DocType::PDF),
       m_pPDFDoc(std::move(pPDFDoc)),
       m_pFormFillEnv(nullptr),
       m_pXFADocView(nullptr),
@@ -53,7 +58,7 @@ CPDFXFA_Context::~CPDFXFA_Context() {
     // Once we're deleted the FormFillEnvironment will point at a bad underlying
     // doc so we need to reset it ...
     m_pFormFillEnv->ResetXFADocument();
-    m_pFormFillEnv = nullptr;
+    m_pFormFillEnv.Reset();
   }
 
   m_nLoadStatus = FXFA_LOADSTATUS_CLOSED;
@@ -62,9 +67,10 @@ CPDFXFA_Context::~CPDFXFA_Context() {
 void CPDFXFA_Context::CloseXFADoc() {
   if (!m_pXFADoc)
     return;
+
+  m_pXFADocView = nullptr;
   m_pXFADoc->CloseDoc();
   m_pXFADoc.reset();
-  m_pXFADocView = nullptr;
 }
 
 void CPDFXFA_Context::SetFormFillEnv(
@@ -75,22 +81,21 @@ void CPDFXFA_Context::SetFormFillEnv(
   if (m_pXFADoc && m_pXFADoc->GetXFADoc())
     m_pXFADoc->GetXFADoc()->ClearLayoutData();
 
-  m_pFormFillEnv = pFormFillEnv;
+  m_pFormFillEnv.Reset(pFormFillEnv);
 }
 
 bool CPDFXFA_Context::LoadXFADoc() {
   m_nLoadStatus = FXFA_LOADSTATUS_LOADING;
-
   if (!m_pPDFDoc)
     return false;
 
-  m_XFAPageList.RemoveAll();
+  m_XFAPageList.clear();
 
   CXFA_FFApp* pApp = GetXFAApp();
   if (!pApp)
     return false;
 
-  m_pXFADoc.reset(pApp->CreateDoc(&m_DocEnv, m_pPDFDoc.get()));
+  m_pXFADoc = pApp->CreateDoc(&m_DocEnv, m_pPDFDoc.get());
   if (!m_pXFADoc) {
     SetLastError(FPDF_ERR_XFALOAD);
     return false;
@@ -103,7 +108,7 @@ bool CPDFXFA_Context::LoadXFADoc() {
   }
 
   m_pXFADoc->StartLoad();
-  int iStatus = m_pXFADoc->DoLoad(nullptr);
+  int iStatus = m_pXFADoc->DoLoad();
   if (iStatus != XFA_PARSESTATUS_Done) {
     CloseXFADoc();
     SetLastError(FPDF_ERR_XFALOAD);
@@ -112,19 +117,19 @@ bool CPDFXFA_Context::LoadXFADoc() {
   m_pXFADoc->StopLoad();
   m_pXFADoc->GetXFADoc()->InitScriptContext(GetJSERuntime());
 
-  if (m_pXFADoc->GetDocType() == XFA_DOCTYPE_Dynamic)
-    m_iDocType = DOCTYPE_DYNAMIC_XFA;
+  if (m_pXFADoc->GetDocType() == XFA_DocType::Dynamic)
+    m_iDocType = XFA_DocType::Dynamic;
   else
-    m_iDocType = DOCTYPE_STATIC_XFA;
+    m_iDocType = XFA_DocType::Static;
 
-  m_pXFADocView = m_pXFADoc->CreateDocView(XFA_DOCVIEW_View);
+  m_pXFADocView = m_pXFADoc->CreateDocView();
   if (m_pXFADocView->StartLayout() < 0) {
     CloseXFADoc();
     SetLastError(FPDF_ERR_XFALAYOUT);
     return false;
   }
 
-  m_pXFADocView->DoLayout(nullptr);
+  m_pXFADocView->DoLayout();
   m_pXFADocView->StopLayout();
   m_nLoadStatus = FXFA_LOADSTATUS_LOADED;
 
@@ -136,11 +141,11 @@ int CPDFXFA_Context::GetPageCount() const {
     return 0;
 
   switch (m_iDocType) {
-    case DOCTYPE_PDF:
-    case DOCTYPE_STATIC_XFA:
+    case XFA_DocType::PDF:
+    case XFA_DocType::Static:
       if (m_pPDFDoc)
         return m_pPDFDoc->GetPageCount();
-    case DOCTYPE_DYNAMIC_XFA:
+    case XFA_DocType::Dynamic:
       if (m_pXFADoc)
         return m_pXFADocView->CountPageViews();
     default:
@@ -148,51 +153,43 @@ int CPDFXFA_Context::GetPageCount() const {
   }
 }
 
-CPDFXFA_Page* CPDFXFA_Context::GetXFAPage(int page_index) {
+CFX_RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetXFAPage(int page_index) {
   if (page_index < 0)
     return nullptr;
 
-  CPDFXFA_Page* pPage = nullptr;
-  int nCount = m_XFAPageList.GetSize();
-  if (nCount > 0 && page_index < nCount) {
-    pPage = m_XFAPageList.GetAt(page_index);
-    if (pPage)
-      pPage->Retain();
+  if (pdfium::IndexInBounds(m_XFAPageList, page_index)) {
+    if (m_XFAPageList[page_index])
+      return m_XFAPageList[page_index];
   } else {
     m_nPageCount = GetPageCount();
-    m_XFAPageList.SetSize(m_nPageCount);
+    m_XFAPageList.resize(m_nPageCount);
   }
-  if (pPage)
-    return pPage;
 
-  pPage = new CPDFXFA_Page(this, page_index);
-  if (!pPage->LoadPage()) {
-    pPage->Release();
+  auto pPage = pdfium::MakeRetain<CPDFXFA_Page>(this, page_index);
+  if (!pPage->LoadPage())
     return nullptr;
-  }
-  m_XFAPageList.SetAt(page_index, pPage);
+
+  if (pdfium::IndexInBounds(m_XFAPageList, page_index))
+    m_XFAPageList[page_index] = pPage;
+
   return pPage;
 }
 
-CPDFXFA_Page* CPDFXFA_Context::GetXFAPage(CXFA_FFPageView* pPage) const {
+CFX_RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetXFAPage(
+    CXFA_FFPageView* pPage) const {
   if (!pPage)
     return nullptr;
 
   if (!m_pXFADoc)
     return nullptr;
 
-  if (m_iDocType != DOCTYPE_DYNAMIC_XFA)
+  if (m_iDocType != XFA_DocType::Dynamic)
     return nullptr;
 
-  int nSize = m_XFAPageList.GetSize();
-  for (int i = 0; i < nSize; i++) {
-    CPDFXFA_Page* pTempPage = m_XFAPageList.GetAt(i);
-    if (!pTempPage)
-      continue;
-    if (pTempPage->GetXFAPageView() && pTempPage->GetXFAPageView() == pPage)
+  for (auto& pTempPage : m_XFAPageList) {
+    if (pTempPage && pTempPage->GetXFAPageView() == pPage)
       return pTempPage;
   }
-
   return nullptr;
 }
 
@@ -203,15 +200,8 @@ void CPDFXFA_Context::DeletePage(int page_index) {
   if (m_pPDFDoc)
     m_pPDFDoc->DeletePage(page_index);
 
-  if (page_index < 0 || page_index >= m_XFAPageList.GetSize())
-    return;
-
-  if (CPDFXFA_Page* pPage = m_XFAPageList.GetAt(page_index))
-    pPage->Release();
-}
-
-void CPDFXFA_Context::RemovePage(CPDFXFA_Page* page) {
-  m_XFAPageList.SetAt(page->GetPageIndex(), nullptr);
+  if (pdfium::IndexInBounds(m_XFAPageList, page_index))
+    m_XFAPageList[page_index].Reset();
 }
 
 void CPDFXFA_Context::ClearChangeMark() {
@@ -229,19 +219,20 @@ v8::Isolate* CPDFXFA_Context::GetJSERuntime() const {
   return runtime->GetIsolate();
 }
 
-void CPDFXFA_Context::GetAppName(CFX_WideString& wsName) {
-  if (m_pFormFillEnv)
-    wsName = m_pFormFillEnv->FFI_GetAppName();
+CFX_WideString CPDFXFA_Context::GetAppTitle() const {
+  return L"PDFium";
 }
 
-void CPDFXFA_Context::GetLanguage(CFX_WideString& wsLanguage) {
-  if (m_pFormFillEnv)
-    wsLanguage = m_pFormFillEnv->GetLanguage();
+CFX_WideString CPDFXFA_Context::GetAppName() {
+  return m_pFormFillEnv ? m_pFormFillEnv->FFI_GetAppName() : L"";
 }
 
-void CPDFXFA_Context::GetPlatform(CFX_WideString& wsPlatform) {
-  if (m_pFormFillEnv)
-    wsPlatform = m_pFormFillEnv->GetPlatform();
+CFX_WideString CPDFXFA_Context::GetLanguage() {
+  return m_pFormFillEnv ? m_pFormFillEnv->GetLanguage() : L"";
+}
+
+CFX_WideString CPDFXFA_Context::GetPlatform() {
+  return m_pFormFillEnv ? m_pFormFillEnv->GetPlatform() : L"";
 }
 
 void CPDFXFA_Context::Beep(uint32_t dwType) {
@@ -305,28 +296,25 @@ CFX_WideString CPDFXFA_Context::Response(const CFX_WideString& wsQuestion,
                                          const CFX_WideString& wsTitle,
                                          const CFX_WideString& wsDefaultAnswer,
                                          bool bMark) {
-  CFX_WideString wsAnswer;
   if (!m_pFormFillEnv)
-    return wsAnswer;
+    return CFX_WideString();
 
   int nLength = 2048;
-  char* pBuff = new char[nLength];
+  std::vector<uint8_t> pBuff(nLength);
   nLength = m_pFormFillEnv->JS_appResponse(wsQuestion.c_str(), wsTitle.c_str(),
                                            wsDefaultAnswer.c_str(), nullptr,
-                                           bMark, pBuff, nLength);
-  if (nLength > 0) {
-    nLength = nLength > 2046 ? 2046 : nLength;
-    pBuff[nLength] = 0;
-    pBuff[nLength + 1] = 0;
-    wsAnswer = CFX_WideString::FromUTF16LE(
-        reinterpret_cast<const unsigned short*>(pBuff),
-        nLength / sizeof(unsigned short));
-  }
-  delete[] pBuff;
-  return wsAnswer;
+                                           bMark, pBuff.data(), nLength);
+  if (nLength <= 0)
+    return CFX_WideString();
+
+  nLength = std::min(2046, nLength);
+  pBuff[nLength] = 0;
+  pBuff[nLength + 1] = 0;
+  return CFX_WideString::FromUTF16LE(reinterpret_cast<uint16_t*>(pBuff.data()),
+                                     nLength / sizeof(uint16_t));
 }
 
-IFX_SeekableReadStream* CPDFXFA_Context::DownloadURL(
+CFX_RetainPtr<IFX_SeekableReadStream> CPDFXFA_Context::DownloadURL(
     const CFX_WideString& wsURL) {
   return m_pFormFillEnv ? m_pFormFillEnv->DownloadFromURL(wsURL.c_str())
                         : nullptr;
@@ -355,106 +343,9 @@ bool CPDFXFA_Context::PutRequestURL(const CFX_WideString& wsURL,
                                        wsEncode.c_str());
 }
 
-void CPDFXFA_Context::LoadString(int32_t iStringID, CFX_WideString& wsString) {
-  switch (iStringID) {
-    case XFA_IDS_ValidateFailed:
-      wsString = L"%s validation failed";
-      return;
-    case XFA_IDS_CalcOverride:
-      wsString = L"Calculate Override";
-      return;
-    case XFA_IDS_ModifyField:
-      wsString = L"Are you sure you want to modify this field?";
-      return;
-    case XFA_IDS_NotModifyField:
-      wsString = L"You are not allowed to modify this field.";
-      return;
-    case XFA_IDS_AppName:
-      wsString = L"pdfium";
-      return;
-    case XFA_IDS_Unable_TO_SET:
-      wsString = L"Unable to set ";
-      return;
-    case XFA_IDS_INVAlID_PROP_SET:
-      wsString = L"Invalid property set operation.";
-      return;
-    case XFA_IDS_NOT_DEFAUL_VALUE:
-      wsString = L" doesn't have a default property.";
-      return;
-    case XFA_IDS_UNABLE_SET_LANGUAGE:
-      wsString = L"Unable to set language value.";
-      return;
-    case XFA_IDS_UNABLE_SET_NUMPAGES:
-      wsString = L"Unable to set numPages value.";
-      return;
-    case XFA_IDS_UNABLE_SET_PLATFORM:
-      wsString = L"Unable to set platform value.";
-      return;
-    case XFA_IDS_UNABLE_SET_VARIATION:
-      wsString = L"Unable to set variation value.";
-      return;
-    case XFA_IDS_UNABLE_SET_VERSION:
-      wsString = L"Unable to set version value.";
-      return;
-    case XFA_IDS_UNABLE_SET_READY:
-      wsString = L"Unable to set ready value.";
-      return;
-    case XFA_IDS_COMPILER_ERROR:
-      wsString = L"Compiler error.";
-      return;
-    case XFA_IDS_DIVIDE_ZERO:
-      wsString = L"Divide by zero.";
-      return;
-    case XFA_IDS_ACCESS_PROPERTY_IN_NOT_OBJECT:
-      wsString =
-          L"An attempt was made to reference property '%s' of a non-object in "
-          L"SOM expression %s.";
-      return;
-    case XFA_IDS_INDEX_OUT_OF_BOUNDS:
-      wsString = L"Index value is out of bounds.";
-      return;
-    case XFA_IDS_INCORRECT_NUMBER_OF_METHOD:
-      wsString = L"Incorrect number of parameters calling method '%s'.";
-      return;
-    case XFA_IDS_ARGUMENT_MISMATCH:
-      wsString = L"Argument mismatch in property or function argument.";
-      return;
-    case XFA_IDS_NOT_HAVE_PROPERTY:
-      wsString = L"'%s' doesn't have property '%s'.";
-      return;
-    case XFA_IDS_VIOLATE_BOUNDARY:
-      wsString =
-          L"The element [%s] has violated its allowable number of occurrences.";
-      return;
-    case XFA_IDS_SERVER_DENY:
-      wsString = L"Server does not permit.";
-      return;
-    case XFA_IDS_ValidateLimit:
-      wsString =
-          L"Message limit exceeded. Remaining %d validation errors not "
-          L"reported.";
-      return;
-    case XFA_IDS_ValidateNullWarning:
-      wsString =
-          L"%s cannot be blank. To ignore validations for %s, click Ignore.";
-      return;
-    case XFA_IDS_ValidateNullError:
-      wsString = L"%s cannot be blank.";
-      return;
-    case XFA_IDS_ValidateWarning:
-      wsString =
-          L"The value you entered for %s is invalid. To ignore validations for "
-          L"%s, click Ignore.";
-      return;
-    case XFA_IDS_ValidateError:
-      wsString = L"The value you entered for %s is invalid.";
-      return;
-  }
-}
-
 IFWL_AdapterTimerMgr* CPDFXFA_Context::GetTimerMgr() {
   CXFA_FWLAdapterTimerMgr* pAdapter = nullptr;
   if (m_pFormFillEnv)
-    pAdapter = new CXFA_FWLAdapterTimerMgr(m_pFormFillEnv);
+    pAdapter = new CXFA_FWLAdapterTimerMgr(m_pFormFillEnv.Get());
   return pAdapter;
 }

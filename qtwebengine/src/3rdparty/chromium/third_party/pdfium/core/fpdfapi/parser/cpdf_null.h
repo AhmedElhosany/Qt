@@ -7,6 +7,8 @@
 #ifndef CORE_FPDFAPI_PARSER_CPDF_NULL_H_
 #define CORE_FPDFAPI_PARSER_CPDF_NULL_H_
 
+#include <memory>
+
 #include "core/fpdfapi/parser/cpdf_object.h"
 
 class CPDF_Null : public CPDF_Object {
@@ -16,6 +18,7 @@ class CPDF_Null : public CPDF_Object {
   // CPDF_Object.
   Type GetType() const override;
   std::unique_ptr<CPDF_Object> Clone() const override;
+  bool WriteTo(IFX_ArchiveStream* archive) const override;
 };
 
 #endif  // CORE_FPDFAPI_PARSER_CPDF_NULL_H_

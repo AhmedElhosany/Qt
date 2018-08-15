@@ -139,9 +139,6 @@ class VIEWS_EXPORT Textfield : public View,
   void SetSelectionBackgroundColor(SkColor color);
   void UseDefaultSelectionBackgroundColor();
 
-  // Set drop shadows underneath the text.
-  void SetShadows(const gfx::ShadowValues& shadows);
-
   // Gets/Sets whether or not the cursor is enabled.
   bool GetCursorEnabled() const;
   void SetCursorEnabled(bool enabled);
@@ -163,6 +160,10 @@ class VIEWS_EXPORT Textfield : public View,
 
   void set_placeholder_text_color(SkColor color) {
     placeholder_text_color_ = color;
+  }
+
+  void set_placeholder_text_draw_flags(int flags) {
+    placeholder_text_draw_flags_ = flags;
   }
 
   // Sets whether to indicate the textfield has invalid content.
@@ -215,7 +216,7 @@ class VIEWS_EXPORT Textfield : public View,
   // View overrides:
   gfx::Insets GetInsets() const override;
   int GetBaseline() const override;
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   const char* GetClassName() const override;
   void SetBorder(std::unique_ptr<Border> b) override;
   gfx::NativeCursor GetCursor(const ui::MouseEvent& event) override;
@@ -223,6 +224,7 @@ class VIEWS_EXPORT Textfield : public View,
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
   void OnMouseCaptureLost() override;
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
   WordLookupClient* GetWordLookupClient() override;
   void OnGestureEvent(ui::GestureEvent* event) override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
@@ -320,7 +322,7 @@ class VIEWS_EXPORT Textfield : public View,
   bool ChangeTextDirectionAndLayoutAlignment(
       base::i18n::TextDirection direction) override;
   void ExtendSelectionAndDelete(size_t before, size_t after) override;
-  void EnsureCaretInRect(const gfx::Rect& rect) override;
+  void EnsureCaretNotInRect(const gfx::Rect& rect) override;
   bool IsTextEditCommandEnabled(ui::TextEditCommand command) const override;
   void SetTextEditCommandForNextKeyEvent(ui::TextEditCommand command) override;
 
@@ -373,11 +375,14 @@ class VIEWS_EXPORT Textfield : public View,
   // Does necessary updates when the text and/or cursor position changes.
   void UpdateAfterChange(bool text_changed, bool cursor_changed);
 
-  // A callback function to periodically update the cursor node_data.
-  void UpdateCursor();
+  // Updates cursor visibility and blinks the cursor if needed.
+  void ShowCursor();
 
-  // Repaint the cursor.
-  void RepaintCursor();
+  // A callback function to periodically update the cursor node_data.
+  void UpdateCursorVisibility();
+
+  // Update the cursor position in the text field.
+  void UpdateCursorViewPosition();
 
   void PaintTextAndCursor(gfx::Canvas* canvas);
 
@@ -472,6 +477,9 @@ class VIEWS_EXPORT Textfield : public View,
   // TODO(estade): remove this when Harmony/MD is default.
   SkColor placeholder_text_color_;
 
+  // The draw flags specified for |placeholder_text_|.
+  int placeholder_text_draw_flags_;
+
   // True when the contents are deemed unacceptable and should be indicated as
   // such.
   bool invalid_;
@@ -526,6 +534,9 @@ class VIEWS_EXPORT Textfield : public View,
   // Context menu related members.
   std::unique_ptr<ui::SimpleMenuModel> context_menu_contents_;
   std::unique_ptr<views::MenuRunner> context_menu_runner_;
+
+  // View containing the text cursor.
+  View cursor_view_;
 
   // Used to bind callback functions to this object.
   base::WeakPtrFactory<Textfield> weak_ptr_factory_;

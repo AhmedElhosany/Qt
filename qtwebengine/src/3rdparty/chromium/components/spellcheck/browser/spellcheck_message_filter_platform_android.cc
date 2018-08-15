@@ -62,20 +62,10 @@ void SpellCheckMessageFilterPlatform::OnFillSuggestionList(
   NOTREACHED();
 }
 
-void SpellCheckMessageFilterPlatform::OnShowSpellingPanel(bool show) {
-  NOTREACHED();
-}
-
-void SpellCheckMessageFilterPlatform::OnUpdateSpellingPanelWithMisspelledWord(
-    const base::string16& word) {
-  NOTREACHED();
-}
-
 void SpellCheckMessageFilterPlatform::OnRequestTextCheck(
     int route_id,
     int identifier,
-    const base::string16& text,
-    std::vector<SpellCheckMarker> markers) {
+    const base::string16& text) {
   DCHECK(!text.empty());
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 

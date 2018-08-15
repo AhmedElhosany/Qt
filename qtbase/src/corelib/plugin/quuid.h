@@ -65,6 +65,7 @@ QT_BEGIN_NAMESPACE
 
 class Q_CORE_EXPORT QUuid
 {
+    QUuid(Qt::Initialization) {}
 public:
     enum Variant {
         VarUnknown        =-1,
@@ -116,6 +117,8 @@ public:
 #endif
 
     QUuid(const QString &);
+    static QUuid fromString(QStringView string) Q_DECL_NOTHROW;
+    static QUuid fromString(QLatin1String string) Q_DECL_NOTHROW;
     QUuid(const char *);
     QString toString() const;
     QUuid(const QByteArray &);

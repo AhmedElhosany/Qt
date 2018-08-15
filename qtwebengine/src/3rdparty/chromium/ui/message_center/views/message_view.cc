@@ -10,28 +10,30 @@
 #include "ui/base/models/simple_menu_model.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/shadow_util.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_style.h"
 #include "ui/message_center/views/message_center_controller.h"
-#include "ui/message_center/views/padded_button.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/background.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/painter.h"
-#include "ui/views/shadow_border.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
 
-constexpr int kCloseIconTopPadding = 5;
-constexpr int kCloseIconRightPadding = 5;
-
-constexpr int kShadowOffset = 1;
-constexpr int kShadowBlur = 4;
+#if defined(OS_CHROMEOS)
+const int kShadowCornerRadius = 2;
+#else
+const int kShadowCornerRadius = 0;
+#endif
+const int kShadowElevation = 2;
 
 // Creates a text for spoken feedback from the data contained in the
 // notification.
@@ -63,73 +65,60 @@ MessageView::MessageView(MessageCenterController* controller,
     : controller_(controller),
       notification_id_(notification.id()),
       notifier_id_(notification.notifier_id()),
-      display_source_(notification.display_source()) {
+      slide_out_controller_(this, this) {
   SetFocusBehavior(FocusBehavior::ALWAYS);
+
+  // Paint to a dedicated layer to make the layer non-opaque.
+  SetPaintToLayer();
+  layer()->SetFillsBoundsOpaquely(false);
 
   // Create the opaque background that's above the view's shadow.
   background_view_ = new views::View();
-  background_view_->set_background(
-      views::Background::CreateSolidBackground(kNotificationBackgroundColor));
+  background_view_->SetBackground(
+      views::CreateSolidBackground(kNotificationBackgroundColor));
   AddChildView(background_view_);
-
-  views::ImageView* small_image_view = new views::ImageView();
-  small_image_view->SetImage(notification.small_image().AsImageSkia());
-  small_image_view->SetImageSize(gfx::Size(kSmallImageSize, kSmallImageSize));
-  // The small image view should be added to view hierarchy by the derived
-  // class. This ensures that it is on top of other views.
-  small_image_view->set_owned_by_client();
-  small_image_view_.reset(small_image_view);
 
   focus_painter_ = views::Painter::CreateSolidFocusPainter(
       kFocusBorderColor, gfx::Insets(0, 1, 3, 2));
 
-  accessible_name_ = CreateAccessibleName(notification);
+  UpdateWithNotification(notification);
 }
 
 MessageView::~MessageView() {
 }
 
 void MessageView::UpdateWithNotification(const Notification& notification) {
-  small_image_view_->SetImage(notification.small_image().AsImageSkia());
   display_source_ = notification.display_source();
-  CreateOrUpdateCloseButtonView(notification);
+  pinned_ = notification.pinned();
   accessible_name_ = CreateAccessibleName(notification);
+  slide_out_controller_.set_enabled(!notification.pinned());
 }
 
 // static
 gfx::Insets MessageView::GetShadowInsets() {
-  return gfx::Insets(kShadowBlur / 2 - kShadowOffset,
-                     kShadowBlur / 2,
-                     kShadowBlur / 2 + kShadowOffset,
-                     kShadowBlur / 2);
+  return -gfx::ShadowValue::GetMargin(
+      gfx::ShadowDetails::Get(kShadowElevation, kShadowCornerRadius).values);
 }
 
-void MessageView::CreateShadowBorder() {
-  SetBorder(std::unique_ptr<views::Border>(new views::ShadowBorder(
-      gfx::ShadowValue(gfx::Vector2d(0, kShadowOffset), kShadowBlur,
-                       message_center::kShadowColor))));
-}
+void MessageView::SetIsNested() {
+  is_nested_ = true;
 
-bool MessageView::IsCloseButtonFocused() {
-  if (!close_button_)
-    return false;
-
-  views::FocusManager* focus_manager = GetFocusManager();
-  return focus_manager &&
-         focus_manager->GetFocusedView() == close_button_.get();
-}
-
-void MessageView::RequestFocusOnCloseButton() {
-  if (close_button_)
-    close_button_->RequestFocus();
-}
-
-bool MessageView::IsPinned() {
-  return !close_button_;
+  const auto& shadow =
+      gfx::ShadowDetails::Get(kShadowElevation, kShadowCornerRadius);
+  gfx::Insets ninebox_insets = gfx::ShadowValue::GetBlurRegion(shadow.values) +
+                               gfx::Insets(kShadowCornerRadius);
+  SetBorder(views::CreateBorderPainter(
+      std::unique_ptr<views::Painter>(views::Painter::CreateImagePainter(
+          shadow.ninebox_image, ninebox_insets)),
+      -gfx::ShadowValue::GetMargin(shadow.values)));
 }
 
 void MessageView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   node_data->role = ui::AX_ROLE_BUTTON;
+  node_data->AddStringAttribute(
+      ui::AX_ATTR_ROLE_DESCRIPTION,
+      l10n_util::GetStringUTF8(
+          IDS_MESSAGE_NOTIFICATION_SETTINGS_BUTTON_ACCESSIBLE_NAME));
   node_data->SetName(accessible_name_);
 }
 
@@ -168,47 +157,38 @@ bool MessageView::OnKeyReleased(const ui::KeyEvent& event) {
 }
 
 void MessageView::OnPaint(gfx::Canvas* canvas) {
-  DCHECK_EQ(this, small_image_view_->parent());
-  DCHECK_EQ(this, close_button_->parent());
-  SlideOutView::OnPaint(canvas);
+  views::View::OnPaint(canvas);
   views::Painter::PaintFocusPainter(this, canvas, focus_painter_.get());
 }
 
 void MessageView::OnFocus() {
-  SlideOutView::OnFocus();
+  views::View::OnFocus();
   // We paint a focus indicator.
   SchedulePaint();
 }
 
 void MessageView::OnBlur() {
-  SlideOutView::OnBlur();
+  views::View::OnBlur();
   // We paint a focus indicator.
   SchedulePaint();
 }
 
 void MessageView::Layout() {
+  views::View::Layout();
+
   gfx::Rect content_bounds = GetContentsBounds();
 
   // Background.
   background_view_->SetBoundsRect(content_bounds);
-
-  // Close button.
-  if (close_button_) {
-    gfx::Rect content_bounds = GetContentsBounds();
-    gfx::Size close_size(close_button_->GetPreferredSize());
-    gfx::Rect close_rect(content_bounds.right() - close_size.width(),
-                         content_bounds.y(), close_size.width(),
-                         close_size.height());
-    close_button_->SetBoundsRect(close_rect);
-  }
-
-  gfx::Size small_image_size(small_image_view_->GetPreferredSize());
-  gfx::Rect small_image_rect(small_image_size);
-  small_image_rect.set_origin(gfx::Point(
-      content_bounds.right() - small_image_size.width() - kSmallImagePadding,
-      content_bounds.bottom() - small_image_size.height() -
-          kSmallImagePadding));
-  small_image_view_->SetBoundsRect(small_image_rect);
+#if defined(OS_CHROMEOS)
+  // ChromeOS rounds the corners of the message view. TODO(estade): should we do
+  // this for all platforms?
+  gfx::Path path;
+  constexpr SkScalar kCornerRadius = SkIntToScalar(2);
+  path.addRoundRect(gfx::RectToSkRect(background_view_->GetLocalBounds()),
+                    kCornerRadius, kCornerRadius);
+  background_view_->set_clip_path(path);
+#endif
 }
 
 void MessageView::OnGestureEvent(ui::GestureEvent* event) {
@@ -233,11 +213,6 @@ void MessageView::OnGestureEvent(ui::GestureEvent* event) {
     }
   }
 
-  SlideOutView::OnGestureEvent(event);
-  // Do not return here by checking handled(). SlideOutView calls SetHandled()
-  // even though the scroll gesture doesn't make no (or little) effects on the
-  // slide-out behavior. See http://crbug.com/172991
-
   if (!event->IsScrollGestureEvent() && !event->IsFlingScrollEvent())
     return;
 
@@ -246,15 +221,22 @@ void MessageView::OnGestureEvent(ui::GestureEvent* event) {
   event->SetHandled();
 }
 
-void MessageView::ButtonPressed(views::Button* sender,
-                                const ui::Event& event) {
-  if (close_button_ && sender == close_button_.get()) {
-    controller()->RemoveNotification(notification_id(), true);  // By user.
-  }
+ui::Layer* MessageView::GetSlideOutLayer() {
+  return is_nested_ ? layer() : GetWidget()->GetLayer();
 }
+
+void MessageView::OnSlideChanged() {}
 
 void MessageView::OnSlideOut() {
   controller_->RemoveNotification(notification_id_, true);  // By user.
+}
+
+void MessageView::OnCloseButtonPressed() {
+  controller_->RemoveNotification(notification_id_, true);  // By user.
+}
+
+void MessageView::OnSettingsButtonPressed() {
+  controller_->ClickOnSettingsButton(notification_id_);
 }
 
 void MessageView::SetDrawBackgroundAsActive(bool active) {
@@ -262,29 +244,6 @@ void MessageView::SetDrawBackgroundAsActive(bool active) {
       SetNativeControlColor(active ? kHoveredButtonBackgroundColor :
                                      kNotificationBackgroundColor);
   SchedulePaint();
-}
-
-void MessageView::CreateOrUpdateCloseButtonView(
-    const Notification& notification) {
-  set_slide_out_enabled(!notification.pinned());
-
-  if (!notification.pinned() && !close_button_) {
-    PaddedButton* close = new PaddedButton(this);
-    close->SetPadding(-kCloseIconRightPadding, kCloseIconTopPadding);
-    close->SetNormalImage(IDR_NOTIFICATION_CLOSE);
-    close->SetHoveredImage(IDR_NOTIFICATION_CLOSE_HOVER);
-    close->SetPressedImage(IDR_NOTIFICATION_CLOSE_PRESSED);
-    close->set_animate_on_state_change(false);
-    close->SetAccessibleName(l10n_util::GetStringUTF16(
-        IDS_MESSAGE_CENTER_CLOSE_NOTIFICATION_BUTTON_ACCESSIBLE_NAME));
-    close->SetTooltipText(l10n_util::GetStringUTF16(
-        IDS_MESSAGE_CENTER_CLOSE_NOTIFICATION_BUTTON_TOOLTIP));
-    close->set_owned_by_client();
-    AddChildView(close);
-    close_button_.reset(close);
-  } else if (notification.pinned() && close_button_) {
-    close_button_.reset();
-  }
 }
 
 }  // namespace message_center

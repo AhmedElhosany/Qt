@@ -51,6 +51,7 @@
 #include <QtQuick/private/qquickwindowmodule_p.h>
 #include <QtQuickTemplates2/private/qtquicktemplates2global_p.h>
 #include <QtGui/qfont.h>
+#include <QtGui/qpalette.h>
 #include <QtCore/qlocale.h>
 
 QT_BEGIN_NAMESPACE
@@ -72,12 +73,17 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickApplicationWindow : public QQuickWi
     Q_PROPERTY(QQuickOverlay *overlay READ overlay CONSTANT FINAL)
     Q_PROPERTY(QFont font READ font WRITE setFont RESET resetFont NOTIFY fontChanged FINAL)
     Q_PROPERTY(QLocale locale READ locale WRITE setLocale RESET resetLocale NOTIFY localeChanged FINAL)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(QPalette palette READ palette WRITE setPalette RESET resetPalette NOTIFY paletteChanged FINAL REVISION 3)
+    Q_PROPERTY(QQuickItem *menuBar READ menuBar WRITE setMenuBar NOTIFY menuBarChanged FINAL REVISION 3)
     Q_CLASSINFO("DeferredPropertyNames", "background")
     Q_CLASSINFO("DefaultProperty", "contentData")
 
 public:
     explicit QQuickApplicationWindow(QWindow *parent = nullptr);
     ~QQuickApplicationWindow();
+
+    static QQuickApplicationWindowAttached *qmlAttachedProperties(QObject *object);
 
     QQuickItem *background() const;
     void setBackground(QQuickItem *background);
@@ -103,7 +109,13 @@ public:
     void setLocale(const QLocale &locale);
     void resetLocale();
 
-    static QQuickApplicationWindowAttached *qmlAttachedProperties(QObject *object);
+    // 2.3 (Qt 5.10)
+    QPalette palette() const;
+    void setPalette(const QPalette &palette);
+    void resetPalette();
+
+    QQuickItem *menuBar() const;
+    void setMenuBar(QQuickItem *menuBar);
 
 Q_SIGNALS:
     void backgroundChanged();
@@ -112,6 +124,8 @@ Q_SIGNALS:
     void footerChanged();
     void fontChanged();
     void localeChanged();
+    Q_REVISION(3) void paletteChanged();
+    Q_REVISION(3) void menuBarChanged();
 
 protected:
     bool isComponentComplete() const;
@@ -135,6 +149,7 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickApplicationWindowAttached : public 
     Q_PROPERTY(QQuickItem *header READ header NOTIFY headerChanged FINAL)
     Q_PROPERTY(QQuickItem *footer READ footer NOTIFY footerChanged FINAL)
     Q_PROPERTY(QQuickOverlay *overlay READ overlay NOTIFY overlayChanged FINAL)
+    Q_PROPERTY(QQuickItem *menuBar READ menuBar NOTIFY menuBarChanged FINAL) // REVISION 3
 
 public:
     explicit QQuickApplicationWindowAttached(QObject *parent = nullptr);
@@ -145,6 +160,7 @@ public:
     QQuickItem *header() const;
     QQuickItem *footer() const;
     QQuickOverlay *overlay() const;
+    QQuickItem *menuBar() const;
 
 Q_SIGNALS:
     void windowChanged();
@@ -153,6 +169,8 @@ Q_SIGNALS:
     void headerChanged();
     void footerChanged();
     void overlayChanged();
+    // 2.3 (Qt 5.10)
+    /*Q_REVISION(3)*/ void menuBarChanged();
 
 private:
     Q_DISABLE_COPY(QQuickApplicationWindowAttached)

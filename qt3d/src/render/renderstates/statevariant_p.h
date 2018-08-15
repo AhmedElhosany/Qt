@@ -83,6 +83,7 @@ struct Q_AUTOTEST_EXPORT StateVariant
         SeamlessCubemap seamlessCubemap;
         StencilOp stencilOp;
         StencilMask stencilMask;
+        LineWidth lineWidth;
 
         u_Data()
         {

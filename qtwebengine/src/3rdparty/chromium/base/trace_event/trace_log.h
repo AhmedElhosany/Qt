@@ -10,13 +10,12 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "base/atomicops.h"
-#include "base/containers/hash_tables.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "base/trace_event/trace_config.h"
 #include "base/trace_event/trace_event_impl.h"
@@ -35,6 +34,7 @@ struct TraceCategory;
 class TraceBuffer;
 class TraceBufferChunk;
 class TraceEvent;
+class TraceEventFilter;
 class TraceEventMemoryOverhead;
 
 struct BASE_EXPORT TraceLogStatus {
@@ -268,6 +268,13 @@ class BASE_EXPORT TraceLog : public MemoryDumpProvider {
                                 const char* name,
                                 TraceEventHandle handle);
 
+  void UpdateTraceEventDurationExplicit(
+      const unsigned char* category_group_enabled,
+      const char* name,
+      TraceEventHandle handle,
+      const TimeTicks& now,
+      const ThreadTicks& thread_now);
+
   void EndFilteredEvent(const unsigned char* category_group_enabled,
                         const char* name,
                         TraceEventHandle handle);
@@ -278,26 +285,15 @@ class BASE_EXPORT TraceLog : public MemoryDumpProvider {
 
   // Exposed for unittesting:
 
+  // Testing factory for TraceEventFilter.
+  typedef std::unique_ptr<TraceEventFilter> (*FilterFactoryForTesting)(
+      const std::string& /* predicate_name */);
+  void SetFilterFactoryForTesting(FilterFactoryForTesting factory) {
+    filter_factory_for_testing_ = factory;
+  }
+
   // Allows deleting our singleton instance.
   static void DeleteForTesting();
-
-  class BASE_EXPORT TraceEventFilter {
-   public:
-    static const char* const kEventWhitelistPredicate;
-    static const char* const kHeapProfilerPredicate;
-
-    TraceEventFilter() {}
-    virtual ~TraceEventFilter() {}
-    virtual bool FilterTraceEvent(const TraceEvent& trace_event) const = 0;
-    virtual void EndEvent(const char* category_group, const char* name) {}
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(TraceEventFilter);
-  };
-  typedef std::unique_ptr<TraceEventFilter> (
-      *TraceEventFilterConstructorForTesting)(void);
-  static void SetTraceEventFilterConstructorForTesting(
-      TraceEventFilterConstructorForTesting predicate);
 
   // Allow tests to inspect TraceEvents.
   TraceEvent* GetEventByHandle(TraceEventHandle handle);
@@ -373,10 +369,6 @@ class BASE_EXPORT TraceLog : public MemoryDumpProvider {
   void UpdateCategoryState(TraceCategory* category);
 
   void CreateFiltersForTraceConfig();
-
-  // Configure synthetic delays based on the values set in the current
-  // trace config.
-  void UpdateSyntheticDelaysFromTraceConfig();
 
   InternalTraceOptions GetInternalOptionsFromTraceConfig(
       const TraceConfig& config);
@@ -462,14 +454,14 @@ class BASE_EXPORT TraceLog : public MemoryDumpProvider {
       async_observers_;
 
   std::string process_name_;
-  base::hash_map<int, std::string> process_labels_;
+  std::unordered_map<int, std::string> process_labels_;
   int process_sort_index_;
-  base::hash_map<int, int> thread_sort_indices_;
-  base::hash_map<int, std::string> thread_names_;
+  std::unordered_map<int, int> thread_sort_indices_;
+  std::unordered_map<int, std::string> thread_names_;
 
   // The following two maps are used only when ECHO_TO_CONSOLE.
-  base::hash_map<int, std::stack<TimeTicks>> thread_event_start_times_;
-  base::hash_map<std::string, int> thread_colors_;
+  std::unordered_map<int, std::stack<TimeTicks>> thread_event_start_times_;
+  std::unordered_map<std::string, int> thread_colors_;
 
   TimeTicks buffer_limit_reached_timestamp_;
 
@@ -505,6 +497,8 @@ class BASE_EXPORT TraceLog : public MemoryDumpProvider {
   ArgumentFilterPredicate argument_filter_predicate_;
   subtle::AtomicWord generation_;
   bool use_worker_thread_;
+
+  FilterFactoryForTesting filter_factory_for_testing_;
 
   DISALLOW_COPY_AND_ASSIGN(TraceLog);
 };

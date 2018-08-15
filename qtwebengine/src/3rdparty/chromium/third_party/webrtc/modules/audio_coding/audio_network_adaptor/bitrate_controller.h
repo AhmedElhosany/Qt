@@ -11,8 +11,8 @@
 #ifndef WEBRTC_MODULES_AUDIO_CODING_AUDIO_NETWORK_ADAPTOR_BITRATE_CONTROLLER_H_
 #define WEBRTC_MODULES_AUDIO_CODING_AUDIO_NETWORK_ADAPTOR_BITRATE_CONTROLLER_H_
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/modules/audio_coding/audio_network_adaptor/controller.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 namespace audio_network_adaptor {
@@ -28,13 +28,18 @@ class BitrateController final : public Controller {
 
   explicit BitrateController(const Config& config);
 
-  void MakeDecision(const NetworkMetrics& metrics,
-                    AudioNetworkAdaptor::EncoderRuntimeConfig* config) override;
+  ~BitrateController() override;
+
+  void UpdateNetworkMetrics(const NetworkMetrics& network_metrics) override;
+
+  void MakeDecision(AudioEncoderRuntimeConfig* config) override;
 
  private:
   const Config config_;
   int bitrate_bps_;
-  int overhead_rate_bps_;
+  int frame_length_ms_;
+  rtc::Optional<int> target_audio_bitrate_bps_;
+  rtc::Optional<size_t> overhead_bytes_per_packet_;
   RTC_DISALLOW_COPY_AND_ASSIGN(BitrateController);
 };
 

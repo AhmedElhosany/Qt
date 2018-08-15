@@ -33,7 +33,6 @@
 Elements.EventListenersWidget = class extends UI.ThrottledWidget {
   constructor() {
     super();
-    this.element.classList.add('events-pane');
     this._toolbarItems = [];
 
     this._showForAncestorsSetting = Common.settings.moduleSetting('showEventListenersForAncestors');
@@ -44,15 +43,17 @@ Elements.EventListenersWidget = class extends UI.ThrottledWidget {
     this._dispatchFilterBySetting.addChangeListener(this.update.bind(this));
 
     this._showFrameworkListenersSetting = Common.settings.createSetting('showFrameowkrListeners', true);
+    this._showFrameworkListenersSetting.setTitle(Common.UIString('Framework listeners'));
     this._showFrameworkListenersSetting.addChangeListener(this._showFrameworkListenersChanged.bind(this));
-    this._eventListenersView = new Components.EventListenersView(this.element, this.update.bind(this));
+    this._eventListenersView = new EventListeners.EventListenersView(this.update.bind(this));
+    this._eventListenersView.show(this.element);
 
     var refreshButton = new UI.ToolbarButton(Common.UIString('Refresh'), 'largeicon-refresh');
-    refreshButton.addEventListener('click', this.update.bind(this));
+    refreshButton.addEventListener(UI.ToolbarButton.Events.Click, this.update.bind(this));
     this._toolbarItems.push(refreshButton);
-    this._toolbarItems.push(new UI.ToolbarCheckbox(
-        Common.UIString('Ancestors'), Common.UIString('Show listeners on the ancestors'),
-        this._showForAncestorsSetting));
+    this._toolbarItems.push(new UI.ToolbarSettingCheckbox(
+        this._showForAncestorsSetting, Common.UIString('Show listeners on the ancestors'),
+        Common.UIString('Ancestors')));
     var dispatchFilter = new UI.ToolbarComboBox(this._onDispatchFilterTypeChanged.bind(this));
 
     /**
@@ -72,9 +73,8 @@ Elements.EventListenersWidget = class extends UI.ThrottledWidget {
         this, Common.UIString('Blocking'), Elements.EventListenersWidget.DispatchFilterBy.Blocking);
     dispatchFilter.setMaxWidth(200);
     this._toolbarItems.push(dispatchFilter);
-    this._toolbarItems.push(new UI.ToolbarCheckbox(
-        Common.UIString('Framework listeners'), Common.UIString('Resolve event listeners bound with framework'),
-        this._showFrameworkListenersSetting));
+    this._toolbarItems.push(new UI.ToolbarSettingCheckbox(
+        this._showFrameworkListenersSetting, Common.UIString('Resolve event listeners bound with framework')));
 
     UI.context.addFlavorChangeListener(SDK.DOMNode, this.update, this);
     this.update();
@@ -87,7 +87,7 @@ Elements.EventListenersWidget = class extends UI.ThrottledWidget {
    */
   doUpdate() {
     if (this._lastRequestedNode) {
-      this._lastRequestedNode.target().runtimeAgent().releaseObjectGroup(
+      this._lastRequestedNode.domModel().runtimeModel().releaseObjectGroup(
           Elements.EventListenersWidget._objectGroupName);
       delete this._lastRequestedNode;
     }
@@ -100,12 +100,11 @@ Elements.EventListenersWidget = class extends UI.ThrottledWidget {
     this._lastRequestedNode = node;
     var selectedNodeOnly = !this._showForAncestorsSetting.get();
     var promises = [];
-    var listenersView = this._eventListenersView;
-    promises.push(node.resolveToObjectPromise(Elements.EventListenersWidget._objectGroupName));
+    promises.push(node.resolveToObject(Elements.EventListenersWidget._objectGroupName));
     if (!selectedNodeOnly) {
       var currentNode = node.parentNode;
       while (currentNode) {
-        promises.push(currentNode.resolveToObjectPromise(Elements.EventListenersWidget._objectGroupName));
+        promises.push(currentNode.resolveToObject(Elements.EventListenersWidget._objectGroupName));
         currentNode = currentNode.parentNode;
       }
       promises.push(this._windowObjectInNodeContext(node));
@@ -152,7 +151,7 @@ Elements.EventListenersWidget = class extends UI.ThrottledWidget {
      * @param {function(*)} reject
      */
     function windowObjectInNodeContext(fulfill, reject) {
-      var executionContexts = node.target().runtimeModel.executionContexts();
+      var executionContexts = node.domModel().runtimeModel().executionContexts();
       var context = null;
       if (node.frameId()) {
         for (var i = 0; i < executionContexts.length; ++i) {

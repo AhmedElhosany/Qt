@@ -55,6 +55,8 @@
 
 QT_BEGIN_NAMESPACE
 
+class QQuickAction;
+class QQmlComponent;
 class QQuickMenuItem;
 class QQuickMenuPrivate;
 
@@ -63,7 +65,13 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickMenu : public QQuickPopup
     Q_OBJECT
     Q_PROPERTY(QVariant contentModel READ contentModel CONSTANT FINAL)
     Q_PROPERTY(QQmlListProperty<QObject> contentData READ contentData FINAL)
-    Q_PROPERTY(QString title READ title WRITE setTitle NOTIFY titleChanged)
+    Q_PROPERTY(QString title READ title WRITE setTitle NOTIFY titleChanged FINAL)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(int count READ count NOTIFY countChanged FINAL REVISION 3)
+    Q_PROPERTY(bool cascade READ cascade WRITE setCascade RESET resetCascade NOTIFY cascadeChanged FINAL REVISION 3)
+    Q_PROPERTY(qreal overlap READ overlap WRITE setOverlap NOTIFY overlapChanged FINAL REVISION 3)
+    Q_PROPERTY(QQmlComponent *delegate READ delegate WRITE setDelegate NOTIFY delegateChanged FINAL REVISION 3)
+    Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged FINAL REVISION 3)
     Q_CLASSINFO("DefaultProperty", "contentData")
 
 public:
@@ -73,7 +81,8 @@ public:
     Q_INVOKABLE void addItem(QQuickItem *item);
     Q_INVOKABLE void insertItem(int index, QQuickItem *item);
     Q_INVOKABLE void moveItem(int from, int to);
-    Q_INVOKABLE void removeItem(int index);
+    Q_INVOKABLE void removeItem(const QVariant &item); // ### Qt 6: remove
+    void removeItem(QQuickItem *item); // ### Qt 6: Q_INVOKABLE
 
     QVariant contentModel() const;
     QQmlListProperty<QObject> contentData();
@@ -81,17 +90,61 @@ public:
     QString title() const;
     void setTitle(QString &title);
 
+    bool cascade() const;
+    void setCascade(bool cascade);
+    void resetCascade();
+
+    qreal overlap() const;
+    void setOverlap(qreal overlap);
+
+    QQmlComponent *delegate() const;
+    void setDelegate(QQmlComponent *delegate);
+
+    int currentIndex() const;
+    void setCurrentIndex(int index);
+
+    // 2.3 (Qt 5.10)
+    int count() const;
+    Q_REVISION(3) Q_INVOKABLE QQuickItem *takeItem(int index);
+
+    Q_REVISION(3) Q_INVOKABLE QQuickMenu *menuAt(int index) const;
+    Q_REVISION(3) Q_INVOKABLE void addMenu(QQuickMenu *menu);
+    Q_REVISION(3) Q_INVOKABLE void insertMenu(int index, QQuickMenu *menu);
+    Q_REVISION(3) Q_INVOKABLE void removeMenu(QQuickMenu *menu);
+    Q_REVISION(3) Q_INVOKABLE QQuickMenu *takeMenu(int index);
+
+    Q_REVISION(3) Q_INVOKABLE QQuickAction *actionAt(int index) const;
+    Q_REVISION(3) Q_INVOKABLE void addAction(QQuickAction *action);
+    Q_REVISION(3) Q_INVOKABLE void insertAction(int index, QQuickAction *action);
+    Q_REVISION(3) Q_INVOKABLE void removeAction(QQuickAction *action);
+    Q_REVISION(3) Q_INVOKABLE QQuickAction *takeAction(int index);
+
+    void popup(QQuickItem *menuItem = nullptr);
+    void popup(const QPointF &pos, QQuickItem *menuItem = nullptr);
+
+    Q_REVISION(3) Q_INVOKABLE void popup(QQmlV4Function *args);
+    Q_REVISION(3) Q_INVOKABLE void dismiss();
+
 protected:
     void componentComplete() override;
     void contentItemChange(QQuickItem *newItem, QQuickItem *oldItem) override;
     void itemChange(QQuickItem::ItemChange change, const QQuickItem::ItemChangeData &data) override;
-    void keyReleaseEvent(QKeyEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 Q_SIGNALS:
-    void titleChanged();
+    void titleChanged(const QString &title);
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) void countChanged();
+    Q_REVISION(3) void cascadeChanged(bool cascade);
+    Q_REVISION(3) void overlapChanged();
+    Q_REVISION(3) void delegateChanged();
+    Q_REVISION(3) void currentIndexChanged();
 
 protected:
+    void timerEvent(QTimerEvent *event) override;
+
     QFont defaultFont() const override;
+    QPalette defaultPalette() const override;
 
 #if QT_CONFIG(accessibility)
     QAccessible::Role accessibleRole() const override;

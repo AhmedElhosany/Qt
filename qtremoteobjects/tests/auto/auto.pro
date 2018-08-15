@@ -12,6 +12,3 @@ SUBDIRS += benchmarks repc sub_integration modelview cmake pods repcodegenerator
            modelreplica
 
 qtConfig(process): SUBDIRS += integration_multiprocess
-
-# QTBUG-60268
-boot2qt: SUBDIRS -= sub_integration modelview

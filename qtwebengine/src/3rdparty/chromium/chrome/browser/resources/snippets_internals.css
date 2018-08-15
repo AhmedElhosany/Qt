@@ -6,10 +6,6 @@ html {
   font-size: 20px;
 }
 
-textarea {
-  width: 100%;
-}
-
 #info > div {
   width: 100%;
 }
@@ -81,4 +77,15 @@ td.title-link {
   font-size: 90%;
   padding: 4px;
   word-break: break-all;
+}
+
+button {
+  min-height: 30px;
+}
+
+.vertical-buttons > button {
+  float: left;
+  margin-right: 5px;
+  max-width: 100px;
+  min-height: 40px;
 }

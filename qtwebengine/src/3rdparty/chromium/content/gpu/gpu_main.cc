@@ -18,17 +18,17 @@
 #include "base/strings/stringprintf.h"
 #include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/threading/platform_thread.h"
+#include "base/timer/hi_res_timer_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "content/child/child_process.h"
 #include "content/common/content_constants_internal.h"
-#include "content/common/gpu_host_messages.h"
-#include "content/common/sandbox_linux/sandbox_linux.h"
 #include "content/gpu/gpu_child_thread.h"
 #include "content/gpu/gpu_process.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
+#include "content/public/common/result_codes.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/config/gpu_driver_bug_list.h"
 #include "gpu/config/gpu_info_collector.h"
@@ -37,9 +37,9 @@
 #include "gpu/ipc/common/gpu_memory_buffer_support.h"
 #include "gpu/ipc/service/gpu_config.h"
 #include "gpu/ipc/service/gpu_init.h"
-#include "gpu/ipc/service/gpu_memory_buffer_factory.h"
 #include "gpu/ipc/service/gpu_watchdog_thread.h"
 #include "ui/events/platform/platform_event_source.h"
+#include "ui/gfx/switches.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
@@ -71,6 +71,7 @@
 #endif
 
 #if defined(OS_LINUX)
+#include "content/common/sandbox_linux/sandbox_linux.h"
 #include "content/public/common/sandbox_init.h"
 #endif
 
@@ -79,13 +80,12 @@
 #include "content/common/sandbox_mac.h"
 #endif
 
-#if defined(OS_CHROMEOS) && defined(ARCH_CPU_X86_FAMILY)
-#include "media/gpu/vaapi_wrapper.h"
+#if defined(USE_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
 #endif
 
-#if defined(SANITIZER_COVERAGE)
-#include <sanitizer/common_interface_defs.h>
-#include <sanitizer/coverage_interface.h>
+#if defined(OS_CHROMEOS) && defined(ARCH_CPU_X86_FAMILY)
+#include "media/gpu/vaapi_wrapper.h"
 #endif
 
 namespace content {
@@ -98,17 +98,18 @@ bool StartSandboxLinux(gpu::GpuWatchdogThread*);
 bool StartSandboxWindows(const sandbox::SandboxInterfaceInfo*);
 #endif
 
-base::LazyInstance<GpuChildThread::DeferredMessages> deferred_messages =
-    LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<GpuChildThread::DeferredMessages>::DestructorAtExit
+    deferred_messages = LAZY_INSTANCE_INITIALIZER;
 
 bool GpuProcessLogMessageHandler(int severity,
                                  const char* file, int line,
                                  size_t message_start,
                                  const std::string& str) {
-  std::string header = str.substr(0, message_start);
-  std::string message = str.substr(message_start);
-  deferred_messages.Get().push(
-      new GpuHostMsg_OnLogMessage(severity, header, message));
+  GpuChildThread::LogMessage log;
+  log.severity = severity;
+  log.header = str.substr(0, message_start);
+  log.message = str.substr(message_start);
+  deferred_messages.Get().push_back(std::move(log));
   return false;
 }
 
@@ -186,43 +187,60 @@ int GpuMain(const MainFunctionParams& parameters) {
       SEM_FAILCRITICALERRORS |
       SEM_NOGPFAULTERRORBOX |
       SEM_NOOPENFILEERRORBOX);
-#elif defined(USE_X11)
-  ui::SetDefaultX11ErrorHandlers();
 
+  // COM is used by some Windows Media Foundation calls made on this thread and
+  // must be MTA so we don't have to worry about pumping messages to handle
+  // COM callbacks.
+  base::win::ScopedCOMInitializer com_initializer(
+      base::win::ScopedCOMInitializer::kMTA);
 #endif
 
   logging::SetLogMessageHandler(GpuProcessLogMessageHandler);
 
+  // We are experiencing what appear to be memory-stomp issues in the GPU
+  // process. These issues seem to be impacting the message loop and listeners
+  // registered to it. Create the message loop on the heap to guard against
+  // this.
+  // TODO(ericrk): Revisit this once we assess its impact on crbug.com/662802
+  // and crbug.com/609252.
+  std::unique_ptr<base::MessageLoop> main_message_loop;
+  std::unique_ptr<ui::PlatformEventSource> event_source;
+  if (command_line.HasSwitch(switches::kHeadless)) {
+    main_message_loop.reset(
+        new base::MessageLoop(base::MessageLoop::TYPE_DEFAULT));
+  } else {
 #if defined(OS_WIN)
-  // OK to use default non-UI message loop because all GPU windows run on
-  // dedicated thread.
-#if defined(TOOLKIT_QT)
-  base::MessageLoop main_message_loop(base::MessageLoop::TYPE_DEFAULT);
-#else
-  base::MessageLoop main_message_loop(base::MessageLoop::TYPE_UI);
-#endif
+    // The GpuMain thread should not be pumping Windows messages because no UI
+    // is expected to run on this thread.
+    main_message_loop.reset(
+        new base::MessageLoop(base::MessageLoop::TYPE_DEFAULT));
 #elif defined(USE_X11)
-  // We need a UI loop so that we can grab the Expose events. See GLSurfaceGLX
-  // and https://crbug.com/326995.
-  base::MessageLoop main_message_loop(base::MessageLoop::TYPE_UI);
-  std::unique_ptr<ui::PlatformEventSource> event_source =
-      ui::PlatformEventSource::CreateDefault();
-#elif defined(USE_OZONE) && defined(OZONE_X11)
-  // If we might be running Ozone X11 we need a UI loop to grab Expose events.
-  // See GLSurfaceGLX and https://crbug.com/326995.
-  base::MessageLoop main_message_loop(base::MessageLoop::TYPE_UI);
+    // We need a UI loop so that we can grab the Expose events. See GLSurfaceGLX
+    // and https://crbug.com/326995.
+#if !defined(TOOLKIT_QT)
+    ui::SetDefaultX11ErrorHandlers();
+    if (!gfx::GetXDisplay())
+      return RESULT_CODE_GPU_DEAD_ON_ARRIVAL;
+#endif
+    main_message_loop.reset(new base::MessageLoop(base::MessageLoop::TYPE_UI));
+    event_source = ui::PlatformEventSource::CreateDefault();
 #elif defined(USE_OZONE)
-  base::MessageLoop main_message_loop(base::MessageLoop::TYPE_DEFAULT);
+    // The MessageLoop type required depends on the Ozone platform selected at
+    // runtime.
+    main_message_loop.reset(new base::MessageLoop(
+        ui::OzonePlatform::EnsureInstance()->GetMessageLoopTypeForGpu()));
 #elif defined(OS_LINUX)
 #error "Unsupported Linux platform."
 #elif defined(OS_MACOSX)
-  // This is necessary for CoreAnimation layers hosted in the GPU process to be
-  // drawn. See http://crbug.com/312462.
-  std::unique_ptr<base::MessagePump> pump(new base::MessagePumpCFRunLoop());
-  base::MessageLoop main_message_loop(std::move(pump));
+    // This is necessary for CoreAnimation layers hosted in the GPU process to
+    // be drawn. See http://crbug.com/312462.
+    std::unique_ptr<base::MessagePump> pump(new base::MessagePumpCFRunLoop());
+    main_message_loop.reset(new base::MessageLoop(std::move(pump)));
 #else
-  base::MessageLoop main_message_loop(base::MessageLoop::TYPE_IO);
+    main_message_loop.reset(
+        new base::MessageLoop(base::MessageLoop::TYPE_DEFAULT));
 #endif
+  }
 
   base::PlatformThread::SetName("CrGpuMain");
 
@@ -248,18 +266,13 @@ int GpuMain(const MainFunctionParams& parameters) {
   // is implemented using an IPC channel error. If the IPC channel is not fully
   // set up between the browser and GPU process, and the GPU process crashes or
   // exits early, the browser process will never detect it.  For this reason we
-  // defer tearing down the GPU process until receiving the GpuMsg_Initialize
-  // message from the browser.
+  // defer tearing down the GPU process until receiving the initialization
+  // message from the browser (through mojom::GpuMain::CreateGpuService()).
   const bool init_success = gpu_init.InitializeAndStartSandbox(command_line);
   const bool dead_on_arrival = !init_success;
 
   logging::SetLogMessageHandler(NULL);
   GetContentClient()->SetGpuInfo(gpu_init.gpu_info());
-
-  std::unique_ptr<gpu::GpuMemoryBufferFactory> gpu_memory_buffer_factory;
-  if (init_success &&
-      gpu::GetNativeGpuMemoryBufferType() != gfx::EMPTY_BUFFER)
-    gpu_memory_buffer_factory = gpu::GpuMemoryBufferFactory::CreateNativeType();
 
   base::ThreadPriority io_thread_priority = base::ThreadPriority::NORMAL;
 #if defined(OS_ANDROID) || defined(OS_CHROMEOS)
@@ -269,16 +282,12 @@ int GpuMain(const MainFunctionParams& parameters) {
   GpuProcess gpu_process(io_thread_priority);
   GpuChildThread* child_thread = new GpuChildThread(
       gpu_init.TakeWatchdogThread(), dead_on_arrival, gpu_init.gpu_info(),
-      deferred_messages.Get(), gpu_memory_buffer_factory.get());
-  while (!deferred_messages.Get().empty())
-    deferred_messages.Get().pop();
+      gpu_init.gpu_feature_info(), std::move(deferred_messages.Get()));
+  deferred_messages.Get().clear();
 
   child_thread->Init(start_time);
 
   gpu_process.set_main_thread(child_thread);
-
-  if (child_thread->watchdog_thread())
-    child_thread->watchdog_thread()->AddPowerObserver();
 
 #if defined(OS_ANDROID)
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
@@ -286,12 +295,14 @@ int GpuMain(const MainFunctionParams& parameters) {
       nullptr);
 #endif
 
+  base::HighResolutionTimerManager hi_res_timer_manager;
+
   {
     TRACE_EVENT0("gpu", "Run Message Loop");
     base::RunLoop().Run();
   }
 
-  return dead_on_arrival ? 2 : 0;
+  return dead_on_arrival ? RESULT_CODE_GPU_DEAD_ON_ARRIVAL : 0;
 }
 
 namespace {
@@ -307,16 +318,6 @@ bool StartSandboxLinux(gpu::GpuWatchdogThread* watchdog_thread) {
     // has really been stopped.
     LinuxSandbox::StopThread(watchdog_thread);
   }
-
-#if defined(SANITIZER_COVERAGE)
-  const std::string sancov_file_name =
-      "gpu." + base::Uint64ToString(base::RandUint64());
-  LinuxSandbox* linux_sandbox = LinuxSandbox::GetInstance();
-  linux_sandbox->sanitizer_args()->coverage_sandboxed = 1;
-  linux_sandbox->sanitizer_args()->coverage_fd =
-      __sanitizer_maybe_open_cov_file(sancov_file_name.c_str());
-  linux_sandbox->sanitizer_args()->coverage_max_block_size = 0;
-#endif
 
   // LinuxSandbox::InitializeSandbox() must always be called
   // with only one thread.

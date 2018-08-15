@@ -11,12 +11,14 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
 #include "cc/layers/video_frame_provider.h"
 #include "content/common/content_export.h"
+#include "media/base/media_log.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -39,7 +41,7 @@ class WebMediaPlayerMS;
 
 // This class is designed to handle the work load on compositor thread for
 // WebMediaPlayerMS. It will be instantiated on the main thread, but destroyed
-// on the compositor thread.
+// on the thread holding the last reference.
 //
 // WebMediaPlayerMSCompositor utilizes VideoRendererAlgorithm to store the
 // incoming frames and select the best frame for rendering to maximize the
@@ -47,26 +49,26 @@ class WebMediaPlayerMS;
 // Otherwise, WebMediaPlayerMSCompositor will simply store the most recent
 // frame, and submit it whenever asked by the compositor.
 class CONTENT_EXPORT WebMediaPlayerMSCompositor
-    : public NON_EXPORTED_BASE(cc::VideoFrameProvider) {
+    : public NON_EXPORTED_BASE(cc::VideoFrameProvider),
+      public base::RefCountedThreadSafe<WebMediaPlayerMSCompositor> {
  public:
   // This |url| represents the media stream we are rendering. |url| is used to
   // find out what web stream this WebMediaPlayerMSCompositor is playing, and
   // together with flag "--disable-rtc-smoothness-algorithm" determine whether
   // we enable algorithm or not.
   WebMediaPlayerMSCompositor(
-      const scoped_refptr<base::SingleThreadTaskRunner>& compositor_task_runner,
+      scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner,
+      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
       const blink::WebMediaStream& web_stream,
       const base::WeakPtr<WebMediaPlayerMS>& player);
 
-  ~WebMediaPlayerMSCompositor() override;
-
-  void EnqueueFrame(const scoped_refptr<media::VideoFrame>& frame);
+  void EnqueueFrame(scoped_refptr<media::VideoFrame> frame);
 
   // Statistical data
   gfx::Size GetCurrentSize();
   base::TimeDelta GetCurrentTime();
-  size_t total_frame_count() const;
-  size_t dropped_frame_count() const;
+  size_t total_frame_count();
+  size_t dropped_frame_count();
 
   // VideoFrameProvider implementation.
   void SetVideoFrameProviderClient(
@@ -88,31 +90,47 @@ class CONTENT_EXPORT WebMediaPlayerMSCompositor
   void StopRendering();
   void ReplaceCurrentFrameWithACopy();
 
+  // Tell |video_frame_provider_client_| to stop using this instance in
+  // preparation for dtor.
+  void StopUsingProvider();
+
  private:
+  friend class base::RefCountedThreadSafe<WebMediaPlayerMSCompositor>;
   friend class WebMediaPlayerMSTest;
+
+  ~WebMediaPlayerMSCompositor() override;
 
   bool MapTimestampsToRenderTimeTicks(
       const std::vector<base::TimeDelta>& timestamps,
       std::vector<base::TimeTicks>* wall_clock_times);
 
-  void SetCurrentFrame(const scoped_refptr<media::VideoFrame>& frame);
-
   // For algorithm enabled case only: given the render interval, update
   // current_frame_ and dropped_frame_count_.
   void Render(base::TimeTicks deadline_min, base::TimeTicks deadline_max);
 
+  void SetCurrentFrame(const scoped_refptr<media::VideoFrame>& frame);
+
   void StartRenderingInternal();
   void StopRenderingInternal();
+  void StopUsingProviderInternal();
+  void ReplaceCurrentFrameWithACopyInternal();
 
   void SetAlgorithmEnabledForTesting(bool algorithm_enabled);
 
-  // Used for DCHECKs to ensure method calls executed in the correct thread.
+  // Used for DCHECKs to ensure method calls executed in the correct thread,
+  // which is renderer main thread in this class.
   base::ThreadChecker thread_checker_;
 
-  scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner_;
+  const scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner_;
+  const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
   base::MessageLoop* main_message_loop_;
 
   base::WeakPtr<WebMediaPlayerMS> player_;
+
+  // TODO(qiangchen, emircan): It might be nice to use a real MediaLog here from
+  // the WebMediaPlayerMS instance, but it owns the MediaLog and this class has
+  // non-deterministic destruction paths (either compositor or IO).
+  media::MediaLog media_log_;
 
   size_t serial_;
 
@@ -154,9 +172,6 @@ class CONTENT_EXPORT WebMediaPlayerMSCompositor
   // |current_frame_lock_| protects |current_frame_used_by_compositor_|,
   // |current_frame_|, and |rendering_frame_buffer_|.
   base::Lock current_frame_lock_;
-
-  // Make sure the weak pointer factory member is the last member of the class.
-  base::WeakPtrFactory<WebMediaPlayerMSCompositor> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(WebMediaPlayerMSCompositor);
 };

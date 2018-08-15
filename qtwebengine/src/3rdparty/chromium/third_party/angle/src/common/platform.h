@@ -27,7 +27,9 @@
       defined(__sun) || \
       defined(__GLIBC__) || \
       defined(__GNU__) || \
-      defined(__QNX__)
+      defined(__QNX__) || \
+      defined(__Fuchsia__) || \
+      defined(__HAIKU__)
 #   define ANGLE_PLATFORM_POSIX 1
 #else
 #   error Unsupported platform.
@@ -64,6 +66,10 @@
 #       include <dxgi1_2.h>
 #       include <d3dcompiler.h>
 #   endif
+
+#if defined(ANGLE_ENABLE_D3D9) || defined(ANGLE_ENABLE_D3D11)
+#include <wrl.h>
+#endif
 
 #   if defined(ANGLE_ENABLE_WINDOWS_STORE)
 #       include <dxgi1_3.h>

@@ -13,7 +13,10 @@ SUBDIRS += \
     qkeyframeanimation \
     qmorphinganimation \
     qmorphtarget \
-    qvertexblendanimation
+    qvertexblendanimation \
+    qclock \
+    qskeletonmapping \
+    qcallbackmapping
 
 qtConfig(private_tests) {
     SUBDIRS += \
@@ -35,5 +38,7 @@ qtConfig(private_tests) {
         clipblendvalue \
         animationutils \
         qabstractanimation \
+        clock \
+        skeleton \
         findrunningclipanimatorsjob
 }

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/callback.h"
+#include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/strings/string16.h"
@@ -32,7 +33,6 @@ class FormStructure;
 
 namespace password_manager {
 
-class BrowserSavePasswordProgressLogger;
 class PasswordManagerClient;
 class PasswordManagerDriver;
 class PasswordFormManager;
@@ -100,14 +100,10 @@ class PasswordManager : public LoginModel {
   void GenerationAvailableForForm(const autofill::PasswordForm& form);
 
   // Presaves the form with generated password.
-  void OnPresaveGeneratedPassword(const autofill::PasswordForm& password_form);
+  void OnPresaveGeneratedPassword(const autofill::PasswordForm& form);
 
-  // Update the state of generation for this form.
-  // If |password_is_generated| == false, removes the presaved form.
-  void SetHasGeneratedPasswordForForm(
-      password_manager::PasswordManagerDriver* driver,
-      const autofill::PasswordForm& form,
-      bool password_is_generated);
+  // Stops treating a password as generated.
+  void OnPasswordNoLongerGenerated(const autofill::PasswordForm& form);
 
   // Update the generation element and whether generation was triggered
   // manually.
@@ -127,7 +123,11 @@ class PasswordManager : public LoginModel {
   // When a form is submitted, we prepare to save the password but wait
   // until we decide the user has successfully logged in. This is step 1
   // of 2 (see SavePassword).
-  void ProvisionallySavePassword(const autofill::PasswordForm& form);
+  // |driver| is optional and if it's given it should be a driver that
+  // corresponds to a frame from which |form| comes from.
+  void ProvisionallySavePassword(
+      const autofill::PasswordForm& form,
+      const password_manager::PasswordManagerDriver* driver);
 
   // Should be called when the user navigates the main frame. Not called for
   // in-page navigation.
@@ -171,27 +171,24 @@ class PasswordManager : public LoginModel {
   // visible forms.
   void DropFormManagers();
 
+  // Returns true if password element is detected on the current page.
+  bool IsPasswordFieldDetectedOnPage();
+
   PasswordManagerClient* client() { return client_; }
 
- private:
-  enum ProvisionalSaveFailure {
-    SAVING_DISABLED,
-    EMPTY_PASSWORD,
-    NO_MATCHING_FORM,
-    MATCHING_NOT_COMPLETE,
-    FORM_BLACKLISTED,
-    INVALID_FORM,
-    SYNC_CREDENTIAL,
-    MAX_FAILURE_VALUE
-  };
+#if defined(UNIT_TEST)
+  // TODO(crbug.com/639786): Replace using this by quering the factory for
+  // mocked PasswordFormManagers.
+  const std::vector<std::unique_ptr<PasswordFormManager>>&
+  pending_login_managers() {
+    return pending_login_managers_;
+  }
+#endif
 
-  // Log failure for UMA. Logs additional metrics if the |form_origin|
-  // corresponds to one of the top, explicitly monitored websites. For some
-  // values of |failure| also sends logs to the internals page through |logger|,
-  // it |logger| is not NULL.
-  void RecordFailure(ProvisionalSaveFailure failure,
-                     const GURL& form_origin,
-                     BrowserSavePasswordProgressLogger* logger);
+ private:
+  FRIEND_TEST_ALL_PREFIXES(
+      PasswordManagerTest,
+      ShouldBlockPasswordForSameOriginButDifferentSchemeTest);
 
   // Returns true if we can show possible usernames to users in cases where
   // the username for the form is ambigious.
@@ -200,6 +197,13 @@ class PasswordManager : public LoginModel {
   // Returns true if |provisional_save_manager_| is ready for saving and
   // non-blacklisted.
   bool CanProvisionalManagerSave();
+
+  // Returns true if there already exists a provisionally saved password form
+  // from the same origin as |form|, but with a different and secure scheme.
+  // This prevents a potential attack where users can be tricked into saving
+  // unwanted credentials, see http://crbug.com/571580 for details.
+  bool ShouldBlockPasswordForSameOriginButDifferentScheme(
+      const autofill::PasswordForm& form) const;
 
   // Returns true if the user needs to be prompted before a password can be
   // saved (instead of automatically saving

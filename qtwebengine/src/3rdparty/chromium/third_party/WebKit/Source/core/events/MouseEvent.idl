@@ -21,7 +21,7 @@
 
 [
     Constructor(DOMString type, optional MouseEventInit eventInitDict),
-    ConstructorCallWith=ScriptState,
+    ConstructorCallWith=ScriptState
 ] interface MouseEvent : UIEvent {
     readonly attribute double           screenX;
     readonly attribute double           screenY;
@@ -62,7 +62,7 @@
     [MeasureAs=MouseEventOffsetY] readonly attribute double offsetY;
 
     // Pointer Lock
-    // https://dvcs.w3.org/hg/pointerlock/raw-file/default/index.html#extensions-to-the-mouseevent-interface
+    // https://w3c.github.io/pointerlock/#extensions-to-the-mouseevent-interface
     [MeasureAs=MouseEventMovementX] readonly attribute long movementX;
     [MeasureAs=MouseEventMovementY] readonly attribute long movementY;
 
@@ -73,7 +73,6 @@
     // Non-standard
     [MeasureAs=MouseEventFromElement] readonly attribute Node fromElement;
     [MeasureAs=MouseEventToElement] readonly attribute Node toElement;
-    [MeasureAs=MouseEventWhich] readonly attribute long which;
     [Measure] readonly attribute long layerX;
     [Measure] readonly attribute long layerY;
 };

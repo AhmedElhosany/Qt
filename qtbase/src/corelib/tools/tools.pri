@@ -38,7 +38,6 @@ HEADERS +=  \
         tools/qmargins.h \
         tools/qmessageauthenticationcode.h \
         tools/qcontiguouscache.h \
-        tools/qpodlist_p.h \
         tools/qpair.h \
         tools/qpoint.h \
         tools/qqueue.h \
@@ -57,11 +56,14 @@ HEADERS +=  \
         tools/qsize.h \
         tools/qstack.h \
         tools/qstring.h \
+        tools/qstringalgorithms.h \
         tools/qstringalgorithms_p.h \
         tools/qstringbuilder.h \
         tools/qstringiterator_p.h \
         tools/qstringlist.h \
+        tools/qstringliteral.h \
         tools/qstringmatcher.h \
+        tools/qstringview.h \
         tools/qtextboundaryfinder.h \
         tools/qtimeline.h \
         tools/qtools_p.h \
@@ -105,6 +107,7 @@ SOURCES += \
         tools/qstring.cpp \
         tools/qstringbuilder.cpp \
         tools/qstringlist.cpp \
+        tools/qstringview.cpp \
         tools/qtextboundaryfinder.cpp \
         tools/qtimeline.cpp \
         tools/qunicodetools.cpp \

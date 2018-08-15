@@ -19,7 +19,6 @@
 #include "mojo/public/cpp/bindings/filter_chain.h"
 #include "mojo/public/cpp/bindings/interface_ptr.h"
 #include "mojo/public/cpp/bindings/interface_request.h"
-#include "mojo/public/cpp/bindings/lib/router.h"
 #include "mojo/public/cpp/bindings/message_header_validator.h"
 #include "mojo/public/cpp/system/core.h"
 
@@ -32,7 +31,9 @@ template <typename Interface>
 using StrongBindingPtr = base::WeakPtr<StrongBinding<Interface>>;
 
 // This connects an interface implementation strongly to a pipe. When a
-// connection error is detected the implementation is deleted.
+// connection error is detected the implementation is deleted. If the task
+// runner that a StrongBinding is bound on is stopped, the connection error
+// handler will not be invoked and the implementation will not be deleted.
 //
 // To use, call StrongBinding<T>::Create() (see below) or the helper
 // MakeStrongBinding function:
@@ -58,16 +59,16 @@ class StrongBinding {
   //
   // This method may only be called after this StrongBinding has been bound to a
   // message pipe.
-  void set_connection_error_handler(const base::Closure& error_handler) {
+  void set_connection_error_handler(base::OnceClosure error_handler) {
     DCHECK(binding_.is_bound());
-    connection_error_handler_ = error_handler;
+    connection_error_handler_ = std::move(error_handler);
     connection_error_with_reason_handler_.Reset();
   }
 
   void set_connection_error_with_reason_handler(
-      const ConnectionErrorWithReasonCallback& error_handler) {
+      ConnectionErrorWithReasonCallback error_handler) {
     DCHECK(binding_.is_bound());
-    connection_error_with_reason_handler_ = error_handler;
+    connection_error_with_reason_handler_ = std::move(error_handler);
     connection_error_handler_.Reset();
   }
 
@@ -75,9 +76,6 @@ class StrongBinding {
   void Close() { delete this; }
 
   Interface* impl() { return impl_.get(); }
-
-  // Exposed for testing, should not generally be used.
-  internal::Router* internal_router() { return binding_.internal_router(); }
 
   // Sends a message on the underlying message pipe and runs the current
   // message loop until its response is received. This can be used in tests to
@@ -99,15 +97,17 @@ class StrongBinding {
 
   void OnConnectionError(uint32_t custom_reason,
                          const std::string& description) {
-    if (!connection_error_handler_.is_null())
-      connection_error_handler_.Run();
-    else if (!connection_error_with_reason_handler_.is_null())
-      connection_error_with_reason_handler_.Run(custom_reason, description);
+    if (connection_error_handler_) {
+      std::move(connection_error_handler_).Run();
+    } else if (connection_error_with_reason_handler_) {
+      std::move(connection_error_with_reason_handler_)
+          .Run(custom_reason, description);
+    }
     Close();
   }
 
   std::unique_ptr<Interface> impl_;
-  base::Closure connection_error_handler_;
+  base::OnceClosure connection_error_handler_;
   ConnectionErrorWithReasonCallback connection_error_with_reason_handler_;
   Binding<Interface> binding_;
   base::WeakPtrFactory<StrongBinding> weak_factory_;

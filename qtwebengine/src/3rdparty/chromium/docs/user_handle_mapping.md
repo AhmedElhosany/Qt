@@ -25,6 +25,7 @@ For Chromium contributors that have different nicks on other domains.
 | darin, fishd      | fishd           | darin           |
 | dbeam             | danbeam         | dbeam           |
 | dmurph            | dmurph          | dmurph          |
+| dougt             | dougt           | dft             |
 | eaugusti          | eriq            | eaugustine      |
 | erg               | eglaysher       | erg             |
 | eroman            | eroman          | ericroman       |
@@ -47,6 +48,7 @@ For Chromium contributors that have different nicks on other domains.
 | jeremy            | jeremymos       | playmobil       |
 | jln               | julien\`        | jln             |
 | jochen            | jochen\_\_      | eisinger        |
+| johnchen          |                 | zhanliang       |
 | johnnyg           | johnny\_g       | johnnyg         |
 | joi               | joisig          | joi             |
 | jonross           | jonrossca       | jonross         |
@@ -108,3 +110,4 @@ For Chromium contributors that have different nicks on other domains.
 | wjmaclean         | seumas, wjmaclean | wjmaclean, wjm, seumas |
 | yoz               | yaws            | yoz             |
 | zmo               | zhenyao         | zmo             |
+| robertma          | Hexcles         | robertma        |

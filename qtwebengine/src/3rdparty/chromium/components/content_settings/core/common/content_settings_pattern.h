@@ -7,14 +7,20 @@
 #ifndef COMPONENTS_CONTENT_SETTINGS_CORE_COMMON_CONTENT_SETTINGS_PATTERN_H_
 #define COMPONENTS_CONTENT_SETTINGS_CORE_COMMON_CONTENT_SETTINGS_PATTERN_H_
 
+#include <memory>
 #include <string>
 
 #include "base/gtest_prod_util.h"
+#include "mojo/public/cpp/bindings/struct_traits.h"
 
 class GURL;
 
 namespace content_settings {
 class PatternParser;
+
+namespace mojom {
+class ContentSettingsPatternDataView;
+}
 }
 
 // A pattern used in content setting rules. See |IsValid| for a description of
@@ -131,7 +137,7 @@ class ContentSettingsPattern {
     virtual ContentSettingsPattern Build() = 0;
   };
 
-  static BuilderInterface* CreateBuilder(bool use_legacy_validate);
+  static std::unique_ptr<BuilderInterface> CreateBuilder();
 
   // The version of the pattern format implemented.
   static const int kContentSettingsPatternVersion;
@@ -216,7 +222,9 @@ class ContentSettingsPattern {
 
  private:
   friend class content_settings::PatternParser;
-  friend class ContentSettingsPatternSerializer;
+  friend struct mojo::StructTraits<
+      content_settings::mojom::ContentSettingsPatternDataView,
+      ContentSettingsPattern>;
   FRIEND_TEST_ALL_PREFIXES(ContentSettingsPatternParserTest, SerializePatterns);
 
   class Builder;

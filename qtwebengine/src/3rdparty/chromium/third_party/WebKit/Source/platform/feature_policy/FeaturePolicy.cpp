@@ -4,257 +4,138 @@
 
 #include "platform/feature_policy/FeaturePolicy.h"
 
+#include "platform/RuntimeEnabledFeatures.h"
 #include "platform/json/JSONValues.h"
 #include "platform/network/HTTPParsers.h"
-#include "platform/weborigin/KURL.h"
 #include "platform/weborigin/SecurityOrigin.h"
-#include "wtf/PtrUtil.h"
-#include "wtf/text/StringBuilder.h"
+#include "platform/wtf/PtrUtil.h"
 
 namespace blink {
 
-namespace {
-
-// Given a string name, return the matching feature struct, or nullptr if it is
-// not the name of a policy-controlled feature.
-const FeaturePolicy::Feature* featureForName(
-    const String& featureName,
-    FeaturePolicy::FeatureList& features) {
-  for (const FeaturePolicy::Feature* feature : features) {
-    if (featureName == feature->featureName)
-      return feature;
-  }
-  return nullptr;
+WebParsedFeaturePolicy ParseFeaturePolicy(const String& policy,
+                                          RefPtr<SecurityOrigin> origin,
+                                          Vector<String>* messages) {
+  return ParseFeaturePolicy(policy, origin, messages,
+                            GetDefaultFeatureNameMap());
 }
 
-// Converts a list of JSON feature policy items into a mapping of features to
-// whitelists. For future compatibility, unrecognized features are simply
-// ignored, as are unparseable origins. Any errors in the input will cause an
-// error message appended to |messages|.
-HashMap<const FeaturePolicy::Feature*,
-        std::unique_ptr<FeaturePolicy::Whitelist>>
-parseFeaturePolicyFromJson(std::unique_ptr<JSONArray> policyItems,
-                           RefPtr<SecurityOrigin> origin,
-                           FeaturePolicy::FeatureList& features,
-                           Vector<String>& messages) {
-  HashMap<const FeaturePolicy::Feature*,
-          std::unique_ptr<FeaturePolicy::Whitelist>>
-      whitelists;
+WebParsedFeaturePolicy ParseFeaturePolicy(const String& policy,
+                                          RefPtr<SecurityOrigin> origin,
+                                          Vector<String>* messages,
+                                          const FeatureNameMap& feature_names) {
+  Vector<WebParsedFeaturePolicyDeclaration> whitelists;
 
-  for (size_t i = 0; i < policyItems->size(); ++i) {
-    JSONObject* item = JSONObject::cast(policyItems->at(i));
+  // Use a reasonable parse depth limit; the actual maximum depth is only going
+  // to be 4 for a valid policy, but we'll give the featurePolicyParser a chance
+  // to report more specific errors, unless the string is really invalid.
+  std::unique_ptr<JSONArray> policy_items = ParseJSONHeader(policy, 50);
+  if (!policy_items) {
+    if (messages)
+      messages->push_back("Unable to parse header.");
+    return whitelists;
+  }
+
+  for (size_t i = 0; i < policy_items->size(); ++i) {
+    JSONObject* item = JSONObject::Cast(policy_items->at(i));
     if (!item) {
-      messages.append("Policy is not an object");
+      if (messages)
+        messages->push_back("Policy is not an object.");
       continue;  // Array element is not an object; skip
     }
 
     for (size_t j = 0; j < item->size(); ++j) {
       JSONObject::Entry entry = item->at(j);
-      String featureName = entry.first;
-      JSONArray* targets = JSONArray::cast(entry.second);
+      if (!feature_names.Contains(entry.first))
+        continue;  // Unrecognized feature; skip
+      WebFeaturePolicyFeature feature = feature_names.at(entry.first);
+      JSONArray* targets = JSONArray::Cast(entry.second);
       if (!targets) {
-        messages.append("Whitelist is not an array of strings.");
+        if (messages)
+          messages->push_back("Whitelist is not an array of strings.");
         continue;
       }
 
-      const FeaturePolicy::Feature* feature =
-          featureForName(featureName, features);
-      if (!feature)
-        continue;  // Feature is not recognized; skip
-
-      std::unique_ptr<FeaturePolicy::Whitelist> whitelist(
-          new FeaturePolicy::Whitelist);
-      String targetString;
+      WebParsedFeaturePolicyDeclaration whitelist;
+      whitelist.feature = feature;
+      Vector<WebSecurityOrigin> origins;
+      String target_string;
       for (size_t j = 0; j < targets->size(); ++j) {
-        if (targets->at(j)->asString(&targetString)) {
-          if (equalIgnoringCase(targetString, "self")) {
-            whitelist->add(origin);
-          } else if (targetString == "*") {
-            whitelist->addAll();
+        if (targets->at(j)->AsString(&target_string)) {
+          if (EqualIgnoringASCIICase(target_string, "self")) {
+            if (!origin->IsUnique())
+              origins.push_back(origin);
+          } else if (target_string == "*") {
+            whitelist.matches_all_origins = true;
           } else {
-            KURL originUrl = KURL(KURL(), targetString);
-            if (originUrl.isValid()) {
-              whitelist->add(SecurityOrigin::create(originUrl));
-            }
+            WebSecurityOrigin target_origin =
+                WebSecurityOrigin::CreateFromString(target_string);
+            if (!target_origin.IsNull() && !target_origin.IsUnique())
+              origins.push_back(target_origin);
           }
         } else {
-          messages.append("Whitelist is not an array of strings.");
+          if (messages)
+            messages->push_back("Whitelist is not an array of strings.");
         }
       }
-      whitelists.set(feature, std::move(whitelist));
+      whitelist.origins = origins;
+      whitelists.push_back(whitelist);
     }
   }
   return whitelists;
 }
 
-}  // namespace
-
-// Definitions of all features controlled by Feature Policy should appear here.
-const FeaturePolicy::Feature kDocumentCookie{
-    "cookie", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kDocumentDomain{
-    "domain", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kDocumentWrite{
-    "docwrite", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kGeolocationFeature{
-    "geolocation", FeaturePolicy::FeatureDefault::EnableForSelf};
-const FeaturePolicy::Feature kMidiFeature{
-    "midi", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kNotificationsFeature{
-    "notifications", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kPaymentFeature{
-    "payment", FeaturePolicy::FeatureDefault::EnableForSelf};
-const FeaturePolicy::Feature kPushFeature{
-    "push", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kSyncScript{
-    "sync-script", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kSyncXHR{
-    "sync-xhr", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kUsermedia{
-    "usermedia", FeaturePolicy::FeatureDefault::EnableForAll};
-const FeaturePolicy::Feature kVibrateFeature{
-    "vibrate", FeaturePolicy::FeatureDefault::EnableForSelf};
-const FeaturePolicy::Feature kWebRTC{
-    "webrtc", FeaturePolicy::FeatureDefault::EnableForAll};
-
-FeaturePolicy::Whitelist::Whitelist() : m_matchesAllOrigins(false) {}
-
-void FeaturePolicy::Whitelist::addAll() {
-  m_matchesAllOrigins = true;
-}
-
-void FeaturePolicy::Whitelist::add(RefPtr<SecurityOrigin> origin) {
-  m_origins.append(std::move(origin));
-}
-
-bool FeaturePolicy::Whitelist::contains(const SecurityOrigin& origin) const {
-  if (m_matchesAllOrigins)
-    return true;
-  for (const auto& targetOrigin : m_origins) {
-    if (targetOrigin->isSameSchemeHostPortAndSuborigin(&origin))
-      return true;
-  }
-  return false;
-}
-
-String FeaturePolicy::Whitelist::toString() {
-  StringBuilder sb;
-  sb.append("[");
-  if (m_matchesAllOrigins) {
-    sb.append("*");
-  } else {
-    for (size_t i = 0; i < m_origins.size(); ++i) {
-      if (i > 0) {
-        sb.append(", ");
-      }
-      sb.append(m_origins[i]->toString());
-    }
-  }
-  sb.append("]");
-  return sb.toString();
-}
-
-// static
-const FeaturePolicy::FeatureList& FeaturePolicy::getDefaultFeatureList() {
-  DEFINE_STATIC_LOCAL(
-      Vector<const FeaturePolicy::Feature*>, defaultFeatureList,
-      ({&kDocumentCookie, &kDocumentDomain, &kDocumentWrite,
-        &kGeolocationFeature, &kMidiFeature, &kNotificationsFeature,
-        &kPaymentFeature, &kPushFeature, &kSyncScript, &kSyncXHR, &kUsermedia,
-        &kVibrateFeature, &kWebRTC}));
-  return defaultFeatureList;
-}
-
-// static
-std::unique_ptr<FeaturePolicy> FeaturePolicy::createFromParentPolicy(
-    const FeaturePolicy* parent,
-    RefPtr<SecurityOrigin> currentOrigin,
-    FeaturePolicy::FeatureList& features) {
-  DCHECK(currentOrigin);
-  std::unique_ptr<FeaturePolicy> newPolicy =
-      wrapUnique(new FeaturePolicy(currentOrigin, features));
-  for (const FeaturePolicy::Feature* feature : features) {
-    if (!parent ||
-        parent->isFeatureEnabledForOrigin(*feature, *currentOrigin)) {
-      newPolicy->m_inheritedFeatures.set(feature, true);
-    } else {
-      newPolicy->m_inheritedFeatures.set(feature, false);
-    }
-  }
-  return newPolicy;
-}
-
-// static
-std::unique_ptr<FeaturePolicy> FeaturePolicy::createFromParentPolicy(
-    const FeaturePolicy* parent,
-    RefPtr<SecurityOrigin> currentOrigin) {
-  return createFromParentPolicy(parent, std::move(currentOrigin),
-                                getDefaultFeatureList());
-}
-
-void FeaturePolicy::setHeaderPolicy(const String& policy,
-                                    Vector<String>& messages) {
-  DCHECK(m_headerWhitelists.isEmpty());
-  std::unique_ptr<JSONArray> policyJSON = parseJSONHeader(policy);
-  if (!policyJSON) {
-    messages.append("Unable to parse header");
-    return;
-  }
-  m_headerWhitelists = parseFeaturePolicyFromJson(
-      std::move(policyJSON), m_origin, m_features, messages);
-}
-
-bool FeaturePolicy::isFeatureEnabledForOrigin(
-    const FeaturePolicy::Feature& feature,
-    const SecurityOrigin& origin) const {
-  DCHECK(m_inheritedFeatures.contains(&feature));
-  if (!m_inheritedFeatures.get(&feature)) {
+bool IsSupportedInFeaturePolicy(WebFeaturePolicyFeature feature) {
+  if (!RuntimeEnabledFeatures::FeaturePolicyEnabled())
     return false;
+
+  switch (feature) {
+    // TODO(loonybear): Re-enabled fullscreen in feature policy once tests have
+    // been updated.
+    // crbug.com/666761
+    case WebFeaturePolicyFeature::kFullscreen:
+      return false;
+    case WebFeaturePolicyFeature::kPayment:
+    case WebFeaturePolicyFeature::kUsb:
+      return true;
+    case WebFeaturePolicyFeature::kVibrate:
+      return RuntimeEnabledFeatures::FeaturePolicyExperimentalFeaturesEnabled();
+    default:
+      return false;
   }
-  if (m_headerWhitelists.contains(&feature)) {
-    return m_headerWhitelists.get(&feature)->contains(origin);
-  }
-  if (feature.defaultPolicy == FeaturePolicy::FeatureDefault::EnableForAll) {
-    return true;
-  }
-  if (feature.defaultPolicy == FeaturePolicy::FeatureDefault::EnableForSelf) {
-    return m_origin->isSameSchemeHostPortAndSuborigin(&origin);
-  }
-  return false;
 }
 
-bool FeaturePolicy::isFeatureEnabled(
-    const FeaturePolicy::Feature& feature) const {
-  DCHECK(m_origin);
-  return isFeatureEnabledForOrigin(feature, *m_origin);
-}
-
-FeaturePolicy::FeaturePolicy(RefPtr<SecurityOrigin> currentOrigin,
-                             FeaturePolicy::FeatureList& features)
-    : m_origin(std::move(currentOrigin)), m_features(features) {}
-
-String FeaturePolicy::toString() {
-  StringBuilder sb;
-  sb.append("Feature Policy for frame in origin: ");
-  sb.append(m_origin->toString());
-  sb.append("\n");
-  sb.append("Inherited features:\n");
-  for (const auto& inheritedFeature : m_inheritedFeatures) {
-    sb.append("  ");
-    sb.append(inheritedFeature.key->featureName);
-    sb.append(": ");
-    sb.append(inheritedFeature.value ? "true" : "false");
-    sb.append("\n");
+const FeatureNameMap& GetDefaultFeatureNameMap() {
+  DEFINE_STATIC_LOCAL(FeatureNameMap, default_feature_name_map, ());
+  if (default_feature_name_map.IsEmpty()) {
+    default_feature_name_map.Set("fullscreen",
+                                 WebFeaturePolicyFeature::kFullscreen);
+    default_feature_name_map.Set("payment", WebFeaturePolicyFeature::kPayment);
+    default_feature_name_map.Set("usb", WebFeaturePolicyFeature::kUsb);
+    default_feature_name_map.Set("camera", WebFeaturePolicyFeature::kCamera);
+    default_feature_name_map.Set("encrypted-media",
+                                 WebFeaturePolicyFeature::kEme);
+    default_feature_name_map.Set("microphone",
+                                 WebFeaturePolicyFeature::kMicrophone);
+    default_feature_name_map.Set("speaker", WebFeaturePolicyFeature::kSpeaker);
+    default_feature_name_map.Set("geolocation",
+                                 WebFeaturePolicyFeature::kGeolocation);
+    default_feature_name_map.Set("midi", WebFeaturePolicyFeature::kMidiFeature);
+    if (RuntimeEnabledFeatures::FeaturePolicyExperimentalFeaturesEnabled()) {
+      default_feature_name_map.Set("vibrate",
+                                   WebFeaturePolicyFeature::kVibrate);
+      default_feature_name_map.Set("cookie",
+                                   WebFeaturePolicyFeature::kDocumentCookie);
+      default_feature_name_map.Set("domain",
+                                   WebFeaturePolicyFeature::kDocumentDomain);
+      default_feature_name_map.Set("docwrite",
+                                   WebFeaturePolicyFeature::kDocumentWrite);
+      default_feature_name_map.Set("sync-script",
+                                   WebFeaturePolicyFeature::kSyncScript);
+      default_feature_name_map.Set("sync-xhr",
+                                   WebFeaturePolicyFeature::kSyncXHR);
+    }
   }
-  sb.append("Header whitelists:\n");
-  for (const auto& whitelist : m_headerWhitelists) {
-    sb.append("  ");
-    sb.append(whitelist.key->featureName);
-    sb.append(": ");
-    sb.append(whitelist.value->toString());
-    sb.append("\n");
-  }
-  return sb.toString();
+  return default_feature_name_map;
 }
 
 }  // namespace blink

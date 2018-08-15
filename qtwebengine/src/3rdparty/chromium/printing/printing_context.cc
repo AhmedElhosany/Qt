@@ -65,6 +65,8 @@ PrintingContext::Result PrintingContext::UsePdfSettings() {
   pdf_settings->SetBoolean(kSettingCollate, true);
   pdf_settings->SetInteger(kSettingCopies, 1);
   pdf_settings->SetInteger(kSettingColor, printing::COLOR);
+  pdf_settings->SetInteger(kSettingDpiHorizontal, kPointsPerInch);
+  pdf_settings->SetInteger(kSettingDpiVertical, kPointsPerInch);
   pdf_settings->SetInteger(kSettingDuplexMode, printing::SIMPLEX);
   pdf_settings->SetBoolean(kSettingLandscape, false);
   pdf_settings->SetString(kSettingDeviceName, "");
@@ -73,6 +75,7 @@ PrintingContext::Result PrintingContext::UsePdfSettings() {
   pdf_settings->SetBoolean(kSettingPrintWithPrivet, false);
   pdf_settings->SetBoolean(kSettingPrintWithExtension, false);
   pdf_settings->SetInteger(kSettingScaleFactor, 100);
+  pdf_settings->SetBoolean(kSettingRasterizePdf, false);
   return UpdatePrintSettings(*pdf_settings);
 }
 

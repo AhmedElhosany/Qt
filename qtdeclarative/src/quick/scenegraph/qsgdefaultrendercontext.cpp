@@ -45,7 +45,6 @@
 #include <QtQuick/private/qsgrenderer_p.h>
 #include <QtQuick/private/qsgatlastexture_p.h>
 #include <QtQuick/private/qsgdefaultdistancefieldglyphcache_p.h>
-#include <QtQuick/private/qsgdistancefieldutil_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -159,8 +158,8 @@ void QSGDefaultRenderContext::invalidate()
     delete m_depthStencilManager;
     m_depthStencilManager = 0;
 
-    delete m_distanceFieldCacheManager;
-    m_distanceFieldCacheManager = 0;
+    qDeleteAll(m_glyphCaches);
+    m_glyphCaches.clear();
 
     if (m_gl->property(QSG_RENDERCONTEXT_PROPERTY) == QVariant::fromValue(this))
         m_gl->setProperty(QSG_RENDERCONTEXT_PROPERTY, QVariant());
@@ -260,7 +259,7 @@ void QSGDefaultRenderContext::compileShader(QSGMaterialShader *shader, QSGMateri
     if (vertexCode || fragmentCode) {
         Q_ASSERT_X((material->flags() & QSGMaterial::CustomCompileStep) == 0,
                    "QSGRenderContext::compile()",
-                   "materials with custom compile step cannot have custom vertex/fragment code");
+                   "materials with custom compile step cannot have modified vertex or fragment code");
         QOpenGLShaderProgram *p = shader->program();
         p->addCacheableShaderFromSourceCode(QOpenGLShader::Vertex, vertexCode ? vertexCode : shader->vertexShader());
         p->addCacheableShaderFromSourceCode(QOpenGLShader::Fragment, fragmentCode ? fragmentCode : shader->fragmentShader());
@@ -269,6 +268,26 @@ void QSGDefaultRenderContext::compileShader(QSGMaterialShader *shader, QSGMateri
             qWarning() << "shader compilation failed:" << endl << p->log();
     } else {
         shader->compile();
+    }
+}
+
+QString QSGDefaultRenderContext::fontKey(const QRawFont &font)
+{
+    QFontEngine *fe = QRawFontPrivate::get(font)->fontEngine;
+    if (!fe->faceId().filename.isEmpty()) {
+        QByteArray keyName = fe->faceId().filename;
+        if (font.style() != QFont::StyleNormal)
+            keyName += QByteArray(" I");
+        if (font.weight() != QFont::Normal)
+            keyName += ' ' + QByteArray::number(font.weight());
+        keyName += QByteArray(" DF");
+        return QString::fromUtf8(keyName);
+    } else {
+        return QString::fromLatin1("%1_%2_%3_%4")
+            .arg(font.familyName())
+            .arg(font.styleName())
+            .arg(font.weight())
+            .arg(font.style());
     }
 }
 
@@ -291,13 +310,11 @@ QSGDefaultRenderContext *QSGDefaultRenderContext::from(QOpenGLContext *context)
 
 QSGDistanceFieldGlyphCache *QSGDefaultRenderContext::distanceFieldGlyphCache(const QRawFont &font)
 {
-    if (!m_distanceFieldCacheManager)
-        m_distanceFieldCacheManager = new QSGDistanceFieldGlyphCacheManager;
-
-    QSGDistanceFieldGlyphCache *cache = m_distanceFieldCacheManager->cache(font);
+    QString key = fontKey(font);
+    QSGDistanceFieldGlyphCache *cache = m_glyphCaches.value(key, 0);
     if (!cache) {
-        cache = new QSGDefaultDistanceFieldGlyphCache(m_distanceFieldCacheManager, openglContext(), font);
-        m_distanceFieldCacheManager->insertCache(font, cache);
+        cache = new QSGDefaultDistanceFieldGlyphCache(openglContext(), font);
+        m_glyphCaches.insert(key, cache);
     }
 
     return cache;

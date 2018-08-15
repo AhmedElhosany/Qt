@@ -27,30 +27,47 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/**
- * @unrestricted
- */
 Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
   constructor() {
     super();
     this.setMinimumSize(96, 26);
+    this.registerRequiredCSS('elements/stylesSidebarPane.css');
 
     Common.moduleSetting('colorFormat').addChangeListener(this.update.bind(this));
     Common.moduleSetting('textEditorIndent').addChangeListener(this.update.bind(this));
 
-    this._sectionsContainer = this.element.createChild('div');
-    this._swatchPopoverHelper = new UI.SwatchPopoverHelper();
+    /** @type {?UI.Widget} */
+    this._currentToolbarPane = null;
+    /** @type {?UI.Widget} */
+    this._animatedToolbarPane = null;
+    /** @type {?UI.Widget} */
+    this._pendingWidget = null;
+    /** @type {?UI.ToolbarToggle} */
+    this._pendingWidgetToggle = null;
+    this._toolbarPaneElement = this._createStylesSidebarToolbar();
+    this._sectionsContainer = this.contentElement.createChild('div');
+    this._swatchPopoverHelper = new InlineEditor.SwatchPopoverHelper();
     this._linkifier = new Components.Linkifier(Elements.StylesSidebarPane._maxLinkLength, /* useLinkDecorator */ true);
+    /** @type {?Elements.StylePropertyHighlighter} */
+    this._decorator = null;
+    this._userOperation = false;
+    this._isEditingStyle = false;
+    /** @type {?RegExp} */
+    this._filterRegex = null;
 
-    this.element.classList.add('styles-pane');
+    /** @type {?Elements.StylePropertyTreeElement} */
+    this._mouseDownTreeElement = null;
+    this._mouseDownTreeElementIsName = false;
+    this._mouseDownTreeElementIsValue = false;
+
+    this.contentElement.classList.add('styles-pane');
 
     /** @type {!Array<!Elements.SectionBlock>} */
     this._sectionBlocks = [];
     Elements.StylesSidebarPane._instance = this;
-
-    SDK.targetManager.addModelListener(
-        SDK.CSSModel, SDK.CSSModel.Events.LayoutEditorChange, this._onLayoutEditorChange, this);
     UI.context.addFlavorChangeListener(SDK.DOMNode, this.forceUpdate, this);
+    this.contentElement.addEventListener('copy', this._clipboardCopy.bind(this));
+    this._resizeThrottler = new Common.Throttler(100);
   }
 
   /**
@@ -111,16 +128,17 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
    * @param {string} placeholder
    * @param {!Element} container
    * @param {function(?RegExp)} filterCallback
+   * @param {string} activeClassName
    * @return {!Element}
    */
-  static createPropertyFilterElement(placeholder, container, filterCallback) {
-    var input = createElement('input');
+  static createPropertyFilterElement(placeholder, container, filterCallback, activeClassName) {
+    var input = createElementWithClass('input');
     input.placeholder = placeholder;
 
     function searchHandler() {
       var regex = input.value ? new RegExp(input.value.escapeForRegExp(), 'i') : null;
       filterCallback(regex);
-      container.classList.toggle('styles-filter-engaged', !!input.value);
+      container.classList.toggle(activeClassName, !!input.value);
     }
     input.addEventListener('input', searchHandler, false);
 
@@ -151,22 +169,10 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
   }
 
   /**
-   * @param {!Common.Event} event
-   */
-  _onLayoutEditorChange(event) {
-    var cssModel = /** @type {!SDK.CSSModel} */ (event.target);
-    var styleSheetId = event.data['id'];
-    var sourceRange = /** @type {!Protocol.CSS.SourceRange} */ (event.data['range']);
-    var range = Common.TextRange.fromObject(sourceRange);
-    this._decorator = new Elements.PropertyChangeHighlighter(this, cssModel, styleSheetId, range);
-    this.update();
-  }
-
-  /**
    * @param {!SDK.CSSProperty} cssProperty
    */
   revealProperty(cssProperty) {
-    this._decorator = new Elements.PropertyRevealHighlighter(this, cssProperty);
+    this._decorator = new Elements.StylePropertyHighlighter(this, cssProperty);
     this._decorator.perform();
     this.update();
   }
@@ -227,7 +233,7 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
   /**
    * @param {?RegExp} regex
    */
-  onFilterChanged(regex) {
+  _onFilterChanged(regex) {
     this._filterRegex = regex;
     this._updateFilter();
   }
@@ -258,6 +264,22 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
    */
   doUpdate() {
     return this._fetchMatchedCascade().then(this._innerRebuildUpdate.bind(this));
+  }
+
+  /**
+   * @override
+   */
+  onResize() {
+    this._resizeThrottler.schedule(this._innerResize.bind(this));
+  }
+
+  /**
+   * @return {!Promise}
+   */
+  _innerResize() {
+    var width = this.contentElement.getBoundingClientRect().width + 'px';
+    this.allSections().forEach(section => section.propertiesTreeOutline.element.style.width = width);
+    return Promise.resolve();
   }
 
   _resetCache() {
@@ -291,7 +313,7 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
   setEditingStyle(editing) {
     if (this._isEditingStyle === editing)
       return;
-    this.element.classList.toggle('is-editing-style', editing);
+    this.contentElement.classList.toggle('is-editing-style', editing);
     this._isEditingStyle = editing;
   }
 
@@ -364,7 +386,7 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
     this._nodeStylesUpdatedForTest(node, true);
     if (this._decorator) {
       this._decorator.perform();
-      delete this._decorator;
+      this._decorator = null;
     }
   }
 
@@ -397,22 +419,17 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
     return blocks;
   }
 
-  _createNewRuleInViaInspectorStyleSheet() {
+  async _createNewRuleInViaInspectorStyleSheet() {
     var cssModel = this.cssModel();
     var node = this.node();
     if (!cssModel || !node)
       return;
     this._userOperation = true;
-    cssModel.requestViaInspectorStylesheet(node, onViaInspectorStyleSheet.bind(this));
 
-    /**
-     * @param {?SDK.CSSStyleSheetHeader} styleSheetHeader
-     * @this {Elements.StylesSidebarPane}
-     */
-    function onViaInspectorStyleSheet(styleSheetHeader) {
-      delete this._userOperation;
-      this._createNewRuleInStyleSheet(styleSheetHeader);
-    }
+    var styleSheetHeader = await cssModel.requestViaInspectorStylesheet(/** @type {!SDK.DOMNode} */ (node));
+
+    this._userOperation = false;
+    this._createNewRuleInStyleSheet(styleSheetHeader);
   }
 
   /**
@@ -431,7 +448,7 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
     function onStyleSheetContent(styleSheetId, text) {
       text = text || '';
       var lines = text.split('\n');
-      var range = Common.TextRange.createFromLocation(lines.length - 1, lines[lines.length - 1].length);
+      var range = TextUtils.TextRange.createFromLocation(lines.length - 1, lines[lines.length - 1].length);
       this._addBlankSection(this._sectionBlocks[0].sections[0], styleSheetId, range);
     }
   }
@@ -439,7 +456,7 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
   /**
    * @param {!Elements.StylePropertiesSection} insertAfterSection
    * @param {string} styleSheetId
-   * @param {!Common.TextRange} ruleLocation
+   * @param {!TextUtils.TextRange} ruleLocation
    */
   _addBlankSection(insertAfterSection, styleSheetId, ruleLocation) {
     var node = this.node();
@@ -500,13 +517,105 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
       sections = sections.concat(block.sections);
     return sections;
   }
+
+  /**
+   * @param {!Event} event
+   */
+  _clipboardCopy(event) {
+    Host.userMetrics.actionTaken(Host.UserMetrics.Action.StyleRuleCopied);
+  }
+
+  /**
+   * @return {!Element}
+   */
+  _createStylesSidebarToolbar() {
+    var container = this.contentElement.createChild('div', 'styles-sidebar-pane-toolbar-container');
+    var hbox = container.createChild('div', 'hbox styles-sidebar-pane-toolbar');
+    var filterContainerElement = hbox.createChild('div', 'styles-sidebar-pane-filter-box');
+    var filterInput = Elements.StylesSidebarPane.createPropertyFilterElement(
+        Common.UIString('Filter'), hbox, this._onFilterChanged.bind(this), 'styles-filter-engaged');
+    UI.ARIAUtils.setAccessibleName(filterInput, Common.UIString('Filter Styles'));
+    filterContainerElement.appendChild(filterInput);
+    var toolbar = new UI.Toolbar('styles-pane-toolbar', hbox);
+    toolbar.makeToggledGray();
+    toolbar.appendLocationItems('styles-sidebarpane-toolbar');
+    var toolbarPaneContainer = container.createChild('div', 'styles-sidebar-toolbar-pane-container');
+    var toolbarPaneContent = toolbarPaneContainer.createChild('div', 'styles-sidebar-toolbar-pane');
+
+    return toolbarPaneContent;
+  }
+
+  /**
+   * @param {?UI.Widget} widget
+   * @param {?UI.ToolbarToggle} toggle
+   */
+  showToolbarPane(widget, toggle) {
+    if (this._pendingWidgetToggle)
+      this._pendingWidgetToggle.setToggled(false);
+    this._pendingWidgetToggle = toggle;
+
+    if (this._animatedToolbarPane)
+      this._pendingWidget = widget;
+    else
+      this._startToolbarPaneAnimation(widget);
+
+    if (widget && toggle)
+      toggle.setToggled(true);
+  }
+
+  /**
+   * @param {?UI.Widget} widget
+   */
+  _startToolbarPaneAnimation(widget) {
+    if (widget === this._currentToolbarPane)
+      return;
+
+    if (widget && this._currentToolbarPane) {
+      this._currentToolbarPane.detach();
+      widget.show(this._toolbarPaneElement);
+      this._currentToolbarPane = widget;
+      this._currentToolbarPane.focus();
+      return;
+    }
+
+    this._animatedToolbarPane = widget;
+
+    if (this._currentToolbarPane)
+      this._toolbarPaneElement.style.animationName = 'styles-element-state-pane-slideout';
+    else if (widget)
+      this._toolbarPaneElement.style.animationName = 'styles-element-state-pane-slidein';
+
+    if (widget)
+      widget.show(this._toolbarPaneElement);
+
+    var listener = onAnimationEnd.bind(this);
+    this._toolbarPaneElement.addEventListener('animationend', listener, false);
+
+    /**
+     * @this {!Elements.StylesSidebarPane}
+     */
+    function onAnimationEnd() {
+      this._toolbarPaneElement.style.removeProperty('animation-name');
+      this._toolbarPaneElement.removeEventListener('animationend', listener, false);
+
+      if (this._currentToolbarPane)
+        this._currentToolbarPane.detach();
+
+      this._currentToolbarPane = this._animatedToolbarPane;
+      if (this._currentToolbarPane)
+        this._currentToolbarPane.focus();
+      this._animatedToolbarPane = null;
+
+      if (this._pendingWidget) {
+        this._startToolbarPaneAnimation(this._pendingWidget);
+        this._pendingWidget = null;
+      }
+    }
+  }
 };
 
 Elements.StylesSidebarPane._maxLinkLength = 30;
 
-/**
- * @unrestricted
- */
 Elements.SectionBlock = class {
   /**
    * @param {?Element} titleElement
@@ -567,10 +676,6 @@ Elements.SectionBlock = class {
   }
 };
 
-
-/**
- * @unrestricted
- */
 Elements.StylePropertiesSection = class {
   /**
    * @param {!Elements.StylesSidebarPane} parentPane
@@ -582,18 +687,24 @@ Elements.StylePropertiesSection = class {
     this._style = style;
     this._matchedStyles = matchedStyles;
     this.editable = !!(style.styleSheetId && style.range);
+    /** @type {?number} */
+    this._hoverTimer = null;
+    /** @type {?function(!Elements.StylePropertiesSection)} */
+    this._afterUpdate = null;
+    this._willCauseCancelEditing = false;
 
     var rule = style.parentRule;
     this.element = createElementWithClass('div', 'styles-section matched-styles monospace');
     this.element._section = this;
+    this._innerElement = this.element.createChild('div');
 
-    this._titleElement = this.element.createChild('div', 'styles-section-title ' + (rule ? 'styles-selector' : ''));
+    this._titleElement = this._innerElement.createChild('div', 'styles-section-title ' + (rule ? 'styles-selector' : ''));
 
-    this.propertiesTreeOutline = new TreeOutlineInShadow();
+    this.propertiesTreeOutline = new UI.TreeOutlineInShadow();
     this.propertiesTreeOutline.registerRequiredCSS('elements/stylesSectionTree.css');
     this.propertiesTreeOutline.element.classList.add('style-properties', 'matched-styles', 'monospace');
     this.propertiesTreeOutline.section = this;
-    this.element.appendChild(this.propertiesTreeOutline.element);
+    this._innerElement.appendChild(this.propertiesTreeOutline.element);
 
     var selectorContainer = createElement('div');
     this._selectorElement = createElementWithClass('span', 'selector');
@@ -608,7 +719,7 @@ Elements.StylePropertiesSection = class {
     selectorContainer.addEventListener('mousedown', this._handleEmptySpaceMouseDown.bind(this), false);
     selectorContainer.addEventListener('click', this._handleSelectorContainerClick.bind(this), false);
 
-    var closeBrace = this.element.createChild('div', 'sidebar-pane-closing-brace');
+    var closeBrace = this._innerElement.createChild('div', 'sidebar-pane-closing-brace');
     closeBrace.textContent = '}';
 
     this._createHoverMenuToolbar(closeBrace);
@@ -625,8 +736,10 @@ Elements.StylePropertiesSection = class {
         this.editable = false;
       } else {
         // Check this is a real CSSRule, not a bogus object coming from Elements.BlankStylePropertiesSection.
-        if (rule.styleSheetId)
-          this.navigable = !!rule.resourceURL();
+        if (rule.styleSheetId) {
+          var header = rule.cssModel().styleSheetHeaderForId(rule.styleSheetId);
+          this.navigable = !header.isAnonymousInlineStyleSheet();
+        }
       }
     }
 
@@ -645,6 +758,9 @@ Elements.StylePropertiesSection = class {
       this.propertiesTreeOutline.element.classList.add('read-only');
     }
 
+    var throttler = new Common.Throttler(100);
+    this._scheduleHeightUpdate = () => throttler.schedule(this._manuallySetHeight.bind(this));
+
     this._hoverableSelectorsMode = false;
     this._markSelectorMatches();
     this.onpopulate();
@@ -661,16 +777,13 @@ Elements.StylePropertiesSection = class {
       return createTextNode('');
 
     var ruleLocation;
-    if (rule instanceof SDK.CSSStyleRule) {
-      var matchingSelectors = matchedStyles.matchingSelectors(rule);
-      var firstMatchingIndex = matchingSelectors.length ? matchingSelectors[0] : 0;
-      ruleLocation = rule.selectors[firstMatchingIndex].range;
-    } else if (rule instanceof SDK.CSSKeyframeRule) {
+    if (rule instanceof SDK.CSSStyleRule)
+      ruleLocation = rule.style.range;
+    else if (rule instanceof SDK.CSSKeyframeRule)
       ruleLocation = rule.key().range;
-    }
 
     var header = rule.styleSheetId ? matchedStyles.cssModel().styleSheetHeaderForId(rule.styleSheetId) : null;
-    if (ruleLocation && rule.styleSheetId && header && header.resourceURL()) {
+    if (ruleLocation && rule.styleSheetId && header && !header.isAnonymousInlineStyleSheet()) {
       return Elements.StylePropertiesSection._linkifyRuleLocation(
           matchedStyles.cssModel(), linkifier, rule.styleSheetId, ruleLocation);
     }
@@ -695,7 +808,7 @@ Elements.StylePropertiesSection = class {
    * @param {!SDK.CSSModel} cssModel
    * @param {!Components.Linkifier} linkifier
    * @param {string} styleSheetId
-   * @param {!Common.TextRange} ruleLocation
+   * @param {!TextUtils.TextRange} ruleLocation
    * @return {!Node}
    */
   static _linkifyRuleLocation(cssModel, linkifier, styleSheetId, ruleLocation) {
@@ -735,25 +848,27 @@ Elements.StylePropertiesSection = class {
     var items = [];
 
     var textShadowButton = new UI.ToolbarButton(Common.UIString('Add text-shadow'), 'largeicon-text-shadow');
-    textShadowButton.addEventListener('click', this._onInsertShadowPropertyClick.bind(this, 'text-shadow'));
+    textShadowButton.addEventListener(
+        UI.ToolbarButton.Events.Click, this._onInsertShadowPropertyClick.bind(this, 'text-shadow'));
     items.push(textShadowButton);
 
     var boxShadowButton = new UI.ToolbarButton(Common.UIString('Add box-shadow'), 'largeicon-box-shadow');
-    boxShadowButton.addEventListener('click', this._onInsertShadowPropertyClick.bind(this, 'box-shadow'));
+    boxShadowButton.addEventListener(
+        UI.ToolbarButton.Events.Click, this._onInsertShadowPropertyClick.bind(this, 'box-shadow'));
     items.push(boxShadowButton);
 
     var colorButton = new UI.ToolbarButton(Common.UIString('Add color'), 'largeicon-foreground-color');
-    colorButton.addEventListener('click', this._onInsertColorPropertyClick.bind(this));
+    colorButton.addEventListener(UI.ToolbarButton.Events.Click, this._onInsertColorPropertyClick, this);
     items.push(colorButton);
 
     var backgroundButton = new UI.ToolbarButton(Common.UIString('Add background-color'), 'largeicon-background-color');
-    backgroundButton.addEventListener('click', this._onInsertBackgroundColorPropertyClick.bind(this));
+    backgroundButton.addEventListener(UI.ToolbarButton.Events.Click, this._onInsertBackgroundColorPropertyClick, this);
     items.push(backgroundButton);
 
     var newRuleButton = null;
     if (this._style.parentRule) {
       newRuleButton = new UI.ToolbarButton(Common.UIString('Insert Style Rule Below'), 'largeicon-add');
-      newRuleButton.addEventListener('click', this._onNewRuleClick.bind(this));
+      newRuleButton.addEventListener(UI.ToolbarButton.Events.Click, this._onNewRuleClick, this);
       items.push(newRuleButton);
     }
 
@@ -789,7 +904,7 @@ Elements.StylePropertiesSection = class {
         this._style.styleSheetId ? this._style.cssModel().styleSheetHeaderForId(this._style.styleSheetId) : null;
     if (!header)
       return false;
-    var sourceMap = header.cssModel().sourceMapForHeader(header);
+    var sourceMap = header.cssModel().sourceMapManager().sourceMapForClient(header);
     return sourceMap ? sourceMap.editable() : false;
   }
 
@@ -815,7 +930,7 @@ Elements.StylePropertiesSection = class {
   _onMouseOutSelector() {
     if (this._hoverTimer)
       clearTimeout(this._hoverTimer);
-    SDK.DOMModel.hideDOMNodeHighlight();
+    SDK.OverlayModel.hideDOMNodeHighlight();
   }
 
   _onMouseEnterSelector() {
@@ -825,11 +940,11 @@ Elements.StylePropertiesSection = class {
   }
 
   _highlight() {
-    SDK.DOMModel.hideDOMNodeHighlight();
+    SDK.OverlayModel.hideDOMNodeHighlight();
     var node = this._parentPane.node();
-    var domModel = node.domModel();
     var selectors = this._style.parentRule ? this._style.parentRule.selectorText() : undefined;
-    domModel.highlightDOMNodeWithConfig(node.id, {mode: 'all', showInfo: undefined, selectors: selectors});
+    node.domModel().overlayModel().highlightDOMNodeWithConfig(
+        node.id, {mode: 'all', showInfo: undefined, selectors: selectors});
   }
 
   /**
@@ -896,9 +1011,9 @@ Elements.StylePropertiesSection = class {
    * @param {!Common.Event} event
    */
   _onNewRuleClick(event) {
-    event.consume();
+    event.data.consume();
     var rule = this._style.parentRule;
-    var range = Common.TextRange.createFromLocation(rule.style.range.endLine, rule.style.range.endColumn + 1);
+    var range = TextUtils.TextRange.createFromLocation(rule.style.range.endLine, rule.style.range.endColumn + 1);
     this._parentPane._addBlankSection(this, /** @type {string} */ (rule.styleSheetId), range);
   }
 
@@ -907,7 +1022,7 @@ Elements.StylePropertiesSection = class {
    * @param {!Common.Event} event
    */
   _onInsertShadowPropertyClick(propertyName, event) {
-    event.consume(true);
+    event.data.consume(true);
     var treeElement = this.addNewBlankProperty();
     treeElement.property.name = propertyName;
     treeElement.property.value = '0 0 black';
@@ -921,7 +1036,7 @@ Elements.StylePropertiesSection = class {
    * @param {!Common.Event} event
    */
   _onInsertColorPropertyClick(event) {
-    event.consume(true);
+    event.data.consume(true);
     var treeElement = this.addNewBlankProperty();
     treeElement.property.name = 'color';
     treeElement.property.value = 'black';
@@ -935,7 +1050,7 @@ Elements.StylePropertiesSection = class {
    * @param {!Common.Event} event
    */
   _onInsertBackgroundColorPropertyClick(event) {
-    event.consume(true);
+    event.data.consume(true);
     var treeElement = this.addNewBlankProperty();
     treeElement.property.name = 'background-color';
     treeElement.property.value = 'white';
@@ -1071,7 +1186,7 @@ Elements.StylePropertiesSection = class {
   afterUpdate() {
     if (this._afterUpdate) {
       this._afterUpdate(this);
-      delete this._afterUpdate;
+      this._afterUpdate = null;
       this._afterUpdateFinishedForTest();
     }
   }
@@ -1124,9 +1239,12 @@ Elements.StylePropertiesSection = class {
 
     var selectorTexts = rule.selectors.map(selector => selector.text);
     var matchingSelectorIndexes = this._matchedStyles.matchingSelectors(/** @type {!SDK.CSSStyleRule} */ (rule));
-    var matchingSelectors = new Array(selectorTexts.length).fill(false);
+    var matchingSelectors = /** @type {!Array<boolean>} */ (new Array(selectorTexts.length).fill(false));
     for (var matchingIndex of matchingSelectorIndexes)
       matchingSelectors[matchingIndex] = true;
+
+    if (this._parentPane._isEditingStyle)
+      return;
 
     var fragment = this._hoverableSelectorsMode ? this._renderHoverableSelectors(selectorTexts, matchingSelectors) :
                                                   this._renderSimplifiedSelectors(selectorTexts, matchingSelectors);
@@ -1201,7 +1319,7 @@ Elements.StylePropertiesSection = class {
    */
   _checkWillCancelEditing() {
     var willCauseCancelEditing = this._willCauseCancelEditing;
-    delete this._willCauseCancelEditing;
+    this._willCauseCancelEditing = false;
     return willCauseCancelEditing;
   }
 
@@ -1241,20 +1359,7 @@ Elements.StylePropertiesSection = class {
    * @param {!Event} event
    */
   _handleEmptySpaceClick(event) {
-    if (!this.editable)
-      return;
-
-    var targetElement = event.deepElementFromPoint();
-    if (targetElement && !targetElement.isComponentSelectionCollapsed())
-      return;
-
-    if (!event.target.isComponentSelectionCollapsed())
-      return;
-
-    if (this._checkWillCancelEditing())
-      return;
-
-    if (event.target.enclosingNodeOrSelfWithNodeName('a'))
+    if (!this.editable || this.element.hasSelection() || this._checkWillCancelEditing())
       return;
 
     if (event.target.classList.contains('header') || this.element.classList.contains('read-only') ||
@@ -1295,8 +1400,9 @@ Elements.StylePropertiesSection = class {
         this._editingMediaCommitted.bind(this, media), this._editingMediaCancelled.bind(this, element), undefined,
         this._editingMediaBlurHandler.bind(this));
     UI.InplaceEditor.startEditing(element, config);
+    this._startEditing();
 
-    element.getComponentSelection().setBaseAndExtent(element, 0, element, 1);
+    element.getComponentSelection().selectAllChildren(element);
     this._parentPane.setEditingStyle(true);
     var parentMediaElement = element.enclosingNodeOrSelfWithClass('media');
     parentMediaElement.classList.add('editing-media');
@@ -1311,6 +1417,7 @@ Elements.StylePropertiesSection = class {
     this._parentPane.setEditingStyle(false);
     var parentMediaElement = element.enclosingNodeOrSelfWithClass('media');
     parentMediaElement.classList.remove('editing-media');
+    this._stopEditing();
   }
 
   /**
@@ -1357,7 +1464,7 @@ Elements.StylePropertiesSection = class {
         this._matchedStyles.resetActiveProperties();
         this._parentPane._refreshUpdate(this);
       }
-      delete this._parentPane._userOperation;
+      this._parentPane._userOperation = false;
       this._editingMediaTextCommittedForTest();
     }
 
@@ -1426,8 +1533,9 @@ Elements.StylePropertiesSection = class {
     var config =
         new UI.InplaceEditor.Config(this.editingSelectorCommitted.bind(this), this.editingSelectorCancelled.bind(this));
     UI.InplaceEditor.startEditing(this._selectorElement, config);
+    this._startEditing();
 
-    element.getComponentSelection().setBaseAndExtent(element, 0, element, 1);
+    element.getComponentSelection().selectAllChildren(element);
     this._parentPane.setEditingStyle(true);
     if (element.classList.contains('simple-selector'))
       this._navigateToSelectorSource(0, false);
@@ -1484,7 +1592,7 @@ Elements.StylePropertiesSection = class {
      * @this {Elements.StylePropertiesSection}
      */
     function headerTextCommitted() {
-      delete this._parentPane._userOperation;
+      this._parentPane._userOperation = false;
       this._moveEditorFromSelector(moveDirection);
       this._editingSelectorCommittedForTest();
     }
@@ -1527,7 +1635,6 @@ Elements.StylePropertiesSection = class {
     var oldSelectorRange = rule.selectorRange();
     if (!oldSelectorRange)
       return Promise.resolve();
-    var selectedNode = this._parentPane.node();
     return rule.setSelectorText(newContent)
         .then(onSelectorsUpdated.bind(this, /** @type {!SDK.CSSStyleRule} */ (rule), oldSelectorRange));
   }
@@ -1543,6 +1650,7 @@ Elements.StylePropertiesSection = class {
 
   _editingSelectorEnded() {
     this._parentPane.setEditingStyle(false);
+    this._stopEditing();
   }
 
   editingSelectorCancelled() {
@@ -1552,25 +1660,42 @@ Elements.StylePropertiesSection = class {
     // This is overridden by BlankStylePropertiesSection.
     this._markSelectorMatches();
   }
+
+  _startEditing() {
+    this._manuallySetHeight();
+    this.element.addEventListener('input', this._scheduleHeightUpdate, true);
+  }
+
+  /**
+   * @return {!Promise}
+   */
+  _manuallySetHeight() {
+    this.element.style.height = (this._innerElement.clientHeight + 1) + 'px';
+    this.element.style.contain = 'strict';
+    return Promise.resolve();
+  }
+
+  _stopEditing() {
+    this.element.style.removeProperty('height');
+    this.element.style.removeProperty('contain');
+    this.element.removeEventListener('input', this._scheduleHeightUpdate, true);
+  }
 };
 
-
-/**
- * @unrestricted
- */
 Elements.BlankStylePropertiesSection = class extends Elements.StylePropertiesSection {
   /**
    * @param {!Elements.StylesSidebarPane} stylesPane
    * @param {!SDK.CSSMatchedStyles} matchedStyles
    * @param {string} defaultSelectorText
    * @param {string} styleSheetId
-   * @param {!Common.TextRange} ruleLocation
+   * @param {!TextUtils.TextRange} ruleLocation
    * @param {!SDK.CSSStyleDeclaration} insertAfterStyle
    */
   constructor(stylesPane, matchedStyles, defaultSelectorText, styleSheetId, ruleLocation, insertAfterStyle) {
     var cssModel = /** @type {!SDK.CSSModel} */ (stylesPane.cssModel());
     var rule = SDK.CSSStyleRule.createDummyRule(cssModel, defaultSelectorText);
     super(stylesPane, matchedStyles, rule.style);
+    this._normal = false;
     this._ruleLocation = ruleLocation;
     this._styleSheetId = styleSheetId;
     this._selectorRefElement.removeChildren();
@@ -1582,13 +1707,13 @@ Elements.BlankStylePropertiesSection = class extends Elements.StylePropertiesSec
   }
 
   /**
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
   _actualRuleLocation() {
     var prefix = this._rulePrefix();
     var lines = prefix.split('\n');
-    var editRange = new Common.TextRange(0, 0, lines.length - 1, lines.peekLast().length);
-    return this._ruleLocation.rebaseAfterTextEdit(Common.TextRange.createFromLocation(0, 0), editRange);
+    var editRange = new TextUtils.TextRange(0, 0, lines.length - 1, lines.peekLast().length);
+    return this._ruleLocation.rebaseAfterTextEdit(TextUtils.TextRange.createFromLocation(0, 0), editRange);
   }
 
   /**
@@ -1622,7 +1747,7 @@ Elements.BlankStylePropertiesSection = class extends Elements.StylePropertiesSec
     /**
      * @param {?SDK.CSSStyleRule} newRule
      * @return {!Promise}
-     * @this {Elements.StylePropertiesSection}
+     * @this {Elements.BlankStylePropertiesSection}
      */
     function onRuleAdded(newRule) {
       if (!newRule) {
@@ -1636,7 +1761,7 @@ Elements.BlankStylePropertiesSection = class extends Elements.StylePropertiesSec
 
     /**
      * @param {!SDK.CSSStyleRule} newRule
-     * @this {Elements.StylePropertiesSection}
+     * @this {Elements.BlankStylePropertiesSection}
      */
     function onAddedToCascade(newRule) {
       var doesSelectorAffectSelectedNode = this._matchedStyles.matchingSelectors(newRule).length > 0;
@@ -1649,7 +1774,7 @@ Elements.BlankStylePropertiesSection = class extends Elements.StylePropertiesSec
       if (this.element.parentElement)  // Might have been detached already.
         this._moveEditorFromSelector(moveDirection);
 
-      delete this._parentPane._userOperation;
+      this._parentPane._userOperation = false;
       this._editingSelectorEnded();
       this._markSelectorMatches();
 
@@ -1669,7 +1794,7 @@ Elements.BlankStylePropertiesSection = class extends Elements.StylePropertiesSec
    * @override
    */
   editingSelectorCancelled() {
-    delete this._parentPane._userOperation;
+    this._parentPane._userOperation = false;
     if (!this.isBlank) {
       super.editingSelectorCancelled();
       return;
@@ -1690,9 +1815,6 @@ Elements.BlankStylePropertiesSection = class extends Elements.StylePropertiesSec
   }
 };
 
-/**
- * @unrestricted
- */
 Elements.KeyframePropertiesSection = class extends Elements.StylePropertiesSection {
   /**
    * @param {!Elements.StylesSidebarPane} stylesPane
@@ -1733,7 +1855,6 @@ Elements.KeyframePropertiesSection = class extends Elements.StylePropertiesSecti
     var oldRange = rule.key().range;
     if (!oldRange)
       return Promise.resolve();
-    var selectedNode = this._parentPane.node();
     return rule.setKeyText(newContent).then(updateSourceRanges.bind(this));
   }
 
@@ -1775,10 +1896,7 @@ Elements.KeyframePropertiesSection = class extends Elements.StylePropertiesSecti
   }
 };
 
-/**
- * @unrestricted
- */
-Elements.StylePropertyTreeElement = class extends TreeElement {
+Elements.StylePropertyTreeElement = class extends UI.TreeElement {
   /**
    * @param {!Elements.StylesSidebarPane} stylesPane
    * @param {!SDK.CSSMatchedStyles} matchedStyles
@@ -1799,13 +1917,21 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
     this._parentPane = stylesPane;
     this.isShorthand = isShorthand;
     this._applyStyleThrottler = new Common.Throttler(0);
+    this._newProperty = false;
+    this._expandedDueToFilter = false;
+    this.valueElement = null;
+    this.nameElement = null;
+    this._expandElement = null;
+    this._originalPropertyText = '';
+    this._prompt = null;
+    this._propertyHasBeenEditedIncrementally = false;
   }
 
   /**
    * @return {boolean}
    */
   _editable() {
-    return this._style.styleSheetId && this._style.range;
+    return !!(this._style.styleSheetId && this._style.range);
   }
 
   /**
@@ -1878,13 +2004,13 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
       return createTextNode(text);
 
     if (!this._editable()) {
-      var swatch = UI.ColorSwatch.create();
+      var swatch = InlineEditor.ColorSwatch.create();
       swatch.setColor(color);
       return swatch;
     }
 
     var swatchPopoverHelper = this._parentPane._swatchPopoverHelper;
-    var swatch = UI.ColorSwatch.create();
+    var swatch = InlineEditor.ColorSwatch.create();
     swatch.setColor(color);
     swatch.setFormat(Common.Color.detectColorFormat(swatch.color()));
     var swatchIcon = new Elements.ColorSwatchPopoverIcon(this, swatchPopoverHelper, swatch);
@@ -1936,10 +2062,10 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
    * @return {!Node}
    */
   _processBezier(text) {
-    if (!this._editable() || !Common.Geometry.CubicBezier.parse(text))
+    if (!this._editable() || !UI.Geometry.CubicBezier.parse(text))
       return createTextNode(text);
     var swatchPopoverHelper = this._parentPane._swatchPopoverHelper;
-    var swatch = UI.BezierSwatch.create();
+    var swatch = InlineEditor.BezierSwatch.create();
     swatch.setBezierText(text);
     new Elements.BezierPopoverIcon(this, swatchPopoverHelper, swatch);
     return swatch;
@@ -1955,9 +2081,9 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
       return createTextNode(propertyValue);
     var shadows;
     if (propertyName === 'text-shadow')
-      shadows = Common.CSSShadowModel.parseTextShadow(propertyValue);
+      shadows = InlineEditor.CSSShadowModel.parseTextShadow(propertyValue);
     else
-      shadows = Common.CSSShadowModel.parseBoxShadow(propertyValue);
+      shadows = InlineEditor.CSSShadowModel.parseBoxShadow(propertyValue);
     if (!shadows.length)
       return createTextNode(propertyValue);
     var container = createDocumentFragment();
@@ -1966,7 +2092,7 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
       if (i !== 0)
         container.appendChild(createTextNode(', '));  // Add back commas and spaces between each shadow.
       // TODO(flandy): editing the property value should use the original value with all spaces.
-      var cssShadowSwatch = UI.CSSShadowSwatch.create();
+      var cssShadowSwatch = InlineEditor.CSSShadowSwatch.create();
       cssShadowSwatch.setCSSShadow(shadows[i]);
       new Elements.ShadowSwatchPopoverHelper(this, swatchPopoverHelper, cssShadowSwatch);
       var colorSwatch = cssShadowSwatch.colorSwatch();
@@ -2050,7 +2176,7 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
      * @this {Elements.StylePropertyTreeElement}
      */
     function callback(success) {
-      delete this._parentPane._userOperation;
+      this._parentPane._userOperation = false;
 
       if (!success)
         return;
@@ -2117,16 +2243,36 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
 
   _resetMouseDownElement() {
     if (this._parentPane) {
-      delete this._parentPane._mouseDownTreeElement;
-      delete this._parentPane._mouseDownTreeElementIsName;
-      delete this._parentPane._mouseDownTreeElementIsValue;
+      this._parentPane._mouseDownTreeElement = null;
+      this._parentPane._mouseDownTreeElementIsName = false;
+      this._parentPane._mouseDownTreeElementIsValue = false;
     }
+  }
+
+  /**
+   * @override
+   */
+  onexpand() {
+    this._updateExpandElement();
+  }
+
+  /**
+   * @override
+   */
+  oncollapse() {
+    this._updateExpandElement();
+  }
+
+  _updateExpandElement() {
+    if (this.expanded)
+      this._expandElement.setIconType('smallicon-triangle-down');
+    else
+      this._expandElement.setIconType('smallicon-triangle-right');
   }
 
   updateTitle() {
     this._updateState();
-    this._expandElement = createElement('span');
-    this._expandElement.className = 'expand-element';
+    this._expandElement = UI.Icon.create('smallicon-triangle-right', 'expand-icon');
 
     var propertyRenderer =
         new Elements.StylesSidebarPropertyRenderer(this._style.parentRule, this.node(), this.name, this.value);
@@ -2179,7 +2325,7 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
    * @param {!Event} event
    */
   _mouseClick(event) {
-    if (!event.target.isComponentSelectionCollapsed())
+    if (event.target.hasSelection())
       return;
 
     event.consume(true);
@@ -2336,25 +2482,34 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
     if (selectElement.parentElement)
       selectElement.parentElement.scrollIntoViewIfNeeded(false);
 
-    var applyItemCallback = !isEditingName ? this._applyFreeFlowStyleTextEdit.bind(this) : undefined;
-    var cssCompletions = isEditingName ? SDK.cssMetadata().allProperties() :
-                                         SDK.cssMetadata().propertyValues(this.nameElement.textContent);
-    this._prompt = new Elements.StylesSidebarPane.CSSPropertyPrompt(cssCompletions, this, isEditingName);
-    this._prompt.setAutocompletionTimeout(0);
-    if (applyItemCallback) {
-      this._prompt.addEventListener(UI.TextPrompt.Events.ItemApplied, applyItemCallback, this);
-      this._prompt.addEventListener(UI.TextPrompt.Events.ItemAccepted, applyItemCallback, this);
+    var cssCompletions = [];
+    if (isEditingName) {
+      cssCompletions = SDK.cssMetadata().allProperties();
+      cssCompletions =
+          cssCompletions.filter(property => SDK.cssMetadata().isSVGProperty(property) === this.node().isSVGNode());
+    } else {
+      cssCompletions = SDK.cssMetadata().propertyValues(this.nameElement.textContent);
     }
+    var cssVariables = this._matchedStyles.cssVariables().sort(String.naturalOrderComparator);
+
+    this._prompt = new Elements.StylesSidebarPane.CSSPropertyPrompt(cssCompletions, cssVariables, this, isEditingName);
+    this._prompt.setAutocompletionTimeout(0);
+    if (section)
+      section._startEditing();
+
+    // Do not live-edit "content" property of pseudo elements. crbug.com/433889
+    if (!isEditingName && (!this._parentPane.node().pseudoType() || this.name !== 'content'))
+      this._prompt.addEventListener(UI.TextPrompt.Events.TextChanged, this._applyFreeFlowStyleTextEdit.bind(this));
+
     var proxyElement = this._prompt.attachAndStartEditing(selectElement, blurListener.bind(this, context));
     this._navigateToSource(selectElement, true);
 
     proxyElement.addEventListener('keydown', this._editingNameValueKeyDown.bind(this, context), false);
     proxyElement.addEventListener('keypress', this._editingNameValueKeyPress.bind(this, context), false);
-    proxyElement.addEventListener('input', this._editingNameValueInput.bind(this, context), false);
     if (isEditingName)
       proxyElement.addEventListener('paste', pasteHandler.bind(this, context), false);
 
-    selectElement.getComponentSelection().setBaseAndExtent(selectElement, 0, selectElement, 1);
+    selectElement.getComponentSelection().selectAllChildren(selectElement);
   }
 
   /**
@@ -2439,16 +2594,6 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
     }
   }
 
-  /**
-   * @param {!Elements.StylePropertyTreeElement.Context} context
-   * @param {!Event} event
-   */
-  _editingNameValueInput(context, event) {
-    // Do not live-edit "content" property of pseudo elements. crbug.com/433889
-    if (!context.isEditingName && (!this._parentPane.node().pseudoType() || this.name !== 'content'))
-      this._applyFreeFlowStyleTextEdit();
-  }
-
   _applyFreeFlowStyleTextEdit() {
     var valueText = this._prompt.textWithCurrentSuggestion();
     if (valueText.indexOf(';') === -1)
@@ -2490,7 +2635,7 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
   _revertStyleUponEditingCanceled() {
     if (this._propertyHasBeenEditedIncrementally) {
       this.applyStyleText(this._originalPropertyText, false);
-      delete this._originalPropertyText;
+      this._originalPropertyText = '';
     } else if (this._newProperty) {
       this.treeOutline.removeChild(this);
     } else {
@@ -2522,7 +2667,7 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
     var isEditingName = context.isEditingName;
 
     // Determine where to move to before making changes
-    var createNewProperty, moveToPropertyName, moveToSelector;
+    var createNewProperty, moveToSelector;
     var isDataPasted = 'originalName' in context;
     var isDirtyViaPaste = isDataPasted && (this.nameElement.textContent !== context.originalName ||
                                            this.valueElement.textContent !== context.originalValue);
@@ -2533,12 +2678,12 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
     if (moveDirection === 'forward' && (!isEditingName || isPropertySplitPaste) ||
         moveDirection === 'backward' && isEditingName) {
       moveTo = moveTo._findSibling(moveDirection);
-      if (moveTo)
-        moveToPropertyName = moveTo.name;
-      else if (moveDirection === 'forward' && (!this._newProperty || userInput))
-        createNewProperty = true;
-      else if (moveDirection === 'backward')
-        moveToSelector = true;
+      if (!moveTo) {
+        if (moveDirection === 'forward' && (!this._newProperty || userInput))
+          createNewProperty = true;
+        else if (moveDirection === 'backward')
+          moveToSelector = true;
+      }
     }
 
     // Make the Changes and trigger the moveToNextCallback after updating.
@@ -2643,8 +2788,11 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
     // BUG 53242. This cannot go into editingEnded(), as it should always happen first for any editing outcome.
     if (this._prompt) {
       this._prompt.detach();
-      delete this._prompt;
+      this._prompt = null;
     }
+    var section = this.section();
+    if (section)
+      section._stopEditing();
   }
 
   styleTextAppliedForTest() {
@@ -2688,7 +2836,7 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
      * @this {Elements.StylePropertyTreeElement}
      */
     function callback(success) {
-      delete this._parentPane._userOperation;
+      this._parentPane._userOperation = false;
 
       if (!success) {
         if (majorChange) {
@@ -2739,20 +2887,19 @@ Elements.StylePropertyTreeElement = class extends TreeElement {
 /** @typedef {{expanded: boolean, hasChildren: boolean, isEditingName: boolean, previousContent: string}} */
 Elements.StylePropertyTreeElement.Context;
 
-/**
- * @unrestricted
- */
 Elements.StylesSidebarPane.CSSPropertyPrompt = class extends UI.TextPrompt {
   /**
    * @param {!Array<string>} cssCompletions
+   * @param {!Array<string>} cssVariables
    * @param {!Elements.StylePropertyTreeElement} treeElement
    * @param {boolean} isEditingName
    */
-  constructor(cssCompletions, treeElement, isEditingName) {
+  constructor(cssCompletions, cssVariables, treeElement, isEditingName) {
     // Use the same callback both for applyItemCallback and acceptItemCallback.
     super();
     this.initialize(this._buildPropertyCompletions.bind(this), UI.StyleValueDelimiters);
     this._cssCompletions = cssCompletions;
+    this._cssVariables = cssVariables;
     this._treeElement = treeElement;
     this._isEditingName = isEditingName;
 
@@ -2855,7 +3002,7 @@ Elements.StylesSidebarPane.CSSPropertyPrompt = class extends UI.TextPrompt {
     }
 
     // Handle numeric value increment/decrement only at this point.
-    if (!this._isEditingName &&
+    if (!this._isEditingName && this._treeElement.valueElement &&
         UI.handleElementValueModifications(
             event, this._treeElement.valueElement, finishHandler.bind(this), this._isValueSuggestion.bind(this),
             customNumberHandler.bind(this)))
@@ -2872,7 +3019,7 @@ Elements.StylesSidebarPane.CSSPropertyPrompt = class extends UI.TextPrompt {
     if (!word)
       return false;
     word = word.toLowerCase();
-    return this._cssCompletions.indexOf(word) !== -1;
+    return this._cssCompletions.indexOf(word) !== -1 || word.startsWith('--');
   }
 
   /**
@@ -2883,39 +3030,47 @@ Elements.StylesSidebarPane.CSSPropertyPrompt = class extends UI.TextPrompt {
    */
   _buildPropertyCompletions(expression, query, force) {
     var lowerQuery = query.toLowerCase();
-    if (!query && !force && (this._isEditingName || expression))
+    var editingVariable = !this._isEditingName && expression.trim().endsWith('var(');
+    if (!query && !force && !editingVariable && (this._isEditingName || expression))
       return Promise.resolve([]);
 
     var prefixResults = [];
     var anywhereResults = [];
-    this._cssCompletions.forEach(filterCompletions);
-    var results = prefixResults.concat(anywhereResults);
+    if (!editingVariable)
+      this._cssCompletions.forEach(filterCompletions.bind(this));
+    if (this._isEditingName || editingVariable)
+      this._cssVariables.forEach(filterCompletions.bind(this));
 
+    var results = prefixResults.concat(anywhereResults);
     if (!this._isEditingName && !results.length && query.length > 1 && '!important'.startsWith(lowerQuery))
-      results.push({title: '!important'});
+      results.push({text: '!important'});
     var userEnteredText = query.replace('-', '');
     if (userEnteredText && (userEnteredText === userEnteredText.toUpperCase())) {
-      for (var i = 0; i < results.length; ++i)
-        results[i].title = results[i].title.toUpperCase();
+      for (var i = 0; i < results.length; ++i) {
+        if (!results[i].text.startsWith('--'))
+          results[i].text = results[i].text.toUpperCase();
+      }
     }
+    if (editingVariable)
+      results.forEach(result => result.text += ')');
     return Promise.resolve(results);
 
     /**
      * @param {string} completion
+     * @this {Elements.StylesSidebarPane.CSSPropertyPrompt}
      */
     function filterCompletions(completion) {
-      var index = completion.indexOf(lowerQuery);
-      if (index === 0)
-        prefixResults.push({title: completion, priority: SDK.cssMetadata().propertyUsageWeight(completion)});
-      else if (index > -1)
-        anywhereResults.push({title: completion});
+      var index = completion.toLowerCase().indexOf(lowerQuery);
+      if (index === 0) {
+        var priority = this._isEditingName ? SDK.cssMetadata().propertyUsageWeight(completion) : 1;
+        prefixResults.push({text: completion, priority: priority});
+      } else if (index > -1) {
+        anywhereResults.push({text: completion});
+      }
     }
   }
 };
 
-/**
- * @unrestricted
- */
 Elements.StylesSidebarPropertyRenderer = class {
   /**
    * @param {?SDK.CSSRule} rule
@@ -2928,6 +3083,12 @@ Elements.StylesSidebarPropertyRenderer = class {
     this._node = node;
     this._propertyName = name;
     this._propertyValue = value;
+    /** @type {?function(string):!Node} */
+    this._colorHandler = null;
+    /** @type {?function(string):!Node} */
+    this._bezierHandler = null;
+    /** @type {?function(string, string):!Node} */
+    this._shadowHandler = null;
   }
 
   /**
@@ -2982,14 +3143,14 @@ Elements.StylesSidebarPropertyRenderer = class {
     var regexes = [SDK.CSSMetadata.VariableRegex, SDK.CSSMetadata.URLRegex];
     var processors = [createTextNode, this._processURL.bind(this)];
     if (this._bezierHandler && SDK.cssMetadata().isBezierAwareProperty(this._propertyName)) {
-      regexes.push(Common.Geometry.CubicBezier.Regex);
+      regexes.push(UI.Geometry.CubicBezier.Regex);
       processors.push(this._bezierHandler);
     }
     if (this._colorHandler && SDK.cssMetadata().isColorAwareProperty(this._propertyName)) {
       regexes.push(Common.Color.Regex);
       processors.push(this._colorHandler);
     }
-    var results = Common.TextUtils.splitStringByRegexes(this._propertyValue, regexes);
+    var results = TextUtils.TextUtils.splitStringByRegexes(this._propertyValue, regexes);
     for (var i = 0; i < results.length; i++) {
       var result = results[i];
       var processor = result.regexIndex === -1 ? createTextNode : processors[result.regexIndex];
@@ -3016,7 +3177,7 @@ Elements.StylesSidebarPropertyRenderer = class {
       hrefUrl = Common.ParsedURL.completeURL(this._rule.resourceURL(), url);
     else if (this._node)
       hrefUrl = this._node.resolveURL(url);
-    container.appendChild(Components.Linkifier.linkifyURLAsNode(hrefUrl || url, url));
+    container.appendChild(Components.Linkifier.linkifyURL(hrefUrl || url, {text: url, preventClick: true}));
     container.createTextChild(')');
     return container;
   }
@@ -3024,12 +3185,11 @@ Elements.StylesSidebarPropertyRenderer = class {
 
 /**
  * @implements {UI.ToolbarItem.Provider}
- * @unrestricted
  */
 Elements.StylesSidebarPane.ButtonProvider = class {
   constructor() {
     this._button = new UI.ToolbarButton(Common.UIString('New Style Rule'), 'largeicon-add');
-    this._button.addEventListener('click', this._clicked, this);
+    this._button.addEventListener(UI.ToolbarButton.Events.Click, this._clicked, this);
     var longclickTriangle = UI.Icon.create('largeicon-longclick-triangle', 'long-click-glyph');
     this._button.element.appendChild(longclickTriangle);
 
@@ -3047,7 +3207,10 @@ Elements.StylesSidebarPane.ButtonProvider = class {
     }
   }
 
-  _clicked() {
+  /**
+   * @param {!Common.Event} event
+   */
+  _clicked(event) {
     Elements.StylesSidebarPane._instance._createNewRuleInViaInspectorStyleSheet();
   }
 

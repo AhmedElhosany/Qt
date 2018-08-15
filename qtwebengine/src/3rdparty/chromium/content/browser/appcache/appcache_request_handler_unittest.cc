@@ -19,17 +19,22 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/test/scoped_task_environment.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "content/browser/appcache/appcache.h"
 #include "content/browser/appcache/appcache_backend_impl.h"
+#include "content/browser/appcache/appcache_url_request.h"
 #include "content/browser/appcache/appcache_url_request_job.h"
 #include "content/browser/appcache/mock_appcache_policy.h"
 #include "content/browser/appcache/mock_appcache_service.h"
 #include "net/base/net_errors.h"
 #include "net/base/request_priority.h"
 #include "net/http/http_response_headers.h"
+#include "net/http/http_util.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_error_job.h"
@@ -105,15 +110,8 @@ class AppCacheRequestHandlerTest : public testing::Test {
    public:
     MockURLRequestJob(net::URLRequest* request,
                       net::NetworkDelegate* network_delegate,
-                      int response_code)
-        : net::URLRequestJob(request, network_delegate),
-          response_code_(response_code),
-          has_response_info_(false) {}
-    MockURLRequestJob(net::URLRequest* request,
-                      net::NetworkDelegate* network_delegate,
                       const net::HttpResponseInfo& info)
         : net::URLRequestJob(request, network_delegate),
-          response_code_(info.headers->response_code()),
           has_response_info_(true),
           response_info_(info) {}
 
@@ -121,7 +119,6 @@ class AppCacheRequestHandlerTest : public testing::Test {
 
    protected:
     void Start() override { NotifyHeadersComplete(); }
-    int GetResponseCode() const override { return response_code_; }
     void GetResponseInfo(net::HttpResponseInfo* info) override {
       if (!has_response_info_)
         return;
@@ -129,7 +126,6 @@ class AppCacheRequestHandlerTest : public testing::Test {
     }
 
    private:
-    int response_code_;
     bool has_response_info_;
     net::HttpResponseInfo response_info_;
   };
@@ -174,10 +170,6 @@ class AppCacheRequestHandlerTest : public testing::Test {
       return scheme == "http";
     };
 
-    bool IsHandledURL(const GURL& url) const override {
-      return url.SchemeIs("http");
-    }
-
     bool IsSafeRedirectTarget(const GURL& location) const override {
       return false;
     }
@@ -187,13 +179,15 @@ class AppCacheRequestHandlerTest : public testing::Test {
   };
 
   static void SetUpTestCase() {
+    scoped_task_environment_.reset(new base::test::ScopedTaskEnvironment);
     io_thread_.reset(new base::Thread("AppCacheRequestHandlerTest Thread"));
     base::Thread::Options options(base::MessageLoop::TYPE_IO, 0);
     io_thread_->StartWithOptions(options);
   }
 
   static void TearDownTestCase() {
-    io_thread_.reset(NULL);
+    io_thread_.reset();
+    scoped_task_environment_.reset();
   }
 
   // Test harness --------------------------------------------------
@@ -215,7 +209,9 @@ class AppCacheRequestHandlerTest : public testing::Test {
   void SetUpTest() {
     DCHECK(io_thread_->task_runner()->BelongsToCurrentThread());
     mock_service_.reset(new MockAppCacheService);
-    mock_service_->set_request_context(&empty_context_);
+    // Initializes URLRequestContext on the IO thread.
+    empty_context_.reset(new net::URLRequestContext);
+    mock_service_->set_request_context(empty_context_.get());
     mock_policy_.reset(new MockAppCachePolicy);
     mock_service_->set_appcache_policy(mock_policy_.get());
     mock_frontend_.reset(new MockFrontend);
@@ -226,7 +222,7 @@ class AppCacheRequestHandlerTest : public testing::Test {
     backend_impl_->RegisterHost(kHostId);
     host_ = backend_impl_->GetHost(kHostId);
     job_factory_.reset(new MockURLRequestJobFactory());
-    empty_context_.set_job_factory(job_factory_.get());
+    empty_context_->set_job_factory(job_factory_.get());
   }
 
   void TearDownTest() {
@@ -239,6 +235,7 @@ class AppCacheRequestHandlerTest : public testing::Test {
     mock_service_.reset();
     mock_policy_.reset();
     job_factory_.reset();
+    empty_context_.reset();
     host_ = NULL;
   }
 
@@ -277,25 +274,27 @@ class AppCacheRequestHandlerTest : public testing::Test {
         base::Bind(&AppCacheRequestHandlerTest::Verify_MainResource_Miss,
                    base::Unretained(this)));
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_MAIN_FRAME,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_MAIN_FRAME, false);
     EXPECT_TRUE(handler_.get());
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())
+            ->AsURLRequestJob()));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
+    EXPECT_TRUE(job_->IsWaiting());
 
     // We have to wait for completion of storage->FindResponseForMainRequest.
     ScheduleNextTask();
   }
 
   void Verify_MainResource_Miss() {
-    EXPECT_FALSE(job_->is_waiting());
-    EXPECT_TRUE(job_->is_delivering_network_response());
+    EXPECT_FALSE(job_->IsWaiting());
+    EXPECT_TRUE(job_->IsDeliveringNetworkResponse());
 
     int64_t cache_id = kAppCacheNoCacheId;
     GURL manifest_url;
@@ -305,12 +304,14 @@ class AppCacheRequestHandlerTest : public testing::Test {
     EXPECT_EQ(0, handler_->found_group_id_);
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForRedirect(
-            request_.get(), request_->context()->network_delegate(),
-            GURL("http://blah/redirect")));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForRedirect(
+                request_->context()->network_delegate(),
+                GURL("http://blah/redirect"))));
     EXPECT_FALSE(fallback_job);
-    fallback_job.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    fallback_job.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     EXPECT_TRUE(host_->preferred_manifest_url().is_empty());
@@ -325,11 +326,12 @@ class AppCacheRequestHandlerTest : public testing::Test {
         base::Bind(&AppCacheRequestHandlerTest::Verify_MainResource_Hit,
                    base::Unretained(this)));
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_MAIN_FRAME,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_MAIN_FRAME, false);
     EXPECT_TRUE(handler_.get());
 
     mock_storage()->SimulateFindMainResource(
@@ -337,18 +339,18 @@ class AppCacheRequestHandlerTest : public testing::Test {
         GURL(), AppCacheEntry(),
         1, 2, GURL("http://blah/manifest/"));
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
+    EXPECT_TRUE(job_->IsWaiting());
 
     // We have to wait for completion of storage->FindResponseForMainRequest.
     ScheduleNextTask();
   }
 
   void Verify_MainResource_Hit() {
-    EXPECT_FALSE(job_->is_waiting());
-    EXPECT_TRUE(job_->is_delivering_appcache_response());
+    EXPECT_FALSE(job_->IsWaiting());
+    EXPECT_TRUE(job_->IsDeliveringAppCacheResponse());
 
     int64_t cache_id = kAppCacheNoCacheId;
     GURL manifest_url;
@@ -358,8 +360,9 @@ class AppCacheRequestHandlerTest : public testing::Test {
     EXPECT_EQ(2, handler_->found_group_id_);
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForResponse(
-            request_.get(), request_->context()->network_delegate()));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForResponse(
+                request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     EXPECT_EQ(GURL("http://blah/manifest/"),
@@ -375,11 +378,12 @@ class AppCacheRequestHandlerTest : public testing::Test {
         base::Bind(&AppCacheRequestHandlerTest::Verify_MainResource_Fallback,
                    base::Unretained(this)));
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_MAIN_FRAME,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_MAIN_FRAME, false);
     EXPECT_TRUE(handler_.get());
 
     mock_storage()->SimulateFindMainResource(
@@ -388,21 +392,26 @@ class AppCacheRequestHandlerTest : public testing::Test {
         AppCacheEntry(AppCacheEntry::EXPLICIT, 1),
         1, 2, GURL("http://blah/manifest/"));
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
+    EXPECT_TRUE(job_->IsWaiting());
 
     // We have to wait for completion of storage->FindResponseForMainRequest.
     ScheduleNextTask();
   }
 
   void SimulateResponseCode(int response_code) {
+    net::HttpResponseInfo info;
+    std::string headers =
+        base::StringPrintf("HTTP/1.1 %i Muffin\r\n\r\n", response_code);
+    info.headers = new net::HttpResponseHeaders(
+        net::HttpUtil::AssembleRawHeaders(headers.c_str(), headers.length()));
+
     job_factory_->SetJob(base::MakeUnique<MockURLRequestJob>(
-        request_.get(), request_->context()->network_delegate(),
-        response_code));
+        request_.get(), request_->context()->network_delegate(), info));
     request_->Start();
-    // All our simulation needs  to satisfy are the following two DCHECKs
+    // All our simulation needs to satisfy are the following two DCHECKs.
     DCHECK_EQ(net::OK, delegate_.request_status());
     DCHECK_EQ(response_code, request_->GetResponseCode());
   }
@@ -414,8 +423,8 @@ class AppCacheRequestHandlerTest : public testing::Test {
   }
 
   void Verify_MainResource_Fallback() {
-    EXPECT_FALSE(job_->is_waiting());
-    EXPECT_TRUE(job_->is_delivering_network_response());
+    EXPECT_FALSE(job_->IsWaiting());
+    EXPECT_TRUE(job_->IsDeliveringNetworkResponse());
 
     // The handler expects to the job to tell it that the request is going to
     // be restarted before it sees the next request.
@@ -424,17 +433,18 @@ class AppCacheRequestHandlerTest : public testing::Test {
     // When the request is restarted, the existing job is dropped so a
     // real network job gets created. We expect NULL here which will cause
     // the net library to create a real job.
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_FALSE(job_.get());
 
     // Simulate an http error of the real network job.
     SimulateResponseCode(500);
 
-    job_.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_delivering_appcache_response());
+    EXPECT_TRUE(job_->IsDeliveringAppCacheResponse());
 
     int64_t cache_id = kAppCacheNoCacheId;
     GURL manifest_url;
@@ -457,12 +467,12 @@ class AppCacheRequestHandlerTest : public testing::Test {
         &AppCacheRequestHandlerTest::Verify_MainResource_FallbackOverride,
         base::Unretained(this)));
 
-    request_ = empty_context_.CreateRequest(
+    request_ = empty_context_->CreateRequest(
         GURL("http://blah/fallback-override"), net::DEFAULT_PRIORITY,
-        &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_MAIN_FRAME,
-                                               false));
+        &delegate_, TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_MAIN_FRAME, false);
     EXPECT_TRUE(handler_.get());
 
     mock_storage()->SimulateFindMainResource(
@@ -471,18 +481,18 @@ class AppCacheRequestHandlerTest : public testing::Test {
         AppCacheEntry(AppCacheEntry::EXPLICIT, 1),
         1, 2, GURL("http://blah/manifest/"));
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
+    EXPECT_TRUE(job_->IsWaiting());
 
     // We have to wait for completion of storage->FindResponseForMainRequest.
     ScheduleNextTask();
   }
 
   void Verify_MainResource_FallbackOverride() {
-    EXPECT_FALSE(job_->is_waiting());
-    EXPECT_TRUE(job_->is_delivering_network_response());
+    EXPECT_FALSE(job_->IsWaiting());
+    EXPECT_TRUE(job_->IsDeliveringNetworkResponse());
 
     // The handler expects to the job to tell it that the request is going to
     // be restarted before it sees the next request.
@@ -491,8 +501,8 @@ class AppCacheRequestHandlerTest : public testing::Test {
     // When the request is restarted, the existing job is dropped so a
     // real network job gets created. We expect NULL here which will cause
     // the net library to create a real job.
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_FALSE(job_.get());
 
     // Simulate an http error of the real network job, but with custom
@@ -506,8 +516,9 @@ class AppCacheRequestHandlerTest : public testing::Test {
         std::string(kOverrideHeaders, arraysize(kOverrideHeaders)));
     SimulateResponseInfo(info);
 
-    job_.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_FALSE(job_.get());
 
     // GetExtraResponseInfo should return no information.
@@ -523,11 +534,12 @@ class AppCacheRequestHandlerTest : public testing::Test {
   // SubResource_Miss_WithNoCacheSelected ----------------------------------
 
   void SubResource_Miss_WithNoCacheSelected() {
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
 
     // We avoid creating handler when possible, sub-resource requests are not
     // subject to retrieval from an appcache when there's no associated cache.
@@ -543,25 +555,28 @@ class AppCacheRequestHandlerTest : public testing::Test {
     // in a network or fallback namespace, should result in a failed request.
     host_->AssociateCompleteCache(MakeNewCache());
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_delivering_error_response());
+    EXPECT_TRUE(job_->IsDeliveringErrorResponse());
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForRedirect(
-            request_.get(), request_->context()->network_delegate(),
-            GURL("http://blah/redirect")));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForRedirect(
+                request_->context()->network_delegate(),
+                GURL("http://blah/redirect"))));
     EXPECT_FALSE(fallback_job);
-    fallback_job.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    fallback_job.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     TestFinished();
@@ -575,28 +590,31 @@ class AppCacheRequestHandlerTest : public testing::Test {
     host_->pending_selected_cache_id_ = cache->cache_id();
     host_->set_preferred_manifest_url(cache->owning_group()->manifest_url());
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
+    EXPECT_TRUE(job_->IsWaiting());
 
     host_->FinishCacheSelection(cache.get(), NULL);
-    EXPECT_FALSE(job_->is_waiting());
-    EXPECT_TRUE(job_->is_delivering_error_response());
+    EXPECT_FALSE(job_->IsWaiting());
+    EXPECT_TRUE(job_->IsDeliveringErrorResponse());
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForRedirect(
-            request_.get(), request_->context()->network_delegate(),
-            GURL("http://blah/redirect")));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForRedirect(
+                request_->context()->network_delegate(),
+                GURL("http://blah/redirect"))));
     EXPECT_FALSE(fallback_job);
-    fallback_job.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    fallback_job.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     TestFinished();
@@ -610,24 +628,27 @@ class AppCacheRequestHandlerTest : public testing::Test {
     mock_storage()->SimulateFindSubResource(
         AppCacheEntry(AppCacheEntry::EXPLICIT, 1), AppCacheEntry(), false);
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_delivering_appcache_response());
+    EXPECT_TRUE(job_->IsDeliveringAppCacheResponse());
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForRedirect(
-            request_.get(), request_->context()->network_delegate(),
-            GURL("http://blah/redirect")));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForRedirect(
+                request_->context()->network_delegate(),
+                GURL("http://blah/redirect"))));
     EXPECT_FALSE(fallback_job);
-    fallback_job.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    fallback_job.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     TestFinished();
@@ -643,25 +664,28 @@ class AppCacheRequestHandlerTest : public testing::Test {
     mock_storage()->SimulateFindSubResource(
         AppCacheEntry(), AppCacheEntry(AppCacheEntry::EXPLICIT, 1), false);
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_FALSE(job_.get());
 
-    job_.reset(handler_->MaybeLoadFallbackForRedirect(
-        request_.get(), request_->context()->network_delegate(),
-        GURL("http://not_blah/redirect")));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForRedirect(
+            request_->context()->network_delegate(),
+            GURL("http://not_blah/redirect"))));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_delivering_appcache_response());
+    EXPECT_TRUE(job_->IsDeliveringAppCacheResponse());
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForResponse(
-            request_.get(), request_->context()->network_delegate()));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForResponse(
+                request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     TestFinished();
@@ -677,25 +701,28 @@ class AppCacheRequestHandlerTest : public testing::Test {
     mock_storage()->SimulateFindSubResource(
         AppCacheEntry(), AppCacheEntry(AppCacheEntry::EXPLICIT, 1), false);
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_FALSE(job_.get());
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForRedirect(
-            request_.get(), request_->context()->network_delegate(),
-            GURL("http://blah/redirect")));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForRedirect(
+                request_->context()->network_delegate(),
+                GURL("http://blah/redirect"))));
     EXPECT_FALSE(fallback_job);
 
     SimulateResponseCode(200);
-    fallback_job.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    fallback_job.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     TestFinished();
@@ -712,23 +739,26 @@ class AppCacheRequestHandlerTest : public testing::Test {
     mock_storage()->SimulateFindSubResource(
         AppCacheEntry(), AppCacheEntry(), true);
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_FALSE(job_.get());
 
     std::unique_ptr<AppCacheURLRequestJob> fallback_job(
-        handler_->MaybeLoadFallbackForRedirect(
-            request_.get(), request_->context()->network_delegate(),
-            GURL("http://blah/redirect")));
+        static_cast<AppCacheURLRequestJob*>(
+            handler_->MaybeLoadFallbackForRedirect(
+                request_->context()->network_delegate(),
+                GURL("http://blah/redirect"))));
     EXPECT_FALSE(fallback_job);
-    fallback_job.reset(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    fallback_job.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
     EXPECT_FALSE(fallback_job);
 
     TestFinished();
@@ -742,24 +772,26 @@ class AppCacheRequestHandlerTest : public testing::Test {
     mock_storage()->SimulateFindSubResource(
         AppCacheEntry(AppCacheEntry::EXPLICIT, 1), AppCacheEntry(), false);
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
 
     backend_impl_->UnregisterHost(1);
     host_ = NULL;
 
-    EXPECT_FALSE(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForRedirect(
-        request_.get(),
-        request_->context()->network_delegate(),
-        GURL("http://blah/redirect")));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForRedirect(
+            request_->context()->network_delegate(),
+            GURL("http://blah/redirect"))));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
 
     TestFinished();
   }
@@ -770,30 +802,32 @@ class AppCacheRequestHandlerTest : public testing::Test {
     // Precondition, the host is waiting on cache selection.
     host_->pending_selected_cache_id_ = 1;
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
+    EXPECT_TRUE(job_->IsWaiting());
 
     backend_impl_->UnregisterHost(1);
     host_ = NULL;
     EXPECT_TRUE(job_->has_been_killed());
 
-    EXPECT_FALSE(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForRedirect(
-        request_.get(),
-        request_->context()->network_delegate(),
-        GURL("http://blah/redirect")));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForRedirect(
+            request_->context()->network_delegate(),
+            GURL("http://blah/redirect"))));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
 
     TestFinished();
   }
@@ -806,14 +840,15 @@ class AppCacheRequestHandlerTest : public testing::Test {
     mock_storage()->SimulateFindSubResource(
         AppCacheEntry(AppCacheEntry::EXPLICIT, 1), AppCacheEntry(), false);
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
 
     backend_impl_.reset();
@@ -823,24 +858,26 @@ class AppCacheRequestHandlerTest : public testing::Test {
     host_ = NULL;
 
     EXPECT_TRUE(job_->has_been_killed());
-    EXPECT_FALSE(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForRedirect(
-        request_.get(),
-        request_->context()->network_delegate(),
-        GURL("http://blah/redirect")));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForRedirect(
+            request_->context()->network_delegate(),
+            GURL("http://blah/redirect"))));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
 
     TestFinished();
   }
 
   void DestroyedServiceWithCrossSiteNav() {
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_MAIN_FRAME,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_MAIN_FRAME, false);
     EXPECT_TRUE(handler_.get());
     handler_->PrepareForCrossSiteTransfer(backend_impl_->process_id());
     EXPECT_TRUE(handler_->host_for_cross_site_transfer_.get());
@@ -852,14 +889,15 @@ class AppCacheRequestHandlerTest : public testing::Test {
     host_ = NULL;
 
     EXPECT_FALSE(handler_->host_for_cross_site_transfer_.get());
-    EXPECT_FALSE(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForRedirect(
-        request_.get(),
-        request_->context()->network_delegate(),
-        GURL("http://blah/redirect")));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForRedirect(
+            request_->context()->network_delegate(),
+            GURL("http://blah/redirect"))));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
 
     TestFinished();
   }
@@ -870,21 +908,23 @@ class AppCacheRequestHandlerTest : public testing::Test {
     // Precondition, the host is waiting on cache selection.
     host_->pending_selected_cache_id_ = 1;
 
-    request_ = empty_context_.CreateRequest(
-        GURL("ftp://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_SUB_RESOURCE,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("ftp://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_SUB_RESOURCE, false);
     EXPECT_TRUE(handler_.get());  // we could redirect to http (conceivably)
 
-    EXPECT_FALSE(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForRedirect(
-        request_.get(),
-        request_->context()->network_delegate(),
-        GURL("ftp://blah/redirect")));
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForRedirect(
+            request_->context()->network_delegate(),
+            GURL("ftp://blah/redirect"))));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
 
     TestFinished();
   }
@@ -892,31 +932,33 @@ class AppCacheRequestHandlerTest : public testing::Test {
   // CanceledRequest -----------------------------
 
   void CanceledRequest() {
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_MAIN_FRAME,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_MAIN_FRAME, false);
     EXPECT_TRUE(handler_.get());
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
-    EXPECT_FALSE(job_->has_been_started());
+    EXPECT_TRUE(job_->IsWaiting());
+    EXPECT_FALSE(job_->IsStarted());
 
-    base::WeakPtr<AppCacheURLRequestJob> weak_job = job_->GetWeakPtr();
+    base::WeakPtr<AppCacheJob> weak_job = job_->GetWeakPtr();
 
     job_factory_->SetJob(std::move(job_));
     request_->Start();
     ASSERT_TRUE(weak_job);
-    EXPECT_TRUE(weak_job->has_been_started());
+    EXPECT_TRUE(weak_job->IsStarted());
 
     request_->Cancel();
     ASSERT_FALSE(weak_job);
 
-    EXPECT_FALSE(handler_->MaybeLoadFallbackForResponse(
-        request_.get(), request_->context()->network_delegate()));
+    EXPECT_FALSE(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadFallbackForResponse(
+            request_->context()->network_delegate())));
 
     TestFinished();
   }
@@ -933,8 +975,9 @@ class AppCacheRequestHandlerTest : public testing::Test {
     EXPECT_FALSE(AppCacheRequestHandler::IsMainResourceType(
         RESOURCE_TYPE_WORKER));
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
 
     const int kParentHostId = host_->host_id();
     const int kWorkerHostId = 2;
@@ -944,8 +987,9 @@ class AppCacheRequestHandlerTest : public testing::Test {
     backend_impl_->RegisterHost(kWorkerHostId);
     AppCacheHost* worker_host = backend_impl_->GetHost(kWorkerHostId);
     worker_host->SelectCacheForWorker(kParentHostId, kMockProcessId);
-    handler_.reset(worker_host->CreateRequestHandler(
-        request_.get(), RESOURCE_TYPE_SHARED_WORKER, false));
+    handler_ = worker_host->CreateRequestHandler(
+        AppCacheURLRequest::Create(request_.get()), RESOURCE_TYPE_SHARED_WORKER,
+        false);
     EXPECT_TRUE(handler_.get());
     // Verify that the handler is associated with the parent host.
     EXPECT_EQ(host_, handler_->host_);
@@ -957,8 +1001,9 @@ class AppCacheRequestHandlerTest : public testing::Test {
     worker_host = backend_impl_->GetHost(kAbandonedWorkerHostId);
     EXPECT_EQ(NULL, backend_impl_->GetHost(kNonExsitingHostId));
     worker_host->SelectCacheForWorker(kNonExsitingHostId, kMockProcessId);
-    handler_.reset(worker_host->CreateRequestHandler(
-        request_.get(), RESOURCE_TYPE_SHARED_WORKER, false));
+    handler_ = worker_host->CreateRequestHandler(
+        AppCacheURLRequest::Create(request_.get()), RESOURCE_TYPE_SHARED_WORKER,
+        false);
     EXPECT_FALSE(handler_.get());
 
     TestFinished();
@@ -971,11 +1016,12 @@ class AppCacheRequestHandlerTest : public testing::Test {
         base::Bind(&AppCacheRequestHandlerTest::Verify_MainResource_Blocked,
                    base::Unretained(this)));
 
-    request_ = empty_context_.CreateRequest(
-        GURL("http://blah/"), net::DEFAULT_PRIORITY, &delegate_);
-    handler_.reset(host_->CreateRequestHandler(request_.get(),
-                                               RESOURCE_TYPE_MAIN_FRAME,
-                                               false));
+    request_ = empty_context_->CreateRequest(GURL("http://blah/"),
+                                             net::DEFAULT_PRIORITY, &delegate_,
+                                             TRAFFIC_ANNOTATION_FOR_TESTS);
+    handler_ =
+        host_->CreateRequestHandler(AppCacheURLRequest::Create(request_.get()),
+                                    RESOURCE_TYPE_MAIN_FRAME, false);
     EXPECT_TRUE(handler_.get());
 
     mock_policy_->can_load_return_value_ = false;
@@ -984,18 +1030,18 @@ class AppCacheRequestHandlerTest : public testing::Test {
         GURL(), AppCacheEntry(),
         1, 2, GURL("http://blah/manifest/"));
 
-    job_.reset(handler_->MaybeLoadResource(
-        request_.get(), request_->context()->network_delegate()));
+    job_.reset(static_cast<AppCacheURLRequestJob*>(
+        handler_->MaybeLoadResource(request_->context()->network_delegate())));
     EXPECT_TRUE(job_.get());
-    EXPECT_TRUE(job_->is_waiting());
+    EXPECT_TRUE(job_->IsWaiting());
 
     // We have to wait for completion of storage->FindResponseForMainRequest.
     ScheduleNextTask();
   }
 
   void Verify_MainResource_Blocked() {
-    EXPECT_FALSE(job_->is_waiting());
-    EXPECT_FALSE(job_->is_delivering_appcache_response());
+    EXPECT_FALSE(job_->IsWaiting());
+    EXPECT_FALSE(job_->IsDeliveringAppCacheResponse());
 
     EXPECT_EQ(0, handler_->found_cache_id_);
     EXPECT_EQ(0, handler_->found_group_id_);
@@ -1033,7 +1079,7 @@ class AppCacheRequestHandlerTest : public testing::Test {
   std::unique_ptr<MockFrontend> mock_frontend_;
   std::unique_ptr<MockAppCachePolicy> mock_policy_;
   AppCacheHost* host_;
-  net::URLRequestContext empty_context_;
+  std::unique_ptr<net::URLRequestContext> empty_context_;
   std::unique_ptr<MockURLRequestJobFactory> job_factory_;
   MockURLRequestDelegate delegate_;
   std::unique_ptr<net::URLRequest> request_;
@@ -1041,10 +1087,14 @@ class AppCacheRequestHandlerTest : public testing::Test {
   std::unique_ptr<AppCacheURLRequestJob> job_;
 
   static std::unique_ptr<base::Thread> io_thread_;
+  static std::unique_ptr<base::test::ScopedTaskEnvironment>
+      scoped_task_environment_;
 };
 
 // static
 std::unique_ptr<base::Thread> AppCacheRequestHandlerTest::io_thread_;
+std::unique_ptr<base::test::ScopedTaskEnvironment>
+    AppCacheRequestHandlerTest::scoped_task_environment_;
 
 TEST_F(AppCacheRequestHandlerTest, MainResource_Miss) {
   RunTestOnIOThread(&AppCacheRequestHandlerTest::MainResource_Miss);

@@ -7,11 +7,13 @@
 #ifndef PUBLIC_FPDF_PROGRESSIVE_H_
 #define PUBLIC_FPDF_PROGRESSIVE_H_
 
+// NOLINTNEXTLINE(build/include)
 #include "fpdfview.h"
 
 // Flags for progressive process status.
 #define FPDF_RENDER_READER 0
-#define FPDF_RENDER_TOBECOUNTINUED 1
+#define FPDF_RENDER_TOBECONTINUED 1
+#define FPDF_RENDER_TOBECOUNTINUED 1  // Deprecated.
 #define FPDF_RENDER_DONE 2
 #define FPDF_RENDER_FAILED 3
 

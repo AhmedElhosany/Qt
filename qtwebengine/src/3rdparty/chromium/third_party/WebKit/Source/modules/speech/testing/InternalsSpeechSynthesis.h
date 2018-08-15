@@ -31,18 +31,19 @@
 #ifndef InternalsSpeechSynthesis_h
 #define InternalsSpeechSynthesis_h
 
-#include "wtf/Allocator.h"
+#include "platform/wtf/Allocator.h"
 
 namespace blink {
 
-class Document;
+class DOMWindow;
 class Internals;
+class ScriptState;
 
 class InternalsSpeechSynthesis {
   STATIC_ONLY(InternalsSpeechSynthesis);
 
  public:
-  static void enableMockSpeechSynthesizer(Internals&, Document*);
+  static void enableMockSpeechSynthesizer(ScriptState*, Internals&, DOMWindow*);
 };
 
 }  // namespace blink

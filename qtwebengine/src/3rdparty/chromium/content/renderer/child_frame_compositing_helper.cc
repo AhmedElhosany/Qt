@@ -10,15 +10,16 @@
 #include "cc/layers/picture_image_layer.h"
 #include "cc/layers/solid_color_layer.h"
 #include "cc/layers/surface_layer.h"
-#include "cc/output/context_provider.h"
 #include "cc/output/copy_output_request.h"
 #include "cc/output/copy_output_result.h"
+#include "cc/paint/paint_image.h"
 #include "cc/resources/single_release_callback.h"
+#include "components/viz/common/gpu/context_provider.h"
+#include "components/viz/common/surfaces/sequence_surface_reference_factory.h"
 #include "content/child/thread_safe_sender.h"
 #include "content/common/browser_plugin/browser_plugin_messages.h"
 #include "content/common/content_switches_internal.h"
 #include "content/common/frame_messages.h"
-#include "content/common/gpu/client/context_provider_command_buffer.h"
 #include "content/public/common/content_client.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/renderer/browser_plugin/browser_plugin.h"
@@ -26,9 +27,10 @@
 #include "content/renderer/render_frame_impl.h"
 #include "content/renderer/render_frame_proxy.h"
 #include "content/renderer/render_thread_impl.h"
+#include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
 #include "skia/ext/image_operations.h"
-#include "third_party/WebKit/public/web/WebFrame.h"
 #include "third_party/WebKit/public/web/WebPluginContainer.h"
+#include "third_party/WebKit/public/web/WebRemoteFrame.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkImage.h"
@@ -37,6 +39,107 @@
 #include "ui/gfx/skia_util.h"
 
 namespace content {
+
+namespace {
+
+class IframeSurfaceReferenceFactory
+    : public viz::SequenceSurfaceReferenceFactory {
+ public:
+  IframeSurfaceReferenceFactory(scoped_refptr<ThreadSafeSender> sender,
+                                int routing_id)
+      : sender_(std::move(sender)), routing_id_(routing_id) {}
+
+  void AddPendingSequence(const viz::SurfaceSequence& sequence) {
+    ReleasePendingSequenceIfNecessary();
+    pending_sequence_ = sequence;
+  }
+
+ private:
+  ~IframeSurfaceReferenceFactory() override {
+    ReleasePendingSequenceIfNecessary();
+  }
+
+  void ReleasePendingSequenceIfNecessary() const {
+    if (pending_sequence_.is_valid()) {
+      sender_->Send(
+          new FrameHostMsg_SatisfySequence(routing_id_, pending_sequence_));
+      pending_sequence_ = viz::SurfaceSequence();
+    }
+  }
+
+  // cc::SequenceSurfaceReferenceFactory implementation:
+  void RequireSequence(const viz::SurfaceId& surface_id,
+                       const viz::SurfaceSequence& sequence) const override {
+    sender_->Send(
+        new FrameHostMsg_RequireSequence(routing_id_, surface_id, sequence));
+    // If there is a temporary reference that was waiting on a new one to be
+    // created, it is now safe to release it.
+    ReleasePendingSequenceIfNecessary();
+  }
+
+  void SatisfySequence(const viz::SurfaceSequence& sequence) const override {
+    sender_->Send(new FrameHostMsg_SatisfySequence(routing_id_, sequence));
+  }
+
+  const scoped_refptr<ThreadSafeSender> sender_;
+  mutable viz::SurfaceSequence pending_sequence_;
+  const int routing_id_;
+
+  DISALLOW_COPY_AND_ASSIGN(IframeSurfaceReferenceFactory);
+};
+
+class BrowserPluginSurfaceReferenceFactory
+    : public viz::SequenceSurfaceReferenceFactory {
+ public:
+  BrowserPluginSurfaceReferenceFactory(scoped_refptr<ThreadSafeSender> sender,
+                                       int routing_id,
+                                       int browser_plugin_instance_id)
+      : sender_(std::move(sender)),
+        routing_id_(routing_id),
+        browser_plugin_instance_id_(browser_plugin_instance_id) {}
+
+  void AddPendingSequence(const viz::SurfaceSequence& sequence) {
+    ReleasePendingSequenceIfNecessary();
+    pending_sequence_ = sequence;
+  }
+
+ private:
+  ~BrowserPluginSurfaceReferenceFactory() override {
+    ReleasePendingSequenceIfNecessary();
+  }
+
+  void ReleasePendingSequenceIfNecessary() const {
+    if (pending_sequence_.is_valid()) {
+      sender_->Send(new BrowserPluginHostMsg_SatisfySequence(
+          routing_id_, browser_plugin_instance_id_, pending_sequence_));
+      pending_sequence_ = viz::SurfaceSequence();
+    }
+  }
+
+  // cc::SequenceSurfaceRefrenceFactory implementation:
+  void SatisfySequence(const viz::SurfaceSequence& seq) const override {
+    sender_->Send(new BrowserPluginHostMsg_SatisfySequence(
+        routing_id_, browser_plugin_instance_id_, seq));
+  }
+
+  void RequireSequence(const viz::SurfaceId& surface_id,
+                       const viz::SurfaceSequence& sequence) const override {
+    sender_->Send(new BrowserPluginHostMsg_RequireSequence(
+        routing_id_, browser_plugin_instance_id_, surface_id, sequence));
+    // If there is a temporary reference that was waiting on a new one to be
+    // created, it is now safe to release it.
+    ReleasePendingSequenceIfNecessary();
+  }
+
+  const scoped_refptr<ThreadSafeSender> sender_;
+  mutable viz::SurfaceSequence pending_sequence_;
+  const int routing_id_;
+  const int browser_plugin_instance_id_;
+
+  DISALLOW_COPY_AND_ASSIGN(BrowserPluginSurfaceReferenceFactory);
+};
+
+}  // namespace
 
 ChildFrameCompositingHelper*
 ChildFrameCompositingHelper::CreateForBrowserPlugin(
@@ -56,13 +159,24 @@ ChildFrameCompositingHelper::CreateForRenderFrameProxy(
 
 ChildFrameCompositingHelper::ChildFrameCompositingHelper(
     const base::WeakPtr<BrowserPlugin>& browser_plugin,
-    blink::WebFrame* frame,
+    blink::WebRemoteFrame* frame,
     RenderFrameProxy* render_frame_proxy,
     int host_routing_id)
     : host_routing_id_(host_routing_id),
       browser_plugin_(browser_plugin),
       render_frame_proxy_(render_frame_proxy),
-      frame_(frame) {}
+      frame_(frame) {
+  scoped_refptr<ThreadSafeSender> sender(
+      RenderThreadImpl::current()->thread_safe_sender());
+  if (render_frame_proxy_) {
+    surface_reference_factory_ =
+        new IframeSurfaceReferenceFactory(sender, host_routing_id_);
+  } else {
+    surface_reference_factory_ = new BrowserPluginSurfaceReferenceFactory(
+        sender, host_routing_id_,
+        browser_plugin_->browser_plugin_instance_id());
+  }
+}
 
 ChildFrameCompositingHelper::~ChildFrameCompositingHelper() {
 }
@@ -71,15 +185,15 @@ blink::WebPluginContainer* ChildFrameCompositingHelper::GetContainer() {
   if (!browser_plugin_)
     return nullptr;
 
-  return browser_plugin_->container();
+  return browser_plugin_->Container();
 }
 
 void ChildFrameCompositingHelper::UpdateWebLayer(
     std::unique_ptr<blink::WebLayer> layer) {
   if (GetContainer()) {
-    GetContainer()->setWebLayer(layer.get());
+    GetContainer()->SetWebLayer(layer.get());
   } else if (frame_) {
-    frame_->setRemoteWebLayer(layer.get());
+    frame_->SetWebLayer(layer.get());
   }
   web_layer_ = std::move(layer);
 }
@@ -112,16 +226,17 @@ void ChildFrameCompositingHelper::ChildFrameGone() {
   if (web_layer_) {
     SkBitmap* sad_bitmap =
         GetContentClient()->renderer()->GetSadWebViewBitmap();
-    if (sad_bitmap && web_layer_->bounds().width > sad_bitmap->width() &&
-        web_layer_->bounds().height > sad_bitmap->height()) {
+    if (sad_bitmap && web_layer_->Bounds().width > sad_bitmap->width() &&
+        web_layer_->Bounds().height > sad_bitmap->height()) {
       scoped_refptr<cc::PictureImageLayer> sad_layer =
           cc::PictureImageLayer::Create();
-      sad_layer->SetImage(SkImage::MakeFromBitmap(*sad_bitmap));
+      sad_layer->SetImage(cc::PaintImage(cc::PaintImage::kNonLazyStableId,
+                                         SkImage::MakeFromBitmap(*sad_bitmap)));
       sad_layer->SetBounds(
           gfx::Size(sad_bitmap->width(), sad_bitmap->height()));
       sad_layer->SetPosition(gfx::PointF(
-          (web_layer_->bounds().width - sad_bitmap->width()) / 2,
-          (web_layer_->bounds().height - sad_bitmap->height()) / 2));
+          (web_layer_->Bounds().width - sad_bitmap->width()) / 2,
+          (web_layer_->Bounds().height - sad_bitmap->height()) / 2));
       sad_layer->SetIsDrawable(true);
 
       crashed_layer->AddChild(sad_layer);
@@ -133,109 +248,55 @@ void ChildFrameCompositingHelper::ChildFrameGone() {
   UpdateWebLayer(std::move(layer));
 }
 
-// static
-void ChildFrameCompositingHelper::SatisfyCallback(
-    scoped_refptr<ThreadSafeSender> sender,
-    int host_routing_id,
-    const cc::SurfaceSequence& sequence) {
-  // This may be called on either the main or impl thread.
-  sender->Send(new FrameHostMsg_SatisfySequence(host_routing_id, sequence));
-}
-
-// static
-void ChildFrameCompositingHelper::SatisfyCallbackBrowserPlugin(
-    scoped_refptr<ThreadSafeSender> sender,
-    int host_routing_id,
-    int browser_plugin_instance_id,
-    const cc::SurfaceSequence& sequence) {
-  sender->Send(new BrowserPluginHostMsg_SatisfySequence(
-      host_routing_id, browser_plugin_instance_id, sequence));
-}
-
-// static
-void ChildFrameCompositingHelper::RequireCallback(
-    scoped_refptr<ThreadSafeSender> sender,
-    int host_routing_id,
-    const cc::SurfaceId& id,
-    const cc::SurfaceSequence& sequence) {
-  // This may be called on either the main or impl thread.
-  sender->Send(new FrameHostMsg_RequireSequence(host_routing_id, id, sequence));
-}
-
-void ChildFrameCompositingHelper::RequireCallbackBrowserPlugin(
-    scoped_refptr<ThreadSafeSender> sender,
-    int host_routing_id,
-    int browser_plugin_instance_id,
-    const cc::SurfaceId& id,
-    const cc::SurfaceSequence& sequence) {
-  // This may be called on either the main or impl thread.
-  sender->Send(new BrowserPluginHostMsg_RequireSequence(
-      host_routing_id, browser_plugin_instance_id, id, sequence));
-}
-
 void ChildFrameCompositingHelper::OnSetSurface(
-    const cc::SurfaceId& surface_id,
-    const gfx::Size& frame_size,
-    float scale_factor,
-    const cc::SurfaceSequence& sequence) {
-  surface_id_ = surface_id;
-  scoped_refptr<ThreadSafeSender> sender(
-      RenderThreadImpl::current()->thread_safe_sender());
-  cc::SurfaceLayer::SatisfyCallback satisfy_callback =
-      render_frame_proxy_
-          ? base::Bind(&ChildFrameCompositingHelper::SatisfyCallback, sender,
-                       host_routing_id_)
-          : base::Bind(
-                &ChildFrameCompositingHelper::SatisfyCallbackBrowserPlugin,
-                sender, host_routing_id_,
-                browser_plugin_->browser_plugin_instance_id());
-  cc::SurfaceLayer::RequireCallback require_callback =
-      render_frame_proxy_
-          ? base::Bind(&ChildFrameCompositingHelper::RequireCallback, sender,
-                       host_routing_id_)
-          : base::Bind(
-                &ChildFrameCompositingHelper::RequireCallbackBrowserPlugin,
-                sender, host_routing_id_,
-                browser_plugin_->browser_plugin_instance_id());
+    const viz::SurfaceInfo& surface_info,
+    const viz::SurfaceSequence& sequence) {
+  float scale_factor = surface_info.device_scale_factor();
+  surface_id_ = surface_info.id();
   scoped_refptr<cc::SurfaceLayer> surface_layer =
-      cc::SurfaceLayer::Create(satisfy_callback, require_callback);
+      cc::SurfaceLayer::Create(surface_reference_factory_);
   // TODO(oshima): This is a stopgap fix so that the compositor does not
   // scaledown the content when 2x frame data is added to 1x parent frame data.
   // Fix this in cc/.
   if (IsUseZoomForDSFEnabled())
     scale_factor = 1.0f;
 
-  surface_layer->SetSurfaceId(surface_id, scale_factor, frame_size);
+  // The RWHV creates a destruction dependency on the surface that needs to be
+  // satisfied. The reference factory will satisfy it when a new reference has
+  // been created.
+  if (render_frame_proxy_) {
+    static_cast<IframeSurfaceReferenceFactory*>(
+        surface_reference_factory_.get())
+        ->AddPendingSequence(sequence);
+  } else {
+    static_cast<BrowserPluginSurfaceReferenceFactory*>(
+        surface_reference_factory_.get())
+        ->AddPendingSequence(sequence);
+  }
+
+  viz::SurfaceInfo modified_surface_info(surface_info.id(), scale_factor,
+                                         surface_info.size_in_pixels());
+  surface_layer->SetPrimarySurfaceInfo(modified_surface_info);
+  surface_layer->SetFallbackSurfaceInfo(modified_surface_info);
   surface_layer->SetMasksToBounds(true);
   std::unique_ptr<cc_blink::WebLayerImpl> layer(
       new cc_blink::WebLayerImpl(surface_layer));
   // TODO(lfg): Investigate if it's possible to propagate the information about
   // the child surface's opacity. https://crbug.com/629851.
-  layer->setOpaque(false);
+  layer->SetOpaque(false);
   layer->SetContentsOpaqueIsFixed(true);
   UpdateWebLayer(std::move(layer));
 
   UpdateVisibility(true);
 
-  // The RWHV creates a destruction dependency on the surface that needs to be
-  // satisfied. Note: render_frame_proxy_ is null in the case our client is a
-  // BrowserPlugin; in this case the BrowserPlugin sends its own SatisfySequence
-  // message.
-  if (render_frame_proxy_) {
-    render_frame_proxy_->Send(
-        new FrameHostMsg_SatisfySequence(host_routing_id_, sequence));
-  } else if (browser_plugin_.get()) {
-    browser_plugin_->SendSatisfySequence(sequence);
-  }
-
   CheckSizeAndAdjustLayerProperties(
-      frame_size, scale_factor,
+      surface_info.size_in_pixels(), surface_info.device_scale_factor(),
       static_cast<cc_blink::WebLayerImpl*>(web_layer_.get())->layer());
 }
 
 void ChildFrameCompositingHelper::UpdateVisibility(bool visible) {
   if (web_layer_)
-    web_layer_->setDrawsContent(visible);
+    web_layer_->SetDrawsContent(visible);
 }
 
 }  // namespace content

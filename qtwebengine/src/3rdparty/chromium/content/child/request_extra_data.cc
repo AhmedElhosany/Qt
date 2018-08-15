@@ -4,8 +4,9 @@
 
 #include "content/child/request_extra_data.h"
 
-#include "content/common/resource_request.h"
 #include "content/common/service_worker/service_worker_types.h"
+#include "content/public/common/resource_request.h"
+#include "content/public/common/service_worker_modes.h"
 #include "ipc/ipc_message.h"
 
 using blink::WebString;
@@ -13,7 +14,7 @@ using blink::WebString;
 namespace content {
 
 RequestExtraData::RequestExtraData()
-    : visibility_state_(blink::WebPageVisibilityStateVisible),
+    : visibility_state_(blink::kWebPageVisibilityStateVisible),
       render_frame_id_(MSG_ROUTING_NONE),
       is_main_frame_(false),
       parent_is_main_frame_(false),
@@ -27,7 +28,9 @@ RequestExtraData::RequestExtraData()
       originated_from_service_worker_(false),
       initiated_in_secure_context_(false),
       is_prefetch_(false),
-      download_to_network_cache_only_(false) {}
+      download_to_network_cache_only_(false),
+      block_mixed_plugin_content_(false),
+      navigation_initiated_by_renderer_(false) {}
 
 RequestExtraData::~RequestExtraData() {
 }

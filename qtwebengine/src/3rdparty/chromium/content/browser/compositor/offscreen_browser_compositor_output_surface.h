@@ -14,23 +14,22 @@
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "content/browser/compositor/browser_compositor_output_surface.h"
+#include "ui/latency/latency_info.h"
 
 namespace ui {
-class CompositorVSyncManager;
+class ContextProviderCommandBuffer;
 }
 
 namespace content {
-class ContextProviderCommandBuffer;
 class ReflectorTexture;
 
 class OffscreenBrowserCompositorOutputSurface
     : public BrowserCompositorOutputSurface {
  public:
   OffscreenBrowserCompositorOutputSurface(
-      scoped_refptr<ContextProviderCommandBuffer> context,
-      scoped_refptr<ui::CompositorVSyncManager> vsync_manager,
-      cc::SyntheticBeginFrameSource* begin_frame_source,
-      std::unique_ptr<display_compositor::CompositorOverlayCandidateValidator>
+      scoped_refptr<ui::ContextProviderCommandBuffer> context,
+      const UpdateVSyncParametersCallback& update_vsync_parameters_callback,
+      std::unique_ptr<viz::CompositorOverlayCandidateValidator>
           overlay_candidate_validator);
 
   ~OffscreenBrowserCompositorOutputSurface() override;
@@ -40,24 +39,27 @@ class OffscreenBrowserCompositorOutputSurface
   void BindToClient(cc::OutputSurfaceClient* client) override;
   void EnsureBackbuffer() override;
   void DiscardBackbuffer() override;
+  void SetDrawRectangle(const gfx::Rect& draw_rectangle) override;
   void Reshape(const gfx::Size& size,
                float scale_factor,
                const gfx::ColorSpace& color_space,
-               bool alpha) override;
+               bool alpha,
+               bool stencil) override;
   void BindFramebuffer() override;
   void SwapBuffers(cc::OutputSurfaceFrame frame) override;
   bool IsDisplayedAsOverlayPlane() const override;
   unsigned GetOverlayTextureId() const override;
+  gfx::BufferFormat GetOverlayBufferFormat() const override;
   bool SurfaceIsSuspendForRecycle() const override;
   uint32_t GetFramebufferCopyTextureFormat() override;
 
   // BrowserCompositorOutputSurface implementation.
   void OnReflectorChanged() override;
 #if defined(OS_MACOSX)
-  void SetSurfaceSuspendedForRecycle(bool suspended) override {};
+  void SetSurfaceSuspendedForRecycle(bool suspended) override {}
 #endif
 
-  void OnSwapBuffersComplete();
+  void OnSwapBuffersComplete(const std::vector<ui::LatencyInfo>& latency_info);
 
   cc::OutputSurfaceClient* client_ = nullptr;
   gfx::Size reshape_size_;

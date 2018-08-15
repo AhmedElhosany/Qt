@@ -8,13 +8,13 @@
 #include "GrTestUtils.h"
 #include "GrProcessorUnitTest.h"
 #include "GrStyle.h"
-#include "SkColorSpace.h"
+#include "SkColorSpace_Base.h"
 #include "SkDashPathPriv.h"
 #include "SkMatrix.h"
 #include "SkPath.h"
 #include "SkRRect.h"
 
-#ifdef GR_TEST_UTILS
+#if GR_TEST_UTILS
 
 static const SkMatrix& test_matrix(SkRandom* random,
                                    bool includeNonPerspective,
@@ -263,7 +263,7 @@ void TestStyle(SkRandom* random, GrStyle* style) {
         SkScalar phase = random->nextRangeScalar(0, sum);
         pe = TestDashPathEffect::Make(intervals.get(), cnt, phase);
     }
-    *style = GrStyle(stroke, pe.get());
+    *style = GrStyle(stroke, std::move(pe));
 }
 
 TestDashPathEffect::TestDashPathEffect(const SkScalar* intervals, int count, SkScalar phase) {
@@ -299,8 +299,8 @@ sk_sp<SkColorSpace> TestColorSpace(SkRandom* random) {
         // No color space (legacy mode)
         gColorSpaces[0] = nullptr;
         // sRGB or Adobe
-        gColorSpaces[1] = SkColorSpace::MakeNamed(SkColorSpace::kSRGB_Named);
-        gColorSpaces[2] = SkColorSpace::MakeNamed(SkColorSpace::kAdobeRGB_Named);
+        gColorSpaces[1] = SkColorSpace::MakeSRGB();
+        gColorSpaces[2] = SkColorSpace_Base::MakeNamed(SkColorSpace_Base::kAdobeRGB_Named);
     }
     return gColorSpaces[random->nextULessThan(static_cast<uint32_t>(SK_ARRAY_COUNT(gColorSpaces)))];
 }
@@ -310,8 +310,8 @@ sk_sp<GrColorSpaceXform> TestColorXform(SkRandom* random) {
     static bool gOnce;
     if (!gOnce) {
         gOnce = true;
-        sk_sp<SkColorSpace> srgb = SkColorSpace::MakeNamed(SkColorSpace::kSRGB_Named);
-        sk_sp<SkColorSpace> adobe = SkColorSpace::MakeNamed(SkColorSpace::kAdobeRGB_Named);
+        sk_sp<SkColorSpace> srgb = SkColorSpace::MakeSRGB();
+        sk_sp<SkColorSpace> adobe = SkColorSpace_Base::MakeNamed(SkColorSpace_Base::kAdobeRGB_Named);
         // No gamut change
         gXforms[0] = nullptr;
         // To larger gamut
@@ -326,14 +326,11 @@ TestAsFPArgs::TestAsFPArgs(GrProcessorTestData* d) {
     fViewMatrixStorage = TestMatrix(d->fRandom);
     fColorSpaceStorage = TestColorSpace(d->fRandom);
 
-    fArgs.fContext = d->fContext;
+    fArgs.fContext = d->context();
     fArgs.fViewMatrix = &fViewMatrixStorage;
     fArgs.fLocalMatrix = nullptr;
     fArgs.fFilterQuality = kNone_SkFilterQuality;
     fArgs.fDstColorSpace = fColorSpaceStorage.get();
-    fArgs.fColorMode = SkToBool(fArgs.fDstColorSpace)
-        ? SkDestinationSurfaceColorMode::kGammaAndColorSpaceAware
-        : SkDestinationSurfaceColorMode::kLegacy;
 }
 
 }  // namespace GrTest

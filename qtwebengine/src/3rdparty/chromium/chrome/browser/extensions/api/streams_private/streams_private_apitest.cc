@@ -6,6 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/run_loop.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/extensions/extension_apitest.h"
@@ -19,7 +20,6 @@
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/browser/resource_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/download_test_observer.h"
 #include "extensions/browser/event_router.h"
@@ -30,6 +30,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 using content::BrowserContext;
@@ -37,7 +38,6 @@ using content::BrowserThread;
 using content::DownloadItem;
 using content::DownloadManager;
 using content::DownloadUrlParameters;
-using content::ResourceController;
 using content::WebContents;
 using extensions::Event;
 using extensions::ExtensionSystem;
@@ -138,9 +138,9 @@ class StreamsPrivateApiTest : public ExtensionApiTest {
   void SetUpOnMainThread() override {
     // Init test server.
     test_server_.reset(new net::EmbeddedTestServer);
-    ASSERT_TRUE(test_server_->Start());
     test_server_->RegisterRequestHandler(base::Bind(&HandleRequest));
-
+    ASSERT_TRUE(test_server_->Start());
+    host_resolver()->AddRule("*", "127.0.0.1");
     ExtensionApiTest::SetUpOnMainThread();
   }
 
@@ -152,6 +152,7 @@ class StreamsPrivateApiTest : public ExtensionApiTest {
   }
 
   void InitializeDownloadSettings() {
+    base::ThreadRestrictions::ScopedAllowIO allow_io;
     ASSERT_TRUE(browser());
     ASSERT_TRUE(downloads_dir_.CreateUniqueTempDir());
 
@@ -165,7 +166,6 @@ class StreamsPrivateApiTest : public ExtensionApiTest {
 
     DownloadManager* manager = GetDownloadManager();
     DownloadPrefs::FromDownloadManager(manager)->ResetAutoOpen();
-    manager->RemoveAllDownloads();
   }
 
   // Sends onExecuteContentHandler event with the MIME type "test/done" to the
@@ -298,7 +298,6 @@ IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, NavigateCrossSite) {
 
   // Navigate to a URL on a different hostname.
   static const char kInitialHost[] = "www.example.com";
-  host_resolver()->AddRule(kInitialHost, "127.0.0.1");
   GURL::Replacements replacements;
   replacements.SetHostStr(kInitialHost);
   GURL initial_url =
@@ -323,10 +322,17 @@ IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, NavigateCrossSite) {
   EXPECT_TRUE(catcher.GetNextResult());
 }
 
+// Flaky on ChromeOS: http://crbug.com/746526.
+#if defined(OS_CHROMEOS)
+#define MAYBE_NavigateToAnAttachment DISABLED_NavigateToAnAttachment
+#else
+#define MAYBE_NavigateToAnAttachment NavigateToAnAttachment
+#endif
+
 // Tests that navigation to an attachment starts a download, even if there is an
 // extension with a file browser handler that can handle the attachment's MIME
 // type.
-IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, NavigateToAnAttachment) {
+IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, MAYBE_NavigateToAnAttachment) {
   InitializeDownloadSettings();
 
   ASSERT_TRUE(LoadTestExtension()) << message_;
@@ -361,10 +367,17 @@ IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, NavigateToAnAttachment) {
   EXPECT_TRUE(catcher.GetNextResult());
 }
 
+// Flaky on ChromeOS: http://crbug.com/746526.
+#if defined(OS_CHROMEOS)
+#define MAYBE_DirectDownload DISABLED_DirectDownload
+#else
+#define MAYBE_DirectDownload DirectDownload
+#endif
+
 // Tests that direct download requests don't get intercepted by
 // StreamsResourceThrottle, even if there is an extension with a file
 // browser handler that can handle the download's MIME type.
-IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, DirectDownload) {
+IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, MAYBE_DirectDownload) {
   InitializeDownloadSettings();
 
   ASSERT_TRUE(LoadTestExtension()) << message_;
@@ -388,7 +401,7 @@ IN_PROC_BROWSER_TEST_F(StreamsPrivateApiTest, DirectDownload) {
   ASSERT_TRUE(web_contents);
   std::unique_ptr<DownloadUrlParameters> params(
       DownloadUrlParameters::CreateForWebContentsMainFrame(
-          web_contents, url));
+          web_contents, url, TRAFFIC_ANNOTATION_FOR_TESTS));
   params->set_file_path(target_path);
 
   // Start download of the URL with a path "/text_path.txt" on the test server.

@@ -23,12 +23,14 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef BlockExceptions_h
+#define BlockExceptions_h
+
 #import <Foundation/NSException.h>
 #import "platform/PlatformExport.h"
-#import "wtf/Assertions.h"
+#import "platform/wtf/Assertions.h"
 
-PLATFORM_EXPORT NO_RETURN_DUE_TO_ASSERT void ReportBlockedObjCException(
-    NSException*);
+PLATFORM_EXPORT void ReportBlockedObjCException(NSException*);
 
 #define BEGIN_BLOCK_OBJC_EXCEPTIONS @try {
 #define END_BLOCK_OBJC_EXCEPTIONS               \
@@ -36,3 +38,5 @@ PLATFORM_EXPORT NO_RETURN_DUE_TO_ASSERT void ReportBlockedObjCException(
   @catch (NSException * localException) {       \
     ReportBlockedObjCException(localException); \
   }
+
+#endif  // BlockExceptions_h

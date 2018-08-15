@@ -12,16 +12,15 @@
 namespace blink {
 namespace scheduler {
 
-class BLINK_PLATFORM_EXPORT VirtualTimeDomain : public TimeDomain {
+class PLATFORM_EXPORT VirtualTimeDomain : public TimeDomain {
  public:
-  VirtualTimeDomain(TimeDomain::Observer* observer,
-                    base::TimeTicks initial_time);
+  VirtualTimeDomain(base::TimeTicks initial_time);
   ~VirtualTimeDomain() override;
 
   // TimeDomain implementation:
   LazyNow CreateLazyNow() const override;
   base::TimeTicks Now() const override;
-  bool MaybeAdvanceTime() override;
+  base::Optional<base::TimeDelta> DelayTillNextTask(LazyNow* lazy_now) override;
   const char* GetName() const override;
 
   // Advances this time domain to |now|. NOTE |now| is supposed to be
@@ -32,7 +31,8 @@ class BLINK_PLATFORM_EXPORT VirtualTimeDomain : public TimeDomain {
  protected:
   void OnRegisterWithTaskQueueManager(
       TaskQueueManager* task_queue_manager) override;
-  void RequestWakeup(base::TimeTicks now, base::TimeDelta delay) override;
+  void RequestWakeUpAt(base::TimeTicks now, base::TimeTicks run_time) override;
+  void CancelWakeUpAt(base::TimeTicks run_time) override;
   void AsValueIntoInternal(
       base::trace_event::TracedValue* state) const override;
 

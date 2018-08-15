@@ -86,8 +86,9 @@ class RenderbufferAttachment
 
   bool CanRenderTo(const FeatureInfo*) const override { return true; }
 
-  void DetachFromFramebuffer(Framebuffer* framebuffer) const override {
-    // Nothing to do for renderbuffers.
+  void DetachFromFramebuffer(Framebuffer* framebuffer,
+                             GLenum attachment) const override {
+    renderbuffer_->RemoveFramebufferAttachmentPoint(framebuffer, attachment);
   }
 
   bool IsLayerValid() const override { return true; }
@@ -238,11 +239,15 @@ class TextureAttachment
     return texture_ref_->texture()->CanRenderTo(feature_info, level_);
   }
 
-  void DetachFromFramebuffer(Framebuffer* framebuffer) const override {
+  void DetachFromFramebuffer(Framebuffer* framebuffer,
+                             GLenum attachment) const override {
     texture_ref_->texture()->DetachFromFramebuffer();
   }
 
   bool IsLayerValid() const override {
+    if (!Is3D()) {
+      return true;
+    }
     Texture* texture = texture_ref_->texture();
     DCHECK(texture);
     GLsizei width, height, depth;
@@ -267,6 +272,10 @@ class TextureAttachment
     // renderable:
     if (internal_format == GL_LUMINANCE || internal_format == GL_ALPHA ||
         internal_format == GL_LUMINANCE_ALPHA) {
+      return false;
+    }
+    // Disallow RGB16F, because it is only supported in ES2 and not ES3.
+    if (internal_format == GL_RGB16F) {
       return false;
     }
     return (need & have) != 0;
@@ -309,8 +318,7 @@ class TextureAttachment
 FramebufferManager::FramebufferManager(
     uint32_t max_draw_buffers,
     uint32_t max_color_attachments,
-    const scoped_refptr<FramebufferCompletenessCache>&
-        framebuffer_combo_complete_cache)
+    FramebufferCompletenessCache* framebuffer_combo_complete_cache)
     : framebuffer_state_change_count_(1),
       framebuffer_count_(0),
       have_context_(true),
@@ -331,9 +339,10 @@ FramebufferManager::~FramebufferManager() {
 void Framebuffer::MarkAsDeleted() {
   deleted_ = true;
   while (!attachments_.empty()) {
-    Attachment* attachment = attachments_.begin()->second.get();
-    attachment->DetachFromFramebuffer(this);
-    attachments_.erase(attachments_.begin());
+    auto entry = attachments_.begin();
+    Attachment* attachment = entry->second.get();
+    attachment->DetachFromFramebuffer(this, entry->first);
+    attachments_.erase(entry);
   }
 }
 
@@ -394,6 +403,10 @@ Framebuffer::~Framebuffer() {
     }
     manager_->StopTracking(this);
     manager_ = NULL;
+  }
+
+  for (auto& attachment : attachments_) {
+    attachment.second->DetachFromFramebuffer(this, attachment.first);
   }
 }
 
@@ -525,21 +538,33 @@ bool Framebuffer::ValidateAndAdjustDrawBuffers(
   if ((mask & fragment_output_type_mask) != (mask & draw_buffer_type_mask_))
     return false;
 
-  if (mask != adjusted_draw_buffer_bound_mask_) {
-    // This won't be reached in every draw/clear call - only when framebuffer
-    // or program has changed.
-    for (uint32_t ii = 0; ii < manager_->max_draw_buffers_; ++ii) {
-      adjusted_draw_buffers_[ii] = draw_buffers_[ii];
-      uint32_t shift_bits = ii * 2;
-      uint32_t buffer_mask = 0x3 << shift_bits;
-      if ((buffer_mask & mask) == 0u) {
-        adjusted_draw_buffers_[ii] = GL_NONE;
-      }
-    }
-    adjusted_draw_buffer_bound_mask_ = mask;
-    glDrawBuffersARB(manager_->max_draw_buffers_, adjusted_draw_buffers_.get());
-  }
+  AdjustDrawBuffersImpl(mask);
   return true;
+}
+
+void Framebuffer::AdjustDrawBuffers() {
+  AdjustDrawBuffersImpl(draw_buffer_bound_mask_);
+}
+
+void Framebuffer::AdjustDrawBuffersImpl(uint32_t desired_mask) {
+  if (desired_mask == adjusted_draw_buffer_bound_mask_) {
+    return;
+  }
+  // This won't be reached in every clear call - only when framebuffer has
+  // changed.
+  for (uint32_t ii = 0; ii < manager_->max_draw_buffers_; ++ii) {
+    adjusted_draw_buffers_[ii] = draw_buffers_[ii];
+    if (adjusted_draw_buffers_[ii] == GL_NONE) {
+      continue;
+    }
+    uint32_t shift_bits = ii * 2;
+    uint32_t buffer_mask = 0x3 << shift_bits;
+    if ((buffer_mask & desired_mask) == 0u) {
+      adjusted_draw_buffers_[ii] = GL_NONE;
+    }
+  }
+  adjusted_draw_buffer_bound_mask_ = desired_mask;
+  glDrawBuffersARB(manager_->max_draw_buffers_, adjusted_draw_buffers_.get());
 }
 
 bool Framebuffer::ContainsActiveIntegerAttachments() const {
@@ -964,14 +989,15 @@ void Framebuffer::AttachRenderbuffer(
   DCHECK(attachment != GL_DEPTH_STENCIL_ATTACHMENT);
   const Attachment* a = GetAttachment(attachment);
   if (a)
-    a->DetachFromFramebuffer(this);
+    a->DetachFromFramebuffer(this, attachment);
   if (renderbuffer) {
     attachments_[attachment] = scoped_refptr<Attachment>(
         new RenderbufferAttachment(renderbuffer));
+    renderbuffer->AddFramebufferAttachmentPoint(this, attachment);
   } else {
     attachments_.erase(attachment);
   }
-  framebuffer_complete_state_count_id_ = 0;
+  UnmarkAsComplete();
 }
 
 void Framebuffer::AttachTexture(
@@ -980,7 +1006,7 @@ void Framebuffer::AttachTexture(
   DCHECK(attachment != GL_DEPTH_STENCIL_ATTACHMENT);
   const Attachment* a = GetAttachment(attachment);
   if (a)
-    a->DetachFromFramebuffer(this);
+    a->DetachFromFramebuffer(this, attachment);
   if (texture_ref) {
     attachments_[attachment] = scoped_refptr<Attachment>(
         new TextureAttachment(texture_ref, target, level, samples, 0));
@@ -988,7 +1014,7 @@ void Framebuffer::AttachTexture(
   } else {
     attachments_.erase(attachment);
   }
-  framebuffer_complete_state_count_id_ = 0;
+  UnmarkAsComplete();
 }
 
 void Framebuffer::AttachTextureLayer(
@@ -997,7 +1023,7 @@ void Framebuffer::AttachTextureLayer(
   DCHECK(attachment != GL_DEPTH_STENCIL_ATTACHMENT);
   const Attachment* a = GetAttachment(attachment);
   if (a)
-    a->DetachFromFramebuffer(this);
+    a->DetachFromFramebuffer(this, attachment);
   if (texture_ref) {
     attachments_[attachment] = scoped_refptr<Attachment>(
         new TextureAttachment(texture_ref, target, level, 0, layer));
@@ -1005,7 +1031,7 @@ void Framebuffer::AttachTextureLayer(
   } else {
     attachments_.erase(attachment);
   }
-  framebuffer_complete_state_count_id_ = 0;
+  UnmarkAsComplete();
 }
 
 const Framebuffer::Attachment*

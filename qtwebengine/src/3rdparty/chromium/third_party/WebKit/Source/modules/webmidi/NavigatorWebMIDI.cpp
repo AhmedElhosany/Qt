@@ -34,54 +34,69 @@
 #include "bindings/core/v8/ScriptPromiseResolver.h"
 #include "core/dom/DOMException.h"
 #include "core/dom/Document.h"
+#include "core/dom/ExecutionContext.h"
+#include "core/frame/Deprecation.h"
 #include "core/frame/LocalFrame.h"
 #include "core/frame/Navigator.h"
 #include "core/frame/UseCounter.h"
 #include "modules/webmidi/MIDIAccessInitializer.h"
 #include "modules/webmidi/MIDIOptions.h"
+#include "public/platform/WebFeaturePolicyFeature.h"
 
 namespace blink {
 
-NavigatorWebMIDI::NavigatorWebMIDI(LocalFrame* frame)
-    : DOMWindowProperty(frame) {}
+NavigatorWebMIDI::NavigatorWebMIDI(Navigator& navigator)
+    : Supplement<Navigator>(navigator) {}
 
 DEFINE_TRACE(NavigatorWebMIDI) {
-  Supplement<Navigator>::trace(visitor);
-  DOMWindowProperty::trace(visitor);
+  Supplement<Navigator>::Trace(visitor);
 }
 
-const char* NavigatorWebMIDI::supplementName() {
+const char* NavigatorWebMIDI::SupplementName() {
   return "NavigatorWebMIDI";
 }
 
-NavigatorWebMIDI& NavigatorWebMIDI::from(Navigator& navigator) {
+NavigatorWebMIDI& NavigatorWebMIDI::From(Navigator& navigator) {
   NavigatorWebMIDI* supplement = static_cast<NavigatorWebMIDI*>(
-      Supplement<Navigator>::from(navigator, supplementName()));
+      Supplement<Navigator>::From(navigator, SupplementName()));
   if (!supplement) {
-    supplement = new NavigatorWebMIDI(navigator.frame());
-    provideTo(navigator, supplementName(), supplement);
+    supplement = new NavigatorWebMIDI(navigator);
+    ProvideTo(navigator, SupplementName(), supplement);
   }
   return *supplement;
 }
 
-ScriptPromise NavigatorWebMIDI::requestMIDIAccess(ScriptState* scriptState,
+ScriptPromise NavigatorWebMIDI::requestMIDIAccess(ScriptState* script_state,
                                                   Navigator& navigator,
                                                   const MIDIOptions& options) {
-  return NavigatorWebMIDI::from(navigator).requestMIDIAccess(scriptState,
+  return NavigatorWebMIDI::From(navigator).requestMIDIAccess(script_state,
                                                              options);
 }
 
-ScriptPromise NavigatorWebMIDI::requestMIDIAccess(ScriptState* scriptState,
+ScriptPromise NavigatorWebMIDI::requestMIDIAccess(ScriptState* script_state,
                                                   const MIDIOptions& options) {
-  if (!frame() || frame()->document()->activeDOMObjectsAreStopped()) {
-    return ScriptPromise::rejectWithDOMException(
-        scriptState,
-        DOMException::create(AbortError, "The frame is not working."));
+  if (!script_state->ContextIsValid()) {
+    return ScriptPromise::RejectWithDOMException(
+        script_state,
+        DOMException::Create(kAbortError, "The frame is not working."));
   }
 
-  UseCounter::countCrossOriginIframe(*frame()->document(),
-                                     UseCounter::RequestMIDIAccessIframe);
-  return MIDIAccessInitializer::start(scriptState, options);
+  Document& document = *ToDocument(ExecutionContext::From(script_state));
+  if (options.hasSysex() && options.sysex()) {
+    UseCounter::Count(
+        document,
+        WebFeature::kRequestMIDIAccessWithSysExOption_ObscuredByFootprinting);
+    UseCounter::CountCrossOriginIframe(
+        document,
+        WebFeature::
+            kRequestMIDIAccessIframeWithSysExOption_ObscuredByFootprinting);
+  }
+  UseCounter::CountCrossOriginIframe(
+      document, WebFeature::kRequestMIDIAccessIframe_ObscuredByFootprinting);
+  Deprecation::CountDeprecationFeaturePolicy(
+      document, WebFeaturePolicyFeature::kMidiFeature);
+
+  return MIDIAccessInitializer::Start(script_state, options);
 }
 
 }  // namespace blink

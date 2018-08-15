@@ -4,6 +4,9 @@
 
 #include "media/audio/fake_audio_manager.h"
 
+#include <algorithm>
+#include <utility>
+
 namespace media {
 
 namespace {
@@ -13,25 +16,20 @@ const int kDefaultSampleRate = 48000;
 
 }  // namespace
 
-FakeAudioManager::FakeAudioManager(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> worker_task_runner,
-    AudioLogFactory* audio_log_factory)
-    : AudioManagerBase(std::move(task_runner),
-                       std::move(worker_task_runner),
-                       audio_log_factory) {
-  LOG(INFO) << __func__;
-}
+FakeAudioManager::FakeAudioManager(std::unique_ptr<AudioThread> audio_thread,
+                                   AudioLogFactory* audio_log_factory)
+    : AudioManagerBase(std::move(audio_thread), audio_log_factory) {}
 
-FakeAudioManager::~FakeAudioManager() {
-  LOG(INFO) << __func__;
-  Shutdown();
-}
+FakeAudioManager::~FakeAudioManager() = default;
 
 // Implementation of AudioManager.
 bool FakeAudioManager::HasAudioOutputDevices() { return false; }
 
 bool FakeAudioManager::HasAudioInputDevices() { return false; }
+
+const char* FakeAudioManager::GetName() {
+  return "Fake";
+}
 
 // Implementation of AudioManagerBase.
 AudioOutputStream* FakeAudioManager::MakeLinearOutputStream(

@@ -10,17 +10,9 @@
 #include "base/macros.h"
 #include "content/browser/renderer_host/overscroll_controller_delegate.h"
 
-namespace gfx {
-class Transform;
-}
-
-namespace ui {
-class Layer;
-}
-
 namespace content {
 
-class ArrowLayerDelegate;
+class Affordance;
 class WebContentsImpl;
 
 // A simple delegate for the overscroll controller that paints an arrow on top
@@ -30,24 +22,26 @@ class GestureNavSimple : public OverscrollControllerDelegate {
   explicit GestureNavSimple(WebContentsImpl* web_contents);
   ~GestureNavSimple() override;
 
+  // Called by the affordance when its complete/abort animation is finished so
+  // that the affordance instance can be destroyed.
+  void OnAffordanceAnimationEnded();
+
  private:
-  void ApplyEffectsAndDestroy(const gfx::Transform& transform, float opacity);
   void AbortGestureAnimation();
   void CompleteGestureAnimation();
-  bool ApplyEffectsForDelta(float delta_x);
 
   // OverscrollControllerDelegate:
-  gfx::Rect GetVisibleBounds() const override;
-  // Returns true if the scroll update was consumed.
+  gfx::Size GetVisibleSize() const override;
+  gfx::Size GetDisplaySize() const override;
   bool OnOverscrollUpdate(float delta_x, float delta_y) override;
   void OnOverscrollComplete(OverscrollMode overscroll_mode) override;
   void OnOverscrollModeChange(OverscrollMode old_mode,
-                              OverscrollMode new_mode) override;
+                              OverscrollMode new_mode,
+                              OverscrollSource source) override;
+  base::Optional<float> GetMaxOverscrollDelta() const override;
 
   WebContentsImpl* web_contents_;
-  std::unique_ptr<ui::Layer> clip_layer_;
-  std::unique_ptr<ui::Layer> arrow_;
-  std::unique_ptr<ArrowLayerDelegate> arrow_delegate_;
+  std::unique_ptr<Affordance> affordance_;
   float completion_threshold_;
 
   DISALLOW_COPY_AND_ASSIGN(GestureNavSimple);

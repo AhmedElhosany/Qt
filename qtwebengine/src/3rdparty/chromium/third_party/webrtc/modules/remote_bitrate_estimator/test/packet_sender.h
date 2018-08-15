@@ -17,10 +17,10 @@
 #include <set>
 #include <string>
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/modules/include/module.h"
 #include "webrtc/modules/remote_bitrate_estimator/test/bwe.h"
 #include "webrtc/modules/remote_bitrate_estimator/test/bwe_test_framework.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 namespace testing {
@@ -114,8 +114,9 @@ class PacedVideoSender : public VideoSender, public PacedSender::PacketSender {
                         uint16_t sequence_number,
                         int64_t capture_time_ms,
                         bool retransmission,
-                        int probe_cluster_id) override;
-  size_t TimeToSendPadding(size_t bytes, int probe_cluster_id) override;
+                        const PacedPacketInfo& pacing_info) override;
+  size_t TimeToSendPadding(size_t bytes,
+                           const PacedPacketInfo& pacing_info) override;
 
   // Implements BitrateObserver.
   void OnNetworkChanged(uint32_t target_bitrate_bps,

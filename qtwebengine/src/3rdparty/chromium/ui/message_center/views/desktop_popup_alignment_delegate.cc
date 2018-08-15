@@ -14,7 +14,7 @@ namespace message_center {
 
 DesktopPopupAlignmentDelegate::DesktopPopupAlignmentDelegate()
     : alignment_(POPUP_ALIGNMENT_BOTTOM | POPUP_ALIGNMENT_RIGHT),
-      primary_display_id_(display::Display::kInvalidDisplayID),
+      primary_display_id_(display::kInvalidDisplayId),
       screen_(NULL) {}
 
 DesktopPopupAlignmentDelegate::~DesktopPopupAlignmentDelegate() {
@@ -89,6 +89,10 @@ void DesktopPopupAlignmentDelegate::ConfigureWidgetInitParamsForContainer(
   // Do nothing, which will use the default container.
 }
 
+bool DesktopPopupAlignmentDelegate::IsPrimaryDisplayForNotification() const {
+  return true;
+}
+
 // Anytime the display configuration changes, we need to recompute the alignment
 // on the primary display. But, we get different events on different platforms.
 // On Windows, for example, when switching from a laptop display to an external
@@ -119,9 +123,9 @@ void DesktopPopupAlignmentDelegate::OnDisplayRemoved(
 void DesktopPopupAlignmentDelegate::OnDisplayMetricsChanged(
     const display::Display& display,
     uint32_t metrics) {
-  // Set to kInvalidDisplayID so the alignment is updated regardless of whether
+  // Set to kInvalidDisplayId so the alignment is updated regardless of whether
   // the primary display actually changed.
-  primary_display_id_ = display::Display::kInvalidDisplayID;
+  primary_display_id_ = display::kInvalidDisplayId;
   UpdatePrimaryDisplay();
 }
 

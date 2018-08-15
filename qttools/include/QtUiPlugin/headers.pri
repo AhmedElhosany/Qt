@@ -1,4 +1,5 @@
 SYNCQT.HEADER_FILES = customwidget.h qdesignerexportwidget.h ../../../../include/QtUiPlugin/qtuipluginversion.h ../../../../include/QtUiPlugin/QtUiPlugin 
+SYNCQT.INJECTED_HEADER_FILES = 
 SYNCQT.HEADER_CLASSES = ../../../../include/QtUiPlugin/QDesignerCustomWidgetInterface ../../../../include/QtUiPlugin/QDesignerCustomWidgetCollectionInterface ../../../../include/QtUiPlugin/QDesignerExportWidget ../../../../include/QtUiPlugin/QtUiPluginVersion 
 SYNCQT.PRIVATE_HEADER_FILES = 
 SYNCQT.INJECTED_PRIVATE_HEADER_FILES = 

@@ -29,7 +29,9 @@ cr.define('downloads', function() {
       /** @private {!Array<!downloads.Data>} */
       items_: {
         type: Array,
-        value: function() { return []; },
+        value: function() {
+          return [];
+        },
       },
 
       /** @private */
@@ -40,6 +42,7 @@ cr.define('downloads', function() {
     },
 
     hostAttributes: {
+      // TODO(dbeam): this should use a class instead.
       loading: true,
     },
 
@@ -51,6 +54,13 @@ cr.define('downloads', function() {
     observers: [
       'itemsChanged_(items_.*)',
     ],
+
+    attached: function() {
+      document.documentElement.classList.remove('loading');
+    },
+
+    /** @private {!PromiseResolver} */
+    loaded_: new PromiseResolver,
 
     /** @private */
     clearAll_: function() {
@@ -74,13 +84,28 @@ cr.define('downloads', function() {
     insertItems_: function(index, list) {
       this.splice.apply(this, ['items_', index, 0].concat(list));
       this.updateHideDates_(index, index + list.length);
-      this.removeAttribute('loading');
+
+      if (this.hasAttribute('loading')) {
+        this.removeAttribute('loading');
+        this.loaded_.resolve();
+      }
+
       this.spinnerActive_ = false;
     },
 
     /** @private */
     itemsChanged_: function() {
       this.hasDownloads_ = this.items_.length > 0;
+
+      if (this.inSearchMode_) {
+        Polymer.IronA11yAnnouncer.requestAvailability();
+        this.fire('iron-announce', {
+          text: this.hasDownloads_ ?
+              loadTimeData.getStringF(
+                  'searchResultsFor', this.$.toolbar.getSearchText()) :
+              this.noDownloadsText_()
+        });
+      }
     },
 
     /**
@@ -97,7 +122,7 @@ cr.define('downloads', function() {
      * @private
      */
     onCanExecute_: function(e) {
-      e = /** @type {cr.ui.CanExecuteEvent} */(e);
+      e = /** @type {cr.ui.CanExecuteEvent} */ (e);
       switch (e.command.id) {
         case 'undo-command':
           e.canExecute = this.$.toolbar.canUndo();
@@ -134,13 +159,17 @@ cr.define('downloads', function() {
       this.hasShadow_ = list.scrollTop > 0;
     },
 
-    /** @private */
+    /**
+     * @return {!Promise}
+     * @private
+     */
     onLoad_: function() {
       cr.ui.decorate('command', cr.ui.Command);
       document.addEventListener('canExecute', this.onCanExecute_.bind(this));
       document.addEventListener('command', this.onCommand_.bind(this));
 
       downloads.ActionService.getInstance().loadMore();
+      return this.loaded_.promise;
     },
 
     /** @private */
@@ -182,7 +211,7 @@ cr.define('downloads', function() {
     updateItem_: function(index, data) {
       this.set('items_.' + index, data);
       this.updateHideDates_(index, index);
-      var list = /** @type {!IronListElement} */(this.$['downloads-list']);
+      var list = /** @type {!IronListElement} */ (this.$['downloads-list']);
       list.updateSizeForItem(index);
     },
   });
@@ -193,7 +222,7 @@ cr.define('downloads', function() {
 
   /** @return {!downloads.Manager} */
   Manager.get = function() {
-    return /** @type {!downloads.Manager} */(
+    return /** @type {!downloads.Manager} */ (
         queryRequiredElement('downloads-manager'));
   };
 
@@ -201,8 +230,9 @@ cr.define('downloads', function() {
     Manager.get().insertItems_(index, list);
   };
 
+  /** @return {!Promise} */
   Manager.onLoad = function() {
-    Manager.get().onLoad_();
+    return Manager.get().onLoad_();
   };
 
   Manager.removeItem = function(index) {

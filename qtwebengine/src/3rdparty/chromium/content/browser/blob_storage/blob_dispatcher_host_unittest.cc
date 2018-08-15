@@ -17,13 +17,13 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_browser_thread_bundle.h"
-#include "content/public/test/test_file_system_context.h"
 #include "ipc/ipc_sender.h"
 #include "ipc/ipc_test_sink.h"
 #include "ipc/message_filter.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_data_handle.h"
 #include "storage/browser/blob/blob_storage_context.h"
+#include "storage/browser/test/test_file_system_context.h"
 #include "storage/common/blob_storage/blob_item_bytes_request.h"
 #include "storage/common/blob_storage/blob_item_bytes_response.h"
 #include "storage/common/data_element.h"
@@ -115,7 +115,8 @@ class BlobDispatcherHostTest : public testing::Test {
     limits.max_ipc_memory_size = kTestBlobStorageIPCThresholdBytes;
     limits.max_shared_memory_size = kTestBlobStorageMaxSharedMemoryBytes;
     limits.max_blob_in_memory_space = kTestBlobStorageMaxBlobMemorySize;
-    limits.max_blob_disk_space = kTestBlobStorageMaxDiskSpace;
+    limits.desired_max_disk_space = kTestBlobStorageMaxDiskSpace;
+    limits.effective_max_disk_space = kTestBlobStorageMaxDiskSpace;
     limits.min_page_file_size = kTestBlobStorageMinFileSizeBytes;
     limits.max_file_size = kTestBlobStorageMaxFileSizeBytes;
     context_->mutable_memory_controller()->set_limits_for_testing(limits);

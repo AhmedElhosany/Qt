@@ -11,8 +11,9 @@
 
 #include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "components/ntp_snippets/category_factory.h"
+#include "components/ntp_snippets/category.h"
 #include "components/ntp_snippets/category_info.h"
 #include "components/ntp_snippets/content_suggestion.h"
 #include "components/ntp_snippets/features.h"
@@ -21,8 +22,9 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/sessions/core/session_types.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/sync_sessions/synced_session.h"
-#include "grit/components_strings.h"
+#include "components/variations/variations_associated_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
@@ -32,6 +34,7 @@ using base::TimeDelta;
 using sessions::SerializedNavigationEntry;
 using sessions::SessionTab;
 using sessions::SessionWindow;
+using sync_sessions::SyncedSessionWindow;
 using sync_sessions::SyncedSession;
 
 using DismissedFilter = base::Callback<bool(const std::string& id)>;
@@ -49,18 +52,19 @@ const char* kMaxForeignTabAgeInMinutesParamName =
     "max_foreign_tabs_age_in_minutes";
 
 int GetMaxForeignTabsTotal() {
-  return GetParamAsInt(ntp_snippets::kForeignSessionsSuggestionsFeature,
-                       kMaxForeignTabsTotalParamName, kMaxForeignTabsTotal);
+  return variations::GetVariationParamByFeatureAsInt(
+      ntp_snippets::kForeignSessionsSuggestionsFeature,
+      kMaxForeignTabsTotalParamName, kMaxForeignTabsTotal);
 }
 
 int GetMaxForeignTabsPerDevice() {
-  return GetParamAsInt(ntp_snippets::kForeignSessionsSuggestionsFeature,
-                       kMaxForeignTabsPerDeviceParamName,
-                       kMaxForeignTabsPerDevice);
+  return variations::GetVariationParamByFeatureAsInt(
+      ntp_snippets::kForeignSessionsSuggestionsFeature,
+      kMaxForeignTabsPerDeviceParamName, kMaxForeignTabsPerDevice);
 }
 
 TimeDelta GetMaxForeignTabAge() {
-  return TimeDelta::FromMinutes(GetParamAsInt(
+  return TimeDelta::FromMinutes(variations::GetVariationParamByFeatureAsInt(
       ntp_snippets::kForeignSessionsSuggestionsFeature,
       kMaxForeignTabAgeInMinutesParamName, kMaxForeignTabAgeInMinutes));
 }
@@ -159,13 +163,12 @@ struct ForeignSessionsSuggestionsProvider::SessionData {
 
 ForeignSessionsSuggestionsProvider::ForeignSessionsSuggestionsProvider(
     ContentSuggestionsProvider::Observer* observer,
-    CategoryFactory* category_factory,
     std::unique_ptr<ForeignSessionsProvider> foreign_sessions_provider,
     PrefService* pref_service)
-    : ContentSuggestionsProvider(observer, category_factory),
+    : ContentSuggestionsProvider(observer),
       category_status_(CategoryStatus::INITIALIZING),
       provided_category_(
-          category_factory->FromKnownCategory(KnownCategories::FOREIGN_TABS)),
+          Category::FromKnownCategory(KnownCategories::FOREIGN_TABS)),
       foreign_sessions_provider_(std::move(foreign_sessions_provider)),
       pref_service_(pref_service) {
   foreign_sessions_provider_->SubscribeForForeignTabChange(
@@ -197,9 +200,7 @@ CategoryInfo ForeignSessionsSuggestionsProvider::GetCategoryInfo(
   return CategoryInfo(l10n_util::GetStringUTF16(
                           IDS_NTP_FOREIGN_SESSIONS_SUGGESTIONS_SECTION_HEADER),
                       ContentSuggestionsCardLayout::MINIMAL_CARD,
-                      /*has_more_action=*/false,
-                      /*has_reload_action=*/false,
-                      /*has_view_all_action=*/true,
+                      ContentSuggestionsAdditionalAction::VIEW_ALL,
                       /*show_if_empty=*/false,
                       l10n_util::GetStringUTF16(
                           IDS_NTP_FOREIGN_SESSIONS_SUGGESTIONS_SECTION_EMPTY));
@@ -231,11 +232,11 @@ void ForeignSessionsSuggestionsProvider::Fetch(
   LOG(DFATAL)
       << "ForeignSessionsSuggestionsProvider has no |Fetch| functionality!";
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE,
-      base::Bind(callback, Status(StatusCode::PERMANENT_ERROR,
-                                  "ForeignSessionsSuggestionsProvider "
-                                  "has no |Fetch| functionality!"),
-                 base::Passed(std::vector<ContentSuggestion>())));
+      FROM_HERE, base::Bind(callback,
+                            Status(StatusCode::PERMANENT_ERROR,
+                                   "ForeignSessionsSuggestionsProvider "
+                                   "has no |Fetch| functionality!"),
+                            base::Passed(std::vector<ContentSuggestion>())));
 }
 
 void ForeignSessionsSuggestionsProvider::ClearHistory(
@@ -365,12 +366,12 @@ ForeignSessionsSuggestionsProvider::GetSuggestionCandidates(
   const TimeDelta max_foreign_tab_age = GetMaxForeignTabAge();
   std::vector<SessionData> suggestion_candidates;
   for (const SyncedSession* session : foreign_sessions) {
-    for (const std::pair<const SessionID::id_type,
-                         std::unique_ptr<sessions::SessionWindow>>& key_value :
-         session->windows) {
-      for (const std::unique_ptr<SessionTab>& tab : key_value.second->tabs) {
-        if (tab->navigations.empty())
+    for (const auto& key_value : session->windows) {
+      for (const std::unique_ptr<SessionTab>& tab :
+           key_value.second->wrapped_window.tabs) {
+        if (tab->navigations.empty()) {
           continue;
+        }
 
         const SerializedNavigationEntry& navigation = tab->navigations.back();
         const std::string id = navigation.virtual_url().spec();

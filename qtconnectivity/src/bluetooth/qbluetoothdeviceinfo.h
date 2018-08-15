@@ -40,7 +40,7 @@
 #ifndef QBLUETOOTHDEVICEINFO_H
 #define QBLUETOOTHDEVICEINFO_H
 
-#include <QtBluetooth/qbluetoothglobal.h>
+#include <QtBluetooth/qtbluetoothglobal.h>
 
 #include <QtCore/qstring.h>
 #include <QtCore/qmetatype.h>
@@ -189,6 +189,7 @@ public:
     };
     Q_DECLARE_FLAGS(ServiceClasses, ServiceClass)
 
+    //TODO Qt6 Remove DataCompleteness -> it serves no purpose
     enum DataCompleteness {
         DataComplete,
         DataIncomplete,

@@ -31,9 +31,9 @@
 #ifndef FileReaderSync_h
 #define FileReaderSync_h
 
-#include "bindings/core/v8/ScriptWrappable.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Handle.h"
-#include "wtf/text/WTFString.h"
+#include "platform/wtf/text/WTFString.h"
 
 namespace blink {
 
@@ -42,33 +42,34 @@ class DOMArrayBuffer;
 class ExceptionState;
 class ExecutionContext;
 class FileReaderLoader;
+class ScriptState;
 
 class FileReaderSync final : public GarbageCollected<FileReaderSync>,
                              public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static FileReaderSync* create() { return new FileReaderSync(); }
-
-  DOMArrayBuffer* readAsArrayBuffer(ExecutionContext*, Blob*, ExceptionState&);
-  String readAsBinaryString(ExecutionContext*, Blob*, ExceptionState&);
-  String readAsText(ExecutionContext* executionContext,
-                    Blob* blob,
-                    ExceptionState& ec) {
-    return readAsText(executionContext, blob, "", ec);
+  static FileReaderSync* Create(ExecutionContext* context) {
+    return new FileReaderSync(context);
   }
-  String readAsText(ExecutionContext*,
+
+  DOMArrayBuffer* readAsArrayBuffer(ScriptState*, Blob*, ExceptionState&);
+  String readAsBinaryString(ScriptState*, Blob*, ExceptionState&);
+  String readAsText(ScriptState* script_state, Blob* blob, ExceptionState& ec) {
+    return readAsText(script_state, blob, "", ec);
+  }
+  String readAsText(ScriptState*,
                     Blob*,
                     const String& encoding,
                     ExceptionState&);
-  String readAsDataURL(ExecutionContext*, Blob*, ExceptionState&);
+  String readAsDataURL(ScriptState*, Blob*, ExceptionState&);
 
   DEFINE_INLINE_TRACE() {}
 
  private:
-  FileReaderSync();
+  explicit FileReaderSync(ExecutionContext*);
 
-  void startLoading(ExecutionContext*,
+  void StartLoading(ExecutionContext*,
                     FileReaderLoader&,
                     const Blob&,
                     ExceptionState&);

@@ -52,7 +52,7 @@ def get_result(test_name, result_type=test_expectations.PASS, run_time=0):
     return test_results.TestResult(test_name, failures=failures, test_run_time=run_time)
 
 
-def run_results(port, extra_skipped_tests=[]):
+def run_results(port, extra_skipped_tests=None):
     tests = [
         'passes/text.html',
         'failures/expected/timeout.html',
@@ -69,7 +69,7 @@ def run_results(port, extra_skipped_tests=[]):
     return test_run_results.TestRunResults(expectations, len(tests))
 
 
-def summarized_results(port, expected, passing, flaky, only_include_failing=False, extra_skipped_tests=[], fail_on_retry=False):
+def summarized_results(port, expected, passing, flaky, only_include_failing=False, extra_skipped_tests=None):
     test_is_slow = False
 
     all_retry_results = []
@@ -188,7 +188,7 @@ class InterpretTestFailuresTest(unittest.TestCase):
 class SummarizedResultsTest(unittest.TestCase):
 
     def setUp(self):
-        host = MockHost(initialize_scm_by_default=False)
+        host = MockHost()
         self.port = host.port_factory.get(port_name='test')
 
     def test_no_chromium_revision(self):
@@ -204,9 +204,8 @@ class SummarizedResultsTest(unittest.TestCase):
                 'MISSING': 0,
                 'TEXT': 1,
                 'IMAGE': 1,
-                'NEEDSREBASELINE': 0,
                 'NEEDSMANUALREBASELINE': 0,
-                'PASS': 1,
+                'PASS': 0,
                 'REBASELINE': 0,
                 'SKIP': 0,
                 'SLOW': 0,
@@ -215,7 +214,7 @@ class SummarizedResultsTest(unittest.TestCase):
                 'LEAK': 0,
                 'FAIL': 0,
                 'AUDIO': 0,
-                'WONTFIX': 0
+                'WONTFIX': 1
             })
 
         summary = summarized_results(self.port, expected=True, passing=False, flaky=False)
@@ -226,7 +225,6 @@ class SummarizedResultsTest(unittest.TestCase):
                 'MISSING': 0,
                 'TEXT': 0,
                 'IMAGE': 0,
-                'NEEDSREBASELINE': 0,
                 'NEEDSMANUALREBASELINE': 0,
                 'PASS': 1,
                 'REBASELINE': 0,
@@ -248,7 +246,6 @@ class SummarizedResultsTest(unittest.TestCase):
                 'MISSING': 0,
                 'TEXT': 0,
                 'IMAGE': 0,
-                'NEEDSREBASELINE': 0,
                 'NEEDSMANUALREBASELINE': 0,
                 'PASS': 5,
                 'REBASELINE': 0,
@@ -281,7 +278,7 @@ class SummarizedResultsTest(unittest.TestCase):
     def test_summarized_results_wontfix(self):
         self.port._options.builder_name = 'dummy builder'
         summary = summarized_results(self.port, expected=False, passing=False, flaky=False)
-        self.assertEquals(summary['tests']['failures']['expected']['keyboard.html']['expected'], 'CRASH')
+        self.assertEquals(summary['tests']['failures']['expected']['keyboard.html']['expected'], 'WONTFIX CRASH')
         self.assertTrue(summary['tests']['passes']['text.html']['is_unexpected'])
         self.assertEqual(summary['num_passes'], 1)
         self.assertEqual(summary['num_regressions'], 6)
@@ -402,8 +399,7 @@ class SummarizedResultsTest(unittest.TestCase):
         self.assertEquals(summary['num_regressions'], 0)
 
     def test_summarized_results_regression(self):
-        summary = summarized_results(self.port, expected=False, passing=False,
-                                     flaky=False, fail_on_retry=True)
+        summary = summarized_results(self.port, expected=False, passing=False, flaky=False)
 
         self.assertTrue(summary['tests']['failures']['expected']['timeout.html']['is_unexpected'])
         self.assertEquals(summary['tests']['failures']['expected']['timeout.html']['expected'], 'TIMEOUT')
@@ -428,3 +424,7 @@ class SummarizedResultsTest(unittest.TestCase):
         self.assertEquals(summary['num_regressions'], 6)
         self.assertEquals(summary['num_passes'], 1)  # keyboard.html
         self.assertEquals(summary['num_flaky'], 0)
+
+    def test_results_contains_path_delimiter(self):
+        summary = summarized_results(self.port, expected=False, passing=False, flaky=False)
+        self.assertEqual(summary['path_delimiter'], '/')

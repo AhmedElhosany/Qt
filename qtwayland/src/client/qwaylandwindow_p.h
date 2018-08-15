@@ -147,7 +147,7 @@ public:
     void handleContentOrientationChange(Qt::ScreenOrientation orientation) override;
     void setOrientationMask(Qt::ScreenOrientations mask);
 
-    void setWindowState(Qt::WindowState state) override;
+    void setWindowState(Qt::WindowStates state) override;
     void setWindowFlags(Qt::WindowFlags flags) override;
 
     void raise() override;
@@ -172,8 +172,8 @@ public:
 
     bool createDecoration();
 
-    inline bool isMaximized() const { return mState == Qt::WindowMaximized; }
-    inline bool isFullscreen() const { return mState == Qt::WindowFullScreen; }
+    inline bool isMaximized() const { return mState & Qt::WindowMaximized; }
+    inline bool isFullscreen() const { return mState & Qt::WindowFullScreen; }
 
 #if QT_CONFIG(cursor)
     void setMouseCursor(QWaylandInputDevice *device, const QCursor &cursor);
@@ -241,7 +241,7 @@ protected:
 
     QIcon mWindowIcon;
 
-    Qt::WindowState mState;
+    Qt::WindowStates mState;
     Qt::WindowFlags mFlags;
     QRegion mMask;
 
@@ -251,13 +251,13 @@ private slots:
     void handleScreenRemoved(QScreen *qScreen);
 
 private:
-    bool setWindowStateInternal(Qt::WindowState flags);
+    bool setWindowStateInternal(Qt::WindowStates flags);
     void setGeometry_helper(const QRect &rect);
     void initWindow();
     void initializeWlSurface();
     bool shouldCreateShellSurface() const;
     bool shouldCreateSubSurface() const;
-    void reset();
+    void reset(bool sendDestroyEvent = true);
     void sendExposeEvent(const QRect &rect);
     static void closePopups(QWaylandWindow *parent);
     QWaylandScreen *calculateScreenFromSurfaceEvents() const;

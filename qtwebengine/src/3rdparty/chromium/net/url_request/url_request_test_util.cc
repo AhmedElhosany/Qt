@@ -14,7 +14,6 @@
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "base/threading/worker_pool.h"
 #include "net/base/host_port_pair.h"
 #include "net/cert/cert_verifier.h"
 #include "net/cert/ct_policy_enforcer.h"
@@ -108,36 +107,38 @@ void TestURLRequestContext::Init() {
   // In-memory Channel ID service.  Must be created before the
   // HttpNetworkSession.
   if (!channel_id_service()) {
-    context_storage_.set_channel_id_service(base::MakeUnique<ChannelIDService>(
-        new DefaultChannelIDStore(nullptr),
-        base::WorkerPool::GetTaskRunner(true)));
+    context_storage_.set_channel_id_service(
+        base::MakeUnique<ChannelIDService>(new DefaultChannelIDStore(nullptr)));
   }
   if (http_transaction_factory()) {
     // Make sure we haven't been passed an object we're not going to use.
     EXPECT_FALSE(client_socket_factory_);
   } else {
-    HttpNetworkSession::Params params;
-
+    HttpNetworkSession::Params session_params;
     if (http_network_session_params_)
-      params = *http_network_session_params_;
-    params.client_socket_factory = client_socket_factory();
-    params.proxy_delegate = proxy_delegate();
-    params.host_resolver = host_resolver();
-    params.cert_verifier = cert_verifier();
-    params.cert_transparency_verifier = cert_transparency_verifier();
-    params.ct_policy_enforcer = ct_policy_enforcer();
-    params.transport_security_state = transport_security_state();
-    params.proxy_service = proxy_service();
-    params.ssl_config_service = ssl_config_service();
-    params.http_auth_handler_factory = http_auth_handler_factory();
-    params.http_server_properties = http_server_properties();
-    params.net_log = net_log();
-    params.channel_id_service = channel_id_service();
+      session_params = *http_network_session_params_;
+
+    HttpNetworkSession::Context session_context;
+    if (http_network_session_context_)
+      session_context = *http_network_session_context_;
+    session_context.client_socket_factory = client_socket_factory();
+    session_context.proxy_delegate = proxy_delegate();
+    session_context.host_resolver = host_resolver();
+    session_context.cert_verifier = cert_verifier();
+    session_context.cert_transparency_verifier = cert_transparency_verifier();
+    session_context.ct_policy_enforcer = ct_policy_enforcer();
+    session_context.transport_security_state = transport_security_state();
+    session_context.proxy_service = proxy_service();
+    session_context.ssl_config_service = ssl_config_service();
+    session_context.http_auth_handler_factory = http_auth_handler_factory();
+    session_context.http_server_properties = http_server_properties();
+    session_context.net_log = net_log();
+    session_context.channel_id_service = channel_id_service();
     context_storage_.set_http_network_session(
-        base::MakeUnique<HttpNetworkSession>(params));
+        base::MakeUnique<HttpNetworkSession>(session_params, session_context));
     context_storage_.set_http_transaction_factory(base::MakeUnique<HttpCache>(
         context_storage_.http_network_session(),
-        HttpCache::DefaultBackend::InMemory(0), false));
+        HttpCache::DefaultBackend::InMemory(0), true /* is_main_cache */));
   }
   if (!http_user_agent_settings()) {
     context_storage_.set_http_user_agent_settings(
@@ -290,15 +291,22 @@ void TestDelegate::OnReadCompleted(URLRequest* request, int bytes_read) {
   if (response_started_count_ == 0)
     received_data_before_response_ = true;
 
-  if (cancel_in_rd_)
-    request_status_ = request->Cancel();
-
   if (bytes_read >= 0) {
     // There is data to read.
     received_bytes_count_ += bytes_read;
 
-    // consume the data
+    // Consume the data.
     data_received_.append(buf_->data(), bytes_read);
+
+    if (cancel_in_rd_) {
+      request_status_ = request->Cancel();
+      // If bytes_read is 0, won't get a notification on cancelation.
+      if (bytes_read == 0 && quit_on_complete_) {
+        base::ThreadTaskRunnerHandle::Get()->PostTask(
+            FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
+      }
+      return;
+    }
   }
 
   // If it was not end of stream, request to read more.
@@ -643,16 +651,14 @@ bool TestNetworkDelegate::OnCanSetCookie(const URLRequest& request,
   return allow;
 }
 
-bool TestNetworkDelegate::OnCanAccessFile(const URLRequest& request,
-                                          const base::FilePath& path) const {
+bool TestNetworkDelegate::OnCanAccessFile(
+    const URLRequest& request,
+    const base::FilePath& original_path,
+    const base::FilePath& absolute_path) const {
   return can_access_files_;
 }
 
 bool TestNetworkDelegate::OnAreExperimentalCookieFeaturesEnabled() const {
-  return experimental_cookie_features_enabled_;
-}
-
-bool TestNetworkDelegate::OnAreStrictSecureCookiesEnabled() const {
   return experimental_cookie_features_enabled_;
 }
 

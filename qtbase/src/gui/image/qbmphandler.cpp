@@ -49,10 +49,10 @@ QT_BEGIN_NAMESPACE
 
 static void swapPixel01(QImage *image)        // 1-bpp: swap 0 and 1 pixels
 {
-    int i;
+    qsizetype i;
     if (image->depth() == 1 && image->colorCount() == 2) {
         uint *p = (uint *)image->bits();
-        int nbytes = image->byteCount();
+        qsizetype nbytes = static_cast<qsizetype>(image->sizeInBytes());
         for (i=0; i<nbytes/4; i++) {
             *p = ~*p;
             p++;

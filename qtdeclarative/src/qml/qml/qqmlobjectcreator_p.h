@@ -123,7 +123,7 @@ private:
 
     void registerObjectWithContextById(const QV4::CompiledData::Object *object, QObject *instance) const;
 
-    inline QV4::Heap::QmlContext *currentQmlContext();
+    inline QV4::QmlContext *currentQmlContext();
     Q_NEVER_INLINE void createQmlContext();
 
     enum Phase {
@@ -137,7 +137,7 @@ private:
 
     QQmlEngine *engine;
     QV4::ExecutionEngine *v4;
-    QQmlRefPointer<QV4::CompiledData::CompilationUnit> compilationUnit;
+    QV4::CompiledData::CompilationUnit *compilationUnit;
     const QV4::CompiledData::Unit *qmlUnit;
     QQmlGuardedContextData parentContext;
     QQmlContextData *context;
@@ -161,9 +161,6 @@ private:
     QV4::QmlContext *_qmlContext;
 
     friend struct QQmlObjectCreatorRecursionWatcher;
-
-    typedef std::function<bool(QQmlObjectCreatorSharedState *sharedState)> PendingAliasBinding;
-    std::vector<PendingAliasBinding> pendingAliasBindings;
 };
 
 struct QQmlObjectCreatorRecursionWatcher
@@ -177,12 +174,12 @@ private:
     QRecursionWatcher<QQmlObjectCreatorSharedState, &QQmlObjectCreatorSharedState::recursionNode> watcher;
 };
 
-QV4::Heap::QmlContext *QQmlObjectCreator::currentQmlContext()
+QV4::QmlContext *QQmlObjectCreator::currentQmlContext()
 {
-    if (Q_UNLIKELY(!_qmlContext->isManaged()))
-        createQmlContext(); // less common slow path
+    if (!_qmlContext->isManaged())
+        _qmlContext->setM(QV4::QmlContext::create(v4->rootContext(), context, _scopeObject));
 
-    return _qmlContext->d();
+    return _qmlContext;
 }
 
 QT_END_NAMESPACE

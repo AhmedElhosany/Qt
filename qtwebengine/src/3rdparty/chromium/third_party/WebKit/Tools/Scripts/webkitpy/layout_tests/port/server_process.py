@@ -53,8 +53,6 @@ else:
     import select
     _quote_cmd = lambda cmdline: ' '.join(pipes.quote(arg) for arg in cmdline)
 
-from webkitpy.common.system.executive import ScriptError
-
 
 _log = logging.getLogger(__name__)
 
@@ -81,15 +79,12 @@ class ServerProcess(object):
     as necessary to keep issuing commands.
     """
 
-    def __init__(self, port_obj, name, cmd, env=None, universal_newlines=False, treat_no_data_as_crash=False,
+    def __init__(self, port_obj, name, cmd, env=None, treat_no_data_as_crash=False,
                  more_logging=False):
         self._port = port_obj
         self._name = name  # Should be the command name (e.g. content_shell, image_diff)
         self._cmd = cmd
         self._env = env
-        # Set if the process outputs non-standard newlines like '\r\n' or '\r'.
-        # Don't set if there will be binary data or the data must be ASCII encoded.
-        self._universal_newlines = universal_newlines
         self._treat_no_data_as_crash = treat_no_data_as_crash
         self._logging = more_logging
         self._host = self._port.host
@@ -97,7 +92,6 @@ class ServerProcess(object):
         self._reset()
 
         # See comment in imports for why we need the win32 APIs and can't just use select.
-        # FIXME: there should be a way to get win32 vs. cygwin from platforminfo.
         self._use_win32_apis = sys.platform == 'win32'
 
     def name(self):
@@ -129,21 +123,20 @@ class ServerProcess(object):
 
     def _start(self):
         if self._proc:
-            raise ValueError("%s already running" % self._name)
+            raise ValueError('%s already running' % self._name)
         self._reset()
         # close_fds is a workaround for http://bugs.python.org/issue2320
         close_fds = not self._host.platform.is_win()
         if self._logging:
             env_str = ''
             if self._env:
-                env_str += '\n'.join("%s=%s" % (k, v) for k, v in self._env.items()) + '\n'
+                env_str += '\n'.join('%s=%s' % (k, v) for k, v in self._env.items()) + '\n'
             _log.info('CMD: \n%s%s\n', env_str, _quote_cmd(self._cmd))
         self._proc = self._host.executive.popen(self._cmd, stdin=self._host.executive.PIPE,
                                                 stdout=self._host.executive.PIPE,
                                                 stderr=self._host.executive.PIPE,
                                                 close_fds=close_fds,
-                                                env=self._env,
-                                                universal_newlines=self._universal_newlines)
+                                                env=self._env)
         self._pid = self._proc.pid
         fd = self._proc.stdout.fileno()
         if not self._use_win32_apis:
@@ -160,9 +153,9 @@ class ServerProcess(object):
         """
         # FIXME: Linux and Mac set the returncode to -signal.SIGINT if a
         # subprocess is killed with a ctrl^C.  Previous comments in this
-        # routine said that supposedly Windows returns 0xc000001d, but that's not what
-        # -1073741510 evaluates to. Figure out what the right value is
-        # for win32 and cygwin here ...
+        # routine said that supposedly Windows returns 0xc000001d, but that's
+        # not what -1073741510 evaluates to. Figure out what the right value
+        # is for win32 here ...
         if self._proc.returncode in (-1073741510, -signal.SIGINT):
             raise KeyboardInterrupt
 
@@ -274,10 +267,10 @@ class ServerProcess(object):
         select_fds = (out_fd, err_fd)
         try:
             read_fds, _, _ = select.select(select_fds, [], select_fds, max(deadline - time.time(), 0))
-        except select.error as e:
+        except select.error as error:
             # We can ignore EINVAL since it's likely the process just crashed and we'll
             # figure that out the next time through the loop in _read().
-            if e.args[0] == errno.EINVAL:
+            if error.args[0] == errno.EINVAL:
                 return
             raise
 
@@ -300,9 +293,9 @@ class ServerProcess(object):
                     self._crashed = True
                 self._log_data('ERR', data)
                 self._error += data
-        except IOError as e:
-            # We can ignore the IOErrors because we will detect if the subporcess crashed
-            # the next time through the loop in _read()
+        except IOError:
+            # We can ignore the IOErrors because we will detect if the
+            # subprocess crashed the next time through the loop in _read().
             pass
 
     def _wait_for_data_and_update_buffers_using_win32_apis(self, deadline):
@@ -333,8 +326,8 @@ class ServerProcess(object):
             if avail > 0:
                 _, buf = win32file.ReadFile(handle, avail, None)
                 return buf
-        except Exception as e:
-            if e[0] not in (109, errno.ESHUTDOWN):  # 109 == win32 ERROR_BROKEN_PIPE
+        except Exception as error:  # pylint: disable=broad-except
+            if error[0] not in (109, errno.ESHUTDOWN):  # 109 == win32 ERROR_BROKEN_PIPE
                 raise
         return None
 
@@ -409,6 +402,12 @@ class ServerProcess(object):
         self._host.executive.kill_process(self._proc.pid)
         if self._proc.poll() is not None:
             self._proc.wait()
+
+    def replace_input(self, stdin):
+        assert self._proc
+        if stdin:
+            self._proc.stdin.close()
+            self._proc.stdin = stdin
 
     def replace_outputs(self, stdout, stderr):
         assert self._proc

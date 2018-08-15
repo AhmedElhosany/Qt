@@ -8,6 +8,7 @@
 #include "gm.h"
 #include "SkAlphaThresholdFilter.h"
 #include "SkOffsetImageFilter.h"
+#include "SkRegion.h"
 #include "SkSurface.h"
 
 #define WIDTH 500
@@ -88,7 +89,7 @@ static sk_sp<SkSurface> make_color_matching_surface(SkCanvas* canvas, int width,
                                                     SkAlphaType alphaType) {
 
     SkColorType ct = canvas->imageInfo().colorType();
-    sk_sp<SkColorSpace> cs(sk_ref_sp(canvas->imageInfo().colorSpace()));
+    sk_sp<SkColorSpace> cs(canvas->imageInfo().refColorSpace());
 
     if (kUnknown_SkColorType == ct) {
         // For backends that aren't yet color-space aware we just fallback to N32.
@@ -131,6 +132,9 @@ protected:
 
         sk_sp<SkSurface> surface(make_color_matching_surface(canvas, WIDTH, HEIGHT,
                                                              kPremul_SkAlphaType));
+        if (!surface) {
+            return;
+        }
 
         surface->getCanvas()->clear(SK_ColorTRANSPARENT);
         draw_rects(surface->getCanvas());

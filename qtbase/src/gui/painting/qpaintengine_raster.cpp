@@ -50,6 +50,7 @@
 #include <qdebug.h>
 #include <qbitmap.h>
 #include <qmath.h>
+#include <qrandom.h>
 
 //   #include <private/qdatabuffer_p.h>
 //   #include <private/qpainter_p.h>
@@ -993,7 +994,7 @@ void QRasterPaintEnginePrivate::drawImage(const QPointF &pt,
 
     Q_ASSERT(img.depth() >= 8);
 
-    int srcBPL = img.bytesPerLine();
+    qsizetype srcBPL = img.bytesPerLine();
     const uchar *srcBits = img.bits();
     int srcSize = img.depth() >> 3; // This is the part that is incompatible with lower than 8-bit..
     int iw = img.width();
@@ -1042,7 +1043,7 @@ void QRasterPaintEnginePrivate::drawImage(const QPointF &pt,
 
     // call the blend function...
     int dstSize = rasterBuffer->bytesPerPixel();
-    int dstBPL = rasterBuffer->bytesPerLine();
+    qsizetype dstBPL = rasterBuffer->bytesPerLine();
     func(rasterBuffer->buffer() + x * dstSize + y * dstBPL, dstBPL,
          srcBits, srcBPL,
          iw, ih,
@@ -2317,8 +2318,8 @@ void QRasterPaintEngine::drawImage(const QRectF &r, const QImage &img, const QRe
 
                 clippedSourceRect = clippedSourceRect.intersected(img.rect());
 
-                uint dbpl = d->rasterBuffer->bytesPerLine();
-                uint sbpl = img.bytesPerLine();
+                const qsizetype dbpl = d->rasterBuffer->bytesPerLine();
+                const qsizetype sbpl = img.bytesPerLine();
 
                 uchar *dst = d->rasterBuffer->buffer();
                 uint bpp = img.depth() >> 3;
@@ -2827,7 +2828,7 @@ bool QRasterPaintEngine::drawCachedGlyphs(int numGlyphs, const glyph_t *glyphs,
         cache->fillInPendingGlyphs();
 
         const QImage &image = cache->image();
-        int bpl = image.bytesPerLine();
+        qsizetype bpl = image.bytesPerLine();
 
         int depth = image.depth();
         int rightShift = 0;
@@ -4229,7 +4230,7 @@ protected:
     QSharedPointer<const CacheInfo> addCacheElement(quint64 hash_val, const QGradient &gradient, int opacity) {
         if (cache.size() == maxCacheSize()) {
             // may remove more than 1, but OK
-            cache.erase(cache.begin() + (qrand() % maxCacheSize()));
+            cache.erase(cache.begin() + QRandomGenerator::global()->bounded(maxCacheSize()));
         }
         auto cache_entry = QSharedPointer<CacheInfo>::create(gradient.stops(), opacity, gradient.interpolationMode());
         generateGradientColorTable(gradient, cache_entry->buffer64, paletteSize(), opacity);

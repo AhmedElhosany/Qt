@@ -13,7 +13,6 @@
 #include "base/optional.h"
 #include "base/time/time.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_config.h"
-#include "net/base/network_interfaces.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace base {
@@ -40,10 +39,7 @@ class TestDataReductionProxyParams;
 // change the underlying state.
 class TestDataReductionProxyConfig : public DataReductionProxyConfig {
  public:
-  // Creates a |TestDataReductionProxyConfig| with the provided |params_flags|.
   TestDataReductionProxyConfig(
-      int params_flags,
-      unsigned int params_definitions,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
       net::NetLog* net_log,
       DataReductionProxyConfigurator* configurator,
@@ -61,11 +57,8 @@ class TestDataReductionProxyConfig : public DataReductionProxyConfig {
 
   ~TestDataReductionProxyConfig() override;
 
-  void GetNetworkList(net::NetworkInterfaceList* interfaces,
-                      int policy) override;
-
   // Allows tests to reset the params being used for configuration.
-  void ResetParamFlagsForTest(int flags);
+  void ResetParamFlagsForTest();
 
   // Retrieves the test params being used for the configuration.
   TestDataReductionProxyParams* test_params();
@@ -73,10 +66,6 @@ class TestDataReductionProxyConfig : public DataReductionProxyConfig {
   // Retrieves the underlying config values.
   // TODO(jeremyim): Rationalize with test_params().
   DataReductionProxyConfigValues* config_values();
-
-  // Allows tests to set the internal state.
-  void SetStateForTest(bool enabled_by_user,
-                       bool secure_proxy_enabled);
 
   // Resets the Lo-Fi status to default state.
   void ResetLoFiStatusForTest();
@@ -86,10 +75,6 @@ class TestDataReductionProxyConfig : public DataReductionProxyConfig {
 
   bool IsNetworkQualityProhibitivelySlow(
       const net::NetworkQualityEstimator* network_quality_estimator) override;
-
-  net::NetworkInterfaceList* interfaces() {
-    return network_interfaces_.get();
-  }
 
   void SetLofiAccuracyRecordingIntervals(
       const std::vector<base::TimeDelta>& lofi_accuracy_recording_intervals);
@@ -118,13 +103,23 @@ class TestDataReductionProxyConfig : public DataReductionProxyConfig {
   // Resets the behavior of WasDataReductionProxyUsed() calls.
   void ResetWasDataReductionProxyUsed();
 
+  // Sets if the captive portal probe has been blocked for the current network.
+  void SetIsCaptivePortal(bool is_captive_portal);
+
+  void SetConnectionTypeForTesting(
+      net::NetworkChangeNotifier::ConnectionType connection_type) {
+    connection_type_ = connection_type;
+  }
+
+  using DataReductionProxyConfig::UpdateConfigForTesting;
+
  private:
+  bool GetIsCaptivePortal() const override;
+
   base::TickClock* tick_clock_;
 
   base::Optional<bool> was_data_reduction_proxy_used_;
   base::Optional<int> proxy_index_;
-
-  std::unique_ptr<net::NetworkInterfaceList> network_interfaces_;
 
   bool network_quality_prohibitively_slow_set_;
   // True if the network quality is slow enough to turn Lo-Fi ON.
@@ -132,6 +127,10 @@ class TestDataReductionProxyConfig : public DataReductionProxyConfig {
 
   bool lofi_accuracy_recording_intervals_set_;
   std::vector<base::TimeDelta> lofi_accuracy_recording_intervals_;
+
+  // Set to true if the captive portal probe for the current network has been
+  // blocked.
+  bool is_captive_portal_;
 
   DISALLOW_COPY_AND_ASSIGN(TestDataReductionProxyConfig);
 };
@@ -149,8 +148,6 @@ class MockDataReductionProxyConfig : public TestDataReductionProxyConfig {
       DataReductionProxyEventCreator* event_creator);
   ~MockDataReductionProxyConfig();
 
-  MOCK_METHOD1(RecordSecureProxyCheckFetchResult,
-               void(SecureProxyCheckFetchResult result));
   MOCK_METHOD2(SetProxyPrefs, void(bool enabled, bool at_startup));
   MOCK_CONST_METHOD2(IsDataReductionProxy,
                      bool(const net::ProxyServer& proxy_server,
@@ -167,14 +164,13 @@ class MockDataReductionProxyConfig : public TestDataReductionProxyConfig {
                      bool(const net::URLRequest& request,
                           const net::ProxyConfig& data_reduction_proxy_config,
                           base::TimeDelta* min_retry_delay));
-  MOCK_METHOD2(SecureProxyCheck,
-               void(const GURL& secure_proxy_check_url,
-                    FetcherResponseCallback fetcher_callback));
+  MOCK_METHOD1(SecureProxyCheck,
+               void(FetcherResponseCallback fetcher_callback));
   MOCK_METHOD1(
       IsNetworkQualityProhibitivelySlow,
       bool(const net::NetworkQualityEstimator* network_quality_estimator));
 
-  void UpdateConfigurator(bool enabled, bool restricted) override;
+  using DataReductionProxyConfig::UpdateConfigForTesting;
 
   // Resets the Lo-Fi status to default state.
   void ResetLoFiStatusForTest();

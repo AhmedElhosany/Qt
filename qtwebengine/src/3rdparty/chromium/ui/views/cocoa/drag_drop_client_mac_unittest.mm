@@ -6,10 +6,12 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include "base/mac/availability.h"
 #import "base/mac/scoped_objc_class_swizzler.h"
 #include "base/mac/sdk_forward_declarations.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
+#import "ui/base/clipboard/clipboard_util_mac.h"
 #import "ui/views/cocoa/bridged_native_widget.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
@@ -40,7 +42,8 @@ using base::ASCIIToUTF16;
 @property BOOL animatesToDestination;
 @property NSInteger numberOfValidItemsForDrop;
 @property NSDraggingFormation draggingFormation;
-@property(readonly) NSSpringLoadingHighlight springLoadingHighlight;
+@property(readonly)
+    NSSpringLoadingHighlight springLoadingHighlight API_AVAILABLE(macos(10.11));
 
 @end
 
@@ -279,17 +282,17 @@ TEST_F(DragDropClientMacTest, InvalidFormatDragDrop) {
 TEST_F(DragDropClientMacTest, PasteboardToOSExchangeTest) {
   target_->set_formats(ui::OSExchangeData::STRING);
 
-  NSPasteboard* pasteboard = [NSPasteboard pasteboardWithUniqueName];
+  scoped_refptr<ui::UniquePasteboard> pasteboard = new ui::UniquePasteboard;
 
   // The test should reject the data if the pasteboard is empty.
-  EXPECT_EQ(DragUpdate(pasteboard), NSDragOperationNone);
+  EXPECT_EQ(DragUpdate(pasteboard->get()), NSDragOperationNone);
   EXPECT_EQ(Drop(), NSDragOperationNone);
   drag_drop_client()->EndDrag();
 
   // Add valid data to the pasteboard and check to see if the target accepts
   // it.
-  [pasteboard setString:@"text" forType:NSPasteboardTypeString];
-  EXPECT_EQ(DragUpdate(pasteboard), NSDragOperationCopy);
+  [pasteboard->get() setString:@"text" forType:NSPasteboardTypeString];
+  EXPECT_EQ(DragUpdate(pasteboard->get()), NSDragOperationCopy);
   EXPECT_EQ(Drop(), NSDragOperationMove);
 }
 

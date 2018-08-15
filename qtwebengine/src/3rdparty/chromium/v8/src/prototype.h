@@ -27,8 +27,6 @@ class PrototypeIterator {
  public:
   enum WhereToEnd { END_AT_NULL, END_AT_NON_HIDDEN };
 
-  const int kProxyPrototypeLimit = 100 * 1000;
-
   PrototypeIterator(Isolate* isolate, Handle<JSReceiver> receiver,
                     WhereToStart where_to_start = kStartAtPrototype,
                     WhereToEnd where_to_end = END_AT_NULL)
@@ -160,9 +158,8 @@ class PrototypeIterator {
     // Due to possible __proto__ recursion limit the number of Proxies
     // we visit to an arbitrarily chosen large number.
     seen_proxies_++;
-    if (seen_proxies_ > kProxyPrototypeLimit) {
-      isolate_->Throw(
-          *isolate_->factory()->NewRangeError(MessageTemplate::kStackOverflow));
+    if (seen_proxies_ > JSProxy::kMaxIterationLimit) {
+      isolate_->StackOverflow();
       return false;
     }
     MaybeHandle<Object> proto =
@@ -174,6 +171,7 @@ class PrototypeIterator {
   }
 
   bool IsAtEnd() const { return is_at_end_; }
+  Isolate* isolate() const { return isolate_; }
 
  private:
   Isolate* isolate_;

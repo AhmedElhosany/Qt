@@ -21,14 +21,14 @@ H264Decoder::H264Accelerator::H264Accelerator() {}
 H264Decoder::H264Accelerator::~H264Accelerator() {}
 
 H264Decoder::H264Decoder(H264Accelerator* accelerator)
-    : max_frame_num_(0),
+    : state_(kNeedStreamMetadata),
+      max_frame_num_(0),
       max_pic_num_(0),
       max_long_term_frame_idx_(0),
       max_num_reorder_frames_(0),
       accelerator_(accelerator) {
   DCHECK(accelerator_);
   Reset();
-  state_ = kNeedStreamMetadata;
 }
 
 H264Decoder::~H264Decoder() {}
@@ -176,6 +176,8 @@ bool H264Decoder::InitCurrPicture(const H264SliceHeader* slice_hdr) {
     memcpy(curr_pic_->ref_pic_marking, slice_hdr->ref_pic_marking,
            sizeof(curr_pic_->ref_pic_marking));
   }
+
+  curr_pic_->visible_rect = visible_rect_;
 
   return true;
 }
@@ -1102,15 +1104,6 @@ bool H264Decoder::ProcessSPS(int sps_id, bool* need_new_buffers) {
     return false;
   }
 
-  if (new_pic_size == pic_size_) {
-    // Already have surfaces and this SPS keeps the same resolution,
-    // no need to request a new set.
-    return true;
-  }
-
-  pic_size_ = new_pic_size;
-  DVLOG(1) << "New picture size: " << pic_size_.ToString();
-
   int level = sps->level_idc;
   int max_dpb_mbs = LevelToMaxDpbMbs(level);
   if (max_dpb_mbs == 0)
@@ -1118,19 +1111,31 @@ bool H264Decoder::ProcessSPS(int sps_id, bool* need_new_buffers) {
 
   size_t max_dpb_size = std::min(max_dpb_mbs / (width_mb * height_mb),
                                  static_cast<int>(H264DPB::kDPBMaxSize));
-  DVLOG(1) << "Codec level: " << level << ", DPB size: " << max_dpb_size;
   if (max_dpb_size == 0) {
     DVLOG(1) << "Invalid DPB Size";
     return false;
   }
 
-  dpb_.set_max_num_pics(max_dpb_size);
+  if ((pic_size_ != new_pic_size) || (dpb_.max_num_pics() != max_dpb_size)) {
+    if (!Flush())
+      return false;
+    DVLOG(1) << "Codec level: " << level << ", DPB size: " << max_dpb_size
+             << ", Picture size: " << new_pic_size.ToString();
+    *need_new_buffers = true;
+    pic_size_ = new_pic_size;
+    dpb_.set_max_num_pics(max_dpb_size);
+  }
+
+  gfx::Rect new_visible_rect = sps->GetVisibleRect().value_or(gfx::Rect());
+  if (visible_rect_ != new_visible_rect) {
+    DVLOG(2) << "New visible rect: " << new_visible_rect.ToString();
+    visible_rect_ = new_visible_rect;
+  }
 
   if (!UpdateMaxNumReorderFrames(sps))
     return false;
   DVLOG(1) << "max_num_reorder_frames: " << max_num_reorder_frames_;
 
-  *need_new_buffers = true;
   return true;
 }
 
@@ -1383,9 +1388,6 @@ H264Decoder::DecodeResult H264Decoder::Decode() {
           state_ = kAfterReset;
 
         if (need_new_buffers) {
-          if (!Flush())
-            return kDecodeError;
-
           curr_pic_ = nullptr;
           curr_nalu_ = nullptr;
           ref_pic_list_p0_.clear();

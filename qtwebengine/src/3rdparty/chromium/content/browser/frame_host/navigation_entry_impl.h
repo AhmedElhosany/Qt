@@ -8,17 +8,17 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
+#include <vector>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "content/browser/frame_host/frame_navigation_entry.h"
 #include "content/browser/frame_host/frame_tree_node.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/common/frame_message_enums.h"
-#include "content/common/resource_request_body_impl.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/browser/navigation_entry.h"
@@ -26,9 +26,11 @@
 #include "content/public/browser/restore_type.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/common/page_state.h"
+#include "content/public/common/previews_state.h"
+#include "content/public/common/resource_request_body.h"
 
 namespace content {
-class ResourceRequestBodyImpl;
+class ResourceRequestBody;
 struct CommonNavigationParams;
 struct RequestNavigationParams;
 struct StartNavigationParams;
@@ -71,7 +73,7 @@ class CONTENT_EXPORT NavigationEntryImpl
     scoped_refptr<FrameNavigationEntry> frame_entry;
 
     // List of child TreeNodes, which will be deleted when this node is.
-    ScopedVector<TreeNode> children;
+    std::vector<std::unique_ptr<TreeNode>> children;
   };
 
   static NavigationEntryImpl* FromNavigationEntry(NavigationEntry* entry);
@@ -176,16 +178,17 @@ class CONTENT_EXPORT NavigationEntryImpl
   // NavigationEntry.
   CommonNavigationParams ConstructCommonNavigationParams(
       const FrameNavigationEntry& frame_entry,
-      const scoped_refptr<ResourceRequestBodyImpl>& post_body,
+      const scoped_refptr<ResourceRequestBody>& post_body,
       const GURL& dest_url,
       const Referrer& dest_referrer,
       FrameMsg_Navigate_Type::Value navigation_type,
-      LoFiState lofi_state,
+      PreviewsState previews_state,
       const base::TimeTicks& navigation_start) const;
   StartNavigationParams ConstructStartNavigationParams() const;
   RequestNavigationParams ConstructRequestNavigationParams(
       const FrameNavigationEntry& frame_entry,
-      bool is_same_document_history_load,
+      const GURL& original_url,
+      const std::string& original_method,
       bool is_history_navigation_in_new_child,
       const std::map<std::string, bool>& subframe_unique_names,
       bool has_committed_real_load,
@@ -388,6 +391,11 @@ class CONTENT_EXPORT NavigationEntryImpl
   // Returns the history URL for a data URL to use in Blink.
   GURL GetHistoryURLForDataURL() const;
 
+  // These flags are set when the navigation controller gets notified of an SSL
+  // error while a navigation is pending.
+  void set_ssl_error(bool error) { ssl_error_ = error; }
+  bool ssl_error() const { return ssl_error_; }
+
 #if defined(OS_ANDROID)
   base::TimeTicks intent_received_timestamp() const {
     return intent_received_timestamp_;
@@ -448,7 +456,7 @@ class CONTENT_EXPORT NavigationEntryImpl
   // If the post request succeeds, this field is cleared since the same
   // information is stored in PageState. It is also only shallow copied with
   // compiler provided copy constructor.  Cleared in |ResetForCommit|.
-  scoped_refptr<ResourceRequestBodyImpl> post_data_;
+  scoped_refptr<ResourceRequestBody> post_data_;
 
   // This is also a transient member (i.e. is not persisted with session
   // restore). The screenshot of a page is taken when navigating away from the
@@ -542,6 +550,10 @@ class CONTENT_EXPORT NavigationEntryImpl
   // persisted, unless specific data is taken out/put back in at save/restore
   // time (see TabNavigation for an example of this).
   std::map<std::string, base::string16> extra_data_;
+
+  // Set to true if the navigation controller gets notified about a SSL error
+  // for a pending navigation. Defaults to false.
+  bool ssl_error_;
 
   DISALLOW_COPY_AND_ASSIGN(NavigationEntryImpl);
 };

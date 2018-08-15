@@ -13,6 +13,7 @@
 #import <WebRTC/RTCMacros.h>
 
 @class RTCIceServer;
+@class RTCIntervalRange;
 
 /**
  * Represents the ice transport policy. This exposes the same states in C++,
@@ -84,6 +85,7 @@ RTC_EXPORT
 @property(nonatomic, assign)
     RTCContinualGatheringPolicy continualGatheringPolicy;
 @property(nonatomic, assign) int audioJitterBufferMaxPackets;
+@property(nonatomic, assign) BOOL audioJitterBufferFastAccelerate;
 @property(nonatomic, assign) int iceConnectionReceivingTimeout;
 @property(nonatomic, assign) int iceBackupCandidatePairPingInterval;
 
@@ -103,7 +105,19 @@ RTC_EXPORT
  */
 @property(nonatomic, assign) BOOL shouldPresumeWritableWhenFullyRelayed;
 
-- (instancetype)init NS_DESIGNATED_INITIALIZER;
+/** If set to non-nil, controls the minimal interval between consecutive ICE
+ *  check packets.
+ */
+@property(nonatomic, copy, nullable) NSNumber *iceCheckMinInterval;
+
+/** ICE Periodic Regathering
+ *  If set, WebRTC will periodically create and propose candidates without
+ *  starting a new ICE generation. The regathering happens continuously with
+ *  interval specified in milliseconds by the uniform distribution [a, b].
+ */
+@property(nonatomic, strong, nullable) RTCIntervalRange *iceRegatherIntervalRange;
+
+- (instancetype)init;
 
 @end
 

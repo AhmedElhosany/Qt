@@ -15,16 +15,13 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <memory>
 #include <set>
 #include <utility>
-#include <vector>
 
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/lazy_instance.h"
-#include "base/memory/scoped_vector.h"
 #include "base/native_library.h"
 #include "base/pickle.h"
 #include "base/posix/eintr_wrapper.h"
@@ -34,7 +31,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/sys_info.h"
 #include "build/build_config.h"
-#include "content/common/child_process_sandbox_support_impl_linux.h"
 #include "content/common/font_config_ipc_linux.h"
 #include "content/common/sandbox_linux/sandbox_debug_handling_linux.h"
 #include "content/common/sandbox_linux/sandbox_linux.h"
@@ -44,6 +40,8 @@
 #include "content/public/common/sandbox_linux.h"
 #include "content/public/common/zygote_fork_delegate_linux.h"
 #include "content/zygote/zygote_linux.h"
+#include "media/media_features.h"
+#include "ppapi/features/features.h"
 #include "sandbox/linux/services/credentials.h"
 #include "sandbox/linux/services/init_process_reaper.h"
 #include "sandbox/linux/services/namespace_sandbox.h"
@@ -60,18 +58,17 @@
 #include <sys/prctl.h>
 #endif
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 #include "content/common/pepper_plugin_list.h"
 #include "content/public/common/pepper_plugin_info.h"
 #endif
 
-#if defined(ENABLE_WEBRTC)
-#include "third_party/webrtc_overrides/init_webrtc.h"
+#if BUILDFLAG(ENABLE_WEBRTC)
+#include "third_party/webrtc_overrides/init_webrtc.h"  // nogncheck
 #endif
 
-#if defined(SANITIZER_COVERAGE)
-#include <sanitizer/common_interface_defs.h>
-#include <sanitizer/coverage_interface.h>
+#if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+#include "content/common/media/cdm_host_files.h"
 #endif
 
 namespace content {
@@ -334,7 +331,7 @@ struct tm* localtime64_r_override(const time_t* timep, struct tm* result) {
   return res;
 }
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 // Loads the (native) libraries but does not initialize them (i.e., does not
 // call PPP_InitializeModule). This is needed by the zygote on Linux to get
 // access to the plugins before entering the sandbox.
@@ -380,12 +377,16 @@ static void ZygotePreSandboxInit() {
   // will work inside the sandbox.
   RAND_set_urandom_fd(base::GetUrandomFD());
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
   // Ensure access to the Pepper plugins before the sandbox is turned on.
   PreloadPepperPlugins();
 #endif
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   InitializeWebRtcModule();
+#endif
+
+#if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+  CdmHostFiles::CreateGlobalInstance();
 #endif
 
   SkFontConfigInterface::SetGlobal(
@@ -421,7 +422,7 @@ static void ZygotePreSandboxInit() {
     custom.fFontsXml = font_config.c_str();
     custom.fIsolated = true;
 
-    blink::WebFontRendering::setSkiaFontManager(SkFontMgr_New_Android(&custom));
+    blink::WebFontRendering::SetSkiaFontManager(SkFontMgr_New_Android(&custom));
   }
 }
 
@@ -492,77 +493,6 @@ static void EnterNamespaceSandbox(LinuxSandbox* linux_sandbox,
   }
 }
 
-#if defined(SANITIZER_COVERAGE)
-static int g_sanitizer_message_length = 1 * 1024 * 1024;
-
-// A helper process which collects code coverage data from the renderers over a
-// socket and dumps it to a file. See http://crbug.com/336212 for discussion.
-static void SanitizerCoverageHelper(int socket_fd, int file_fd) {
-  std::unique_ptr<char[]> buffer(new char[g_sanitizer_message_length]);
-  while (true) {
-    ssize_t received_size = HANDLE_EINTR(
-        recv(socket_fd, buffer.get(), g_sanitizer_message_length, 0));
-    PCHECK(received_size >= 0);
-    if (received_size == 0)
-      // All clients have closed the socket. We should die.
-      _exit(0);
-    PCHECK(file_fd >= 0);
-    ssize_t written_size = 0;
-    while (written_size < received_size) {
-      ssize_t write_res =
-          HANDLE_EINTR(write(file_fd, buffer.get() + written_size,
-                             received_size - written_size));
-      PCHECK(write_res >= 0);
-      written_size += write_res;
-    }
-    PCHECK(0 == HANDLE_EINTR(fsync(file_fd)));
-  }
-}
-
-// fds[0] is the read end, fds[1] is the write end.
-static void CreateSanitizerCoverageSocketPair(int fds[2]) {
-  PCHECK(0 == socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));
-  PCHECK(0 == shutdown(fds[0], SHUT_WR));
-  PCHECK(0 == shutdown(fds[1], SHUT_RD));
-
-  // Find the right buffer size for sending coverage data.
-  // The kernel will silently set the buffer size to the allowed maximum when
-  // the specified size is too large, so we set our desired size and read it
-  // back.
-  int* buf_size = &g_sanitizer_message_length;
-  socklen_t option_length = sizeof(*buf_size);
-  PCHECK(0 == setsockopt(fds[1], SOL_SOCKET, SO_SNDBUF,
-                         buf_size, option_length));
-  PCHECK(0 == getsockopt(fds[1], SOL_SOCKET, SO_SNDBUF,
-                         buf_size, &option_length));
-  DCHECK_EQ(sizeof(*buf_size), option_length);
-  // The kernel returns the doubled buffer size.
-  *buf_size /= 2;
-  PCHECK(*buf_size > 0);
-}
-
-static pid_t ForkSanitizerCoverageHelper(
-    int child_fd,
-    int parent_fd,
-    base::ScopedFD file_fd,
-    const std::vector<int>& extra_fds_to_close) {
-  pid_t pid = fork();
-  PCHECK(pid >= 0);
-  if (pid == 0) {
-    // In the child.
-    PCHECK(0 == IGNORE_EINTR(close(parent_fd)));
-    CloseFds(extra_fds_to_close);
-    SanitizerCoverageHelper(child_fd, file_fd.get());
-    _exit(0);
-  } else {
-    // In the parent.
-    PCHECK(0 == IGNORE_EINTR(close(child_fd)));
-    return pid;
-  }
-}
-
-#endif  // defined(SANITIZER_COVERAGE)
-
 static void EnterLayerOneSandbox(LinuxSandbox* linux_sandbox,
                                  const bool using_layer1_sandbox,
                                  base::Closure* post_fork_parent_callback) {
@@ -587,31 +517,14 @@ static void EnterLayerOneSandbox(LinuxSandbox* linux_sandbox,
   }
 }
 
-bool ZygoteMain(const MainFunctionParams& params,
-                ScopedVector<ZygoteForkDelegate> fork_delegates) {
+bool ZygoteMain(
+    const MainFunctionParams& params,
+    std::vector<std::unique_ptr<ZygoteForkDelegate>> fork_delegates) {
   g_am_zygote_or_renderer = true;
 
   std::vector<int> fds_to_close_post_fork;
 
   LinuxSandbox* linux_sandbox = LinuxSandbox::GetInstance();
-
-#if defined(SANITIZER_COVERAGE)
-  const std::string sancov_file_name =
-      "zygote." + base::Uint64ToString(base::RandUint64());
-  base::ScopedFD sancov_file_fd(
-      __sanitizer_maybe_open_cov_file(sancov_file_name.c_str()));
-  int sancov_socket_fds[2] = {-1, -1};
-  CreateSanitizerCoverageSocketPair(sancov_socket_fds);
-  linux_sandbox->sanitizer_args()->coverage_sandboxed = 1;
-  linux_sandbox->sanitizer_args()->coverage_fd = sancov_socket_fds[1];
-  linux_sandbox->sanitizer_args()->coverage_max_block_size =
-      g_sanitizer_message_length;
-  // Zygote termination will block until the helper process exits, which will
-  // not happen until the write end of the socket is closed everywhere. Make
-  // sure the init process does not hold on to it.
-  fds_to_close_post_fork.push_back(sancov_socket_fds[0]);
-  fds_to_close_post_fork.push_back(sancov_socket_fds[1]);
-#endif  // SANITIZER_COVERAGE
 
   // Skip pre-initializing sandbox under --no-sandbox for crbug.com/444900.
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -633,15 +546,20 @@ bool ZygoteMain(const MainFunctionParams& params,
 
   if (using_layer1_sandbox) {
     // Let the ZygoteHost know we're booting up.
-    CHECK(base::UnixDomainSocket::SendMsg(kZygoteSocketPairFd,
-                                          kZygoteBootMessage,
-                                          sizeof(kZygoteBootMessage),
-                                          std::vector<int>()));
+    if (!base::UnixDomainSocket::SendMsg(
+            kZygoteSocketPairFd, kZygoteBootMessage, sizeof(kZygoteBootMessage),
+            std::vector<int>())) {
+      // This is not a CHECK failure because the browser process could either
+      // crash or quickly exit while the zygote is starting. In either case a
+      // zygote crash is not useful. http://crbug.com/692227
+      PLOG(ERROR) << "Failed sending zygote boot message";
+      _exit(1);
+    }
   }
 
   VLOG(1) << "ZygoteMain: initializing " << fork_delegates.size()
           << " fork delegates";
-  for (ZygoteForkDelegate* fork_delegate : fork_delegates) {
+  for (const auto& fork_delegate : fork_delegates) {
     fork_delegate->Init(GetSandboxFD(), using_layer1_sandbox);
   }
 
@@ -662,21 +580,6 @@ bool ZygoteMain(const MainFunctionParams& params,
   // knowledge of.
   std::vector<pid_t> extra_children;
   std::vector<int> extra_fds;
-
-#if defined(SANITIZER_COVERAGE)
-  pid_t sancov_helper_pid = ForkSanitizerCoverageHelper(
-      sancov_socket_fds[0], sancov_socket_fds[1], std::move(sancov_file_fd),
-      sandbox_fds_to_close_post_fork);
-  // It's important that the zygote reaps the helper before dying. Otherwise,
-  // the destruction of the PID namespace could kill the helper before it
-  // completes its I/O tasks. |sancov_helper_pid| will exit once the last
-  // renderer holding the write end of |sancov_socket_fds| closes it.
-  extra_children.push_back(sancov_helper_pid);
-  // Sanitizer code in the renderers will inherit the write end of the socket
-  // from the zygote. We must keep it open until the very end of the zygote's
-  // lifetime, even though we don't explicitly use it.
-  extra_fds.push_back(sancov_socket_fds[1]);
-#endif  // SANITIZER_COVERAGE
 
   const int sandbox_flags = linux_sandbox->GetStatus();
 

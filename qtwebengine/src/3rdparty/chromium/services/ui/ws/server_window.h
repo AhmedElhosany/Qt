@@ -14,19 +14,17 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
+#include "cc/ipc/compositor_frame_sink.mojom.h"
+#include "cc/ipc/frame_sink_manager.mojom.h"
 #include "mojo/public/cpp/bindings/binding.h"
+#include "services/ui/public/interfaces/window_manager_constants.mojom.h"
 #include "services/ui/public/interfaces/window_tree.mojom.h"
-#include "services/ui/surfaces/surfaces_context_provider.h"
 #include "services/ui/ws/ids.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/transform.h"
 #include "ui/platform_window/text_input_state.h"
-
-namespace gpu {
-class GpuMemoryBufferManager;
-}
 
 namespace ui {
 namespace ws {
@@ -63,19 +61,23 @@ class ServerWindow {
 
   // Creates a new CompositorFrameSink of the specified type, replacing the
   // existing.
-  // TODO(fsamuel): We should not be passing in |gpu_memory_buffer_manager| and
-  // |context_provider|. The window server should not know anything about them.
-  // Instead, they should be a CompositorFrameSink service-side implementation
-  // detail.
-  void CreateCompositorFrameSink(
-      mojom::CompositorFrameSinkType compositor_frame_sink_type,
+  void CreateRootCompositorFrameSink(
       gfx::AcceleratedWidget widget,
-      gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager,
-      scoped_refptr<SurfacesContextProvider> context_provider,
-      cc::mojom::MojoCompositorFrameSinkRequest request,
-      cc::mojom::MojoCompositorFrameSinkClientPtr client);
+      cc::mojom::CompositorFrameSinkAssociatedRequest sink_request,
+      cc::mojom::CompositorFrameSinkClientPtr client,
+      cc::mojom::DisplayPrivateAssociatedRequest display_request);
+
+  void CreateCompositorFrameSink(
+      cc::mojom::CompositorFrameSinkRequest request,
+      cc::mojom::CompositorFrameSinkClientPtr client);
 
   const WindowId& id() const { return id_; }
+
+  const viz::FrameSinkId& frame_sink_id() const { return frame_sink_id_; }
+
+  const base::Optional<viz::LocalSurfaceId>& current_local_surface_id() const {
+    return current_local_surface_id_;
+  }
 
   void Add(ServerWindow* child);
   void Remove(ServerWindow* child);
@@ -86,7 +88,9 @@ class ServerWindow {
   const gfx::Rect& bounds() const { return bounds_; }
   // Sets the bounds. If the size changes this implicitly resets the client
   // area to fill the whole bounds.
-  void SetBounds(const gfx::Rect& bounds);
+  void SetBounds(const gfx::Rect& bounds,
+                 const base::Optional<viz::LocalSurfaceId>& local_surface_id =
+                     base::nullopt);
 
   const std::vector<gfx::Rect>& additional_client_areas() const {
     return additional_client_areas_;
@@ -102,14 +106,14 @@ class ServerWindow {
   bool can_accept_drops() const { return accepts_drops_; }
   void SetCanAcceptDrops(bool accepts_drags);
 
-  ui::mojom::Cursor cursor() const { return cursor_id_; }
-  ui::mojom::Cursor non_client_cursor() const {
-    return non_client_cursor_id_;
-  }
+  const ui::CursorData& cursor() const { return cursor_; }
+  const ui::CursorData& non_client_cursor() const { return non_client_cursor_; }
 
   const ServerWindow* parent() const { return parent_; }
   ServerWindow* parent() { return parent_; }
 
+  // NOTE: this returns null if the window does not have an ancestor associated
+  // with a display.
   const ServerWindow* GetRoot() const;
   ServerWindow* GetRoot() {
     return const_cast<ServerWindow*>(
@@ -132,8 +136,8 @@ class ServerWindow {
 
   const Windows& transient_children() const { return transient_children_; }
 
-  bool is_modal() const { return is_modal_; }
-  void SetModal();
+  ModalType modal_type() const { return modal_type_; }
+  void SetModalType(ModalType modal_type);
 
   // Returns true if this contains |window| or is |window|.
   bool Contains(const ServerWindow* window) const;
@@ -146,8 +150,8 @@ class ServerWindow {
   float opacity() const { return opacity_; }
   void SetOpacity(float value);
 
-  void SetPredefinedCursor(ui::mojom::Cursor cursor_id);
-  void SetNonClientCursor(ui::mojom::Cursor cursor_id);
+  void SetCursor(ui::CursorData cursor);
+  void SetNonClientCursor(ui::CursorData cursor);
 
   const gfx::Transform& transform() const { return transform_; }
   void SetTransform(const gfx::Transform& transform);
@@ -167,18 +171,30 @@ class ServerWindow {
   void set_can_focus(bool can_focus) { can_focus_ = can_focus; }
   bool can_focus() const { return can_focus_; }
 
-  void set_can_accept_events(bool value) { can_accept_events_ = value; }
-  bool can_accept_events() const { return can_accept_events_; }
+  void set_event_targeting_policy(mojom::EventTargetingPolicy policy) {
+    event_targeting_policy_ = policy;
+  }
+  mojom::EventTargetingPolicy event_targeting_policy() const {
+    return event_targeting_policy_;
+  }
 
   // Returns true if this window is attached to a root and all ancestors are
   // visible.
   bool IsDrawn() const;
 
-  const gfx::Insets& extended_hit_test_region() const {
-    return extended_hit_test_region_;
+  mojom::ShowState GetShowState() const;
+
+  const gfx::Insets& extended_mouse_hit_test_region() const {
+    return extended_mouse_hit_test_region_;
   }
-  void set_extended_hit_test_region(const gfx::Insets& insets) {
-    extended_hit_test_region_ = insets;
+  const gfx::Insets& extended_touch_hit_test_region() const {
+    return extended_touch_hit_test_region_;
+  }
+  void set_extended_hit_test_regions_for_children(
+      const gfx::Insets& mouse_insets,
+      const gfx::Insets& touch_insets) {
+    extended_mouse_hit_test_region_ = mouse_insets;
+    extended_touch_hit_test_region_ = touch_insets;
   }
 
   ServerWindowCompositorFrameSinkManager*
@@ -200,7 +216,7 @@ class ServerWindow {
   // Called when the window is no longer an embed root.
   void OnEmbeddedAppDisconnected();
 
-#if !defined(NDEBUG) || defined(DCHECK_ALWAYS_ON)
+#if DCHECK_IS_ON()
   std::string GetDebugWindowHierarchy() const;
   std::string GetDebugWindowInfo() const;
   void BuildDebugInfo(const std::string& depth, std::string* result) const;
@@ -223,6 +239,9 @@ class ServerWindow {
 
   ServerWindowDelegate* delegate_;
   const WindowId id_;
+  viz::FrameSinkId frame_sink_id_;
+  base::Optional<viz::LocalSurfaceId> current_local_surface_id_;
+
   ServerWindow* parent_;
   Windows children_;
 
@@ -233,18 +252,19 @@ class ServerWindow {
   ServerWindow* transient_parent_;
   Windows transient_children_;
 
-  bool is_modal_;
+  ModalType modal_type_;
   bool visible_;
   gfx::Rect bounds_;
   gfx::Insets client_area_;
   std::vector<gfx::Rect> additional_client_areas_;
   std::unique_ptr<ServerWindowCompositorFrameSinkManager>
       compositor_frame_sink_manager_;
-  mojom::Cursor cursor_id_;
-  mojom::Cursor non_client_cursor_id_;
+  ui::CursorData cursor_;
+  ui::CursorData non_client_cursor_;
   float opacity_;
   bool can_focus_;
-  bool can_accept_events_;
+  mojom::EventTargetingPolicy event_targeting_policy_ =
+      mojom::EventTargetingPolicy::TARGET_AND_DESCENDANTS;
   gfx::Transform transform_;
   ui::TextInputState text_input_state_;
 
@@ -254,7 +274,8 @@ class ServerWindow {
 
   // The hit test for windows extends outside the bounds of the window by this
   // amount.
-  gfx::Insets extended_hit_test_region_;
+  gfx::Insets extended_mouse_hit_test_region_;
+  gfx::Insets extended_touch_hit_test_region_;
 
   // Mouse events outside the hit test mask don't hit the window. An empty mask
   // means all events miss the window. If null there is no mask.

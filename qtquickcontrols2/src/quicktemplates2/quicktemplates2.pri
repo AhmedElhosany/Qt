@@ -3,6 +3,8 @@ INCLUDEPATH += $$PWD
 HEADERS += \
     $$PWD/qquickabstractbutton_p.h \
     $$PWD/qquickabstractbutton_p_p.h \
+    $$PWD/qquickaction_p.h \
+    $$PWD/qquickactiongroup_p.h \
     $$PWD/qquickapplicationwindow_p.h \
     $$PWD/qquickbusyindicator_p.h \
     $$PWD/qquickbutton_p.h \
@@ -28,19 +30,27 @@ HEADERS += \
     $$PWD/qquickframe_p.h \
     $$PWD/qquickframe_p_p.h \
     $$PWD/qquickgroupbox_p.h \
+    $$PWD/qquickicon_p.h \
     $$PWD/qquickitemdelegate_p.h \
     $$PWD/qquickitemdelegate_p_p.h \
     $$PWD/qquicklabel_p.h \
     $$PWD/qquicklabel_p_p.h \
     $$PWD/qquickmenu_p.h \
     $$PWD/qquickmenu_p_p.h \
+    $$PWD/qquickmenubar_p.h \
+    $$PWD/qquickmenubar_p_p.h \
+    $$PWD/qquickmenubaritem_p.h \
+    $$PWD/qquickmenubaritem_p_p.h \
     $$PWD/qquickmenuitem_p.h \
+    $$PWD/qquickmenuitem_p_p.h \
     $$PWD/qquickmenuseparator_p.h \
     $$PWD/qquickoverlay_p.h \
     $$PWD/qquickoverlay_p_p.h \
     $$PWD/qquickpage_p.h \
     $$PWD/qquickpageindicator_p.h \
     $$PWD/qquickpagelayout_p_p.h \
+    $$PWD/qquickpalette_p.h \
+    $$PWD/qquickpaletteprovider_p.h \
     $$PWD/qquickpane_p.h \
     $$PWD/qquickpane_p_p.h \
     $$PWD/qquickpopup_p.h \
@@ -84,6 +94,8 @@ HEADERS += \
 
 SOURCES += \
     $$PWD/qquickabstractbutton.cpp \
+    $$PWD/qquickaction.cpp \
+    $$PWD/qquickactiongroup.cpp \
     $$PWD/qquickapplicationwindow.cpp \
     $$PWD/qquickbusyindicator.cpp \
     $$PWD/qquickbutton.cpp \
@@ -101,15 +113,20 @@ SOURCES += \
     $$PWD/qquickdrawer.cpp \
     $$PWD/qquickframe.cpp \
     $$PWD/qquickgroupbox.cpp \
+    $$PWD/qquickicon.cpp \
     $$PWD/qquickitemdelegate.cpp \
     $$PWD/qquicklabel.cpp \
     $$PWD/qquickmenu.cpp \
+    $$PWD/qquickmenubar.cpp \
+    $$PWD/qquickmenubaritem.cpp \
     $$PWD/qquickmenuitem.cpp \
     $$PWD/qquickmenuseparator.cpp \
     $$PWD/qquickoverlay.cpp \
     $$PWD/qquickpage.cpp \
     $$PWD/qquickpageindicator.cpp \
     $$PWD/qquickpagelayout.cpp \
+    $$PWD/qquickpalette.cpp \
+    $$PWD/qquickpaletteprovider.cpp \
     $$PWD/qquickpane.cpp \
     $$PWD/qquickpopup.cpp \
     $$PWD/qquickpopupitem.cpp \

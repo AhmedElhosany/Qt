@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_QUIC_STREAM_SEQUENCER_BUFFER_H_
-#define NET_QUIC_QUIC_STREAM_SEQUENCER_BUFFER_H_
+#ifndef NET_QUIC_CORE_QUIC_STREAM_SEQUENCER_BUFFER_H_
+#define NET_QUIC_CORE_QUIC_STREAM_SEQUENCER_BUFFER_H_
 
-// QuicStreamSequencerBuffer implements QuicStreamSequencerBufferInterface.
-// It is a circular stream buffer with random write and
+// QuicStreamSequencerBuffer is a circular stream buffer with random write and
 // in-sequence read. It consists of a vector of pointers pointing
 // to memory blocks created as needed and a list of Gaps to indicate
 // the missing data between the data already written into the buffer.
@@ -29,11 +28,11 @@
 // Expected Use:
 //  QuicStreamSequencerBuffer buffer(2.5 * 8 * 1024);
 //  std::string source(1024, 'a');
-//  base::StringPiece std::string_piece(source.data(), source.size());
+//  QuicStringPiece std::string_piece(source.data(), source.size());
 //  size_t written = 0;
 //  buffer.OnStreamData(800, std::string_piece, GetEpollClockNow(), &written);
 //  source = std::string{800, 'b'};
-//  base::StringPiece std::string_piece1(source.data(), 800);
+//  QuicStringPiece std::string_piece1(source.data(), 800);
 //  // Try to write to [1, 801), but should fail due to overlapping,
 //  // res should be QUIC_INVALID_STREAM_DATA
 //  auto res = buffer.OnStreamData(1, std::string_piece1, &written));
@@ -60,15 +59,15 @@
 //  size_t consumed = consume_iovs(iovs, iov_count);
 //  buffer.MarkConsumed(consumed);
 
-#include <stddef.h>
-
+#include <cstddef>
 #include <functional>
 #include <list>
 #include <memory>
 
 #include "base/macros.h"
-#include "net/base/net_export.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
+#include "net/quic/platform/api/quic_export.h"
+#include "net/quic/platform/api/quic_string_piece.h"
 
 namespace net {
 
@@ -76,18 +75,18 @@ namespace test {
 class QuicStreamSequencerBufferPeer;
 }  // namespace test
 
-class NET_EXPORT_PRIVATE QuicStreamSequencerBuffer {
+class QUIC_EXPORT_PRIVATE QuicStreamSequencerBuffer {
  public:
   // A Gap indicates a missing chunk of bytes between
   // [begin_offset, end_offset) in the stream
-  struct NET_EXPORT_PRIVATE Gap {
+  struct QUIC_EXPORT_PRIVATE Gap {
     Gap(QuicStreamOffset begin_offset, QuicStreamOffset end_offset);
     QuicStreamOffset begin_offset;
     QuicStreamOffset end_offset;
   };
 
   // A FrameInfo stores the length of a frame and the time it arrived.
-  struct NET_EXPORT_PRIVATE FrameInfo {
+  struct QUIC_EXPORT_PRIVATE FrameInfo {
     FrameInfo();
     FrameInfo(size_t length, QuicTime timestamp);
 
@@ -119,7 +118,7 @@ class NET_EXPORT_PRIVATE QuicStreamSequencerBuffer {
   // bytes buffered in |bytes_buffered|. Returns an error otherwise.
   // |timestamp| is the time the data arrived.
   QuicErrorCode OnStreamData(QuicStreamOffset offset,
-                             base::StringPiece data,
+                             QuicStringPiece data,
                              QuicTime timestamp,
                              size_t* bytes_buffered,
                              std::string* error_details);
@@ -217,12 +216,10 @@ class NET_EXPORT_PRIVATE QuicStreamSequencerBuffer {
   // should be removed from the map.
   void UpdateFrameArrivalMap(QuicStreamOffset offset);
 
-  // Return |gaps_| as a std::string: [1024, 1500) [1800, 2048)... for
-  // debugging.
+  // Return |gaps_| as a string: [1024, 1500) [1800, 2048)... for debugging.
   std::string GapsDebugString();
 
-  // Return all received frames as a std::string in same format as
-  // GapsDebugString();
+  // Return all received frames as a string in same format as GapsDebugString();
   std::string ReceivedFramesDebugString();
 
   // The maximum total capacity of this buffer in byte, as constructed.
@@ -248,8 +245,13 @@ class NET_EXPORT_PRIVATE QuicStreamSequencerBuffer {
   // Stores all the buffered frames' start offset, length and arrival time.
   std::map<QuicStreamOffset, FrameInfo> frame_arrival_time_map_;
 
+  // For debugging use after free, assigned to 123456 in constructor and 654321
+  // in destructor. As long as it's not 123456, this means either use after free
+  // or memory corruption.
+  int32_t destruction_indicator_;
+
   DISALLOW_COPY_AND_ASSIGN(QuicStreamSequencerBuffer);
 };
 }  // namespace net
 
-#endif  // NET_QUIC_QUIC_STREAM_SEQUENCER_BUFFER_H_
+#endif  // NET_QUIC_CORE_QUIC_STREAM_SEQUENCER_BUFFER_H_

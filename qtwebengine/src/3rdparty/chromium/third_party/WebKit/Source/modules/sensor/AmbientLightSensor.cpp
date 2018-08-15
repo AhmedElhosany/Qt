@@ -6,42 +6,40 @@
 
 #include "bindings/core/v8/ScriptPromise.h"
 #include "bindings/core/v8/ScriptPromiseResolver.h"
-#include "modules/sensor/AmbientLightSensorReading.h"
 
 using device::mojom::blink::SensorType;
 
 namespace blink {
 
 // static
-AmbientLightSensor* AmbientLightSensor::create(ScriptState* scriptState,
-                                               const SensorOptions& options,
-                                               ExceptionState& exceptionState) {
-  return new AmbientLightSensor(scriptState, options, exceptionState);
+AmbientLightSensor* AmbientLightSensor::Create(
+    ExecutionContext* execution_context,
+    const SensorOptions& options,
+    ExceptionState& exception_state) {
+  return new AmbientLightSensor(execution_context, options, exception_state);
 }
 
 // static
-AmbientLightSensor* AmbientLightSensor::create(ScriptState* scriptState,
-                                               ExceptionState& exceptionState) {
-  return create(scriptState, SensorOptions(), exceptionState);
+AmbientLightSensor* AmbientLightSensor::Create(
+    ExecutionContext* execution_context,
+    ExceptionState& exception_state) {
+  return Create(execution_context, SensorOptions(), exception_state);
 }
 
-AmbientLightSensor::AmbientLightSensor(ScriptState* scriptState,
+AmbientLightSensor::AmbientLightSensor(ExecutionContext* execution_context,
                                        const SensorOptions& options,
-                                       ExceptionState& exceptionState)
-    : Sensor(scriptState, options, exceptionState, SensorType::AMBIENT_LIGHT) {}
+                                       ExceptionState& exception_state)
+    : Sensor(execution_context,
+             options,
+             exception_state,
+             SensorType::AMBIENT_LIGHT) {}
 
-AmbientLightSensorReading* AmbientLightSensor::reading() const {
-  return static_cast<AmbientLightSensorReading*>(Sensor::reading());
-}
-
-std::unique_ptr<SensorReadingFactory>
-AmbientLightSensor::createSensorReadingFactory() {
-  return std::unique_ptr<SensorReadingFactory>(
-      new SensorReadingFactoryImpl<AmbientLightSensorReading>());
+double AmbientLightSensor::illuminance(bool& is_null) const {
+  return ReadingValue(0, is_null);
 }
 
 DEFINE_TRACE(AmbientLightSensor) {
-  Sensor::trace(visitor);
+  Sensor::Trace(visitor);
 }
 
 }  // namespace blink

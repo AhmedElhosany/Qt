@@ -178,6 +178,8 @@ void BlinkGCPluginConsumer::CheckClass(RecordInfo* info) {
     return;
 
   if (CXXMethodDecl* trace = info->GetTraceMethod()) {
+    if (info->IsStackAllocated())
+      reporter_.TraceMethodForStackAllocatedClass(info, trace);
     if (trace->isPure())
       reporter_.ClassDeclaresPureVirtualTrace(info, trace);
   } else if (info->RequiresTraceMethod()) {
@@ -193,7 +195,7 @@ void BlinkGCPluginConsumer::CheckClass(RecordInfo* info) {
   }
 
   {
-    CheckFieldsVisitor visitor;
+    CheckFieldsVisitor visitor(options_);
     if (visitor.ContainsInvalidFields(info))
       reporter_.ClassContainsInvalidFields(info, visitor.invalid_fields());
   }
@@ -525,7 +527,6 @@ void BlinkGCPluginConsumer::CheckTraceOrDispatchMethod(
     CXXMethodDecl* method) {
   Config::TraceMethodType trace_type = Config::GetTraceMethodType(method);
   if (trace_type == Config::TRACE_AFTER_DISPATCH_METHOD ||
-      trace_type == Config::TRACE_AFTER_DISPATCH_IMPL_METHOD ||
       !parent->GetTraceDispatchMethod()) {
     CheckTraceMethod(parent, method, trace_type);
   }
@@ -545,12 +546,6 @@ void BlinkGCPluginConsumer::CheckTraceMethod(
 
   CheckTraceVisitor visitor(trace, parent, &cache_);
   visitor.TraverseCXXMethodDecl(trace);
-
-  // Skip reporting if this trace method is a just delegate to
-  // traceImpl (or traceAfterDispatchImpl) method. We will report on
-  // CheckTraceMethod on traceImpl method.
-  if (visitor.delegates_to_traceimpl())
-    return;
 
   for (auto& base : parent->GetBases())
     if (!base.second.IsProperlyTraced())

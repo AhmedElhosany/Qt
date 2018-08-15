@@ -51,6 +51,8 @@
 // We mean it.
 //
 
+#include <Qt3DCore/QNodeId>
+#include <Qt3DCore/private/qdownloadhelperservice_p.h>
 #include <Qt3DRender/private/qabstracttexture_p.h>
 #include <Qt3DRender/qtexturegenerator.h>
 #include <Qt3DRender/qtexture.h>
@@ -67,16 +69,32 @@ public:
 
     Q_DECLARE_PUBLIC(QTextureLoader)
 
+    void setScene(Qt3DCore::QScene *scene) override;
     void updateGenerator();
 
     QUrl m_source;
     bool m_mirrored;
 };
 
+class Q_AUTOTEST_EXPORT TextureDownloadRequest : public Qt3DCore::QDownloadRequest
+{
+public:
+    TextureDownloadRequest(Qt3DCore::QNodeId texture, const QUrl &url, Qt3DCore::QAspectEngine *engine);
+
+    void onCompleted() Q_DECL_OVERRIDE;
+
+private:
+    Qt3DCore::QNodeId m_texture;
+    Qt3DCore::QAspectEngine *m_engine;
+};
+
 class Q_AUTOTEST_EXPORT QTextureFromSourceGenerator : public QTextureGenerator
 {
 public:
-    explicit QTextureFromSourceGenerator(QTextureLoader *textureLoader);
+    explicit QTextureFromSourceGenerator(QTextureLoader *textureLoader,
+                                         Qt3DCore::QAspectEngine *engine,
+                                         Qt3DCore::QNodeId textureId);
+
     QTextureDataPtr operator ()() Q_DECL_OVERRIDE;
     bool operator ==(const QTextureGenerator &other) const Q_DECL_OVERRIDE;
     inline QAbstractTexture::Status status() const { return m_status; }
@@ -87,9 +105,15 @@ public:
     bool isMirrored() const;
 
 private:
-    QAbstractTexture::Status m_status;
+    friend class TextureDownloadRequest;
+
     QUrl m_url;
+    QAbstractTexture::Status m_status;
     bool m_mirrored;
+
+    QByteArray m_sourceData;
+    Qt3DCore::QNodeId m_texture;
+    Qt3DCore::QAspectEngine *m_engine;
 
     // Options that can be overridden on TextureLoader when loading
     QAbstractTexture::TextureFormat m_format;
@@ -100,6 +124,8 @@ class Q_AUTOTEST_EXPORT TextureLoadingHelper
 {
 public:
     static QTextureImageDataPtr loadTextureData(const QUrl &source, bool allow3D, bool mirrored);
+    static QTextureImageDataPtr loadTextureData(QIODevice *data, const QString& suffix,
+                                                bool allow3D, bool mirrored);
 };
 
 } // namespace Qt3DRender

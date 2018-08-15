@@ -23,8 +23,8 @@
 #include "SkTypeface.h"
 #include "SkUtils.h"
 #include "SkKey.h"
-#include "SkXfermode.h"
 #include "SkDrawFilter.h"
+#include "SkClipOpPriv.h"
 
 static void make_paint(SkPaint* paint, const SkMatrix& localMatrix) {
     SkColor colors[] = { 0, SK_ColorWHITE };
@@ -255,12 +255,12 @@ protected:
         m.postTranslate(fCenter.x(), fCenter.y());
         path.transform(m);
 
-        canvas->clipPath(path, SkCanvas::kIntersect_Op, true);
+        canvas->clipPath(path, kIntersect_SkClipOp, true);
         const SkRect bounds = path.getBounds();
 
         SkPaint paint;
         paint.setAlpha(0xCC);
-        canvas->saveLayer({ &bounds, &paint, fFilter.get(), 0 });
+        canvas->saveLayer({ &bounds, &paint, fFilter.get(), nullptr, nullptr, 0 });
 
         canvas->restore();
     }

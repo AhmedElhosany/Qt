@@ -32,6 +32,7 @@
 #
 
 ActiveScriptWrappable
+AllowShared
 CEReactions
 CachedAccessor
 CachedAttribute=*
@@ -42,17 +43,17 @@ Constructor
 # FIXME: remove [ConstructorCallWith=Document], as can instead use
 # [ConstructorCallWith=ExecutionContext] + toDocument(executionContext)
 ConstructorCallWith=ExecutionContext|ScriptState|Document
-Custom=|Getter|Setter|LegacyCallAsFunction|VisitDOMWrapper|PropertyGetter|PropertyEnumerator|PropertyQuery|CallPrologue|CallEpilogue
+ContextEnabled=*
+CrossOrigin=|Getter|Setter
+Custom=|Getter|Setter|LegacyCallAsFunction|PropertyGetter|PropertyEnumerator|PropertyQuery|CallPrologue|CallEpilogue
 CustomConstructor
 CustomElementCallbacks
 Default=Undefined
 DependentLifetime
 DeprecateAs=*
 DoNotCheckConstants
-DoNotCheckSecurity=|Setter
 DoNotTestNewObject
 EnforceRange
-ExperimentalCallbackFunction
 Exposed=*
 FeaturePolicy=*
 FlexibleArrayBufferView
@@ -60,8 +61,6 @@ Global=|*
 HTMLConstructor
 ImmutablePrototype
 ImplementedAs=*
-ImplementedInPrivateScript
-Iterable
 LegacyInterfaceTypeChecking
 LegacyTreatAsPartialInterface
 LenientThis
@@ -71,10 +70,8 @@ NewObject
 Measure
 MeasureAs=*
 NamedConstructor=*
-NoImplHeader
 NoInterfaceObject
 NotEnumerable
-OnlyExposedToPrivateScript
 OriginTrialEnabled=*
 OverrideBuiltins
 PartialInterfaceImplementedAs=*
@@ -91,16 +88,17 @@ ReflectMissing=*
 ReflectOnly=*
 Replaceable
 # Valid values for [RuntimeEnabled] are the Runtime Enabled Features, listed in
-# Source/platform/RuntimeEnabledFeatures.in
+# Source/platform/RuntimeEnabledFeatures.json5
 RuntimeEnabled=*
+# Valid values for [RuntimeCallStatsCounter] are counters defined in
+# Source/platform/bindings/RuntimeCallStats.h
+RuntimeCallStatsCounter=*
 SameObject
 SaveSameObject
 SecureContext
-SetWrapperReferenceFrom=*
-SetWrapperReferenceTo=*
 SetterCallWith=ExecutionContext|ScriptArguments|CurrentWindow|EnteredWindow
 TreatNullAs=NullString|EmptyString
 URL
 Unforgeable
 Unscopable
-WebModuleAPI
+WebAgentAPI

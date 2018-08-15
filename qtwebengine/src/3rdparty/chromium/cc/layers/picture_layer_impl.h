@@ -13,15 +13,17 @@
 
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "cc/base/cc_export.h"
+#include "cc/cc_export.h"
+#include "cc/layers/layer.h"
 #include "cc/layers/layer_impl.h"
+#include "cc/paint/image_id.h"
 #include "cc/tiles/picture_layer_tiling.h"
 #include "cc/tiles/picture_layer_tiling_set.h"
 #include "cc/tiles/tiling_set_eviction_queue.h"
 
 namespace cc {
 
-struct AppendQuadsData;
+class AppendQuadsData;
 class MicroBenchmarkImpl;
 class Tile;
 
@@ -29,14 +31,14 @@ class CC_EXPORT PictureLayerImpl
     : public LayerImpl,
       NON_EXPORTED_BASE(public PictureLayerTilingClient) {
  public:
-  static std::unique_ptr<PictureLayerImpl> Create(LayerTreeImpl* tree_impl,
-                                                  int id,
-                                                  bool is_mask) {
-    return base::WrapUnique(new PictureLayerImpl(tree_impl, id, is_mask));
+  static std::unique_ptr<PictureLayerImpl>
+  Create(LayerTreeImpl* tree_impl, int id, Layer::LayerMaskType mask_type) {
+    return base::WrapUnique(new PictureLayerImpl(tree_impl, id, mask_type));
   }
   ~PictureLayerImpl() override;
 
-  bool is_mask() const { return is_mask_; }
+  Layer::LayerMaskType mask_type() const { return mask_type_; }
+  void SetLayerMaskType(Layer::LayerMaskType type);
 
   // LayerImpl overrides.
   const char* LayerTypeAsString() const override;
@@ -53,7 +55,7 @@ class CC_EXPORT PictureLayerImpl
   Region GetInvalidationRegionForDebugging() override;
 
   // PictureLayerTilingClient overrides.
-  ScopedTilePtr CreateTile(const Tile::CreateInfo& info) override;
+  std::unique_ptr<Tile> CreateTile(const Tile::CreateInfo& info) override;
   gfx::Size CalculateTileSize(const gfx::Size& content_bounds) const override;
   const Region* GetPendingInvalidation() override;
   const PictureLayerTiling* GetPendingOrActiveTwinTiling(
@@ -69,15 +71,18 @@ class CC_EXPORT PictureLayerImpl
                           Region* new_invalidation,
                           const PictureLayerTilingSet* pending_set);
   bool UpdateTiles();
-  void UpdateCanUseLCDTextAfterCommit();
-  bool RasterSourceUsesLCDText() const;
+  // Returns true if the LCD state changed.
+  bool UpdateCanUseLCDTextAfterCommit();
   WhichTree GetTree() const;
 
   // Mask-related functions.
   void GetContentsResourceId(ResourceId* resource_id,
-                             gfx::Size* resource_size) const override;
+                             gfx::Size* resource_size,
+                             gfx::SizeF* resource_uv_size) const override;
 
   void SetNearestNeighbor(bool nearest_neighbor);
+
+  void SetUseTransformedRasterization(bool use);
 
   size_t GPUMemoryUsageInBytes() const override;
 
@@ -98,14 +103,22 @@ class CC_EXPORT PictureLayerImpl
     is_directly_composited_image_ = is_directly_composited_image;
   }
 
+  void InvalidateRegionForImages(
+      const PaintImageIdFlatSet& images_to_invalidate);
+
+  bool RasterSourceUsesLCDTextForTesting() const { return can_use_lcd_text_; }
+
  protected:
-  PictureLayerImpl(LayerTreeImpl* tree_impl, int id, bool is_mask);
-  PictureLayerTiling* AddTiling(float contents_scale);
+  PictureLayerImpl(LayerTreeImpl* tree_impl,
+                   int id,
+                   Layer::LayerMaskType mask_type);
+  PictureLayerTiling* AddTiling(const gfx::AxisTransform2d& contents_transform);
   void RemoveAllTilings();
   void AddTilingsForRasterScale();
   void AddLowResolutionTilingIfNeeded();
   bool ShouldAdjustRasterScale() const;
   void RecalculateRasterScales();
+  gfx::Vector2dF CalculateRasterTranslation(float raster_scale);
   void CleanUpTilingsOnActiveLayer(
       const std::vector<PictureLayerTiling*>& used_tilings);
   float MinimumContentsScale() const;
@@ -141,12 +154,15 @@ class CC_EXPORT PictureLayerImpl
   float raster_contents_scale_;
   float low_res_raster_contents_scale_;
 
-  bool was_screen_space_transform_animating_;
-  bool only_used_low_res_last_append_quads_;
-  const bool is_mask_;
+  Layer::LayerMaskType mask_type_;
 
-  bool nearest_neighbor_;
-  bool is_directly_composited_image_;
+  bool was_screen_space_transform_animating_ : 1;
+  bool only_used_low_res_last_append_quads_ : 1;
+
+  bool nearest_neighbor_ : 1;
+  bool use_transformed_rasterization_ : 1;
+  bool is_directly_composited_image_ : 1;
+  bool can_use_lcd_text_ : 1;
 
   // Use this instead of |visible_layer_rect()| for tiling calculations. This
   // takes external viewport and transform for tile priority into account.

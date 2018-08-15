@@ -4,13 +4,18 @@
 
 #include "content/renderer/pepper/pepper_media_device_manager.h"
 
+#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "content/public/common/console_message_level.h"
+#include "content/public/common/content_features.h"
 #include "content/renderer/media/media_devices_event_dispatcher.h"
 #include "content/renderer/media/media_stream_dispatcher.h"
+#include "content/renderer/pepper/renderer_ppapi_host_impl.h"
 #include "content/renderer/render_frame_impl.h"
+#include "media/media_features.h"
 #include "ppapi/shared_impl/ppb_device_ref_shared.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 
@@ -18,12 +23,20 @@ namespace content {
 
 namespace {
 
+const char kPepperInsecureOriginMessage[] =
+    "Microphone and Camera access no longer works on insecure origins. To use "
+    "this feature, you should consider switching your application to a "
+    "secure origin, such as HTTPS. See https://goo.gl/rStTGz for more "
+    "details.";
+
 PP_DeviceType_Dev FromMediaDeviceType(MediaDeviceType type) {
   switch (type) {
     case MEDIA_DEVICE_TYPE_AUDIO_INPUT:
       return PP_DEVICETYPE_DEV_AUDIOCAPTURE;
     case MEDIA_DEVICE_TYPE_VIDEO_INPUT:
       return PP_DEVICETYPE_DEV_VIDEOCAPTURE;
+    case MEDIA_DEVICE_TYPE_AUDIO_OUTPUT:
+      return PP_DEVICETYPE_DEV_AUDIOOUTPUT;
     default:
       NOTREACHED();
       return PP_DEVICETYPE_DEV_INVALID;
@@ -36,6 +49,8 @@ MediaDeviceType ToMediaDeviceType(PP_DeviceType_Dev type) {
       return MEDIA_DEVICE_TYPE_AUDIO_INPUT;
     case PP_DEVICETYPE_DEV_VIDEOCAPTURE:
       return MEDIA_DEVICE_TYPE_VIDEO_INPUT;
+    case PP_DEVICETYPE_DEV_AUDIOOUTPUT:
+      return MEDIA_DEVICE_TYPE_AUDIO_OUTPUT;
     default:
       NOTREACHED();
       return MEDIA_DEVICE_TYPE_AUDIO_OUTPUT;
@@ -76,34 +91,32 @@ PepperMediaDeviceManager::~PepperMediaDeviceManager() {
 
 void PepperMediaDeviceManager::EnumerateDevices(
     PP_DeviceType_Dev type,
-    const GURL& document_url,
     const DevicesCallback& callback) {
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   bool request_audio_input = type == PP_DEVICETYPE_DEV_AUDIOCAPTURE;
   bool request_video_input = type == PP_DEVICETYPE_DEV_VIDEOCAPTURE;
-  CHECK(request_audio_input || request_video_input);
+  bool request_audio_output = type == PP_DEVICETYPE_DEV_AUDIOOUTPUT;
+  CHECK(request_audio_input || request_video_input || request_audio_output);
   GetMediaDevicesDispatcher()->EnumerateDevices(
-      request_audio_input, request_video_input, false /* audio_output */,
-      url::Origin(document_url.GetOrigin()),
+      request_audio_input, request_video_input, request_audio_output,
       base::Bind(&PepperMediaDeviceManager::DevicesEnumerated, AsWeakPtr(),
                  callback, ToMediaDeviceType(type)));
 #else
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE,
-      base::Bind(&PepperMediaDeviceManager::DevicesEnumerated, AsWeakPtr(),
-                 callback, ToMediaDeviceType(type), std::vector<MediaDeviceInfoArray>()));
+      FROM_HERE, base::Bind(&PepperMediaDeviceManager::DevicesEnumerated,
+                            AsWeakPtr(), callback, ToMediaDeviceType(type),
+                            std::vector<MediaDeviceInfoArray>()));
 #endif
 }
 
 uint32_t PepperMediaDeviceManager::StartMonitoringDevices(
     PP_DeviceType_Dev type,
-    const GURL& document_url,
     const DevicesCallback& callback) {
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   base::WeakPtr<MediaDevicesEventDispatcher> event_dispatcher =
       MediaDevicesEventDispatcher::GetForRenderFrame(render_frame());
   return event_dispatcher->SubscribeDeviceChangeNotifications(
-      ToMediaDeviceType(type), url::Origin(document_url.GetOrigin()),
+      ToMediaDeviceType(type),
       base::Bind(&PepperMediaDeviceManager::DevicesChanged, AsWeakPtr(),
                  callback));
 #else
@@ -113,7 +126,7 @@ uint32_t PepperMediaDeviceManager::StartMonitoringDevices(
 
 void PepperMediaDeviceManager::StopMonitoringDevices(PP_DeviceType_Dev type,
                                                      uint32_t subscription_id) {
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   base::WeakPtr<MediaDevicesEventDispatcher> event_dispatcher =
       MediaDevicesEventDispatcher::GetForRenderFrame(render_frame());
   event_dispatcher->UnsubscribeDeviceChangeNotifications(
@@ -123,16 +136,32 @@ void PepperMediaDeviceManager::StopMonitoringDevices(PP_DeviceType_Dev type,
 
 int PepperMediaDeviceManager::OpenDevice(PP_DeviceType_Dev type,
                                          const std::string& device_id,
-                                         const GURL& document_url,
+                                         PP_Instance pp_instance,
                                          const OpenDeviceCallback& callback) {
   open_callbacks_[next_id_] = callback;
   int request_id = next_id_++;
 
-#if defined(ENABLE_WEBRTC)
+  RendererPpapiHostImpl* host =
+      RendererPpapiHostImpl::GetForPPInstance(pp_instance);
+  if (base::FeatureList::IsEnabled(
+          features::kRequireSecureOriginsForPepperMediaRequests) &&
+      !host->IsSecureContext(pp_instance)) {
+    RenderFrame* render_frame = host->GetRenderFrameForInstance(pp_instance);
+    if (render_frame) {
+      render_frame->AddMessageToConsole(CONSOLE_MESSAGE_LEVEL_WARNING,
+                                        kPepperInsecureOriginMessage);
+    }
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::Bind(&PepperMediaDeviceManager::OnDeviceOpenFailed,
+                              AsWeakPtr(), request_id));
+    return request_id;
+  }
+
+#if BUILDFLAG(ENABLE_WEBRTC)
   GetMediaStreamDispatcher()->OpenDevice(
       request_id, AsWeakPtr(), device_id,
       PepperMediaDeviceManager::FromPepperDeviceType(type),
-      url::Origin(document_url.GetOrigin()));
+      url::Origin(host->GetDocumentURL(pp_instance).GetOrigin()));
 #else
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::Bind(&PepperMediaDeviceManager::OnDeviceOpenFailed,
@@ -145,20 +174,20 @@ int PepperMediaDeviceManager::OpenDevice(PP_DeviceType_Dev type,
 void PepperMediaDeviceManager::CancelOpenDevice(int request_id) {
   open_callbacks_.erase(request_id);
 
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   GetMediaStreamDispatcher()->CancelOpenDevice(request_id, AsWeakPtr());
 #endif
 }
 
 void PepperMediaDeviceManager::CloseDevice(const std::string& label) {
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   GetMediaStreamDispatcher()->CloseDevice(label);
 #endif
 }
 
 int PepperMediaDeviceManager::GetSessionID(PP_DeviceType_Dev type,
                                            const std::string& label) {
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   switch (type) {
     case PP_DEVICETYPE_DEV_AUDIOCAPTURE:
       return GetMediaStreamDispatcher()->audio_session_id(label, 0);
@@ -260,9 +289,10 @@ MediaStreamDispatcher* PepperMediaDeviceManager::GetMediaStreamDispatcher()
 const ::mojom::MediaDevicesDispatcherHostPtr&
 PepperMediaDeviceManager::GetMediaDevicesDispatcher() {
   if (!media_devices_dispatcher_) {
-    DCHECK(render_frame());
+    CHECK(render_frame());
+    CHECK(render_frame()->GetRemoteInterfaces());
     render_frame()->GetRemoteInterfaces()->GetInterface(
-        mojo::GetProxy(&media_devices_dispatcher_));
+        mojo::MakeRequest(&media_devices_dispatcher_));
   }
 
   return media_devices_dispatcher_;

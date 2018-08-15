@@ -46,7 +46,7 @@ QT_BEGIN_NAMESPACE
 
 #define MAX_NUM_OF_WFD_BUFFERS 3
 #define MAX_NUM_OF_WFD_DEVICES 4
-#define MAX_NUM_OF_WFD_PIPELINES 16
+#define MAX_NUM_OF_WFD_PIPELINES 4
 #define MAX_NUM_OF_WFD_PORT_MODES 64
 #define MAX_NUM_OF_WFD_PORTS 4
 
@@ -77,17 +77,7 @@ void QEglFSOpenWFDIntegration::platformInit()
         wfdEnumerateDevices(devIds, numDevs, nullptr);
 
     // Create device
-    WFDint dev_attribs[3] = {WFD_DEVICE_CLIENT_TYPE,
-                              WFD_CLIENT_ID_CLUSTER,
-                              WFD_NONE};
-
-    bool ok;
-    WFDint clientType = qgetenv("QT_OPENWFD_CLIENT_ID").toInt(&ok, 16);
-
-    if (ok)
-        dev_attribs[1] = clientType;
-
-    mDevice = wfdCreateDevice(WFD_DEFAULT_DEVICE_ID, dev_attribs);
+    mDevice = wfdCreateDevice(WFD_DEFAULT_DEVICE_ID, nullptr);
 
     if (WFD_INVALID_HANDLE == mDevice)
         qFatal( "Failed to create wfd device");
@@ -148,13 +138,9 @@ EGLNativeWindowType QEglFSOpenWFDIntegration::createNativeWindow(QPlatformWindow
     WFDint pipelineIds[MAX_NUM_OF_WFD_PIPELINES];
     wfdEnumeratePipelines(mDevice, pipelineIds, numPipelines, nullptr);
 
-    bool ok;
-    WFDint pipelineId = qgetenv("QT_OPENWFD_PIPELINE_ID").toInt(&ok);
-
-    if (!ok)
-        pipelineId = pipelineIds[0];
-
-    WFDPipeline pipeline = wfdCreatePipeline(mDevice, pipelineId, nullptr);
+    WFDint testId = 0;
+    testId = pipelineIds[0];
+    WFDPipeline pipeline = wfdCreatePipeline(mDevice, testId, nullptr);
     if (WFD_INVALID_HANDLE == pipeline)
         qFatal("Failed to create wfd pipeline");
 

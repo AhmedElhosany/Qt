@@ -201,8 +201,11 @@ public:
             }
 
             SkAutoSTMalloc<4, SkFixed> axisValues(axisDefinitions.count());
-            Scanner::computeAxisValues(axisDefinitions,
-                                       fontFile.fAxes.begin(), fontFile.fAxes.count(),
+            SkFontArguments::VariationPosition position = {
+                fontFile.fVariationDesignPosition.begin(),
+                fontFile.fVariationDesignPosition.count()
+            };
+            Scanner::computeAxisValues(axisDefinitions, position,
                                        axisValues, familyName);
 
             fStyles.push_back().reset(new SkTypeface_AndroidSystem(
@@ -428,25 +431,24 @@ protected:
         return new SkTypeface_AndroidStream(std::move(data), style, isFixedPitch, name);
     }
 
-    SkTypeface* onCreateFromStream(SkStreamAsset* s, const FontParameters& params) const override {
+    SkTypeface* onCreateFromStream(SkStreamAsset* s, const SkFontArguments& args) const override {
         using Scanner = SkTypeface_FreeType::Scanner;
         std::unique_ptr<SkStreamAsset> stream(s);
         bool isFixedPitch;
         SkFontStyle style;
         SkString name;
         Scanner::AxisDefinitions axisDefinitions;
-        if (!fScanner.scanFont(stream.get(), params.getCollectionIndex(),
+        if (!fScanner.scanFont(stream.get(), args.getCollectionIndex(),
                                &name, &style, &isFixedPitch, &axisDefinitions))
         {
             return nullptr;
         }
 
-        int paramAxisCount;
-        const FontParameters::Axis* paramAxes = params.getAxes(&paramAxisCount);
         SkAutoSTMalloc<4, SkFixed> axisValues(axisDefinitions.count());
-        Scanner::computeAxisValues(axisDefinitions, paramAxes, paramAxisCount, axisValues, name);
+        Scanner::computeAxisValues(axisDefinitions, args.getVariationDesignPosition(),
+                                   axisValues, name);
 
-        auto data = skstd::make_unique<SkFontData>(std::move(stream), params.getCollectionIndex(),
+        auto data = skstd::make_unique<SkFontData>(std::move(stream), args.getCollectionIndex(),
                                                    axisValues.get(), axisDefinitions.count());
         return new SkTypeface_AndroidStream(std::move(data), style, isFixedPitch, name);
     }
@@ -535,7 +537,8 @@ static char const * const gSystemFontUseStrings[] = {
     "OnlyCustom", "PreferCustom", "PreferSystem"
 };
 #endif
-SkFontMgr* SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* custom) {
+
+sk_sp<SkFontMgr> SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* custom) {
     if (custom) {
         SkASSERT(0 <= custom->fSystemFontUse);
         SkASSERT(custom->fSystemFontUse < SK_ARRAY_COUNT(gSystemFontUseStrings));
@@ -545,6 +548,5 @@ SkFontMgr* SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* custom) {
                   custom->fFontsXml,
                   custom->fFallbackFontsXml));
     }
-
-    return new SkFontMgr_Android(custom);
+    return sk_make_sp<SkFontMgr_Android>(custom);
 }

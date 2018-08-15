@@ -4,19 +4,29 @@
 
 // Custom binding for the browserAction API.
 
-var binding = require('binding').Binding.create('browserAction');
+var binding = apiBridge || require('binding').Binding.create('browserAction');
 
 var setIcon = require('setIcon').setIcon;
 var getExtensionViews = requireNative('runtime').GetExtensionViews;
-var sendRequest = require('sendRequest').sendRequest;
-var lastError = require('lastError');
+var sendRequest = bindingUtil ?
+    $Function.bind(bindingUtil.sendRequest, bindingUtil) :
+    require('sendRequest').sendRequest;
+
+var jsLastError = bindingUtil ? undefined : require('lastError');
+function hasLastError() {
+  return bindingUtil ?
+      bindingUtil.hasLastError() : jsLastError.hasError(chrome);
+}
 
 binding.registerCustomHook(function(bindingsAPI) {
   var apiFunctions = bindingsAPI.apiFunctions;
 
   apiFunctions.setHandleRequest('setIcon', function(details, callback) {
     setIcon(details, function(args) {
-      sendRequest(this.name, [args, callback], this.definition.parameters);
+      sendRequest('browserAction.setIcon',
+                  [args, callback],
+                  apiBridge ? undefined : this.definition.parameters,
+                  undefined);
     }.bind(this));
   });
 
@@ -25,7 +35,7 @@ binding.registerCustomHook(function(bindingsAPI) {
     if (!callback)
       return;
 
-    if (lastError.hasError(chrome)) {
+    if (hasLastError()) {
       callback();
     } else {
       var views = getExtensionViews(-1, -1, 'POPUP');
@@ -34,4 +44,5 @@ binding.registerCustomHook(function(bindingsAPI) {
   });
 });
 
-exports.$set('binding', binding.generate());
+if (!apiBridge)
+  exports.$set('binding', binding.generate());

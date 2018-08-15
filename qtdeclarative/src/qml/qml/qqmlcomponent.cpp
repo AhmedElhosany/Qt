@@ -1060,20 +1060,52 @@ void QQmlComponent::create(QQmlIncubator &incubator, QQmlContext *context,
     enginePriv->incubate(incubator, forContextData);
 }
 
+/*
+    This is essentially a copy of QQmlComponent::create(); except it takes the QQmlContextData
+    arguments instead of QQmlContext which means we don't have to construct the rather weighty
+    wrapper class for every delegate item.
+
+    This is used by QQmlDelegateModel.
+*/
+void QQmlComponentPrivate::incubateObject(
+        QQmlIncubator *incubationTask,
+        QQmlComponent *component,
+        QQmlEngine *engine,
+        QQmlContextData *context,
+        QQmlContextData *forContext)
+{
+    QQmlIncubatorPrivate *incubatorPriv = QQmlIncubatorPrivate::get(incubationTask);
+    QQmlEnginePrivate *enginePriv = QQmlEnginePrivate::get(engine);
+    QQmlComponentPrivate *componentPriv = QQmlComponentPrivate::get(component);
+
+    incubatorPriv->compilationUnit = componentPriv->compilationUnit;
+    incubatorPriv->enginePriv = enginePriv;
+    incubatorPriv->creator.reset(new QQmlObjectCreator(context, componentPriv->compilationUnit, componentPriv->creationContext));
+    incubatorPriv->subComponentToCreate = componentPriv->start;
+
+    enginePriv->incubate(*incubationTask, forContext);
+}
+
+
+
 class QQmlComponentIncubator;
 
 namespace QV4 {
 
 namespace Heap {
 
-struct QmlIncubatorObject : Object {
+#define QmlIncubatorObjectMembers(class, Member) \
+    Member(class, HeapValue, HeapValue, valuemap) \
+    Member(class, HeapValue, HeapValue, statusChanged) \
+    Member(class, Pointer, QmlContext *, qmlContext) \
+    Member(class, NoMark, QQmlComponentIncubator *, incubator) \
+    Member(class, NoMark, QQmlQPointer<QObject>, parent)
+
+DECLARE_HEAP_OBJECT(QmlIncubatorObject, Object) {
+    DECLARE_MARK_TABLE(QmlIncubatorObject);
+
     void init(QQmlIncubator::IncubationMode = QQmlIncubator::Asynchronous);
     inline void destroy();
-    QQmlComponentIncubator *incubator;
-    QQmlQPointer<QObject> parent;
-    QV4::Value valuemap;
-    QV4::Value statusChanged;
-    Pointer<Heap::QmlContext> qmlContext;
 };
 
 }
@@ -1088,8 +1120,6 @@ struct QmlIncubatorObject : public QV4::Object
     static void method_get_status(const BuiltinFunction *, Scope &scope, CallData *callData);
     static void method_get_object(const BuiltinFunction *, Scope &scope, CallData *callData);
     static void method_forceCompletion(const BuiltinFunction *, Scope &scope, CallData *callData);
-
-    static void markObjects(QV4::Heap::Base *that, QV4::ExecutionEngine *e);
 
     void statusChanged(QQmlIncubator::Status);
     void setInitialState(QObject *);
@@ -1394,8 +1424,8 @@ void QQmlComponent::incubateObject(QQmlV4Function *args)
     r->setPrototype(p);
 
     if (!valuemap->isUndefined())
-        r->d()->valuemap = valuemap;
-    r->d()->qmlContext = v4->qmlContext();
+        r->d()->valuemap.set(scope.engine, valuemap);
+    r->d()->qmlContext.set(scope.engine, v4->qmlContext());
     r->d()->parent = parent;
 
     QQmlIncubator *incubator = r->d()->incubator;
@@ -1479,7 +1509,7 @@ void QV4::QmlIncubatorObject::method_set_statusChanged(const BuiltinFunction *, 
     if (!o || callData->argc < 1)
         THROW_TYPE_ERROR();
 
-    o->d()->statusChanged = callData->args[0];
+    o->d()->statusChanged.set(scope.engine, callData->args[0]);
 
     RETURN_UNDEFINED();
 }
@@ -1491,10 +1521,10 @@ QQmlComponentExtension::~QQmlComponentExtension()
 void QV4::Heap::QmlIncubatorObject::init(QQmlIncubator::IncubationMode m)
 {
     Object::init();
-    valuemap = QV4::Primitive::undefinedValue();
-    statusChanged = QV4::Primitive::undefinedValue();
+    valuemap.set(internalClass->engine, QV4::Primitive::undefinedValue());
+    statusChanged.set(internalClass->engine, QV4::Primitive::undefinedValue());
     parent.init();
-    qmlContext = nullptr;
+    qmlContext.set(internalClass->engine, nullptr);
     incubator = new QQmlComponentIncubator(this, m);
 }
 
@@ -1515,16 +1545,6 @@ void QV4::QmlIncubatorObject::setInitialState(QObject *o)
         QV4::Scoped<QV4::QmlContext> qmlCtxt(scope, d()->qmlContext);
         QQmlComponentPrivate::setInitialProperties(v4, qmlCtxt, obj, d()->valuemap);
     }
-}
-
-void QV4::QmlIncubatorObject::markObjects(QV4::Heap::Base *that, QV4::ExecutionEngine *e)
-{
-    QmlIncubatorObject::Data *o = static_cast<QmlIncubatorObject::Data *>(that);
-    o->valuemap.mark(e);
-    o->statusChanged.mark(e);
-    if (o->qmlContext)
-        o->qmlContext->mark(e);
-    Object::markObjects(that, e);
 }
 
 void QV4::QmlIncubatorObject::statusChanged(QQmlIncubator::Status s)

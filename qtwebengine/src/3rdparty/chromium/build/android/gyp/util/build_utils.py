@@ -21,6 +21,7 @@ import zipfile
 import md5_check  # pylint: disable=relative-import
 
 sys.path.append(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+from pylib import constants
 from pylib.constants import host_paths
 
 sys.path.append(os.path.join(os.path.dirname(__file__),
@@ -79,6 +80,14 @@ def FindInDirectories(directories, filename_filter):
   for directory in directories:
     all_files.extend(FindInDirectory(directory, filename_filter))
   return all_files
+
+
+def ReadBuildVars(build_vars_path=None):
+  if not build_vars_path:
+    build_vars_path = os.path.join(constants.GetOutDirectory(),
+                                   "build_vars.txt")
+  with open(build_vars_path) as f:
+    return dict(l.rstrip().split('=', 1) for l in f)
 
 
 def ParseGnList(gn_string):
@@ -224,6 +233,7 @@ def ExtractAll(zip_path, path=None, no_clobber=True, pattern=None,
   if not zipfile.is_zipfile(zip_path):
     raise Exception('Invalid zip file: %s' % zip_path)
 
+  extracted = []
   with zipfile.ZipFile(zip_path) as z:
     for name in z.namelist():
       if name.endswith('/'):
@@ -244,8 +254,12 @@ def ExtractAll(zip_path, path=None, no_clobber=True, pattern=None,
         dest = os.path.join(path, name)
         MakeDirectory(os.path.dirname(dest))
         os.symlink(z.read(name), dest)
+        extracted.append(dest)
       else:
         z.extract(name, path)
+        extracted.append(os.path.join(path, name))
+
+  return extracted
 
 
 def AddToZipHermetic(zip_file, zip_path, src_path=None, data=None,
@@ -257,7 +271,7 @@ def AddToZipHermetic(zip_file, zip_path, src_path=None, data=None,
     zip_path: Destination path within the zip file.
     src_path: Path of the source file. Mutually exclusive with |data|.
     data: File data as a string.
-    compress: Whether to enable compression. Default is take from ZipFile
+    compress: Whether to enable compression. Default is taken from ZipFile
         constructor.
   """
   assert (src_path is None) != (data is None), (
@@ -289,13 +303,15 @@ def AddToZipHermetic(zip_file, zip_path, src_path=None, data=None,
   zip_file.writestr(zipinfo, data, compress_type)
 
 
-def DoZip(inputs, output, base_dir=None):
+def DoZip(inputs, output, base_dir=None, compress_fn=None):
   """Creates a zip file from a list of files.
 
   Args:
     inputs: A list of paths to zip, or a list of (zip_path, fs_path) tuples.
     output: Destination .zip file.
     base_dir: Prefix to strip from inputs.
+    compress_fn: Applied to each input to determine whether or not to compress.
+        By default, items will be |zipfile.ZIP_STORED|.
   """
   input_tuples = []
   for tup in inputs:
@@ -307,16 +323,17 @@ def DoZip(inputs, output, base_dir=None):
   input_tuples.sort(key=lambda tup: tup[0])
   with zipfile.ZipFile(output, 'w') as outfile:
     for zip_path, fs_path in input_tuples:
-      AddToZipHermetic(outfile, zip_path, src_path=fs_path)
+      compress = compress_fn(zip_path) if compress_fn else None
+      AddToZipHermetic(outfile, zip_path, src_path=fs_path, compress=compress)
 
 
-def ZipDir(output, base_dir):
+def ZipDir(output, base_dir, compress_fn=None):
   """Creates a zip file from a directory."""
   inputs = []
   for root, _, files in os.walk(base_dir):
     for f in files:
       inputs.append(os.path.join(root, f))
-  DoZip(inputs, output, base_dir)
+  DoZip(inputs, output, base_dir, compress_fn=compress_fn)
 
 
 def MatchesGlob(path, filters):
@@ -406,8 +423,7 @@ def GetPythonDependencies():
   A path is assumed to be a "system" import if it is outside of chromium's
   src/. The paths will be relative to the current directory.
   """
-  module_paths = (m.__file__ for m in sys.modules.itervalues()
-                  if m is not None and hasattr(m, '__file__'))
+  module_paths = GetModulePaths()
 
   abs_module_paths = map(os.path.abspath, module_paths)
 
@@ -422,6 +438,30 @@ def GetPythonDependencies():
   non_system_module_paths = map(ConvertPycToPy, non_system_module_paths)
   non_system_module_paths = map(os.path.relpath, non_system_module_paths)
   return sorted(set(non_system_module_paths))
+
+
+def GetModulePaths():
+  """Returns the paths to all of the modules in sys.modules."""
+  ForceLazyModulesToLoad()
+  return (m.__file__ for m in sys.modules.itervalues()
+          if m is not None and hasattr(m, '__file__'))
+
+
+def ForceLazyModulesToLoad():
+  """Forces any lazily imported modules to fully load themselves.
+
+  Inspecting the modules' __file__ attribute causes lazily imported modules
+  (e.g. from email) to get fully imported and update sys.modules. Iterate
+  over the values until sys.modules stabilizes so that no modules are missed.
+  """
+  while True:
+    num_modules_before = len(sys.modules.keys())
+    for m in sys.modules.values():
+      if m is not None and hasattr(m, '__file__'):
+        _ = m.__file__
+    num_modules_after = len(sys.modules.keys())
+    if num_modules_before == num_modules_after:
+      break
 
 
 def AddDepfileOption(parser):

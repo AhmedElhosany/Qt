@@ -47,20 +47,20 @@ BlinkNotificationServiceImpl::~BlinkNotificationServiceImpl() {
 }
 
 void BlinkNotificationServiceImpl::GetPermissionStatus(
-    const mojo::String& origin,
-    const GetPermissionStatusCallback& callback) {
+    const std::string& origin,
+    GetPermissionStatusCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (!Service()) {
-    callback.Run(blink::mojom::PermissionStatus::DENIED);
+    std::move(callback).Run(blink::mojom::PermissionStatus::DENIED);
     return;
   }
 
   blink::mojom::PermissionStatus permission_status =
-      Service()->CheckPermissionOnIOThread(
-          resource_context_, GURL(origin.get()), render_process_id_);
+      Service()->CheckPermissionOnIOThread(resource_context_, GURL(origin),
+                                           render_process_id_);
 
-  callback.Run(permission_status);
+  std::move(callback).Run(permission_status);
 }
 
 void BlinkNotificationServiceImpl::OnConnectionError() {

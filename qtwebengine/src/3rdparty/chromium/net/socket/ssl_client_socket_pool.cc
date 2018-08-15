@@ -4,10 +4,12 @@
 
 #include "net/socket/ssl_client_socket_pool.h"
 
+#include <cstdlib>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
@@ -16,6 +18,7 @@
 #include "base/values.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
+#include "net/base/trace_constants.h"
 #include "net/http/http_proxy_client_socket.h"
 #include "net/http/http_proxy_client_socket_pool.h"
 #include "net/log/net_log_source_type.h"
@@ -114,7 +117,7 @@ SSLConnectJob::SSLConnectJob(const std::string& group_name,
           priority,
           respect_limits,
           delegate,
-          NetLogWithSource::Make(net_log, NetLogSourceType::CONNECT_JOB)),
+          NetLogWithSource::Make(net_log, NetLogSourceType::SSL_CONNECT_JOB)),
       params_(params),
       transport_pool_(transport_pool),
       socks_pool_(socks_pool),
@@ -129,7 +132,10 @@ SSLConnectJob::SSLConnectJob(const std::string& group_name,
                     ? "pm/" + context.ssl_session_cache_shard
                     : context.ssl_session_cache_shard)),
       callback_(
-          base::Bind(&SSLConnectJob::OnIOComplete, base::Unretained(this))) {}
+          base::Bind(&SSLConnectJob::OnIOComplete, base::Unretained(this))),
+      version_interference_probe_(false),
+      version_interference_error_(OK),
+      version_interference_details_(SSLErrorDetails::kOther) {}
 
 SSLConnectJob::~SSLConnectJob() {
 }
@@ -176,7 +182,7 @@ void SSLConnectJob::OnIOComplete(int result) {
 }
 
 int SSLConnectJob::DoLoop(int result) {
-  TRACE_EVENT0("net", "SSLConnectJob::DoLoop");
+  TRACE_EVENT0(kNetTracingCategory, "SSLConnectJob::DoLoop");
   DCHECK_NE(next_state_, STATE_NONE);
 
   int rv = result;
@@ -235,7 +241,10 @@ int SSLConnectJob::DoTransportConnect() {
 }
 
 int SSLConnectJob::DoTransportConnectComplete(int result) {
-  connection_attempts_ = transport_socket_handle_->connection_attempts();
+  connection_attempts_.insert(
+      connection_attempts_.end(),
+      transport_socket_handle_->connection_attempts().begin(),
+      transport_socket_handle_->connection_attempts().end());
   if (result == OK) {
     next_state_ = STATE_SSL_CONNECT;
     transport_socket_handle_->socket()->GetPeerAddress(&server_address_);
@@ -294,7 +303,7 @@ int SSLConnectJob::DoTunnelConnectComplete(int result) {
 }
 
 int SSLConnectJob::DoSSLConnect() {
-  TRACE_EVENT0("net", "SSLConnectJob::DoSSLConnect");
+  TRACE_EVENT0(kNetTracingCategory, "SSLConnectJob::DoSSLConnect");
   // TODO(pkasting): Remove ScopedTracker below once crbug.com/462815 is fixed.
   tracked_objects::ScopedTracker tracking_profile(
       FROM_HERE_WITH_EXPLICIT_FUNCTION("462815 SSLConnectJob::DoSSLConnect"));
@@ -320,13 +329,22 @@ int SSLConnectJob::DoSSLConnect() {
 
   connect_timing_.ssl_start = base::TimeTicks::Now();
 
+  SSLConfig ssl_config = params_->ssl_config();
+  if (version_interference_probe_) {
+    DCHECK_EQ(SSL_PROTOCOL_VERSION_TLS1_3, ssl_config.version_max);
+    ssl_config.version_max = SSL_PROTOCOL_VERSION_TLS1_2;
+    ssl_config.version_interference_probe = true;
+  }
   ssl_socket_ = client_socket_factory_->CreateSSLClientSocket(
-      std::move(transport_socket_handle_), params_->host_and_port(),
-      params_->ssl_config(), context_);
+      std::move(transport_socket_handle_), params_->host_and_port(), ssl_config,
+      context_);
   return ssl_socket_->Connect(callback_);
 }
 
 int SSLConnectJob::DoSSLConnectComplete(int result) {
+  // Version interference probes should not result in success.
+  DCHECK(!version_interference_probe_ || result != OK);
+
   // TODO(rvargas): Remove ScopedTracker below once crbug.com/462784 is fixed.
   tracked_objects::ScopedTracker tracking_profile(
       FROM_HERE_WITH_EXPLICIT_FUNCTION(
@@ -344,6 +362,44 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
       ssl_socket_->GetNegotiatedProtocol() != kProtoHTTP2) {
     return ERR_ALPN_NEGOTIATION_FAILED;
   }
+
+  // Perform a TLS 1.3 version interference probe on various connection
+  // errors. The retry will never produce a successful connection but may map
+  // errors to ERR_SSL_VERSION_INTERFERENCE, which signals a probable
+  // version-interfering middlebox.
+  if (params_->ssl_config().version_max == SSL_PROTOCOL_VERSION_TLS1_3 &&
+      !version_interference_probe_) {
+    if (result == ERR_CONNECTION_CLOSED || result == ERR_SSL_PROTOCOL_ERROR ||
+        result == ERR_SSL_VERSION_OR_CIPHER_MISMATCH ||
+        result == ERR_CONNECTION_RESET ||
+        result == ERR_SSL_BAD_RECORD_MAC_ALERT) {
+      // Report the error code for each time a version interference probe is
+      // triggered.
+      UMA_HISTOGRAM_SPARSE_SLOWLY("Net.SSLVersionInterferenceProbeTrigger",
+                                  std::abs(result));
+      net_log().AddEventWithNetErrorCode(
+          NetLogEventType::SSL_VERSION_INTERFERENCE_PROBE, result);
+      SSLErrorDetails details = ssl_socket_->GetConnectErrorDetails();
+
+      ResetStateForRetry();
+      version_interference_probe_ = true;
+      version_interference_error_ = result;
+      version_interference_details_ = details;
+      next_state_ = GetInitialState(params_->GetConnectionType());
+      return OK;
+    }
+  }
+
+  const std::string& host = params_->host_and_port().host();
+  bool is_google =
+      host == "google.com" ||
+      (host.size() > 11 && host.rfind(".google.com") == host.size() - 11);
+
+  // These are hosts that we intend to use in the initial TLS 1.3 deployment.
+  // TLS connections to them, whether or not this browser is in the experiment
+  // group, form the basis of our comparisons.
+  bool tls13_supported = (host == "inbox.google.com" ||
+                          host == "mail.google.com" || host == "gmail.com");
 
   if (result == OK ||
       ssl_socket_->IgnoreCertError(result, params_->load_flags())) {
@@ -376,9 +432,6 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
         SSLConnectionStatusToCipherSuite(ssl_info.connection_status);
     UMA_HISTOGRAM_SPARSE_SLOWLY("Net.SSL_CipherSuite", cipher_suite);
 
-    const SSL_CIPHER* cipher = SSL_get_cipher_by_value(cipher_suite);
-    bool is_cecpq1 = cipher && SSL_CIPHER_is_CECPQ1(cipher);
-
     if (ssl_info.key_exchange_group != 0) {
       UMA_HISTOGRAM_SPARSE_SLOWLY("Net.SSL_KeyExchange.ECDHE",
                                   ssl_info.key_exchange_group);
@@ -398,10 +451,6 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
                                  100);
     }
 
-    const std::string& host = params_->host_and_port().host();
-    bool is_google =
-        host == "google.com" ||
-        (host.size() > 11 && host.rfind(".google.com") == host.size() - 11);
     if (is_google) {
       UMA_HISTOGRAM_CUSTOM_TIMES("Net.SSL_Connection_Latency_Google2",
                                  connect_duration,
@@ -422,32 +471,42 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
                                    base::TimeDelta::FromMilliseconds(1),
                                    base::TimeDelta::FromMinutes(1),
                                    100);
-
-        // These are hosts that we expect to always offer CECPQ1.  Connections
-        // to them, whether or not this browser is in the experiment group, form
-        // the basis of our comparisons.
-        bool cecpq1_expected_to_be_offered =
-            ssl_info.is_issued_by_known_root &&
-            (host == "play.google.com" || host == "checkout.google.com" ||
-             host == "wallet.google.com");
-        if (cecpq1_expected_to_be_offered) {
-          UMA_HISTOGRAM_CUSTOM_TIMES(
-              "Net.SSL_Connection_Latency_PostQuantumSupported_Full_Handshake",
-              connect_duration, base::TimeDelta::FromMilliseconds(1),
-              base::TimeDelta::FromMinutes(1), 100);
-          if (SSLClientSocket::IsPostQuantumExperimentEnabled()) {
-            // But don't trust that these hosts offer CECPQ1: make sure.  If
-            // we're doing everything right on the server side, |is_cecpq1|
-            // should always be true if we get here, modulo MITM.
-            UMA_HISTOGRAM_BOOLEAN("Net.SSL_Connection_PostQuantum_Negotiated",
-                                  is_cecpq1);
-          }
-        }
       }
+    }
+
+    if (tls13_supported) {
+      UMA_HISTOGRAM_CUSTOM_TIMES("Net.SSL_Connection_Latency_TLS13Experiment",
+                                 connect_duration,
+                                 base::TimeDelta::FromMilliseconds(1),
+                                 base::TimeDelta::FromMinutes(1), 100);
     }
   }
 
   UMA_HISTOGRAM_SPARSE_SLOWLY("Net.SSL_Connection_Error", std::abs(result));
+
+  if (is_google) {
+    UMA_HISTOGRAM_SPARSE_SLOWLY("Net.SSL_Connection_Error_Google",
+                                std::abs(result));
+  }
+
+  if (tls13_supported) {
+    UMA_HISTOGRAM_SPARSE_SLOWLY("Net.SSL_Connection_Error_TLS13Experiment",
+                                std::abs(result));
+  }
+
+  if (result == ERR_SSL_VERSION_INTERFERENCE) {
+    // Record the error code version interference was detected at.
+    DCHECK(version_interference_probe_);
+    DCHECK_NE(OK, version_interference_error_);
+    UMA_HISTOGRAM_SPARSE_SLOWLY("Net.SSLVersionInterferenceError",
+                                std::abs(version_interference_error_));
+
+    if (tls13_supported) {
+      UMA_HISTOGRAM_ENUMERATION(
+          "Net.SSLVersionInterferenceDetails_TLS13Experiment",
+          version_interference_details_, SSLErrorDetails::kLastValue);
+    }
+  }
 
   if (result == OK || IsCertificateError(result)) {
     SetSocket(std::move(ssl_socket_));
@@ -477,6 +536,13 @@ SSLConnectJob::State SSLConnectJob::GetInitialState(
 int SSLConnectJob::ConnectInternal() {
   next_state_ = GetInitialState(params_->GetConnectionType());
   return DoLoop(OK);
+}
+
+void SSLConnectJob::ResetStateForRetry() {
+  transport_socket_handle_.reset();
+  ssl_socket_.reset();
+  error_response_info_ = HttpResponseInfo();
+  server_address_ = IPEndPoint();
 }
 
 SSLClientSocketPool::SSLConnectJobFactory::SSLConnectJobFactory(
@@ -604,6 +670,12 @@ void SSLClientSocketPool::RequestSockets(const std::string& group_name,
   base_.RequestSockets(group_name, *casted_params, num_sockets, net_log);
 }
 
+void SSLClientSocketPool::SetPriority(const std::string& group_name,
+                                      ClientSocketHandle* handle,
+                                      RequestPriority priority) {
+  base_.SetPriority(group_name, handle, priority);
+}
+
 void SSLClientSocketPool::CancelRequest(const std::string& group_name,
                                         ClientSocketHandle* handle) {
   base_.CancelRequest(group_name, handle);
@@ -623,6 +695,11 @@ void SSLClientSocketPool::CloseIdleSockets() {
   base_.CloseIdleSockets();
 }
 
+void SSLClientSocketPool::CloseIdleSocketsInGroup(
+    const std::string& group_name) {
+  base_.CloseIdleSocketsInGroup(group_name);
+}
+
 int SSLClientSocketPool::IdleSocketCount() const {
   return base_.idle_socket_count();
 }
@@ -637,13 +714,19 @@ LoadState SSLClientSocketPool::GetLoadState(
   return base_.GetLoadState(group_name, handle);
 }
 
+void SSLClientSocketPool::DumpMemoryStats(
+    base::trace_event::ProcessMemoryDump* pmd,
+    const std::string& parent_dump_absolute_name) const {
+  base_.DumpMemoryStats(pmd, parent_dump_absolute_name);
+}
+
 std::unique_ptr<base::DictionaryValue> SSLClientSocketPool::GetInfoAsValue(
     const std::string& name,
     const std::string& type,
     bool include_nested_pools) const {
   std::unique_ptr<base::DictionaryValue> dict(base_.GetInfoAsValue(name, type));
   if (include_nested_pools) {
-    base::ListValue* list = new base::ListValue();
+    auto list = base::MakeUnique<base::ListValue>();
     if (transport_pool_) {
       list->Append(transport_pool_->GetInfoAsValue("transport_socket_pool",
                                                    "transport_socket_pool",
@@ -659,7 +742,7 @@ std::unique_ptr<base::DictionaryValue> SSLClientSocketPool::GetInfoAsValue(
                                                     "http_proxy_pool",
                                                     true));
     }
-    dict->Set("nested_pools", list);
+    dict->Set("nested_pools", std::move(list));
   }
   return dict;
 }

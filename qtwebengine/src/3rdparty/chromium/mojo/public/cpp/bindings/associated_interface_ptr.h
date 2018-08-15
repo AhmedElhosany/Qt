@@ -15,10 +15,9 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "mojo/public/cpp/bindings/associated_group.h"
 #include "mojo/public/cpp/bindings/associated_interface_ptr_info.h"
 #include "mojo/public/cpp/bindings/associated_interface_request.h"
+#include "mojo/public/cpp/bindings/bindings_export.h"
 #include "mojo/public/cpp/bindings/connection_error_callback.h"
 #include "mojo/public/cpp/bindings/lib/associated_interface_ptr_state.h"
 #include "mojo/public/cpp/bindings/lib/multiplex_router.h"
@@ -31,6 +30,9 @@ namespace mojo {
 template <typename Interface>
 class AssociatedInterfacePtr {
  public:
+  using InterfaceType = Interface;
+  using PtrInfoType = AssociatedInterfacePtrInfo<Interface>;
+
   // Constructs an unbound AssociatedInterfacePtr.
   AssociatedInterfacePtr() {}
   AssociatedInterfacePtr(decltype(nullptr)) {}
@@ -63,20 +65,15 @@ class AssociatedInterfacePtr {
   // multiple task runners to a single thread for the purposes of task
   // scheduling.
   //
-  // NOTE: Please see the comments of
-  // AssociatedGroup.CreateAssociatedInterface() about when you can use this
-  // object to make calls.
+  // NOTE: The corresponding AssociatedInterfaceRequest must be sent over
+  // another interface before using this object to make calls. Please see the
+  // comments of MakeRequest(AssociatedInterfacePtr<Interface>*) for more
+  // details.
   void Bind(AssociatedInterfacePtrInfo<Interface> info,
-            scoped_refptr<base::SingleThreadTaskRunner> runner =
-                base::ThreadTaskRunnerHandle::Get()) {
+            scoped_refptr<base::SingleThreadTaskRunner> runner = nullptr) {
     reset();
 
-    bool is_local = info.handle().is_local();
-
-    DCHECK(is_local) << "The AssociatedInterfacePtrInfo is supposed to be used "
-                        "at the other side of the message pipe.";
-
-    if (info.is_valid() && is_local)
+    if (info.is_valid())
       internal_state_.Bind(std::move(info), std::move(runner));
   }
 
@@ -90,9 +87,6 @@ class AssociatedInterfacePtr {
 
   // Returns the version number of the interface that the remote side supports.
   uint32_t version() const { return internal_state_.version(); }
-
-  // Returns the internal interface ID of this associated interface.
-  uint32_t interface_id() const { return internal_state_.interface_id(); }
 
   // Queries the max version that the remote side supports. On completion, the
   // result will be returned as the input of |callback|. The version number of
@@ -128,7 +122,7 @@ class AssociatedInterfacePtr {
   // Similar to the method above, but also specifies a disconnect reason.
   void ResetWithReason(uint32_t custom_reason, const std::string& description) {
     if (internal_state_.is_bound())
-      internal_state_.SendDisconnectReason(custom_reason, description);
+      internal_state_.CloseWithReason(custom_reason, description);
     reset();
   }
 
@@ -140,18 +134,19 @@ class AssociatedInterfacePtr {
   //
   // This method may only be called after the AssociatedInterfacePtr has been
   // bound.
-  void set_connection_error_handler(const base::Closure& error_handler) {
-    internal_state_.set_connection_error_handler(error_handler);
+  void set_connection_error_handler(base::OnceClosure error_handler) {
+    internal_state_.set_connection_error_handler(std::move(error_handler));
   }
 
   void set_connection_error_with_reason_handler(
-      const ConnectionErrorWithReasonCallback& error_handler) {
-    internal_state_.set_connection_error_with_reason_handler(error_handler);
+      ConnectionErrorWithReasonCallback error_handler) {
+    internal_state_.set_connection_error_with_reason_handler(
+        std::move(error_handler));
   }
 
   // Unbinds and returns the associated interface pointer information which
   // could be used to setup an AssociatedInterfacePtr again. This method may be
-  // used to move the proxy to a different thread.
+  // used to move the proxy to a different sequence.
   //
   // It is an error to call PassInterface() while there are pending responses.
   // TODO: fix this restriction, it's not always obvious when there is a
@@ -164,79 +159,100 @@ class AssociatedInterfacePtr {
     return state.PassInterface();
   }
 
-  // Returns the associated group that this object belongs to. Returns null if
-  // the object is not bound.
-  AssociatedGroup* associated_group() {
-    return internal_state_.associated_group();
-  }
-
   // DO NOT USE. Exposed only for internal use and for testing.
   internal::AssociatedInterfacePtrState<Interface>* internal_state() {
     return &internal_state_;
   }
 
-  // Allow AssociatedInterfacePtr<> to be used in boolean expressions, but not
-  // implicitly convertible to a real bool (which is dangerous).
- private:
-  // TODO(dcheng): Use an explicit conversion operator.
-  typedef internal::AssociatedInterfacePtrState<Interface>
-      AssociatedInterfacePtr::*Testable;
-
- public:
-  operator Testable() const {
-    return internal_state_.is_bound() ? &AssociatedInterfacePtr::internal_state_
-                                      : nullptr;
-  }
+  // Allow AssociatedInterfacePtr<> to be used in boolean expressions.
+  explicit operator bool() const { return internal_state_.is_bound(); }
 
  private:
-  // Forbid the == and != operators explicitly, otherwise AssociatedInterfacePtr
-  // will be converted to Testable to do == or != comparison.
-  template <typename T>
-  bool operator==(const AssociatedInterfacePtr<T>& other) const = delete;
-  template <typename T>
-  bool operator!=(const AssociatedInterfacePtr<T>& other) const = delete;
-
   typedef internal::AssociatedInterfacePtrState<Interface> State;
   mutable State internal_state_;
 
   DISALLOW_COPY_AND_ASSIGN(AssociatedInterfacePtr);
 };
 
-// Creates an associated interface. The output |ptr| should be used locally
-// while the returned request should be passed through the message pipe endpoint
-// referred to by |associated_group| to setup the corresponding asssociated
-// interface implementation at the remote side.
+// Creates an associated interface. The returned request is supposed to be sent
+// over another interface (either associated or non-associated).
 //
-// NOTE: |ptr| should NOT be used to make calls before the request is sent.
-// Violating that will cause the message pipe to be closed. On the other hand,
-// as soon as the request is sent, |ptr| is usable. There is no need to wait
-// until the request is bound to an implementation at the remote side.
+// NOTE: |ptr| must NOT be used to make calls before the request is sent.
+// Violating that will lead to crash. On the other hand, as soon as the request
+// is sent, |ptr| is usable. There is no need to wait until the request is bound
+// to an implementation at the remote side.
 template <typename Interface>
-AssociatedInterfaceRequest<Interface> GetProxy(
+AssociatedInterfaceRequest<Interface> MakeRequest(
     AssociatedInterfacePtr<Interface>* ptr,
-    AssociatedGroup* group,
-    scoped_refptr<base::SingleThreadTaskRunner> runner =
-        base::ThreadTaskRunnerHandle::Get()) {
-  AssociatedInterfaceRequest<Interface> request;
+    scoped_refptr<base::SingleThreadTaskRunner> runner = nullptr) {
   AssociatedInterfacePtrInfo<Interface> ptr_info;
-  group->CreateAssociatedInterface(AssociatedGroup::WILL_PASS_REQUEST,
-                                   &ptr_info, &request);
-
+  auto request = MakeRequest(&ptr_info);
   ptr->Bind(std::move(ptr_info), std::move(runner));
   return request;
 }
 
-// Creates an associated interface proxy which casts its messages into the void.
+// Creates an associated interface. One of the two endpoints is supposed to be
+// sent over another interface (either associated or non-associated); while the
+// other is used locally.
+//
+// NOTE: If |ptr_info| is used locally and bound to an AssociatedInterfacePtr,
+// the interface pointer must NOT be used to make calls before the request is
+// sent. Please see NOTE of the previous function for more details.
 template <typename Interface>
-void GetDummyProxyForTesting(AssociatedInterfacePtr<Interface>* proxy) {
-  MessagePipe pipe;
-  scoped_refptr<internal::MultiplexRouter> router =
-      new internal::MultiplexRouter(std::move(pipe.handle0),
-                                    internal::MultiplexRouter::MULTI_INTERFACE,
-                                    false, base::ThreadTaskRunnerHandle::Get());
-  std::unique_ptr<AssociatedGroup> group = router->CreateAssociatedGroup();
-  GetProxy(proxy, group.get());
+AssociatedInterfaceRequest<Interface> MakeRequest(
+    AssociatedInterfacePtrInfo<Interface>* ptr_info) {
+  ScopedInterfaceEndpointHandle handle0;
+  ScopedInterfaceEndpointHandle handle1;
+  ScopedInterfaceEndpointHandle::CreatePairPendingAssociation(&handle0,
+                                                              &handle1);
+
+  ptr_info->set_handle(std::move(handle0));
+  ptr_info->set_version(0);
+
+  return AssociatedInterfaceRequest<Interface>(std::move(handle1));
 }
+
+// Like MakeRequest() above, but it creates a dedicated message pipe. The
+// returned request can be bound directly to an implementation, without being
+// first passed through a message pipe endpoint.
+//
+// This function has two main uses:
+//
+//  * In testing, where the returned request is bound to e.g. a mock and there
+//    are no other interfaces involved.
+//
+//  * When discarding messages sent on an interface, which can be done by
+//    discarding the returned request.
+template <typename Interface>
+AssociatedInterfaceRequest<Interface> MakeIsolatedRequest(
+    AssociatedInterfacePtr<Interface>* ptr) {
+  MessagePipe pipe;
+  scoped_refptr<internal::MultiplexRouter> router0 =
+      new internal::MultiplexRouter(
+          std::move(pipe.handle0), internal::MultiplexRouter::MULTI_INTERFACE,
+          false, base::SequencedTaskRunnerHandle::Get());
+  scoped_refptr<internal::MultiplexRouter> router1 =
+      new internal::MultiplexRouter(
+          std::move(pipe.handle1), internal::MultiplexRouter::MULTI_INTERFACE,
+          true, base::SequencedTaskRunnerHandle::Get());
+
+  ScopedInterfaceEndpointHandle endpoint0, endpoint1;
+  ScopedInterfaceEndpointHandle::CreatePairPendingAssociation(&endpoint0,
+                                                              &endpoint1);
+  InterfaceId id = router1->AssociateInterface(std::move(endpoint0));
+  endpoint0 = router0->CreateLocalEndpointHandle(id);
+
+  ptr->Bind(AssociatedInterfacePtrInfo<Interface>(std::move(endpoint0),
+                                                  Interface::Version_));
+  return AssociatedInterfaceRequest<Interface>(std::move(endpoint1));
+}
+
+// |handle| is supposed to be the request of an associated interface. This
+// method associates the interface with a dedicated, disconnected message pipe.
+// That way, the corresponding associated interface pointer of |handle| can
+// safely make calls (although those calls are silently dropped).
+MOJO_CPP_BINDINGS_EXPORT void GetIsolatedInterface(
+    ScopedInterfaceEndpointHandle handle);
 
 }  // namespace mojo
 

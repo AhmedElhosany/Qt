@@ -59,9 +59,6 @@ cr.define('options', function() {
     initializePage: function() {
       Page.prototype.initializePage.call(this);
 
-      $('auto-signin-block').hidden =
-          !loadTimeData.getBoolean('enableCredentialManagerAPI');
-
       $('password-manager-confirm').onclick = function() {
         PageManager.closeOverlay();
       };
@@ -242,14 +239,6 @@ cr.define('options', function() {
       // Reveal the password in the UI.
       var item = this.savedPasswordsList_.getListItemByIndex(index);
       item.showPassword(password);
-    },
-
-    /**
-     * @param {boolean} visible Whether the link should be visible.
-     * @private
-     */
-    setManageAccountLinkVisibility_: function(visible) {
-      $('manage-passwords-span').hidden = !visible;
     },
 
     /** @private */

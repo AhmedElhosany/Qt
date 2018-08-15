@@ -50,7 +50,7 @@
 #include <QOffscreenSurface>
 
 #ifdef MAYBE_ANGLE
-# include <qtgui/qguiapplication.h>
+# include <qguiapplication.h>
 # include <qpa/qplatformnativeinterface.h>
 # include <qopenglfunctions.h>
 # include <EGL/eglext.h>
@@ -581,6 +581,10 @@ done:
                                                                     : qt_evr_pixelFormatFromD3DFormat(d3dFormat),
                                               m_useTextureRendering ? QAbstractVideoBuffer::GLTextureHandle
                                                                     : QAbstractVideoBuffer::NoHandle);
+        UINT32 horizontal = 1, vertical = 1;
+        hr = MFGetAttributeRatio(format, MF_MT_PIXEL_ASPECT_RATIO, &horizontal, &vertical);
+        if (SUCCEEDED(hr))
+            m_surfaceFormat.setPixelAspectRatio(horizontal, vertical);
     } else {
         releaseResources();
     }

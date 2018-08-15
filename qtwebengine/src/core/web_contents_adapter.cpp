@@ -50,7 +50,6 @@
 #include "browser_context_qt.h"
 #include "download_manager_delegate_qt.h"
 #include "media_capture_devices_dispatcher.h"
-#include "pdfium_document_wrapper_qt.h"
 #include "print_view_manager_qt.h"
 #include "qwebenginecallback_p.h"
 #include "renderer_host/web_channel_ipc_transport_host.h"
@@ -83,6 +82,8 @@
 #include "content/public/common/web_preferences.h"
 #include "third_party/WebKit/public/web/WebFindOptions.h"
 #include "printing/features/features.h"
+#include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/gfx/font_render_params.h"
 
 #include <QDir>
@@ -90,6 +91,7 @@
 #include <QPageLayout>
 #include <QStringList>
 #include <QStyleHints>
+#include <QTimer>
 #include <QVariant>
 #include <QtCore/qelapsedtimer.h>
 #include <QtCore/qmimedata.h>
@@ -101,6 +103,12 @@
 
 namespace QtWebEngineCore {
 
+#define CHECK_VALID_RENDER_WIDGET_HOST_VIEW(render_view_host) \
+    if (!render_view_host->IsRenderViewLive() && render_view_host->GetWidget()->GetView()) { \
+        qWarning("Ignore navigation due to terminated render process with invalid RenderWidgetHostView."); \
+        return; \
+    }
+
 static const int kTestWindowWidth = 800;
 static const int kTestWindowHeight = 600;
 static const int kHistoryStreamVersion = 3;
@@ -109,37 +117,37 @@ static QVariant fromJSValue(const base::Value *result)
 {
     QVariant ret;
     switch (result->GetType()) {
-    case base::Value::TYPE_NULL:
+    case base::Value::Type::NONE:
         break;
-    case base::Value::TYPE_BOOLEAN:
+    case base::Value::Type::BOOLEAN:
     {
         bool out;
         if (result->GetAsBoolean(&out))
             ret.setValue(out);
         break;
     }
-    case base::Value::TYPE_INTEGER:
+    case base::Value::Type::INTEGER:
     {
         int out;
         if (result->GetAsInteger(&out))
             ret.setValue(out);
         break;
     }
-    case base::Value::TYPE_DOUBLE:
+    case base::Value::Type::DOUBLE:
     {
         double out;
         if (result->GetAsDouble(&out))
             ret.setValue(out);
         break;
     }
-    case base::Value::TYPE_STRING:
+    case base::Value::Type::STRING:
     {
         base::string16 out;
         if (result->GetAsString(&out))
             ret.setValue(toQt(out));
         break;
     }
-    case base::Value::TYPE_LIST:
+    case base::Value::Type::LIST:
     {
         const base::ListValue *out;
         if (result->GetAsList(&out)) {
@@ -154,7 +162,7 @@ static QVariant fromJSValue(const base::Value *result)
         }
         break;
     }
-    case base::Value::TYPE_DICTIONARY:
+    case base::Value::Type::DICTIONARY:
     {
         const base::DictionaryValue *out;
         if (result->GetAsDictionary(&out)) {
@@ -168,10 +176,9 @@ static QVariant fromJSValue(const base::Value *result)
         }
         break;
     }
-    case base::Value::TYPE_BINARY:
+    case base::Value::Type::BINARY:
     {
-        const base::BinaryValue *out = static_cast<const base::BinaryValue*>(result);
-        QByteArray data(out->GetBuffer(), out->GetSize());
+        QByteArray data(result->GetBlob().data(), result->GetBlob().size());
         ret.setValue(data);
         break;
     }
@@ -350,14 +357,12 @@ WebContentsAdapterPrivate::WebContentsAdapterPrivate()
     , adapterClient(0)
     , nextRequestId(CallbackDirectory::ReservedCallbackIdsEnd)
     , lastFindRequestId(0)
-    , currentDropAction(blink::WebDragOperationNone)
+    , currentDropAction(blink::kWebDragOperationNone)
 {
 }
 
 WebContentsAdapterPrivate::~WebContentsAdapterPrivate()
 {
-    // Destroy the WebContents first
-    webContents.reset();
 }
 
 QSharedPointer<WebContentsAdapter> WebContentsAdapter::createFromSerializedNavigationHistory(QDataStream &input, WebContentsAdapterClient *adapterClient)
@@ -501,14 +506,16 @@ void WebContentsAdapter::stop()
 void WebContentsAdapter::reload()
 {
     Q_D(WebContentsAdapter);
-    d->webContents->GetController().Reload(/*checkRepost = */false);
+    CHECK_VALID_RENDER_WIDGET_HOST_VIEW(d->webContents->GetRenderViewHost());
+    d->webContents->GetController().Reload(content::ReloadType::NORMAL, /*checkRepost = */false);
     focusIfNecessary();
 }
 
 void WebContentsAdapter::reloadAndBypassCache()
 {
     Q_D(WebContentsAdapter);
-    d->webContents->GetController().ReloadBypassingCache(/*checkRepost = */false);
+    CHECK_VALID_RENDER_WIDGET_HOST_VIEW(d->webContents->GetRenderViewHost());
+    d->webContents->GetController().Reload(content::ReloadType::BYPASSING_CACHE, /*checkRepost = */false);
     focusIfNecessary();
 }
 
@@ -520,6 +527,9 @@ void WebContentsAdapter::load(const QUrl &url)
 
 void WebContentsAdapter::load(const QWebEngineHttpRequest &request)
 {
+    Q_D(WebContentsAdapter);
+    CHECK_VALID_RENDER_WIDGET_HOST_VIEW(d->webContents->GetRenderViewHost());
+
     // The situation can occur when relying on the editingFinished signal in QML to set the url
     // of the WebView.
     // When enter is pressed, onEditingFinished fires and the url of the webview is set, which
@@ -533,7 +543,6 @@ void WebContentsAdapter::load(const QWebEngineHttpRequest &request)
     LoadRecursionGuard guard(this);
     Q_UNUSED(guard);
 
-    Q_D(WebContentsAdapter);
     GURL gurl = toGurl(request.url());
 
     // Add URL scheme if missing from view-source URL.
@@ -583,13 +592,35 @@ void WebContentsAdapter::load(const QWebEngineHttpRequest &request)
         params.extra_headers += (*it).toStdString() + ": " + request.header(*it).toStdString();
     }
 
-    d->webContents->GetController().LoadURLWithParams(params);
-    focusIfNecessary();
+    bool resizeNeeded = false;
+    if (request.url().hasFragment()) {
+        if (content::RenderWidgetHostView *rwhv = webContents()->GetRenderWidgetHostView()) {
+            const gfx::Size &viewportSize = rwhv->GetVisibleViewportSize();
+            resizeNeeded = (viewportSize.width() == 0 || viewportSize.height() == 0);
+        }
+    }
+
+    auto navigate = [this, params]() {
+        Q_D(WebContentsAdapter);
+        webContents()->GetController().LoadURLWithParams(params);
+        // Follow chrome::Navigate and invalidate the URL immediately.
+        d->webContentsDelegate->NavigationStateChanged(webContents(), content::INVALIDATE_TYPE_URL);
+        focusIfNecessary();
+    };
+
+    if (resizeNeeded) {
+        // Schedule navigation on the event loop.
+        QTimer::singleShot(0, navigate);
+    } else {
+        navigate();
+    }
 }
 
 void WebContentsAdapter::setContent(const QByteArray &data, const QString &mimeType, const QUrl &baseUrl)
 {
     Q_D(WebContentsAdapter);
+    CHECK_VALID_RENDER_WIDGET_HOST_VIEW(d->webContents->GetRenderViewHost());
+
     QByteArray encodedData = data.toPercentEncoding();
     std::string urlString;
     if (!mimeType.isEmpty())
@@ -612,7 +643,7 @@ void WebContentsAdapter::setContent(const QByteArray &data, const QString &mimeT
     params.override_user_agent = content::NavigationController::UA_OVERRIDE_TRUE;
     d->webContents->GetController().LoadURLWithParams(params);
     focusIfNecessary();
-    d->webContents->Unselect();
+    d->webContents->CollapseSelection();
 }
 
 void WebContentsAdapter::save(const QString &filePath, int savePageFormat)
@@ -625,7 +656,7 @@ void WebContentsAdapter::save(const QString &filePath, int savePageFormat)
 QUrl WebContentsAdapter::activeUrl() const
 {
     Q_D(const WebContentsAdapter);
-    return toQt(d->webContents->GetLastCommittedURL());
+    return d->webContentsDelegate->url();
 }
 
 QUrl WebContentsAdapter::requestedUrl() const
@@ -660,7 +691,7 @@ QUrl WebContentsAdapter::iconUrl() const
 QString WebContentsAdapter::pageTitle() const
 {
     Q_D(const WebContentsAdapter);
-    return toQt(d->webContents->GetTitle());
+    return d->webContentsDelegate->title();
 }
 
 QString WebContentsAdapter::selectedText() const
@@ -720,12 +751,13 @@ void WebContentsAdapter::requestClose()
 void WebContentsAdapter::unselect()
 {
     Q_D(const WebContentsAdapter);
-    d->webContents->Unselect();
+    d->webContents->CollapseSelection();
 }
 
 void WebContentsAdapter::navigateToIndex(int offset)
 {
     Q_D(WebContentsAdapter);
+    CHECK_VALID_RENDER_WIDGET_HOST_VIEW(d->webContents->GetRenderViewHost());
     d->webContents->GetController().GoToIndex(offset);
     focusIfNecessary();
 }
@@ -733,6 +765,7 @@ void WebContentsAdapter::navigateToIndex(int offset)
 void WebContentsAdapter::navigateToOffset(int offset)
 {
     Q_D(WebContentsAdapter);
+    CHECK_VALID_RENDER_WIDGET_HOST_VIEW(d->webContents->GetRenderViewHost());
     d->webContents->GetController().GoToOffset(offset);
     focusIfNecessary();
 }
@@ -902,8 +935,8 @@ quint64 WebContentsAdapter::findText(const QString &subString, bool caseSensitiv
 
     blink::WebFindOptions options;
     options.forward = !findBackward;
-    options.matchCase = caseSensitively;
-    options.findNext = subString == d->webContentsDelegate->lastSearchedString();
+    options.match_case = caseSensitively;
+    options.find_next = subString == d->webContentsDelegate->lastSearchedString();
     d->webContentsDelegate->setLastSearchedString(subString);
 
     // Find already allows a request ID as input, but only as an int.
@@ -918,9 +951,6 @@ void WebContentsAdapter::stopFinding()
 {
     Q_D(WebContentsAdapter);
     d->webContentsDelegate->setLastSearchedString(QString());
-    // Clear any previous selection,
-    // but keep the renderer blue rectangle selection just like Chromium does.
-    d->webContents->Unselect();
     d->webContents->StopFinding(content::STOP_FIND_ACTION_KEEP_SELECTION);
 }
 
@@ -945,9 +975,26 @@ void WebContentsAdapter::download(const QUrl &url, const QString &suggestedFileN
     dlmd->markNextDownloadAsUserRequested();
     dlm->SetDelegate(dlmd);
 
+    net::NetworkTrafficAnnotationTag traffic_annotation =
+        net::DefineNetworkTrafficAnnotation(
+            "WebContentsAdapter::download", R"(
+            semantics {
+              sender: "User"
+              description:
+                "User requested download"
+              trigger: "User."
+              data: "Anything."
+              destination: OTHER
+            }
+            policy {
+              cookies_allowed: YES
+              cookies_store: "user"
+              setting:
+                "It's possible not to use this feature."
+            })");
     GURL gurl = toGurl(url);
     std::unique_ptr<content::DownloadUrlParameters> params(
-        content::DownloadUrlParameters::CreateForWebContentsMainFrame(webContents(), gurl));
+        content::DownloadUrlParameters::CreateForWebContentsMainFrame(webContents(), gurl, traffic_annotation));
 
     params->set_suggested_name(toString16(suggestedFileName));
 
@@ -985,11 +1032,11 @@ void WebContentsAdapter::copyImageAt(const QPoint &location)
     d->webContents->GetRenderViewHost()->GetMainFrame()->CopyImageAt(location.x(), location.y());
 }
 
-ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerNoAction, blink::WebMediaPlayerAction::Unknown)
-ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerPlay, blink::WebMediaPlayerAction::Play)
-ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerMute, blink::WebMediaPlayerAction::Mute)
-ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerLoop,  blink::WebMediaPlayerAction::Loop)
-ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerControls,  blink::WebMediaPlayerAction::Controls)
+ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerNoAction, blink::WebMediaPlayerAction::kUnknown)
+ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerPlay, blink::WebMediaPlayerAction::kPlay)
+ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerMute, blink::WebMediaPlayerAction::kMute)
+ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerLoop,  blink::WebMediaPlayerAction::kLoop)
+ASSERT_ENUMS_MATCH(WebContentsAdapter::MediaPlayerControls,  blink::WebMediaPlayerAction::kControls)
 
 void WebContentsAdapter::executeMediaPlayerActionAt(const QPoint &location, MediaPlayerAction action, bool enable)
 {
@@ -1180,18 +1227,23 @@ static QMimeData *mimeDataFromDropData(const content::DropData &dropData)
         mimeData->setHtml(toQt(dropData.html.string()));
     if (dropData.url.is_valid())
         mimeData->setUrls(QList<QUrl>() << toQt(dropData.url));
+    if (!dropData.custom_data.empty()) {
+        base::Pickle pickle;
+        ui::WriteCustomDataToPickle(dropData.custom_data, &pickle);
+        mimeData->setData(toQt(ui::Clipboard::GetWebCustomDataFormatType().ToString()), QByteArray((const char*)pickle.data(), pickle.size()));
+    }
     return mimeData;
 }
 
 static blink::WebDragOperationsMask toWeb(const Qt::DropActions action)
 {
-    int result = blink::WebDragOperationNone;
+    int result = blink::kWebDragOperationNone;
     if (action & Qt::CopyAction)
-        result |= blink::WebDragOperationCopy;
+        result |= blink::kWebDragOperationCopy;
     if (action & Qt::LinkAction)
-        result |= blink::WebDragOperationLink;
+        result |= blink::kWebDragOperationLink;
     if (action & Qt::MoveAction)
-        result |= blink::WebDragOperationMove;
+        result |= blink::kWebDragOperationMove;
     return static_cast<blink::WebDragOperationsMask>(result);
 }
 
@@ -1209,16 +1261,14 @@ void WebContentsAdapter::startDragging(QObject *dragSource, const content::DropD
     d->currentDropData.reset(new content::DropData(dropData));
     d->currentDropData->download_metadata.clear();
     d->currentDropData->file_contents.clear();
-    d->currentDropData->file_description_filename.clear();
+    d->currentDropData->file_contents_content_disposition.clear();
 
-    d->currentDropAction = blink::WebDragOperationNone;
+    d->currentDropAction = blink::kWebDragOperationNone;
     QDrag *drag = new QDrag(dragSource);    // will be deleted by Qt's DnD implementation
     bool dValid = true;
     QMetaObject::Connection onDestroyed = QObject::connect(dragSource, &QObject::destroyed, [&dValid](){
         dValid = false;
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 7, 0))
         QDrag::cancel();
-#endif
     });
 
     QMimeData *mimeData = mimeDataFromDropData(*d->currentDropData);
@@ -1266,7 +1316,8 @@ bool WebContentsAdapter::handleDropDataFileContents(const content::DropData &dro
         }
     }
 
-    const QString &fileName = toQt(dropData.file_description_filename);
+    const auto maybeFilename = dropData.GetSafeFilenameForImageFileContents();
+    const QString fileName = maybeFilename ? toQt(maybeFilename->AsUTF16Unsafe()) : QString();
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 9, 0))
     const QString &filePath = d->dndTmpDir->filePath(fileName);
 #else
@@ -1300,6 +1351,10 @@ static void fillDropDataFromMimeData(content::DropData *dropData, const QMimeDat
         dropData->html = toNullableString16(mimeData->html());
     if (mimeData->hasText())
         dropData->text = toNullableString16(mimeData->text());
+    if (mimeData->hasFormat(toQt(ui::Clipboard::GetWebCustomDataFormatType().ToString()))) {
+        QByteArray customData = mimeData->data(toQt(ui::Clipboard::GetWebCustomDataFormatType().ToString()));
+        ui::ReadCustomDataIntoMap(customData.constData(), customData.length(), &dropData->custom_data);
+    }
 }
 
 void WebContentsAdapter::enterDrag(QDragEnterEvent *e, const QPoint &screenPos)
@@ -1321,11 +1376,11 @@ void WebContentsAdapter::enterDrag(QDragEnterEvent *e, const QPoint &screenPos)
 
 Qt::DropAction toQt(blink::WebDragOperation op)
 {
-    if (op & blink::WebDragOperationCopy)
+    if (op & blink::kWebDragOperationCopy)
         return Qt::CopyAction;
-    if (op & blink::WebDragOperationLink)
+    if (op & blink::kWebDragOperationLink)
         return Qt::LinkAction;
-    if (op & blink::WebDragOperationMove || op & blink::WebDragOperationDelete)
+    if (op & blink::kWebDragOperationMove || op & blink::kWebDragOperationDelete)
         return Qt::MoveAction;
     return Qt::IgnoreAction;
 }
@@ -1334,11 +1389,11 @@ static int toWeb(Qt::MouseButtons buttons)
 {
     int result = 0;
     if (buttons & Qt::LeftButton)
-        result |= blink::WebInputEvent::LeftButtonDown;
+        result |= blink::WebInputEvent::kLeftButtonDown;
     if (buttons & Qt::RightButton)
-        result |= blink::WebInputEvent::RightButtonDown;
+        result |= blink::WebInputEvent::kRightButtonDown;
     if (buttons & Qt::MiddleButton)
-        result |= blink::WebInputEvent::MiddleButtonDown;
+        result |= blink::WebInputEvent::kMiddleButtonDown;
     return result;
 }
 
@@ -1346,13 +1401,13 @@ static int toWeb(Qt::KeyboardModifiers modifiers)
 {
     int result = 0;
     if (modifiers & Qt::ShiftModifier)
-        result |= blink::WebInputEvent::ShiftKey;
+        result |= blink::WebInputEvent::kShiftKey;
     if (modifiers & Qt::ControlModifier)
-        result |= blink::WebInputEvent::ControlKey;
+        result |= blink::WebInputEvent::kControlKey;
     if (modifiers & Qt::AltModifier)
-        result |= blink::WebInputEvent::AltKey;
+        result |= blink::WebInputEvent::kAltKey;
     if (modifiers & Qt::MetaModifier)
-        result |= blink::WebInputEvent::MetaKey;
+        result |= blink::WebInputEvent::kMetaKey;
     return result;
 }
 
@@ -1412,7 +1467,7 @@ void WebContentsAdapter::leaveDrag()
 {
     Q_D(WebContentsAdapter);
     content::RenderViewHost *rvh = d->webContents->GetRenderViewHost();
-    rvh->GetWidget()->DragTargetDragLeave();
+    rvh->GetWidget()->DragTargetDragLeave(d->lastDragClientPos, d->lastDragScreenPos);
     d->currentDropData.reset();
 }
 
@@ -1500,13 +1555,15 @@ ASSERT_ENUMS_MATCH(WebContentsAdapterClient::SaveToDiskDisposition, WindowOpenDi
 ASSERT_ENUMS_MATCH(WebContentsAdapterClient::OffTheRecordDisposition, WindowOpenDisposition::OFF_THE_RECORD)
 ASSERT_ENUMS_MATCH(WebContentsAdapterClient::IgnoreActionDisposition, WindowOpenDisposition::IGNORE_ACTION)
 
-ASSERT_ENUMS_MATCH(ReferrerPolicy::Always, blink::WebReferrerPolicyAlways)
-ASSERT_ENUMS_MATCH(ReferrerPolicy::Default, blink::WebReferrerPolicyDefault)
-ASSERT_ENUMS_MATCH(ReferrerPolicy::NoReferrerWhenDowngrade, blink::WebReferrerPolicyNoReferrerWhenDowngrade)
-ASSERT_ENUMS_MATCH(ReferrerPolicy::Never, blink::WebReferrerPolicyNever)
-ASSERT_ENUMS_MATCH(ReferrerPolicy::Origin, blink::WebReferrerPolicyOrigin)
-ASSERT_ENUMS_MATCH(ReferrerPolicy::OriginWhenCrossOrigin, blink::WebReferrerPolicyOriginWhenCrossOrigin)
-ASSERT_ENUMS_MATCH(ReferrerPolicy::NoReferrerWhenDowngradeOriginWhenCrossOrigin, blink::WebReferrerPolicyNoReferrerWhenDowngradeOriginWhenCrossOrigin)
-ASSERT_ENUMS_MATCH(ReferrerPolicy::Last, blink::WebReferrerPolicyLast)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::Always, blink::kWebReferrerPolicyAlways)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::Default, blink::kWebReferrerPolicyDefault)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::NoReferrerWhenDowngrade, blink::kWebReferrerPolicyNoReferrerWhenDowngrade)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::Never, blink::kWebReferrerPolicyNever)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::Origin, blink::kWebReferrerPolicyOrigin)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::OriginWhenCrossOrigin, blink::kWebReferrerPolicyOriginWhenCrossOrigin)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::NoReferrerWhenDowngradeOriginWhenCrossOrigin, blink::kWebReferrerPolicyNoReferrerWhenDowngradeOriginWhenCrossOrigin)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::SameOrigin, blink::kWebReferrerPolicySameOrigin)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::StrictOrigin, blink::kWebReferrerPolicyStrictOrigin)
+ASSERT_ENUMS_MATCH(ReferrerPolicy::Last, blink::kWebReferrerPolicyLast)
 
 } // namespace QtWebEngineCore

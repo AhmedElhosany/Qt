@@ -8,15 +8,12 @@
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/gpu_export.h"
 
-namespace {
-class CMAAEffect;
-}
-
 namespace gpu {
 namespace gles2 {
 class CopyTextureCHROMIUMResourceManager;
 class GLES2Decoder;
 class Framebuffer;
+class TextureManager;
 
 // This class encapsulates the resources required to implement the
 // GL_INTEL_framebuffer_CMAA extension via shaders.
@@ -36,9 +33,10 @@ class GPU_EXPORT ApplyFramebufferAttachmentCMAAINTELResourceManager {
   // Applies the algorithm to the color attachments of the currently bound draw
   // framebuffer.
   void ApplyFramebufferAttachmentCMAAINTEL(
-      gles2::GLES2Decoder* decoder,
-      gles2::Framebuffer* framebuffer,
-      gles2::CopyTextureCHROMIUMResourceManager* copier);
+      GLES2Decoder* decoder,
+      Framebuffer* framebuffer,
+      CopyTextureCHROMIUMResourceManager* copier,
+      TextureManager* texture_manager);
 
  private:
   // Applies the CMAA algorithm to a texture.
@@ -59,7 +57,6 @@ class GPU_EXPORT ApplyFramebufferAttachmentCMAAINTELResourceManager {
   bool is_in_gamma_correct_mode_;
   bool supports_usampler_;
   bool supports_r8_image_;
-  bool supports_r8_read_format_;
   bool is_gles31_compatible_;
 
   int frame_id_;

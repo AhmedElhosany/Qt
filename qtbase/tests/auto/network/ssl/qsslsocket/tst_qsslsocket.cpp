@@ -1171,6 +1171,19 @@ void tst_QSslSocket::protocolServerSide_data()
     QTest::addColumn<QSsl::SslProtocol>("clientProtocol");
     QTest::addColumn<bool>("works");
 
+#if QT_CONFIG(opensslv11)
+#if !defined(OPENSSL_NO_SSL2)
+    // OpenSSL 1.1 has removed SSL2 support. But there is no OPENSSL_NO_SSL2 macro ...
+#define OPENSSL_NO_SSL2
+#endif
+    // A client using our OpenSSL1.1 backend will negotiate up from TLS 1.0 or 1.1
+    // to TLS 1.2 if the server asks for it, where our older backend fails to compromise.
+    // So some tests that fail for the old pass with the new.
+    const bool willUseTLS12 = true;
+#else
+    const bool willUseTLS12 = false;
+#endif // opensslv11
+
 #if !defined(OPENSSL_NO_SSL2) && !defined(QT_SECURETRANSPORT)
     QTest::newRow("ssl2-ssl2") << QSsl::SslV2 << QSsl::SslV2 << false; // no idea why it does not work, but we don't care about SSL 2
 #endif
@@ -1263,7 +1276,8 @@ void tst_QSslSocket::protocolServerSide_data()
 #if !defined(OPENSSL_NO_SSL3)
     QTest::newRow("tls1.1orlater-ssl3") << QSsl::TlsV1_1OrLater << QSsl::SslV3 << false;
 #endif
-    QTest::newRow("tls1.1orlater-tls1.0") << QSsl::TlsV1_1OrLater << QSsl::TlsV1_0 << false;
+
+    QTest::newRow("tls1.1orlater-tls1.0") << QSsl::TlsV1_1OrLater << QSsl::TlsV1_0 << willUseTLS12;
     QTest::newRow("tls1.1orlater-tls1.1") << QSsl::TlsV1_1OrLater << QSsl::TlsV1_1 << true;
     QTest::newRow("tls1.1orlater-tls1.2") << QSsl::TlsV1_1OrLater << QSsl::TlsV1_2 << true;
 
@@ -1273,8 +1287,8 @@ void tst_QSslSocket::protocolServerSide_data()
 #if !defined(OPENSSL_NO_SSL3)
     QTest::newRow("tls1.2orlater-ssl3") << QSsl::TlsV1_2OrLater << QSsl::SslV3 << false;
 #endif
-    QTest::newRow("tls1.2orlater-tls1.0") << QSsl::TlsV1_2OrLater << QSsl::TlsV1_0 << false;
-    QTest::newRow("tls1.2orlater-tls1.1") << QSsl::TlsV1_2OrLater << QSsl::TlsV1_1 << false;
+    QTest::newRow("tls1.2orlater-tls1.0") << QSsl::TlsV1_2OrLater << QSsl::TlsV1_0 << willUseTLS12;
+    QTest::newRow("tls1.2orlater-tls1.1") << QSsl::TlsV1_2OrLater << QSsl::TlsV1_1 << willUseTLS12;
     QTest::newRow("tls1.2orlater-tls1.2") << QSsl::TlsV1_2OrLater << QSsl::TlsV1_2 << true;
 
     QTest::newRow("any-tls1.0") << QSsl::AnyProtocol << QSsl::TlsV1_0 << true;
@@ -2168,6 +2182,13 @@ void tst_QSslSocket::waitForMinusOne()
 
     // fifth verification: it should wait for 200 ms more
     QVERIFY(socket.waitForDisconnected(-1));
+
+    // sixth verification: reading from a disconnected socket returns -1
+    //                     once we deplete the read buffer
+    QCOMPARE(socket.state(), QAbstractSocket::UnconnectedState);
+    socket.readAll();
+    char aux;
+    QCOMPARE(socket.read(&aux, 1), -1);
 }
 
 class VerifyServer : public QTcpServer
@@ -3670,7 +3691,9 @@ void tst_QSslSocket::ephemeralServerKey_data()
     QTest::addColumn<QString>("cipher");
     QTest::addColumn<bool>("emptyKey");
 
+#if !QT_CONFIG(opensslv11) // 1.1 drops support for RC4-SHA
     QTest::newRow("NonForwardSecrecyCipher") << "RC4-SHA" << true;
+#endif // !opensslv11
     QTest::newRow("ForwardSecrecyCipher") << "ECDHE-RSA-AES256-SHA" << (QSslSocket::sslLibraryVersionNumber() < 0x10002000L);
 }
 

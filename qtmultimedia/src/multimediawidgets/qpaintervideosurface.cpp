@@ -191,6 +191,10 @@ QAbstractVideoSurface::Error QVideoSurfaceGenericPainter::paint(
                 m_imageSize.height(),
                 m_frame.bytesPerLine(),
                 m_imageFormat);
+        // Do not render into ARGB32 images using QPainter.
+        // Using QImage::Format_ARGB32_Premultiplied is significantly faster.
+        if (m_imageFormat == QImage::Format_ARGB32)
+            image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 
         const QTransform oldTransform = painter->transform();
         QTransform transform = oldTransform;
@@ -1250,8 +1254,8 @@ QAbstractVideoSurface::Error QVideoSurfaceGlslPainter::paint(
         if (scissorTestEnabled)
             glEnable(GL_SCISSOR_TEST);
 
-        const int width = QOpenGLContext::currentContext()->surface()->size().width();
-        const int height = QOpenGLContext::currentContext()->surface()->size().height();
+        const int width = painter->viewport().width();
+        const int height = painter->viewport().height();
 
         const QTransform transform = painter->deviceTransform();
 

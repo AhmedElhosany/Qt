@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <unordered_set>
@@ -42,17 +43,14 @@ int HashUUID(const base::Optional<BluetoothUUID>& uuid) {
   return uuid ? HashUUID(uuid->canonical_value()) : 0;
 }
 
+// The maximum number of devices that needs to be recorded.
+const size_t kMaxNumOfDevices = 100;
+
 }  // namespace
 
 namespace content {
 
 // General
-
-void RecordWebBluetoothFunctionCall(UMAWebBluetoothFunction function) {
-  UMA_HISTOGRAM_ENUMERATION("Bluetooth.Web.FunctionCall.Count",
-                            static_cast<int>(function),
-                            static_cast<int>(UMAWebBluetoothFunction::COUNT));
-}
 
 // requestDevice()
 
@@ -63,7 +61,7 @@ void RecordRequestDeviceOutcome(UMARequestDeviceOutcome outcome) {
 }
 
 static void RecordRequestDeviceFilters(
-    const std::vector<blink::mojom::WebBluetoothScanFilterPtr>& filters) {
+    const std::vector<blink::mojom::WebBluetoothLeScanFilterPtr>& filters) {
   UMA_HISTOGRAM_COUNTS_100("Bluetooth.Web.RequestDevice.Filters.Count",
                            filters.size());
   for (const auto& filter : filters) {
@@ -239,6 +237,7 @@ void RecordGetCharacteristicsOutcome(
                                       UMAGetCharacteristicOutcome::NO_SERVICE);
       return;
     case CacheQueryOutcome::NO_CHARACTERISTIC:
+    case CacheQueryOutcome::NO_DESCRIPTOR:
       NOTREACHED();
       return;
   }
@@ -261,6 +260,64 @@ void RecordGetCharacteristicsCharacteristic(
   }
 }
 
+void RecordGetDescriptorsDescriptor(
+    blink::mojom::WebBluetoothGATTQueryQuantity quantity,
+    const base::Optional<BluetoothUUID>& descriptor) {
+  switch (quantity) {
+    case blink::mojom::WebBluetoothGATTQueryQuantity::SINGLE:
+      UMA_HISTOGRAM_SPARSE_SLOWLY("Bluetooth.Web.GetDescriptor.Descriptor",
+                                  HashUUID(descriptor));
+      return;
+    case blink::mojom::WebBluetoothGATTQueryQuantity::MULTIPLE:
+      UMA_HISTOGRAM_SPARSE_SLOWLY("Bluetooth.Web.GetDescriptors.Descriptor",
+                                  HashUUID(descriptor));
+      return;
+  }
+}
+
+void RecordGetDescriptorsOutcome(
+    blink::mojom::WebBluetoothGATTQueryQuantity quantity,
+    UMAGetDescriptorOutcome outcome) {
+  switch (quantity) {
+    case blink::mojom::WebBluetoothGATTQueryQuantity::SINGLE:
+      UMA_HISTOGRAM_ENUMERATION(
+          "Bluetooth.Web.GetDescriptor.Outcome", static_cast<int>(outcome),
+          static_cast<int>(UMAGetDescriptorOutcome::COUNT));
+      return;
+    case blink::mojom::WebBluetoothGATTQueryQuantity::MULTIPLE:
+      UMA_HISTOGRAM_ENUMERATION(
+          "Bluetooth.Web.GetDescriptors.Outcome", static_cast<int>(outcome),
+          static_cast<int>(UMAGetDescriptorOutcome::COUNT));
+      return;
+  }
+}
+
+void RecordGetDescriptorsOutcome(
+    blink::mojom::WebBluetoothGATTQueryQuantity quantity,
+    CacheQueryOutcome outcome) {
+  switch (outcome) {
+    case CacheQueryOutcome::SUCCESS:
+    case CacheQueryOutcome::BAD_RENDERER:
+      // No need to record a success or renderer crash.
+      NOTREACHED();
+      return;
+    case CacheQueryOutcome::NO_DEVICE:
+      RecordGetDescriptorsOutcome(quantity, UMAGetDescriptorOutcome::NO_DEVICE);
+      return;
+    case CacheQueryOutcome::NO_SERVICE:
+      RecordGetDescriptorsOutcome(quantity,
+                                  UMAGetDescriptorOutcome::NO_SERVICE);
+      return;
+    case CacheQueryOutcome::NO_CHARACTERISTIC:
+      RecordGetDescriptorsOutcome(quantity,
+                                  UMAGetDescriptorOutcome::NO_CHARACTERISTIC);
+      return;
+    case CacheQueryOutcome::NO_DESCRIPTOR:
+      NOTREACHED();
+      return;
+  }
+}
+
 // GATT Operations
 
 void RecordGATTOperationOutcome(UMAGATTOperation operation,
@@ -274,6 +331,12 @@ void RecordGATTOperationOutcome(UMAGATTOperation operation,
       return;
     case UMAGATTOperation::START_NOTIFICATIONS:
       RecordStartNotificationsOutcome(outcome);
+      return;
+    case UMAGATTOperation::DESCRIPTOR_READ:
+      RecordDescriptorReadValueOutcome(outcome);
+      return;
+    case UMAGATTOperation::DESCRIPTOR_WRITE:
+      RecordDescriptorWriteValueOutcome(outcome);
       return;
     case UMAGATTOperation::COUNT:
       NOTREACHED();
@@ -296,6 +359,8 @@ static UMAGATTOperationOutcome TranslateCacheQueryOutcomeToGATTOperationOutcome(
       return UMAGATTOperationOutcome::NO_SERVICE;
     case CacheQueryOutcome::NO_CHARACTERISTIC:
       return UMAGATTOperationOutcome::NO_CHARACTERISTIC;
+    case CacheQueryOutcome::NO_DESCRIPTOR:
+      return UMAGATTOperationOutcome::NO_DESCRIPTOR;
   }
   NOTREACHED() << "No need to record success or renderer crash";
   return UMAGATTOperationOutcome::NOT_SUPPORTED;
@@ -303,7 +368,6 @@ static UMAGATTOperationOutcome TranslateCacheQueryOutcomeToGATTOperationOutcome(
 
 // Characteristic.readValue
 
-// static
 void RecordCharacteristicReadValueOutcome(UMAGATTOperationOutcome outcome) {
   UMA_HISTOGRAM_ENUMERATION("Bluetooth.Web.Characteristic.ReadValue.Outcome",
                             static_cast<int>(outcome),
@@ -346,11 +410,46 @@ void RecordRSSISignalStrength(int rssi) {
                               rssi);
 }
 
+// Descriptor.readValue
+
+void RecordDescriptorReadValueOutcome(UMAGATTOperationOutcome outcome) {
+  UMA_HISTOGRAM_ENUMERATION("Bluetooth.Web.Descriptor.ReadValue.Outcome",
+                            static_cast<int>(outcome),
+                            static_cast<int>(UMAGATTOperationOutcome::COUNT));
+}
+
+void RecordDescriptorReadValueOutcome(CacheQueryOutcome outcome) {
+  RecordDescriptorReadValueOutcome(
+      TranslateCacheQueryOutcomeToGATTOperationOutcome(outcome));
+}
+
+// Descriptor.writeValue
+
+void RecordDescriptorWriteValueOutcome(UMAGATTOperationOutcome outcome) {
+  UMA_HISTOGRAM_ENUMERATION("Bluetooth.Web.Descriptor.WriteValue.Outcome",
+                            static_cast<int>(outcome),
+                            static_cast<int>(UMAGATTOperationOutcome::COUNT));
+}
+
+void RecordDescriptorWriteValueOutcome(CacheQueryOutcome outcome) {
+  RecordDescriptorWriteValueOutcome(
+      TranslateCacheQueryOutcomeToGATTOperationOutcome(outcome));
+}
+
 void RecordRSSISignalStrengthLevel(UMARSSISignalStrengthLevel level) {
   UMA_HISTOGRAM_ENUMERATION(
       "Bluetooth.Web.RequestDevice.RSSISignalStrengthLevel",
       static_cast<int>(level),
       static_cast<int>(UMARSSISignalStrengthLevel::COUNT));
+}
+
+void RecordNumOfDevices(bool accept_all_devices, size_t num_of_devices) {
+  if (!accept_all_devices) {
+    UMA_HISTOGRAM_SPARSE_SLOWLY(
+        "Bluetooth.Web.RequestDevice."
+        "NumOfDevicesInChooserWhenNotAcceptingAllDevices",
+        std::min(num_of_devices, kMaxNumOfDevices));
+  }
 }
 
 }  // namespace content

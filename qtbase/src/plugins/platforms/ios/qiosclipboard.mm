@@ -232,7 +232,7 @@ void QIOSClipboard::setMimeData(QMimeData *mimeData, QClipboard::Mode mode)
                 mimeDataAsVariant = mimeData->imageData();
             } else if (mimeData->hasUrls()) {
                 QVariantList urlList;
-                for (const QUrl &url : mimeData->urls())
+                for (QUrl url : mimeData->urls())
                     urlList << url;
                 mimeDataAsVariant = QVariant(urlList);
             } else {

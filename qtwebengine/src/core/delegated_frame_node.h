@@ -40,6 +40,7 @@
 #ifndef DELEGATED_FRAME_NODE_H
 #define DELEGATED_FRAME_NODE_H
 
+#include "cc/output/compositor_frame.h"
 #include "cc/quads/render_pass.h"
 #include "cc/resources/transferable_resource.h"
 #include "gpu/command_buffer/service/sync_point_manager.h"
@@ -80,8 +81,8 @@ class ChromiumCompositorData : public QSharedData {
 public:
     ChromiumCompositorData() : frameDevicePixelRatio(1) { }
     QHash<unsigned, QSharedPointer<ResourceHolder> > resourceHolders;
-    std::unique_ptr<cc::DelegatedFrameData> frameData;
-    std::unique_ptr<cc::DelegatedFrameData> previousFrameData;
+    cc::CompositorFrame frameData;
+    cc::CompositorFrame previousFrameData;
     qreal frameDevicePixelRatio;
 };
 
@@ -90,7 +91,7 @@ public:
     DelegatedFrameNode();
     ~DelegatedFrameNode();
     void preprocess();
-    void commit(ChromiumCompositorData *chromiumCompositorData, cc::ReturnedResourceArray *resourcesToRelease, RenderWidgetHostViewQtDelegate *apiDelegate);
+    void commit(ChromiumCompositorData *chromiumCompositorData, std::vector<cc::ReturnedResource> *resourcesToRelease, RenderWidgetHostViewQtDelegate *apiDelegate);
 
 private:
     void flushPolygons(
@@ -122,7 +123,9 @@ private:
     // Making those callbacks static bypasses base::Bind's ref-counting requirement
     // of the this pointer when the callback is a method.
     static void pullTexture(DelegatedFrameNode *frameNode, MailboxTexture *mailbox);
+    static void pullTextures(DelegatedFrameNode *frameNode, const QVector<MailboxTexture *> mailboxes);
     static void fenceAndUnlockQt(DelegatedFrameNode *frameNode);
+    static void unlockQt(DelegatedFrameNode *frameNode);
 
     ResourceHolder *findAndHoldResource(unsigned resourceId, QHash<unsigned, QSharedPointer<ResourceHolder> > &candidates);
     void holdResources(const cc::DrawQuad *quad, QHash<unsigned, QSharedPointer<ResourceHolder> > &candidates);
@@ -131,7 +134,7 @@ private:
 
     QExplicitlySharedDataPointer<ChromiumCompositorData> m_chromiumCompositorData;
     struct SGObjects {
-        QVector<QPair<cc::RenderPassId, QSharedPointer<QSGLayer> > > renderPassLayers;
+        QVector<QPair<int, QSharedPointer<QSGLayer> > > renderPassLayers;
         QVector<QSharedPointer<QSGRootNode> > renderPassRootNodes;
         QVector<QSharedPointer<QSGTexture> > textureStrongRefs;
     } m_sgObjects;
@@ -140,7 +143,6 @@ private:
     QWaitCondition m_mailboxesFetchedWaitCond;
     QMutex m_mutex;
     QList<gl::TransferableFence> m_textureFences;
-    std::unique_ptr<gpu::SyncPointClient> m_syncPointClient;
 #if defined(USE_X11)
     bool m_contextShared;
     QScopedPointer<QOffscreenSurface> m_offsurface;

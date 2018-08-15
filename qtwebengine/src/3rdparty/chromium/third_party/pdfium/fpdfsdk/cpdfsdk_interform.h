@@ -8,12 +8,15 @@
 #define FPDFSDK_CPDFSDK_INTERFORM_H_
 
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "core/fpdfdoc/cpdf_action.h"
 #include "core/fpdfdoc/ipdf_formnotify.h"
+#include "core/fxcrt/cfx_unowned_ptr.h"
 #include "core/fxcrt/fx_basic.h"
 #include "core/fxge/fx_dib.h"
+#include "fpdfsdk/cpdfsdk_widget.h"
 
 class CPDF_Dictionary;
 class CPDF_FormControl;
@@ -21,7 +24,6 @@ class CPDF_FormField;
 class CPDF_InterForm;
 class CPDF_Object;
 class CPDFSDK_FormFillEnvironment;
-class CPDFSDK_Widget;
 
 #ifdef PDF_ENABLE_XFA
 class CPDFSDK_XFAWidget;
@@ -34,16 +36,18 @@ class CPDFSDK_InterForm : public IPDF_FormNotify {
   ~CPDFSDK_InterForm() override;
 
   CPDF_InterForm* GetInterForm() const { return m_pInterForm.get(); }
-  CPDFSDK_FormFillEnvironment* GetFormFillEnv() const { return m_pFormFillEnv; }
+  CPDFSDK_FormFillEnvironment* GetFormFillEnv() const {
+    return m_pFormFillEnv.Get();
+  }
 
   bool HighlightWidgets();
 
   CPDFSDK_Widget* GetSibling(CPDFSDK_Widget* pWidget, bool bNext) const;
   CPDFSDK_Widget* GetWidget(CPDF_FormControl* pControl) const;
   void GetWidgets(const CFX_WideString& sFieldName,
-                  std::vector<CPDFSDK_Widget*>* widgets) const;
+                  std::vector<CPDFSDK_Annot::ObservedPtr>* widgets) const;
   void GetWidgets(CPDF_FormField* pField,
-                  std::vector<CPDFSDK_Widget*>* widgets) const;
+                  std::vector<CPDFSDK_Annot::ObservedPtr>* widgets) const;
 
   void AddMap(CPDF_FormControl* pControl, CPDFSDK_Widget* pWidget);
   void RemoveMap(CPDF_FormControl* pControl);
@@ -120,7 +124,7 @@ class CPDFSDK_InterForm : public IPDF_FormNotify {
 
   using CPDFSDK_WidgetMap = std::map<CPDF_FormControl*, CPDFSDK_Widget*>;
 
-  CPDFSDK_FormFillEnvironment* m_pFormFillEnv;  // Not owned.
+  CFX_UnownedPtr<CPDFSDK_FormFillEnvironment> m_pFormFillEnv;
   std::unique_ptr<CPDF_InterForm> m_pInterForm;
   CPDFSDK_WidgetMap m_Map;
 #ifdef PDF_ENABLE_XFA

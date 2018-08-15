@@ -61,6 +61,8 @@ inline uint qHash(const FaceIndices &faceIndices)
 
 bool ObjGeometryLoader::doLoad(QIODevice *ioDev, const QString &subMesh)
 {
+    int faceCount = 0;
+
     // Parse faces taking into account each vertex in a face can index different indices
     // for the positions, normals and texture coords;
     // Generate unique vertices (in OpenGL parlance) and output to points, texCoords,
@@ -148,6 +150,8 @@ bool ObjGeometryLoader::doLoad(QIODevice *ioDev, const QString &subMesh)
                 }
             } else if (!skipping && tokens.size() >= 4 && qstrncmp(tokens.charPtrAt(0), "f ", 2) == 0) {
                 // Process face
+                ++faceCount;
+
                 int faceVertices = tokens.size() - 1;
 
                 QVarLengthArray<FaceIndices, 4> face; // try to avoid allocations in the common case of triangulated data
@@ -220,15 +224,11 @@ bool ObjGeometryLoader::doLoad(QIODevice *ioDev, const QString &subMesh)
         m_normals.resize(vertexCount);
 
     for (auto it = faceIndexMap.cbegin(), endIt = faceIndexMap.cend(); it != endIt; ++it) {
-        const uint positionIndex = it.key().positionIndex;
-        const uint texCoordIndex = it.key().texCoordIndex;
-        const uint normalIndex = it.key().normalIndex;
-
-        m_points[it.value()] = (positionIndex < uint(positions.size())) ? positions[positionIndex] : QVector3D();
+        m_points[it.value()] = positions[it.key().positionIndex];
         if (hasTexCoords)
-            m_texCoords[it.value()] = (texCoordIndex < uint(texCoords.size())) ? texCoords[texCoordIndex] : QVector2D();
+            m_texCoords[it.value()] = std::numeric_limits<unsigned int>::max() != it.key().texCoordIndex ? texCoords[it.key().texCoordIndex] : QVector2D();
         if (hasNormals)
-            m_normals[it.value()] = (normalIndex < uint(normals.size())) ? normals[normalIndex] : QVector3D();
+            m_normals[it.value()] = normals[it.key().normalIndex];
     }
 
     // Now iterate over the face indices and lookup the unique vertex index

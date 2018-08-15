@@ -98,17 +98,19 @@ public:
 
     // SceneParserInterface interface
     void setSource(const QUrl& source) Q_DECL_OVERRIDE;
-    bool isFileTypeSupported(const QUrl &source) const Q_DECL_OVERRIDE;
+    void setData(const QByteArray& data, const QString &basePath) Q_DECL_OVERRIDE;
+    bool areFileTypesSupported(const QStringList &extensions) const Q_DECL_OVERRIDE;
     Qt3DCore::QEntity *scene(const QString &id = QString()) Q_DECL_OVERRIDE;
     Qt3DCore::QEntity *node(const QString &id) Q_DECL_OVERRIDE;
 
 private:
-    static bool isAssimpPath(const QString &path);
+    static bool areAssimpExtensions(const QStringList &extensions);
     static QStringList assimpSupportedFormats();
 
     Qt3DCore::QEntity *node(aiNode *node);
 
     void readSceneFile(const QString &file);
+    void readSceneData(const QByteArray& data, const QString &basePath);
 
     void cleanup();
     void parse();
@@ -141,6 +143,7 @@ private:
         QHash<aiTextureType, QString> m_textureToParameterName;
         QVector<Qt3DAnimation::QKeyframeAnimation *> m_animations;
         QVector<Qt3DAnimation::QMorphingAnimation *> m_morphAnimations;
+//    QMap<aiNode*, Light*> m_lights;
     };
 
     QDir     m_sceneDir;

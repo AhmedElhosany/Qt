@@ -13,6 +13,7 @@
 #include "base/test/fuzzed_data_provider.h"
 #include "net/base/request_priority.h"
 #include "net/socket/fuzzed_socket_factory.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_test_util.h"
@@ -21,7 +22,7 @@
 // Integration fuzzer for URLRequest's handling of HTTP requests. Can follow
 // redirects, both on the same server (using a new socket or the old one) and
 // across servers.
-// TODO(mmenke): Add support for testing HTTPS, FTP, auth, proxies, uploading,
+// TODO(mmenke): Add support for testing HTTPS, auth, proxies, uploading,
 // cancelation, deferring reads / redirects, using preconnected sockets, SPDY,
 // QUIC, DNS failures (they all currently resolve to localhost), IPv6 DNS
 // results, URLs with IPs instead of hostnames (v4 and v6), etc.
@@ -36,7 +37,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   std::unique_ptr<net::URLRequest> url_request(
       url_request_context.CreateRequest(GURL("http://foo/"),
-                                        net::DEFAULT_PRIORITY, &delegate));
+                                        net::DEFAULT_PRIORITY, &delegate,
+                                        TRAFFIC_ANNOTATION_FOR_TESTS));
   url_request->Start();
   // TestDelegate quits the message loop on completion.
   base::RunLoop().Run();

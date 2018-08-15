@@ -5,7 +5,6 @@
 #ifndef NavigatorServiceWorker_h
 #define NavigatorServiceWorker_h
 
-#include "core/dom/ContextLifecycleObserver.h"
 #include "core/frame/Navigator.h"
 #include "modules/ModulesExport.h"
 #include "platform/Supplementable.h"
@@ -16,34 +15,36 @@ namespace blink {
 class Document;
 class ExceptionState;
 class Navigator;
+class ScriptState;
 class ServiceWorkerContainer;
 
 class MODULES_EXPORT NavigatorServiceWorker final
     : public GarbageCollected<NavigatorServiceWorker>,
-      public Supplement<Navigator>,
-      public ContextLifecycleObserver {
+      public Supplement<Navigator> {
   USING_GARBAGE_COLLECTED_MIXIN(NavigatorServiceWorker);
 
  public:
-  static NavigatorServiceWorker* from(Document&);
-  static NavigatorServiceWorker& from(Navigator&);
-  static NavigatorServiceWorker* toNavigatorServiceWorker(Navigator&);
-  static ServiceWorkerContainer* serviceWorker(ExecutionContext*,
+  static NavigatorServiceWorker* From(Document&);
+  static NavigatorServiceWorker& From(Navigator&);
+  static NavigatorServiceWorker* ToNavigatorServiceWorker(Navigator&);
+  static ServiceWorkerContainer* serviceWorker(ScriptState*,
                                                Navigator&,
                                                ExceptionState&);
+  static ServiceWorkerContainer* serviceWorker(ScriptState*,
+                                               Navigator&,
+                                               String& error_message);
+  void ClearServiceWorker();
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
   explicit NavigatorServiceWorker(Navigator&);
   ServiceWorkerContainer* serviceWorker(LocalFrame*, ExceptionState&);
+  ServiceWorkerContainer* serviceWorker(LocalFrame*, String& error_message);
 
-  static const char* supplementName();
+  static const char* SupplementName();
 
-  // ContextLifecycleObserver override.
-  void contextDestroyed() override;
-
-  Member<ServiceWorkerContainer> m_serviceWorker;
+  Member<ServiceWorkerContainer> service_worker_;
 };
 
 }  // namespace blink

@@ -1,19 +1,21 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright (c) 2017 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/quic/quartc/quartc_stream.h"
 
-#include "base/threading/thread_task_runner_handle.h"
 #include "net/quic/core/crypto/quic_random.h"
 #include "net/quic/core/quic_session.h"
 #include "net/quic/core/quic_simple_buffer_allocator.h"
-#include "net/quic/quartc/quartc_alarm_factory.h"
-#include "net/quic/quartc/quartc_stream_interface.h"
+#include "net/quic/quartc/quartc_clock_interface.h"
+#include "net/quic/quartc/quartc_factory.h"
+#include "net/quic/test_tools/mock_clock.h"
+#include "net/spdy/core/spdy_protocol.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
-namespace test {
+
 namespace {
 
 static const SpdyPriority kDefaultPriority = 3;
@@ -30,14 +32,17 @@ class MockQuicSession : public QuicSession {
       : QuicSession(connection, nullptr /*visitor*/, config),
         write_buffer_(write_buffer) {}
 
+  ~MockQuicSession() override {}
+
   // Writes outgoing data from QuicStream to a string.
   QuicConsumedData WritevData(
       QuicStream* stream,
       QuicStreamId id,
       QuicIOVector iovector,
       QuicStreamOffset offset,
-      bool fin,
-      QuicAckListenerInterface* ack_notifier_delegate) override {
+      StreamSendingState state,
+      QuicReferenceCountedPointer<
+          QuicAckListenerInterface> /*ack_notifier_delegate*/) override {
     if (!writable_) {
       return QuicConsumedData(0, false);
     }
@@ -45,7 +50,7 @@ class MockQuicSession : public QuicSession {
     const char* data = reinterpret_cast<const char*>(iovector.iov->iov_base);
     size_t len = iovector.total_length;
     write_buffer_->append(data, len);
-    return QuicConsumedData(len, fin);
+    return QuicConsumedData(len, state != StreamSendingState::NO_FIN);
   }
 
   QuartcStream* CreateIncomingDynamicStream(QuicStreamId id) override {
@@ -56,7 +61,8 @@ class MockQuicSession : public QuicSession {
     return nullptr;
   }
 
-  QuicCryptoStream* GetCryptoStream() override { return nullptr; }
+  const QuicCryptoStream* GetCryptoStream() const override { return nullptr; }
+  QuicCryptoStream* GetMutableCryptoStream() override { return nullptr; }
 
   // Called by QuicStream when they want to close stream.
   void SendRstStream(QuicStreamId id,
@@ -76,6 +82,11 @@ class MockQuicSession : public QuicSession {
     ActivateStream(std::move(stream));
   }
 
+ protected:
+  std::unique_ptr<QuicStream> CreateStream(QuicStreamId id) override {
+    return nullptr;
+  }
+
  private:
   // Stores written data from ReliableQuicStreamAdapter.
   std::string* write_buffer_;
@@ -92,8 +103,8 @@ class DummyPacketWriter : public QuicPacketWriter {
   // QuicPacketWriter overrides.
   WriteResult WritePacket(const char* buffer,
                           size_t buf_len,
-                          const IPAddress& self_address,
-                          const IPEndPoint& peer_address,
+                          const QuicIpAddress& self_address,
+                          const QuicSocketAddress& peer_address,
                           PerPacketOptions* options) override {
     return WriteResult(WRITE_STATUS_ERROR, 0);
   }
@@ -105,14 +116,14 @@ class DummyPacketWriter : public QuicPacketWriter {
   void SetWritable() override {}
 
   QuicByteCount GetMaxPacketSize(
-      const IPEndPoint& peer_address) const override {
+      const QuicSocketAddress& peer_address) const override {
     return 0;
   }
 };
 
 class MockQuartcStreamDelegate : public QuartcStreamInterface::Delegate {
  public:
-  MockQuartcStreamDelegate(int id, std::string& read_buffer)
+  MockQuartcStreamDelegate(int id, std::string* read_buffer)
       : id_(id), read_buffer_(read_buffer) {}
 
   void OnBufferedAmountDecrease(QuartcStreamInterface* stream) override {
@@ -123,12 +134,10 @@ class MockQuartcStreamDelegate : public QuartcStreamInterface::Delegate {
                   const char* data,
                   size_t size) override {
     EXPECT_EQ(id_, stream->stream_id());
-    read_buffer_.append(data, size);
+    read_buffer_->append(data, size);
   }
 
-  void OnClose(QuartcStreamInterface* stream, int error_code) override {
-    closed_ = true;
-  }
+  void OnClose(QuartcStreamInterface* stream) override { closed_ = true; }
 
   bool closed() { return closed_; }
 
@@ -137,7 +146,7 @@ class MockQuartcStreamDelegate : public QuartcStreamInterface::Delegate {
  protected:
   uint32_t id_;
   // Data read by the QuicStream.
-  std::string& read_buffer_;
+  std::string* read_buffer_;
   // Whether the QuicStream is closed.
   bool closed_ = false;
   int queued_bytes_amount_ = -1;
@@ -149,25 +158,30 @@ class QuartcStreamTest : public ::testing::Test,
   void CreateReliableQuicStream() {
     // Arbitrary values for QuicConnection.
     Perspective perspective = Perspective::IS_SERVER;
-    IPAddress ip(0, 0, 0, 0);
+    QuicIpAddress ip;
+    ip.FromString("0.0.0.0");
     bool owns_writer = true;
-    alarm_factory_.reset(new QuartcAlarmFactory(
-        base::ThreadTaskRunnerHandle::Get().get(), GetClock()));
+
+    // We only use QuartcFactory for its role as an alarm factory.
+    QuartcFactoryConfig config;
+    alarm_factory_.reset(new QuartcFactory(config));
 
     connection_.reset(new QuicConnection(
-        0, IPEndPoint(ip, 0), this /*QuicConnectionHelperInterface*/,
+        0, QuicSocketAddress(ip, 0), this /*QuicConnectionHelperInterface*/,
         alarm_factory_.get(), new DummyPacketWriter(), owns_writer, perspective,
         AllSupportedVersions()));
 
     session_.reset(
         new MockQuicSession(connection_.get(), QuicConfig(), &write_buffer_));
     mock_stream_delegate_.reset(
-        new MockQuartcStreamDelegate(kStreamId, read_buffer_));
+        new MockQuartcStreamDelegate(kStreamId, &read_buffer_));
     stream_ = new QuartcStream(kStreamId, session_.get());
     stream_->SetDelegate(mock_stream_delegate_.get());
     session_->RegisterReliableStream(stream_->stream_id(), kDefaultPriority);
     session_->ActivateReliableStream(std::unique_ptr<QuartcStream>(stream_));
   }
+
+  ~QuartcStreamTest() override {}
 
   const QuicClock* GetClock() const override { return &clock_; }
 
@@ -188,11 +202,11 @@ class QuartcStreamTest : public ::testing::Test,
   std::string write_buffer_;
   // Data read by the ReliableQuicStreamAdapterTest.
   std::string read_buffer_;
-  std::unique_ptr<QuartcAlarmFactory> alarm_factory_;
+  std::unique_ptr<QuicAlarmFactory> alarm_factory_;
   std::unique_ptr<QuicConnection> connection_;
   // Used to implement the QuicConnectionHelperInterface.
   SimpleBufferAllocator buffer_allocator_;
-  QuicClock clock_;
+  MockClock clock_;
 };
 
 // Write an entire string.
@@ -258,5 +272,5 @@ TEST_F(QuartcStreamTest, CloseStream) {
 }
 
 }  // namespace
-}  // namespace test
+
 }  // namespace net

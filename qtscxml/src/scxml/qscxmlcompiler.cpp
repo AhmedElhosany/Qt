@@ -42,8 +42,6 @@
 
 #include <qxmlstream.h>
 #include <qloggingcategory.h>
-#include <qjsondocument.h>
-#include <qjsonobject.h>
 #include <qfile.h>
 #include <qvector.h>
 #include <qstring.h>
@@ -498,8 +496,6 @@ class DynamicStateMachine: public QScxmlStateMachine, public QScxmlInternal::Gen
     Q_DECLARE_PRIVATE(DynamicStateMachine)
     // Manually expanded from Q_OBJECT macro:
 public:
-    Q_OBJECT_CHECK
-
     const QMetaObject *metaObject() const Q_DECL_OVERRIDE
     { return d_func()->m_metaObject; }
 

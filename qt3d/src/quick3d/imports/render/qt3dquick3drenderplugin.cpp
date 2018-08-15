@@ -71,6 +71,7 @@
 #include <Qt3DRender/qlevelofdetail.h>
 #include <Qt3DRender/qlevelofdetailboundingsphere.h>
 #include <Qt3DRender/qlevelofdetailswitch.h>
+#include <Qt3DRender/qlinewidth.h>
 #include <Qt3DRender/qmemorybarrier.h>
 #include <Qt3DRender/qmesh.h>
 #include <Qt3DRender/qmultisampleantialiasing.h>
@@ -96,6 +97,7 @@
 #include <Qt3DRender/qseamlesscubemap.h>
 #include <Qt3DRender/qshaderdata.h>
 #include <Qt3DRender/qshaderprogram.h>
+#include <Qt3DRender/qshaderprogrambuilder.h>
 #include <Qt3DRender/qsortpolicy.h>
 #include <Qt3DRender/qspotlight.h>
 #include <Qt3DRender/qstencilmask.h>
@@ -107,6 +109,8 @@
 #include <Qt3DRender/qtechniquefilter.h>
 #include <Qt3DRender/qtexture.h>
 #include <Qt3DRender/qviewport.h>
+#include <Qt3DRender/qproximityfilter.h>
+#include <Qt3DRender/qblitframebuffer.h>
 
 #include <QtGui/qwindow.h>
 
@@ -171,6 +175,7 @@ void Qt3DQuick3DRenderPlugin::registerTypes(const char *uri)
     Qt3DRender::Quick::registerExtendedType<Qt3DRender::QRenderPass, Qt3DRender::Render::Quick::Quick3DRenderPass>("QRenderPass", "Qt3D.Render/RenderPass", uri, 2, 0, "RenderPass");
     qmlRegisterType<Qt3DRender::QShaderProgram>(uri, 2, 0, "ShaderProgram");
     qmlRegisterRevision<Qt3DRender::QShaderProgram, 9>(uri, 2, 9);
+    qmlRegisterType<Qt3DRender::QShaderProgramBuilder>(uri, 2, 10, "ShaderProgramBuilder");
     qmlRegisterUncreatableType<Qt3DRender::QShaderData>(uri, 2, 0, "QShaderData", "Quick3D should instantiate Quick3DShaderData only");
     qmlRegisterType<Qt3DRender::Render::Quick::Quick3DShaderDataArray>(uri, 2, 0, "ShaderDataArray");
     qmlRegisterType<Qt3DRender::Render::Quick::Quick3DShaderData>(uri, 2, 0, "ShaderData");
@@ -250,6 +255,8 @@ void Qt3DQuick3DRenderPlugin::registerTypes(const char *uri)
     qmlRegisterUncreatableType<Qt3DRender::QRenderCaptureReply>(uri, 2, 1, "RenderCaptureReply", QStringLiteral("RenderCaptureReply is only instantiated by RenderCapture"));
     qmlRegisterType<Qt3DRender::QBufferCapture>(uri, 2, 9, "BufferCapture");
     Qt3DRender::Quick::registerExtendedType<Qt3DRender::QMemoryBarrier, Qt3DRender::Render::Quick::Quick3DMemoryBarrier>("QMemoryBarrier", "Qt3D.Render/MemoryBarrier", uri, 2, 9, "MemoryBarrier");
+    qmlRegisterType<Qt3DRender::QProximityFilter>(uri, 2, 10, "ProximityFilter");
+    qmlRegisterType<Qt3DRender::QBlitFramebuffer>(uri, 2, 10, "BlitFramebuffer");
 
     // RenderTarget
     qmlRegisterType<Qt3DRender::QRenderTargetOutput>(uri, 2, 0, "RenderTargetOutput");
@@ -284,6 +291,7 @@ void Qt3DQuick3DRenderPlugin::registerTypes(const char *uri)
     qmlRegisterType<Qt3DRender::QSeamlessCubemap>(uri, 2, 0, "SeamlessCubemap");
     qmlRegisterType<Qt3DRender::QStencilOperation>(uri, 2, 0, "StencilOperation");
     qmlRegisterType<Qt3DRender::QStencilMask>(uri, 2, 0, "StencilMask");
+    qmlRegisterType<Qt3DRender::QLineWidth>(uri, 2, 10, "LineWidth");
 }
 
 QT_END_NAMESPACE

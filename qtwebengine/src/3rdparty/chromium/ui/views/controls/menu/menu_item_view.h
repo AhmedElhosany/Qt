@@ -11,11 +11,13 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "ui/base/models/menu_separator_types.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/controls/menu/menu_config.h"
+#include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_types.h"
 #include "ui/views/view.h"
 
@@ -220,6 +222,9 @@ class VIEWS_EXPORT MenuItemView : public View {
   // Returns the view containing child menu items.
   virtual SubmenuView* GetSubmenu() const;
 
+  // Returns true if this menu item has a submenu and it is showing
+  virtual bool SubmenuIsShowing() const;
+
   // Returns the parent menu item.
   MenuItemView* GetParentMenuItem() { return parent_menu_item_; }
   const MenuItemView* GetParentMenuItem() const { return parent_menu_item_; }
@@ -268,7 +273,7 @@ class VIEWS_EXPORT MenuItemView : public View {
   void OnPaint(gfx::Canvas* canvas) override;
 
   // Returns the preferred size of this item.
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
 
   // Gets the preferred height for the given |width|. This is only different
   // from GetPreferredSize().width() if the item has a child view with flexible
@@ -389,7 +394,7 @@ class VIEWS_EXPORT MenuItemView : public View {
   void PaintButton(gfx::Canvas* canvas, PaintButtonMode mode);
 
   // Paints the right-side text.
-  void PaintMinorText(gfx::Canvas* canvas, bool render_selection);
+  void PaintMinorText(gfx::Canvas* canvas, SkColor color);
 
   // Destroys the window used to display this menu and recursively destroys
   // the windows used to display all descendants.
@@ -398,6 +403,12 @@ class VIEWS_EXPORT MenuItemView : public View {
   // Returns the text that should be displayed on the end (right) of the menu
   // item. This will be the accelerator (if one exists), otherwise |subtitle_|.
   base::string16 GetMinorText() const;
+
+  // Returns the text color for the current state.  |minor| specifies if the
+  // minor text or the normal text is desired.
+  SkColor GetTextColor(bool minor,
+                       bool render_selection,
+                       bool emphasized) const;
 
   // Calculates and returns the MenuItemDimensions.
   MenuItemDimensions CalculateDimensions() const;
@@ -412,7 +423,12 @@ class VIEWS_EXPORT MenuItemView : public View {
     actual_menu_position_ = actual_menu_position;
   }
 
-  void set_controller(MenuController* controller) { controller_ = controller; }
+  void set_controller(MenuController* controller) {
+    if (controller)
+      controller_ = controller->AsWeakPtr();
+    else
+      controller_.reset();
+  }
 
   // Returns true if this MenuItemView contains a single child
   // that is responsible for rendering the content.
@@ -436,7 +452,7 @@ class VIEWS_EXPORT MenuItemView : public View {
   MenuDelegate* delegate_;
 
   // The controller for the run operation, or NULL if the menu isn't showing.
-  MenuController* controller_;
+  base::WeakPtr<MenuController> controller_;
 
   // Used to detect when Cancel was invoked.
   bool canceled_;

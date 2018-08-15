@@ -34,9 +34,11 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Templates 2.2 as T
-import QtQuick.Controls.Universal 2.2
+import QtQuick 2.10
+import QtQuick.Templates 2.3 as T
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Controls.Universal 2.3
 
 T.Button {
     id: control
@@ -50,18 +52,23 @@ T.Button {
     padding: 8
     topPadding: padding - 4
     bottomPadding: padding - 4
+    spacing: 8
+
+    icon.width: 20
+    icon.height: 20
+    icon.color: Color.transparent(Universal.foreground, enabled ? 1.0 : 0.2)
 
     property bool useSystemFocusVisuals: true
 
-    contentItem: Text {
+    contentItem: IconLabel {
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+
+        icon: control.icon
         text: control.text
         font: control.font
-        elide: Text.ElideRight
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-
-        opacity: enabled ? 1.0 : 0.2
-        color: control.Universal.foreground
+        color: Color.transparent(control.Universal.foreground, enabled ? 1.0 : 0.2)
     }
 
     background: Rectangle {

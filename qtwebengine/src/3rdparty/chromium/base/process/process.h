@@ -76,6 +76,9 @@ class BASE_EXPORT Process {
   // Returns true if processes can be backgrounded.
   static bool CanBackgroundProcesses();
 
+  // Terminates the current process immediately with |exit_code|.
+  static void TerminateCurrentProcessImmediately(int exit_code);
+
   // Returns true if this objects represents a valid process.
   bool IsValid() const;
 
@@ -108,12 +111,12 @@ class BASE_EXPORT Process {
   // any process.
   // NOTE: |exit_code| is optional, nullptr can be passed if the exit code is
   // not required.
-  bool WaitForExit(int* exit_code);
+  bool WaitForExit(int* exit_code) const;
 
   // Same as WaitForExit() but only waits for up to |timeout|.
   // NOTE: |exit_code| is optional, nullptr can be passed if the exit code
   // is not required.
-  bool WaitForExitWithTimeout(TimeDelta timeout, int* exit_code);
+  bool WaitForExitWithTimeout(TimeDelta timeout, int* exit_code) const;
 
 #if defined(OS_MACOSX)
   // The Mac needs a Mach port in order to manipulate a process's priority,
@@ -136,6 +139,9 @@ class BASE_EXPORT Process {
   // Returns true if the priority was changed, false otherwise. If
   // |port_provider| is null, this is a no-op and it returns false.
   bool SetProcessBackgrounded(PortProvider* port_provider, bool value);
+
+  // Returns |true| if helper processes should participate in AppNap.
+  static bool IsAppNapEnabled();
 #else
   // A process is backgrounded when it's priority is lower than normal.
   // Return true if this process is backgrounded, false otherwise.
@@ -160,10 +166,13 @@ class BASE_EXPORT Process {
 
  private:
 #if defined(OS_WIN)
-  bool is_current_process_;
   win::ScopedHandle process_;
 #else
   ProcessHandle process_;
+#endif
+
+#if defined(OS_WIN) || defined(OS_FUCHSIA)
+  bool is_current_process_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(Process);

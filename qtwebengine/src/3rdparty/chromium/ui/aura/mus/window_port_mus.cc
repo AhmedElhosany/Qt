@@ -4,18 +4,34 @@
 
 #include "ui/aura/mus/window_port_mus.h"
 
+#include "base/memory/ptr_util.h"
+#include "components/viz/client/local_surface_id_provider.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/transient_window_client.h"
+#include "ui/aura/env.h"
+#include "ui/aura/mus/client_surface_embedder.h"
 #include "ui/aura/mus/property_converter.h"
-#include "ui/aura/mus/surface_id_handler.h"
 #include "ui/aura/mus/window_tree_client.h"
 #include "ui/aura/mus/window_tree_client_delegate.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/aura/window_observer.h"
-#include "ui/aura/window_property.h"
+#include "ui/base/class_property.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
+#include "ui/gfx/geometry/dip_util.h"
 
 namespace aura {
+
+namespace {
+// Helper function to get the device_scale_factor() of the display::Display
+// nearest to |window|.
+float ScaleFactorForDisplay(Window* window) {
+  return display::Screen::GetScreen()
+      ->GetDisplayNearestWindow(window)
+      .device_scale_factor();
+}
+}  // namespace
 
 WindowPortMus::WindowMusChangeDataImpl::WindowMusChangeDataImpl() = default;
 
@@ -31,10 +47,15 @@ WindowPortMus::WindowPortMus(WindowTreeClient* client,
     : WindowMus(window_mus_type), window_tree_client_(client) {}
 
 WindowPortMus::~WindowPortMus() {
-  if (surface_info_)
-    SetSurfaceIdFromServer(nullptr);
+  client_surface_embedder_.reset();
 
-  window_tree_client_->OnWindowMusDestroyed(this);
+  // DESTROY is only scheduled from DestroyFromServer(), meaning if DESTROY is
+  // present then the server originated the change.
+  const WindowTreeClient::Origin origin =
+      RemoveChangeByTypeAndData(ServerChangeType::DESTROY, ServerChangeData())
+          ? WindowTreeClient::Origin::SERVER
+          : WindowTreeClient::Origin::CLIENT;
+  window_tree_client_->OnWindowMusDestroyed(this, origin);
 }
 
 // static
@@ -51,35 +72,58 @@ void WindowPortMus::SetImeVisibility(bool visible,
   window_tree_client_->SetImeVisibility(this, visible, std::move(state));
 }
 
-void WindowPortMus::SetPredefinedCursor(ui::mojom::Cursor cursor_id) {
-  window_tree_client_->SetPredefinedCursor(this, predefined_cursor_, cursor_id);
-  predefined_cursor_ = cursor_id;
+void WindowPortMus::SetCursor(const ui::CursorData& cursor) {
+  if (cursor_.IsSameAs(cursor))
+    return;
+
+  window_tree_client_->SetCursor(this, cursor_, cursor);
+  cursor_ = cursor;
 }
 
-std::unique_ptr<WindowCompositorFrameSink>
-WindowPortMus::RequestCompositorFrameSink(
-    ui::mojom::CompositorFrameSinkType type,
-    scoped_refptr<cc::ContextProvider> context_provider,
+void WindowPortMus::SetEventTargetingPolicy(
+    ui::mojom::EventTargetingPolicy policy) {
+  window_tree_client_->SetEventTargetingPolicy(this, policy);
+}
+
+void WindowPortMus::SetCanAcceptDrops(bool can_accept_drops) {
+  window_tree_client_->SetCanAcceptDrops(this, can_accept_drops);
+}
+
+void WindowPortMus::SetExtendedHitRegionForChildren(
+    const gfx::Insets& mouse_insets,
+    const gfx::Insets& touch_insets) {
+  window_tree_client_->SetExtendedHitRegionForChildren(window_, mouse_insets,
+                                                       touch_insets);
+}
+
+void WindowPortMus::Embed(
+    ui::mojom::WindowTreeClientPtr client,
+    uint32_t flags,
+    const ui::mojom::WindowTree::EmbedCallback& callback) {
+  window_tree_client_->Embed(window_, std::move(client), flags, callback);
+}
+
+std::unique_ptr<viz::ClientLayerTreeFrameSink>
+WindowPortMus::RequestLayerTreeFrameSink(
+    scoped_refptr<viz::ContextProvider> context_provider,
     gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager) {
-  std::unique_ptr<WindowCompositorFrameSinkBinding>
-      compositor_frame_sink_binding;
-  std::unique_ptr<WindowCompositorFrameSink> compositor_frame_sink =
-      WindowCompositorFrameSink::Create(std::move(context_provider),
-                                        gpu_memory_buffer_manager,
-                                        &compositor_frame_sink_binding);
-  AttachCompositorFrameSink(type, std::move(compositor_frame_sink_binding));
-  return compositor_frame_sink;
-}
-
-void WindowPortMus::AttachCompositorFrameSink(
-    ui::mojom::CompositorFrameSinkType type,
-    std::unique_ptr<WindowCompositorFrameSinkBinding>
-        compositor_frame_sink_binding) {
+  cc::mojom::CompositorFrameSinkPtrInfo sink_info;
+  cc::mojom::CompositorFrameSinkRequest sink_request =
+      mojo::MakeRequest(&sink_info);
+  cc::mojom::CompositorFrameSinkClientPtr client;
+  cc::mojom::CompositorFrameSinkClientRequest client_request =
+      mojo::MakeRequest(&client);
+  constexpr bool enable_surface_synchronization = true;
+  auto layer_tree_frame_sink = base::MakeUnique<viz::ClientLayerTreeFrameSink>(
+      std::move(context_provider), nullptr /* worker_context_provider */,
+      gpu_memory_buffer_manager, nullptr /* shared_bitmap_manager */,
+      nullptr /* synthetic_begin_frame_source */, std::move(sink_info),
+      std::move(client_request),
+      base::MakeUnique<viz::DefaultLocalSurfaceIdProvider>(),
+      enable_surface_synchronization);
   window_tree_client_->AttachCompositorFrameSink(
-      server_id(), type,
-      std::move(compositor_frame_sink_binding->compositor_frame_sink_request_),
-      mojo::MakeProxy(std::move(
-          compositor_frame_sink_binding->compositor_frame_sink_client_)));
+      server_id(), std::move(sink_request), std::move(client));
+  return layer_tree_frame_sink;
 }
 
 WindowPortMus::ServerChangeIdType WindowPortMus::ScheduleChange(
@@ -105,8 +149,18 @@ void WindowPortMus::RemoveChangeById(ServerChangeIdType change_id) {
 
 bool WindowPortMus::RemoveChangeByTypeAndData(const ServerChangeType type,
                                               const ServerChangeData& data) {
-  for (auto iter = server_changes_.begin(); iter != server_changes_.end();
-       ++iter) {
+  auto iter = FindChangeByTypeAndData(type, data);
+  if (iter == server_changes_.end())
+    return false;
+  server_changes_.erase(iter);
+  return true;
+}
+
+WindowPortMus::ServerChanges::iterator WindowPortMus::FindChangeByTypeAndData(
+    const ServerChangeType type,
+    const ServerChangeData& data) {
+  auto iter = server_changes_.begin();
+  for (; iter != server_changes_.end(); ++iter) {
     if (iter->type != type)
       continue;
 
@@ -116,26 +170,32 @@ bool WindowPortMus::RemoveChangeByTypeAndData(const ServerChangeType type,
       case ServerChangeType::REMOVE:
       case ServerChangeType::REMOVE_TRANSIENT:
       case ServerChangeType::REORDER:
+      case ServerChangeType::TRANSIENT_REORDER:
         if (iter->data.child_id == data.child_id)
-          break;
-        continue;
+          return iter;
+        break;
       case ServerChangeType::BOUNDS:
-        if (iter->data.bounds == data.bounds)
-          break;
-        continue;
+        if (iter->data.bounds_in_dip == data.bounds_in_dip)
+          return iter;
+        break;
+      case ServerChangeType::DESTROY:
+        // No extra data for delete.
+        return iter;
       case ServerChangeType::PROPERTY:
         if (iter->data.property_name == data.property_name)
-          break;
-        continue;
+          return iter;
+        break;
+      case ServerChangeType::TRANSFORM:
+        if (iter->data.transform == data.transform)
+          return iter;
+        break;
       case ServerChangeType::VISIBLE:
         if (iter->data.visible == data.visible)
-          break;
-        continue;
+          return iter;
+        break;
     }
-    server_changes_.erase(iter);
-    return true;
   }
-  return false;
+  return iter;
 }
 
 PropertyConverter* WindowPortMus::GetPropertyConverter() {
@@ -176,11 +236,27 @@ void WindowPortMus::ReorderFromServer(WindowMus* child,
     window_->StackChildAbove(child->GetWindow(), relative->GetWindow());
 }
 
-void WindowPortMus::SetBoundsFromServer(const gfx::Rect& bounds) {
+void WindowPortMus::SetBoundsFromServer(
+    const gfx::Rect& bounds,
+    const base::Optional<viz::LocalSurfaceId>& local_surface_id) {
   ServerChangeData data;
-  data.bounds = bounds;
+  data.bounds_in_dip = bounds;
   ScopedServerChange change(this, ServerChangeType::BOUNDS, data);
+  float device_scale_factor = ScaleFactorForDisplay(window_);
+  last_surface_size_in_pixels_ =
+      gfx::ConvertSizeToPixel(device_scale_factor, bounds.size());
+  if (local_surface_id)
+    local_surface_id_ = *local_surface_id;
+  else
+    local_surface_id_ = viz::LocalSurfaceId();
   window_->SetBounds(bounds);
+}
+
+void WindowPortMus::SetTransformFromServer(const gfx::Transform& transform) {
+  ServerChangeData data;
+  data.transform = transform;
+  ScopedServerChange change(this, ServerChangeType::TRANSFORM, data);
+  window_->SetTransform(transform);
 }
 
 void WindowPortMus::SetVisibleFromServer(bool visible) {
@@ -194,15 +270,13 @@ void WindowPortMus::SetVisibleFromServer(bool visible) {
 }
 
 void WindowPortMus::SetOpacityFromServer(float opacity) {
-  // TODO(sky): route to server.
-  // Changes to opacity don't make it back to the server.
   window_->layer()->SetOpacity(opacity);
 }
 
-void WindowPortMus::SetPredefinedCursorFromServer(ui::mojom::Cursor cursor) {
+void WindowPortMus::SetCursorFromServer(const ui::CursorData& cursor) {
   // As this does nothing more than set the cursor we don't need to use
   // ServerChange.
-  predefined_cursor_ = cursor;
+  cursor_ = cursor;
 }
 
 void WindowPortMus::SetPropertyFromServer(
@@ -215,23 +289,68 @@ void WindowPortMus::SetPropertyFromServer(
                                                         property_data);
 }
 
-void WindowPortMus::SetSurfaceIdFromServer(
-    std::unique_ptr<SurfaceInfo> surface_info) {
-  if (surface_info_) {
-    const cc::SurfaceId& existing_surface_id = surface_info_->surface_id;
-    cc::SurfaceId new_surface_id =
-        surface_info ? surface_info->surface_id : cc::SurfaceId();
-    if (existing_surface_id.is_valid() &&
-        existing_surface_id != new_surface_id) {
-      // TODO(kylechar): Start return reference here?
-    }
+void WindowPortMus::SetFrameSinkIdFromServer(
+    const viz::FrameSinkId& frame_sink_id) {
+  DCHECK(window_mus_type() == WindowMusType::TOP_LEVEL_IN_WM ||
+         window_mus_type() == WindowMusType::EMBED_IN_OWNER);
+  frame_sink_id_ = frame_sink_id;
+  UpdatePrimarySurfaceInfo();
+}
+
+const viz::LocalSurfaceId& WindowPortMus::GetOrAllocateLocalSurfaceId(
+    const gfx::Size& surface_size_in_pixels) {
+  if (last_surface_size_in_pixels_ == surface_size_in_pixels &&
+      local_surface_id_.is_valid()) {
+    return local_surface_id_;
   }
-  WindowPortMus* parent = Get(window_->parent());
-  if (parent && parent->surface_id_handler_) {
-    parent->surface_id_handler_->OnChildWindowSurfaceChanged(window_,
-                                                             &surface_info);
+
+  local_surface_id_ = local_surface_id_allocator_.GenerateId();
+  last_surface_size_in_pixels_ = surface_size_in_pixels;
+
+  // If the FrameSinkId is available, then immediately embed the SurfaceId.
+  // The newly generated frame by the embedder will block in the display
+  // compositor until the child submits a corresponding CompositorFrame or a
+  // deadline hits.
+  if (frame_sink_id_.is_valid())
+    UpdatePrimarySurfaceInfo();
+
+  if (local_layer_tree_frame_sink_)
+    local_layer_tree_frame_sink_->SetLocalSurfaceId(local_surface_id_);
+
+  return local_surface_id_;
+}
+
+void WindowPortMus::SetFallbackSurfaceInfo(
+    const viz::SurfaceInfo& surface_info) {
+  if (!frame_sink_id_.is_valid()) {
+    // |primary_surface_info_| shold not be valid, since we didn't know the
+    // |frame_sink_id_|.
+    DCHECK(!primary_surface_info_.is_valid());
+    frame_sink_id_ = surface_info.id().frame_sink_id();
+    UpdatePrimarySurfaceInfo();
   }
-  surface_info_ = std::move(surface_info);
+
+  // The frame sink id should never be changed.
+  DCHECK_EQ(surface_info.id().frame_sink_id(), frame_sink_id_);
+
+  fallback_surface_info_ = surface_info;
+  UpdateClientSurfaceEmbedder();
+}
+
+void WindowPortMus::DestroyFromServer() {
+  std::unique_ptr<ScopedServerChange> remove_from_parent_change;
+  if (window_->parent()) {
+    ServerChangeData data;
+    data.child_id = server_id();
+    WindowPortMus* parent = Get(window_->parent());
+    remove_from_parent_change = base::MakeUnique<ScopedServerChange>(
+        parent, ServerChangeType::REMOVE, data);
+  }
+  // NOTE: this can't use ScopedServerChange as |this| is destroyed before the
+  // function returns (ScopedServerChange would attempt to access |this| after
+  // destruction).
+  ScheduleChange(ServerChangeType::DESTROY, ServerChangeData());
+  delete window_;
 }
 
 void WindowPortMus::AddTransientChildFromServer(WindowMus* child) {
@@ -273,12 +392,16 @@ WindowPortMus::ChangeSource WindowPortMus::OnTransientChildRemoved(
              : ChangeSource::LOCAL;
 }
 
+const viz::LocalSurfaceId& WindowPortMus::GetLocalSurfaceId() {
+  return local_surface_id_;
+}
+
 std::unique_ptr<WindowMusChangeData>
 WindowPortMus::PrepareForServerBoundsChange(const gfx::Rect& bounds) {
   std::unique_ptr<WindowMusChangeDataImpl> data(
       base::MakeUnique<WindowMusChangeDataImpl>());
   ServerChangeData change_data;
-  change_data.bounds = bounds;
+  change_data.bounds_in_dip = bounds;
   data->change = base::MakeUnique<ScopedServerChange>(
       this, ServerChangeType::BOUNDS, change_data);
   return std::move(data);
@@ -295,9 +418,31 @@ WindowPortMus::PrepareForServerVisibilityChange(bool value) {
   return std::move(data);
 }
 
+void WindowPortMus::PrepareForDestroy() {
+  ScheduleChange(ServerChangeType::DESTROY, ServerChangeData());
+}
+
+void WindowPortMus::PrepareForTransientRestack(WindowMus* window) {
+  ServerChangeData change_data;
+  change_data.child_id = window->server_id();
+  ScheduleChange(ServerChangeType::TRANSIENT_REORDER, change_data);
+}
+
+void WindowPortMus::OnTransientRestackDone(WindowMus* window) {
+  ServerChangeData change_data;
+  change_data.child_id = window->server_id();
+  const bool removed = RemoveChangeByTypeAndData(
+      ServerChangeType::TRANSIENT_REORDER, change_data);
+  DCHECK(removed);
+}
+
 void WindowPortMus::NotifyEmbeddedAppDisconnected() {
   for (WindowObserver& observer : *GetObservers(window_))
     observer.OnEmbeddedAppDisconnected(window_);
+}
+
+bool WindowPortMus::HasLocalLayerTreeFrameSink() {
+  return !!local_layer_tree_frame_sink_;
 }
 
 void WindowPortMus::OnPreInit(Window* window) {
@@ -327,8 +472,13 @@ void WindowPortMus::OnWillRemoveChild(Window* child) {
 void WindowPortMus::OnWillMoveChild(size_t current_index, size_t dest_index) {
   ServerChangeData change_data;
   change_data.child_id = Get(window_->children()[current_index])->server_id();
-  if (!RemoveChangeByTypeAndData(ServerChangeType::REORDER, change_data))
+  // See description of TRANSIENT_REORDER for details on why it isn't removed
+  // here.
+  if (!RemoveChangeByTypeAndData(ServerChangeType::REORDER, change_data) &&
+      FindChangeByTypeAndData(ServerChangeType::TRANSIENT_REORDER,
+                              change_data) == server_changes_.end()) {
     window_tree_client_->OnWindowMusMoveChild(this, current_index, dest_index);
+  }
 }
 
 void WindowPortMus::OnVisibilityChanged(bool visible) {
@@ -341,19 +491,42 @@ void WindowPortMus::OnVisibilityChanged(bool visible) {
 void WindowPortMus::OnDidChangeBounds(const gfx::Rect& old_bounds,
                                       const gfx::Rect& new_bounds) {
   ServerChangeData change_data;
-  change_data.bounds = new_bounds;
+  change_data.bounds_in_dip = new_bounds;
   if (!RemoveChangeByTypeAndData(ServerChangeType::BOUNDS, change_data))
     window_tree_client_->OnWindowMusBoundsChanged(this, old_bounds, new_bounds);
+  if (client_surface_embedder_)
+    client_surface_embedder_->UpdateSizeAndGutters();
 }
 
-std::unique_ptr<WindowPortPropertyData> WindowPortMus::OnWillChangeProperty(
+void WindowPortMus::OnDidChangeTransform(const gfx::Transform& old_transform,
+                                         const gfx::Transform& new_transform) {
+  ServerChangeData change_data;
+  change_data.transform = new_transform;
+  if (!RemoveChangeByTypeAndData(ServerChangeType::TRANSFORM, change_data)) {
+    window_tree_client_->OnWindowMusTransformChanged(this, old_transform,
+                                                     new_transform);
+  }
+}
+
+std::unique_ptr<ui::PropertyData> WindowPortMus::OnWillChangeProperty(
     const void* key) {
+  // |window_| is null if a property is set on the aura::Window before
+  // Window::Init() is called. It's safe to ignore the change in this case as
+  // once Window::Init() is called the Window is queried for the current set of
+  // properties.
+  if (!window_)
+    return nullptr;
+
   return window_tree_client_->OnWindowMusWillChangeProperty(this, key);
 }
 
-void WindowPortMus::OnPropertyChanged(
-    const void* key,
-    std::unique_ptr<WindowPortPropertyData> data) {
+void WindowPortMus::OnPropertyChanged(const void* key,
+                                      int64_t old_value,
+                                      std::unique_ptr<ui::PropertyData> data) {
+  // See comment in OnWillChangeProperty() as to why |window_| may be null.
+  if (!window_)
+    return;
+
   ServerChangeData change_data;
   change_data.property_name =
       GetPropertyConverter()->GetTransportNameForPropertyKey(key);
@@ -361,7 +534,60 @@ void WindowPortMus::OnPropertyChanged(
   // we ever have a case where changing a property cascades into changing the
   // same property?
   if (!RemoveChangeByTypeAndData(ServerChangeType::PROPERTY, change_data))
-    window_tree_client_->OnWindowMusPropertyChanged(this, key, std::move(data));
+    window_tree_client_->OnWindowMusPropertyChanged(this, key, old_value,
+                                                    std::move(data));
+}
+
+std::unique_ptr<cc::LayerTreeFrameSink>
+WindowPortMus::CreateLayerTreeFrameSink() {
+  DCHECK_EQ(window_mus_type(), WindowMusType::LOCAL);
+  DCHECK(!local_layer_tree_frame_sink_);
+  auto frame_sink = RequestLayerTreeFrameSink(
+      nullptr,
+      aura::Env::GetInstance()->context_factory()->GetGpuMemoryBufferManager());
+  local_layer_tree_frame_sink_ = frame_sink->GetWeakPtr();
+  return std::move(frame_sink);
+}
+
+viz::SurfaceId WindowPortMus::GetSurfaceId() const {
+  // This is only used by WindowPortLocal in unit tests.
+  return viz::SurfaceId();
+}
+
+void WindowPortMus::UpdatePrimarySurfaceInfo() {
+  if (window_mus_type() != WindowMusType::TOP_LEVEL_IN_WM &&
+      window_mus_type() != WindowMusType::EMBED_IN_OWNER &&
+      window_mus_type() != WindowMusType::DISPLAY_MANUALLY_CREATED &&
+      window_mus_type() != WindowMusType::LOCAL) {
+    return;
+  }
+
+  if (!frame_sink_id_.is_valid() || !local_surface_id_.is_valid())
+    return;
+
+  primary_surface_info_ = viz::SurfaceInfo(
+      viz::SurfaceId(frame_sink_id_, local_surface_id_),
+      ScaleFactorForDisplay(window_), last_surface_size_in_pixels_);
+  UpdateClientSurfaceEmbedder();
+  if (window_->delegate())
+    window_->delegate()->OnWindowSurfaceChanged(primary_surface_info_);
+}
+
+void WindowPortMus::UpdateClientSurfaceEmbedder() {
+  if (window_mus_type() != WindowMusType::TOP_LEVEL_IN_WM &&
+      window_mus_type() != WindowMusType::EMBED_IN_OWNER &&
+      window_mus_type() != WindowMusType::DISPLAY_MANUALLY_CREATED &&
+      window_mus_type() != WindowMusType::LOCAL) {
+    return;
+  }
+
+  if (!client_surface_embedder_) {
+    client_surface_embedder_ = base::MakeUnique<ClientSurfaceEmbedder>(
+        window_, window_tree_client_->normal_client_area_insets_);
+  }
+
+  client_surface_embedder_->SetPrimarySurfaceInfo(primary_surface_info_);
+  client_surface_embedder_->SetFallbackSurfaceInfo(fallback_surface_info_);
 }
 
 }  // namespace aura

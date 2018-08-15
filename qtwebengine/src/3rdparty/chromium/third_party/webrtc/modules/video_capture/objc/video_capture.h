@@ -11,8 +11,8 @@
 #ifndef WEBRTC_MODULES_VIDEO_CAPTURE_OBJC_VIDEO_CAPTURE_H_
 #define WEBRTC_MODULES_VIDEO_CAPTURE_OBJC_VIDEO_CAPTURE_H_
 
-#include "webrtc/base/scoped_ref_ptr.h"
 #include "webrtc/modules/video_capture/video_capture_impl.h"
+#include "webrtc/rtc_base/scoped_ref_ptr.h"
 
 @class RTCVideoCaptureIosObjC;
 
@@ -20,11 +20,10 @@ namespace webrtc {
 namespace videocapturemodule {
 class VideoCaptureIos : public VideoCaptureImpl {
  public:
-  explicit VideoCaptureIos(const int32_t capture_id);
+  VideoCaptureIos();
   virtual ~VideoCaptureIos();
 
   static rtc::scoped_refptr<VideoCaptureModule> Create(
-      const int32_t capture_id,
       const char* device_unique_id_utf8);
 
   // Implementation of VideoCaptureImpl.
@@ -36,7 +35,6 @@ class VideoCaptureIos : public VideoCaptureImpl {
  private:
   RTCVideoCaptureIosObjC* capture_device_;
   bool is_capturing_;
-  int32_t id_;
   VideoCaptureCapability capability_;
 };
 

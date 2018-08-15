@@ -49,12 +49,18 @@ struct ImageDesc final
 {
     ImageDesc();
     ImageDesc(const Extents &size, const Format &format);
+    ImageDesc(const Extents &size,
+              const Format &format,
+              const GLsizei samples,
+              const GLboolean fixedSampleLocations);
 
     ImageDesc(const ImageDesc &other) = default;
     ImageDesc &operator=(const ImageDesc &other) = default;
 
     Extents size;
     Format format;
+    GLsizei samples;
+    GLboolean fixedSampleLocations;
 };
 
 struct SwizzleState final
@@ -76,7 +82,7 @@ struct SwizzleState final
 };
 
 // State from Table 6.9 (state per texture object) in the OpenGL ES 3.0.2 spec.
-struct TextureState final : public angle::NonCopyable
+struct TextureState final : private angle::NonCopyable
 {
     TextureState(GLenum target);
 
@@ -94,7 +100,10 @@ struct TextureState final : public angle::NonCopyable
     bool isCubeComplete() const;
     bool isSamplerComplete(const SamplerState &samplerState, const ContextState &data) const;
 
+    void invalidateCompletenessCache() const;
+
     const ImageDesc &getImageDesc(GLenum target, size_t level) const;
+    const ImageDesc &getImageDesc(const ImageIndex &imageIndex) const;
 
     GLenum getTarget() const { return mTarget; }
     const SwizzleState &getSwizzleState() const { return mSwizzleState; }
@@ -120,6 +129,11 @@ struct TextureState final : public angle::NonCopyable
                            GLuint maxLevel,
                            Extents baseSize,
                            const Format &format);
+    void setImageDescChainMultisample(Extents baseSize,
+                                      const Format &format,
+                                      GLsizei samples,
+                                      GLboolean fixedSampleLocations);
+
     void clearImageDesc(GLenum target, size_t level);
     void clearImageDescs();
 
@@ -131,6 +145,8 @@ struct TextureState final : public angle::NonCopyable
 
     GLuint mBaseLevel;
     GLuint mMaxLevel;
+
+    GLenum mDepthStencilTextureMode;
 
     bool mImmutableFormat;
     GLuint mImmutableLevels;
@@ -144,18 +160,17 @@ struct TextureState final : public angle::NonCopyable
     {
         SamplerCompletenessCache();
 
-        bool cacheValid;
+        // Context used to generate this cache entry
+        ContextID context;
 
         // All values that affect sampler completeness that are not stored within
         // the texture itself
         SamplerState samplerState;
-        bool filterable;
-        GLint clientVersion;
-        bool supportsNPOT;
 
         // Result of the sampler completeness with the above parameters
         bool samplerComplete;
     };
+
     mutable SamplerCompletenessCache mCompletenessCache;
 };
 
@@ -163,12 +178,13 @@ bool operator==(const TextureState &a, const TextureState &b);
 bool operator!=(const TextureState &a, const TextureState &b);
 
 class Texture final : public egl::ImageSibling,
-                      public FramebufferAttachmentObject,
                       public LabeledObject
 {
   public:
     Texture(rx::GLImplFactory *factory, GLuint id, GLenum target);
     ~Texture() override;
+
+    void onDestroy(const Context *context) override;
 
     void setLabel(const std::string &label) override;
     const std::string &getLabel() const override;
@@ -222,11 +238,14 @@ class Texture final : public egl::ImageSibling,
 
     const SamplerState &getSamplerState() const;
 
-    void setBaseLevel(GLuint baseLevel);
+    gl::Error setBaseLevel(const Context *context, GLuint baseLevel);
     GLuint getBaseLevel() const;
 
     void setMaxLevel(GLuint maxLevel);
     GLuint getMaxLevel() const;
+
+    void setDepthStencilTextureMode(GLenum mode);
+    GLenum getDepthStencilTextureMode() const;
 
     bool getImmutableFormat() const;
 
@@ -240,11 +259,17 @@ class Texture final : public egl::ImageSibling,
     size_t getWidth(GLenum target, size_t level) const;
     size_t getHeight(GLenum target, size_t level) const;
     size_t getDepth(GLenum target, size_t level) const;
+    GLsizei getSamples(GLenum target, size_t level) const;
+    GLboolean getFixedSampleLocations(GLenum target, size_t level) const;
     const Format &getFormat(GLenum target, size_t level) const;
+
+    // Returns the value called "q" in the GLES 3.0.4 spec section 3.8.10.
+    GLuint getMipmapMaxLevel() const;
 
     bool isMipmapComplete() const;
 
-    Error setImage(const PixelUnpackState &unpackState,
+    Error setImage(const Context *context,
+                   const PixelUnpackState &unpackState,
                    GLenum target,
                    size_t level,
                    GLenum internalFormat,
@@ -252,7 +277,8 @@ class Texture final : public egl::ImageSibling,
                    GLenum format,
                    GLenum type,
                    const uint8_t *pixels);
-    Error setSubImage(const PixelUnpackState &unpackState,
+    Error setSubImage(const Context *context,
+                      const PixelUnpackState &unpackState,
                       GLenum target,
                       size_t level,
                       const Box &area,
@@ -260,14 +286,16 @@ class Texture final : public egl::ImageSibling,
                       GLenum type,
                       const uint8_t *pixels);
 
-    Error setCompressedImage(const PixelUnpackState &unpackState,
+    Error setCompressedImage(const Context *context,
+                             const PixelUnpackState &unpackState,
                              GLenum target,
                              size_t level,
                              GLenum internalFormat,
                              const Extents &size,
                              size_t imageSize,
                              const uint8_t *pixels);
-    Error setCompressedSubImage(const PixelUnpackState &unpackState,
+    Error setCompressedSubImage(const Context *context,
+                                const PixelUnpackState &unpackState,
                                 GLenum target,
                                 size_t level,
                                 const Box &area,
@@ -275,49 +303,72 @@ class Texture final : public egl::ImageSibling,
                                 size_t imageSize,
                                 const uint8_t *pixels);
 
-    Error copyImage(GLenum target,
+    Error copyImage(const Context *context,
+                    GLenum target,
                     size_t level,
                     const Rectangle &sourceArea,
                     GLenum internalFormat,
                     const Framebuffer *source);
-    Error copySubImage(GLenum target,
+    Error copySubImage(const Context *context,
+                       GLenum target,
                        size_t level,
                        const Offset &destOffset,
                        const Rectangle &sourceArea,
                        const Framebuffer *source);
 
-    Error copyTexture(GLenum internalFormat,
+    Error copyTexture(const Context *context,
+                      GLenum target,
+                      size_t level,
+                      GLenum internalFormat,
                       GLenum type,
+                      size_t sourceLevel,
                       bool unpackFlipY,
                       bool unpackPremultiplyAlpha,
                       bool unpackUnmultiplyAlpha,
                       const Texture *source);
-    Error copySubTexture(const Offset &destOffset,
+    Error copySubTexture(const Context *context,
+                         GLenum target,
+                         size_t level,
+                         const Offset &destOffset,
+                         size_t sourceLevel,
                          const Rectangle &sourceArea,
                          bool unpackFlipY,
                          bool unpackPremultiplyAlpha,
                          bool unpackUnmultiplyAlpha,
                          const Texture *source);
-    Error copyCompressedTexture(const Texture *source);
+    Error copyCompressedTexture(const Context *context, const Texture *source);
 
-    Error setStorage(GLenum target, GLsizei levels, GLenum internalFormat, const Extents &size);
+    Error setStorage(const Context *context,
+                     GLenum target,
+                     GLsizei levels,
+                     GLenum internalFormat,
+                     const Extents &size);
 
-    Error setEGLImageTarget(GLenum target, egl::Image *imageTarget);
+    Error setStorageMultisample(const Context *context,
+                                GLenum target,
+                                GLsizei samples,
+                                GLint internalformat,
+                                const Extents &size,
+                                GLboolean fixedSampleLocations);
 
-    Error generateMipmap();
+    Error setEGLImageTarget(const Context *context, GLenum target, egl::Image *imageTarget);
+
+    Error generateMipmap(const Context *context);
 
     egl::Surface *getBoundSurface() const;
     egl::Stream *getBoundStream() const;
 
+    void invalidateCompletenessCache() const;
+
     rx::TextureImpl *getImplementation() const { return mTexture; }
 
     // FramebufferAttachmentObject implementation
-    Extents getAttachmentSize(const FramebufferAttachment::Target &target) const override;
-    const Format &getAttachmentFormat(const FramebufferAttachment::Target &target) const override;
-    GLsizei getAttachmentSamples(const FramebufferAttachment::Target &target) const override;
+    Extents getAttachmentSize(const ImageIndex &imageIndex) const override;
+    const Format &getAttachmentFormat(GLenum binding, const ImageIndex &imageIndex) const override;
+    GLsizei getAttachmentSamples(const ImageIndex &imageIndex) const override;
 
-    void onAttach() override;
-    void onDetach() override;
+    void onAttach(const Context *context) override;
+    void onDetach(const Context *context) override;
     GLuint getId() const override;
 
     enum DirtyBitType
@@ -349,7 +400,7 @@ class Texture final : public egl::ImageSibling,
 
         DIRTY_BIT_COUNT,
     };
-    using DirtyBits = std::bitset<DIRTY_BIT_COUNT>;
+    using DirtyBits = angle::BitSet<DIRTY_BIT_COUNT>;
 
     void syncImplState();
     bool hasAnyDirtyBit() const { return mDirtyBits.any(); }
@@ -359,15 +410,16 @@ class Texture final : public egl::ImageSibling,
 
     // ANGLE-only method, used internally
     friend class egl::Surface;
-    void bindTexImageFromSurface(egl::Surface *surface);
-    void releaseTexImageFromSurface();
+    Error bindTexImageFromSurface(const Context *context, egl::Surface *surface);
+    Error releaseTexImageFromSurface(const Context *context);
 
     // ANGLE-only methods, used internally
     friend class egl::Stream;
     void bindStream(egl::Stream *stream);
     void releaseStream();
-    void acquireImageFromStream(const egl::Stream::GLTextureDescription &desc);
-    void releaseImageFromStream();
+    Error acquireImageFromStream(const Context *context,
+                                 const egl::Stream::GLTextureDescription &desc);
+    Error releaseImageFromStream(const Context *context);
 
     TextureState mState;
     DirtyBits mDirtyBits;
@@ -375,7 +427,7 @@ class Texture final : public egl::ImageSibling,
 
     std::string mLabel;
 
-    void releaseTexImageInternal();
+    Error releaseTexImageInternal(const Context *context);
 
     egl::Surface *mBoundSurface;
     egl::Stream *mBoundStream;
@@ -395,4 +447,4 @@ inline bool operator!=(const TextureState &a, const TextureState &b)
 }
 }
 
-#endif   // LIBANGLE_TEXTURE_H_
+#endif  // LIBANGLE_TEXTURE_H_

@@ -37,34 +37,22 @@ namespace blink {
 SVGAnimatedEnumerationBase::~SVGAnimatedEnumerationBase() {}
 
 void SVGAnimatedEnumerationBase::setBaseVal(unsigned short value,
-                                            ExceptionState& exceptionState) {
-  if (this->isReadOnly()) {
-    exceptionState.throwDOMException(NoModificationAllowedError,
-                                     "The attribute is read-only.");
-    return;
-  }
-
+                                            ExceptionState& exception_state) {
   if (!value) {
-    exceptionState.throwTypeError(
+    exception_state.ThrowTypeError(
         "The enumeration value provided is 0, which is not settable.");
     return;
   }
 
-  if (value > baseValue()->maxExposedEnumValue()) {
-    exceptionState.throwTypeError(
-        "The enumeration value provided (" + String::number(value) +
+  if (value > BaseValue()->MaxExposedEnumValue()) {
+    exception_state.ThrowTypeError(
+        "The enumeration value provided (" + String::Number(value) +
         ") is larger than the largest allowed value (" +
-        String::number(baseValue()->maxExposedEnumValue()) + ").");
+        String::Number(BaseValue()->MaxExposedEnumValue()) + ").");
     return;
   }
 
-  baseValue()->setValue(value);
-
-  m_baseValueUpdated = true;
-
-  ASSERT(this->attributeName() != QualifiedName::null());
-  contextElement()->invalidateSVGAttributes();
-  contextElement()->svgAttributeBaseValChanged(this->attributeName());
+  SVGAnimatedProperty<SVGEnumerationBase>::setBaseVal(value, exception_state);
 }
 
 }  // namespace blink

@@ -29,29 +29,23 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import sys
-import in_generator
+import json5_generator
 import template_expander
 import name_utilities
 from make_settings import to_passing_type, to_idl_type
 
 
-class MakeInternalSettingsWriter(in_generator.Writer):
-    defaults = {
-        'type': 'bool',
-        'initial': None,
-        'invalidate': None,
-    }
-    default_parameters = {}
+class MakeInternalSettingsWriter(json5_generator.Writer):
     filters = {
         'upper_first': name_utilities.upper_first,
         'to_passing_type': to_passing_type,
         'to_idl_type': to_idl_type,
     }
 
-    def __init__(self, in_file_path):
-        super(MakeInternalSettingsWriter, self).__init__(in_file_path)
+    def __init__(self, json5_file_path):
+        super(MakeInternalSettingsWriter, self).__init__(json5_file_path)
 
-        self.in_file.name_dictionaries.sort(key=lambda entry: entry['name'])
+        self.json5_file.name_dictionaries.sort(key=lambda entry: entry['name'])
 
         self._outputs = {
             ('InternalSettingsGenerated.h'): self.generate_header,
@@ -59,21 +53,22 @@ class MakeInternalSettingsWriter(in_generator.Writer):
             ('InternalSettingsGenerated.idl'): self.generate_idl,
         }
         self._template_context = {
-            'settings': self.in_file.name_dictionaries,
+            'input_files': self._input_files,
+            'settings': self.json5_file.name_dictionaries,
         }
 
-    @template_expander.use_jinja('InternalSettingsGenerated.h.tmpl', filters=filters)
+    @template_expander.use_jinja('templates/InternalSettingsGenerated.h.tmpl', filters=filters)
     def generate_header(self):
         return self._template_context
 
-    @template_expander.use_jinja('InternalSettingsGenerated.cpp.tmpl', filters=filters)
+    @template_expander.use_jinja('templates/InternalSettingsGenerated.cpp.tmpl', filters=filters)
     def generate_implementation(self):
         return self._template_context
 
-    @template_expander.use_jinja('InternalSettingsGenerated.idl.tmpl', filters=filters)
+    @template_expander.use_jinja('templates/InternalSettingsGenerated.idl.tmpl', filters=filters)
     def generate_idl(self):
         return self._template_context
 
 
 if __name__ == '__main__':
-    in_generator.Maker(MakeInternalSettingsWriter).main(sys.argv)
+    json5_generator.Maker(MakeInternalSettingsWriter).main()

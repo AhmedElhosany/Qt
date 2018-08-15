@@ -449,6 +449,9 @@ public:
         const_iterator base() const { return i; }
     };
 
+    typedef QKeyValueIterator<const Key&, const T&, const_iterator> const_key_value_iterator;
+    typedef QKeyValueIterator<const Key&, T&, iterator> key_value_iterator;
+
     // STL style
     inline iterator begin() { detach(); return iterator(d->firstNode()); }
     inline const_iterator begin() const { return const_iterator(d->firstNode()); }
@@ -460,6 +463,12 @@ public:
     inline const_iterator constEnd() const { return const_iterator(e); }
     inline key_iterator keyBegin() const { return key_iterator(begin()); }
     inline key_iterator keyEnd() const { return key_iterator(end()); }
+    inline key_value_iterator keyValueBegin() { return key_value_iterator(begin()); }
+    inline key_value_iterator keyValueEnd() { return key_value_iterator(end()); }
+    inline const_key_value_iterator keyValueBegin() const { return const_key_value_iterator(begin()); }
+    inline const_key_value_iterator constKeyValueBegin() const { return const_key_value_iterator(begin()); }
+    inline const_key_value_iterator keyValueEnd() const { return const_key_value_iterator(end()); }
+    inline const_key_value_iterator constKeyValueEnd() const { return const_key_value_iterator(end()); }
 
     QPair<iterator, iterator> equal_range(const Key &key);
     QPair<const_iterator, const_iterator> equal_range(const Key &key) const Q_DECL_NOTHROW;
@@ -816,7 +825,7 @@ Q_OUTOFLINE_TEMPLATE T QHash<Key, T>::take(const Key &akey)
 
     Node **node = findNode(akey);
     if (*node != e) {
-        T t = (*node)->value;
+        T t = std::move((*node)->value);
         Node *next = (*node)->next;
         deleteNode(*node);
         *node = next;

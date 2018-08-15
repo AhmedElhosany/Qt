@@ -453,6 +453,12 @@ The following functions are also on the Qt object.
         \li \c "windows" - Windows
         \li \c "winrt" - WinRT / UWP
     \endlist
+
+    \row
+    \li \c platform.pluginName
+    \li This is the name of the platform set on the QGuiApplication instance
+        as returned by \l QGuiApplication::platformName()
+
     \endtable
 */
 
@@ -746,15 +752,11 @@ QQmlData::QQmlData()
       hasInterceptorMetaObject(false), hasVMEMetaObject(false), parentFrozen(false),
       bindingBitsArraySize(InlineBindingArraySize), notifyList(0),
       bindings(0), signalHandlers(0), nextContextObject(0), prevContextObject(0),
-      lineNumber(0), columnNumber(0), jsEngineId(0),
+      lineNumber(0), columnNumber(0), jsEngineId(0), compilationUnit(0),
       propertyCache(0), guards(0), extendedData(0)
 {
     memset(bindingBitsValue, 0, sizeof(bindingBitsValue));
     init();
-}
-
-QQmlData::~QQmlData()
-{
 }
 
 void QQmlData::destroyed(QAbstractDeclarativeData *d, QObject *o)
@@ -778,7 +780,7 @@ class QQmlThreadNotifierProxyObject : public QObject
 public:
     QPointer<QObject> target;
 
-    virtual int qt_metacall(QMetaObject::Call, int methodIndex, void **a) {
+    int qt_metacall(QMetaObject::Call, int methodIndex, void **a) override {
         if (!target)
             return -1;
 
@@ -926,14 +928,6 @@ void QQmlData::flushPendingBindingImpl(QQmlPropertyIndex index)
             !b->targetPropertyIndex().hasValueTypeIndex())
         b->setEnabled(true, QQmlPropertyData::BypassInterceptor |
                             QQmlPropertyData::DontRemoveBinding);
-}
-
-QQmlData::DeferredData::DeferredData()
-{
-}
-
-QQmlData::DeferredData::~DeferredData()
-{
 }
 
 bool QQmlEnginePrivate::baseModulesUninitialized = true;
@@ -1098,9 +1092,7 @@ QQmlEngine::~QQmlEngine()
 void QQmlEngine::clearComponentCache()
 {
     Q_D(QQmlEngine);
-    d->typeLoader.lock();
     d->typeLoader.clearCache();
-    d->typeLoader.unlock();
 }
 
 /*!
@@ -1353,6 +1345,30 @@ void QQmlEngine::setOutputWarningsToStandardError(bool enabled)
 }
 
 /*!
+  Refreshes all binding expressions that use strings marked for translation.
+
+  Call this function after you have installed a new translator with
+  QCoreApplication::installTranslator, to ensure that your user-interface
+  shows up-to-date translations.
+
+  \note Due to a limitation in the implementation, this function
+  refreshes all the engine's bindings, not only those that use strings
+  marked for translation.
+  This may be optimized in a future release.
+
+  \since 5.10
+*/
+void QQmlEngine::retranslate()
+{
+    Q_D(QQmlEngine);
+    QQmlContextData *context = QQmlContextData::get(d->rootContext)->childContexts;
+    while (context) {
+        context->refreshExpressions();
+        context = context->nextChild;
+    }
+}
+
+/*!
   Returns the QQmlContext for the \a object, or 0 if no
   context has been set.
 
@@ -1472,6 +1488,9 @@ bool QQmlEngine::event(QEvent *e)
     Q_D(QQmlEngine);
     if (e->type() == QEvent::User)
         d->doDeleteInEngineThread();
+    else if (e->type() == QEvent::LanguageChange) {
+        retranslate();
+    }
 
     return QJSEngine::event(e);
 }
@@ -1521,9 +1540,9 @@ QQmlEngine *qmlEngine(const QObject *obj)
 
 QObject *qmlAttachedPropertiesObjectById(int id, const QObject *object, bool create)
 {
-    QQmlData *data = QQmlData::get(object);
+    QQmlData *data = QQmlData::get(object, create);
     if (!data)
-        return 0; // Attached properties are only on objects created by QML
+        return 0; // Attached properties are only on objects created by QML, unless explicitly requested (create==true)
 
     QObject *rv = data->hasExtendedData()?data->attachedProperties()->value(id):0;
     if (rv || !create)
@@ -1665,6 +1684,7 @@ void QQmlData::deferData(int objectIndex, QV4::CompiledData::CompilationUnit *co
     QQmlData::DeferredData *deferData = new QQmlData::DeferredData;
     deferData->deferredIdx = objectIndex;
     deferData->compilationUnit = compilationUnit;
+    deferData->compilationUnit->addref();
     deferData->context = context;
 
     const QV4::CompiledData::Object *compiledObject = compilationUnit->objectAt(objectIndex);
@@ -1686,6 +1706,7 @@ void QQmlData::releaseDeferredData()
     while (it != deferredData.end()) {
         DeferredData *deferData = *it;
         if (deferData->bindings.isEmpty()) {
+            deferData->compilationUnit->release();
             delete deferData;
             it = deferredData.erase(it);
         } else {
@@ -1763,10 +1784,12 @@ void QQmlData::destroyed(QObject *object)
     if (bindings && !bindings->ref.deref())
         delete bindings;
 
-    compilationUnit = nullptr;
+    if (compilationUnit) {
+        compilationUnit->release();
+        compilationUnit = 0;
+    }
 
-    qDeleteAll(deferredData);
-    deferredData.clear();
+    releaseDeferredData();
 
     QQmlBoundSignal *signalHandler = signalHandlers;
     while (signalHandler) {

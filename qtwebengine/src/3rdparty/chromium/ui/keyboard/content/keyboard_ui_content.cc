@@ -12,7 +12,6 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_ui.h"
@@ -21,11 +20,13 @@
 #include "ui/aura/window.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_client.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/keyboard/content/keyboard_constants.h"
 #include "ui/keyboard/keyboard_controller.h"
 #include "ui/keyboard/keyboard_switches.h"
 #include "ui/keyboard/keyboard_util.h"
 #include "ui/wm/core/shadow.h"
+#include "ui/wm/core/shadow_types.h"
 
 namespace {
 
@@ -57,10 +58,13 @@ class KeyboardContentsDelegate : public content::WebContentsDelegate,
 
   bool ShouldCreateWebContents(
       content::WebContents* web_contents,
-      int route_id,
-      int main_frame_route_id,
-      int main_frame_widget_route_id,
-      WindowContainerType window_container_type,
+      content::RenderFrameHost* opener,
+      content::SiteInstance* source_site_instance,
+      int32_t route_id,
+      int32_t main_frame_route_id,
+      int32_t main_frame_widget_route_id,
+      content::mojom::WindowContainerType window_container_type,
+      const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
       const std::string& partition_id,
@@ -74,7 +78,7 @@ class KeyboardContentsDelegate : public content::WebContentsDelegate,
 
   void MoveContents(content::WebContents* source,
                     const gfx::Rect& pos) override {
-    aura::Window* keyboard = ui_->GetKeyboardWindow();
+    aura::Window* keyboard = ui_->GetContentsWindow();
     // keyboard window must have been added to keyboard container window at this
     // point. Otherwise, wrong keyboard bounds is used and may cause problem as
     // described in crbug.com/367788.
@@ -91,6 +95,25 @@ class KeyboardContentsDelegate : public content::WebContentsDelegate,
       const content::MediaStreamRequest& request,
       const content::MediaResponseCallback& callback) override {
     ui_->RequestAudioInput(web_contents, request, callback);
+  }
+
+  // Overridden from content::WebContentsDelegate:
+  bool PreHandleGestureEvent(content::WebContents* source,
+                             const blink::WebGestureEvent& event) override {
+    switch (event.GetType()) {
+      // Scroll events are not suppressed because the menu to select IME should
+      // be scrollable.
+      case blink::WebInputEvent::kGestureScrollBegin:
+      case blink::WebInputEvent::kGestureScrollEnd:
+      case blink::WebInputEvent::kGestureScrollUpdate:
+      case blink::WebInputEvent::kGestureFlingStart:
+      case blink::WebInputEvent::kGestureFlingCancel:
+        return false;
+      default:
+        // Stop gesture events from being passed to renderer to suppress the
+        // context menu. crbug.com/685140
+        return true;
+    }
   }
 
   // Overridden from content::WebContentsObserver:
@@ -151,15 +174,6 @@ KeyboardUIContent::~KeyboardUIContent() {
   ResetInsets();
 }
 
-void KeyboardUIContent::LoadSystemKeyboard() {
-  DCHECK(keyboard_contents_);
-  if (keyboard_contents_->GetURL() != default_url_) {
-    // TODO(bshe): The height of system virtual keyboard and IME virtual
-    // keyboard may different. The height needs to be restored too.
-    LoadContents(default_url_);
-  }
-}
-
 void KeyboardUIContent::UpdateInsetsForWindow(aura::Window* window) {
   aura::Window* keyboard_container =
       keyboard_controller()->GetContainerWindow();
@@ -184,13 +198,9 @@ void KeyboardUIContent::UpdateInsetsForWindow(aura::Window* window) {
   }
 }
 
-aura::Window* KeyboardUIContent::GetKeyboardWindow() {
+aura::Window* KeyboardUIContent::GetContentsWindow() {
   if (!keyboard_contents_) {
-    content::BrowserContext* context = browser_context();
-    keyboard_contents_.reset(content::WebContents::Create(
-        content::WebContents::CreateParams(context,
-            content::SiteInstance::CreateForURL(context,
-                                                GetVirtualKeyboardUrl()))));
+    keyboard_contents_.reset(CreateWebContents());
     keyboard_contents_->SetDelegate(new KeyboardContentsDelegate(this));
     SetupWebContents(keyboard_contents_.get());
     LoadContents(GetVirtualKeyboardUrl());
@@ -200,7 +210,7 @@ aura::Window* KeyboardUIContent::GetKeyboardWindow() {
   return keyboard_contents_->GetNativeView();
 }
 
-bool KeyboardUIContent::HasKeyboardWindow() const {
+bool KeyboardUIContent::HasContentsWindow() const {
   return !!keyboard_contents_;
 }
 
@@ -217,7 +227,8 @@ void KeyboardUIContent::ReloadKeyboardIfNeeded() {
       // navigate to a keyboard in a different extension. This keeps the UX the
       // same as Android. Note we need to explicitly close current page as it
       // might try to resize keyboard window in javascript on a resize event.
-      GetKeyboardWindow()->SetBounds(gfx::Rect());
+      TRACE_EVENT0("vk", "ReloadKeyboardIfNeeded");
+      GetContentsWindow()->SetBounds(gfx::Rect());
       keyboard_contents_->ClosePage();
       keyboard_controller()->SetKeyboardMode(FULL_WIDTH);
     }
@@ -277,20 +288,16 @@ void KeyboardUIContent::SetupWebContents(content::WebContents* contents) {
 void KeyboardUIContent::OnWindowBoundsChanged(aura::Window* window,
                                               const gfx::Rect& old_bounds,
                                               const gfx::Rect& new_bounds) {
-  if (!shadow_) {
-    shadow_.reset(new wm::Shadow());
-    shadow_->Init(wm::Shadow::STYLE_ACTIVE);
-    shadow_->layer()->SetVisible(true);
-    DCHECK(keyboard_contents_->GetNativeView()->parent());
-    keyboard_contents_->GetNativeView()->parent()->layer()->Add(
-        shadow_->layer());
-  }
-
-  shadow_->SetContentBounds(new_bounds);
+  SetShadowAroundKeyboard();
 }
 
 void KeyboardUIContent::OnWindowDestroyed(aura::Window* window) {
   window->RemoveObserver(this);
+}
+
+void KeyboardUIContent::OnWindowParentChanged(aura::Window* window,
+                                              aura::Window* parent) {
+  SetShadowAroundKeyboard();
 }
 
 const aura::Window* KeyboardUIContent::GetKeyboardRootWindow() const {
@@ -300,8 +307,16 @@ const aura::Window* KeyboardUIContent::GetKeyboardRootWindow() const {
   return keyboard_contents_->GetNativeView()->GetRootWindow();
 }
 
+content::WebContents* KeyboardUIContent::CreateWebContents() {
+  content::BrowserContext* context = browser_context();
+  return content::WebContents::Create(content::WebContents::CreateParams(
+      context,
+      content::SiteInstance::CreateForURL(context, GetVirtualKeyboardUrl())));
+}
+
 void KeyboardUIContent::LoadContents(const GURL& url) {
   if (keyboard_contents_) {
+    TRACE_EVENT0("vk", "LoadContents");
     content::OpenURLParams params(url, content::Referrer(),
                                   WindowOpenDisposition::SINGLETON_TAB,
                                   ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false);
@@ -319,10 +334,10 @@ const GURL& KeyboardUIContent::GetVirtualKeyboardUrl() {
 }
 
 bool KeyboardUIContent::ShouldEnableInsets(aura::Window* window) {
-  aura::Window* keyboard_window = GetKeyboardWindow();
-  return (keyboard_window->GetRootWindow() == window->GetRootWindow() &&
+  aura::Window* contents_window = GetContentsWindow();
+  return (contents_window->GetRootWindow() == window->GetRootWindow() &&
           keyboard::IsKeyboardOverscrollEnabled() &&
-          keyboard_window->IsVisible() &&
+          contents_window->IsVisible() &&
           keyboard_controller()->keyboard_visible());
 }
 
@@ -330,6 +345,21 @@ void KeyboardUIContent::AddBoundsChangedObserver(aura::Window* window) {
   aura::Window* target_window = window ? window->GetToplevelWindow() : nullptr;
   if (target_window)
     window_bounds_observer_->AddObservedWindow(target_window);
+}
+
+void KeyboardUIContent::SetShadowAroundKeyboard() {
+  aura::Window* contents_window = keyboard_contents_->GetNativeView();
+  if (!contents_window->parent())
+    return;
+
+  if (!shadow_) {
+    shadow_.reset(new wm::Shadow());
+    shadow_->Init(wm::ShadowElevation::LARGE);
+    shadow_->layer()->SetVisible(true);
+    contents_window->parent()->layer()->Add(shadow_->layer());
+  }
+
+  shadow_->SetContentBounds(contents_window->bounds());
 }
 
 }  // namespace keyboard

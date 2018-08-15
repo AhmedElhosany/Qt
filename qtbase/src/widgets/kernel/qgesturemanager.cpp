@@ -124,7 +124,7 @@ QGestureManager::~QGestureManager()
 
 Qt::GestureType QGestureManager::registerGestureRecognizer(QGestureRecognizer *recognizer)
 {
-    QGesture *dummy = recognizer->create(0);
+    const QScopedPointer<QGesture> dummy(recognizer->create(nullptr));
     if (Q_UNLIKELY(!dummy)) {
         qWarning("QGestureManager::registerGestureRecognizer: "
                  "the recognizer fails to create a gesture object, skipping registration.");
@@ -137,7 +137,6 @@ Qt::GestureType QGestureManager::registerGestureRecognizer(QGestureRecognizer *r
         type = Qt::GestureType(m_lastCustomGestureId);
     }
     m_recognizers.insertMulti(type, recognizer);
-    delete dummy;
     return type;
 }
 
@@ -145,10 +144,9 @@ void QGestureManager::unregisterGestureRecognizer(Qt::GestureType type)
 {
     QList<QGestureRecognizer *> list = m_recognizers.values(type);
     while (QGestureRecognizer *recognizer = m_recognizers.take(type)) {
-        if (!m_obsoleteGestures.contains(recognizer)) {
-            // inserting even an empty QSet will cause the recognizer to be deleted on destruction of the manager
-            m_obsoleteGestures.insert(recognizer, QSet<QGesture *>());
-        }
+        // ensuring an entry exists causes the recognizer to be deleted on destruction of the manager
+        auto &gestures = m_obsoleteGestures[recognizer];
+        Q_UNUSED(gestures);
     }
     foreach (QGesture *g, m_gestureToRecognizer.keys()) {
         QGestureRecognizer *recognizer = m_gestureToRecognizer.value(g);

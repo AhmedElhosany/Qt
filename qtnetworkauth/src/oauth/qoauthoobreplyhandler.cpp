@@ -30,10 +30,12 @@
 #ifndef QT_NO_HTTP
 
 #include "qoauthoobreplyhandler.h"
+#include "qabstractoauthreplyhandler_p.h"
 
 #include <QtCore/qurlquery.h>
 #include <QtCore/qjsonobject.h>
 #include <QtCore/qjsondocument.h>
+#include <QtCore/qloggingcategory.h>
 
 #include <QtNetwork/qnetworkreply.h>
 
@@ -51,12 +53,11 @@ QString QOAuthOobReplyHandler::callback() const
 void QOAuthOobReplyHandler::networkReplyFinished(QNetworkReply *reply)
 {
     if (reply->error() != QNetworkReply::NoError) {
-        qWarning("QOAuthOobReplyHandler::networkReplyFinished: %s",
-                 qPrintable(reply->errorString()));
+        qCWarning(lcReplyHandler, "%s", qPrintable(reply->errorString()));
         return;
     }
     if (reply->header(QNetworkRequest::ContentTypeHeader).isNull()) {
-        qWarning("QOAuthOobReplyHandler::networkReplyFinished: Empty Content-type header");
+        qCWarning(lcReplyHandler, "Empty Content-type header");
         return;
     }
     const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).isNull() ?
@@ -64,7 +65,7 @@ void QOAuthOobReplyHandler::networkReplyFinished(QNetworkReply *reply)
                 reply->header(QNetworkRequest::ContentTypeHeader).toString();
     const QByteArray data = reply->readAll();
     if (data.isEmpty()) {
-        qWarning("QOAuthOobReplyHandler::networkReplyFinished: No received data");
+        qCWarning(lcReplyHandler, "No received data");
         return;
     }
 
@@ -79,19 +80,18 @@ void QOAuthOobReplyHandler::networkReplyFinished(QNetworkReply *reply)
                || contentType.startsWith(QStringLiteral("text/javascript"))) {
         const QJsonDocument document = QJsonDocument::fromJson(data);
         if (!document.isObject()) {
-            qWarning("QOAuthOobReplyHandler::networkReplyFinished: Received data is not a JSON"
-                     "object: %s", qPrintable(QString::fromUtf8(data)));
+            qCWarning(lcReplyHandler, "Received data is not a JSON object: %s",
+                      qPrintable(QString::fromUtf8(data)));
             return;
         }
         const QJsonObject object = document.object();
         if (object.isEmpty()) {
-            qWarning("QOAuthOobReplyHandler::networkReplyFinished: Received empty JSON object: %s",
-                     qPrintable(QString::fromUtf8(data)));
+            qCWarning(lcReplyHandler, "Received empty JSON object: %s",
+                      qPrintable(QString::fromUtf8(data)));
         }
         ret = object.toVariantMap();
     } else {
-        qWarning("QOAuthOobReplyHandler::networkReplyFinished: Unknown Content-type: %s",
-                 qPrintable(contentType));
+        qCWarning(lcReplyHandler, "Unknown Content-type: %s", qPrintable(contentType));
         return;
     }
 

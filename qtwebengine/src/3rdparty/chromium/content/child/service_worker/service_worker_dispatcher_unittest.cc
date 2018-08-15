@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
 #include "content/child/service_worker/service_worker_dispatcher.h"
+#include "base/macros.h"
+#include "base/message_loop/message_loop.h"
 #include "content/child/service_worker/service_worker_handle_reference.h"
 #include "content/child/service_worker/service_worker_provider_context.h"
 #include "content/child/service_worker/web_service_worker_impl.h"
 #include "content/child/service_worker/web_service_worker_registration_impl.h"
 #include "content/child/thread_safe_sender.h"
 #include "content/common/service_worker/service_worker_messages.h"
+#include "content/common/service_worker/service_worker_provider_interfaces.mojom.h"
 #include "content/common/service_worker/service_worker_types.h"
 #include "ipc/ipc_sync_message_filter.h"
 #include "ipc/ipc_test_sink.h"
@@ -85,9 +87,11 @@ class ServiceWorkerDispatcherTest : public testing::Test {
   void OnSetControllerServiceWorker(int thread_id,
                                     int provider_id,
                                     const ServiceWorkerObjectInfo& info,
-                                    bool should_notify_controllerchange) {
+                                    bool should_notify_controllerchange,
+                                    const std::set<uint32_t>& used_features) {
     dispatcher_->OnSetControllerServiceWorker(thread_id, provider_id, info,
-                                              should_notify_controllerchange);
+                                              should_notify_controllerchange,
+                                              used_features);
   }
 
   void OnPostMessage(const ServiceWorkerMsg_MessageToDocument_Params& params) {
@@ -125,20 +129,24 @@ class MockWebServiceWorkerProviderClientImpl
     dispatcher_->RemoveProviderClient(provider_id_);
   }
 
-  void setController(std::unique_ptr<blink::WebServiceWorker::Handle> handle,
+  void SetController(std::unique_ptr<blink::WebServiceWorker::Handle> handle,
                      bool shouldNotifyControllerChange) override {
     // WebPassOwnPtr cannot be owned in Chromium, so drop the handle here.
     // The destruction releases ServiceWorkerHandleReference.
     is_set_controlled_called_ = true;
   }
 
-  void dispatchMessageEvent(
+  void DispatchMessageEvent(
       std::unique_ptr<blink::WebServiceWorker::Handle> handle,
       const blink::WebString& message,
-      const blink::WebMessagePortChannelArray& channels) override {
+      blink::WebMessagePortChannelArray channels) override {
     // WebPassOwnPtr cannot be owned in Chromium, so drop the handle here.
     // The destruction releases ServiceWorkerHandleReference.
     is_dispatch_message_event_called_ = true;
+  }
+
+  void CountFeature(uint32_t feature) override {
+    used_features_.insert(feature);
   }
 
   bool is_set_controlled_called() const { return is_set_controlled_called_; }
@@ -152,6 +160,7 @@ class MockWebServiceWorkerProviderClientImpl
   bool is_set_controlled_called_ = false;
   bool is_dispatch_message_event_called_ = false;
   ServiceWorkerDispatcher* dispatcher_;
+  std::set<uint32_t> used_features_;
 };
 
 TEST_F(ServiceWorkerDispatcherTest, OnAssociateRegistration_NoProviderContext) {
@@ -187,9 +196,10 @@ TEST_F(ServiceWorkerDispatcherTest,
   // Set up ServiceWorkerProviderContext for ServiceWorkerGlobalScope.
   const int kProviderId = 10;
   scoped_refptr<ServiceWorkerProviderContext> provider_context(
-      new ServiceWorkerProviderContext(kProviderId,
-                                       SERVICE_WORKER_PROVIDER_FOR_CONTROLLER,
-                                       thread_safe_sender()));
+      new ServiceWorkerProviderContext(
+          kProviderId, SERVICE_WORKER_PROVIDER_FOR_CONTROLLER,
+          mojom::ServiceWorkerProviderAssociatedRequest(),
+          thread_safe_sender()));
 
   // The passed references should be adopted and owned by the provider context.
   OnAssociateRegistration(kDocumentMainThreadId, kProviderId, info, attrs);
@@ -220,9 +230,10 @@ TEST_F(ServiceWorkerDispatcherTest,
   // Set up ServiceWorkerProviderContext for a document context.
   const int kProviderId = 10;
   scoped_refptr<ServiceWorkerProviderContext> provider_context(
-      new ServiceWorkerProviderContext(kProviderId,
-                                       SERVICE_WORKER_PROVIDER_FOR_WINDOW,
-                                       thread_safe_sender()));
+      new ServiceWorkerProviderContext(
+          kProviderId, SERVICE_WORKER_PROVIDER_FOR_WINDOW,
+          mojom::ServiceWorkerProviderAssociatedRequest(),
+          thread_safe_sender()));
 
   // The passed references should be adopted and only the registration reference
   // should be owned by the provider context.
@@ -258,7 +269,8 @@ TEST_F(ServiceWorkerDispatcherTest, OnSetControllerServiceWorker) {
   // the provider, the passed reference to the active worker should be adopted
   // but immediately released because there is no provider context to own it.
   OnSetControllerServiceWorker(kDocumentMainThreadId, kProviderId, attrs.active,
-                               should_notify_controllerchange);
+                               should_notify_controllerchange,
+                               std::set<uint32_t>());
   ASSERT_EQ(1UL, ipc_sink()->message_count());
   EXPECT_EQ(ServiceWorkerHostMsg_DecrementServiceWorkerRefCount::ID,
             ipc_sink()->GetMessageAt(0)->type());
@@ -268,13 +280,15 @@ TEST_F(ServiceWorkerDispatcherTest, OnSetControllerServiceWorker) {
   // the provider, the passed referecence should be adopted and owned by the
   // provider context.
   scoped_refptr<ServiceWorkerProviderContext> provider_context(
-      new ServiceWorkerProviderContext(kProviderId,
-                                       SERVICE_WORKER_PROVIDER_FOR_WINDOW,
-                                       thread_safe_sender()));
+      new ServiceWorkerProviderContext(
+          kProviderId, SERVICE_WORKER_PROVIDER_FOR_WINDOW,
+          mojom::ServiceWorkerProviderAssociatedRequest(),
+          thread_safe_sender()));
   OnAssociateRegistration(kDocumentMainThreadId, kProviderId, info, attrs);
   ipc_sink()->ClearMessages();
   OnSetControllerServiceWorker(kDocumentMainThreadId, kProviderId, attrs.active,
-                               should_notify_controllerchange);
+                               should_notify_controllerchange,
+                               std::set<uint32_t>());
   EXPECT_EQ(0UL, ipc_sink()->message_count());
 
   // Destruction of the provider context should release references to the
@@ -297,7 +311,8 @@ TEST_F(ServiceWorkerDispatcherTest, OnSetControllerServiceWorker) {
       new MockWebServiceWorkerProviderClientImpl(kProviderId, dispatcher()));
   ASSERT_FALSE(provider_client->is_set_controlled_called());
   OnSetControllerServiceWorker(kDocumentMainThreadId, kProviderId, attrs.active,
-                               should_notify_controllerchange);
+                               should_notify_controllerchange,
+                               std::set<uint32_t>());
   EXPECT_TRUE(provider_client->is_set_controlled_called());
   ASSERT_EQ(3UL, ipc_sink()->message_count());
   EXPECT_EQ(ServiceWorkerHostMsg_IncrementServiceWorkerRefCount::ID,
@@ -315,14 +330,16 @@ TEST_F(ServiceWorkerDispatcherTest, OnSetControllerServiceWorker) {
   // provider client and immediately released due to limitation of the mock
   // implementation.
   provider_context = new ServiceWorkerProviderContext(
-      kProviderId, SERVICE_WORKER_PROVIDER_FOR_WINDOW, thread_safe_sender());
+      kProviderId, SERVICE_WORKER_PROVIDER_FOR_WINDOW,
+      mojom::ServiceWorkerProviderAssociatedRequest(), thread_safe_sender());
   OnAssociateRegistration(kDocumentMainThreadId, kProviderId, info, attrs);
   provider_client.reset(
       new MockWebServiceWorkerProviderClientImpl(kProviderId, dispatcher()));
   ASSERT_FALSE(provider_client->is_set_controlled_called());
   ipc_sink()->ClearMessages();
   OnSetControllerServiceWorker(kDocumentMainThreadId, kProviderId, attrs.active,
-                               should_notify_controllerchange);
+                               should_notify_controllerchange,
+                               std::set<uint32_t>());
   EXPECT_TRUE(provider_client->is_set_controlled_called());
   ASSERT_EQ(2UL, ipc_sink()->message_count());
   EXPECT_EQ(ServiceWorkerHostMsg_IncrementServiceWorkerRefCount::ID,
@@ -344,16 +361,17 @@ TEST_F(ServiceWorkerDispatcherTest, OnSetControllerServiceWorker_Null) {
   std::unique_ptr<MockWebServiceWorkerProviderClientImpl> provider_client(
       new MockWebServiceWorkerProviderClientImpl(kProviderId, dispatcher()));
   scoped_refptr<ServiceWorkerProviderContext> provider_context(
-      new ServiceWorkerProviderContext(kProviderId,
-                                       SERVICE_WORKER_PROVIDER_FOR_WINDOW,
-                                       thread_safe_sender()));
+      new ServiceWorkerProviderContext(
+          kProviderId, SERVICE_WORKER_PROVIDER_FOR_WINDOW,
+          mojom::ServiceWorkerProviderAssociatedRequest(),
+          thread_safe_sender()));
 
   OnAssociateRegistration(kDocumentMainThreadId, kProviderId, info, attrs);
 
   // Set the controller to kInvalidServiceWorkerHandle.
-  OnSetControllerServiceWorker(kDocumentMainThreadId, kProviderId,
-                               ServiceWorkerObjectInfo(),
-                               should_notify_controllerchange);
+  OnSetControllerServiceWorker(
+      kDocumentMainThreadId, kProviderId, ServiceWorkerObjectInfo(),
+      should_notify_controllerchange, std::set<uint32_t>());
 
   // Check that it became null.
   EXPECT_EQ(nullptr, provider_context->controller());
@@ -435,7 +453,7 @@ TEST_F(ServiceWorkerDispatcherTest, GetOrCreateRegistration) {
       dispatcher()->GetOrCreateRegistration(info, attrs));
   EXPECT_TRUE(registration1);
   EXPECT_TRUE(ContainsRegistration(info.handle_id));
-  EXPECT_EQ(info.registration_id, registration1->registration_id());
+  EXPECT_EQ(info.registration_id, registration1->RegistrationId());
   ASSERT_EQ(4UL, ipc_sink()->message_count());
   EXPECT_EQ(ServiceWorkerHostMsg_IncrementRegistrationRefCount::ID,
             ipc_sink()->GetMessageAt(0)->type());
@@ -483,7 +501,7 @@ TEST_F(ServiceWorkerDispatcherTest, GetOrAdoptRegistration) {
       dispatcher()->GetOrAdoptRegistration(info, attrs));
   EXPECT_TRUE(registration1);
   EXPECT_TRUE(ContainsRegistration(info.handle_id));
-  EXPECT_EQ(info.registration_id, registration1->registration_id());
+  EXPECT_EQ(info.registration_id, registration1->RegistrationId());
   EXPECT_EQ(0UL, ipc_sink()->message_count());
 
   ipc_sink()->ClearMessages();

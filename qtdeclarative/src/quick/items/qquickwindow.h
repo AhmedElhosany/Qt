@@ -100,6 +100,12 @@ public:
     };
     Q_ENUM(SceneGraphError)
 
+    enum TextRenderType {
+        QtTextRendering,
+        NativeTextRendering
+    };
+    Q_ENUM(TextRenderType)
+
     explicit QQuickWindow(QWindow *parent = Q_NULLPTR);
     explicit QQuickWindow(QQuickRenderControl *renderControl);
 
@@ -112,7 +118,9 @@ public:
 
     QQuickItem *mouseGrabberItem() const;
 
-    bool sendEvent(QQuickItem *, QEvent *);
+#if QT_DEPRECATED_SINCE(5, 8)
+    QT_DEPRECATED bool sendEvent(QQuickItem *, QEvent *);
+#endif
 
     QImage grabWindow();
 #if QT_CONFIG(opengl)
@@ -167,6 +175,9 @@ public:
     QSGRectangleNode *createRectangleNode() const;
     QSGImageNode *createImageNode() const;
     QSGNinePatchNode *createNinePatchNode() const;
+
+    static TextRenderType textRenderType();
+    static void setTextRenderType(TextRenderType renderType);
 
 Q_SIGNALS:
     void frameSwapped();

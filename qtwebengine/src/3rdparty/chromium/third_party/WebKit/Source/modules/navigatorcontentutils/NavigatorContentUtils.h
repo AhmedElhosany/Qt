@@ -27,29 +27,28 @@
 #ifndef NavigatorContentUtils_h
 #define NavigatorContentUtils_h
 
-#include "core/frame/LocalFrame.h"
+#include "core/frame/Navigator.h"
 #include "modules/ModulesExport.h"
 #include "modules/navigatorcontentutils/NavigatorContentUtilsClient.h"
 #include "platform/Supplementable.h"
 #include "platform/heap/Handle.h"
-#include "wtf/text/WTFString.h"
+#include "platform/wtf/text/WTFString.h"
 
 namespace blink {
 
 class ExceptionState;
-class LocalFrame;
 class Navigator;
 
 class MODULES_EXPORT NavigatorContentUtils final
     : public GarbageCollectedFinalized<NavigatorContentUtils>,
-      public Supplement<LocalFrame> {
+      public Supplement<Navigator> {
   USING_GARBAGE_COLLECTED_MIXIN(NavigatorContentUtils);
 
  public:
   virtual ~NavigatorContentUtils();
 
-  static NavigatorContentUtils* from(LocalFrame&);
-  static const char* supplementName();
+  static NavigatorContentUtils* From(Navigator&);
+  static const char* SupplementName();
 
   static void registerProtocolHandler(Navigator&,
                                       const String& scheme,
@@ -65,21 +64,22 @@ class MODULES_EXPORT NavigatorContentUtils final
                                         const String& url,
                                         ExceptionState&);
 
-  static NavigatorContentUtils* create(NavigatorContentUtilsClient*);
+  static void ProvideTo(Navigator&, NavigatorContentUtilsClient*);
 
   DECLARE_VIRTUAL_TRACE();
 
-  void setClientForTest(NavigatorContentUtilsClient* client) {
-    m_client = client;
+  void SetClientForTest(NavigatorContentUtilsClient* client) {
+    client_ = client;
   }
 
  private:
-  explicit NavigatorContentUtils(NavigatorContentUtilsClient* client)
-      : m_client(client) {}
+  NavigatorContentUtils(Navigator& navigator,
+                        NavigatorContentUtilsClient* client)
+      : Supplement<Navigator>(navigator), client_(client) {}
 
-  NavigatorContentUtilsClient* client() { return m_client.get(); }
+  NavigatorContentUtilsClient* Client() { return client_.Get(); }
 
-  Member<NavigatorContentUtilsClient> m_client;
+  Member<NavigatorContentUtilsClient> client_;
 };
 
 }  // namespace blink

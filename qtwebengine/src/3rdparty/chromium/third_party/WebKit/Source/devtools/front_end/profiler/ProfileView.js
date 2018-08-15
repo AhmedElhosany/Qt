@@ -13,36 +13,36 @@ Profiler.ProfileView = class extends UI.SimpleView {
     this._searchableView.setPlaceholder(Common.UIString('Find by cost (>50ms), name or file'));
     this._searchableView.show(this.element);
 
-    var columns = /** @type {!Array<!UI.DataGrid.ColumnDescriptor>} */ ([]);
+    var columns = /** @type {!Array<!DataGrid.DataGrid.ColumnDescriptor>} */ ([]);
     columns.push({
       id: 'self',
       title: this.columnHeader('self'),
       width: '120px',
       fixedWidth: true,
       sortable: true,
-      sort: UI.DataGrid.Order.Descending
+      sort: DataGrid.DataGrid.Order.Descending
     });
     columns.push({id: 'total', title: this.columnHeader('total'), width: '120px', fixedWidth: true, sortable: true});
     columns.push({id: 'function', title: Common.UIString('Function'), disclosure: true, sortable: true});
 
-    this.dataGrid = new UI.DataGrid(columns);
-    this.dataGrid.addEventListener(UI.DataGrid.Events.SortingChanged, this._sortProfile, this);
-    this.dataGrid.addEventListener(UI.DataGrid.Events.SelectedNode, this._nodeSelected.bind(this, true));
-    this.dataGrid.addEventListener(UI.DataGrid.Events.DeselectedNode, this._nodeSelected.bind(this, false));
+    this.dataGrid = new DataGrid.DataGrid(columns);
+    this.dataGrid.addEventListener(DataGrid.DataGrid.Events.SortingChanged, this._sortProfile, this);
+    this.dataGrid.addEventListener(DataGrid.DataGrid.Events.SelectedNode, this._nodeSelected.bind(this, true));
+    this.dataGrid.addEventListener(DataGrid.DataGrid.Events.DeselectedNode, this._nodeSelected.bind(this, false));
 
     this.viewSelectComboBox = new UI.ToolbarComboBox(this._changeView.bind(this));
 
     this.focusButton = new UI.ToolbarButton(Common.UIString('Focus selected function'), 'largeicon-visibility');
     this.focusButton.setEnabled(false);
-    this.focusButton.addEventListener('click', this._focusClicked, this);
+    this.focusButton.addEventListener(UI.ToolbarButton.Events.Click, this._focusClicked, this);
 
     this.excludeButton = new UI.ToolbarButton(Common.UIString('Exclude selected function'), 'largeicon-delete');
     this.excludeButton.setEnabled(false);
-    this.excludeButton.addEventListener('click', this._excludeClicked, this);
+    this.excludeButton.addEventListener(UI.ToolbarButton.Events.Click, this._excludeClicked, this);
 
     this.resetButton = new UI.ToolbarButton(Common.UIString('Restore all functions'), 'largeicon-refresh');
     this.resetButton.setEnabled(false);
-    this.resetButton.addEventListener('click', this._resetClicked, this);
+    this.resetButton.addEventListener(UI.ToolbarButton.Events.Click, this._resetClicked, this);
 
     this._linkifier = new Components.Linkifier(Profiler.ProfileView._maxLinkLength);
   }
@@ -107,13 +107,6 @@ Profiler.ProfileView = class extends UI.SimpleView {
    */
   columnHeader(columnId) {
     throw 'Not implemented';
-  }
-
-  /**
-   * @return {?SDK.Target}
-   */
-  target() {
-    return this._profileHeader.target();
   }
 
   /**
@@ -248,7 +241,7 @@ Profiler.ProfileView = class extends UI.SimpleView {
   }
 
   /**
-   * @return {!UI.FlameChartDataProvider}
+   * @return {!PerfUI.FlameChartDataProvider}
    */
   createFlameChartDataProvider() {
     throw 'Not implemented';
@@ -259,7 +252,7 @@ Profiler.ProfileView = class extends UI.SimpleView {
       return;
     this._dataProvider = this.createFlameChartDataProvider();
     this._flameChart = new Profiler.CPUProfileFlameChart(this._searchableView, this._dataProvider);
-    this._flameChart.addEventListener(UI.FlameChart.Events.EntrySelected, this._onEntrySelected.bind(this));
+    this._flameChart.addEventListener(PerfUI.FlameChart.Events.EntrySelected, this._onEntrySelected.bind(this));
   }
 
   /**
@@ -325,6 +318,9 @@ Profiler.ProfileView = class extends UI.SimpleView {
     this.excludeButton.setEnabled(selected);
   }
 
+  /**
+   * @param {!Common.Event} event
+   */
   _focusClicked(event) {
     if (!this.dataGrid.selectedNode)
       return;
@@ -333,8 +329,12 @@ Profiler.ProfileView = class extends UI.SimpleView {
     this.profileDataGridTree.focus(this.dataGrid.selectedNode);
     this.refresh();
     this.refreshVisibleData();
+    Host.userMetrics.actionTaken(Host.UserMetrics.Action.CpuProfileNodeFocused);
   }
 
+  /**
+   * @param {!Common.Event} event
+   */
   _excludeClicked(event) {
     var selectedNode = this.dataGrid.selectedNode;
 
@@ -347,8 +347,12 @@ Profiler.ProfileView = class extends UI.SimpleView {
     this.profileDataGridTree.exclude(selectedNode);
     this.refresh();
     this.refreshVisibleData();
+    Host.userMetrics.actionTaken(Host.UserMetrics.Action.CpuProfileNodeExcluded);
   }
 
+  /**
+   * @param {!Common.Event} event
+   */
   _resetClicked(event) {
     this.resetButton.setEnabled(false);
     this.profileDataGridTree.restore();
@@ -379,77 +383,40 @@ Profiler.ProfileView.ViewTypes = {
 
 /**
  * @implements {Common.OutputStream}
- * @implements {Bindings.OutputStreamDelegate}
  * @unrestricted
  */
 Profiler.WritableProfileHeader = class extends Profiler.ProfileHeader {
   /**
-   * @param {?SDK.Target} target
+   * @param {?SDK.DebuggerModel} debuggerModel
    * @param {!Profiler.ProfileType} type
    * @param {string=} title
    */
-  constructor(target, type, title) {
-    super(target, type, title || Common.UIString('Profile %d', type.nextProfileUid()));
-    this._debuggerModel = SDK.DebuggerModel.fromTarget(target);
+  constructor(debuggerModel, type, title) {
+    super(type, title || Common.UIString('Profile %d', type.nextProfileUid()));
+    this._debuggerModel = debuggerModel;
     this._tempFile = null;
   }
 
   /**
-   * @override
-   */
-  onTransferStarted() {
-    this._jsonifiedProfile = '';
-    this.updateStatus(Common.UIString('Loading\u2026 %s', Number.bytesToString(this._jsonifiedProfile.length)), true);
-  }
-
-  /**
-   * @override
    * @param {!Bindings.ChunkedReader} reader
    */
-  onChunkTransferred(reader) {
+  _onChunkTransferred(reader) {
     this.updateStatus(Common.UIString('Loading\u2026 %d%%', Number.bytesToString(this._jsonifiedProfile.length)));
   }
 
   /**
-   * @override
-   */
-  onTransferFinished() {
-    this.updateStatus(Common.UIString('Parsing\u2026'), true);
-    this._profile = JSON.parse(this._jsonifiedProfile);
-    this._jsonifiedProfile = null;
-    this.updateStatus(Common.UIString('Loaded'), false);
-
-    if (this._profileType.profileBeingRecorded() === this)
-      this._profileType.setProfileBeingRecorded(null);
-  }
-
-  /**
-   * @override
    * @param {!Bindings.ChunkedReader} reader
-   * @param {!Event} e
    */
-  onError(reader, e) {
-    var subtitle;
-    switch (e.target.error.code) {
-      case e.target.error.NOT_FOUND_ERR:
-        subtitle = Common.UIString('\'%s\' not found.', reader.fileName());
-        break;
-      case e.target.error.NOT_READABLE_ERR:
-        subtitle = Common.UIString('\'%s\' is not readable', reader.fileName());
-        break;
-      case e.target.error.ABORT_ERR:
-        return;
-      default:
-        subtitle = Common.UIString('\'%s\' error %d', reader.fileName(), e.target.error.code);
-    }
-    this.updateStatus(subtitle);
+  _onError(reader) {
+    this.updateStatus(Common.UIString(`File '%s' read error: %s`, reader.fileName(), reader.error().message));
   }
 
   /**
    * @override
    * @param {string} text
+   * @return {!Promise}
    */
-  write(text) {
+  async write(text) {
     this._jsonifiedProfile += text;
   }
 
@@ -486,44 +453,41 @@ Profiler.WritableProfileHeader = class extends Profiler.ProfileHeader {
   /**
    * @override
    */
-  saveToFile() {
+  async saveToFile() {
     var fileOutputStream = new Bindings.FileOutputStream();
-
-    /**
-     * @param {boolean} accepted
-     * @this {Profiler.WritableProfileHeader}
-     */
-    function onOpenForSave(accepted) {
-      if (!accepted)
-        return;
-      function didRead(data) {
-        if (data)
-          fileOutputStream.write(data, fileOutputStream.close.bind(fileOutputStream));
-        else
-          fileOutputStream.close();
-      }
-      if (this._failedToCreateTempFile) {
-        Common.console.error('Failed to open temp file with heap snapshot');
-        fileOutputStream.close();
-      } else if (this._tempFile) {
-        this._tempFile.read(didRead);
-      } else {
-        this._onTempFileReady = onOpenForSave.bind(this, accepted);
-      }
-    }
     this._fileName = this._fileName ||
-        `${this._profileType.typeName()}-${new Date().toISO8601Compact()}${this._profileType.fileExtension()}`;
-    fileOutputStream.open(this._fileName, onOpenForSave.bind(this));
+        `${this.profileType().typeName()}-${new Date().toISO8601Compact()}${this.profileType().fileExtension()}`;
+    var accepted = await fileOutputStream.open(this._fileName);
+    if (!accepted || !this._tempFile)
+      return;
+    var data = await this._tempFile.read();
+    if (data)
+      await fileOutputStream.write(data);
+    fileOutputStream.close();
   }
 
   /**
    * @override
    * @param {!File} file
    */
-  loadFromFile(file) {
+  async loadFromFile(file) {
     this.updateStatus(Common.UIString('Loading\u2026'), true);
-    var fileReader = new Bindings.ChunkedFileReader(file, 10000000, this);
-    fileReader.start(this);
+    var fileReader = new Bindings.ChunkedFileReader(file, 10000000, this._onChunkTransferred.bind(this));
+    this._jsonifiedProfile = '';
+
+    var success = await fileReader.read(this);
+    if (!success) {
+      this._onError(fileReader);
+      return;
+    }
+
+    this.updateStatus(Common.UIString('Parsing\u2026'), true);
+    this._profile = JSON.parse(this._jsonifiedProfile);
+    this._jsonifiedProfile = null;
+    this.updateStatus(Common.UIString('Loaded'), false);
+
+    if (this.profileType().profileBeingRecorded() === this)
+      this.profileType().setProfileBeingRecorded(null);
   }
 
   /**
@@ -531,54 +495,9 @@ Profiler.WritableProfileHeader = class extends Profiler.ProfileHeader {
    */
   setProtocolProfile(profile) {
     this._protocolProfile = profile;
-    this._saveProfileDataToTempFile(profile);
+    this._tempFile = new Bindings.TempFile();
+    this._tempFile.write([JSON.stringify(profile)]);
     if (this.canSaveToFile())
       this.dispatchEventToListeners(Profiler.ProfileHeader.Events.ProfileReceived);
-  }
-
-  /**
-   * @param {*} data
-   */
-  _saveProfileDataToTempFile(data) {
-    var serializedData = JSON.stringify(data);
-
-    /**
-     * @this {Profiler.WritableProfileHeader}
-     */
-    function didCreateTempFile(tempFile) {
-      this._writeToTempFile(tempFile, serializedData);
-    }
-    Bindings.TempFile.create('cpu-profiler', String(this.uid)).then(didCreateTempFile.bind(this));
-  }
-
-  /**
-   * @param {?Bindings.TempFile} tempFile
-   * @param {string} serializedData
-   */
-  _writeToTempFile(tempFile, serializedData) {
-    this._tempFile = tempFile;
-    if (!tempFile) {
-      this._failedToCreateTempFile = true;
-      this._notifyTempFileReady();
-      return;
-    }
-    /**
-     * @param {number} fileSize
-     * @this {Profiler.WritableProfileHeader}
-     */
-    function didWriteToTempFile(fileSize) {
-      if (!fileSize)
-        this._failedToCreateTempFile = true;
-      tempFile.finishWriting();
-      this._notifyTempFileReady();
-    }
-    tempFile.write([serializedData], didWriteToTempFile.bind(this));
-  }
-
-  _notifyTempFileReady() {
-    if (this._onTempFileReady) {
-      this._onTempFileReady();
-      this._onTempFileReady = null;
-    }
   }
 };

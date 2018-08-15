@@ -4,7 +4,6 @@
 
 #include "content/browser/renderer_host/text_input_manager.h"
 
-#include "base/strings/string16.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/common/view_messages.h"
@@ -15,7 +14,7 @@ namespace content {
 
 namespace {
 
-bool AreDifferentTextInputStates(const content::TextInputState& old_state,
+bool ShouldUpdateTextInputState(const content::TextInputState& old_state,
                                  const content::TextInputState& new_state) {
 #if defined(USE_AURA)
   return old_state.type != new_state.type || old_state.mode != new_state.mode ||
@@ -24,8 +23,11 @@ bool AreDifferentTextInputStates(const content::TextInputState& old_state,
 #elif defined(OS_MACOSX)
   return old_state.type != new_state.type ||
          old_state.can_compose_inline != new_state.can_compose_inline;
+#elif defined(OS_ANDROID)
+  // On Android, TextInputState update is sent only if there is some change in
+  // the state. So the new state is always different.
+  return true;
 #else
-  // TODO(ekaramad): Implement the logic for other platforms (crbug.com/578168).
   NOTREACHED();
   return true;
 #endif
@@ -70,11 +72,7 @@ const TextInputManager::SelectionRegion* TextInputManager::GetSelectionRegion(
 }
 
 const TextInputManager::CompositionRangeInfo*
-TextInputManager::GetCompositionRangeInfo(
-    RenderWidgetHostViewBase* view) const {
-  DCHECK(!view || IsRegistered(view));
-  if (!view)
-    view = active_view_;
+TextInputManager::GetCompositionRangeInfo() const {
   return active_view_ ? &composition_range_info_map_.at(active_view_) : nullptr;
 }
 
@@ -83,7 +81,10 @@ const TextInputManager::TextSelection* TextInputManager::GetTextSelection(
   DCHECK(!view || IsRegistered(view));
   if (!view)
     view = active_view_;
-  return !!view ? &text_selection_map_.at(view) : nullptr;
+  // A crash occurs when we end up here with an unregistered view.
+  // See crbug.com/735980
+  // TODO(ekaramad): Take a deeper look why this is happening.
+  return (view && IsRegistered(view)) ? &text_selection_map_.at(view) : nullptr;
 }
 
 void TextInputManager::UpdateTextInputState(
@@ -100,13 +101,17 @@ void TextInputManager::UpdateTextInputState(
     // already synthesized the loss of TextInputState for the |view| before (see
     // below). So we can forget about this method ever being called (no observer
     // calls necessary).
+    // NOTE: Android requires state to be returned even when the current state
+    // is/becomes NONE. Otherwise IME may become irresponsive.
+#if !defined(OS_ANDROID)
     return;
+#endif
   }
 
   // Since |view| is registered, we already have a previous value for its
   // TextInputState.
-  bool changed = AreDifferentTextInputStates(text_input_state_map_[view],
-                                             text_input_state);
+  bool changed = ShouldUpdateTextInputState(text_input_state_map_[view],
+                                            text_input_state);
 
   text_input_state_map_[view] = text_input_state;
 
@@ -168,9 +173,9 @@ void TextInputManager::SelectionBoundsChanged(
     focus_bound.set_type(gfx::SelectionBound::CENTER);
   } else {
     // Whether text is LTR at the anchor handle.
-    bool anchor_LTR = params.anchor_dir == blink::WebTextDirectionLeftToRight;
+    bool anchor_LTR = params.anchor_dir == blink::kWebTextDirectionLeftToRight;
     // Whether text is LTR at the focus handle.
-    bool focus_LTR = params.focus_dir == blink::WebTextDirectionLeftToRight;
+    bool focus_LTR = params.focus_dir == blink::kWebTextDirectionLeftToRight;
 
     if ((params.is_anchor_first && anchor_LTR) ||
         (!params.is_anchor_first && !anchor_LTR)) {
@@ -234,14 +239,10 @@ void TextInputManager::ImeCompositionRangeChanged(
 void TextInputManager::SelectionChanged(RenderWidgetHostViewBase* view,
                                         const base::string16& text,
                                         size_t offset,
-                                        const gfx::Range& range) {
+                                        const gfx::Range& range,
+                                        bool user_initiated) {
   DCHECK(IsRegistered(view));
-
-  text_selection_map_[view].text = text;
-  text_selection_map_[view].offset = offset;
-  text_selection_map_[view].range.set_start(range.start());
-  text_selection_map_[view].range.set_end(range.end());
-
+  text_selection_map_[view].SetSelection(text, offset, range, user_initiated);
   for (auto& observer : observer_list_)
     observer.OnTextSelectionChanged(this, view);
 }
@@ -296,6 +297,12 @@ ui::TextInputType TextInputManager::GetTextInputTypeForViewForTesting(
   return text_input_state_map_[view].type;
 }
 
+const gfx::Range* TextInputManager::GetCompositionRangeForTesting() const {
+  if (auto* info = GetCompositionRangeInfo())
+    return &info->range;
+  return nullptr;
+}
+
 void TextInputManager::NotifyObserversAboutInputStateUpdate(
     RenderWidgetHostViewBase* updated_view,
     bool did_update_state) {
@@ -316,35 +323,41 @@ TextInputManager::CompositionRangeInfo::CompositionRangeInfo(
 TextInputManager::CompositionRangeInfo::~CompositionRangeInfo() {}
 
 TextInputManager::TextSelection::TextSelection()
-    : offset(0), range(gfx::Range::InvalidRange()), text(base::string16()) {}
+    : offset_(0), range_(gfx::Range::InvalidRange()) {}
 
 TextInputManager::TextSelection::TextSelection(const TextSelection& other) =
     default;
 
 TextInputManager::TextSelection::~TextSelection() {}
 
-bool TextInputManager::TextSelection::GetSelectedText(
-    base::string16* selected_text) const {
-  if (text.empty() || range.is_empty())
-    return false;
+void TextInputManager::TextSelection::SetSelection(const base::string16& text,
+                                                   size_t offset,
+                                                   const gfx::Range& range,
+                                                   bool user_initiated) {
+  text_ = text;
+  range_.set_start(range.start());
+  range_.set_end(range.end());
+  offset_ = offset;
+  user_initiated_ = user_initiated;
 
-  size_t pos = range.GetMin() - offset;
-  size_t n = range.length();
-  if (pos + n > text.length()) {
-    LOG(WARNING) << "The text can not fully cover range (selection's end point "
-                    "exceeds text length).";
-    return false;
+  // Update the selected text.
+  selected_text_.clear();
+  if (!text.empty() && !range.is_empty()) {
+    size_t pos = range.GetMin() - offset;
+    size_t n = range.length();
+    if (pos + n > text.length()) {
+      LOG(WARNING)
+          << "The text cannot fully cover range (selection's end point "
+             "exceeds text length).";
+    }
+
+    if (pos >= text.length()) {
+      LOG(WARNING) << "The text cannot cover range (selection range's starting "
+                      "point exceeds text length).";
+    } else {
+      selected_text_.append(text.substr(pos, n));
+    }
   }
-
-  if (pos >= text.length()) {
-    LOG(WARNING) << "The text ca not cover range (selection range's starting "
-                    "point exceeds text length).";
-    return false;
-  }
-
-  selected_text->clear();
-  selected_text->append(text.substr(pos, n));
-  return true;
 }
 
 }  // namespace content

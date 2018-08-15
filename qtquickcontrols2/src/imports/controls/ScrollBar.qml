@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.ScrollBar {
     id: control
@@ -55,7 +55,7 @@ T.ScrollBar {
         implicitHeight: control.interactive ? 6 : 2
 
         radius: width / 2
-        color: control.pressed ? Default.scrollBarPressedColor : Default.scrollBarColor
+        color: control.pressed ? control.palette.dark : control.palette.mid
         opacity: 0.0
 
         states: State {

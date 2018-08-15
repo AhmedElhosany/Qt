@@ -26,6 +26,8 @@ enum {
 #if defined(OS_WIN)
   DIR_WATCHER_DATA,             // Directory where the Chrome watcher stores
                                 // data.
+  DIR_ROAMING_USER_DATA,        // Directory where user data is stored that
+                                // needs to be roamed between computers.
 #endif
   DIR_RESOURCES,                // Directory containing separate file resources
                                 // used by Chrome at runtime.
@@ -97,7 +99,6 @@ enum {
   FILE_RESOURCES_PACK,          // Full path to the .pak file containing
                                 // binary data (e.g., html files and images
                                 // used by internal pages).
-  DIR_RESOURCES_EXTENSION,      // Full path to extension resources.
 #if defined(OS_CHROMEOS)
   DIR_CHROMEOS_WALLPAPERS,      // Directory where downloaded chromeos
                                 // wallpapers reside.

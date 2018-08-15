@@ -73,18 +73,20 @@ private Q_SLOTS:
         Qt3DRender::Render::Buffer renderBuffer;
         Qt3DRender::QBuffer buffer(Qt3DRender::QBuffer::IndexBuffer);
         Qt3DRender::Render::BufferManager bufferManager;
+        TestRenderer renderer;
+
         buffer.setUsage(Qt3DRender::QBuffer::DynamicCopy);
         buffer.setData(QByteArrayLiteral("Corvette"));
         buffer.setDataGenerator(Qt3DRender::QBufferDataGeneratorPtr(new TestFunctor(883)));
 
         // WHEN
+        renderBuffer.setRenderer(&renderer);
         renderBuffer.setManager(&bufferManager);
         simulateInitialization(&buffer, &renderBuffer);
 
         // THEN
         QCOMPARE(renderBuffer.peerId(), buffer.id());
         QCOMPARE(renderBuffer.isDirty(), true);
-        QCOMPARE(renderBuffer.type(), buffer.type());
         QCOMPARE(renderBuffer.usage(), buffer.usage());
         QCOMPARE(renderBuffer.data(), buffer.data());
         QCOMPARE(renderBuffer.dataGenerator(), buffer.dataGenerator());
@@ -102,7 +104,6 @@ private Q_SLOTS:
 
         // THEN
         QCOMPARE(renderBuffer.isDirty(), false);
-        QCOMPARE(renderBuffer.type(), Qt3DRender::QBuffer::VertexBuffer);
         QCOMPARE(renderBuffer.usage(), Qt3DRender::QBuffer::StaticDraw);
         QVERIFY(renderBuffer.data().isEmpty());
         QVERIFY(renderBuffer.peerId().isNull());
@@ -110,7 +111,7 @@ private Q_SLOTS:
         QVERIFY(renderBuffer.pendingBufferUpdates().empty());
 
         // GIVEN
-        Qt3DRender::QBuffer buffer(Qt3DRender::QBuffer::IndexBuffer);
+        Qt3DRender::QBuffer buffer;
         buffer.setUsage(Qt3DRender::QBuffer::DynamicCopy);
         buffer.setData(QByteArrayLiteral("C7"));
         buffer.setDataGenerator(Qt3DRender::QBufferDataGeneratorPtr(new TestFunctor(73)));
@@ -129,7 +130,6 @@ private Q_SLOTS:
         renderBuffer.sceneChangeEvent(updateChange);
 
         // THEN
-        QCOMPARE(renderBuffer.type(), Qt3DRender::QBuffer::IndexBuffer);
         QCOMPARE(renderBuffer.usage(), Qt3DRender::QBuffer::DynamicCopy);
         QCOMPARE(renderBuffer.isDirty(), true);
         QCOMPARE(renderBuffer.data(), QByteArrayLiteral("C7"));
@@ -141,7 +141,6 @@ private Q_SLOTS:
 
         // THEN
         QCOMPARE(renderBuffer.isDirty(), false);
-        QCOMPARE(renderBuffer.type(), Qt3DRender::QBuffer::VertexBuffer);
         QCOMPARE(renderBuffer.usage(), Qt3DRender::QBuffer::StaticDraw);
         QVERIFY(renderBuffer.data().isEmpty());
         QVERIFY(renderBuffer.dataGenerator().isNull());
@@ -156,27 +155,14 @@ private Q_SLOTS:
         renderBuffer.setRenderer(&renderer);
 
         // THEN
-        QVERIFY(renderBuffer.type() != Qt3DRender::QBuffer::IndexBuffer);
         QVERIFY(renderBuffer.data().isEmpty());
         QVERIFY(renderBuffer.usage() != Qt3DRender::QBuffer::DynamicRead);
         QVERIFY(!renderBuffer.isDirty());
+        QVERIFY(!(renderer.dirtyBits() & Qt3DRender::Render::AbstractRenderer::BuffersDirty));
+        renderer.clearDirtyBits(Qt3DRender::Render::AbstractRenderer::AllDirty);
 
         // WHEN
         Qt3DCore::QPropertyUpdatedChangePtr updateChange(new Qt3DCore::QPropertyUpdatedChange(Qt3DCore::QNodeId()));
-        updateChange->setValue(static_cast<int>(Qt3DRender::QBuffer::IndexBuffer));
-        updateChange->setPropertyName("type");
-        renderBuffer.sceneChangeEvent(updateChange);
-
-        // THEN
-        QCOMPARE(renderBuffer.type(), Qt3DRender::QBuffer::IndexBuffer);
-        QVERIFY(renderer.dirtyBits() != 0);
-        QVERIFY(renderBuffer.isDirty());
-
-        renderBuffer.unsetDirty();
-        QVERIFY(!renderBuffer.isDirty());
-
-        // WHEN
-        updateChange = QSharedPointer<Qt3DCore::QPropertyUpdatedChange>::create(Qt3DCore::QNodeId());
         updateChange->setValue(static_cast<int>(Qt3DRender::QBuffer::DynamicRead));
         updateChange->setPropertyName("usage");
         renderBuffer.sceneChangeEvent(updateChange);
@@ -184,6 +170,9 @@ private Q_SLOTS:
         // THEN
         QCOMPARE(renderBuffer.usage(), Qt3DRender::QBuffer::DynamicRead);
         QVERIFY(renderBuffer.isDirty());
+
+        QVERIFY(renderer.dirtyBits() & Qt3DRender::Render::AbstractRenderer::BuffersDirty);
+        renderer.clearDirtyBits(Qt3DRender::Render::AbstractRenderer::AllDirty);
 
         renderBuffer.unsetDirty();
         QVERIFY(!renderBuffer.isDirty());
@@ -201,6 +190,10 @@ private Q_SLOTS:
         QCOMPARE(renderBuffer.pendingBufferUpdates().first().offset, -1);
 
         renderBuffer.pendingBufferUpdates().clear();
+
+        QVERIFY(renderer.dirtyBits() & Qt3DRender::Render::AbstractRenderer::BuffersDirty);
+        renderer.clearDirtyBits(Qt3DRender::Render::AbstractRenderer::AllDirty);
+
         renderBuffer.unsetDirty();
         QVERIFY(!renderBuffer.isDirty());
 
@@ -215,6 +208,9 @@ private Q_SLOTS:
         QCOMPARE(renderBuffer.dataGenerator(), functor);
         QVERIFY(renderBuffer.isDirty());
 
+        QVERIFY(renderer.dirtyBits() & Qt3DRender::Render::AbstractRenderer::BuffersDirty);
+        renderer.clearDirtyBits(Qt3DRender::Render::AbstractRenderer::AllDirty);
+
         renderBuffer.unsetDirty();
         QVERIFY(!renderBuffer.isDirty());
 
@@ -227,6 +223,9 @@ private Q_SLOTS:
         // THEN
         QCOMPARE(renderBuffer.isSyncData(), true);
         QVERIFY(!renderBuffer.isDirty());
+
+        QVERIFY(renderer.dirtyBits() & Qt3DRender::Render::AbstractRenderer::BuffersDirty);
+        renderer.clearDirtyBits(Qt3DRender::Render::AbstractRenderer::AllDirty);
 
         // WHEN
         TestArbiter arbiter;
@@ -258,6 +257,9 @@ private Q_SLOTS:
         QCOMPARE(renderBuffer.pendingBufferUpdates().first().offset, 2);
         QVERIFY(renderBuffer.isDirty());
 
+        QVERIFY(renderer.dirtyBits() & Qt3DRender::Render::AbstractRenderer::BuffersDirty);
+        renderer.clearDirtyBits(Qt3DRender::Render::AbstractRenderer::AllDirty);
+
         renderBuffer.unsetDirty();
         QVERIFY(!renderBuffer.isDirty());
     }
@@ -268,8 +270,10 @@ private Q_SLOTS:
         Qt3DRender::Render::Buffer renderBuffer;
         Qt3DRender::QBuffer buffer(Qt3DRender::QBuffer::IndexBuffer);
         Qt3DRender::Render::BufferManager bufferManager;
+        TestRenderer renderer;
 
         // WHEN
+        renderBuffer.setRenderer(&renderer);
         renderBuffer.setManager(&bufferManager);
         simulateInitialization(&buffer, &renderBuffer);
 
@@ -284,6 +288,27 @@ private Q_SLOTS:
         QVERIFY(buffers.size() == 1);
         QVERIFY(buffers.first() == renderBuffer.peerId());
         QVERIFY(bufferManager.takeBuffersToRelease().empty());
+    }
+
+    void checkSetRendererDirtyOnInitialization()
+    {
+        // GIVEN
+        Qt3DRender::Render::Buffer renderBuffer;
+        Qt3DRender::QBuffer buffer(Qt3DRender::QBuffer::IndexBuffer);
+        Qt3DRender::Render::BufferManager bufferManager;
+        TestRenderer renderer;
+
+        renderBuffer.setRenderer(&renderer);
+        renderBuffer.setManager(&bufferManager);
+
+        // THEN
+        QCOMPARE(renderer.dirtyBits(), 0);
+
+        // WHEN
+        simulateInitialization(&buffer, &renderBuffer);
+
+        // THEN
+        QCOMPARE(renderer.dirtyBits(), Qt3DRender::Render::AbstractRenderer::BuffersDirty);
     }
 };
 

@@ -16,8 +16,8 @@
 #include "base/files/file.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "base/sequenced_task_runner_helpers.h"
+#include "build/build_config.h"
 #include "storage/browser/fileapi/file_system_url.h"
 #include "storage/browser/fileapi/open_file_system_mode.h"
 #include "storage/browser/fileapi/plugin_private_file_system_backend.h"
@@ -32,10 +32,6 @@ class SequencedTaskRunner;
 class SingleThreadTaskRunner;
 }
 
-namespace chrome {
-class NativeMediaFileUtilTest;
-}
-
 namespace storage {
 class QuotaManagerProxy;
 class SpecialStoragePolicy;
@@ -46,7 +42,6 @@ class URLRequest;
 }
 
 namespace storage {
-class BlobURLRequestJobTest;
 class FileStreamReader;
 }
 
@@ -58,7 +53,6 @@ class ExternalFileSystemBackend;
 class ExternalMountPoints;
 class FileStreamWriter;
 class FileSystemBackend;
-class FileSystemFileUtil;
 class FileSystemOperation;
 class FileSystemOperationRunner;
 class FileSystemOptions;
@@ -68,7 +62,6 @@ class IsolatedFileSystemBackend;
 class MountPoints;
 class QuotaReservation;
 class SandboxFileSystemBackend;
-class WatchManager;
 
 struct DefaultContextDeleter;
 struct FileSystemInfo;
@@ -102,8 +95,8 @@ class STORAGE_EXPORT FileSystemContext
   // file_task_runner is used as default TaskRunner.
   // Unless a FileSystemBackend is overridden in CreateFileSystemOperation,
   // it is used for all file operations and file related meta operations.
-  // The code assumes that file_task_runner->RunsTasksOnCurrentThread()
-  // returns false if the current task is not running on the thread that allows
+  // The code assumes that file_task_runner->RunsTasksInCurrentSequence()
+  // returns false if the current task is not running on the sequence that allows
   // blocking file operations (like SequencedWorkerPool implementation does).
   //
   // |external_mount_points| contains non-system external mount points available
@@ -125,7 +118,7 @@ class STORAGE_EXPORT FileSystemContext
       ExternalMountPoints* external_mount_points,
       storage::SpecialStoragePolicy* special_storage_policy,
       storage::QuotaManagerProxy* quota_manager_proxy,
-      ScopedVector<FileSystemBackend> additional_backends,
+      std::vector<std::unique_ptr<FileSystemBackend>> additional_backends,
       const std::vector<URLRequestAutoMountHandler>& auto_mount_handlers,
       const base::FilePath& partition_path,
       const FileSystemOptions& options);
@@ -332,7 +325,7 @@ class STORAGE_EXPORT FileSystemContext
                                           DefaultContextDeleter>;
   ~FileSystemContext();
 
-  void DeleteOnCorrectThread() const;
+  void DeleteOnCorrectSequence() const;
 
   // Creates a new FileSystemOperation instance by getting an appropriate
   // FileSystemBackend for |url| and calling the backend's corresponding
@@ -388,7 +381,7 @@ class STORAGE_EXPORT FileSystemContext
 
   // Additional file system backends.
   std::unique_ptr<PluginPrivateFileSystemBackend> plugin_private_backend_;
-  ScopedVector<FileSystemBackend> additional_backends_;
+  std::vector<std::unique_ptr<FileSystemBackend>> additional_backends_;
 
   std::vector<URLRequestAutoMountHandler> auto_mount_handlers_;
 
@@ -420,7 +413,7 @@ class STORAGE_EXPORT FileSystemContext
 
 struct DefaultContextDeleter {
   static void Destruct(const FileSystemContext* context) {
-    context->DeleteOnCorrectThread();
+    context->DeleteOnCorrectSequence();
   }
 };
 

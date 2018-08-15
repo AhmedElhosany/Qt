@@ -69,6 +69,7 @@ void PrintUsage(const char* argv0) {
 
 int main(int argc, char** argv) {
   base::AtExitManager at_exit_manager;
+  // TODO(eroman): Is this needed?
   base::MessageLoopForIO message_loop;
   if (!base::CommandLine::Init(argc, argv)) {
     std::cerr << "ERROR in CommandLine::Init\n";
@@ -124,6 +125,8 @@ int main(int argc, char** argv) {
     std::cerr << "ERROR: no target cert\n";
     return 1;
   }
+
+  // TODO(eroman): Also use CertVerifyProcBuiltin.
 
   std::cout << "CertVerifyProc:\n";
   bool cert_verify_proc_ok = true;

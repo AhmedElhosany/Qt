@@ -7,6 +7,7 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -40,8 +41,8 @@ class PreferredSizeLabel : public Label {
   ~PreferredSizeLabel() override {}
 
   // Label:
-  gfx::Size GetPreferredSize() const override {
-    return gfx::Size(50, Label::GetPreferredSize().height());
+  gfx::Size CalculatePreferredSize() const override {
+    return gfx::Size(50, Label::CalculatePreferredSize().height());
   }
 
  private:
@@ -67,7 +68,8 @@ LabelExample::~LabelExample() {
 
 void LabelExample::CreateExampleView(View* container) {
   // A very simple label example, followed by additional helpful examples.
-  container->SetLayoutManager(new BoxLayout(BoxLayout::kVertical, 0, 0, 10));
+  container->SetLayoutManager(
+      new BoxLayout(BoxLayout::kVertical, gfx::Insets(), 10));
   Label* label = new Label(ASCIIToUTF16("Hello world!"));
   container->AddChildView(label);
 
@@ -115,8 +117,10 @@ void LabelExample::CreateExampleView(View* container) {
   label->SetBorder(CreateSolidBorder(20, SK_ColorRED));
   container->AddChildView(label);
 
-  label = new Label(ASCIIToUTF16("A label supporting text selection."));
+  label = new Label(
+      ASCIIToUTF16("A multiline label...\n\n...which supports text selection"));
   label->SetSelectable(true);
+  label->SetMultiLine(true);
   container->AddChildView(label);
 
   AddCustomLabel(container);
@@ -132,6 +136,8 @@ void LabelExample::ButtonPressed(Button* button, const ui::Event& event) {
       shadows.push_back(gfx::ShadowValue(gfx::Vector2d(2, 2), 0, SK_ColorGRAY));
     }
     custom_label_->SetShadows(shadows);
+  } else if (button == selectable_) {
+    custom_label_->SetSelectable(selectable_->checked());
   }
   custom_label_->parent()->parent()->Layout();
   custom_label_->SchedulePaint();
@@ -156,8 +162,7 @@ void LabelExample::ContentsChanged(Textfield* sender,
 void LabelExample::AddCustomLabel(View* container) {
   View* control_container = new View();
   control_container->SetBorder(CreateSolidBorder(2, SK_ColorGRAY));
-  control_container->set_background(
-      Background::CreateSolidBackground(SK_ColorLTGRAY));
+  control_container->SetBackground(CreateSolidBackground(SK_ColorLTGRAY));
   GridLayout* layout = GridLayout::CreatePanel(control_container);
   control_container->SetLayoutManager(layout);
 
@@ -186,6 +191,8 @@ void LabelExample::AddCustomLabel(View* container) {
                         0, GridLayout::USE_PREF, 0, 0);
   column_set->AddColumn(GridLayout::LEADING, GridLayout::LEADING,
                         0, GridLayout::USE_PREF, 0, 0);
+  column_set->AddColumn(GridLayout::LEADING, GridLayout::LEADING, 0,
+                        GridLayout::USE_PREF, 0, 0);
   layout->StartRow(0, 1);
   multiline_ = new Checkbox(base::ASCIIToUTF16("Multiline"));
   multiline_->set_listener(this);
@@ -193,6 +200,9 @@ void LabelExample::AddCustomLabel(View* container) {
   shadows_ = new Checkbox(base::ASCIIToUTF16("Shadows"));
   shadows_->set_listener(this);
   layout->AddView(shadows_);
+  selectable_ = new Checkbox(base::ASCIIToUTF16("Selectable"));
+  selectable_->set_listener(this);
+  layout->AddView(selectable_);
   layout->AddPaddingRow(0, 8);
 
   column_set = layout->AddColumnSet(2);
@@ -204,6 +214,10 @@ void LabelExample::AddCustomLabel(View* container) {
   custom_label_->SetElideBehavior(gfx::NO_ELIDE);
   custom_label_->SetText(textfield_->text());
   layout->AddView(custom_label_);
+
+  // Disable the text selection checkbox if |custom_label_| does not support
+  // text selection.
+  selectable_->SetEnabled(custom_label_->IsSelectionSupported());
 
   container->AddChildView(control_container);
 }

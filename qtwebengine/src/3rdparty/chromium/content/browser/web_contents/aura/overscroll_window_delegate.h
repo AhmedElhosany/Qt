@@ -29,7 +29,7 @@ class CONTENT_EXPORT OverscrollWindowDelegate
   ~OverscrollWindowDelegate() override;
 
   // Starts the overscroll gesture.
-  void StartOverscroll();
+  void StartOverscroll(OverscrollSource source);
 
   // Resets the overscroll state.
   void ResetOverscroll();
@@ -38,7 +38,7 @@ class CONTENT_EXPORT OverscrollWindowDelegate
   void CompleteOrResetOverscroll();
 
   // Updates the current horizontal overscroll.
-  void UpdateOverscroll(float delta_x);
+  void UpdateOverscroll(float delta_x, OverscrollSource source);
 
   // Overridden from ui::EventHandler.
   void OnKeyEvent(ui::KeyEvent* event) override;
@@ -51,6 +51,9 @@ class CONTENT_EXPORT OverscrollWindowDelegate
 
   // The current overscroll mode.
   OverscrollMode overscroll_mode_;
+
+  // The current overscroll source.
+  OverscrollSource overscroll_source_;
 
   // The latest delta_x scroll update.
   float delta_x_;

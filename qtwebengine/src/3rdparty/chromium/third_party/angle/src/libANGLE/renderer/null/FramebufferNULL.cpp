@@ -9,6 +9,8 @@
 
 #include "libANGLE/renderer/null/FramebufferNULL.h"
 
+#include "libANGLE/formatutils.h"
+
 #include "common/debug.h"
 
 namespace rx
@@ -22,110 +24,123 @@ FramebufferNULL::~FramebufferNULL()
 {
 }
 
-gl::Error FramebufferNULL::discard(size_t count, const GLenum *attachments)
+gl::Error FramebufferNULL::discard(const gl::Context *context,
+                                   size_t count,
+                                   const GLenum *attachments)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::invalidate(size_t count, const GLenum *attachments)
+gl::Error FramebufferNULL::invalidate(const gl::Context *context,
+                                      size_t count,
+                                      const GLenum *attachments)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::invalidateSub(size_t count,
+gl::Error FramebufferNULL::invalidateSub(const gl::Context *context,
+                                         size_t count,
                                          const GLenum *attachments,
                                          const gl::Rectangle &area)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::clear(ContextImpl *context, GLbitfield mask)
+gl::Error FramebufferNULL::clear(const gl::Context *context, GLbitfield mask)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::clearBufferfv(ContextImpl *context,
+gl::Error FramebufferNULL::clearBufferfv(const gl::Context *context,
                                          GLenum buffer,
                                          GLint drawbuffer,
                                          const GLfloat *values)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::clearBufferuiv(ContextImpl *context,
+gl::Error FramebufferNULL::clearBufferuiv(const gl::Context *context,
                                           GLenum buffer,
                                           GLint drawbuffer,
                                           const GLuint *values)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::clearBufferiv(ContextImpl *context,
+gl::Error FramebufferNULL::clearBufferiv(const gl::Context *context,
                                          GLenum buffer,
                                          GLint drawbuffer,
                                          const GLint *values)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::clearBufferfi(ContextImpl *context,
+gl::Error FramebufferNULL::clearBufferfi(const gl::Context *context,
                                          GLenum buffer,
                                          GLint drawbuffer,
                                          GLfloat depth,
                                          GLint stencil)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-GLenum FramebufferNULL::getImplementationColorReadFormat() const
+GLenum FramebufferNULL::getImplementationColorReadFormat(const gl::Context *context) const
 {
-    UNIMPLEMENTED();
-    return GLenum();
+    const gl::FramebufferAttachment *readAttachment = mState.getReadAttachment();
+    if (readAttachment == nullptr)
+    {
+        return GL_NONE;
+    }
+
+    const gl::Format &format = readAttachment->getFormat();
+    ASSERT(format.info != nullptr);
+    return format.info->getReadPixelsFormat();
 }
 
-GLenum FramebufferNULL::getImplementationColorReadType() const
+GLenum FramebufferNULL::getImplementationColorReadType(const gl::Context *context) const
 {
-    UNIMPLEMENTED();
-    return GLenum();
+    const gl::FramebufferAttachment *readAttachment = mState.getReadAttachment();
+    if (readAttachment == nullptr)
+    {
+        return GL_NONE;
+    }
+
+    const gl::Format &format = readAttachment->getFormat();
+    ASSERT(format.info != nullptr);
+    return format.info->getReadPixelsType();
 }
 
-gl::Error FramebufferNULL::readPixels(ContextImpl *context,
+gl::Error FramebufferNULL::readPixels(const gl::Context *context,
                                       const gl::Rectangle &area,
                                       GLenum format,
                                       GLenum type,
-                                      GLvoid *pixels) const
+                                      void *pixels) const
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
-gl::Error FramebufferNULL::blit(ContextImpl *context,
+gl::Error FramebufferNULL::blit(const gl::Context *context,
                                 const gl::Rectangle &sourceArea,
                                 const gl::Rectangle &destArea,
                                 GLbitfield mask,
                                 GLenum filter)
 {
-    UNIMPLEMENTED();
-    return gl::Error(GL_INVALID_OPERATION);
+    return gl::NoError();
 }
 
 bool FramebufferNULL::checkStatus() const
 {
-    UNIMPLEMENTED();
-    return bool();
+    return true;
 }
 
-void FramebufferNULL::syncState(const gl::Framebuffer::DirtyBits &dirtyBits)
+void FramebufferNULL::syncState(const gl::Context *context,
+                                const gl::Framebuffer::DirtyBits &dirtyBits)
 {
-    UNIMPLEMENTED();
+}
+
+gl::Error FramebufferNULL::getSamplePosition(size_t index, GLfloat *xy) const
+{
+    return gl::NoError();
 }
 
 }  // namespace rx

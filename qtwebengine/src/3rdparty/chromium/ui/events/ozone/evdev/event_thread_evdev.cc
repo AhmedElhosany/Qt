@@ -9,6 +9,7 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/logging.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
@@ -43,7 +44,8 @@ class EvdevThread : public base::Thread {
         new InputDeviceFactoryEvdevProxy(base::ThreadTaskRunnerHandle::Get(),
                                          input_device_factory_->GetWeakPtr()));
 
-    cursor_->InitializeOnEvdev();
+    if (cursor_)
+      cursor_->InitializeOnEvdev();
 
     init_runner_->PostTask(FROM_HERE,
                            base::Bind(init_callback_, base::Passed(&proxy)));

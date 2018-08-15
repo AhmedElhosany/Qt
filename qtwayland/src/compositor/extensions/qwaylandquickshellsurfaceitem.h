@@ -56,6 +56,7 @@ class Q_WAYLAND_COMPOSITOR_EXPORT QWaylandQuickShellSurfaceItem : public QWaylan
     Q_PROPERTY(QQuickItem *moveItem READ moveItem WRITE setMoveItem NOTIFY moveItemChanged)
 public:
     QWaylandQuickShellSurfaceItem(QQuickItem *parent = nullptr);
+    ~QWaylandQuickShellSurfaceItem();
 
     QWaylandShellSurface *shellSurface() const;
     void setShellSurface(QWaylandShellSurface *shellSurface);

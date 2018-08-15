@@ -8,6 +8,8 @@
 #include "base/macros.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/thread_restrictions.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_response_info.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_file_job.h"
 #include "net/url_request/url_request_filter.h"
@@ -31,7 +33,9 @@ class TestURLRequestJob : public URLRequestFileJob {
                           file_path,
                           worker_task_runner) {}
 
-  int GetResponseCode() const override { return 200; }
+  void GetResponseInfo(HttpResponseInfo* info) override {
+    info->headers = new net::HttpResponseHeaders("HTTP/1.1 200 OK");
+  }
 
  private:
   ~TestURLRequestJob() override {}
@@ -73,7 +77,7 @@ class TestURLRequestInterceptor::Delegate : public URLRequestInterceptor {
   void SetResponse(const GURL& url,
                    const base::FilePath& path,
                    bool ignore_query) {
-    DCHECK(network_task_runner_->RunsTasksOnCurrentThread());
+    DCHECK(network_task_runner_->RunsTasksInCurrentSequence());
     if (ignore_query) {
       ignore_query_responses_[url] = path;
     } else {
@@ -94,7 +98,7 @@ class TestURLRequestInterceptor::Delegate : public URLRequestInterceptor {
   URLRequestJob* MaybeInterceptRequest(
       URLRequest* request,
       NetworkDelegate* network_delegate) const override {
-    DCHECK(network_task_runner_->RunsTasksOnCurrentThread());
+    DCHECK(network_task_runner_->RunsTasksInCurrentSequence());
     if (request->url().scheme() != scheme_ ||
         request->url().host() != hostname_) {
       return NULL;

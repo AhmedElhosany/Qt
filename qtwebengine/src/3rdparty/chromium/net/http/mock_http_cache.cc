@@ -74,7 +74,9 @@ MockDiskEntry::MockDiskEntry(const std::string& key)
       fail_sparse_requests_(false),
       busy_(false),
       delayed_(false),
-      cancel_(false) {
+      cancel_(false),
+      defer_op_(DEFER_NONE),
+      resume_return_code_(0) {
   test_mode_ = GetTestModeForEntry(key);
 }
 
@@ -125,8 +127,23 @@ int MockDiskEntry::ReadData(int index,
   if (MockHttpCache::GetTestMode(test_mode_) & TEST_MODE_SYNC_CACHE_READ)
     return num;
 
+  // Pause and resume.
+  if (defer_op_ == DEFER_READ) {
+    defer_op_ = DEFER_NONE;
+    resume_callback_ = callback;
+    resume_return_code_ = num;
+    return ERR_IO_PENDING;
+  }
+
   CallbackLater(callback, num);
   return ERR_IO_PENDING;
+}
+
+void MockDiskEntry::ResumeDiskEntryOperation() {
+  DCHECK(!resume_callback_.is_null());
+  CallbackLater(resume_callback_, resume_return_code_);
+  resume_callback_.Reset();
+  resume_return_code_ = 0;
 }
 
 int MockDiskEntry::WriteData(int index,
@@ -370,10 +387,15 @@ bool MockDiskEntry::ignore_callbacks_ = false;
 //-----------------------------------------------------------------------------
 
 MockDiskCache::MockDiskCache()
-    : open_count_(0), create_count_(0), fail_requests_(false),
-      soft_failures_(false), double_create_check_(true),
-      fail_sparse_requests_(false) {
-}
+    : open_count_(0),
+      create_count_(0),
+      doomed_count_(0),
+      fail_requests_(false),
+      soft_failures_(false),
+      double_create_check_(true),
+      fail_sparse_requests_(false),
+      defer_op_(MockDiskEntry::DEFER_NONE),
+      resume_return_code_(0) {}
 
 MockDiskCache::~MockDiskCache() {
   ReleaseAll();
@@ -457,6 +479,14 @@ int MockDiskCache::CreateEntry(const std::string& key,
   if (GetTestModeForEntry(key) & TEST_MODE_SYNC_CACHE_START)
     return OK;
 
+  // Pause and resume.
+  if (defer_op_ == MockDiskEntry::DEFER_CREATE) {
+    defer_op_ = MockDiskEntry::DEFER_NONE;
+    resume_callback_ = callback;
+    resume_return_code_ = OK;
+    return ERR_IO_PENDING;
+  }
+
   CallbackLater(callback, OK);
   return ERR_IO_PENDING;
 }
@@ -468,6 +498,7 @@ int MockDiskCache::DoomEntry(const std::string& key,
   if (it != entries_.end()) {
     it->second->Release();
     entries_.erase(it);
+    doomed_count_++;
   }
 
   if (GetTestModeForEntry(key) & TEST_MODE_SYNC_CACHE_START)
@@ -515,10 +546,15 @@ void MockDiskCache::GetStats(base::StringPairs* stats) {
 void MockDiskCache::OnExternalCacheHit(const std::string& key) {
 }
 
+size_t MockDiskCache::DumpMemoryStats(
+    base::trace_event::ProcessMemoryDump* pmd,
+    const std::string& parent_absolute_name) const {
+  return 0u;
+}
+
 void MockDiskCache::ReleaseAll() {
-  EntryMap::iterator it = entries_.begin();
-  for (; it != entries_.end(); ++it)
-    it->second->Release();
+  for (auto entry : entries_)
+    entry.second->Release();
   entries_.clear();
 }
 
@@ -526,6 +562,29 @@ void MockDiskCache::CallbackLater(const CompletionCallback& callback,
                                   int result) {
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::Bind(&CallbackForwader, callback, result));
+}
+
+bool MockDiskCache::IsDiskEntryDoomed(const std::string& key) {
+  auto it = entries_.find(key);
+  if (it != entries_.end())
+    return it->second->is_doomed();
+
+  return false;
+}
+
+void MockDiskCache::ResumeCacheOperation() {
+  DCHECK(!resume_callback_.is_null());
+  CallbackLater(resume_callback_, resume_return_code_);
+  resume_callback_.Reset();
+  resume_return_code_ = 0;
+}
+
+scoped_refptr<MockDiskEntry> MockDiskCache::GetDiskEntryRef(
+    const std::string& key) {
+  auto it = entries_.find(key);
+  if (it == entries_.end())
+    return nullptr;
+  return it->second;
 }
 
 //-----------------------------------------------------------------------------
@@ -540,14 +599,21 @@ int MockBackendFactory::CreateBackend(
 
 //-----------------------------------------------------------------------------
 
-MockHttpCache::MockHttpCache()
-    : MockHttpCache(base::MakeUnique<MockBackendFactory>()) {}
+MockHttpCache::MockHttpCache() : MockHttpCache(false) {}
 
 MockHttpCache::MockHttpCache(
     std::unique_ptr<HttpCache::BackendFactory> disk_cache_factory)
+    : MockHttpCache(std::move(disk_cache_factory), false) {}
+
+MockHttpCache::MockHttpCache(bool is_main_cache)
+    : MockHttpCache(base::MakeUnique<MockBackendFactory>(), is_main_cache) {}
+
+MockHttpCache::MockHttpCache(
+    std::unique_ptr<HttpCache::BackendFactory> disk_cache_factory,
+    bool is_main_cache)
     : http_cache_(base::MakeUnique<MockNetworkLayer>(),
                   std::move(disk_cache_factory),
-                  true) {}
+                  is_main_cache) {}
 
 disk_cache::Backend* MockHttpCache::backend() {
   TestCompletionCallback cb;
@@ -565,8 +631,12 @@ int MockHttpCache::CreateTransaction(std::unique_ptr<HttpTransaction>* trans) {
   return http_cache_.CreateTransaction(DEFAULT_PRIORITY, trans);
 }
 
-void MockHttpCache::BypassCacheLock() {
-  http_cache_.BypassLockForTest();
+void MockHttpCache::SimulateCacheLockTimeout() {
+  http_cache_.SimulateCacheLockTimeoutForTesting();
+}
+
+void MockHttpCache::SimulateCacheLockTimeoutAfterHeaders() {
+  http_cache_.SimulateCacheLockTimeoutAfterHeadersForTesting();
 }
 
 void MockHttpCache::FailConditionalizations() {
@@ -632,6 +702,41 @@ int MockHttpCache::GetTestMode(int test_mode) {
 // Static.
 void MockHttpCache::SetTestMode(int test_mode) {
   g_test_mode = test_mode;
+}
+
+bool MockHttpCache::IsWriterPresent(const std::string& key) {
+  HttpCache::ActiveEntry* entry = http_cache_.FindActiveEntry(key);
+  if (entry)
+    return entry->writer;
+  return false;
+}
+
+bool MockHttpCache::IsHeadersTransactionPresent(const std::string& key) {
+  HttpCache::ActiveEntry* entry = http_cache_.FindActiveEntry(key);
+  if (entry)
+    return entry->headers_transaction;
+  return false;
+}
+
+int MockHttpCache::GetCountReaders(const std::string& key) {
+  HttpCache::ActiveEntry* entry = http_cache_.FindActiveEntry(key);
+  if (entry)
+    return entry->readers.size();
+  return false;
+}
+
+int MockHttpCache::GetCountAddToEntryQueue(const std::string& key) {
+  HttpCache::ActiveEntry* entry = http_cache_.FindActiveEntry(key);
+  if (entry)
+    return entry->add_to_entry_queue.size();
+  return false;
+}
+
+int MockHttpCache::GetCountDoneHeadersQueue(const std::string& key) {
+  HttpCache::ActiveEntry* entry = http_cache_.FindActiveEntry(key);
+  if (entry)
+    return entry->done_headers_queue.size();
+  return false;
 }
 
 //-----------------------------------------------------------------------------

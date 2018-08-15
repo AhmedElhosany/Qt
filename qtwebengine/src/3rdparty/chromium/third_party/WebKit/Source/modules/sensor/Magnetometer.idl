@@ -8,8 +8,11 @@
 [
     RuntimeEnabled=Sensor,
     Constructor(optional SensorOptions sensorOptions),
-    ConstructorCallWith=ScriptState,
+    ConstructorCallWith=ExecutionContext,
     RaisesException=Constructor,
+    MeasureAs=MagnetometerConstructor
 ] interface Magnetometer : Sensor {
-    readonly attribute MagnetometerReading? reading;
+    readonly attribute unrestricted double? x;
+    readonly attribute unrestricted double? y;
+    readonly attribute unrestricted double? z;
 };

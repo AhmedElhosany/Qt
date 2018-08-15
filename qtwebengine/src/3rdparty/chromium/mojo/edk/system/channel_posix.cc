@@ -88,21 +88,22 @@ class ChannelPosix : public Channel,
                      public base::MessageLoopForIO::Watcher {
  public:
   ChannelPosix(Delegate* delegate,
-               ScopedPlatformHandle handle,
+               ConnectionParams connection_params,
                scoped_refptr<base::TaskRunner> io_task_runner)
       : Channel(delegate),
         self_(this),
-        handle_(std::move(handle)),
+        handle_(connection_params.TakeChannelHandle()),
         io_task_runner_(io_task_runner)
 #if defined(OS_MACOSX)
         ,
         handles_to_close_(new PlatformHandleVector)
 #endif
   {
+    CHECK(handle_.is_valid());
   }
 
   void Start() override {
-    if (io_task_runner_->RunsTasksOnCurrentThread()) {
+    if (io_task_runner_->RunsTasksInCurrentSequence()) {
       StartOnIOThread();
     } else {
       io_task_runner_->PostTask(
@@ -132,21 +133,21 @@ class ChannelPosix : public Channel,
     if (write_error) {
       // Do not synchronously invoke OnError(). Write() may have been called by
       // the delegate and we don't want to re-enter it.
-      io_task_runner_->PostTask(FROM_HERE,
-                                base::Bind(&ChannelPosix::OnError, this));
+      io_task_runner_->PostTask(
+          FROM_HERE,
+          base::Bind(&ChannelPosix::OnError, this, Error::kDisconnected));
     }
   }
 
   void LeakHandle() override {
-    DCHECK(io_task_runner_->RunsTasksOnCurrentThread());
+    DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
     leak_handle_ = true;
   }
 
-  bool GetReadPlatformHandles(
-      size_t num_handles,
-      const void* extra_header,
-      size_t extra_header_size,
-      ScopedPlatformHandleVectorPtr* handles) override {
+  bool GetReadPlatformHandles(size_t num_handles,
+                              const void* extra_header,
+                              size_t extra_header_size,
+                              ScopedPlatformHandleVectorPtr* handles) override {
     if (num_handles > std::numeric_limits<uint16_t>::max())
       return false;
 #if defined(OS_MACOSX) && !defined(OS_IOS)
@@ -154,12 +155,15 @@ class ChannelPosix : public Channel,
     // section.
     using MachPortsEntry = Channel::Message::MachPortsEntry;
     using MachPortsExtraHeader = Channel::Message::MachPortsExtraHeader;
-    CHECK(extra_header_size >=
-          sizeof(MachPortsExtraHeader) + num_handles * sizeof(MachPortsEntry));
+    if (extra_header_size <
+        sizeof(MachPortsExtraHeader) + num_handles * sizeof(MachPortsEntry)) {
+      return false;
+    }
     const MachPortsExtraHeader* mach_ports_header =
         reinterpret_cast<const MachPortsExtraHeader*>(extra_header);
     size_t num_mach_ports = mach_ports_header->num_ports;
-    CHECK(num_mach_ports <= num_handles);
+    if (num_mach_ports > num_handles)
+      return false;
     if (incoming_platform_handles_.size() + num_mach_ports < num_handles) {
       handles->reset();
       return true;
@@ -172,13 +176,15 @@ class ChannelPosix : public Channel,
           mach_ports[mach_port_index].index == i) {
         (*handles)->at(i) = PlatformHandle(
             static_cast<mach_port_t>(mach_ports[mach_port_index].mach_port));
-        CHECK((*handles)->at(i).type == PlatformHandle::Type::MACH);
+        if ((*handles)->at(i).type != PlatformHandle::Type::MACH)
+          return false;
         // These are actually just Mach port names until they're resolved from
         // the remote process.
         (*handles)->at(i).type = PlatformHandle::Type::MACH_NAME;
         mach_port_index++;
       } else {
-        CHECK(!incoming_platform_handles_.empty());
+        if (incoming_platform_handles_.empty())
+          return false;
         (*handles)->at(i) = incoming_platform_handles_.front();
         incoming_platform_handles_.pop_front();
       }
@@ -210,14 +216,16 @@ class ChannelPosix : public Channel,
   void StartOnIOThread() {
     DCHECK(!read_watcher_);
     DCHECK(!write_watcher_);
-    read_watcher_.reset(new base::MessageLoopForIO::FileDescriptorWatcher);
+    read_watcher_.reset(
+        new base::MessageLoopForIO::FileDescriptorWatcher(FROM_HERE));
     base::MessageLoop::current()->AddDestructionObserver(this);
     if (handle_.get().needs_connection) {
       base::MessageLoopForIO::current()->WatchFileDescriptor(
           handle_.get().handle, false /* persistent */,
           base::MessageLoopForIO::WATCH_READ, read_watcher_.get(), this);
     } else {
-      write_watcher_.reset(new base::MessageLoopForIO::FileDescriptorWatcher);
+      write_watcher_.reset(
+          new base::MessageLoopForIO::FileDescriptorWatcher(FROM_HERE));
       base::MessageLoopForIO::current()->WatchFileDescriptor(
           handle_.get().handle, true /* persistent */,
           base::MessageLoopForIO::WATCH_READ, read_watcher_.get(), this);
@@ -236,7 +244,7 @@ class ChannelPosix : public Channel,
       return;
     if (!write_watcher_)
       return;
-    if (io_task_runner_->RunsTasksOnCurrentThread()) {
+    if (io_task_runner_->RunsTasksInCurrentSequence()) {
       pending_write_ = true;
       base::MessageLoopForIO::current()->WatchFileDescriptor(
           handle_.get().handle, false /* persistent */,
@@ -265,7 +273,7 @@ class ChannelPosix : public Channel,
 
   // base::MessageLoop::DestructionObserver:
   void WillDestroyCurrentMessageLoop() override {
-    DCHECK(io_task_runner_->RunsTasksOnCurrentThread());
+    DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
     if (self_)
       ShutDownOnIOThread();
   }
@@ -281,7 +289,7 @@ class ChannelPosix : public Channel,
       ScopedPlatformHandle accept_fd;
       ServerAcceptConnection(handle_.get(), &accept_fd);
       if (!accept_fd.is_valid()) {
-        OnError();
+        OnError(Error::kConnectionFailed);
         return;
       }
       handle_ = std::move(accept_fd);
@@ -292,6 +300,7 @@ class ChannelPosix : public Channel,
       return;
     }
 
+    bool validation_error = false;
     bool read_error = false;
     size_t next_read_size = 0;
     size_t buffer_capacity = 0;
@@ -303,16 +312,14 @@ class ChannelPosix : public Channel,
       DCHECK_GT(buffer_capacity, 0u);
 
       ssize_t read_result = PlatformChannelRecvmsg(
-          handle_.get(),
-          buffer,
-          buffer_capacity,
-          &incoming_platform_handles_);
+          handle_.get(), buffer, buffer_capacity, &incoming_platform_handles_);
 
       if (read_result > 0) {
         bytes_read = static_cast<size_t>(read_result);
         total_bytes_read += bytes_read;
         if (!OnReadComplete(bytes_read, &next_read_size)) {
           read_error = true;
+          validation_error = true;
           break;
         }
       } else if (read_result == 0 ||
@@ -321,13 +328,14 @@ class ChannelPosix : public Channel,
         break;
       }
     } while (bytes_read == buffer_capacity &&
-             total_bytes_read < kMaxBatchReadCapacity &&
-             next_read_size > 0);
+             total_bytes_read < kMaxBatchReadCapacity && next_read_size > 0);
     if (read_error) {
       // Stop receiving read notifications.
       read_watcher_.reset();
-
-      OnError();
+      if (validation_error)
+        OnError(Error::kReceivedMalformedData);
+      else
+        OnError(Error::kDisconnected);
     }
   }
 
@@ -340,7 +348,7 @@ class ChannelPosix : public Channel,
         reject_writes_ = write_error = true;
     }
     if (write_error)
-      OnError();
+      OnError(Error::kDisconnected);
   }
 
   // Attempts to write a message directly to the channel. If the full message
@@ -358,10 +366,8 @@ class ChannelPosix : public Channel,
       ssize_t result;
       ScopedPlatformHandleVectorPtr handles = message_view.TakeHandles();
       if (handles && handles->size()) {
-        iovec iov = {
-          const_cast<void*>(message_view.data()),
-          message_view.data_num_bytes()
-        };
+        iovec iov = {const_cast<void*>(message_view.data()),
+                     message_view.data_num_bytes()};
         // TODO: Handle lots of handles.
         result = PlatformChannelSendmsgWithHandles(
             handle_.get(), &iov, 1, handles->data(), handles->size());
@@ -385,7 +391,7 @@ class ChannelPosix : public Channel,
           }
           MessagePtr fds_message(
               new Channel::Message(sizeof(fds[0]) * fds.size(), 0,
-                                   Message::Header::MessageType::HANDLES_SENT));
+                                   Message::MessageType::HANDLES_SENT));
           memcpy(fds_message->mutable_payload(), fds.data(),
                  sizeof(fds[0]) * fds.size());
           outgoing_messages_.emplace_back(std::move(fds_message), 0);
@@ -400,8 +406,27 @@ class ChannelPosix : public Channel,
       }
 
       if (result < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK)
+        if (errno != EAGAIN &&
+            errno != EWOULDBLOCK
+#if defined(OS_MACOSX)
+            // On OS X if sendmsg() is trying to send fds between processes and
+            // there isn't enough room in the output buffer to send the fd
+            // structure over atomically then EMSGSIZE is returned.
+            //
+            // EMSGSIZE presents a problem since the system APIs can only call
+            // us when there's room in the socket buffer and not when there is
+            // "enough" room.
+            //
+            // The current behavior is to return to the event loop when EMSGSIZE
+            // is received and hopefull service another FD.  This is however
+            // still technically a busy wait since the event loop will call us
+            // right back until the receiver has read enough data to allow
+            // passing the FD over atomically.
+            && errno != EMSGSIZE
+#endif
+            ) {
           return false;
+        }
         message_view.SetHandles(std::move(handles));
         outgoing_messages_.emplace_front(std::move(message_view));
         WaitForWriteOnIOThreadNoLock();
@@ -442,22 +467,22 @@ class ChannelPosix : public Channel,
   }
 
 #if defined(OS_MACOSX)
-  bool OnControlMessage(Message::Header::MessageType message_type,
+  bool OnControlMessage(Message::MessageType message_type,
                         const void* payload,
                         size_t payload_size,
                         ScopedPlatformHandleVectorPtr handles) override {
     switch (message_type) {
-      case Message::Header::MessageType::HANDLES_SENT: {
+      case Message::MessageType::HANDLES_SENT: {
         if (payload_size == 0)
           break;
         MessagePtr message(new Channel::Message(
-            payload_size, 0, Message::Header::MessageType::HANDLES_SENT_ACK));
+            payload_size, 0, Message::MessageType::HANDLES_SENT_ACK));
         memcpy(message->mutable_payload(), payload, payload_size);
         Write(std::move(message));
         return true;
       }
 
-      case Message::Header::MessageType::HANDLES_SENT_ACK: {
+      case Message::MessageType::HANDLES_SENT_ACK: {
         size_t num_fds = payload_size / sizeof(int);
         if (num_fds == 0 || payload_size % sizeof(int) != 0)
           break;
@@ -541,9 +566,10 @@ class ChannelPosix : public Channel,
 // static
 scoped_refptr<Channel> Channel::Create(
     Delegate* delegate,
-    ScopedPlatformHandle platform_handle,
+    ConnectionParams connection_params,
     scoped_refptr<base::TaskRunner> io_task_runner) {
-  return new ChannelPosix(delegate, std::move(platform_handle), io_task_runner);
+  return new ChannelPosix(delegate, std::move(connection_params),
+                          io_task_runner);
 }
 
 }  // namespace edk

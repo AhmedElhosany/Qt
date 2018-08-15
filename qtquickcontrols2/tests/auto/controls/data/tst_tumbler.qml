@@ -123,7 +123,9 @@ TestCase {
                 return child;
             }
 
-            return findView(child);
+            var grandChild = findView(child);
+            if (grandChild)
+                return grandChild;
         }
 
         return null;
@@ -347,6 +349,7 @@ TestCase {
         verify(firstItem);
         // Test QTBUG-40298.
         actualPos = testCase.mapFromItem(firstItem, 0, 0);
+        tryCompare(tumbler, "moving", false);
         fuzzyCompare(actualPos.x, tumbler.leftPadding, 0.0001);
         fuzzyCompare(actualPos.y, tumbler.topPadding, 0.0001);
 

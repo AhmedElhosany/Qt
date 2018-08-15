@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_CRYPTO_CHANNEL_ID_CHROMIUM_H_
-#define NET_QUIC_CRYPTO_CHANNEL_ID_CHROMIUM_H_
+#ifndef NET_QUIC_CHROMIUM_CRYPTO_CHANNEL_ID_CHROMIUM_H_
+#define NET_QUIC_CHROMIUM_CRYPTO_CHANNEL_ID_CHROMIUM_H_
 
 #include <map>
 #include <memory>
@@ -12,6 +12,7 @@
 #include "base/macros.h"
 #include "net/base/net_export.h"
 #include "net/quic/core/crypto/channel_id.h"
+#include "net/quic/platform/api/quic_string_piece.h"
 
 namespace crypto {
 class ECPrivateKey;
@@ -28,7 +29,7 @@ class NET_EXPORT_PRIVATE ChannelIDKeyChromium : public ChannelIDKey {
   ~ChannelIDKeyChromium() override;
 
   // ChannelIDKey interface
-  bool Sign(base::StringPiece signed_data,
+  bool Sign(QuicStringPiece signed_data,
             std::string* out_signature) const override;
   std::string SerializeKey() const override;
 
@@ -63,4 +64,4 @@ class ChannelIDSourceChromium : public ChannelIDSource {
 
 }  // namespace net
 
-#endif  // NET_QUIC_CRYPTO_CHANNEL_ID_CHROMIUM_H_
+#endif  // NET_QUIC_CHROMIUM_CRYPTO_CHANNEL_ID_CHROMIUM_H_

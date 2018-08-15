@@ -24,8 +24,7 @@ class VulkanBrowserCompositorOutputSurface
  public:
   VulkanBrowserCompositorOutputSurface(
       scoped_refptr<cc::VulkanContextProvider> context,
-      scoped_refptr<ui::CompositorVSyncManager> vsync_manager,
-      cc::SyntheticBeginFrameSource* begin_frame_source);
+      const UpdateVSyncParametersCallback& update_vsync_parameters_callback);
 
   ~VulkanBrowserCompositorOutputSurface() override;
 
@@ -39,6 +38,7 @@ class VulkanBrowserCompositorOutputSurface
   void BindFramebuffer() override;
   bool IsDisplayedAsOverlayPlane() const override;
   unsigned GetOverlayTextureId() const override;
+  gfx::BufferFormat GetOverlayBufferFormat() const override;
   bool SurfaceIsSuspendForRecycle() const override;
   void Reshape(const gfx::Size& size,
                float device_scale_factor,

@@ -26,14 +26,16 @@ static_library("usb") {
     "usb_device.h",
     "usb_device_android.cc",
     "usb_device_android.h",
-    "usb_device_filter.cc",
-    "usb_device_filter.h",
     "usb_device_handle.cc",
     "usb_device_handle.h",
     "usb_device_handle_android.cc",
     "usb_device_handle_android.h",
+    "usb_device_handle_win.cc",
+    "usb_device_handle_win.h",
     "usb_device_linux.cc",
     "usb_device_linux.h",
+    "usb_device_win.cc",
+    "usb_device_win.h",
     "usb_endpoint_android.cc",
     "usb_endpoint_android.h",
     "usb_ids.cc",
@@ -44,6 +46,8 @@ static_library("usb") {
     "usb_service.h",
     "usb_service_android.cc",
     "usb_service_android.h",
+    "usb_service_win.cc",
+    "usb_service_win.h",
     "webusb_descriptors.cc",
     "webusb_descriptors.h",
     generated_ids,
@@ -51,11 +55,16 @@ static_library("usb") {
 
   deps = [
     ":usb_device_ids",
-    "//base",
     "//base/third_party/dynamic_annotations",
     "//components/device_event_log",
     "//device/base",
+    "//device/usb/public/interfaces",
     "//net",
+  ]
+
+  public_deps = [
+    "//base",
+    "//url",
   ]
 
   if (use_udev) {
@@ -85,6 +94,10 @@ static_library("usb") {
     ]
 
     deps += [ "//third_party/libusb" ]
+  }
+
+  if (is_win) {
+    libs = [ "setupapi.lib" ]
   }
 
   if (is_android || is_chromeos || is_linux) {

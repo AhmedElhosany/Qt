@@ -66,7 +66,9 @@ struct EngineBase {
     Heap::ExecutionContext *current = 0;
 
     Value *jsStackTop = 0;
-    quint32 hasException = false;
+    quint8 hasException = false;
+    quint8 writeBarrierActive = false;
+    quint16 unused = 0;
 #if QT_POINTER_SIZE == 8
     quint8 padding[4];
 #endif
@@ -88,7 +90,7 @@ struct EngineBase {
         Class_SimpleArrayData,
         Class_SparseArrayData,
         Class_ExecutionContext,
-        Class_CallContext,
+        Class_SimpleCallContext,
         Class_Object,
         Class_ArrayObject,
         Class_FunctionObject,

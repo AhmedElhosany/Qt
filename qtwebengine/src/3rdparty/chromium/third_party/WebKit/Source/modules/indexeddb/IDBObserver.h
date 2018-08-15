@@ -5,9 +5,9 @@
 #ifndef IDBObserver_h
 #define IDBObserver_h
 
-#include "bindings/core/v8/ScriptState.h"
-#include "bindings/core/v8/ScriptWrappable.h"
 #include "modules/ModulesExport.h"
+#include "platform/bindings/ScriptState.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Handle.h"
 #include "public/platform/WebVector.h"
 #include "public/platform/modules/indexeddb/WebIDBTypes.h"
@@ -19,19 +19,15 @@ class IDBDatabase;
 class IDBObserverCallback;
 class IDBObserverInit;
 class IDBTransaction;
-struct WebIDBObservation;
 
 class MODULES_EXPORT IDBObserver final : public GarbageCollected<IDBObserver>,
                                          public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static IDBObserver* create(IDBObserverCallback*);
+  static IDBObserver* Create(IDBObserverCallback*);
 
-  void removeObserver(int32_t id);
-  void onChange(int32_t id,
-                const WebVector<WebIDBObservation>&,
-                const WebVector<int32_t>& observationIndex);
+  IDBObserverCallback* Callback() { return callback_; }
 
   // Implement the IDBObserver IDL.
   void observe(IDBDatabase*,
@@ -45,8 +41,8 @@ class MODULES_EXPORT IDBObserver final : public GarbageCollected<IDBObserver>,
  private:
   explicit IDBObserver(IDBObserverCallback*);
 
-  Member<IDBObserverCallback> m_callback;
-  HeapHashMap<int32_t, WeakMember<IDBDatabase>> m_observerIds;
+  Member<IDBObserverCallback> callback_;
+  HeapHashMap<int32_t, WeakMember<IDBDatabase>> observer_ids_;
 };
 
 }  // namespace blink

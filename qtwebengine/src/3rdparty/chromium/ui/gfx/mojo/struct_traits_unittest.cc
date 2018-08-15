@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <utility>
+
 #include "base/message_loop/message_loop.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/mojo/buffer_types_struct_traits.h"
 #include "ui/gfx/mojo/traits_test_service.mojom.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/selection_bound.h"
@@ -28,31 +31,32 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
 
  protected:
   mojom::TraitsTestServicePtr GetTraitsTestProxy() {
-    return traits_test_bindings_.CreateInterfacePtrAndBind(this);
+    mojom::TraitsTestServicePtr proxy;
+    traits_test_bindings_.AddBinding(this, mojo::MakeRequest(&proxy));
+    return proxy;
   }
 
  private:
   // TraitsTestService:
   void EchoSelectionBound(const SelectionBound& s,
-                          const EchoSelectionBoundCallback& callback) override {
-    callback.Run(s);
+                          EchoSelectionBoundCallback callback) override {
+    std::move(callback).Run(s);
   }
 
   void EchoTransform(const Transform& t,
-                     const EchoTransformCallback& callback) override {
-    callback.Run(t);
+                     EchoTransformCallback callback) override {
+    std::move(callback).Run(t);
   }
 
-  void EchoAcceleratedWidget(
-      const AcceleratedWidget& t,
-      const EchoAcceleratedWidgetCallback& callback) override {
-    callback.Run(t);
+  void EchoAcceleratedWidget(const AcceleratedWidget& t,
+                             EchoAcceleratedWidgetCallback callback) override {
+    std::move(callback).Run(t);
   }
 
   void EchoGpuMemoryBufferHandle(
       const GpuMemoryBufferHandle& handle,
-      const EchoGpuMemoryBufferHandleCallback& callback) override {
-    callback.Run(handle);
+      EchoGpuMemoryBufferHandleCallback callback) override {
+    std::move(callback).Run(handle);
   }
 
   base::MessageLoop loop_;
@@ -144,10 +148,6 @@ TEST_F(StructTraitsTest, GpuMemoryBufferHandle) {
   const gfx::GpuMemoryBufferId kId(99);
   const uint32_t kOffset = 126;
   const int32_t kStride = 256;
-#if defined(USE_OZONE)
-  const uint64_t kSize = kOffset + kStride;
-  const uint64_t kModifier = 2;
-#endif
   base::SharedMemory shared_memory;
   ASSERT_TRUE(shared_memory.CreateAnonymous(1024));
   ASSERT_TRUE(shared_memory.Map(1024));
@@ -159,11 +159,6 @@ TEST_F(StructTraitsTest, GpuMemoryBufferHandle) {
   handle.offset = kOffset;
   handle.stride = kStride;
 
-#if defined(USE_OZONE)
-  handle.native_pixmap_handle.planes.emplace_back(kOffset, kStride, kSize,
-                                                  kModifier);
-#endif
-
   mojom::TraitsTestServicePtr proxy = GetTraitsTestProxy();
   gfx::GpuMemoryBufferHandle output;
   proxy->EchoGpuMemoryBufferHandle(handle, &output);
@@ -172,16 +167,22 @@ TEST_F(StructTraitsTest, GpuMemoryBufferHandle) {
   EXPECT_EQ(kOffset, output.offset);
   EXPECT_EQ(kStride, output.stride);
 
-#if defined(USE_OZONE)
+  base::SharedMemory output_memory(output.handle, true);
+  EXPECT_TRUE(output_memory.Map(1024));
+
+#if defined(OS_LINUX)
+  const uint64_t kSize = kOffset + kStride;
+  const uint64_t kModifier = 2;
+  handle.type = gfx::NATIVE_PIXMAP;
+  handle.id = kId;
+  handle.native_pixmap_handle.planes.emplace_back(kOffset, kStride, kSize,
+                                                  kModifier);
+  proxy->EchoGpuMemoryBufferHandle(handle, &output);
+  EXPECT_EQ(gfx::NATIVE_PIXMAP, output.type);
+  EXPECT_EQ(kId, output.id);
   ASSERT_EQ(1u, output.native_pixmap_handle.planes.size());
   EXPECT_EQ(kSize, output.native_pixmap_handle.planes.back().size);
   EXPECT_EQ(kModifier, output.native_pixmap_handle.planes.back().modifier);
-#endif
-
-#if !defined(OS_MACOSX) && !defined(OS_IOS)
-  // TODO: Add support for mach_port on mac.
-  base::SharedMemory output_memory(output.handle, true);
-  EXPECT_TRUE(output_memory.Map(1024));
 #endif
 }
 
@@ -190,6 +191,30 @@ TEST_F(StructTraitsTest, NullGpuMemoryBufferHandle) {
   GpuMemoryBufferHandle output;
   proxy->EchoGpuMemoryBufferHandle(GpuMemoryBufferHandle(), &output);
   EXPECT_TRUE(output.is_null());
+}
+
+TEST_F(StructTraitsTest, BufferFormat) {
+  using BufferFormatTraits =
+      mojo::EnumTraits<gfx::mojom::BufferFormat, gfx::BufferFormat>;
+  BufferFormat output;
+  mojom::TraitsTestServicePtr proxy = GetTraitsTestProxy();
+  for (int i = 0; i <= static_cast<int>(BufferFormat::LAST); ++i) {
+    BufferFormat input = static_cast<BufferFormat>(i);
+    BufferFormatTraits::FromMojom(BufferFormatTraits::ToMojom(input), &output);
+    EXPECT_EQ(output, input);
+  }
+}
+
+TEST_F(StructTraitsTest, BufferUsage) {
+  using BufferUsageTraits =
+      mojo::EnumTraits<gfx::mojom::BufferUsage, gfx::BufferUsage>;
+  BufferUsage output;
+  mojom::TraitsTestServicePtr proxy = GetTraitsTestProxy();
+  for (int i = 0; i <= static_cast<int>(BufferUsage::LAST); ++i) {
+    BufferUsage input = static_cast<BufferUsage>(i);
+    BufferUsageTraits::FromMojom(BufferUsageTraits::ToMojom(input), &output);
+    EXPECT_EQ(output, input);
+  }
 }
 
 }  // namespace gfx

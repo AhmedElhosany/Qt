@@ -49,19 +49,9 @@ std::unique_ptr<net::test_server::HttpResponse> GoodTimeResponseHandler(
   return std::unique_ptr<net::test_server::HttpResponse>(response);
 }
 
+FieldTrialTest::FieldTrialTest() {}
+
 FieldTrialTest::~FieldTrialTest() {}
-
-FieldTrialTest* FieldTrialTest::CreateForUnitTest() {
-  FieldTrialTest* test = new FieldTrialTest();
-  test->create_field_trial_list_ = true;
-  return test;
-}
-
-FieldTrialTest* FieldTrialTest::CreateForBrowserTest() {
-  FieldTrialTest* test = new FieldTrialTest();
-  test->create_field_trial_list_ = false;
-  return test;
-}
 
 void FieldTrialTest::SetNetworkQueriesWithVariationsService(
     bool enable,
@@ -105,11 +95,17 @@ void FieldTrialTest::SetNetworkQueriesWithVariationsService(
   // ScopedFeatureList helper class. If this comment was useful to you
   // please send me a postcard.
 
-  if (create_field_trial_list_) {
-    field_trial_list_.reset();  // Averts a CHECK fail in constructor below.
-    field_trial_list_.reset(new base::FieldTrialList(
-        base::MakeUnique<base::MockEntropyProvider>()));
-  }
+  // SetNetworkQueriesWithVariationsService() is usually called during test
+  // fixture setup (to establish a default state) and then again in certain
+  // tests that want to set special params. FieldTrialList is meant to be a
+  // singleton with only one instance existing at once, and the constructor
+  // fails a CHECK if this is violated. To allow these duplicate calls to this
+  // method, any existing FieldTrialList must be destroyed before creating a new
+  // one. (See https://crbug.com/684216#c5 for more discussion.)
+  field_trial_list_.reset();
+  field_trial_list_.reset(
+      new base::FieldTrialList(base::MakeUnique<base::MockEntropyProvider>()));
+
   // refcounted, and reference held by the singleton FieldTrialList.
   base::FieldTrial* trial = base::FieldTrialList::FactoryGetFieldTrial(
       kTrialName, 100, kGroupName, 1971, 1, 1,
@@ -125,7 +121,5 @@ void FieldTrialTest::SetNetworkQueriesWithVariationsService(
   scoped_feature_list_.reset(new base::test::ScopedFeatureList);
   scoped_feature_list_->InitWithFeatureList(std::move(feature_list));
 }
-
-FieldTrialTest::FieldTrialTest() {}
 
 }  // namespace network_time

@@ -238,7 +238,7 @@
         self.inputAccessoryView = [[[WrapperView alloc] initWithView:accessoryView] autorelease];
 
 #ifndef Q_OS_TVOS
-    if (QSysInfo::MacintoshVersion >= QSysInfo::MV_IOS_9_0) {
+    if (__builtin_available(iOS 9, *)) {
         if (platformData.value(kImePlatformDataHideShortcutsBar).toBool()) {
             // According to the docs, leadingBarButtonGroups/trailingBarButtonGroups should be set to nil to hide the shortcuts bar.
             // However, starting with iOS 10, the API has been surrounded with NS_ASSUME_NONNULL, which contradicts this and causes
@@ -879,9 +879,10 @@
 
 - (UITextPosition *)closestPositionToPoint:(CGPoint)point
 {
-    // No API in Qt for determining this. Use sensible default instead:
-    Q_UNUSED(point);
-    return [QUITextPosition positionWithIndex:[self currentImeState:Qt::ImCursorPosition].toInt()];
+    QPointF p = QPointF::fromCGPoint(point);
+    const QTransform mapToLocal = QGuiApplication::inputMethod()->inputItemTransform().inverted();
+    int textPos = QInputMethod::queryFocusObject(Qt::ImCursorPosition, p * mapToLocal).toInt();
+    return [QUITextPosition positionWithIndex:textPos];
 }
 
 - (UITextPosition *)closestPositionToPoint:(CGPoint)point withinRange:(UITextRange *)range

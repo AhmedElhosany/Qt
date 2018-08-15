@@ -6,6 +6,7 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkBlurMask.h"
 #include "SkBlurMaskFilter.h"
 #include "SkReadBuffer.h"
@@ -150,8 +151,6 @@ constexpr raster_proc gRastProcs[] = {
     r0, r1, r2, r3, r4, r5, r6, r7, r8, r9
 };
 
-#include "SkXfermode.h"
-
 static void apply_shader(SkPaint* paint, int index) {
     raster_proc proc = gRastProcs[index];
     if (proc) {
@@ -189,44 +188,12 @@ DEF_SIMPLE_GM(texteffects, canvas, 460, 680) {
             //  paint.setMaskFilter(nullptr);
             //  paint.setColor(SK_ColorBLACK);
 
-            canvas->drawText(str.c_str(), str.size(), x, y, paint);
+            canvas->drawString(str, x, y, paint);
 
             y += paint.getFontSpacing();
         }
 
         canvas->restore();
-}
-
-DEF_SIMPLE_GM(textunderstrike, canvas, 460, 680) {
-    canvas->clear(SK_ColorYELLOW);
-    SkPaint paint;
-    sk_tool_utils::set_portable_typeface(&paint);
-    paint.setTextSize(50);
-    paint.setStrokeWidth(5);
-    paint.setAntiAlias(true);
-
-    auto drawText = [&]() {
-        paint.setStyle(SkPaint::kFill_Style);
-        canvas->drawText("Hello", 5, 100, 50, paint);
-        paint.setStyle(SkPaint::kStroke_Style);
-        canvas->drawText("Hello", 5, 100, 100, paint);
-        canvas->translate(0, 100);
-    };
-
-    drawText();
-    paint.setUnderlineText(true);
-    drawText();
-    paint.setUnderlineText(false);
-    paint.setStrikeThruText(true);
-    drawText();
-    paint.setUnderlineText(true);
-    drawText();
-    paint.setColor(SK_ColorWHITE);
-    paint.setStyle(SkPaint::kStroke_Style);
-    canvas->drawText("Hello", 5, 100, 50, paint);
-    paint.setColor(SK_ColorBLUE);
-    paint.setStyle(SkPaint::kFill_Style);
-    canvas->drawText("Hello", 5, 100, 50, paint);
 }
 
 static SkPath create_underline(const SkTDArray<SkScalar>& intersections,

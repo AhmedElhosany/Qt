@@ -84,3 +84,26 @@ q.exec("execute procedure my_procedure");
 q.next();
 qDebug() << q.value(0); // outputs the first RETURN/OUT value
 //! [26]
+
+
+//! [31]
+QSqlDatabase: QMYSQL driver not loaded
+QSqlDatabase: available drivers: QMYSQL
+//! [31]
+
+
+//! [34]
+column.contains(QRegularExpression("pattern"));
+//! [34]
+
+
+//! [35]
+QSqlDatabase db = QSqlDatabase::addDatabase("QODBC3");
+QString connectString = QStringLiteral(
+    "DRIVER=/path/to/installation/libodbcHDB.so;"
+    "SERVERNODE=hostname:port;"
+    "UID=USER;"
+    "PWD=PASSWORD;"
+    "SCROLLABLERESULT=true");
+db.setDatabaseName(connectString);
+//! [35]

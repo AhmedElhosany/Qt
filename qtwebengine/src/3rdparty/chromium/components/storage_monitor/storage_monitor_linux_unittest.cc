@@ -18,15 +18,17 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task_scheduler/task_scheduler.h"
+#include "base/test/scoped_task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/storage_monitor/mock_removable_storage_observer.h"
 #include "components/storage_monitor/removable_device_constants.h"
 #include "components/storage_monitor/storage_info.h"
 #include "components/storage_monitor/storage_monitor.h"
 #include "components/storage_monitor/test_storage_monitor.h"
-#include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace storage_monitor {
@@ -133,6 +135,13 @@ class TestStorageMonitorLinux : public StorageMonitorLinux {
   void UpdateMtab(
       const MtabWatcherLinux::MountPointDeviceMap& new_mtab) override {
     StorageMonitorLinux::UpdateMtab(new_mtab);
+
+    // The UpdateMtab call performs the actual mounting by posting tasks
+    // to the task scheduler. This also needs to be flushed.
+    base::TaskScheduler::GetInstance()->FlushForTesting();
+
+    // Once the storage monitor picks up the changes to the fake mtab file,
+    // exit the RunLoop that should be blocking the main test thread.
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
   }
@@ -156,8 +165,7 @@ class StorageMonitorLinuxTest : public testing::Test {
     const std::string mount_type;
   };
 
-  StorageMonitorLinuxTest()
-      : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP) {}
+  StorageMonitorLinuxTest() {}
   ~StorageMonitorLinuxTest() override {}
 
  protected:
@@ -181,13 +189,13 @@ class StorageMonitorLinuxTest : public testing::Test {
     monitor_->AddObserver(mock_storage_observer_.get());
 
     monitor_->Init();
-    base::RunLoop().RunUntilIdle();
+    scoped_task_environment_.RunUntilIdle();
   }
 
   void TearDown() override {
-    base::RunLoop().RunUntilIdle();
+    scoped_task_environment_.RunUntilIdle();
     monitor_->RemoveObserver(mock_storage_observer_.get());
-    base::RunLoop().RunUntilIdle();
+    scoped_task_environment_.RunUntilIdle();
 
     // Linux storage monitor must be destroyed on the UI thread, so do it here.
     monitor_.reset();
@@ -197,6 +205,7 @@ class StorageMonitorLinuxTest : public testing::Test {
   // file, and run the message loop.
   void AppendToMtabAndRunLoop(const MtabTestData* data, size_t data_size) {
     WriteToMtab(data, data_size, false  /* do not overwrite */);
+    // Block until the mtab changes are detected by the file watcher.
     base::RunLoop().Run();
   }
 
@@ -204,6 +213,7 @@ class StorageMonitorLinuxTest : public testing::Test {
   // |data_size|, and run the message loop.
   void OverwriteMtabAndRunLoop(const MtabTestData* data, size_t data_size) {
     WriteToMtab(data, data_size, true  /* overwrite */);
+    // Block until the mtab changes are detected by the file watcher.
     base::RunLoop().Run();
   }
 
@@ -300,7 +310,7 @@ class StorageMonitorLinuxTest : public testing::Test {
     ASSERT_EQ(1, endmntent(file));
   }
 
-  content::TestBrowserThreadBundle thread_bundle_;
+  base::test::ScopedTaskEnvironment scoped_task_environment_;
 
   std::unique_ptr<MockRemovableStorageObserver> mock_storage_observer_;
 
@@ -315,8 +325,7 @@ class StorageMonitorLinuxTest : public testing::Test {
 };
 
 // Simple test case where we attach and detach a media device.
-// http://crbug.com/526252 flaky
-TEST_F(StorageMonitorLinuxTest, DISABLED_BasicAttachDetach) {
+TEST_F(StorageMonitorLinuxTest, BasicAttachDetach) {
   base::FilePath test_path = CreateMountPointWithDCIMDir(kMountPointA);
   ASSERT_FALSE(test_path.empty());
   MtabTestData test_data[] = {
@@ -340,8 +349,7 @@ TEST_F(StorageMonitorLinuxTest, DISABLED_BasicAttachDetach) {
 }
 
 // Only removable devices are recognized.
-// http://crbug.com/526252 flaky
-TEST_F(StorageMonitorLinuxTest, DISABLED_Removable) {
+TEST_F(StorageMonitorLinuxTest, Removable) {
   base::FilePath test_path_a = CreateMountPointWithDCIMDir(kMountPointA);
   ASSERT_FALSE(test_path_a.empty());
   MtabTestData test_data1[] = {
@@ -389,8 +397,7 @@ TEST_F(StorageMonitorLinuxTest, DISABLED_Removable) {
 }
 
 // More complicated test case with multiple devices on multiple mount points.
-// http://crbug.com/526252 flaky
-TEST_F(StorageMonitorLinuxTest, DISABLED_SwapMountPoints) {
+TEST_F(StorageMonitorLinuxTest, SwapMountPoints) {
   base::FilePath test_path_a = CreateMountPointWithDCIMDir(kMountPointA);
   base::FilePath test_path_b = CreateMountPointWithDCIMDir(kMountPointB);
   ASSERT_FALSE(test_path_a.empty());
@@ -427,8 +434,7 @@ TEST_F(StorageMonitorLinuxTest, DISABLED_SwapMountPoints) {
 }
 
 // More complicated test case with multiple devices on multiple mount points.
-// http://crbug.com/526252 flaky
-TEST_F(StorageMonitorLinuxTest, DISABLED_MultiDevicesMultiMountPoints) {
+TEST_F(StorageMonitorLinuxTest, MultiDevicesMultiMountPoints) {
   base::FilePath test_path_a = CreateMountPointWithDCIMDir(kMountPointA);
   base::FilePath test_path_b = CreateMountPointWithDCIMDir(kMountPointB);
   ASSERT_FALSE(test_path_a.empty());
@@ -495,9 +501,7 @@ TEST_F(StorageMonitorLinuxTest, DISABLED_MultiDevicesMultiMountPoints) {
   EXPECT_EQ(5, observer().detach_calls());
 }
 
-// http://crbug.com/526252 flaky
-TEST_F(StorageMonitorLinuxTest,
-       DISABLED_MultipleMountPointsWithNonDCIMDevices) {
+TEST_F(StorageMonitorLinuxTest, MultipleMountPointsWithNonDCIMDevices) {
   base::FilePath test_path_a = CreateMountPointWithDCIMDir(kMountPointA);
   base::FilePath test_path_b = CreateMountPointWithDCIMDir(kMountPointB);
   ASSERT_FALSE(test_path_a.empty());
@@ -583,8 +587,7 @@ TEST_F(StorageMonitorLinuxTest,
   EXPECT_EQ(4, observer().detach_calls());
 }
 
-// http://crbug.com/526252 flaky
-TEST_F(StorageMonitorLinuxTest, DISABLED_DeviceLookUp) {
+TEST_F(StorageMonitorLinuxTest, DeviceLookUp) {
   base::FilePath test_path_a = CreateMountPointWithDCIMDir(kMountPointA);
   base::FilePath test_path_b = CreateMountPointWithoutDCIMDir(kMountPointB);
   base::FilePath test_path_c = CreateMountPointWithoutDCIMDir(kMountPointC);
@@ -658,8 +661,7 @@ TEST_F(StorageMonitorLinuxTest, DISABLED_DeviceLookUp) {
   EXPECT_EQ(1, observer().detach_calls());
 }
 
-// http://crbug.com/526252 flaky
-TEST_F(StorageMonitorLinuxTest, DISABLED_DevicePartitionSize) {
+TEST_F(StorageMonitorLinuxTest, DevicePartitionSize) {
   base::FilePath test_path_a = CreateMountPointWithDCIMDir(kMountPointA);
   base::FilePath test_path_b = CreateMountPointWithoutDCIMDir(kMountPointB);
   ASSERT_FALSE(test_path_a.empty());

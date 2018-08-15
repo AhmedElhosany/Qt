@@ -5,31 +5,13 @@
 #ifndef GeometryMapper_h
 #define GeometryMapper_h
 
-#include "platform/geometry/FloatRect.h"
+#include "platform/graphics/paint/FloatClipRect.h"
 #include "platform/graphics/paint/PropertyTreeState.h"
-#include "platform/transforms/TransformationMatrix.h"
-#include "wtf/HashMap.h"
+#include "platform/wtf/HashMap.h"
 
 namespace blink {
 
-struct PrecomputedDataForAncestor {
-  // Maps from a transform node that is a descendant of the ancestor to the
-  // combined transform between the descendant's and the ancestor's coordinate
-  // space.
-  HashMap<const TransformPaintPropertyNode*, TransformationMatrix>
-      toAncestorTransforms;
-
-  // Maps from a descendant clip node to its equivalent "clip visual rect" in
-  // the space of the ancestor. The clip visual rect is defined as the
-  // intersection of all clips between the descendant and the ancestor (*not*
-  // including the ancestor) in the clip tree, individually transformed from
-  // their localTransformSpace into the ancestor's localTransformSpace.
-  HashMap<const ClipPaintPropertyNode*, FloatRect> toAncestorClipRects;
-
-  static std::unique_ptr<PrecomputedDataForAncestor> create() {
-    return makeUnique<PrecomputedDataForAncestor>();
-  }
-};
+class TransformationMatrix;
 
 // GeometryMapper is a helper class for fast computations of transformed and
 // visual rects in different PropertyTreeStates. The design document has a
@@ -39,39 +21,49 @@ struct PrecomputedDataForAncestor {
 // change. If any mutation occurs, a new GeometryMapper object must be allocated
 // corresponding to the new state.
 //
+// ** WARNING** Callers to the methods below may not assume that any const
+// references returned remain const across multiple calls into GeometryMapper.
+// If needed, callers must store local copies of the return values.
+//
 // Design document: http://bit.ly/28P4FDA
 //
 // TODO(chrishtr): take effect tree into account.
 class PLATFORM_EXPORT GeometryMapper {
+  STATIC_ONLY(GeometryMapper);
+
  public:
-  GeometryMapper() {}
-  // The runtime of m calls among localToVisualRectInAncestorSpace,
-  // localToAncestorRect or ancestorToLocalRect with the same |ancestorState|
-  // parameter is guaranteed to be O(n + m), where n is the number of transform
-  // and clip nodes in their respective property trees.
+  // Returns the matrix that is suitable to map geometries on the source plane
+  // to some backing in the destination plane.
+  // Formal definition:
+  //   output = flatten(destination_to_screen)^-1 * flatten(source_to_screen)
+  // There are some cases that flatten(destination_to_screen) being
+  // singular yet we can still define a reasonable projection, for example:
+  // 1. Both nodes inherited a common singular flat ancestor:
+  // 2. Both nodes are co-planar to a common singular ancestor:
+  // Not every cases outlined above are supported!
+  // Read implementation comments for specific restrictions.
+  static const TransformationMatrix& SourceToDestinationProjection(
+      const TransformPaintPropertyNode* source,
+      const TransformPaintPropertyNode* destination);
 
-  // If the clips and transforms of |sourceState| are equal to or descendants of
-  // those of |destinationState|, returns the same value as
-  // localToVisualRectInAncestorSpace. Otherwise, maps the input rect to the
-  // transform state which is the least common ancestor of
-  // |sourceState.transform| and |destinationState.transform|, then multiplies
-  // it by the the inverse transform mapping from the least common ancestor to
-  // |destinationState.transform|.
-  //
-  // Sets |success| to whether that inverse transform is invertible. If it is
-  // not, returns the input rect.
-  FloatRect mapToVisualRectInDestinationSpace(
-      const FloatRect&,
-      const PropertyTreeState& sourceState,
-      const PropertyTreeState& destinationState,
-      bool& success);
-
-  // Same as mapToVisualRectInDestinationSpace() except that *no* clip is
+  // Same as sourceToDestinationVisualRect() except that only transforms are
   // applied.
-  FloatRect mapRectToDestinationSpace(const FloatRect&,
-                                      const PropertyTreeState& sourceState,
-                                      const PropertyTreeState& destinationState,
-                                      bool& success);
+  //
+  // |mappingRect| is both input and output.
+  static void SourceToDestinationRect(
+      const TransformPaintPropertyNode* source_transform_node,
+      const TransformPaintPropertyNode* destination_transform_node,
+      FloatRect& mapping_rect);
+
+  // Returns the "clip visual rect" between |localTransformState| and
+  // |ancestorState|. See above for the definition of "clip visual rect".
+  //
+  // The output FloatClipRect may contain false positives for rounded-ness
+  // if a rounded clip is clipped out, and overly conservative results
+  // in the presences of transforms.
+  static const FloatClipRect& LocalToAncestorClipRect(
+      const PropertyTreeState& local_transform_state,
+      const PropertyTreeState& ancestor_state);
 
   // Maps from a rect in |localTransformSpace| to its visual rect in
   // |ancestorState|. This is computed by multiplying the rect by its combined
@@ -82,92 +74,56 @@ class PLATFORM_EXPORT GeometryMapper {
   //
   // Note that the clip of |ancestorState| is *not* applied.
   //
-  // If any of the paint property tree nodes in |localTransformState| are not
-  // equal to or a descendant of that in |ancestorState|, returns the passed-in
-  // rect and sets |success| to false. Otherwise, sets |success| to true.
-  FloatRect localToVisualRectInAncestorSpace(
-      const FloatRect&,
-      const PropertyTreeState& localTransformState,
-      const PropertyTreeState& ancestorState,
-      bool& success);
-
-  // Maps from a rect in |localTransformSpace| to its transformed rect in
-  // |ancestorSpace|. This is computed by multiplying the rect by the combined
-  // transform between |localTransformState| and |ancestorState|, then
-  // flattening into 2D space.
+  // DCHECK fails if any of the paint property tree nodes in
+  // |localTransformState| are not equal to or a descendant of that in
+  // |ancestorState|.
   //
-  // If any of the paint property tree nodes in |localTransformState| are not
-  // equal to or a descendant of that in |ancestorState|, returns the passed-in
-  // rec and sets |success| to false. Otherwise, sets |success| to true.
-  FloatRect localToAncestorRect(const FloatRect&,
-                                const PropertyTreeState& localTransformState,
-                                const PropertyTreeState& ancestorState,
-                                bool& success);
-
-  // Maps from a rect in |ancestorSpace| to its transformed rect in
-  // |localTransformSpace|. This is computed by multiplying the rect by the
-  // inverse combined transform between |localTransformState| and
-  // |ancestorState|, if the transform is invertible.
+  // |mappingRect| is both input and output.
   //
-  // If any of the paint property tree nodes in |localTransformState| are not
-  // equal to or a descendant of that in |ancestorState|, returns the passed-in
-  // rect and sets |success| to false. Otherwise, sets |success| to true.
-  FloatRect ancestorToLocalRect(const FloatRect&,
-                                const PropertyTreeState& localTransformState,
-                                const PropertyTreeState& ancestorState,
-                                bool& success);
+  // The output FloatClipRect may contain false positives for rounded-ness
+  // if a rounded clip is clipped out, and overly conservative results
+  // in the presences of transforms.
+  //
+  // TODO(chrishtr): we should provide a variant of these methods that
+  // guarantees a tight result, or else signals an error. crbug.com/708741
+  static void LocalToAncestorVisualRect(
+      const PropertyTreeState& local_transform_state,
+      const PropertyTreeState& ancestor_state,
+      FloatClipRect& mapping_rect);
+
+  static void ClearCache();
 
  private:
-  // Used by mapToVisualRectInDestinationSpace() after fast mapping (assuming
-  // destination is an ancestor of source) failed.
-  FloatRect slowMapToVisualRectInDestinationSpace(
-      const FloatRect&,
-      const PropertyTreeState& sourceState,
-      const PropertyTreeState& destinationState,
+  // The internal methods do the same things as their public counterparts, but
+  // take an extra |success| parameter which indicates if the function is
+  // successful on return. See comments of the public functions for failure
+  // conditions.
+
+  static const TransformationMatrix& SourceToDestinationProjectionInternal(
+      const TransformPaintPropertyNode* source,
+      const TransformPaintPropertyNode* destination,
       bool& success);
 
-  // Used by mapRectToDestinationSpace() after fast mapping (assuming
-  // destination is an ancestor of source) failed.
-  FloatRect slowMapRectToDestinationSpace(
-      const FloatRect&,
-      const PropertyTreeState& sourceState,
-      const PropertyTreeState& destinationState,
+  static const FloatClipRect& LocalToAncestorClipRectInternal(
+      const ClipPaintPropertyNode* descendant,
+      const ClipPaintPropertyNode* ancestor_clip,
+      const TransformPaintPropertyNode* ancestor_transform,
       bool& success);
 
-  // Returns the matrix used in |LocalToAncestorRect|. Sets |success| to false
-  // iff |localTransformNode| is not equal to or a descendant of
-  // |ancestorState.transform|.
-  const TransformationMatrix& localToAncestorMatrix(
-      const TransformPaintPropertyNode* localTransformNode,
-      const PropertyTreeState& ancestorState,
+  static void LocalToAncestorVisualRectInternal(
+      const PropertyTreeState& local_transform_state,
+      const PropertyTreeState& ancestor_state,
+      FloatClipRect& mapping_rect,
       bool& success);
 
-  // Returns the "clip visual rect" between |localTransformState| and
-  // |ancestorState|. See above for the definition of "clip visual rect".
-  FloatRect localToAncestorClipRect(
-      const PropertyTreeState& localTransformState,
-      const PropertyTreeState& ancestorState,
+  static void SlowLocalToAncestorVisualRectWithEffects(
+      const PropertyTreeState& local_state,
+      const PropertyTreeState& ancestor_state,
+      FloatClipRect& mapping_rect,
       bool& success);
-
-  // Returns the precomputed data if already set, or adds and memoizes a new
-  // PrecomputedDataForAncestor otherwise.
-  PrecomputedDataForAncestor& getPrecomputedDataForAncestor(
-      const PropertyTreeState&);
-
-  // Returns the least common ancestor in the transform tree.
-  static const TransformPaintPropertyNode* leastCommonAncestor(
-      const TransformPaintPropertyNode*,
-      const TransformPaintPropertyNode*);
 
   friend class GeometryMapperTest;
-
-  HashMap<const TransformPaintPropertyNode*,
-          std::unique_ptr<PrecomputedDataForAncestor>>
-      m_data;
-
-  const TransformationMatrix m_identity;
-
-  DISALLOW_COPY_AND_ASSIGN(GeometryMapper);
+  friend class PaintLayerClipperTest;
 };
 
 }  // namespace blink

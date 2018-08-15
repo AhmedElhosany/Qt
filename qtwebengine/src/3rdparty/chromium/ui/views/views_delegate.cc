@@ -5,8 +5,8 @@
 #include "ui/views/views_delegate.h"
 
 #include "base/command_line.h"
+#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
-#include "ui/views/layout/layout_constants.h"
 #include "ui/views/views_touch_selection_controller_factory.h"
 #include "ui/views/widget/native_widget_private.h"
 
@@ -19,6 +19,20 @@ namespace {
 
 ViewsDelegate* views_delegate = nullptr;
 
+}
+
+ViewsDelegate::ViewsDelegate()
+    : editing_controller_factory_(new ViewsTouchEditingControllerFactory) {
+  DCHECK(!views_delegate);
+  views_delegate = this;
+
+  ui::TouchEditingControllerFactory::SetInstance(
+      editing_controller_factory_.get());
+
+#if defined(USE_AURA)
+  touch_selection_menu_runner_ =
+      base::MakeUnique<TouchSelectionMenuRunnerViews>();
+#endif
 }
 
 ViewsDelegate::~ViewsDelegate() {
@@ -106,6 +120,10 @@ ui::ContextFactory* ViewsDelegate::GetContextFactory() {
   return nullptr;
 }
 
+ui::ContextFactoryPrivate* ViewsDelegate::GetContextFactoryPrivate() {
+  return nullptr;
+}
+
 std::string ViewsDelegate::GetApplicationName() {
   base::FilePath program = base::CommandLine::ForCurrentProcess()->GetProgram();
   return program.BaseName().AsUTF8Unsafe();
@@ -120,27 +138,6 @@ int ViewsDelegate::GetAppbarAutohideEdges(HMONITOR monitor,
 
 scoped_refptr<base::TaskRunner> ViewsDelegate::GetBlockingPoolTaskRunner() {
   return nullptr;
-}
-
-gfx::Insets ViewsDelegate::GetDialogButtonInsets() {
-  return gfx::Insets(0, kButtonHEdgeMarginNew, kButtonVEdgeMarginNew,
-                     kButtonHEdgeMarginNew);
-}
-
-int ViewsDelegate::GetDialogRelatedButtonHorizontalSpacing() {
-  return kRelatedButtonHSpacing;
-}
-
-ViewsDelegate::ViewsDelegate()
-    : views_tsc_factory_(new ViewsTouchEditingControllerFactory) {
-  DCHECK(!views_delegate);
-  views_delegate = this;
-
-  ui::TouchEditingControllerFactory::SetInstance(views_tsc_factory_.get());
-
-#if defined(USE_AURA)
-  touch_selection_menu_runner_.reset(new TouchSelectionMenuRunnerViews());
-#endif
 }
 
 }  // namespace views

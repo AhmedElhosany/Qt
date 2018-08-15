@@ -19,15 +19,14 @@ class BroadcastChannelProvider
   public blink::mojom::BroadcastChannelProvider {
  public:
   BroadcastChannelProvider();
-  void Connect(
-      mojo::InterfaceRequest<blink::mojom::BroadcastChannelProvider> request);
+  void Connect(blink::mojom::BroadcastChannelProviderRequest request);
 
   void ConnectToChannel(
       const url::Origin& origin,
-      const mojo::String& name,
+      const std::string& name,
       blink::mojom::BroadcastChannelClientAssociatedPtrInfo client,
       blink::mojom::BroadcastChannelClientAssociatedRequest connection)
-          override;
+      override;
 
  private:
   friend class base::RefCountedThreadSafe<BroadcastChannelProvider>;
@@ -36,7 +35,8 @@ class BroadcastChannelProvider
   ~BroadcastChannelProvider() override;
 
   void UnregisterConnection(Connection*);
-  void ReceivedMessageOnConnection(Connection*, mojo::Array<uint8_t> message);
+  void ReceivedMessageOnConnection(Connection*,
+                                   const std::vector<uint8_t>& message);
 
   mojo::BindingSet<blink::mojom::BroadcastChannelProvider> bindings_;
   std::map<url::Origin, std::multimap<std::string, std::unique_ptr<Connection>>>

@@ -24,6 +24,9 @@ ui::AXEvent AXEventFromBlink(blink::WebAXEvent event);
 // in AXNodeData instead.)
 uint32_t AXStateFromBlink(const blink::WebAXObject& o);
 
+ui::AXDefaultActionVerb AXDefaultActionVerbFromBlink(
+    blink::WebAXDefaultActionVerb action_verb);
+
 ui::AXMarkerType AXMarkerTypeFromBlink(blink::WebAXMarkerType marker_type);
 
 ui::AXTextDirection AXTextDirectionFromBlink(
@@ -36,6 +39,9 @@ ui::AXAriaCurrentState AXAriaCurrentStateFromBlink(
 
 ui::AXInvalidState AXInvalidStateFromBlink(
     blink::WebAXInvalidState invalid_state);
+
+ui::AXCheckedState AXCheckedStateFromBlink(
+    blink::WebAXCheckedState checked_state);
 
 ui::AXSortDirection AXSortDirectionFromBlink(
     blink::WebAXSortDirection sort_direction);

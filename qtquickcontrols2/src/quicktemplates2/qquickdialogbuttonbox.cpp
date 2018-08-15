@@ -38,6 +38,7 @@
 #include "qquickdialogbuttonbox_p_p.h"
 #include "qquickabstractbutton_p.h"
 #include "qquickbutton_p.h"
+#include "qquickdialog_p_p.h"
 
 #include <QtCore/qpointer.h>
 #include <QtGui/private/qguiapplication_p.h>
@@ -122,6 +123,36 @@ QT_BEGIN_NAMESPACE
 */
 
 /*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlsignal QtQuick.Controls::DialogButtonBox::applied()
+
+    This signal is emitted when a button defined with the \c ApplyRole is
+    clicked.
+
+    \sa discarded(), reset()
+*/
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlsignal QtQuick.Controls::DialogButtonBox::reset()
+
+    This signal is emitted when a button defined with the \c ResetRole is
+    clicked.
+
+    \sa discarded(), applied()
+*/
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlsignal QtQuick.Controls::DialogButtonBox::discarded()
+
+    This signal is emitted when a button defined with the \c DiscardRole is
+    clicked.
+
+    \sa reset(), applied()
+*/
+
+/*!
     \qmlsignal QtQuick.Controls::DialogButtonBox::helpRequested()
 
     This signal is emitted when a button defined with the \c HelpRole is clicked.
@@ -136,12 +167,6 @@ QT_BEGIN_NAMESPACE
 
     \sa accepted(), rejected(), helpRequested()
 */
-
-static QPlatformDialogHelper::ButtonRole buttonRole(QQuickAbstractButton *button)
-{
-    const QQuickDialogButtonBoxAttached *attached = qobject_cast<QQuickDialogButtonBoxAttached *>(qmlAttachedPropertiesObject<QQuickDialogButtonBox>(button, false));
-    return attached ? attached->buttonRole() : QPlatformDialogHelper::InvalidRole;
-}
 
 QQuickDialogButtonBoxPrivate::QQuickDialogButtonBoxPrivate()
     : alignment(0),
@@ -235,8 +260,8 @@ void QQuickDialogButtonBoxPrivate::updateLayout()
     struct ButtonLayout {
         bool operator()(QQuickAbstractButton *first, QQuickAbstractButton *second)
         {
-            const QPlatformDialogHelper::ButtonRole firstRole = buttonRole(first);
-            const QPlatformDialogHelper::ButtonRole secondRole = buttonRole(second);
+            const QPlatformDialogHelper::ButtonRole firstRole = QQuickDialogPrivate::buttonRole(first);
+            const QPlatformDialogHelper::ButtonRole secondRole = QQuickDialogPrivate::buttonRole(second);
 
             if (firstRole != secondRole && firstRole != QPlatformDialogHelper::InvalidRole && secondRole != QPlatformDialogHelper::InvalidRole) {
                 const int *l = m_layout;
@@ -280,7 +305,7 @@ void QQuickDialogButtonBoxPrivate::handleClick()
     // or change its role. Now changing the role is not possible yet, but arguably
     // both clicked and accepted/rejected/etc. should be emitted "atomically"
     // depending on whatever role the button had at the time of the click.
-    const QPlatformDialogHelper::ButtonRole role = buttonRole(button);
+    const QPlatformDialogHelper::ButtonRole role = QQuickDialogPrivate::buttonRole(button);
     QPointer<QQuickDialogButtonBox> guard(q);
 
     emit q->clicked(button);
@@ -296,6 +321,15 @@ void QQuickDialogButtonBoxPrivate::handleClick()
     case QPlatformDialogHelper::RejectRole:
     case QPlatformDialogHelper::NoRole:
         emit q->rejected();
+        break;
+    case QPlatformDialogHelper::ApplyRole:
+        emit q->applied();
+        break;
+    case QPlatformDialogHelper::ResetRole:
+        emit q->reset();
+        break;
+    case QPlatformDialogHelper::DestructiveRole:
+        emit q->discarded();
         break;
     case QPlatformDialogHelper::HelpRole:
         emit q->helpRequested();

@@ -63,6 +63,23 @@ private:
     QScopedPointer<QJNIEnvironmentPrivate> d;
 };
 
+class Q_ANDROIDEXTRAS_EXPORT QAndroidJniExceptionCleaner
+{
+public:
+    enum class OutputMode {
+        Silent,
+        Verbose
+    };
+
+public:
+    explicit QAndroidJniExceptionCleaner(OutputMode outputMode = OutputMode::Silent);
+    ~QAndroidJniExceptionCleaner();
+
+    void clean();
+private:
+    OutputMode m_outputMode;
+};
+
 QT_END_NAMESPACE
 
 #endif // QANDROIDJNIENVIRONMENT_H

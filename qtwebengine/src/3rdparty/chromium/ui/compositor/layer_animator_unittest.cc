@@ -10,6 +10,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -44,12 +45,12 @@ std::string ColorToString(SkColor color) {
 // Creates vector with two LayerAnimationSequences, based on |first| and
 // |second| layer animation elements.
 std::vector<LayerAnimationSequence*> CreateMultiSequence(
-    LayerAnimationElement* first,
-    LayerAnimationElement* second) {
+    std::unique_ptr<LayerAnimationElement> first,
+    std::unique_ptr<LayerAnimationElement> second) {
   LayerAnimationSequence* first_sequence = new LayerAnimationSequence();
-  first_sequence->AddElement(first);
+  first_sequence->AddElement(std::move(first));
   LayerAnimationSequence* second_sequence = new LayerAnimationSequence();
-  second_sequence->AddElement(second);
+  second_sequence->AddElement(std::move(second));
 
   std::vector<ui::LayerAnimationSequence*> animations;
   animations.push_back(first_sequence);
@@ -242,9 +243,9 @@ class TestLayerAnimator : public LayerAnimator {
 // created and destroyed.
 class TestLayerAnimationSequence : public LayerAnimationSequence {
  public:
-  TestLayerAnimationSequence(LayerAnimationElement* element,
+  TestLayerAnimationSequence(std::unique_ptr<LayerAnimationElement> element,
                              int* num_live_instances)
-      : LayerAnimationSequence(element),
+      : LayerAnimationSequence(std::move(element)),
         num_live_instances_(num_live_instances) {
     (*num_live_instances_)++;
   }
@@ -2106,8 +2107,9 @@ TEST(LayerAnimatorTest, SettingPropertyDuringAnAnimation) {
 
   delegate.SetOpacityFromAnimation(start_opacity);
 
-  std::unique_ptr<LayerAnimationSequence> sequence(new LayerAnimationSequence(
-      LayerAnimationElement::CreateOpacityElement(target_opacity, delta)));
+  std::unique_ptr<LayerAnimationSequence> sequence =
+      base::MakeUnique<LayerAnimationSequence>(
+          LayerAnimationElement::CreateOpacityElement(target_opacity, delta));
 
   animator->StartAnimation(sequence.release());
 
@@ -2140,10 +2142,10 @@ TEST(LayerAnimatorTest, ImmediatelySettingNewTargetDoesNotLeak) {
 
   int num_live_instances = 0;
   base::TimeDelta delta = base::TimeDelta::FromSeconds(1);
-  std::unique_ptr<TestLayerAnimationSequence> sequence(
-      new TestLayerAnimationSequence(
+  std::unique_ptr<TestLayerAnimationSequence> sequence =
+      base::MakeUnique<TestLayerAnimationSequence>(
           LayerAnimationElement::CreateBoundsElement(target_bounds, delta),
-          &num_live_instances));
+          &num_live_instances);
 
   EXPECT_EQ(1, num_live_instances);
 
@@ -2247,6 +2249,39 @@ TEST(LayerAnimatorTest, Color) {
   EXPECT_FALSE(animator->is_animating());
   EXPECT_EQ(ColorToString(target_color),
             ColorToString(delegate.GetColorForAnimation()));
+}
+
+// Verifies temperature property is modified appropriately.
+TEST(LayerAnimatorTest, Temperature) {
+  TestLayerAnimationDelegate delegate;
+  scoped_refptr<LayerAnimator> animator(CreateDefaultTestAnimator(&delegate));
+
+  float start_temperature = 0.0f;
+  float middle_temperature = 0.5f;
+  float target_temperature = 1.0f;
+
+  base::TimeDelta delta = base::TimeDelta::FromSeconds(1);
+
+  delegate.SetTemperatureFromAnimation(start_temperature);
+
+  animator->ScheduleAnimation(new LayerAnimationSequence(
+      LayerAnimationElement::CreateTemperatureElement(target_temperature,
+                                                      delta)));
+
+  EXPECT_TRUE(animator->is_animating());
+  EXPECT_EQ(start_temperature, delegate.GetTemperatureFromAnimation());
+
+  base::TimeTicks start_time = animator->last_step_time();
+
+  animator->Step(start_time + base::TimeDelta::FromMilliseconds(500));
+
+  EXPECT_TRUE(animator->is_animating());
+  EXPECT_EQ(middle_temperature, delegate.GetTemperatureFromAnimation());
+
+  animator->Step(start_time + base::TimeDelta::FromMilliseconds(1000));
+
+  EXPECT_FALSE(animator->is_animating());
+  EXPECT_EQ(target_temperature, delegate.GetTemperatureFromAnimation());
 }
 
 // Verifies SchedulePauseForProperties().
@@ -2607,13 +2642,15 @@ TEST(LayerAnimatorTest, AnimatorRemovedFromCollectionWhenLayerIsDestroyed) {
 
 TEST(LayerAnimatorTest, LayerMovedBetweenCompositorsDuringAnimation) {
   bool enable_pixel_output = false;
-  ui::ContextFactory* context_factory =
-      InitializeContextFactoryForTests(enable_pixel_output);
+  ui::ContextFactory* context_factory = nullptr;
+  ui::ContextFactoryPrivate* context_factory_private = nullptr;
+  InitializeContextFactoryForTests(enable_pixel_output, &context_factory,
+                                   &context_factory_private);
   const gfx::Rect bounds(10, 10, 100, 100);
-  std::unique_ptr<TestCompositorHost> host_1(
-      TestCompositorHost::Create(bounds, context_factory));
-  std::unique_ptr<TestCompositorHost> host_2(
-      TestCompositorHost::Create(bounds, context_factory));
+  std::unique_ptr<TestCompositorHost> host_1(TestCompositorHost::Create(
+      bounds, context_factory, context_factory_private));
+  std::unique_ptr<TestCompositorHost> host_2(TestCompositorHost::Create(
+      bounds, context_factory, context_factory_private));
   host_1->Show();
   host_2->Show();
 
@@ -2632,7 +2669,7 @@ TEST(LayerAnimatorTest, LayerMovedBetweenCompositorsDuringAnimation) {
   Layer layer;
   root_1.Add(&layer);
   LayerAnimator* animator = layer.GetAnimator();
-  EXPECT_FALSE(layer.cc_layer_for_testing()->HasActiveAnimationForTesting());
+  EXPECT_FALSE(layer.cc_layer_for_testing()->HasTickingAnimationForTesting());
 
   double target_opacity = 1.0;
   base::TimeDelta time_delta = base::TimeDelta::FromSeconds(1);
@@ -2641,12 +2678,12 @@ TEST(LayerAnimatorTest, LayerMovedBetweenCompositorsDuringAnimation) {
       LayerAnimationElement::CreateOpacityElement(target_opacity, time_delta)));
   EXPECT_TRUE(compositor_1->layer_animator_collection()->HasActiveAnimators());
   EXPECT_FALSE(compositor_2->layer_animator_collection()->HasActiveAnimators());
-  EXPECT_TRUE(layer.cc_layer_for_testing()->HasActiveAnimationForTesting());
+  EXPECT_TRUE(layer.cc_layer_for_testing()->HasTickingAnimationForTesting());
 
   root_2.Add(&layer);
   EXPECT_FALSE(compositor_1->layer_animator_collection()->HasActiveAnimators());
   EXPECT_TRUE(compositor_2->layer_animator_collection()->HasActiveAnimators());
-  EXPECT_TRUE(layer.cc_layer_for_testing()->HasActiveAnimationForTesting());
+  EXPECT_TRUE(layer.cc_layer_for_testing()->HasTickingAnimationForTesting());
 
   host_2.reset();
   host_1.reset();
@@ -2655,11 +2692,13 @@ TEST(LayerAnimatorTest, LayerMovedBetweenCompositorsDuringAnimation) {
 
 TEST(LayerAnimatorTest, ThreadedAnimationSurvivesIfLayerRemovedAdded) {
   bool enable_pixel_output = false;
-  ui::ContextFactory* context_factory =
-      InitializeContextFactoryForTests(enable_pixel_output);
+  ui::ContextFactory* context_factory = nullptr;
+  ui::ContextFactoryPrivate* context_factory_private = nullptr;
+  InitializeContextFactoryForTests(enable_pixel_output, &context_factory,
+                                   &context_factory_private);
   const gfx::Rect bounds(10, 10, 100, 100);
-  std::unique_ptr<TestCompositorHost> host(
-      TestCompositorHost::Create(bounds, context_factory));
+  std::unique_ptr<TestCompositorHost> host(TestCompositorHost::Create(
+      bounds, context_factory, context_factory_private));
   host->Show();
 
   Compositor* compositor = host->GetCompositor();
@@ -2676,13 +2715,13 @@ TEST(LayerAnimatorTest, ThreadedAnimationSurvivesIfLayerRemovedAdded) {
 
   animator->ScheduleAnimation(new LayerAnimationSequence(
       LayerAnimationElement::CreateOpacityElement(target_opacity, time_delta)));
-  EXPECT_TRUE(layer.cc_layer_for_testing()->HasActiveAnimationForTesting());
+  EXPECT_TRUE(layer.cc_layer_for_testing()->HasTickingAnimationForTesting());
 
   root.Remove(&layer);
-  EXPECT_FALSE(layer.cc_layer_for_testing()->HasActiveAnimationForTesting());
+  EXPECT_FALSE(layer.cc_layer_for_testing()->HasTickingAnimationForTesting());
 
   root.Add(&layer);
-  EXPECT_TRUE(layer.cc_layer_for_testing()->HasActiveAnimationForTesting());
+  EXPECT_TRUE(layer.cc_layer_for_testing()->HasTickingAnimationForTesting());
 
   host.reset();
   TerminateContextFactoryForTests();

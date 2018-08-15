@@ -430,7 +430,7 @@ base::NativeLibrary GSSAPISharedLibrary::LoadSharedLibrary() {
   } else {
     static const char* const kDefaultLibraryNames[] = {
 #if defined(OS_MACOSX)
-      "/System/Library/Frameworks/Kerberos.framework/Kerberos"
+      "/System/Library/Frameworks/GSS.framework/GSS"
 #elif defined(OS_OPENBSD)
       "libgssapi.so"          // Heimdal - OpenBSD
 #else
@@ -818,7 +818,7 @@ int MapInitSecContextStatusToError(OM_uint32 major_status) {
   return ERR_UNDOCUMENTED_SECURITY_LIBRARY_STATUS;
 }
 
-}
+}  // anonymous namespace
 
 int HttpAuthGSSAPI::GetNextSecurityToken(const std::string& spn,
                                          const std::string& channel_bindings,

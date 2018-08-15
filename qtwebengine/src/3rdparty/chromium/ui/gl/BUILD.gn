@@ -9,12 +9,7 @@ import("//build/config/ui.gni")
 import("//ui/ozone/ozone.gni")
 import("//testing/test.gni")
 
-declare_args() {
-  enable_swiftshader = is_chrome_branded && is_win
-}
-
-use_egl = is_win || is_android || is_linux
-use_glx = use_x11 || ozone_platform_x11
+import("//ui/gl/ui_gl.gni")
 
 if (is_android) {
   import("//build/config/android/config.gni")
@@ -53,6 +48,8 @@ component("gl") {
     "android/surface_texture_listener.h",
     "ca_renderer_layer_params.cc",
     "ca_renderer_layer_params.h",
+    "dc_renderer_layer_params.cc",
+    "dc_renderer_layer_params.h",
     "gl_bindings.cc",
     "gl_bindings.h",
     "gl_bindings_autogen_gl.cc",
@@ -65,8 +62,6 @@ component("gl") {
     "gl_context_osmesa.h",
     "gl_context_stub.cc",
     "gl_context_stub.h",
-    "gl_context_stub_with_extensions.cc",
-    "gl_context_stub_with_extensions.h",
     "gl_enums.cc",
     "gl_enums.h",
     "gl_enums_implementation_autogen.h",
@@ -106,6 +101,8 @@ component("gl") {
     "gl_stub_autogen_gl.h",
     "gl_surface.cc",
     "gl_surface.h",
+    "gl_surface_format.cc",
+    "gl_surface_format.h",
     "gl_surface_osmesa.cc",
     "gl_surface_osmesa.h",
     "gl_surface_overlay.cc",
@@ -114,14 +111,15 @@ component("gl") {
     "gl_surface_stub.h",
     "gl_switches.cc",
     "gl_switches.h",
+    "gl_utils.cc",
+    "gl_utils.h",
     "gl_version_info.cc",
     "gl_version_info.h",
+    "gl_workarounds.h",
     "gpu_switching_manager.cc",
     "gpu_switching_manager.h",
     "gpu_timing.cc",
     "gpu_timing.h",
-    "scoped_api.cc",
-    "scoped_api.h",
     "scoped_binders.cc",
     "scoped_binders.h",
     "scoped_make_current.cc",
@@ -152,8 +150,14 @@ component("gl") {
     "//ui/gfx/geometry",
   ]
 
+  data_deps = []
+  if (enable_swiftshader) {
+    data_deps += [ "//third_party/swiftshader" ]
+  }
   if (use_egl) {
     sources += [
+      "angle_platform_impl.cc",
+      "angle_platform_impl.h",
       "egl_util.cc",
       "egl_util.h",
       "gl_bindings_autogen_egl.cc",
@@ -169,6 +173,13 @@ component("gl") {
       "gl_surface_egl.cc",
       "gl_surface_egl.h",
     ]
+
+    if (is_linux) {
+      sources += [
+        "gl_image_native_pixmap.cc",
+        "gl_image_native_pixmap.h",
+      ]
+    }
   }
   if (is_android || is_linux) {
     sources += [
@@ -188,7 +199,7 @@ component("gl") {
 
     deps += [ "//ui/base/x" ]
 
-    data_deps = [
+    data_deps += [
       "//third_party/angle:libEGL",
       "//third_party/angle:libGLESv2",
     ]
@@ -219,12 +230,14 @@ component("gl") {
   }
   if (is_win) {
     sources += [
-      "angle_platform_impl.cc",
-      "angle_platform_impl.h",
+      "gl_angle_util_win.cc",
+      "gl_angle_util_win.h",
       "gl_bindings_autogen_wgl.cc",
       "gl_bindings_autogen_wgl.h",
       "gl_context_wgl.cc",
       "gl_context_wgl.h",
+      "gl_image_dxgi.cc",
+      "gl_image_dxgi.h",
       "gl_surface_osmesa_win.cc",
       "gl_surface_osmesa_win.h",
       "gl_surface_wgl.cc",
@@ -238,11 +251,13 @@ component("gl") {
     libs = [ "dwmapi.lib" ]
     ldflags = [ "/DELAYLOAD:dwmapi.dll" ]
 
-    data_deps = [
+    data_deps += [
       "//third_party/angle:libEGL",
       "//third_party/angle:libGLESv2",
       "//third_party/mesa:osmesa",
     ]
+
+    deps += [ "//third_party/angle:includes" ]
   }
   if (is_mac) {
     sources += [
@@ -293,7 +308,7 @@ component("gl") {
         "//third_party/mesa:osmesa",
       ]
     }
-    if (is_linux) {
+    if (is_linux || is_win) {
       sources -= [
         "gl_surface_egl.cc",
         "gl_surface_egl.h",
@@ -350,7 +365,9 @@ static_library("test_support") {
     "//ui/gl/init",
   ]
   deps = [
+    "//base/test:test_support",
     "//testing/gtest",
+    "//ui/base",
   ]
 
   if (use_x11) {
@@ -388,9 +405,14 @@ test("gl_unittests") {
     "gl_api_unittest.cc",
     "gl_image_ref_counted_memory_unittest.cc",
     "gl_image_shared_memory_unittest.cc",
+    "gl_surface_format_unittest.cc",
     "gl_version_info_unittest.cc",
     "gpu_timing_unittest.cc",
   ]
+
+  if (use_egl && !use_ozone) {
+    sources += [ "gl_surface_egl_unittest.cc" ]
+  }
 
   if (use_egl) {
     sources += [
@@ -423,12 +445,23 @@ test("gl_unittests") {
     "//testing/gmock",
     "//testing/gtest",
     "//ui/gfx",
+    "//ui/gfx:test_support",
     "//ui/gfx/geometry",
     "//ui/gl/init",
+    "//ui/platform_window",
+    "//ui/platform_window:platform_impls",
   ]
 
   data_deps = [
     "//third_party/mesa:osmesa",
+  ]
+}
+
+# We can't run this test on real Chrome OS hardware for Ozone, so new target.
+group("gl_unittests_ozone") {
+  testonly = true
+  data_deps = [
+    ":gl_unittests",
   ]
 }
 

@@ -1236,7 +1236,7 @@ void QApplication::setStyle(QStyle *style)
     Requests a QStyle object for \a style from the QStyleFactory.
 
     The string must be one of the QStyleFactory::keys(), typically one of
-    "windows", "fusion", "windowsxp", or "macintosh". Style
+    "windows", "windowsvista", "fusion", or "macintosh". Style
     names are case insensitive.
 
     Returns 0 if an unknown \a style is passed, otherwise the QStyle object
@@ -1479,8 +1479,8 @@ void QApplicationPrivate::setPalette_helper(const QPalette &palette, const char*
     "selection-background-color" and "alternate-background-color".
 
     \note Some styles do not use the palette for all drawing, for instance, if
-    they make use of native theme engines. This is the case for the Windows XP,
-    Windows Vista, and \macos styles.
+    they make use of native theme engines. This is the case for the
+    Windows Vista and \macos styles.
 
     \sa QWidget::setPalette(), palette(), QStyle::polish()
 */
@@ -2228,8 +2228,15 @@ QWidget *QApplicationPrivate::focusNextPrevChild_helper(QWidget *toplevel, bool 
         if (test->isWindow())
             seenWindow = true;
 
+        // If the next focus widget has a focus proxy, we need to check to ensure
+        // that the proxy is in the correct parent-child direction (according to
+        // \a next). This is to ensure that we can tab in and out of compound widgets
+        // without getting stuck in a tab-loop between parent and child.
+        QWidget *focusProxy = test->d_func()->deepestFocusProxy();
+
         if ((test->focusPolicy() & focus_flag) == focus_flag
-            && !(test->d_func()->extra && test->d_func()->extra->focus_proxy)
+            && !(next && focusProxy && focusProxy->isAncestorOf(test))
+            && !(!next && focusProxy && test->isAncestorOf(focusProxy))
             && test->isVisibleTo(toplevel) && test->isEnabled()
             && !(w->windowType() == Qt::SubWindow && !w->isAncestorOf(test))
             && (toplevel->windowType() != Qt::SubWindow || toplevel->isAncestorOf(test))) {
@@ -2735,7 +2742,7 @@ bool QApplicationPrivate::sendMouseEvent(QWidget *receiver, QMouseEvent *event,
     case enter/leave events are genereated by the underlying windowing system.
 */
 extern QPointer<QWidget> qt_last_mouse_receiver;
-extern QWidget *qt_button_down;
+extern Q_WIDGETS_EXPORT QWidget *qt_button_down;
 void QApplicationPrivate::sendSyntheticEnterLeave(QWidget *widget)
 {
 #ifndef QT_NO_CURSOR
@@ -2861,7 +2868,7 @@ void QApplication::setStartDragDistance(int l)
     and the current position (e.g. in the mouse move event) is \c currentPos,
     you can find out if a drag should be started with code like this:
 
-    \snippet code/src_gui_kernel_qapplication.cpp 6
+    \snippet code/src_gui_kernel_qapplication.cpp 7
 
     Qt uses this value internally, e.g. in QFileDialog.
 
@@ -2964,6 +2971,9 @@ bool QApplication::notify(QObject *receiver, QEvent *e)
         // required in order to support Qt Test synthesized events. Real mouse
         // and keyboard state updates from the platform plugin are managed by
         // QGuiApplicationPrivate::process(Mouse|Wheel|Key|Touch|Tablet)Event();
+        // ### FIXME: Qt Test should not call qapp->notify(), but rather route
+        // the events through the proper QPA interface. This is required to
+        // properly generate all other events such as enter/leave etc.
         switch (e->type()) {
         case QEvent::MouseButtonPress:
             {
@@ -3760,7 +3770,6 @@ static void grabForPopup(QWidget *popup)
     }
 }
 
-extern QWidget *qt_button_down;
 extern QWidget *qt_popup_down;
 extern bool qt_replay_popup_mouse_event;
 

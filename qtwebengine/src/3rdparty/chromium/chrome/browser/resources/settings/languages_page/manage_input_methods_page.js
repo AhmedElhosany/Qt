@@ -32,7 +32,9 @@ Polymer({
      */
     languageList_: {
       type: Array,
-      value: function() { return []; },
+      value: function() {
+        return [];
+      },
     },
   },
 
@@ -144,8 +146,8 @@ Polymer({
         language: displayLanguage,
         inputMethods: combinedInputMethods,
       });
-      for (var languageCode of languageFamilyCodes)
-        usedLanguages.add(languageCode);
+      for (var k = 0; k < languageFamilyCodes.length; k++)
+        usedLanguages.add(languageFamilyCodes[k]);
     }
 
     this.languageList_ = languageList;
@@ -163,9 +165,9 @@ Polymer({
     var /** !Set<string> */ usedInputMethods = new Set();
     /** @type {!Array<chrome.languageSettingsPrivate.InputMethod>} */
     var combinedInputMethods = [];
-    for (var languageCode of languageCodes) {
-      var inputMethods = this.languageHelper.getInputMethodsForLanguage(
-          languageCode);
+    for (var i = 0; i < languageCodes.length; i++) {
+      var inputMethods =
+          this.languageHelper.getInputMethodsForLanguage(languageCodes[i]);
       // Get the language's unused input methods and mark them as used.
       var newInputMethods = inputMethods.filter(function(inputMethod) {
         if (usedInputMethods.has(inputMethod.id))

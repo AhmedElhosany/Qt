@@ -296,7 +296,7 @@ bool NetworkDelegateQt::OnCanGetCookies(const net::URLRequest&, const net::Cooki
     return true;
 }
 
-bool NetworkDelegateQt::OnCanAccessFile(const net::URLRequest& request, const base::FilePath& path) const
+bool NetworkDelegateQt::OnCanAccessFile(const net::URLRequest&, const base::FilePath&, const base::FilePath&) const
 {
     return true;
 }
@@ -311,12 +311,27 @@ bool NetworkDelegateQt::OnAreExperimentalCookieFeaturesEnabled() const
     return false;
 }
 
-bool NetworkDelegateQt::OnAreStrictSecureCookiesEnabled() const
+bool NetworkDelegateQt::OnCancelURLRequestWithPolicyViolatingReferrerHeader(const net::URLRequest&, const GURL&, const GURL&) const
 {
     return false;
 }
 
-bool NetworkDelegateQt::OnCancelURLRequestWithPolicyViolatingReferrerHeader(const net::URLRequest&, const GURL&, const GURL&) const
+bool NetworkDelegateQt::OnCanQueueReportingReport(const url::Origin& origin) const
+{
+    return false;
+}
+
+bool NetworkDelegateQt::OnCanSendReportingReport(const url::Origin& origin) const
+{
+    return false;
+}
+
+bool NetworkDelegateQt::OnCanSetReportingClient(const url::Origin& origin, const GURL& endpoint) const
+{
+    return false;
+}
+
+bool NetworkDelegateQt::OnCanUseReportingClient(const url::Origin& origin, const GURL& endpoint) const
 {
     return false;
 }

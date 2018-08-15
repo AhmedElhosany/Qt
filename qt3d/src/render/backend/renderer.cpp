@@ -64,10 +64,12 @@
 #include <Qt3DRender/private/renderqueue_p.h>
 #include <Qt3DRender/private/shader_p.h>
 #include <Qt3DRender/private/buffer_p.h>
+#include <Qt3DRender/private/glbuffer_p.h>
 #include <Qt3DRender/private/renderstateset_p.h>
 #include <Qt3DRender/private/technique_p.h>
 #include <Qt3DRender/private/renderthread_p.h>
 #include <Qt3DRender/private/renderview_p.h>
+#include <Qt3DRender/private/scenemanager_p.h>
 #include <Qt3DRender/private/techniquefilternode_p.h>
 #include <Qt3DRender/private/viewportnode_p.h>
 #include <Qt3DRender/private/vsyncframeadvanceservice_p.h>
@@ -89,12 +91,11 @@
 #include <Qt3DRender/private/renderviewbuilder_p.h>
 
 #include <Qt3DRender/qcameralens.h>
-#include <Qt3DCore/qt3dcore-config.h>
 #include <Qt3DCore/private/qeventfilterservice_p.h>
 #include <Qt3DCore/private/qabstractaspectjobmanager_p.h>
 #include <Qt3DCore/private/qnodecreatedchangegenerator_p.h>
 
-#if defined(QT3D_JOBS_RUN_STATS)
+#if QT_CONFIG(qt3d_profile_jobs)
 #include <Qt3DCore/private/aspectcommanddebugger_p.h>
 #endif
 
@@ -115,7 +116,7 @@
 #include <QThread>
 
 
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
 #include <Qt3DCore/private/qthreadpooler_p.h>
 #include <Qt3DRender/private/job_common_p.h>
 #include <Qt3DRender/private/commandexecuter_p.h>
@@ -161,7 +162,6 @@ Renderer::Renderer(QRenderAspect::RenderType type)
     , m_waitForInitializationToBeCompleted(0)
     , m_pickEventFilter(new PickEventFilter())
     , m_exposed(0)
-    , m_changeSet(0)
     , m_lastFrameCorrect(0)
     , m_glContext(nullptr)
     , m_shareContext(nullptr)
@@ -177,6 +177,7 @@ Renderer::Renderer(QRenderAspect::RenderType type)
     , m_updateTreeEnabledJob(Render::UpdateTreeEnabledJobPtr::create())
     , m_sendRenderCaptureJob(Render::SendRenderCaptureJobPtr::create(this))
     , m_sendBufferCaptureJob(Render::SendBufferCaptureJobPtr::create())
+    , m_updateSkinningPaletteJob(Render::UpdateSkinningPaletteJobPtr::create())
     , m_updateLevelOfDetailJob(Render::UpdateLevelOfDetailJobPtr::create())
     , m_updateMeshTriangleListJob(Render::UpdateMeshTriangleListJobPtr::create())
     , m_filterCompatibleTechniqueJob(Render::FilterCompatibleTechniqueJobPtr::create())
@@ -187,7 +188,7 @@ Renderer::Renderer(QRenderAspect::RenderType type)
     , m_syncTextureLoadingJob(Render::GenericLambdaJobPtr<std::function<void ()>>::create([] {}, JobTypes::SyncTextureLoading))
     , m_ownedContext(false)
     , m_offscreenHelper(nullptr)
-    #ifdef QT3D_JOBS_RUN_STATS
+    #if QT_CONFIG(qt3d_profile_jobs)
     , m_commandExecuter(new Qt3DRender::Debug::CommandExecuter(this))
     #endif
 {
@@ -210,9 +211,14 @@ Renderer::Renderer(QRenderAspect::RenderType type)
     // m_syncTextureLoadingJob will depend on the texture loading jobs
     m_textureGathererJob->addDependency(m_syncTextureLoadingJob);
 
+    // Ensures all skeletons are loaded before we try to update them
+    m_updateSkinningPaletteJob->addDependency(m_syncTextureLoadingJob);
+
     // All world stuff depends on the RenderEntity's localBoundingVolume
     m_updateLevelOfDetailJob->addDependency(m_updateMeshTriangleListJob);
     m_pickBoundingVolumeJob->addDependency(m_updateMeshTriangleListJob);
+
+    m_shaderGathererJob->addDependency(m_filterCompatibleTechniqueJob);
 
     m_filterCompatibleTechniqueJob->setRenderer(this);
 
@@ -276,8 +282,16 @@ void Renderer::setNodeManagers(NodeManagers *managers)
     m_sendRenderCaptureJob->setManagers(m_nodesManager);
     m_sendBufferCaptureJob->setManagers(m_nodesManager);
     m_updateLevelOfDetailJob->setManagers(m_nodesManager);
+    m_updateSkinningPaletteJob->setManagers(m_nodesManager);
     m_updateMeshTriangleListJob->setManagers(m_nodesManager);
     m_filterCompatibleTechniqueJob->setManager(m_nodesManager->techniqueManager());
+}
+
+void Renderer::setServices(QServiceLocator *services)
+{
+    m_services = services;
+
+    m_nodesManager->sceneManager()->setDownloadService(m_services->downloadHelperService());
 }
 
 NodeManagers *Renderer::nodeManagers() const
@@ -505,7 +519,11 @@ void Renderer::setSceneRoot(QBackendNodeFactory *factory, Entity *sgRoot)
     m_cleanupJob->setRoot(m_renderSceneRoot);
     m_pickBoundingVolumeJob->setRoot(m_renderSceneRoot);
     m_updateLevelOfDetailJob->setRoot(m_renderSceneRoot);
+    m_updateSkinningPaletteJob->setRoot(m_renderSceneRoot);
     m_updateTreeEnabledJob->setRoot(m_renderSceneRoot);
+
+    // Set all flags to dirty
+    m_dirtyBits.marked |= AbstractRenderer::AllDirty;
 }
 
 void Renderer::registerEventFilter(QEventFilterService *service)
@@ -556,7 +574,7 @@ void Renderer::doRender(bool scene3dBlocking)
     const bool canSubmit = isReadyToSubmit();
 
     // Lock the mutex to protect access to the renderQueue while we look for its state
-    QMutexLocker locker(&m_renderQueueMutex);
+    QMutexLocker locker(m_renderQueue->mutex());
     bool queueIsComplete = m_renderQueue->isFrameQueueComplete();
     const bool queueIsEmpty = m_renderQueue->targetRenderViewCount() == 0;
 
@@ -584,7 +602,7 @@ void Renderer::doRender(bool scene3dBlocking)
     if (canSubmit && (queueIsComplete && !queueIsEmpty)) {
         const QVector<Render::RenderView *> renderViews = m_renderQueue->nextFrameQueue();
 
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
         // Save start of frame
         JobRunStats submissionStatsPart1;
         JobRunStats submissionStatsPart2;
@@ -596,10 +614,8 @@ void Renderer::doRender(bool scene3dBlocking)
         submissionStatsPart2.jobId.typeAndInstance[1] = 0;
         submissionStatsPart2.threadId = reinterpret_cast<quint64>(QThread::currentThreadId());
 #endif
-        if (canRender()) {
-            const BackendNodeDirtySet changesToUnset = m_changeSet;
-            clearDirtyBits(changesToUnset);
 
+        if (canRender()) {
             { // Scoped to destroy surfaceLock
                 QSurface *surface = nullptr;
                 for (const Render::RenderView *rv: renderViews) {
@@ -630,7 +646,7 @@ void Renderer::doRender(bool scene3dBlocking)
             m_vsyncFrameAdvanceService->proceedToNextFrame();
             hasCleanedQueueAndProceeded = true;
 
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
             if (preprocessingComplete) {
                 submissionStatsPart2.startTime = QThreadPooler::m_jobsStatTimer.nsecsElapsed();
                 submissionStatsPart1.endTime = submissionStatsPart2.startTime;
@@ -648,7 +664,7 @@ void Renderer::doRender(bool scene3dBlocking)
             }
         }
 
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
         // Execute the pending shell commands
         m_commandExecuter->performAsynchronousCommandExecution(renderViews);
 #endif
@@ -657,7 +673,7 @@ void Renderer::doRender(bool scene3dBlocking)
         // that were used for their allocation
         qDeleteAll(renderViews);
 
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
         if (preprocessingComplete) {
             // Save submission elapsed time
             submissionStatsPart2.endTime = QThreadPooler::m_jobsStatTimer.nsecsElapsed();
@@ -711,7 +727,7 @@ void Renderer::doRender(bool scene3dBlocking)
 // we allow the render thread to proceed
 void Renderer::enqueueRenderView(Render::RenderView *renderView, int submitOrder)
 {
-    QMutexLocker locker(&m_renderQueueMutex); // Prevent out of order execution
+    QMutexLocker locker(m_renderQueue->mutex()); // Prevent out of order execution
     // We cannot use a lock free primitive here because:
     // - QVector is not thread safe
     // - Even if the insert is made correctly, the isFrameComplete call
@@ -729,8 +745,7 @@ void Renderer::enqueueRenderView(Render::RenderView *renderView, int submitOrder
 
 bool Renderer::canRender() const
 {
-    // Make sure that we've not been told to terminate whilst waiting on
-    // the above wait condition
+    // Make sure that we've not been told to terminate
     if (m_renderThread && !m_running.load()) {
         qCDebug(Rendering) << "RenderThread termination requested whilst waiting";
         return false;
@@ -766,7 +781,7 @@ bool Renderer::isReadyToSubmit()
 // Main thread
 QVariant Renderer::executeCommand(const QStringList &args)
 {
-#ifdef QT3D_JOBS_RUN_STATS
+#if QT_CONFIG(qt3d_profile_jobs)
     return m_commandExecuter->executeCommand(args);
 #else
     Q_UNUSED(args);
@@ -895,7 +910,7 @@ void Renderer::prepareCommandsSubmission(const QVector<RenderView *> &renderView
                     // Update the draw command with all the information required for the drawing
                     if (command->m_drawIndexed) {
                         command->m_indexAttributeDataType = GraphicsContext::glDataTypeFromAttributeDataType(indexAttribute->vertexBaseType());
-                        command->m_indexAttributeByteOffset = indexAttribute->byteOffset();
+                        command->m_indexAttributeByteOffset = indexAttribute->byteOffset() + rGeometryRenderer->indexBufferByteOffset();
                     }
 
                     // Note: we only care about the primitiveCount when using direct draw calls
@@ -955,7 +970,7 @@ void Renderer::prepareCommandsSubmission(const QVector<RenderView *> &renderView
 void Renderer::lookForAbandonedVaos()
 {
     const QVector<HVao> activeVaos = m_nodesManager->vaoManager()->activeHandles();
-    for (HVao handle : activeVaos) {
+    for (const HVao &handle : activeVaos) {
         OpenGLVertexArrayObject *vao = m_nodesManager->vaoManager()->data(handle);
 
         // Make sure to only mark VAOs for deletion that were already created
@@ -972,7 +987,7 @@ void Renderer::lookForAbandonedVaos()
 void Renderer::lookForDirtyBuffers()
 {
     const QVector<HBuffer> activeBufferHandles = m_nodesManager->bufferManager()->activeHandles();
-    for (HBuffer handle: activeBufferHandles) {
+    for (const HBuffer &handle: activeBufferHandles) {
         Buffer *buffer = m_nodesManager->bufferManager()->data(handle);
         if (buffer->isDirty())
             m_dirtyBuffers.push_back(handle);
@@ -983,7 +998,7 @@ void Renderer::lookForDownloadableBuffers()
 {
     m_downloadableBuffers.clear();
     const QVector<HBuffer> activeBufferHandles = m_nodesManager->bufferManager()->activeHandles();
-    for (HBuffer handle : activeBufferHandles) {
+    for (const HBuffer &handle : activeBufferHandles) {
         Buffer *buffer = m_nodesManager->bufferManager()->data(handle);
         if (buffer->access() & QBuffer::Read)
             m_downloadableBuffers.push_back(handle);
@@ -994,7 +1009,7 @@ void Renderer::lookForDownloadableBuffers()
 void Renderer::lookForDirtyTextures()
 {
     const QVector<HTexture> activeTextureHandles = m_nodesManager->textureManager()->activeHandles();
-    for (HTexture handle: activeTextureHandles) {
+    for (const HTexture &handle: activeTextureHandles) {
         Texture *texture = m_nodesManager->textureManager()->data(handle);
         // Dirty meaning that something has changed on the texture
         // either properties, parameters, generator or a texture image
@@ -1006,22 +1021,71 @@ void Renderer::lookForDirtyTextures()
 // Executed in a job
 void Renderer::lookForDirtyShaders()
 {
-    if (isRunning()) {
-        const QVector<HTechnique> activeTechniques = m_nodesManager->techniqueManager()->activeHandles();
-        for (HTechnique techniqueHandle : activeTechniques) {
-            Technique *technique = m_nodesManager->techniqueManager()->data(techniqueHandle);
-            // If api of the renderer matches the one from the technique
-            if (technique->isCompatibleWithRenderer()) {
-                const auto passIds = technique->renderPasses();
-                for (const QNodeId passId : passIds) {
-                    RenderPass *renderPass = m_nodesManager->renderPassManager()->lookupResource(passId);
-                    HShader shaderHandle = m_nodesManager->shaderManager()->lookupHandle(renderPass->shaderProgram());
-                    Shader *shader = m_nodesManager->shaderManager()->data(shaderHandle);
-                    if (Q_UNLIKELY(shader->hasPendingNotifications()))
-                        shader->submitPendingNotifications();
-                    if (shader != nullptr && !shader->isLoaded())
-                        m_dirtyShaders.push_back(shaderHandle);
+    Q_ASSERT(isRunning());
+    const QVector<HTechnique> activeTechniques = m_nodesManager->techniqueManager()->activeHandles();
+    const QVector<HShaderBuilder> activeBuilders = m_nodesManager->shaderBuilderManager()->activeHandles();
+    for (const HTechnique &techniqueHandle : activeTechniques) {
+        Technique *technique = m_nodesManager->techniqueManager()->data(techniqueHandle);
+        // If api of the renderer matches the one from the technique
+        if (technique->isCompatibleWithRenderer()) {
+            const auto passIds = technique->renderPasses();
+            for (const QNodeId passId : passIds) {
+                RenderPass *renderPass = m_nodesManager->renderPassManager()->lookupResource(passId);
+                HShader shaderHandle = m_nodesManager->shaderManager()->lookupHandle(renderPass->shaderProgram());
+                Shader *shader = m_nodesManager->shaderManager()->data(shaderHandle);
+
+                ShaderBuilder *shaderBuilder = nullptr;
+                for (const HShaderBuilder &builderHandle : activeBuilders) {
+                    ShaderBuilder *builder = m_nodesManager->shaderBuilderManager()->data(builderHandle);
+                    if (builder->shaderProgramId() == shader->peerId()) {
+                        shaderBuilder = builder;
+                        break;
+                    }
                 }
+
+                if (shaderBuilder) {
+                    shaderBuilder->setGraphicsApi(*technique->graphicsApiFilter());
+
+                    for (int i = 0; i <= ShaderBuilder::Compute; i++) {
+                        const auto builderType = static_cast<ShaderBuilder::ShaderType>(i);
+                        if (!shaderBuilder->shaderGraph(builderType).isValid())
+                            continue;
+
+                        if (shaderBuilder->isShaderCodeDirty(builderType)) {
+                            shaderBuilder->generateCode(builderType);
+                        }
+
+                        QShaderProgram::ShaderType shaderType = QShaderProgram::Vertex;
+                        switch (builderType) {
+                        case ShaderBuilder::Vertex:
+                            shaderType = QShaderProgram::Vertex;
+                            break;
+                        case ShaderBuilder::TessellationControl:
+                            shaderType = QShaderProgram::TessellationControl;
+                            break;
+                        case ShaderBuilder::TessellationEvaluation:
+                            shaderType = QShaderProgram::TessellationEvaluation;
+                            break;
+                        case ShaderBuilder::Geometry:
+                            shaderType = QShaderProgram::Geometry;
+                            break;
+                        case ShaderBuilder::Fragment:
+                            shaderType = QShaderProgram::Fragment;
+                            break;
+                        case ShaderBuilder::Compute:
+                            shaderType = QShaderProgram::Compute;
+                            break;
+                        }
+
+                        const auto code = shaderBuilder->shaderCode(builderType);
+                        shader->setShaderCode(shaderType, code);
+                    }
+                }
+
+                if (Q_UNLIKELY(shader->hasPendingNotifications()))
+                    shader->submitPendingNotifications();
+                if (shader != nullptr && !shader->isLoaded())
+                    m_dirtyShaders.push_back(shaderHandle);
             }
         }
     }
@@ -1033,11 +1097,12 @@ void Renderer::updateGLResources()
     {
         Profiling::GLTimeRecorder recorder(Profiling::BufferUpload);
         const QVector<HBuffer> dirtyBufferHandles = std::move(m_dirtyBuffers);
-        for (HBuffer handle: dirtyBufferHandles) {
+        for (const HBuffer &handle: dirtyBufferHandles) {
             Buffer *buffer = m_nodesManager->bufferManager()->data(handle);
             // Forces creation if it doesn't exit
+            // Also note the binding point doesn't really matter here, we just upload data
             if (!m_graphicsContext->hasGLBufferForBuffer(buffer))
-                m_graphicsContext->glBufferForRenderBuffer(buffer);
+                m_graphicsContext->glBufferForRenderBuffer(buffer, GLBuffer::ArrayBuffer);
             // Update the glBuffer data
             m_graphicsContext->updateBuffer(buffer);
             buffer->unsetDirty();
@@ -1048,7 +1113,7 @@ void Renderer::updateGLResources()
         Profiling::GLTimeRecorder recorder(Profiling::ShaderUpload);
         const QVector<HShader> dirtyShaderHandles = std::move(m_dirtyShaders);
         ShaderManager *shaderManager = m_nodesManager->shaderManager();
-        for (HShader handle: dirtyShaderHandles) {
+        for (const HShader &handle: dirtyShaderHandles) {
             Shader *shader = shaderManager->data(handle);
             // Compile shader
             m_graphicsContext->loadShader(shader, shaderManager);
@@ -1058,7 +1123,7 @@ void Renderer::updateGLResources()
     {
         Profiling::GLTimeRecorder recorder(Profiling::TextureUpload);
         const QVector<HTexture> activeTextureHandles = std::move(m_dirtyTextures);
-        for (HTexture handle: activeTextureHandles) {
+        for (const HTexture &handle: activeTextureHandles) {
             Texture *texture = m_nodesManager->textureManager()->data(handle);
             // Upload/Update texture
             updateTexture(texture);
@@ -1092,7 +1157,7 @@ void Renderer::updateTexture(Texture *texture)
     // TO DO: Update the vector once per frame (or in a job)
     const QVector<HAttachment> activeRenderTargetOutputs = m_nodesManager->attachmentManager()->activeHandles();
     // A texture is unique if it's being reference by a render target output
-    for (const HAttachment attachmentHandle : activeRenderTargetOutputs) {
+    for (const HAttachment &attachmentHandle : activeRenderTargetOutputs) {
         RenderTargetOutput *attachment = m_nodesManager->attachmentManager()->data(attachmentHandle);
         if (attachment->textureUuid() == texture->peerId()) {
             isUnique = true;
@@ -1178,13 +1243,12 @@ void Renderer::downloadGLBuffers()
 {
     lookForDownloadableBuffers();
     const QVector<HBuffer> downloadableHandles = std::move(m_downloadableBuffers);
-    for (HBuffer handle : downloadableHandles) {
+    for (const HBuffer &handle : downloadableHandles) {
         Buffer *buffer = m_nodesManager->bufferManager()->data(handle);
         QByteArray content = m_graphicsContext->downloadBufferContent(buffer);
         m_sendBufferCaptureJob->addRequest(QPair<Buffer*, QByteArray>(buffer, content));
     }
 }
-
 
 // Happens in RenderThread context when all RenderViewJobs are done
 // Returns the id of the last bound FBO
@@ -1315,18 +1379,43 @@ Renderer::ViewSubmissionResultData Renderer::submitRenderViews(const QVector<Ren
         // of gc->currentContext() at the moment it was called (either
         // renderViewStateSet or m_defaultRenderStateSet)
         if (!renderView->renderCaptureNodeId().isNull()) {
+            const QRenderCaptureRequest request = renderView->renderCaptureRequest();
             const QSize size = m_graphicsContext->renderTargetSize(renderView->surfaceSize() * renderView->devicePixelRatio());
-            // Bind fbo as read framebuffer
-            m_graphicsContext->bindFramebuffer(m_graphicsContext->activeFBO(), GraphicsHelperInterface::FBORead);
-            const QImage image = m_graphicsContext->readFramebuffer(size);
+            QRect rect(QPoint(0, 0), size);
+            if (!request.rect.isEmpty())
+                rect = rect.intersected(request.rect);
+            QImage image;
+            if (!rect.isEmpty()) {
+                // Bind fbo as read framebuffer
+                m_graphicsContext->bindFramebuffer(m_graphicsContext->activeFBO(), GraphicsHelperInterface::FBORead);
+                image = m_graphicsContext->readFramebuffer(rect);
+            } else {
+                qWarning() << "Requested capture rectangle is outside framebuffer";
+            }
             Render::RenderCapture *renderCapture =
                     static_cast<Render::RenderCapture*>(m_nodesManager->frameGraphManager()->lookupNode(renderView->renderCaptureNodeId()));
-            renderCapture->addRenderCapture(image);
+            renderCapture->addRenderCapture(request.captureId, image);
             addRenderCaptureSendRequest(renderView->renderCaptureNodeId());
         }
 
         if (renderView->isDownloadBuffersEnable())
             downloadGLBuffers();
+
+        // Perform BlitFramebuffer operations
+        if (renderView->hasBlitFramebufferInfo()) {
+            const auto &blitFramebufferInfo = renderView->blitFrameBufferInfo();
+            const QNodeId inputTargetId = blitFramebufferInfo.sourceRenderTargetId;
+            const QNodeId outputTargetId = blitFramebufferInfo.destinationRenderTargetId;
+            const QRect inputRect = blitFramebufferInfo.sourceRect;
+            const QRect outputRect = blitFramebufferInfo.destinationRect;
+            const QRenderTargetOutput::AttachmentPoint inputAttachmentPoint = blitFramebufferInfo.sourceAttachmentPoint;
+            const QRenderTargetOutput::AttachmentPoint outputAttachmentPoint = blitFramebufferInfo.destinationAttachmentPoint;
+            const QBlitFramebuffer::InterpolationMethod interpolationMethod = blitFramebufferInfo.interpolationMethod;
+            m_graphicsContext->blitFramebuffer(inputTargetId, outputTargetId, inputRect, outputRect, lastBoundFBOId,
+                                               inputAttachmentPoint, outputAttachmentPoint,
+                                               interpolationMethod);
+        }
+
 
         frameElapsed = timer.elapsed() - frameElapsed;
         qCDebug(Rendering) << Q_FUNC_INFO << "Submitted Renderview " << i + 1 << "/" << renderViewsCount  << "in " << frameElapsed << "ms";
@@ -1364,25 +1453,29 @@ Renderer::ViewSubmissionResultData Renderer::submitRenderViews(const QVector<Ren
 void Renderer::markDirty(BackendNodeDirtySet changes, BackendNode *node)
 {
     Q_UNUSED(node);
-    m_changeSet |= changes;
+    m_dirtyBits.marked |= changes;
 }
 
 Renderer::BackendNodeDirtySet Renderer::dirtyBits()
 {
-    return m_changeSet;
+    return m_dirtyBits.marked;
 }
 
+#if defined(QT_BUILD_INTERNAL)
 void Renderer::clearDirtyBits(BackendNodeDirtySet changes)
 {
-    m_changeSet &= ~changes;
+    m_dirtyBits.remaining &= ~changes;
+    m_dirtyBits.marked &= ~changes;
 }
+#endif
 
 bool Renderer::shouldRender()
 {
     // Only render if something changed during the last frame, or the last frame
     // was not rendered successfully (or render-on-demand is disabled)
     return (m_settings->renderPolicy() == QRenderSettings::Always
-            || m_changeSet != 0
+            || m_dirtyBits.marked != 0
+            || m_dirtyBits.remaining != 0
             || !m_lastFrameCorrect.load());
 }
 
@@ -1415,36 +1508,61 @@ QVector<Qt3DCore::QAspectJobPtr> Renderer::renderBinJobs()
         m_calculateBoundingVolumeJob->addDependency(bufferJob);
 
     m_updateLevelOfDetailJob->setFrameGraphRoot(frameGraphRoot());
-    // Set dependencies of resource gatherer
-    for (const QAspectJobPtr &jobPtr : renderBinJobs) {
-        jobPtr->addDependency(m_bufferGathererJob);
-        jobPtr->addDependency(m_textureGathererJob);
-        jobPtr->addDependency(m_shaderGathererJob);
-    }
+
+    const BackendNodeDirtySet dirtyBitsForFrame = m_dirtyBits.marked | m_dirtyBits.remaining;
+    m_dirtyBits.marked = 0;
+    m_dirtyBits.remaining = 0;
+    BackendNodeDirtySet notCleared = 0;
 
     // Add jobs
-    renderBinJobs.push_back(m_updateShaderDataTransformJob);
-    renderBinJobs.push_back(m_updateMeshTriangleListJob);
-    renderBinJobs.push_back(m_updateTreeEnabledJob);
+    const bool entitiesEnabledDirty = dirtyBitsForFrame & AbstractRenderer::EntityEnabledDirty;
+    if (entitiesEnabledDirty) {
+        renderBinJobs.push_back(m_updateTreeEnabledJob);
+        m_calculateBoundingVolumeJob->addDependency(m_updateTreeEnabledJob);
+    }
+
+    if (dirtyBitsForFrame & AbstractRenderer::TransformDirty) {
+        renderBinJobs.push_back(m_worldTransformJob);
+        renderBinJobs.push_back(m_updateWorldBoundingVolumeJob);
+        renderBinJobs.push_back(m_updateShaderDataTransformJob);
+    }
+
+    if (dirtyBitsForFrame & AbstractRenderer::GeometryDirty) {
+        renderBinJobs.push_back(m_calculateBoundingVolumeJob);
+        renderBinJobs.push_back(m_updateMeshTriangleListJob);
+    }
+
+    if (dirtyBitsForFrame & AbstractRenderer::GeometryDirty ||
+        dirtyBitsForFrame & AbstractRenderer::TransformDirty) {
+        renderBinJobs.push_back(m_expandBoundingVolumeJob);
+    }
+
+    m_updateSkinningPaletteJob->setDirtyJoints(m_nodesManager->jointManager()->dirtyJoints());
+    renderBinJobs.push_back(m_updateSkinningPaletteJob);
     renderBinJobs.push_back(m_updateLevelOfDetailJob);
-    renderBinJobs.push_back(m_expandBoundingVolumeJob);
-    renderBinJobs.push_back(m_updateWorldBoundingVolumeJob);
-    renderBinJobs.push_back(m_calculateBoundingVolumeJob);
-    renderBinJobs.push_back(m_worldTransformJob);
     renderBinJobs.push_back(m_cleanupJob);
     renderBinJobs.push_back(m_sendRenderCaptureJob);
     renderBinJobs.push_back(m_sendBufferCaptureJob);
-    renderBinJobs.push_back(m_filterCompatibleTechniqueJob);
     renderBinJobs.append(bufferJobs);
 
     // Jobs to prepare GL Resource upload
-    renderBinJobs.push_back(m_syncTextureLoadingJob);
     renderBinJobs.push_back(m_vaoGathererJob);
-    renderBinJobs.push_back(m_bufferGathererJob);
-    renderBinJobs.push_back(m_textureGathererJob);
-    renderBinJobs.push_back(m_shaderGathererJob);
 
-    QMutexLocker lock(&m_renderQueueMutex);
+    if (dirtyBitsForFrame & AbstractRenderer::BuffersDirty)
+        renderBinJobs.push_back(m_bufferGathererJob);
+
+    if (dirtyBitsForFrame & AbstractRenderer::TexturesDirty) {
+        renderBinJobs.push_back(m_syncTextureLoadingJob);
+        renderBinJobs.push_back(m_textureGathererJob);
+    }
+
+
+    // Layer cache is dependent on layers, layer filters and the enabled flag
+    // on entities
+    const bool layersDirty = dirtyBitsForFrame & AbstractRenderer::LayersDirty;
+    const bool layersCacheNeedsToBeRebuilt = layersDirty || entitiesEnabledDirty;
+
+    QMutexLocker lock(m_renderQueue->mutex());
     if (m_renderQueue->wasReset()) { // Have we rendered yet? (Scene3D case)
         // Traverse the current framegraph. For each leaf node create a
         // RenderView and set its configuration then create a job to
@@ -1455,22 +1573,40 @@ QVector<Qt3DCore::QAspectJobPtr> Renderer::renderBinJobs()
         const QVector<FrameGraphNode *> fgLeaves = visitor.traverse(frameGraphRoot());
 
         // Remove leaf nodes that no longer exist from cache
-        const auto keys = m_cache.leafNodeCache.keys();
-        for (auto *leafNode : keys) {
-            if (!fgLeaves.contains(leafNode)) {
+        const QList<FrameGraphNode *> keys = m_cache.leafNodeCache.keys();
+        for (FrameGraphNode *leafNode : keys) {
+            if (!fgLeaves.contains(leafNode))
                 m_cache.leafNodeCache.remove(leafNode);
-            }
         }
 
         const int fgBranchCount = fgLeaves.size();
         for (int i = 0; i < fgBranchCount; ++i) {
             RenderViewBuilder builder(fgLeaves.at(i), i, this);
+            builder.setLayerCacheNeedsToBeRebuilt(layersCacheNeedsToBeRebuilt);
+            builder.prepareJobs();
             renderBinJobs.append(builder.buildJobHierachy());
         }
 
         // Set target number of RenderViews
         m_renderQueue->setTargetRenderViewCount(fgBranchCount);
+    } else {
+        // FilterLayerEntityJob is part of the RenderViewBuilder jobs and must be run later
+        // if none of those jobs are started this frame
+        notCleared |= AbstractRenderer::EntityEnabledDirty;
+        notCleared |= AbstractRenderer::LayersDirty;
     }
+
+    if (isRunning() && m_graphicsContext->isInitialized()) {
+        if (dirtyBitsForFrame & AbstractRenderer::TechniquesDirty )
+            renderBinJobs.push_back(m_filterCompatibleTechniqueJob);
+        if (dirtyBitsForFrame & AbstractRenderer::ShadersDirty)
+            renderBinJobs.push_back(m_shaderGathererJob);
+    } else {
+        notCleared |= AbstractRenderer::TechniquesDirty;
+        notCleared |= AbstractRenderer::ShadersDirty;
+    }
+
+    m_dirtyBits.remaining = dirtyBitsForFrame & notCleared;
 
     return renderBinJobs;
 }
@@ -1494,6 +1630,11 @@ QAspectJobPtr Renderer::syncTextureLoadingJob()
     return m_syncTextureLoadingJob;
 }
 
+QAspectJobPtr Renderer::expandBoundingVolumeJob()
+{
+    return m_expandBoundingVolumeJob;
+}
+
 QAbstractFrameAdvanceService *Renderer::frameAdvanceService() const
 {
     return static_cast<Qt3DCore::QAbstractFrameAdvanceService *>(m_vsyncFrameAdvanceService.data());
@@ -1513,7 +1654,7 @@ void Renderer::performDraw(RenderCommand *command)
         }
 
         // Get GLBuffer from Buffer;
-        GLBuffer *indirectDrawGLBuffer = m_graphicsContext->glBufferForRenderBuffer(indirectDrawBuffer);
+        GLBuffer *indirectDrawGLBuffer = m_graphicsContext->glBufferForRenderBuffer(indirectDrawBuffer, GLBuffer::DrawIndirectBuffer);
         if (Q_UNLIKELY(indirectDrawGLBuffer == nullptr)) {
             qWarning() << "Invalid Indirect Draw Buffer - failed to retrieve GLBuffer";
             return;
@@ -1591,7 +1732,7 @@ void Renderer::performCompute(const RenderView *, RenderCommand *command)
                 command->m_workGroups[2]);
     }
     // HACK: Reset the compute flag to dirty
-    m_changeSet |= AbstractRenderer::ComputeDirty;
+    m_dirtyBits.marked |= AbstractRenderer::ComputeDirty;
 
 #if defined(QT3D_RENDER_ASPECT_OPENGL_DEBUG)
     int err = m_graphicsContext->openGLContext()->functions()->glGetError();
@@ -1748,16 +1889,16 @@ bool Renderer::updateVAOWithAttributes(Geometry *geometry,
             if ((attributeWasDirty = attribute->isDirty()) == true || forceUpdate) {
                 // Find the location for the attribute
                 const QVector<ShaderAttribute> shaderAttributes = shader->attributes();
-                int attributeLocation = -1;
+                const ShaderAttribute *attributeDescription = nullptr;
                 for (const ShaderAttribute &shaderAttribute : shaderAttributes) {
                     if (shaderAttribute.m_nameId == attribute->nameId()) {
-                        attributeLocation = shaderAttribute.m_location;
+                        attributeDescription = &shaderAttribute;
                         break;
                     }
                 }
-                if (attributeLocation < 0)
+                if (!attributeDescription || attributeDescription->m_location < 0)
                     return false;
-                m_graphicsContext->specifyAttribute(attribute, buffer, attributeLocation);
+                m_graphicsContext->specifyAttribute(attribute, buffer, attributeDescription);
             }
         }
 
@@ -1814,7 +1955,7 @@ void Renderer::cleanGraphicsResources()
     m_abandonedVaosMutex.lock();
     const QVector<HVao> abandonedVaos = std::move(m_abandonedVaos);
     m_abandonedVaosMutex.unlock();
-    for (HVao vaoHandle : abandonedVaos) {
+    for (const HVao &vaoHandle : abandonedVaos) {
         // might have already been destroyed last frame, but added by the cleanup job before, so
         // check if the VAO is really still existent
         OpenGLVertexArrayObject *vao = m_nodesManager->vaoManager()->data(vaoHandle);
@@ -1825,7 +1966,7 @@ void Renderer::cleanGraphicsResources()
     }
 }
 
-QList<QPair<QObject *, QMouseEvent>> Renderer::pendingPickingEvents() const
+QList<QMouseEvent> Renderer::pendingPickingEvents() const
 {
     return m_pickEventFilter->pendingMouseEvents();
 }
@@ -1860,7 +2001,7 @@ const QVector<Qt3DCore::QNodeId> Renderer::takePendingRenderCaptureSendRequests(
 // 1 dirty buffer == 1 job, all job can be performed in parallel
 QVector<Qt3DCore::QAspectJobPtr> Renderer::createRenderBufferJobs() const
 {
-    const QVector<QNodeId> dirtyBuffers = m_nodesManager->bufferManager()->dirtyBuffers();
+    const QVector<QNodeId> dirtyBuffers = m_nodesManager->bufferManager()->takeDirtyBuffers();
     QVector<QAspectJobPtr> dirtyBuffersJobs;
     dirtyBuffersJobs.reserve(dirtyBuffers.size());
 

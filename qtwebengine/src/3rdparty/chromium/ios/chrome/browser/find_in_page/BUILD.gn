@@ -5,11 +5,14 @@
 import("//ios/web/js_compile.gni")
 
 source_set("find_in_page") {
+  configs += [ "//build/config/compiler:enable_arc" ]
   sources = [
     "find_in_page_controller.h",
     "find_in_page_controller.mm",
     "find_in_page_model.h",
     "find_in_page_model.mm",
+    "find_tab_helper.h",
+    "find_tab_helper.mm",
     "js_findinpage_manager.h",
     "js_findinpage_manager.mm",
   ]
@@ -27,5 +30,25 @@ source_set("find_in_page") {
 js_compile_unchecked("injected_js") {
   sources = [
     "resources/find_in_page.js",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  configs += [ "//build/config/compiler:enable_arc" ]
+  sources = [
+    "find_in_page_js_unittest.mm",
+    "find_tab_helper_unittest.mm",
+    "js_findinpage_manager_unittest.mm",
+  ]
+  deps = [
+    ":find_in_page",
+    "//base",
+    "//base/test:test_support",
+    "//ios/chrome/browser/web:test_support",
+    "//ios/web",
+    "//ios/web/public/test",
+    "//ios/web/public/test/fakes",
+    "//testing/gtest",
   ]
 }

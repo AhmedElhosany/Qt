@@ -1,6 +1,6 @@
 /****************************************************************************
 **
-** Copyright (C) 2016 The Qt Company Ltd.
+** Copyright (C) 2017 The Qt Company Ltd.
 ** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the QtQuick module of the Qt Toolkit.
@@ -66,8 +66,10 @@ QT_BEGIN_NAMESPACE
 class QQuickPointerDevice;
 class QQuickPointerEvent;
 class QQuickPointerMouseEvent;
+class QQuickPointerNativeGestureEvent;
 class QQuickPointerTabletEvent;
 class QQuickPointerTouchEvent;
+class QQuickPointerHandler;
 
 class QQuickKeyEvent : public QObject
 {
@@ -251,12 +253,17 @@ private:
 class Q_QUICK_PRIVATE_EXPORT QQuickEventPoint : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QPointF scenePos READ scenePos)
+    Q_PROPERTY(QQuickPointerEvent *event READ pointerEvent)
+    Q_PROPERTY(QPointF position READ position)
+    Q_PROPERTY(QPointF scenePosition READ scenePosition)
+    Q_PROPERTY(QPointF scenePressPosition READ scenePressPosition)
+    Q_PROPERTY(QPointF sceneGrabPosition READ sceneGrabPosition)
     Q_PROPERTY(State state READ state)
-    Q_PROPERTY(quint64 pointId READ pointId)
+    Q_PROPERTY(int pointId READ pointId)
     Q_PROPERTY(qreal timeHeld READ timeHeld)
+    Q_PROPERTY(QVector2D velocity READ velocity)
     Q_PROPERTY(bool accepted READ isAccepted WRITE setAccepted)
-    Q_PROPERTY(QQuickItem *grabber READ grabber WRITE setGrabber)
+    Q_PROPERTY(QObject *exclusiveGrabber READ exclusiveGrabber WRITE setExclusiveGrabber)
 
 public:
     enum State {
@@ -264,37 +271,79 @@ public:
         Updated     = Qt::TouchPointMoved,
         Stationary  = Qt::TouchPointStationary,
         Released    = Qt::TouchPointReleased
-        // Canceled    = Qt::TouchPointReleased << 1 // 0x10 // TODO maybe
     };
-    Q_ENUM(State)
+    Q_DECLARE_FLAGS(States, State)
+    Q_FLAG(States)
+
+    enum GrabState {
+        GrabPassive = 0x01,
+        UngrabPassive = 0x02,
+        CancelGrabPassive = 0x03,
+        OverrideGrabPassive = 0x04,
+        GrabExclusive = 0x10,
+        UngrabExclusive = 0x20,
+        CancelGrabExclusive = 0x30,
+    };
+    Q_ENUM(GrabState)
 
     QQuickEventPoint(QQuickPointerEvent *parent);
 
-    void reset(Qt::TouchPointState state, QPointF scenePos, quint64 pointId, ulong timestamp);
-
-    void invalidate() { m_valid = false; }
+    void reset(Qt::TouchPointState state, const QPointF &scenePosition, int pointId, ulong timestamp, const QVector2D &velocity = QVector2D());
+    void localizePosition(QQuickItem *target);
 
     QQuickPointerEvent *pointerEvent() const;
-    QPointF scenePos() const { return m_scenePos; }
+    QPointF position() const { return m_pos; }
+    QPointF scenePosition() const { return m_scenePos; }
+    QPointF scenePressPosition() const { return m_scenePressPos; }
+    QPointF sceneGrabPosition() const { return m_sceneGrabPos; }
+    QVector2D velocity() const { return m_velocity; }
     State state() const { return m_state; }
-    quint64 pointId() const { return m_pointId; }
-    bool isValid() const { return m_valid; }
+    int pointId() const { return m_pointId; }
     qreal timeHeld() const { return (m_timestamp - m_pressTimestamp) / 1000.0; }
     bool isAccepted() const { return m_accept; }
     void setAccepted(bool accepted = true);
-    QQuickItem *grabber() const;
-    void setGrabber(QQuickItem *grabber);
+    QObject *exclusiveGrabber() const;
+    void setExclusiveGrabber(QObject *exclusiveGrabber);
+
+    QQuickItem *grabberItem() const;
+    void setGrabberItem(QQuickItem *exclusiveGrabber);
+
+    QQuickPointerHandler *grabberPointerHandler() const;
+    void setGrabberPointerHandler(QQuickPointerHandler *exclusiveGrabber, bool exclusive = false);
+
+    void cancelExclusiveGrab();
+    void cancelPassiveGrab(QQuickPointerHandler *handler);
+    bool removePassiveGrabber(QQuickPointerHandler *handler);
+    void cancelAllGrabs(QQuickPointerHandler *handler);
+
+    QVector<QPointer <QQuickPointerHandler> > passiveGrabbers() const { return m_passiveGrabbers; }
+    void setPassiveGrabbers(const QVector<QPointer <QQuickPointerHandler> > &grabbers) { m_passiveGrabbers = grabbers; }
+    void clearPassiveGrabbers() { m_passiveGrabbers.clear(); }
+
+protected:
+    void cancelExclusiveGrabImpl(QTouchEvent *cancelEvent = nullptr);
 
 private:
+    QVector2D estimatedVelocity() const;
+
+protected:
+    QPointF m_pos;
     QPointF m_scenePos;
-    quint64 m_pointId;
-    QPointer<QQuickItem> m_grabber;
+    QPointF m_scenePressPos;
+    QPointF m_sceneGrabPos;
+    QVector2D m_velocity;
+    int m_pointId;
+    QPointer<QObject> m_exclusiveGrabber;
+    QVector<QPointer <QQuickPointerHandler> > m_passiveGrabbers;
     ulong m_timestamp;
     ulong m_pressTimestamp;
     State m_state;
-    bool m_valid : 1;
     bool m_accept : 1;
-    int m_reserved : 30;
+    bool m_grabberIsHandler : 1;
+    int m_reserved : 29;
+
+    friend class QQuickPointerTouchEvent;
+    friend class QQuickWindowPrivate;
 
     Q_DISABLE_COPY(QQuickEventPoint)
 };
@@ -304,6 +353,7 @@ class Q_QUICK_PRIVATE_EXPORT QQuickEventTouchPoint : public QQuickEventPoint
     Q_OBJECT
     Q_PROPERTY(qreal rotation READ rotation)
     Q_PROPERTY(qreal pressure READ pressure)
+    Q_PROPERTY(QSizeF ellipseDiameters READ ellipseDiameters)
     Q_PROPERTY(QPointingDeviceUniqueId uniqueId READ uniqueId)
 
 public:
@@ -313,12 +363,16 @@ public:
 
     qreal rotation() const { return m_rotation; }
     qreal pressure() const { return m_pressure; }
+    QSizeF ellipseDiameters() const { return m_ellipseDiameters; }
     QPointingDeviceUniqueId uniqueId() const { return m_uniqueId; }
 
 private:
     qreal m_rotation;
     qreal m_pressure;
+    QSizeF m_ellipseDiameters;
     QPointingDeviceUniqueId m_uniqueId;
+
+    friend class QQuickPointerTouchEvent;
 
     Q_DISABLE_COPY(QQuickEventTouchPoint)
 };
@@ -350,25 +404,33 @@ public: // property accessors
 
 public: // helpers for C++ only (during event delivery)
     virtual QQuickPointerEvent *reset(QEvent *ev) = 0;
+    virtual void localize(QQuickItem *target) = 0;
 
     virtual bool isPressEvent() const = 0;
+    virtual bool isDoubleClickEvent() const { return false; }
+    virtual bool isUpdateEvent() const = 0;
+    virtual bool isReleaseEvent() const = 0;
     virtual QQuickPointerMouseEvent *asPointerMouseEvent() { return nullptr; }
     virtual QQuickPointerTouchEvent *asPointerTouchEvent() { return nullptr; }
     virtual QQuickPointerTabletEvent *asPointerTabletEvent() { return nullptr; }
+    virtual QQuickPointerNativeGestureEvent *asPointerNativeGestureEvent() { return nullptr; }
     virtual const QQuickPointerMouseEvent *asPointerMouseEvent() const { return nullptr; }
     virtual const QQuickPointerTouchEvent *asPointerTouchEvent() const { return nullptr; }
     virtual const QQuickPointerTabletEvent *asPointerTabletEvent() const { return nullptr; }
-    bool isValid() const { return m_event != nullptr; }
+    virtual const QQuickPointerNativeGestureEvent *asPointerNativeGestureEvent() const { return nullptr; }
     virtual bool allPointsAccepted() const = 0;
+    virtual bool allUpdatedPointsAccepted() const = 0;
+    virtual bool allPointsGrabbed() const = 0;
     bool isAccepted() { return m_event->isAccepted(); }
     void setAccepted(bool accepted) { m_event->setAccepted(accepted); }
     QVector<QPointF> unacceptedPressedPointScenePositions() const;
 
     virtual int pointCount() const = 0;
     virtual QQuickEventPoint *point(int i) const = 0;
-    virtual QQuickEventPoint *pointById(quint64 pointId) const = 0;
-    virtual QVector<QQuickItem *> grabbers() const = 0;
+    virtual QQuickEventPoint *pointById(int pointId) const = 0;
+    virtual QVector<QObject *> exclusiveGrabbers() const = 0;
     virtual void clearGrabbers() const = 0;
+    virtual bool hasExclusiveGrabber(const QQuickPointerHandler *handler) const = 0;
 
     ulong timestamp() const { return m_event->timestamp(); }
 
@@ -389,15 +451,22 @@ public:
         : QQuickPointerEvent(parent, device), m_mousePoint(new QQuickEventPoint(this)) { }
 
     QQuickPointerEvent *reset(QEvent *) override;
+    void localize(QQuickItem *target) override;
     bool isPressEvent() const override;
+    bool isDoubleClickEvent() const override;
+    bool isUpdateEvent() const override;
+    bool isReleaseEvent() const override;
     QQuickPointerMouseEvent *asPointerMouseEvent() override { return this; }
     const QQuickPointerMouseEvent *asPointerMouseEvent() const override { return this; }
     int pointCount() const override { return 1; }
     QQuickEventPoint *point(int i) const override;
-    QQuickEventPoint *pointById(quint64 pointId) const override;
+    QQuickEventPoint *pointById(int pointId) const override;
     bool allPointsAccepted() const override;
-    QVector<QQuickItem *> grabbers() const override;
+    bool allUpdatedPointsAccepted() const override;
+    bool allPointsGrabbed() const override;
+    QVector<QObject *> exclusiveGrabbers() const override;
     void clearGrabbers() const override;
+    bool hasExclusiveGrabber(const QQuickPointerHandler *handler) const override;
 
     QMouseEvent *asMouseEvent(const QPointF& localPos) const;
 
@@ -418,16 +487,22 @@ public:
     { }
 
     QQuickPointerEvent *reset(QEvent *) override;
+    void localize(QQuickItem *target) override;
     bool isPressEvent() const override;
+    bool isUpdateEvent() const override;
+    bool isReleaseEvent() const override;
     QQuickPointerTouchEvent *asPointerTouchEvent() override { return this; }
     const QQuickPointerTouchEvent *asPointerTouchEvent() const override { return this; }
     int pointCount() const override { return m_pointCount; }
     QQuickEventPoint *point(int i) const override;
-    QQuickEventPoint *pointById(quint64 pointId) const override;
+    QQuickEventPoint *pointById(int pointId) const override;
     const QTouchEvent::TouchPoint *touchPointById(int pointId) const;
     bool allPointsAccepted() const override;
-    QVector<QQuickItem *> grabbers() const override;
+    bool allUpdatedPointsAccepted() const override;
+    bool allPointsGrabbed() const override;
+    QVector<QObject *> exclusiveGrabbers() const override;
     void clearGrabbers() const override;
+    bool hasExclusiveGrabber(const QQuickPointerHandler *handler) const override;
 
     QMouseEvent *syntheticMouseEvent(int pointID, QQuickItem *relativeTo) const;
     QTouchEvent *touchEventForItem(QQuickItem *item, bool isFiltering = false) const;
@@ -441,6 +516,42 @@ private:
 
     Q_DISABLE_COPY(QQuickPointerTouchEvent)
 };
+
+class Q_QUICK_PRIVATE_EXPORT QQuickPointerNativeGestureEvent : public QQuickPointerEvent
+{
+    Q_OBJECT
+    Q_PROPERTY(Qt::NativeGestureType type READ type CONSTANT)
+    Q_PROPERTY(qreal value READ value CONSTANT)
+
+public:
+    QQuickPointerNativeGestureEvent(QObject *parent = nullptr, QQuickPointerDevice *device = nullptr)
+        : QQuickPointerEvent(parent, device), m_gesturePoint(new QQuickEventPoint(this)) { }
+
+    QQuickPointerEvent *reset(QEvent *) override;
+    void localize(QQuickItem *target) override;
+    bool isPressEvent() const override;
+    bool isUpdateEvent() const override;
+    bool isReleaseEvent() const override;
+    QQuickPointerNativeGestureEvent *asPointerNativeGestureEvent() override { return this; }
+    const QQuickPointerNativeGestureEvent *asPointerNativeGestureEvent() const override { return this; }
+    int pointCount() const override { return 1; }
+    QQuickEventPoint *point(int i) const override;
+    QQuickEventPoint *pointById(int pointId) const override;
+    bool allPointsAccepted() const override;
+    bool allUpdatedPointsAccepted() const override;
+    bool allPointsGrabbed() const override;
+    QVector<QObject *> exclusiveGrabbers() const override;
+    void clearGrabbers() const override;
+    bool hasExclusiveGrabber(const QQuickPointerHandler *handler) const override;
+    Qt::NativeGestureType type() const;
+    qreal value() const;
+
+private:
+    QQuickEventPoint *m_gesturePoint;
+
+    Q_DISABLE_COPY(QQuickPointerNativeGestureEvent)
+};
+
 
 // ### Qt 6: move this to qtbase, replace QTouchDevice and the enums in QTabletEvent
 class Q_QUICK_PRIVATE_EXPORT QQuickPointerDevice : public QObject
@@ -497,13 +608,6 @@ public:
     Q_ENUM(CapabilityFlag)
     Q_FLAG(Capabilities)
 
-    QQuickPointerDevice(DeviceType devType, PointerType pType, Capabilities caps, int maxPoints, int buttonCount, const QString &name, qint64 uniqueId = 0)
-      : m_deviceType(devType), m_pointerType(pType), m_capabilities(caps)
-      , m_maximumTouchPoints(maxPoints), m_buttonCount(buttonCount), m_name(name)
-      , m_uniqueId(QPointingDeviceUniqueId::fromNumericId(uniqueId))
-    {
-    }
-
     DeviceType type() const { return m_deviceType; }
     PointerType pointerType() const { return m_pointerType; }
     Capabilities capabilities() const { return m_capabilities; }
@@ -513,10 +617,21 @@ public:
     QString name() const { return m_name; }
     QPointingDeviceUniqueId uniqueId() const { return m_uniqueId; }
 
-    static QQuickPointerDevice *touchDevice(QTouchDevice *d);
+    static QQuickPointerDevice *touchDevice(const QTouchDevice *d);
     static QList<QQuickPointerDevice *> touchDevices();
     static QQuickPointerDevice *genericMouseDevice();
     static QQuickPointerDevice *tabletDevice(qint64);
+
+    QVector<QQuickPointerHandler *> &eventDeliveryTargets() { return m_eventDeliveryTargets; }
+
+private:
+    QQuickPointerDevice(DeviceType devType, PointerType pType, Capabilities caps, int maxPoints, int buttonCount, const QString &name, qint64 uniqueId = 0)
+      : m_deviceType(devType), m_pointerType(pType), m_capabilities(caps)
+      , m_maximumTouchPoints(maxPoints), m_buttonCount(buttonCount), m_name(name)
+      , m_uniqueId(QPointingDeviceUniqueId::fromNumericId(uniqueId))
+    {
+    }
+    ~QQuickPointerDevice() { }
 
 private:
     DeviceType m_deviceType;
@@ -526,8 +641,10 @@ private:
     int m_buttonCount;
     QString m_name;
     QPointingDeviceUniqueId m_uniqueId;
+    QVector<QQuickPointerHandler *> m_eventDeliveryTargets; // during delivery, handlers which have already seen the event
 
     Q_DISABLE_COPY(QQuickPointerDevice)
+    friend struct ConstructableQQuickPointerDevice;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(QQuickPointerDevice::DeviceTypes)

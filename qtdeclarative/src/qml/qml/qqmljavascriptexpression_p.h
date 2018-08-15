@@ -160,13 +160,7 @@ protected:
     }
 
     void setupFunction(QV4::ExecutionContext *qmlContext, QV4::Function *f);
-
-private:
-    friend class QQmlContextData;
-    friend class QQmlPropertyCapture;
-    friend void QQmlJavaScriptExpressionGuard_callback(QQmlNotifierEndpoint *, void **);
-
-    QQmlDelayedError *m_error;
+    void setCompilationUnit(QV4::CompiledData::CompilationUnit *compilationUnit);
 
     // We store some flag bits in the following flag pointers.
     //    activeGuards:flag1  - notifyOnValueChanged
@@ -174,6 +168,14 @@ private:
     QBiPointer<QObject, DeleteWatcher> m_scopeObject;
     QForwardFieldList<QQmlJavaScriptExpressionGuard, &QQmlJavaScriptExpressionGuard::next> activeGuards;
     QForwardFieldList<QQmlJavaScriptExpressionGuard, &QQmlJavaScriptExpressionGuard::next> permanentGuards;
+
+private:
+    friend class QQmlContextData;
+    friend class QQmlPropertyCapture;
+    friend void QQmlJavaScriptExpressionGuard_callback(QQmlNotifierEndpoint *, void **);
+    friend class QQmlTranslationBinding;
+
+    QQmlDelayedError *m_error;
 
     QQmlContextData *m_context;
     QQmlJavaScriptExpression **m_prevExpression;

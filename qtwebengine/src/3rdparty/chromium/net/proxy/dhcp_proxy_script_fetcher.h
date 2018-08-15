@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_PROXY_DHCP_SCRIPT_FETCHER_H_
-#define NET_PROXY_DHCP_SCRIPT_FETCHER_H_
+#ifndef NET_PROXY_DHCP_PROXY_SCRIPT_FETCHER_H_
+#define NET_PROXY_DHCP_PROXY_SCRIPT_FETCHER_H_
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
@@ -62,6 +62,11 @@ class NET_EXPORT_PRIVATE DhcpProxyScriptFetcher {
   // Aborts the in-progress fetch (if any).
   virtual void Cancel() = 0;
 
+  // Fails the in-progress fetch (if any) and future requests will fail
+  // immediately. Must be called before the URLRequestContext the fetcher was
+  // created with is torn down.
+  virtual void OnShutdown() = 0;
+
   // After successful completion of |Fetch()|, this will return the URL
   // retrieved from DHCP.  It is reset if/when |Fetch()| is called again.
   virtual const GURL& GetPacURL() const = 0;
@@ -88,7 +93,9 @@ class NET_EXPORT_PRIVATE DoNothingDhcpProxyScriptFetcher
   int Fetch(base::string16* utf16_text,
             const CompletionCallback& callback) override;
   void Cancel() override;
+  void OnShutdown() override;
   const GURL& GetPacURL() const override;
+  std::string GetFetcherName() const override;
 
  private:
   GURL gurl_;
@@ -97,4 +104,4 @@ class NET_EXPORT_PRIVATE DoNothingDhcpProxyScriptFetcher
 
 }  // namespace net
 
-#endif  // NET_PROXY_DHCP_SCRIPT_FETCHER_H_
+#endif  // NET_PROXY_DHCP_PROXY_SCRIPT_FETCHER_H_

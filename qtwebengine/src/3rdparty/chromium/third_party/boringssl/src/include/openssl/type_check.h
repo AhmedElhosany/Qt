@@ -80,7 +80,7 @@ extern "C" {
 #define OPENSSL_COMPILE_ASSERT(cond, msg) _Static_assert(cond, #msg)
 #else
 #define OPENSSL_COMPILE_ASSERT(cond, msg) \
-  typedef char OPENSSL_COMPILE_ASSERT_##msg[((cond) ? 1 : -1)]
+  typedef char OPENSSL_COMPILE_ASSERT_##msg[((cond) ? 1 : -1)] OPENSSL_UNUSED
 #endif
 
 

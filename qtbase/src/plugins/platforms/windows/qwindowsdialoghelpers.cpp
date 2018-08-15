@@ -39,8 +39,11 @@
 
 #define QT_NO_URL_CAST_FROM_STRING 1
 
-#define _WIN32_WINNT 0x0600
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
 
+#include "qwindowscombase.h"
 #include "qwindowsdialoghelpers.h"
 
 #include "qwindowscontext.h"
@@ -52,7 +55,7 @@
 #include <QtGui/QColor>
 
 #include <QtCore/QDebug>
-#include <QtCore/QRegExp>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QTimer>
 #include <QtCore/QDir>
 #include <QtCore/QScopedArrayPointer>
@@ -503,32 +506,10 @@ inline void QWindowsFileDialogSharedData::fromOptions(const QSharedPointer<QFile
 
 class QWindowsNativeFileDialogBase;
 
-class QWindowsNativeFileDialogEventHandler : public IFileDialogEvents
+class QWindowsNativeFileDialogEventHandler : public QWindowsComBase<IFileDialogEvents>
 {
 public:
     static IFileDialogEvents *create(QWindowsNativeFileDialogBase *nativeFileDialog);
-
-    // IUnknown methods
-    IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv)
-    {
-        if (riid != IID_IUnknown && riid != IID_IFileDialogEvents) {
-            *ppv = NULL;
-            return ResultFromScode(E_NOINTERFACE);
-        }
-        *ppv = this;
-        AddRef();
-        return NOERROR;
-    }
-
-    IFACEMETHODIMP_(ULONG) AddRef() { return InterlockedIncrement(&m_ref); }
-
-    IFACEMETHODIMP_(ULONG) Release()
-    {
-        const long ref = InterlockedDecrement(&m_ref);
-        if (!ref)
-            delete this;
-        return ref;
-    }
 
     // IFileDialogEvents methods
     IFACEMETHODIMP OnFileOk(IFileDialog *);
@@ -545,7 +526,6 @@ public:
     virtual ~QWindowsNativeFileDialogEventHandler() {}
 
 private:
-    long m_ref = 1;
     QWindowsNativeFileDialogBase *m_nativeFileDialog;
 };
 
@@ -930,7 +910,7 @@ IShellItem *QWindowsNativeFileDialogBase::shellItem(const QUrl &url)
         // (see https://msdn.microsoft.com/en-us/library/windows/desktop/dd378457(v=vs.85).aspx)
         // specified as "clsid:<GUID>" (without '{', '}').
         IShellItem *result = Q_NULLPTR;
-        const QUuid uuid(url.path());
+        const auto uuid = QUuid::fromString(url.path());
         if (uuid.isNull()) {
             qWarning() << __FUNCTION__ << ": Invalid CLSID: " << url.path();
             return Q_NULLPTR;
@@ -994,7 +974,9 @@ void QWindowsNativeFileDialogBase::setMode(QFileDialogOptions::FileMode mode,
                                            QFileDialogOptions::AcceptMode acceptMode,
                                            QFileDialogOptions::FileDialogOptions options)
 {
-    DWORD flags = FOS_PATHMUSTEXIST | FOS_FORCESHOWHIDDEN;
+    DWORD flags = FOS_PATHMUSTEXIST;
+    if (QWindowsContext::readAdvancedExplorerSettings(L"Hidden", 1) == 1) // 1:show, 2:hidden
+        flags |= FOS_FORCESHOWHIDDEN;
     if (options & QFileDialogOptions::DontResolveSymlinks)
         flags |= FOS_NODEREFERENCELINKS;
     switch (mode) {
@@ -1040,7 +1022,7 @@ static QList<FilterSpec> filterSpecs(const QStringList &filters,
     result.reserve(filters.size());
     *totalStringLength = 0;
 
-    const QRegExp filterSeparatorRE(QStringLiteral("[;\\s]+"));
+    const QRegularExpression filterSeparatorRE(QStringLiteral("[;\\s]+"));
     const QString separator = QStringLiteral(";");
     Q_ASSERT(filterSeparatorRE.isValid());
     // Split filter specification as 'Texts (*.txt[;] *.doc)', '*.txt[;] *.doc'

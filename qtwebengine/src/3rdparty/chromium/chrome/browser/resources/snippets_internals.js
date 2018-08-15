@@ -10,12 +10,12 @@ cr.define('chrome.SnippetsInternals', function() {
 
   function initialize() {
     $('submit-download').addEventListener('click', function(event) {
-      chrome.send('download', [$('hosts-input').value]);
+      chrome.send('download');
       event.preventDefault();
     });
 
     $('submit-dump').addEventListener('click', function(event) {
-      downloadJson(JSON.stringify(lastSuggestions));
+      downloadJson(JSON.stringify(lastSuggestions, null, 2));
       event.preventDefault();
     });
 
@@ -33,6 +33,11 @@ cr.define('chrome.SnippetsInternals', function() {
       event.preventDefault();
     });
 
+    $('background-fetch-button').addEventListener('click', function(event) {
+      chrome.send('fetchRemoteSuggestionsInTheBackground');
+      event.preventDefault();
+    });
+
     window.addEventListener('focus', refreshContent);
     window.setInterval(refreshContent, 1000);
 
@@ -45,8 +50,7 @@ cr.define('chrome.SnippetsInternals', function() {
 
   function receiveContentSuggestions(categoriesList) {
     lastSuggestions = categoriesList;
-    displayList(categoriesList, 'content-suggestions',
-                'hidden-toggler');
+    displayList(categoriesList, 'content-suggestions', 'hidden-toggler');
 
     var clearCachedButtons =
         document.getElementsByClassName('submit-clear-cached-suggestions');
@@ -84,7 +88,8 @@ cr.define('chrome.SnippetsInternals', function() {
     var id = parseInt(event.currentTarget.getAttribute('category-id'), 10);
     var table = $('dismissed-suggestions-' + id);
     table.classList.toggle('hidden');
-    chrome.send('toggleDismissedSuggestions',
+    chrome.send(
+        'toggleDismissedSuggestions',
         [id, !table.classList.contains('hidden')]);
   }
 
@@ -108,13 +113,24 @@ cr.define('chrome.SnippetsInternals', function() {
     receiveProperty('avg-time-to-use', timeToUse);
   }
 
+  function receiveRankerDebugData(itemsList) {
+    displayList(itemsList, 'ranker', 'no-togler');
+  }
+
+  function receiveLastRemoteSuggestionsBackgroundFetchTime(
+      lastRemoteSuggestionsBackgroundFetchTime) {
+    receiveProperty(
+        'last-background-fetch-time-label',
+        lastRemoteSuggestionsBackgroundFetchTime);
+  }
+
   function downloadJson(json) {
     // Redirect the browser to download data in |json| as a file "snippets.json"
     // (Setting Content-Disposition: attachment via a data: URL is not possible;
     // create a link with download attribute and simulate a click, instead.)
     var link = document.createElement('a');
     link.download = 'snippets.json';
-    link.href = 'data:,' + json;
+    link.href = 'data:application/json,' + encodeURI(json);
     link.click();
   }
 
@@ -141,8 +157,10 @@ cr.define('chrome.SnippetsInternals', function() {
       display = 'none';
     }
 
-    if ($(domId + '-empty')) $(domId + '-empty').textContent = text;
-    if ($(domId + '-clear')) $(domId + '-clear').style.display = display;
+    if ($(domId + '-empty'))
+      $(domId + '-empty').textContent = text;
+    if ($(domId + '-clear'))
+      $(domId + '-clear').style.display = display;
 
     var links = document.getElementsByClassName(toggleClass);
     for (var link of links) {
@@ -157,8 +175,11 @@ cr.define('chrome.SnippetsInternals', function() {
     receiveContentSuggestions: receiveContentSuggestions,
     receiveJson: receiveJson,
     receiveClassification: receiveClassification,
+    receiveRankerDebugData: receiveRankerDebugData,
+    receiveLastRemoteSuggestionsBackgroundFetchTime:
+        receiveLastRemoteSuggestionsBackgroundFetchTime,
   };
 });
 
-document.addEventListener('DOMContentLoaded',
-                          chrome.SnippetsInternals.initialize);
+document.addEventListener(
+    'DOMContentLoaded', chrome.SnippetsInternals.initialize);

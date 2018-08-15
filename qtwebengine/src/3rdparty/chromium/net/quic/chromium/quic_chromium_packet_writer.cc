@@ -18,7 +18,7 @@ namespace net {
 
 QuicChromiumPacketWriter::QuicChromiumPacketWriter() : weak_factory_(this) {}
 
-QuicChromiumPacketWriter::QuicChromiumPacketWriter(Socket* socket)
+QuicChromiumPacketWriter::QuicChromiumPacketWriter(DatagramClientSocket* socket)
     : socket_(socket),
       delegate_(nullptr),
       packet_(nullptr),
@@ -30,8 +30,8 @@ QuicChromiumPacketWriter::~QuicChromiumPacketWriter() {}
 WriteResult QuicChromiumPacketWriter::WritePacket(
     const char* buffer,
     size_t buf_len,
-    const IPAddress& self_address,
-    const IPEndPoint& peer_address,
+    const QuicIpAddress& self_address,
+    const QuicSocketAddress& peer_address,
     PerPacketOptions* /*options*/) {
   scoped_refptr<StringIOBuffer> buf(
       new StringIOBuffer(std::string(buffer, buf_len)));
@@ -61,7 +61,7 @@ WriteResult QuicChromiumPacketWriter::WritePacketToSocket(
     } else {
       status = WRITE_STATUS_BLOCKED;
       write_blocked_ = true;
-      packet_ = packet;
+      packet_ = std::move(packet);
     }
   }
 
@@ -110,7 +110,7 @@ void QuicChromiumPacketWriter::OnWriteComplete(int rv) {
 }
 
 QuicByteCount QuicChromiumPacketWriter::GetMaxPacketSize(
-    const IPEndPoint& peer_address) const {
+    const QuicSocketAddress& peer_address) const {
   return kMaxPacketSize;
 }
 

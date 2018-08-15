@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/files/file_path.h"
-#include "base/test/scoped_feature_list.h"
-#include "content/public/common/content_features.h"
+#include "base/macros.h"
+#include "base/synchronization/lock.h"
+#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
@@ -25,8 +27,14 @@ namespace {
 using net::test_server::HttpRequest;
 using net::test_server::HttpResponse;
 
-const char kReloadTestPath[] = "/loader/reload.html";
-const char kReloadImagePath[] = "/loader/empty16x16.png";
+const char kReloadTestPath[] = "/loader/reload_test.html";
+// The test page should request resources as the content structure is described
+// below. Reload and the same page navigation will affect only the top frame
+// resource, reload_test.html. But bypassing reload will affect all resources.
+// +- reload_test.html
+//     +- empty16x16.png
+//     +- simple_frame.html
+//         +- empty16x16.png
 
 const char kNoCacheControl[] = "";
 const char kMaxAgeCacheControl[] = "max-age=0";
@@ -37,17 +45,25 @@ struct RequestLog {
   std::string cache_control;
 };
 
+struct ExpectedCacheControl {
+  const char* top_main;
+  const char* others;
+};
+
+const ExpectedCacheControl kExpectedCacheControlForNormalLoad = {
+    kNoCacheControl, kNoCacheControl};
+const ExpectedCacheControl kExpectedCacheControlForReload = {
+    kMaxAgeCacheControl, kNoCacheControl};
+const ExpectedCacheControl kExpectedCacheControlForBypassingReload = {
+    kNoCacheCacheControl, kNoCacheCacheControl};
+
+// Tests end to end behaviors between Blink and content around reload variants.
 class ReloadCacheControlBrowserTest : public ContentBrowserTest {
  protected:
-  ReloadCacheControlBrowserTest() = default;
+  ReloadCacheControlBrowserTest() {}
   ~ReloadCacheControlBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
-    // TODO(toyoshim): Tests in this file depend on current reload behavior,
-    // and should be modified when we enable the new reload behavior.
-    scoped_feature_list_.InitAndDisableFeature(
-        features::kNonValidatingReloadOnNormalReload);
-
     SetUpTestServerOnMainThread();
   }
 
@@ -64,7 +80,20 @@ class ReloadCacheControlBrowserTest : public ContentBrowserTest {
   }
 
  protected:
+  void CheckCacheControl(const ExpectedCacheControl& expectation) {
+    base::AutoLock lock(request_log_lock_);
+    EXPECT_EQ(4u, request_log_.size());
+    for (const auto& log : request_log_) {
+      if (log.relative_url == kReloadTestPath)
+        EXPECT_EQ(expectation.top_main, log.cache_control);
+      else
+        EXPECT_EQ(expectation.others, log.cache_control);
+    }
+    request_log_.clear();
+  }
+
   std::vector<RequestLog> request_log_;
+  base::Lock request_log_lock_;
 
  private:
   void MonitorRequestHandler(const HttpRequest& request) {
@@ -74,88 +103,74 @@ class ReloadCacheControlBrowserTest : public ContentBrowserTest {
     log.cache_control = cache_control == request.headers.end()
                             ? kNoCacheControl
                             : cache_control->second;
+    base::AutoLock lock(request_log_lock_);
     request_log_.push_back(log);
   }
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 
   DISALLOW_COPY_AND_ASSIGN(ReloadCacheControlBrowserTest);
 };
 
-class ReloadCacheControlWithAnExperimentBrowserTest
-    : public ReloadCacheControlBrowserTest {
- protected:
-  ReloadCacheControlWithAnExperimentBrowserTest() = default;
-  ~ReloadCacheControlWithAnExperimentBrowserTest() override = default;
-
-  void SetUpOnMainThread() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kNonValidatingReloadOnNormalReload);
-
-    SetUpTestServerOnMainThread();
-  }
-
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(ReloadCacheControlWithAnExperimentBrowserTest);
-};
-
+// Test if reload issues requests with proper cache control flags.
 IN_PROC_BROWSER_TEST_F(ReloadCacheControlBrowserTest, NormalReload) {
   GURL url(embedded_test_server()->GetURL(kReloadTestPath));
 
   EXPECT_TRUE(NavigateToURL(shell(), url));
+  CheckCacheControl(kExpectedCacheControlForNormalLoad);
+
   ReloadBlockUntilNavigationsComplete(shell(), 1);
+  CheckCacheControl(kExpectedCacheControlForReload);
 
-  ASSERT_EQ(4UL, request_log_.size());
-  EXPECT_EQ(kReloadTestPath, request_log_[0].relative_url);
-  EXPECT_EQ(kNoCacheControl, request_log_[0].cache_control);
-  EXPECT_EQ(kReloadImagePath, request_log_[1].relative_url);
-  EXPECT_EQ(kNoCacheControl, request_log_[1].cache_control);
+  shell()->ShowDevTools();
+  ReloadBlockUntilNavigationsComplete(shell(), 1);
+  CheckCacheControl(kExpectedCacheControlForReload);
 
-  EXPECT_EQ(kReloadTestPath, request_log_[2].relative_url);
-  EXPECT_EQ(kMaxAgeCacheControl, request_log_[2].cache_control);
-  EXPECT_EQ(kReloadImagePath, request_log_[3].relative_url);
-  EXPECT_EQ(kMaxAgeCacheControl, request_log_[3].cache_control);
+  shell()->CloseDevTools();
+  ReloadBlockUntilNavigationsComplete(shell(), 1);
+  CheckCacheControl(kExpectedCacheControlForReload);
 }
 
+// Test if bypassing reload issues requests with proper cache control flags.
 IN_PROC_BROWSER_TEST_F(ReloadCacheControlBrowserTest, BypassingReload) {
   GURL url(embedded_test_server()->GetURL(kReloadTestPath));
 
-  EXPECT_TRUE(NavigateToURL(shell(), url));
+  NavigateToURLBlockUntilNavigationsComplete(shell(), url, 1);
+  CheckCacheControl(kExpectedCacheControlForNormalLoad);
+
   ReloadBypassingCacheBlockUntilNavigationsComplete(shell(), 1);
+  CheckCacheControl(kExpectedCacheControlForBypassingReload);
 
-  ASSERT_EQ(4UL, request_log_.size());
-  EXPECT_EQ(kReloadTestPath, request_log_[0].relative_url);
-  EXPECT_EQ(kNoCacheControl, request_log_[0].cache_control);
-  EXPECT_EQ(kReloadImagePath, request_log_[1].relative_url);
-  EXPECT_EQ(kNoCacheControl, request_log_[1].cache_control);
+  shell()->ShowDevTools();
+  ReloadBypassingCacheBlockUntilNavigationsComplete(shell(), 1);
+  CheckCacheControl(kExpectedCacheControlForBypassingReload);
 
-  EXPECT_EQ(kReloadTestPath, request_log_[2].relative_url);
-  EXPECT_EQ(kNoCacheCacheControl, request_log_[2].cache_control);
-  EXPECT_EQ(kReloadImagePath, request_log_[3].relative_url);
-  EXPECT_EQ(kNoCacheCacheControl, request_log_[3].cache_control);
+  shell()->CloseDevTools();
+  ReloadBypassingCacheBlockUntilNavigationsComplete(shell(), 1);
+  CheckCacheControl(kExpectedCacheControlForBypassingReload);
 }
 
-IN_PROC_BROWSER_TEST_F(ReloadCacheControlWithAnExperimentBrowserTest,
-                       ReloadMainResource) {
+// Test if the same page navigation issues requests with proper cache control
+// flags.
+IN_PROC_BROWSER_TEST_F(ReloadCacheControlBrowserTest, NavigateToSame) {
   GURL url(embedded_test_server()->GetURL(kReloadTestPath));
 
+  // The first navigation is just a normal load.
   EXPECT_TRUE(NavigateToURL(shell(), url));
-  ReloadBlockUntilNavigationsComplete(shell(), 1);
+  CheckCacheControl(kExpectedCacheControlForNormalLoad);
 
-  ASSERT_EQ(4UL, request_log_.size());
-  EXPECT_EQ(kReloadTestPath, request_log_[0].relative_url);
-  EXPECT_EQ(kNoCacheControl, request_log_[0].cache_control);
-  EXPECT_EQ(kReloadImagePath, request_log_[1].relative_url);
-  EXPECT_EQ(kNoCacheControl, request_log_[1].cache_control);
+  // The second navigation is the same page navigation. This should be handled
+  // as a reload, revalidating the main resource, but following cache protocols
+  // for others.
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  CheckCacheControl(kExpectedCacheControlForReload);
 
-  EXPECT_EQ(kReloadTestPath, request_log_[2].relative_url);
-  EXPECT_EQ(kMaxAgeCacheControl, request_log_[2].cache_control);
-  EXPECT_EQ(kReloadImagePath, request_log_[3].relative_url);
-  EXPECT_EQ(kNoCacheControl, request_log_[3].cache_control);
+  shell()->ShowDevTools();
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  CheckCacheControl(kExpectedCacheControlForReload);
+
+  shell()->CloseDevTools();
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  CheckCacheControl(kExpectedCacheControlForReload);
 }
-
-// TODO(toyoshim): Add another set of reload tests with DevTools open.
 
 }  // namespace
 

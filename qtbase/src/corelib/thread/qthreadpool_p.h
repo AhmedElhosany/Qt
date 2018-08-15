@@ -53,6 +53,7 @@
 //
 
 #include "QtCore/qmutex.h"
+#include "QtCore/qthread.h"
 #include "QtCore/qwaitcondition.h"
 #include "QtCore/qset.h"
 #include "QtCore/qqueue.h"
@@ -173,11 +174,12 @@ public:
     QVector<QueuePage*> queue;
     QWaitCondition noActiveThreads;
 
-    bool isExiting;
-    int expiryTimeout;
-    int maxThreadCount;
-    int reservedThreads;
-    int activeThreads;
+    int expiryTimeout = 30000;
+    int maxThreadCount = QThread::idealThreadCount();
+    int reservedThreads = 0;
+    int activeThreads = 0;
+    uint stackSize = 0;
+    bool isExiting = false;
 };
 
 QT_END_NAMESPACE

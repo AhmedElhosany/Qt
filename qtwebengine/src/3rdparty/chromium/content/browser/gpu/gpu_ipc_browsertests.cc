@@ -6,13 +6,17 @@
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
+#include "content/browser/browser_main_loop.h"
 #include "content/browser/compositor/image_transport_factory.h"
-#include "content/browser/gpu/browser_gpu_channel_host_factory.h"
-#include "content/browser/gpu/gpu_process_host_ui_shim.h"
-#include "content/common/gpu/client/context_provider_command_buffer.h"
+#include "content/browser/gpu/gpu_process_host.h"
+#include "content/common/gpu_stream_constants.h"
 #include "content/public/browser/gpu_data_manager.h"
+#include "content/public/browser/gpu_utils.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/content_browser_test.h"
+#include "gpu/ipc/client/gpu_channel_host.h"
+#include "services/ui/gpu/interfaces/gpu_service.mojom.h"
+#include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkSurface.h"
@@ -21,7 +25,7 @@
 
 namespace {
 
-scoped_refptr<content::ContextProviderCommandBuffer> CreateContext(
+scoped_refptr<ui::ContextProviderCommandBuffer> CreateContext(
     scoped_refptr<gpu::GpuChannelHost> gpu_channel_host) {
   // This is for an offscreen context, so the default framebuffer doesn't need
   // any alpha, depth, stencil, antialiasing.
@@ -34,11 +38,11 @@ scoped_refptr<content::ContextProviderCommandBuffer> CreateContext(
   attributes.bind_generates_resource = false;
   constexpr bool automatic_flushes = false;
   constexpr bool support_locking = false;
-  return make_scoped_refptr(new content::ContextProviderCommandBuffer(
-      std::move(gpu_channel_host), gpu::GPU_STREAM_DEFAULT,
-      gpu::GpuStreamPriority::NORMAL, gpu::kNullSurfaceHandle, GURL(),
+  return make_scoped_refptr(new ui::ContextProviderCommandBuffer(
+      std::move(gpu_channel_host), content::kGpuStreamIdDefault,
+      content::kGpuStreamPriorityDefault, gpu::kNullSurfaceHandle, GURL(),
       automatic_flushes, support_locking, gpu::SharedMemoryLimits(), attributes,
-      nullptr, content::command_buffer_metrics::OFFSCREEN_CONTEXT_FOR_TESTING));
+      nullptr, ui::command_buffer_metrics::OFFSCREEN_CONTEXT_FOR_TESTING));
 }
 
 void OnEstablishedGpuChannel(
@@ -56,11 +60,9 @@ class EstablishGpuChannelHelper {
   ~EstablishGpuChannelHelper() {}
 
   scoped_refptr<gpu::GpuChannelHost> EstablishGpuChannelSyncRunLoop() {
-    if (!content::BrowserGpuChannelHostFactory::instance())
-      content::BrowserGpuChannelHostFactory::Initialize(true);
-
-    content::BrowserGpuChannelHostFactory* factory =
-        content::BrowserGpuChannelHostFactory::instance();
+    gpu::GpuChannelEstablishFactory* factory =
+        content::BrowserMainLoop::GetInstance()
+            ->gpu_channel_establish_factory();
     CHECK(factory);
     base::RunLoop run_loop;
     factory->EstablishGpuChannel(base::Bind(
@@ -79,7 +81,7 @@ class ContextTestBase : public content::ContentBrowserTest {
   void SetUpOnMainThread() override {
     // This may leave the provider_ null in some cases, so tests need to early
     // out.
-    if (!content::BrowserGpuChannelHostFactory::CanUseForTesting())
+    if (!content::GpuDataManager::GetInstance()->GpuAccessAllowed(nullptr))
       return;
 
     EstablishGpuChannelHelper helper;
@@ -107,7 +109,7 @@ class ContextTestBase : public content::ContentBrowserTest {
   gpu::ContextSupport* context_support_ = nullptr;
 
  private:
-  scoped_refptr<content::ContextProviderCommandBuffer> provider_;
+  scoped_refptr<ui::ContextProviderCommandBuffer> provider_;
 };
 
 }  // namespace
@@ -121,15 +123,9 @@ namespace content {
 class BrowserGpuChannelHostFactoryTest : public ContentBrowserTest {
  public:
   void SetUpOnMainThread() override {
-    if (!BrowserGpuChannelHostFactory::CanUseForTesting())
+    if (!GpuDataManager::GetInstance()->GpuAccessAllowed(nullptr))
       return;
-
-    // Start all tests without a gpu channel so that the tests exercise a
-    // consistent codepath.
-    if (!BrowserGpuChannelHostFactory::instance())
-      BrowserGpuChannelHostFactory::Initialize(false);
     CHECK(GetFactory());
-
     ContentBrowserTest::SetUpOnMainThread();
   }
 
@@ -152,8 +148,8 @@ class BrowserGpuChannelHostFactoryTest : public ContentBrowserTest {
   }
 
  protected:
-  BrowserGpuChannelHostFactory* GetFactory() {
-    return BrowserGpuChannelHostFactory::instance();
+  gpu::GpuChannelEstablishFactory* GetFactory() {
+    return BrowserMainLoop::GetInstance()->gpu_channel_establish_factory();
   }
 
   bool IsChannelEstablished() {
@@ -181,25 +177,6 @@ IN_PROC_BROWSER_TEST_F(BrowserGpuChannelHostFactoryTest, MAYBE_Basic) {
   DCHECK(!IsChannelEstablished());
   EstablishAndWait();
   EXPECT_TRUE(GetGpuChannel() != NULL);
-}
-
-// Test fails on Chromeos + Mac, flaky on Windows because UI Compositor
-// establishes a GPU channel.
-#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
-#define MAYBE_EstablishAndTerminate EstablishAndTerminate
-#else
-#define MAYBE_EstablishAndTerminate DISABLED_EstablishAndTerminate
-#endif
-IN_PROC_BROWSER_TEST_F(BrowserGpuChannelHostFactoryTest,
-                       MAYBE_EstablishAndTerminate) {
-  DCHECK(!IsChannelEstablished());
-  base::RunLoop run_loop;
-  GetFactory()->EstablishGpuChannel(
-      base::Bind(&OnEstablishedGpuChannel, run_loop.QuitClosure(), nullptr));
-  GetFactory()->Terminate();
-
-  // The callback should still trigger.
-  run_loop.Run();
 }
 
 #if !defined(OS_ANDROID)
@@ -237,7 +214,8 @@ IN_PROC_BROWSER_TEST_F(BrowserGpuChannelHostFactoryTest,
                        MAYBE_GrContextKeepsGpuChannelAlive) {
   // Test for crbug.com/551143
   // This test verifies that holding a reference to the GrContext created by
-  // a ContextProviderCommandBuffer will keep the gpu channel alive after the
+  // a ui::ContextProviderCommandBuffer will keep the gpu channel alive after
+  // the
   // provider has been destroyed. Without this behavior, user code would have
   // to be careful to destroy objects in the right order to avoid using freed
   // memory as a function pointer in the GrContext's GrGLInterface instance.
@@ -246,7 +224,7 @@ IN_PROC_BROWSER_TEST_F(BrowserGpuChannelHostFactoryTest,
 
   // Step 2: verify that holding onto the provider's GrContext will
   // retain the host after provider is destroyed.
-  scoped_refptr<ContextProviderCommandBuffer> provider =
+  scoped_refptr<ui::ContextProviderCommandBuffer> provider =
       CreateContext(GetGpuChannel());
   EXPECT_TRUE(provider->BindToCurrentThread());
 
@@ -293,7 +271,7 @@ IN_PROC_BROWSER_TEST_F(BrowserGpuChannelHostFactoryTest,
   EstablishAndWait();
   scoped_refptr<gpu::GpuChannelHost> host = GetGpuChannel();
 
-  scoped_refptr<ContextProviderCommandBuffer> provider =
+  scoped_refptr<ui::ContextProviderCommandBuffer> provider =
       CreateContext(GetGpuChannel());
   base::RunLoop run_loop;
   int counter = 0;
@@ -301,16 +279,28 @@ IN_PROC_BROWSER_TEST_F(BrowserGpuChannelHostFactoryTest,
       base::Bind(&BrowserGpuChannelHostFactoryTest::OnContextLost,
                  base::Unretained(this), run_loop.QuitClosure(), &counter));
   EXPECT_TRUE(provider->BindToCurrentThread());
-  GpuProcessHostUIShim* shim =
-      GpuProcessHostUIShim::FromID(GetFactory()->GpuProcessHostId());
-  EXPECT_TRUE(shim != NULL);
-  shim->SimulateCrash();
+  GpuProcessHost::CallOnIO(GpuProcessHost::GPU_PROCESS_KIND_SANDBOXED,
+                           false /* force_create */,
+                           base::Bind([](GpuProcessHost* host) {
+                             if (host)
+                               host->gpu_service()->Crash();
+                           }));
   run_loop.Run();
 
   EXPECT_EQ(1, counter);
   EXPECT_FALSE(IsChannelEstablished());
   EstablishAndWait();
   EXPECT_TRUE(IsChannelEstablished());
+}
+
+using GpuProcessHostBrowserTest = BrowserGpuChannelHostFactoryTest;
+
+IN_PROC_BROWSER_TEST_F(GpuProcessHostBrowserTest, Shutdown) {
+  DCHECK(!IsChannelEstablished());
+  EstablishAndWait();
+  base::RunLoop run_loop;
+  StopGpuProcess(run_loop.QuitClosure());
+  run_loop.Run();
 }
 
 }  // namespace content

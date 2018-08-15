@@ -68,14 +68,13 @@ GPUInfo::GPUDevice::~GPUDevice() { }
 GPUInfo::GPUInfo()
     : optimus(false),
       amd_switchable(false),
-      lenovo_dcute(false),
-      adapter_luid(0),
       gl_reset_notification_strategy(0),
       software_rendering(false),
       direct_rendering(true),
       sandboxed(false),
       process_crash_count(0),
       in_process_gpu(true),
+      passthrough_cmd_decoder(false),
       basic_info_state(kCollectInfoNone),
       context_info_state(kCollectInfoNone),
 #if defined(OS_WIN)
@@ -94,16 +93,24 @@ GPUInfo::GPUInfo(const GPUInfo& other) = default;
 
 GPUInfo::~GPUInfo() { }
 
+const GPUInfo::GPUDevice& GPUInfo::active_gpu() const {
+  if (gpu.active)
+    return gpu;
+  for (const GPUDevice& secondary_gpu : secondary_gpus) {
+    if (secondary_gpu.active)
+      return secondary_gpu;
+  }
+  DLOG(ERROR) << "No active GPU found, returning primary GPU.";
+  return gpu;
+}
+
 void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
   struct GPUInfoKnownFields {
     base::TimeDelta initialization_time;
     bool optimus;
     bool amd_switchable;
-    bool lenovo_dcute;
-    base::Version display_link_version;
     GPUDevice gpu;
     std::vector<GPUDevice> secondary_gpus;
-    uint64_t adapter_luid;
     std::string driver_vendor;
     std::string driver_version;
     std::string driver_date;
@@ -125,6 +132,10 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
     bool sandboxed;
     int process_crash_count;
     bool in_process_gpu;
+    bool passthrough_cmd_decoder;
+    bool supports_overlays;
+    bool hdr;
+    bool can_support_threaded_texture_mailbox;
     CollectInfoResult basic_info_state;
     CollectInfoResult context_info_state;
 #if defined(OS_WIN)
@@ -160,12 +171,6 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
                                      initialization_time);
   enumerator->AddBool("optimus", optimus);
   enumerator->AddBool("amdSwitchable", amd_switchable);
-  enumerator->AddBool("lenovoDcute", lenovo_dcute);
-  if (display_link_version.IsValid()) {
-    enumerator->AddString("displayLinkVersion",
-                          display_link_version.GetString());
-  }
-  enumerator->AddInt64("adapterLuid", adapter_luid);
   enumerator->AddString("driverVendor", driver_vendor);
   enumerator->AddString("driverVersion", driver_version);
   enumerator->AddString("driverDate", driver_date);
@@ -188,6 +193,11 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
   enumerator->AddBool("sandboxed", sandboxed);
   enumerator->AddInt("processCrashCount", process_crash_count);
   enumerator->AddBool("inProcessGpu", in_process_gpu);
+  enumerator->AddBool("passthroughCmdDecoder", passthrough_cmd_decoder);
+  enumerator->AddBool("supportsOverlays", supports_overlays);
+  enumerator->AddBool("hdr", hdr);
+  enumerator->AddBool("canSupportThreadedTextureMailbox",
+                      can_support_threaded_texture_mailbox);
   enumerator->AddInt("basicInfoState", basic_info_state);
   enumerator->AddInt("contextInfoState", context_info_state);
 #if defined(OS_WIN)

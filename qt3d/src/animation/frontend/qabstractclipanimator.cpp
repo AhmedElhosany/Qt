@@ -40,6 +40,8 @@
 #include "qabstractclipanimator.h"
 #include "qabstractclipanimator_p.h"
 #include <Qt3DAnimation/qchannelmapper.h>
+#include <Qt3DAnimation/qclock.h>
+#include <Qt3DAnimation/private/qanimationcallbacktrigger_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -48,6 +50,7 @@ namespace Qt3DAnimation {
 QAbstractClipAnimatorPrivate::QAbstractClipAnimatorPrivate()
     : Qt3DCore::QComponentPrivate()
     , m_mapper(nullptr)
+    , m_clock(nullptr)
     , m_running(false)
     , m_loops(1)
 {
@@ -114,18 +117,29 @@ QAbstractClipAnimator::QAbstractClipAnimator(QAbstractClipAnimatorPrivate &dd, Q
 {
 }
 
+/*! \internal */
+void QAbstractClipAnimator::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &change)
+{
+    if (change->type() == Qt3DCore::CallbackTriggered) {
+        QAnimationCallbackTriggerPtr callbackTrigger = qSharedPointerCast<Qt3DAnimation::QAnimationCallbackTrigger>(change);
+        if (callbackTrigger->callback())
+            callbackTrigger->callback()->valueChanged(callbackTrigger->value());
+    } else {
+        QComponent::sceneChangeEvent(change);
+    }
+}
+
 QAbstractClipAnimator::~QAbstractClipAnimator()
 {
 }
 
 /*!
-    \qmlproperty bool QAbstractClipAnimator::running
+    \property Qt3DAnimation::QAbstractClipAnimator::running
 
-    This property holds whether the animation is currently running.
+    This property holds a boolean indicating whether the animation is currently running.
 */
 
 /*!
-    \property QAbstractClipAnimator::isRunning
     Returns a boolean indicating whether the animation is currently running.
 */
 bool QAbstractClipAnimator::isRunning() const
@@ -135,7 +149,7 @@ bool QAbstractClipAnimator::isRunning() const
 }
 
 /*!
-    \property ChannelMapper QAbstractClipAnimator::channelMapper
+    \property Qt3DAnimation::QAbstractClipAnimator::channelMapper
 
     This property holds the ChannelMapper that controls how the channels in
     the animation clip map onto the properties of the target objects.
@@ -148,7 +162,7 @@ QChannelMapper *QAbstractClipAnimator::channelMapper() const
 }
 
 /*!
-    \qmlproperty int AbstractClipAnimator::loops
+    \qmlproperty int Qt3DAnimation::AbstractClipAnimator::loops
 
     This property holds the number of times the animation should play.
 
@@ -157,11 +171,29 @@ QChannelMapper *QAbstractClipAnimator::channelMapper() const
     If set to QAbstractClipAnimator::Infinite, the animation will continuously
     repeat until it is explicitly stopped.
 */
+/*!
+    \enum QAbstractClipAnimator::Loops
+
+    Holds the number of times the animation should play.
+
+    \value Infinite
+         This will repeat the loop continuously until it is explicitly
+         stopped.
+
+*/
+/*!
+    \property Qt3DAnimation::QAbstractClipAnimator::loops
+
+    Holds the number of times the animation should play.
+
+    The value is 1 by default: the animation will be played once and then stop.
+
+    If set to QAbstractClipAnimator::Infinite, the animation will continuously
+    repeat until it is explicitly stopped.
+*/
 
 /*!
-    \property int QAbstractClipAnimator::loopCount
-
-    This property holds the number of times the animation should play.
+    Returns the number of times the animation should play.
 
     The value is 1 by default: the animation will play through once and then stop.
 
@@ -172,6 +204,16 @@ int QAbstractClipAnimator::loopCount() const
 {
     Q_D(const QAbstractClipAnimator);
     return d->m_loops;
+}
+/*!
+    \property Qt3DAnimation::QAbstractClipAnimator::clock
+
+    The clock controls the speed with which an animation is played.
+*/
+QClock *QAbstractClipAnimator::clock() const
+{
+    Q_D(const QAbstractClipAnimator);
+    return d->m_clock;
 }
 
 void QAbstractClipAnimator::setRunning(bool running)
@@ -211,6 +253,24 @@ void QAbstractClipAnimator::setLoopCount(int loops)
 
     d->m_loops = loops;
     emit loopCountChanged(loops);
+}
+
+void QAbstractClipAnimator::setClock(QClock *clock)
+{
+    Q_D(QAbstractClipAnimator);
+    if (d->m_clock == clock)
+        return;
+
+    if (d->m_clock)
+        d->unregisterDestructionHelper(d->m_clock);
+
+    if (clock && !clock->parent())
+        clock->setParent(this);
+    d->m_clock = clock;
+
+    if (d->m_clock)
+        d->registerDestructionHelper(d->m_clock, &QAbstractClipAnimator::setClock, d->m_clock);
+    emit clockChanged(clock);
 }
 
 /*!

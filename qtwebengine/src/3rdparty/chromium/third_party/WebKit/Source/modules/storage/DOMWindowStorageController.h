@@ -14,7 +14,6 @@
 namespace blink {
 
 class Document;
-class Event;
 
 class MODULES_EXPORT DOMWindowStorageController final
     : public GarbageCollected<DOMWindowStorageController>,
@@ -25,21 +24,16 @@ class MODULES_EXPORT DOMWindowStorageController final
  public:
   DECLARE_VIRTUAL_TRACE();
 
-  static const char* supplementName();
-  static DOMWindowStorageController& from(Document&);
+  static const char* SupplementName();
+  static DOMWindowStorageController& From(Document&);
 
   // Inherited from LocalDOMWindow::EventListenerObserver
-  void didAddEventListener(LocalDOMWindow*, const AtomicString&) override;
-  void didRemoveEventListener(LocalDOMWindow*, const AtomicString&) override {}
-  void didRemoveAllEventListeners(LocalDOMWindow*) override {}
-
- protected:
-  explicit DOMWindowStorageController(Document&);
+  void DidAddEventListener(LocalDOMWindow*, const AtomicString&) override;
+  void DidRemoveEventListener(LocalDOMWindow*, const AtomicString&) override {}
+  void DidRemoveAllEventListeners(LocalDOMWindow*) override {}
 
  private:
-  Document& document() const { return *m_document; }
-
-  Member<Document> m_document;
+  explicit DOMWindowStorageController(Document&);
 };
 
 }  // namespace blink

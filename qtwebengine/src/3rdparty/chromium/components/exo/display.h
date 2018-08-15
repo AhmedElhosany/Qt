@@ -25,6 +25,9 @@ class Point;
 }
 
 namespace exo {
+class DataDevice;
+class DataDeviceDelegate;
+class FileHelper;
 class NotificationSurface;
 class NotificationSurfaceManager;
 class SharedMemory;
@@ -42,7 +45,8 @@ class Buffer;
 class Display {
  public:
   Display();
-  explicit Display(NotificationSurfaceManager* notification_surface_manager);
+  Display(NotificationSurfaceManager* notification_surface_manager,
+          std::unique_ptr<FileHelper> file_helper);
   ~Display();
 
   // Creates a new surface.
@@ -74,8 +78,9 @@ class Display {
       const gfx::Point& position);
 
   // Creates a remote shell surface for an existing surface using |container|.
-  std::unique_ptr<ShellSurface> CreateRemoteShellSurface(Surface* surface,
-                                                         int container);
+  std::unique_ptr<ShellSurface> CreateRemoteShellSurface(
+      Surface* surface,
+      int container);
 
   // Creates a sub-surface for an existing surface. The sub-surface will be
   // a child of |parent|.
@@ -85,10 +90,18 @@ class Display {
   // Creates a notification surface for a surface and notification id.
   std::unique_ptr<NotificationSurface> CreateNotificationSurface(
       Surface* surface,
-      const std::string& notification_id);
+      const std::string& notification_key);
+
+  // Creates a data device for a |delegate|.
+  std::unique_ptr<DataDevice> CreateDataDevice(DataDeviceDelegate* delegate);
 
  private:
   NotificationSurfaceManager* const notification_surface_manager_;
+  std::unique_ptr<FileHelper> file_helper_;
+
+#if defined(USE_OZONE)
+  std::vector<gfx::BufferFormat> overlay_formats_;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(Display);
 };

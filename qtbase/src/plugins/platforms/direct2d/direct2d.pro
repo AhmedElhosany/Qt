@@ -6,8 +6,9 @@ QT += \
     fontdatabase_support-private theme_support-private
 
 qtConfig(accessibility): QT += accessibility_support-private
+qtConfig(vulkan): QT += vulkan_support-private
 
-LIBS += -ldwmapi -ld2d1 -ld3d11 -ldwrite -lVersion -lgdi32
+LIBS += -ldwmapi -ld2d1 -ld3d11 -ldwrite -lversion -lgdi32
 
 include(../windows/windows.pri)
 

@@ -5,6 +5,7 @@
 #include "media/capture/video/linux/v4l2_capture_delegate.h"
 
 #include <linux/version.h>
+#include <linux/videodev2.h>
 #include <poll.h>
 #include <sys/fcntl.h>
 #include <sys/ioctl.h>
@@ -23,6 +24,8 @@
 #include "media/base/bind_to_current_loop.h"
 #include "media/capture/video/blob_utils.h"
 #include "media/capture/video/linux/video_capture_device_linux.h"
+
+using media::mojom::MeteringMode;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)
 // 16 bit depth, Realsense F200.
@@ -81,6 +84,16 @@ static struct {
     {V4L2_PIX_FMT_JPEG, PIXEL_FORMAT_MJPEG, 1},
 };
 
+// Maximum number of ioctl retries before giving up trying to reset controls.
+const int kMaxIOCtrlRetries = 5;
+
+// Base id and class identifier for Controls to be reset.
+static struct {
+  uint32_t control_base;
+  uint32_t class_id;
+} const kControls[] = {{V4L2_CID_USER_BASE, V4L2_CID_USER_CLASS},
+                       {V4L2_CID_CAMERA_CLASS_BASE, V4L2_CID_CAMERA_CLASS}};
+
 // Fill in |format| with the given parameters.
 static void FillV4L2Format(v4l2_format* format,
                            uint32_t width,
@@ -115,15 +128,30 @@ static std::string FourccToString(uint32_t fourcc) {
                             (fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF);
 }
 
-// Creates a mojom::RangePtr with the range of values (min, max, current) of the
-// user control associated with |control_id|. Returns an empty Range otherwise.
+// Running ioctl() on some devices, especially shortly after (re)opening the
+// device file descriptor or (re)starting streaming, can fail but works after
+// retrying (https://crbug.com/670262).
+// Returns false if the |request| ioctl fails too many times.
+static bool RunIoctl(int fd, int request, void* argp) {
+  int num_retries = 0;
+  for (; HANDLE_EINTR(ioctl(fd, request, argp)) < 0 &&
+         num_retries < kMaxIOCtrlRetries;
+       ++num_retries) {
+    DPLOG(WARNING) << "ioctl";
+  }
+  DPLOG_IF(ERROR, num_retries != kMaxIOCtrlRetries);
+  return num_retries != kMaxIOCtrlRetries;
+}
+
+// Creates a mojom::RangePtr with the (min, max, current, step) values of the
+// control associated with |control_id|. Returns an empty Range otherwise.
 static mojom::RangePtr RetrieveUserControlRange(int device_fd, int control_id) {
   mojom::RangePtr capability = mojom::Range::New();
 
   v4l2_queryctrl range = {};
   range.id = control_id;
   range.type = V4L2_CTRL_TYPE_INTEGER;
-  if (HANDLE_EINTR(ioctl(device_fd, VIDIOC_QUERYCTRL, &range)) < 0)
+  if (!RunIoctl(device_fd, VIDIOC_QUERYCTRL, &range))
     return mojom::Range::New();
   capability->max = range.maximum;
   capability->min = range.minimum;
@@ -131,11 +159,154 @@ static mojom::RangePtr RetrieveUserControlRange(int device_fd, int control_id) {
 
   v4l2_control current = {};
   current.id = control_id;
-  if (HANDLE_EINTR(ioctl(device_fd, VIDIOC_G_CTRL, &current)) < 0)
+  if (!RunIoctl(device_fd, VIDIOC_G_CTRL, &current))
     return mojom::Range::New();
   capability->current = current.value;
 
   return capability;
+}
+
+// Determines if |control_id| is special, i.e. controls another one's state.
+static bool IsSpecialControl(int control_id) {
+  switch (control_id) {
+    case V4L2_CID_AUTO_WHITE_BALANCE:
+    case V4L2_CID_EXPOSURE_AUTO:
+    case V4L2_CID_EXPOSURE_AUTO_PRIORITY:
+    case V4L2_CID_FOCUS_AUTO:
+      return true;
+  }
+  return false;
+}
+
+// Determines if |control_id| should be skipped, https://crbug.com/697885.
+#if !defined(V4L2_CID_PAN_SPEED)
+#define V4L2_CID_PAN_SPEED (V4L2_CID_CAMERA_CLASS_BASE + 32)
+#endif
+#if !defined(V4L2_CID_TILT_SPEED)
+#define V4L2_CID_TILT_SPEED (V4L2_CID_CAMERA_CLASS_BASE + 33)
+#endif
+#if !defined(V4L2_CID_PANTILT_CMD)
+#define V4L2_CID_PANTILT_CMD (V4L2_CID_CAMERA_CLASS_BASE + 34)
+#endif
+static bool IsBlacklistedControl(int control_id) {
+  switch (control_id) {
+    case V4L2_CID_PAN_RELATIVE:
+    case V4L2_CID_TILT_RELATIVE:
+    case V4L2_CID_PAN_RESET:
+    case V4L2_CID_TILT_RESET:
+    case V4L2_CID_PAN_ABSOLUTE:
+    case V4L2_CID_TILT_ABSOLUTE:
+    case V4L2_CID_ZOOM_ABSOLUTE:
+    case V4L2_CID_ZOOM_RELATIVE:
+    case V4L2_CID_ZOOM_CONTINUOUS:
+    case V4L2_CID_PAN_SPEED:
+    case V4L2_CID_TILT_SPEED:
+    case V4L2_CID_PANTILT_CMD:
+      return true;
+  }
+  return false;
+}
+
+// Sets all user control to their default. Some controls are enabled by another
+// flag, usually having the word "auto" in the name, see IsSpecialControl().
+// These flags are preset beforehand, then set to their defaults individually
+// afterwards.
+static void ResetUserAndCameraControlsToDefault(int device_fd) {
+  // Set V4L2_CID_AUTO_WHITE_BALANCE to false first.
+  v4l2_control auto_white_balance = {};
+  auto_white_balance.id = V4L2_CID_AUTO_WHITE_BALANCE;
+  auto_white_balance.value = false;
+  if (!RunIoctl(device_fd, VIDIOC_S_CTRL, &auto_white_balance))
+    return;
+
+  std::vector<struct v4l2_ext_control> special_camera_controls;
+  // Set V4L2_CID_EXPOSURE_AUTO to V4L2_EXPOSURE_MANUAL.
+  v4l2_ext_control auto_exposure = {};
+  auto_exposure.id = V4L2_CID_EXPOSURE_AUTO;
+  auto_exposure.value = V4L2_EXPOSURE_MANUAL;
+  special_camera_controls.push_back(auto_exposure);
+  // Set V4L2_CID_EXPOSURE_AUTO_PRIORITY to false.
+  v4l2_ext_control priority_auto_exposure = {};
+  priority_auto_exposure.id = V4L2_CID_EXPOSURE_AUTO_PRIORITY;
+  priority_auto_exposure.value = false;
+  special_camera_controls.push_back(priority_auto_exposure);
+  // Set V4L2_CID_FOCUS_AUTO to false.
+  v4l2_ext_control auto_focus = {};
+  auto_focus.id = V4L2_CID_FOCUS_AUTO;
+  auto_focus.value = false;
+  special_camera_controls.push_back(auto_focus);
+
+  struct v4l2_ext_controls ext_controls = {};
+  ext_controls.ctrl_class = V4L2_CID_CAMERA_CLASS;
+  ext_controls.count = special_camera_controls.size();
+  ext_controls.controls = special_camera_controls.data();
+  if (HANDLE_EINTR(ioctl(device_fd, VIDIOC_S_EXT_CTRLS, &ext_controls)) < 0)
+    DPLOG(ERROR) << "VIDIOC_S_EXT_CTRLS";
+
+  std::vector<struct v4l2_ext_control> camera_controls;
+  for (const auto& control : kControls) {
+    std::vector<struct v4l2_ext_control> camera_controls;
+
+    v4l2_queryctrl range = {};
+    range.id = control.control_base | V4L2_CTRL_FLAG_NEXT_CTRL;
+    while (0 == HANDLE_EINTR(ioctl(device_fd, VIDIOC_QUERYCTRL, &range))) {
+      if (V4L2_CTRL_ID2CLASS(range.id) != V4L2_CTRL_ID2CLASS(control.class_id))
+        break;
+      range.id |= V4L2_CTRL_FLAG_NEXT_CTRL;
+
+      if (IsSpecialControl(range.id & ~V4L2_CTRL_FLAG_NEXT_CTRL))
+        continue;
+      if (IsBlacklistedControl(range.id & ~V4L2_CTRL_FLAG_NEXT_CTRL))
+        continue;
+
+      struct v4l2_ext_control ext_control = {};
+      ext_control.id = range.id & ~V4L2_CTRL_FLAG_NEXT_CTRL;
+      ext_control.value = range.default_value;
+      camera_controls.push_back(ext_control);
+    }
+
+    if (!camera_controls.empty()) {
+      struct v4l2_ext_controls ext_controls = {};
+      ext_controls.ctrl_class = control.class_id;
+      ext_controls.count = camera_controls.size();
+      ext_controls.controls = camera_controls.data();
+      if (HANDLE_EINTR(ioctl(device_fd, VIDIOC_S_EXT_CTRLS, &ext_controls)) < 0)
+        DPLOG(ERROR) << "VIDIOC_S_EXT_CTRLS";
+    }
+  }
+
+  // Now set the special flags to the default values
+  v4l2_queryctrl range = {};
+  range.id = V4L2_CID_AUTO_WHITE_BALANCE;
+  HANDLE_EINTR(ioctl(device_fd, VIDIOC_QUERYCTRL, &range));
+  auto_white_balance.value = range.default_value;
+  HANDLE_EINTR(ioctl(device_fd, VIDIOC_S_CTRL, &auto_white_balance));
+
+  special_camera_controls.clear();
+  memset(&range, 0, sizeof(struct v4l2_queryctrl));
+  range.id = V4L2_CID_EXPOSURE_AUTO;
+  HANDLE_EINTR(ioctl(device_fd, VIDIOC_QUERYCTRL, &range));
+  auto_exposure.value = range.default_value;
+  special_camera_controls.push_back(auto_exposure);
+
+  memset(&range, 0, sizeof(struct v4l2_queryctrl));
+  range.id = V4L2_CID_EXPOSURE_AUTO_PRIORITY;
+  HANDLE_EINTR(ioctl(device_fd, VIDIOC_QUERYCTRL, &range));
+  priority_auto_exposure.value = range.default_value;
+  special_camera_controls.push_back(priority_auto_exposure);
+
+  memset(&range, 0, sizeof(struct v4l2_queryctrl));
+  range.id = V4L2_CID_FOCUS_AUTO;
+  HANDLE_EINTR(ioctl(device_fd, VIDIOC_QUERYCTRL, &range));
+  auto_focus.value = range.default_value;
+  special_camera_controls.push_back(auto_focus);
+
+  memset(&ext_controls, 0, sizeof(struct v4l2_ext_controls));
+  ext_controls.ctrl_class = V4L2_CID_CAMERA_CLASS;
+  ext_controls.count = special_camera_controls.size();
+  ext_controls.controls = special_camera_controls.data();
+  if (HANDLE_EINTR(ioctl(device_fd, VIDIOC_S_EXT_CTRLS, &ext_controls)) < 0)
+    DPLOG(ERROR) << "VIDIOC_S_EXT_CTRLS";
 }
 
 // Class keeping track of a SPLANE V4L2 buffer, mmap()ed on construction and
@@ -210,7 +381,8 @@ V4L2CaptureDelegate::V4L2CaptureDelegate(
       power_line_frequency_(power_line_frequency),
       is_capturing_(false),
       timeout_count_(0),
-      rotation_(0) {}
+      rotation_(0),
+      weak_factory_(this) {}
 
 void V4L2CaptureDelegate::AllocateAndStart(
     int width,
@@ -228,6 +400,8 @@ void V4L2CaptureDelegate::AllocateAndStart(
     SetErrorState(FROM_HERE, "Failed to open V4L2 device driver file.");
     return;
   }
+
+  ResetUserAndCameraControlsToDefault(device_fd_.get());
 
   v4l2_capability cap = {};
   if (!((HANDLE_EINTR(ioctl(device_fd_.get(), VIDIOC_QUERYCAP, &cap)) == 0) &&
@@ -338,10 +512,12 @@ void V4L2CaptureDelegate::AllocateAndStart(
     return;
   }
 
+  client_->OnStarted();
   is_capturing_ = true;
+
   // Post task to start fetching frames from v4l2.
   v4l2_task_runner_->PostTask(
-      FROM_HERE, base::Bind(&V4L2CaptureDelegate::DoCapture, this));
+      FROM_HERE, base::Bind(&V4L2CaptureDelegate::DoCapture, GetWeakPtr()));
 }
 
 void V4L2CaptureDelegate::StopAndDeAllocate() {
@@ -375,58 +551,95 @@ void V4L2CaptureDelegate::TakePhoto(
   take_photo_callbacks_.push(std::move(callback));
 }
 
-void V4L2CaptureDelegate::GetPhotoCapabilities(
-    VideoCaptureDevice::GetPhotoCapabilitiesCallback callback) {
+void V4L2CaptureDelegate::GetPhotoState(
+    VideoCaptureDevice::GetPhotoStateCallback callback) {
   DCHECK(v4l2_task_runner_->BelongsToCurrentThread());
   if (!device_fd_.is_valid() || !is_capturing_)
     return;
 
-  mojom::PhotoCapabilitiesPtr photo_capabilities =
-      mojom::PhotoCapabilities::New();
+  mojom::PhotoStatePtr photo_capabilities = mojom::PhotoState::New();
 
   photo_capabilities->zoom =
       RetrieveUserControlRange(device_fd_.get(), V4L2_CID_ZOOM_ABSOLUTE);
 
-  photo_capabilities->focus_mode = mojom::MeteringMode::NONE;
+  v4l2_queryctrl manual_focus_ctrl = {};
+  manual_focus_ctrl.id = V4L2_CID_FOCUS_ABSOLUTE;
+  if (RunIoctl(device_fd_.get(), VIDIOC_QUERYCTRL, &manual_focus_ctrl))
+    photo_capabilities->supported_focus_modes.push_back(MeteringMode::MANUAL);
+
+  v4l2_queryctrl auto_focus_ctrl = {};
+  auto_focus_ctrl.id = V4L2_CID_FOCUS_AUTO;
+  if (RunIoctl(device_fd_.get(), VIDIOC_QUERYCTRL, &auto_focus_ctrl)) {
+    photo_capabilities->supported_focus_modes.push_back(
+        MeteringMode::CONTINUOUS);
+  }
+
+  photo_capabilities->current_focus_mode = MeteringMode::NONE;
   v4l2_control auto_focus_current = {};
   auto_focus_current.id = V4L2_CID_FOCUS_AUTO;
   if (HANDLE_EINTR(
           ioctl(device_fd_.get(), VIDIOC_G_CTRL, &auto_focus_current)) >= 0) {
-    photo_capabilities->focus_mode = auto_focus_current.value
-                                         ? mojom::MeteringMode::CONTINUOUS
-                                         : mojom::MeteringMode::MANUAL;
+    photo_capabilities->current_focus_mode = auto_focus_current.value
+                                                 ? MeteringMode::CONTINUOUS
+                                                 : MeteringMode::MANUAL;
   }
 
-  photo_capabilities->exposure_mode = mojom::MeteringMode::NONE;
+  v4l2_queryctrl auto_exposure_ctrl = {};
+  auto_exposure_ctrl.id = V4L2_CID_EXPOSURE_AUTO;
+  if (RunIoctl(device_fd_.get(), VIDIOC_QUERYCTRL, &auto_exposure_ctrl)) {
+    photo_capabilities->supported_exposure_modes.push_back(
+        MeteringMode::MANUAL);
+    photo_capabilities->supported_exposure_modes.push_back(
+        MeteringMode::CONTINUOUS);
+  }
+
+  photo_capabilities->current_exposure_mode = MeteringMode::NONE;
   v4l2_control exposure_current = {};
   exposure_current.id = V4L2_CID_EXPOSURE_AUTO;
   if (HANDLE_EINTR(ioctl(device_fd_.get(), VIDIOC_G_CTRL, &exposure_current)) >=
       0) {
-    photo_capabilities->exposure_mode =
+    photo_capabilities->current_exposure_mode =
         exposure_current.value == V4L2_EXPOSURE_MANUAL
-            ? mojom::MeteringMode::MANUAL
-            : mojom::MeteringMode::CONTINUOUS;
+            ? MeteringMode::MANUAL
+            : MeteringMode::CONTINUOUS;
   }
 
-  photo_capabilities->white_balance_mode = mojom::MeteringMode::NONE;
+  photo_capabilities->exposure_compensation =
+      RetrieveUserControlRange(device_fd_.get(), V4L2_CID_EXPOSURE_ABSOLUTE);
+
+  photo_capabilities->color_temperature = RetrieveUserControlRange(
+      device_fd_.get(), V4L2_CID_WHITE_BALANCE_TEMPERATURE);
+  if (photo_capabilities->color_temperature) {
+    photo_capabilities->supported_white_balance_modes.push_back(
+        MeteringMode::MANUAL);
+  }
+
+  v4l2_queryctrl white_balance_ctrl = {};
+  white_balance_ctrl.id = V4L2_CID_AUTO_WHITE_BALANCE;
+  if (RunIoctl(device_fd_.get(), VIDIOC_QUERYCTRL, &white_balance_ctrl)) {
+    photo_capabilities->supported_white_balance_modes.push_back(
+        MeteringMode::CONTINUOUS);
+  }
+
+  photo_capabilities->current_white_balance_mode = MeteringMode::NONE;
   v4l2_control white_balance_current = {};
   white_balance_current.id = V4L2_CID_AUTO_WHITE_BALANCE;
   if (HANDLE_EINTR(ioctl(device_fd_.get(), VIDIOC_G_CTRL,
                          &white_balance_current)) >= 0) {
-    photo_capabilities->white_balance_mode =
-        white_balance_current.value ? mojom::MeteringMode::CONTINUOUS
-                                    : mojom::MeteringMode::MANUAL;
+    photo_capabilities->current_white_balance_mode =
+        white_balance_current.value ? MeteringMode::CONTINUOUS
+                                    : MeteringMode::MANUAL;
   }
 
-  photo_capabilities->color_temperature = RetrieveUserControlRange(
-      device_fd_.get(), V4L2_CID_WHITE_BALANCE_TEMPERATURE);
-
   photo_capabilities->iso = mojom::Range::New();
-  photo_capabilities->height = mojom::Range::New();
-  photo_capabilities->width = mojom::Range::New();
-  photo_capabilities->exposure_compensation = mojom::Range::New();
-  photo_capabilities->fill_light_mode = mojom::FillLightMode::NONE;
-  photo_capabilities->red_eye_reduction = false;
+  photo_capabilities->height = mojom::Range::New(
+      capture_format_.frame_size.height(), capture_format_.frame_size.height(),
+      capture_format_.frame_size.height(), 0 /* step */);
+  photo_capabilities->width = mojom::Range::New(
+      capture_format_.frame_size.width(), capture_format_.frame_size.width(),
+      capture_format_.frame_size.width(), 0 /* step */);
+  photo_capabilities->red_eye_reduction = mojom::RedEyeReduction::NEVER;
+  photo_capabilities->torch = false;
 
   photo_capabilities->brightness =
       RetrieveUserControlRange(device_fd_.get(), V4L2_CID_BRIGHTNESS);
@@ -465,17 +678,43 @@ void V4L2CaptureDelegate::SetPhotoOptions(
     HANDLE_EINTR(ioctl(device_fd_.get(), VIDIOC_S_CTRL, &white_balance_set));
   }
 
-  // Color temperature can only be applied if Auto White Balance is off.
   if (settings->has_color_temperature) {
     v4l2_control auto_white_balance_current = {};
     auto_white_balance_current.id = V4L2_CID_AUTO_WHITE_BALANCE;
     const int result = HANDLE_EINTR(
         ioctl(device_fd_.get(), VIDIOC_G_CTRL, &auto_white_balance_current));
+    // Color temperature can only be applied if Auto White Balance is off.
     if (result >= 0 && !auto_white_balance_current.value) {
       v4l2_control set_temperature = {};
       set_temperature.id = V4L2_CID_WHITE_BALANCE_TEMPERATURE;
       set_temperature.value = settings->color_temperature;
       HANDLE_EINTR(ioctl(device_fd_.get(), VIDIOC_S_CTRL, &set_temperature));
+    }
+  }
+
+  if (settings->has_exposure_mode &&
+      (settings->exposure_mode == mojom::MeteringMode::CONTINUOUS ||
+       settings->exposure_mode == mojom::MeteringMode::MANUAL)) {
+    v4l2_control exposure_mode_set = {};
+    exposure_mode_set.id = V4L2_CID_EXPOSURE_AUTO;
+    exposure_mode_set.value =
+        settings->exposure_mode == mojom::MeteringMode::CONTINUOUS
+            ? V4L2_EXPOSURE_APERTURE_PRIORITY
+            : V4L2_EXPOSURE_MANUAL;
+    HANDLE_EINTR(ioctl(device_fd_.get(), VIDIOC_S_CTRL, &exposure_mode_set));
+  }
+
+  if (settings->has_exposure_compensation) {
+    v4l2_control auto_exposure_current = {};
+    auto_exposure_current.id = V4L2_CID_EXPOSURE_AUTO;
+    const int result = HANDLE_EINTR(
+        ioctl(device_fd_.get(), VIDIOC_G_CTRL, &auto_exposure_current));
+    // Exposure Compensation can only be applied if Auto Exposure is off.
+    if (result >= 0 && auto_exposure_current.value == V4L2_EXPOSURE_MANUAL) {
+      v4l2_control set_exposure = {};
+      set_exposure.id = V4L2_CID_EXPOSURE_ABSOLUTE;
+      set_exposure.value = settings->exposure_compensation;
+      HANDLE_EINTR(ioctl(device_fd_.get(), VIDIOC_S_CTRL, &set_exposure));
     }
   }
 
@@ -515,6 +754,10 @@ void V4L2CaptureDelegate::SetRotation(int rotation) {
   DCHECK(v4l2_task_runner_->BelongsToCurrentThread());
   DCHECK(rotation >= 0 && rotation < 360 && rotation % 90 == 0);
   rotation_ = rotation;
+}
+
+base::WeakPtr<V4L2CaptureDelegate> V4L2CaptureDelegate::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 V4L2CaptureDelegate::~V4L2CaptureDelegate() {}
@@ -623,7 +866,7 @@ void V4L2CaptureDelegate::DoCapture() {
   }
 
   v4l2_task_runner_->PostTask(
-      FROM_HERE, base::Bind(&V4L2CaptureDelegate::DoCapture, this));
+      FROM_HERE, base::Bind(&V4L2CaptureDelegate::DoCapture, GetWeakPtr()));
 }
 
 void V4L2CaptureDelegate::SetErrorState(

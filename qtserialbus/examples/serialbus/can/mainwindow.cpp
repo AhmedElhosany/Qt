@@ -56,7 +56,6 @@
 #include <QCanBusFrame>
 #include <QCloseEvent>
 #include <QDesktopServices>
-#include <QtDebug>
 #include <QTimer>
 
 MainWindow::MainWindow(QWidget *parent) :
@@ -68,14 +67,13 @@ MainWindow::MainWindow(QWidget *parent) :
     m_connectDialog = new ConnectDialog;
 
     m_status = new QLabel;
-    m_ui->statusBar->addWidget(m_status);
+    m_ui->statusBar->addPermanentWidget(m_status);
 
-    m_ui->sendMessagesBox->setEnabled(false);
+    m_written = new QLabel;
+    m_ui->statusBar->addWidget(m_written);
 
     initActionsConnections();
     QTimer::singleShot(50, m_connectDialog, &ConnectDialog::show);
-
-    connect(m_ui->sendButton, &QPushButton::clicked, this, &MainWindow::sendMessage);
 }
 
 MainWindow::~MainWindow()
@@ -86,17 +84,12 @@ MainWindow::~MainWindow()
     delete m_ui;
 }
 
-void MainWindow::showStatusMessage(const QString &message)
-{
-    m_status->setText(message);
-}
-
 void MainWindow::initActionsConnections()
 {
-    m_ui->actionConnect->setEnabled(true);
     m_ui->actionDisconnect->setEnabled(false);
-    m_ui->actionQuit->setEnabled(true);
+    m_ui->sendFrameBox->setEnabled(false);
 
+    connect(m_ui->sendFrameBox, &SendFrameBox::sendFrame, this, &MainWindow::sendFrame);
     connect(m_ui->actionConnect, &QAction::triggered, m_connectDialog, &ConnectDialog::show);
     connect(m_connectDialog, &QDialog::accepted, this, &MainWindow::connectDevice);
     connect(m_ui->actionDisconnect, &QAction::triggered, this, &MainWindow::disconnectDevice);
@@ -108,7 +101,7 @@ void MainWindow::initActionsConnections()
     });
 }
 
-void MainWindow::receiveError(QCanBusDevice::CanBusError error) const
+void MainWindow::processErrors(QCanBusDevice::CanBusError error) const
 {
     switch (error) {
     case QCanBusDevice::ReadError:
@@ -116,7 +109,8 @@ void MainWindow::receiveError(QCanBusDevice::CanBusError error) const
     case QCanBusDevice::ConnectionError:
     case QCanBusDevice::ConfigurationError:
     case QCanBusDevice::UnknownError:
-        qWarning() << m_canDevice->errorString();
+        m_status->setText(m_canDevice->errorString());
+        break;
     default:
         break;
     }
@@ -127,20 +121,19 @@ void MainWindow::connectDevice()
     const ConnectDialog::Settings p = m_connectDialog->settings();
 
     QString errorString;
-    m_canDevice = QCanBus::instance()->createDevice(p.backendName, p.deviceInterfaceName,
+    m_canDevice = QCanBus::instance()->createDevice(p.pluginName, p.deviceInterfaceName,
                                                     &errorString);
     if (!m_canDevice) {
-        showStatusMessage(tr("Error creating device '%1', reason: '%2'")
-                          .arg(p.backendName).arg(errorString));
+        m_status->setText(tr("Error creating device '%1', reason: '%2'")
+                          .arg(p.pluginName).arg(errorString));
         return;
     }
 
-    connect(m_canDevice, &QCanBusDevice::errorOccurred,
-            this, &MainWindow::receiveError);
-    connect(m_canDevice, &QCanBusDevice::framesReceived,
-            this, &MainWindow::checkMessages);
-    connect(m_canDevice, &QCanBusDevice::framesWritten,
-            this, &MainWindow::framesWritten);
+    m_numberFramesWritten = 0;
+
+    connect(m_canDevice, &QCanBusDevice::errorOccurred, this, &MainWindow::processErrors);
+    connect(m_canDevice, &QCanBusDevice::framesReceived, this, &MainWindow::processReceivedFrames);
+    connect(m_canDevice, &QCanBusDevice::framesWritten, this, &MainWindow::processFramesWritten);
 
     if (p.useConfigurationEnabled) {
         for (const ConnectDialog::ConfigurationItem &item : p.configurations)
@@ -148,7 +141,7 @@ void MainWindow::connectDevice()
     }
 
     if (!m_canDevice->connectDevice()) {
-        showStatusMessage(tr("Connection error: %1").arg(m_canDevice->errorString()));
+        m_status->setText(tr("Connection error: %1").arg(m_canDevice->errorString()));
 
         delete m_canDevice;
         m_canDevice = nullptr;
@@ -156,16 +149,16 @@ void MainWindow::connectDevice()
         m_ui->actionConnect->setEnabled(false);
         m_ui->actionDisconnect->setEnabled(true);
 
-        m_ui->sendMessagesBox->setEnabled(true);
+        m_ui->sendFrameBox->setEnabled(true);
 
         QVariant bitRate = m_canDevice->configurationParameter(QCanBusDevice::BitRateKey);
         if (bitRate.isValid()) {
-            showStatusMessage(tr("Backend: %1, connected to %2 at %3 kBit/s")
-                    .arg(p.backendName).arg(p.deviceInterfaceName)
+            m_status->setText(tr("Plugin: %1, connected to %2 at %3 kBit/s")
+                    .arg(p.pluginName).arg(p.deviceInterfaceName)
                     .arg(bitRate.toInt() / 1000));
         } else {
-            showStatusMessage(tr("Backend: %1, connected to %2")
-                    .arg(p.backendName).arg(p.deviceInterfaceName));
+            m_status->setText(tr("Plugin: %1, connected to %2")
+                    .arg(p.pluginName).arg(p.deviceInterfaceName));
         }
     }
 }
@@ -182,14 +175,15 @@ void MainWindow::disconnectDevice()
     m_ui->actionConnect->setEnabled(true);
     m_ui->actionDisconnect->setEnabled(false);
 
-    m_ui->sendMessagesBox->setEnabled(false);
+    m_ui->sendFrameBox->setEnabled(false);
 
-    showStatusMessage(tr("Disconnected"));
+    m_status->setText(tr("Disconnected"));
 }
 
-void MainWindow::framesWritten(qint64 count)
+void MainWindow::processFramesWritten(qint64 count)
 {
-    qDebug() << "Number of frames written:" << count;
+    m_numberFramesWritten += count;
+    m_written->setText(tr("%1 frames written").arg(m_numberFramesWritten));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -200,16 +194,19 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 static QString frameFlags(const QCanBusFrame &frame)
 {
-    if (frame.hasBitrateSwitch() && frame.hasErrorStateIndicator())
-        return QStringLiteral(" B E ");
+    QString result = QLatin1String(" --- ");
+
     if (frame.hasBitrateSwitch())
-        return QStringLiteral(" B - ");
+        result[1] = QLatin1Char('B');
     if (frame.hasErrorStateIndicator())
-        return QStringLiteral(" - E ");
-    return QStringLiteral(" - - ");
+        result[2] = QLatin1Char('E');
+    if (frame.hasLocalEcho())
+        result[3] = QLatin1Char('L');
+
+    return result;
 }
 
-void MainWindow::checkMessages()
+void MainWindow::processReceivedFrames()
 {
     if (!m_canDevice)
         return;
@@ -233,40 +230,10 @@ void MainWindow::checkMessages()
     }
 }
 
-static QByteArray dataFromHex(const QString &hex)
-{
-    QByteArray line = hex.toLatin1();
-    line.replace(' ', QByteArray());
-    return QByteArray::fromHex(line);
-}
-
-void MainWindow::sendMessage() const
+void MainWindow::sendFrame(const QCanBusFrame &frame) const
 {
     if (!m_canDevice)
         return;
-
-    QByteArray writings = dataFromHex(m_ui->lineEdit->displayText());
-
-    QCanBusFrame frame;
-    const int maxPayload = m_ui->fdBox->checkState() ? 64 : 8;
-    writings.truncate(maxPayload);
-    frame.setPayload(writings);
-
-    qint32 id = m_ui->idEdit->displayText().toInt(nullptr, 16);
-    if (!m_ui->effBox->checkState() && id > 2047) //11 bits
-        id = 2047;
-
-    frame.setFrameId(id);
-    frame.setExtendedFrameFormat(m_ui->effBox->checkState());
-    frame.setFlexibleDataRateFormat(m_ui->fdBox->checkState());
-    frame.setBitrateSwitch(m_ui->bitrateSwitchBox->checkState());
-
-    if (m_ui->remoteFrame->isChecked())
-        frame.setFrameType(QCanBusFrame::RemoteRequestFrame);
-    else if (m_ui->errorFrame->isChecked())
-        frame.setFrameType(QCanBusFrame::ErrorFrame);
-    else
-        frame.setFrameType(QCanBusFrame::DataFrame);
 
     m_canDevice->writeFrame(frame);
 }

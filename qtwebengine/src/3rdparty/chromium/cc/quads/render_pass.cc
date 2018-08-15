@@ -37,12 +37,14 @@ const size_t kDefaultNumQuadsToReserve = 128;
 namespace cc {
 
 QuadList::QuadList()
-    : ListContainer<DrawQuad>(LargestDrawQuadSize(),
+    : ListContainer<DrawQuad>(LargestDrawQuadAlignment(),
+                              LargestDrawQuadSize(),
                               kDefaultNumSharedQuadStatesToReserve) {}
 
 QuadList::QuadList(size_t default_size_to_reserve)
-    : ListContainer<DrawQuad>(LargestDrawQuadSize(), default_size_to_reserve) {
-}
+    : ListContainer<DrawQuad>(LargestDrawQuadAlignment(),
+                              LargestDrawQuadSize(),
+                              default_size_to_reserve) {}
 
 std::unique_ptr<RenderPass> RenderPass::Create() {
   return base::WrapUnique(new RenderPass());
@@ -60,42 +62,45 @@ std::unique_ptr<RenderPass> RenderPass::Create(
 }
 
 RenderPass::RenderPass()
-    : has_transparent_background(true),
-      quad_list(kDefaultNumQuadsToReserve),
-      shared_quad_state_list(sizeof(SharedQuadState),
-                             kDefaultNumSharedQuadStatesToReserve) {
-}
+    : quad_list(kDefaultNumQuadsToReserve),
+      shared_quad_state_list(alignof(SharedQuadState),
+                             sizeof(SharedQuadState),
+                             kDefaultNumSharedQuadStatesToReserve) {}
 
 // Each layer usually produces one shared quad state, so the number of layers
 // is a good hint for what to reserve here.
 RenderPass::RenderPass(size_t num_layers)
     : has_transparent_background(true),
+      cache_render_pass(false),
+      has_damage_from_contributing_content(false),
       quad_list(kDefaultNumQuadsToReserve),
-      shared_quad_state_list(sizeof(SharedQuadState), num_layers) {
-}
+      shared_quad_state_list(alignof(SharedQuadState),
+                             sizeof(SharedQuadState),
+                             num_layers) {}
 
 RenderPass::RenderPass(size_t shared_quad_state_list_size,
                        size_t quad_list_size)
     : has_transparent_background(true),
+      cache_render_pass(false),
+      has_damage_from_contributing_content(false),
       quad_list(quad_list_size),
-      shared_quad_state_list(sizeof(SharedQuadState),
-                             shared_quad_state_list_size) {
-}
+      shared_quad_state_list(alignof(SharedQuadState),
+                             sizeof(SharedQuadState),
+                             shared_quad_state_list_size) {}
 
 RenderPass::~RenderPass() {
   TRACE_EVENT_OBJECT_DELETED_WITH_ID(
-      TRACE_DISABLED_BY_DEFAULT("cc.debug.quads"),
-      "cc::RenderPass", id.AsTracingId());
+      TRACE_DISABLED_BY_DEFAULT("cc.debug.quads"), "cc::RenderPass",
+      reinterpret_cast<void*>(id));
 }
 
-std::unique_ptr<RenderPass> RenderPass::Copy(RenderPassId new_id) const {
+std::unique_ptr<RenderPass> RenderPass::Copy(int new_id) const {
   std::unique_ptr<RenderPass> copy_pass(
       Create(shared_quad_state_list.size(), quad_list.size()));
-  copy_pass->SetAll(new_id,
-                    output_rect,
-                    damage_rect,
-                    transform_to_root_target,
-                    has_transparent_background);
+  copy_pass->SetAll(new_id, output_rect, damage_rect, transform_to_root_target,
+                    filters, background_filters, color_space,
+                    has_transparent_background, cache_render_pass,
+                    has_damage_from_contributing_content);
   return copy_pass;
 }
 
@@ -107,7 +112,9 @@ std::unique_ptr<RenderPass> RenderPass::DeepCopy() const {
   std::unique_ptr<RenderPass> copy_pass(
       Create(shared_quad_state_list.size(), quad_list.size()));
   copy_pass->SetAll(id, output_rect, damage_rect, transform_to_root_target,
-                    has_transparent_background);
+                    filters, background_filters, color_space,
+                    has_transparent_background, cache_render_pass,
+                    has_damage_from_contributing_content);
   for (auto* shared_quad_state : shared_quad_state_list) {
     SharedQuadState* copy_shared_quad_state =
         copy_pass->CreateAndAppendSharedQuadState();
@@ -145,11 +152,11 @@ void RenderPass::CopyAll(const std::vector<std::unique_ptr<RenderPass>>& in,
     out->push_back(source->DeepCopy());
 }
 
-void RenderPass::SetNew(RenderPassId id,
+void RenderPass::SetNew(uint64_t id,
                         const gfx::Rect& output_rect,
                         const gfx::Rect& damage_rect,
                         const gfx::Transform& transform_to_root_target) {
-  DCHECK(id.IsValid());
+  DCHECK(id);
   DCHECK(damage_rect.IsEmpty() || output_rect.Contains(damage_rect))
       << "damage_rect: " << damage_rect.ToString()
       << " output_rect: " << output_rect.ToString();
@@ -163,18 +170,29 @@ void RenderPass::SetNew(RenderPassId id,
   DCHECK(shared_quad_state_list.empty());
 }
 
-void RenderPass::SetAll(RenderPassId id,
+void RenderPass::SetAll(uint64_t id,
                         const gfx::Rect& output_rect,
                         const gfx::Rect& damage_rect,
                         const gfx::Transform& transform_to_root_target,
-                        bool has_transparent_background) {
-  DCHECK(id.IsValid());
+                        const FilterOperations& filters,
+                        const FilterOperations& background_filters,
+                        const gfx::ColorSpace& color_space,
+                        bool has_transparent_background,
+                        bool cache_render_pass,
+                        bool has_damage_from_contributing_content) {
+  DCHECK(id);
 
   this->id = id;
   this->output_rect = output_rect;
   this->damage_rect = damage_rect;
   this->transform_to_root_target = transform_to_root_target;
+  this->filters = filters;
+  this->background_filters = background_filters;
+  this->color_space = color_space;
   this->has_transparent_background = has_transparent_background;
+  this->cache_render_pass = cache_render_pass;
+  this->has_damage_from_contributing_content =
+      has_damage_from_contributing_content;
 
   DCHECK(quad_list.empty());
   DCHECK(shared_quad_state_list.empty());
@@ -185,8 +203,19 @@ void RenderPass::AsValueInto(base::trace_event::TracedValue* value) const {
   MathUtil::AddToTracedValue("damage_rect", damage_rect, value);
 
   value->SetBoolean("has_transparent_background", has_transparent_background);
+  value->SetBoolean("cache_render_pass", cache_render_pass);
+  value->SetBoolean("has_damage_from_contributing_content",
+                    has_damage_from_contributing_content);
   value->SetInteger("copy_requests",
                     base::saturated_cast<int>(copy_requests.size()));
+
+  value->BeginArray("filters");
+  filters.AsValueInto(value);
+  value->EndArray();
+
+  value->BeginArray("background_filters");
+  background_filters.AsValueInto(value);
+  value->EndArray();
 
   value->BeginArray("shared_quad_state_list");
   for (auto* shared_quad_state : shared_quad_state_list) {
@@ -205,10 +234,8 @@ void RenderPass::AsValueInto(base::trace_event::TracedValue* value) const {
   value->EndArray();
 
   TracedValue::MakeDictIntoImplicitSnapshotWithCategory(
-      TRACE_DISABLED_BY_DEFAULT("cc.debug.quads"),
-      value,
-      "cc::RenderPass",
-      id.AsTracingId());
+      TRACE_DISABLED_BY_DEFAULT("cc.debug.quads"), value, "cc::RenderPass",
+      reinterpret_cast<void*>(id));
 }
 
 SharedQuadState* RenderPass::CreateAndAppendSharedQuadState() {

@@ -18,6 +18,7 @@
 #include "base/files/file_path.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_thread.h"
@@ -42,7 +43,7 @@ std::string StringTypeToString(const base::FilePath::StringType& value) {
 }
 
 // Helper for checking the plugin private data for a specified origin and
-// plugin for the existance of any file that matches the time range specified.
+// plugin for the existence of any file that matches the time range specified.
 // All of the operations in this class are done on the IO thread.
 //
 // This class keeps track of outstanding async requests it generates, and does
@@ -111,6 +112,9 @@ class PluginPrivateDataByOriginChecker {
   // Keep track if the data for this origin needs to be deleted due to
   // any file found that has last modified time between |begin_| and |end_|.
   bool delete_this_origin_data_ = false;
+
+  // Keep track if any files exist for this origin.
+  bool files_found_ = false;
 };
 
 void PluginPrivateDataByOriginChecker::CheckFilesOnIOThread() {
@@ -166,6 +170,10 @@ void PluginPrivateDataByOriginChecker::OnDirectoryRead(
     DecrementTaskCount();
     return;
   }
+
+  // If there are files found, keep track of it.
+  if (!file_list.empty())
+    files_found_ = true;
 
   // No error, process the files returned. No need to do this if we have
   // already decided to delete all the data for this origin.
@@ -227,6 +235,10 @@ void PluginPrivateDataByOriginChecker::DecrementTaskCount() {
   if (task_count_)
     return;
 
+  // If no files exist for this origin, then we can safely delete it.
+  if (!files_found_)
+    delete_this_origin_data_ = true;
+
   // If there are no more tasks in progress, then run |callback_| on the
   // proper thread.
   filesystem_context_->default_file_task_runner()->PostTask(
@@ -269,7 +281,7 @@ class PluginPrivateDataDeletionHelper {
 void PluginPrivateDataDeletionHelper::CheckOriginsOnFileTaskRunner(
     const std::set<GURL>& origins) {
   DCHECK(filesystem_context_->default_file_task_runner()
-             ->RunsTasksOnCurrentThread());
+             ->RunsTasksInCurrentSequence());
   IncrementTaskCount();
 
   base::Callback<void(bool, const GURL&)> decrement_callback =
@@ -326,7 +338,7 @@ void PluginPrivateDataDeletionHelper::CheckOriginsOnFileTaskRunner(
 
 void PluginPrivateDataDeletionHelper::IncrementTaskCount() {
   DCHECK(filesystem_context_->default_file_task_runner()
-             ->RunsTasksOnCurrentThread());
+             ->RunsTasksInCurrentSequence());
   ++task_count_;
 }
 
@@ -334,7 +346,7 @@ void PluginPrivateDataDeletionHelper::DecrementTaskCount(
     bool delete_data_for_origin,
     const GURL& origin) {
   DCHECK(filesystem_context_->default_file_task_runner()
-             ->RunsTasksOnCurrentThread());
+             ->RunsTasksInCurrentSequence());
 
   // Since the PluginPrivateDataByOriginChecker runs on the IO thread,
   // delete all the data for |origin| if needed.
@@ -373,7 +385,7 @@ void ClearPluginPrivateDataOnFileTaskRunner(
     const base::Time end,
     const base::Closure& callback) {
   DCHECK(filesystem_context->default_file_task_runner()
-             ->RunsTasksOnCurrentThread());
+             ->RunsTasksInCurrentSequence());
   DVLOG(3) << "Clearing plugin data for origin: " << storage_origin;
 
   storage::FileSystemBackend* backend =

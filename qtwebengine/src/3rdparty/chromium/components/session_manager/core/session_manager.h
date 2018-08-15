@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_SESSION_MANAGER_CORE_SESSION_MANAGER_H_
 #define COMPONENTS_SESSION_MANAGER_CORE_SESSION_MANAGER_H_
 
+#include <string>
 #include <vector>
 
 #include "base/macros.h"
@@ -39,7 +40,7 @@ class SESSION_EXPORT SessionManager {
   // Returns true if we're logged in and browser has been started i.e.
   // browser_creator.LaunchBrowser(...) was called after sign in
   // or restart after crash.
-  virtual bool IsSessionStarted() const;
+  bool IsSessionStarted() const;
 
   // Called when browser session is started i.e. after
   // browser_creator.LaunchBrowser(...) was called after user sign in.
@@ -48,6 +49,14 @@ class SESSION_EXPORT SessionManager {
   // we perform additional initialization after the user is logged in but
   // before the session has been started.
   virtual void SessionStarted();
+
+  // Returns true if the session for the given user was started.
+  bool HasSessionForAccountId(const AccountId& user_account_id) const;
+
+  // Convenience wrapps of session state.
+  bool IsInSecondaryLoginScreen() const;
+  bool IsScreenLocked() const;
+  bool IsUserSessionBlocked() const;
 
   void AddObserver(SessionManagerObserver* observer);
   void RemoveObserver(SessionManagerObserver* observer);

@@ -7,6 +7,7 @@
 #include "net/quic/core/crypto/quic_random.h"
 #include "net/quic/core/quic_crypto_stream.h"
 #include "net/quic/core/quic_utils.h"
+#include "net/quic/platform/api/quic_test.h"
 #include "net/quic/test_tools/crypto_test_utils.h"
 #include "net/quic/test_tools/mock_quic_dispatcher.h"
 #include "net/quic/test_tools/quic_test_utils.h"
@@ -14,18 +15,17 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-using net::test::CryptoTestUtils;
 
 namespace net {
 namespace test {
 
 // TODO(dmz) Remove "Chrome" part of name once net/tools/quic is deleted.
-class QuicChromeServerDispatchPacketTest : public ::testing::Test {
+class QuicChromeServerDispatchPacketTest : public QuicTest {
  public:
   QuicChromeServerDispatchPacketTest()
       : crypto_config_("blah",
                        QuicRandom::GetInstance(),
-                       CryptoTestUtils::ProofSourceForTesting()),
+                       crypto_test_utils::ProofSourceForTesting()),
         version_manager_(AllSupportedVersions()),
         dispatcher_(
             config_,
@@ -35,14 +35,16 @@ class QuicChromeServerDispatchPacketTest : public ::testing::Test {
                 new net::test::MockQuicConnectionHelper),
             std::unique_ptr<QuicCryptoServerStream::Helper>(
                 new QuicSimpleServerSessionHelper(QuicRandom::GetInstance())),
-            std::unique_ptr<MockAlarmFactory>(
-                new net::test::MockAlarmFactory)) {
+            std::unique_ptr<MockAlarmFactory>(new net::test::MockAlarmFactory),
+            &response_cache_) {
     dispatcher_.InitializeWithWriter(nullptr);
   }
 
   void DispatchPacket(const QuicReceivedPacket& packet) {
     IPEndPoint client_addr, server_addr;
-    dispatcher_.ProcessPacket(server_addr, client_addr, packet);
+    dispatcher_.ProcessPacket(
+        QuicSocketAddress(QuicSocketAddressImpl(server_addr)),
+        QuicSocketAddress(QuicSocketAddressImpl(client_addr)), packet);
   }
 
  protected:
@@ -50,6 +52,7 @@ class QuicChromeServerDispatchPacketTest : public ::testing::Test {
   QuicCryptoServerConfig crypto_config_;
   QuicVersionManager version_manager_;
   net::test::MockQuicDispatcher dispatcher_;
+  QuicHttpResponseCache response_cache_;
 };
 
 TEST_F(QuicChromeServerDispatchPacketTest, DispatchPacket) {
@@ -62,9 +65,9 @@ TEST_F(QuicChromeServerDispatchPacketTest, DispatchPacket) {
                                   0xBC, 0x9A, 0x78, 0x56, 0x34, 0x12,
                                   // private flags
                                   0x00};
-  QuicReceivedPacket encrypted_valid_packet(QuicUtils::AsChars(valid_packet),
-                                            arraysize(valid_packet),
-                                            QuicTime::Zero(), false);
+  QuicReceivedPacket encrypted_valid_packet(
+      reinterpret_cast<char*>(valid_packet), arraysize(valid_packet),
+      QuicTime::Zero(), false);
 
   EXPECT_CALL(dispatcher_, ProcessPacket(_, _, _)).Times(1);
   DispatchPacket(encrypted_valid_packet);

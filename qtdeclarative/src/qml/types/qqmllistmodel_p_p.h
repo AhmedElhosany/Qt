@@ -164,24 +164,22 @@ namespace QV4 {
 namespace Heap {
 
 struct ModelObject : public QObjectWrapper {
-    void init(QObject *object, QQmlListModel *model)
+    void init(QObject *object, QQmlListModel *model, int elementIndex)
     {
         QObjectWrapper::init(object);
         m_model = model;
-        QObjectPrivate *op = QObjectPrivate::get(object);
-        m_nodeModelMetaObject = static_cast<ModelNodeMetaObject *>(op->metaObject);
+        m_elementIndex = elementIndex;
     }
     void destroy() { QObjectWrapper::destroy(); }
-    int elementIndex() const { return m_nodeModelMetaObject->m_elementIndex; }
     QQmlListModel *m_model;
-    ModelNodeMetaObject *m_nodeModelMetaObject;
+    int m_elementIndex;
 };
 
 }
 
 struct ModelObject : public QObjectWrapper
 {
-    static void put(Managed *m, String *name, const Value& value);
+    static bool put(Managed *m, String *name, const Value& value);
     static ReturnedValue get(const Managed *m, String *name, bool *hasProperty);
     static void advanceIterator(Managed *m, ObjectIterator *it, Value *name, uint *index, Property *p, PropertyAttributes *attributes);
 
@@ -398,7 +396,7 @@ private:
 
     void newElement(int index);
 
-    void updateCacheIndices();
+    void updateCacheIndices(int start = 0, int end = -1);
 
     friend class ListElement;
     friend class QQmlListModelWorkerAgent;

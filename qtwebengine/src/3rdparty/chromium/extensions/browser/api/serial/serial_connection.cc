@@ -98,7 +98,7 @@ api::serial::ParityBit ConvertParityBitFromMojo(
       return api::serial::PARITY_BIT_NONE;
     case device::serial::ParityBit::ODD:
       return api::serial::PARITY_BIT_ODD;
-    case device::serial::ParityBit::NO:
+    case device::serial::ParityBit::NO_PARITY:
       return api::serial::PARITY_BIT_NO;
     case device::serial::ParityBit::EVEN:
       return api::serial::PARITY_BIT_EVEN;
@@ -111,7 +111,7 @@ device::serial::ParityBit ConvertParityBitToMojo(api::serial::ParityBit input) {
     case api::serial::PARITY_BIT_NONE:
       return device::serial::ParityBit::NONE;
     case api::serial::PARITY_BIT_NO:
-      return device::serial::ParityBit::NO;
+      return device::serial::ParityBit::NO_PARITY;
     case api::serial::PARITY_BIT_ODD:
       return device::serial::ParityBit::ODD;
     case api::serial::PARITY_BIT_EVEN:
@@ -146,9 +146,9 @@ device::serial::StopBits ConvertStopBitsToMojo(api::serial::StopBits input) {
 
 }  // namespace
 
-static base::LazyInstance<
-    BrowserContextKeyedAPIFactory<ApiResourceManager<SerialConnection> > >
-    g_factory = LAZY_INSTANCE_INITIALIZER;
+static base::LazyInstance<BrowserContextKeyedAPIFactory<
+    ApiResourceManager<SerialConnection>>>::DestructorAtExit g_factory =
+    LAZY_INSTANCE_INITIALIZER;
 
 // static
 template <>
@@ -167,8 +167,6 @@ SerialConnection::SerialConnection(const std::string& port,
       send_timeout_(0),
       paused_(false),
       io_handler_(device::SerialIoHandler::Create(
-          content::BrowserThread::GetTaskRunnerForThread(
-              content::BrowserThread::FILE),
           content::BrowserThread::GetTaskRunnerForThread(
               content::BrowserThread::UI))) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);

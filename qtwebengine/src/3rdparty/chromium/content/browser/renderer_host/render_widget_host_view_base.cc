@@ -13,10 +13,13 @@
 #include "content/browser/renderer_host/render_widget_host_delegate.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base_observer.h"
+#include "content/browser/renderer_host/render_widget_host_view_frame_subscriber.h"
 #include "content/browser/renderer_host/text_input_manager.h"
 #include "content/common/content_switches_internal.h"
-#include "content/public/browser/render_widget_host_view_frame_subscriber.h"
-#include "ui/display/display.h"
+#include "content/public/common/content_features.h"
+#include "media/base/video_frame.h"
+#include "ui/base/layout.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
@@ -26,27 +29,20 @@ namespace content {
 
 namespace {
 
-// How many microseconds apart input events should be flushed.
-const int kFlushInputRateInUs = 16666;
-
 }
 
 RenderWidgetHostViewBase::RenderWidgetHostViewBase()
     : is_fullscreen_(false),
-      popup_type_(blink::WebPopupTypeNone),
-      background_color_(SK_ColorWHITE),
+      popup_type_(blink::kWebPopupTypeNone),
       mouse_locked_(false),
-      showing_context_menu_(false),
-#if !defined(USE_AURA)
-      selection_text_offset_(0),
-      selection_range_(gfx::Range::InvalidRange()),
-#endif
       current_device_scale_factor_(0),
       current_display_rotation_(display::Display::ROTATE_0),
       text_input_manager_(nullptr),
+      wheel_scroll_latching_enabled_(base::FeatureList::IsEnabled(
+          features::kTouchpadAndWheelScrollLatching)),
+      web_contents_accessibility_(nullptr),
       renderer_frame_number_(0),
-      weak_factory_(this) {
-}
+      weak_factory_(this) {}
 
 RenderWidgetHostViewBase::~RenderWidgetHostViewBase() {
   DCHECK(!mouse_locked_);
@@ -90,27 +86,14 @@ bool RenderWidgetHostViewBase::OnMessageReceived(const IPC::Message& msg){
   return false;
 }
 
-void RenderWidgetHostViewBase::SetBackgroundColor(SkColor color) {
-  background_color_ = color;
-}
-
-SkColor RenderWidgetHostViewBase::background_color() {
-  return background_color_;
-}
-
 void RenderWidgetHostViewBase::SetBackgroundColorToDefault() {
   SetBackgroundColor(SK_ColorWHITE);
 }
 
-bool RenderWidgetHostViewBase::GetBackgroundOpaque() {
-  return SkColorGetA(background_color_) == SK_AlphaOPAQUE;
-}
-
 gfx::Size RenderWidgetHostViewBase::GetPhysicalBackingSize() const {
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(GetNativeView());
-  return gfx::ScaleToCeiledSize(GetRequestedRendererSize(),
-                                display.device_scale_factor());
+  return gfx::ScaleToCeiledSize(
+      GetRequestedRendererSize(),
+      ui::GetScaleFactorForNativeView(GetNativeView()));
 }
 
 bool RenderWidgetHostViewBase::DoBrowserControlsShrinkBlinkSize() const {
@@ -137,19 +120,11 @@ float RenderWidgetHostViewBase::GetBottomControlsHeight() const {
 
 void RenderWidgetHostViewBase::SelectionChanged(const base::string16& text,
                                                 size_t offset,
-                                                const gfx::Range& range) {
-// TODO(ekaramad): Use TextInputManager code paths for IME on other platforms.
-// Also, remove the following local variables when that happens
-// (https://crbug.com/578168 and https://crbug.com/602427).
-#if !defined(OS_ANDROID)
+                                                const gfx::Range& range,
+                                                bool user_initiated) {
   if (GetTextInputManager())
-    GetTextInputManager()->SelectionChanged(this, text, offset, range);
-#else
-  selection_text_ = text;
-  selection_text_offset_ = offset;
-  selection_range_.set_start(range.start());
-  selection_range_.set_end(range.end());
-#endif
+    GetTextInputManager()->SelectionChanged(this, text, offset, range,
+                                            user_initiated);
 }
 
 gfx::Size RenderWidgetHostViewBase::GetRequestedRendererSize() const {
@@ -161,38 +136,39 @@ ui::TextInputClient* RenderWidgetHostViewBase::GetTextInputClient() {
   return NULL;
 }
 
-bool RenderWidgetHostViewBase::IsShowingContextMenu() const {
-  return showing_context_menu_;
+void RenderWidgetHostViewBase::SetIsInVR(bool is_in_vr) {
+  NOTIMPLEMENTED();
 }
 
-void RenderWidgetHostViewBase::SetShowingContextMenu(bool showing) {
-  DCHECK_NE(showing_context_menu_, showing);
-  showing_context_menu_ = showing;
+bool RenderWidgetHostViewBase::IsInVR() const {
+  return false;
+}
+
+bool RenderWidgetHostViewBase::IsSurfaceAvailableForCopy() const {
+  return false;
+}
+
+void RenderWidgetHostViewBase::CopyFromSurface(
+    const gfx::Rect& src_rect,
+    const gfx::Size& output_size,
+    const ReadbackRequestCallback& callback,
+    const SkColorType color_type) {
+  NOTIMPLEMENTED();
+  callback.Run(SkBitmap(), READBACK_SURFACE_UNAVAILABLE);
+}
+
+void RenderWidgetHostViewBase::CopyFromSurfaceToVideoFrame(
+    const gfx::Rect& src_rect,
+    scoped_refptr<media::VideoFrame> target,
+    const base::Callback<void(const gfx::Rect&, bool)>& callback) {
+  NOTIMPLEMENTED();
+  callback.Run(gfx::Rect(), false);
 }
 
 base::string16 RenderWidgetHostViewBase::GetSelectedText() {
-// TODO(ekaramad): Use TextInputManager code paths for IME on other platforms.
-// Also, remove the following local variables when that happens
-// (https://crbug.com/578168 and https://crbug.com/602427).
-#if !defined(OS_ANDROID)
   if (!GetTextInputManager())
     return base::string16();
-
-  const TextInputManager::TextSelection* selection =
-      GetTextInputManager()->GetTextSelection(this);
-
-  if (!selection || !selection->range.IsValid())
-    return base::string16();
-
-  return selection->text.substr(selection->range.GetMin() - selection->offset,
-                                selection->range.length());
-#else
-  if (!selection_range_.IsValid())
-    return base::string16();
-  return selection_text_.substr(
-      selection_range_.GetMin() - selection_text_offset_,
-      selection_range_.length());
-#endif
+  return GetTextInputManager()->GetTextSelection(this)->selected_text();
 }
 
 bool RenderWidgetHostViewBase::IsMouseLocked() {
@@ -205,15 +181,10 @@ InputEventAckState RenderWidgetHostViewBase::FilterInputEvent(
   return INPUT_EVENT_ACK_STATE_NOT_CONSUMED;
 }
 
-void RenderWidgetHostViewBase::OnSetNeedsFlushInput() {
-  if (flush_input_timer_.IsRunning())
-    return;
-
-  flush_input_timer_.Start(
-      FROM_HERE,
-      base::TimeDelta::FromMicroseconds(kFlushInputRateInUs),
-      this,
-      &RenderWidgetHostViewBase::FlushInput);
+InputEventAckState RenderWidgetHostViewBase::FilterChildGestureEvent(
+    const blink::WebGestureEvent& gesture_event) {
+  // By default, do nothing with the child's gesture events.
+  return INPUT_EVENT_ACK_STATE_NOT_CONSUMED;
 }
 
 void RenderWidgetHostViewBase::WheelEventAck(
@@ -247,7 +218,7 @@ void RenderWidgetHostViewBase::AccessibilityShowMenu(const gfx::Point& point) {
     impl = RenderWidgetHostImpl::From(GetRenderWidgetHost());
 
   if (impl)
-    impl->ShowContextMenuAtPoint(point);
+    impl->ShowContextMenuAtPoint(point, ui::MENU_SOURCE_NONE);
 }
 
 gfx::Point RenderWidgetHostViewBase::AccessibilityOriginInScreen(
@@ -279,16 +250,18 @@ void RenderWidgetHostViewBase::UpdateScreenInfo(gfx::NativeView view) {
 
 bool RenderWidgetHostViewBase::HasDisplayPropertyChanged(gfx::NativeView view) {
   display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(view);
+      display::Screen::GetScreen()->GetDisplayNearestView(view);
   if (current_display_area_ == display.work_area() &&
       current_device_scale_factor_ == display.device_scale_factor() &&
-      current_display_rotation_ == display.rotation()) {
+      current_display_rotation_ == display.rotation() &&
+      current_display_color_space_ == display.color_space()) {
     return false;
   }
 
   current_display_area_ = display.work_area();
   current_device_scale_factor_ = display.device_scale_factor();
   current_display_rotation_ = display.rotation();
+  current_display_color_space_ = display.color_space();
   return true;
 }
 
@@ -335,15 +308,6 @@ void RenderWidgetHostViewBase::DidReceiveRendererFrame() {
   ++renderer_frame_number_;
 }
 
-void RenderWidgetHostViewBase::FlushInput() {
-  RenderWidgetHostImpl* impl = NULL;
-  if (GetRenderWidgetHost())
-    impl = RenderWidgetHostImpl::From(GetRenderWidgetHost());
-  if (!impl)
-    return;
-  impl->FlushInput();
-}
-
 void RenderWidgetHostViewBase::ShowDisambiguationPopup(
     const gfx::Rect& rect_pixels,
     const SkBitmap& zoomed_bitmap) {
@@ -356,6 +320,14 @@ gfx::Size RenderWidgetHostViewBase::GetVisibleViewportSize() const {
 
 void RenderWidgetHostViewBase::SetInsets(const gfx::Insets& insets) {
   NOTIMPLEMENTED();
+}
+
+void RenderWidgetHostViewBase::DisplayCursor(const WebCursor& cursor) {
+  return;
+}
+
+CursorManager* RenderWidgetHostViewBase::GetCursorManager() {
+  return nullptr;
 }
 
 // static
@@ -420,16 +392,20 @@ ScreenOrientationValues RenderWidgetHostViewBase::GetOrientationTypeForDesktop(
 void RenderWidgetHostViewBase::OnDidNavigateMainFrameToNewPage() {
 }
 
-cc::FrameSinkId RenderWidgetHostViewBase::GetFrameSinkId() {
-  return cc::FrameSinkId();
+viz::FrameSinkId RenderWidgetHostViewBase::GetFrameSinkId() {
+  return viz::FrameSinkId();
 }
 
-cc::FrameSinkId RenderWidgetHostViewBase::FrameSinkIdAtPoint(
+viz::LocalSurfaceId RenderWidgetHostViewBase::GetLocalSurfaceId() const {
+  return viz::LocalSurfaceId();
+}
+
+viz::FrameSinkId RenderWidgetHostViewBase::FrameSinkIdAtPoint(
     cc::SurfaceHittestDelegate* delegate,
     const gfx::Point& point,
     gfx::Point* transformed_point) {
   NOTREACHED();
-  return cc::FrameSinkId();
+  return viz::FrameSinkId();
 }
 
 gfx::Point RenderWidgetHostViewBase::TransformPointToRootCoordSpace(
@@ -445,7 +421,7 @@ gfx::PointF RenderWidgetHostViewBase::TransformPointToRootCoordSpaceF(
 
 bool RenderWidgetHostViewBase::TransformPointToLocalCoordSpace(
     const gfx::Point& point,
-    const cc::SurfaceId& original_surface,
+    const viz::SurfaceId& original_surface,
     gfx::Point* transformed_point) {
   *transformed_point = point;
   return true;
@@ -469,31 +445,22 @@ bool RenderWidgetHostViewBase::IsRenderWidgetHostViewChildFrame() {
 
 void RenderWidgetHostViewBase::TextInputStateChanged(
     const TextInputState& text_input_state) {
-// TODO(ekaramad): Use TextInputManager code paths for IME on other platforms.
-#if !defined(OS_ANDROID)
   if (GetTextInputManager())
     GetTextInputManager()->UpdateTextInputState(this, text_input_state);
-#endif
 }
 
 void RenderWidgetHostViewBase::ImeCancelComposition() {
-// TODO(ekaramad): Use TextInputManager code paths for IME on other platforms.
-#if !defined(OS_ANDROID)
   if (GetTextInputManager())
     GetTextInputManager()->ImeCancelComposition(this);
-#endif
 }
 
 void RenderWidgetHostViewBase::ImeCompositionRangeChanged(
     const gfx::Range& range,
     const std::vector<gfx::Rect>& character_bounds) {
-// TODO(ekaramad): Use TextInputManager code paths for IME on other platforms.
-#if !defined(OS_ANDROID)
   if (GetTextInputManager()) {
     GetTextInputManager()->ImeCompositionRangeChanged(this, range,
                                                       character_bounds);
   }
-#endif
 }
 
 TextInputManager* RenderWidgetHostViewBase::GetTextInputManager() {
@@ -524,12 +491,17 @@ void RenderWidgetHostViewBase::RemoveObserver(
   observers_.RemoveObserver(observer);
 }
 
+TouchSelectionControllerClientManager*
+RenderWidgetHostViewBase::GetTouchSelectionControllerClientManager() {
+  return nullptr;
+}
+
 bool RenderWidgetHostViewBase::IsChildFrameForTesting() const {
   return false;
 }
 
-cc::SurfaceId RenderWidgetHostViewBase::SurfaceIdForTesting() const {
-  return cc::SurfaceId();
+viz::SurfaceId RenderWidgetHostViewBase::SurfaceIdForTesting() const {
+  return viz::SurfaceId();
 }
 
 }  // namespace content

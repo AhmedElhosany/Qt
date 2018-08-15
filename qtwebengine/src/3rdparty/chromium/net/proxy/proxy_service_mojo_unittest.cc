@@ -21,11 +21,11 @@
 #include "net/log/test_net_log.h"
 #include "net/log/test_net_log_entry.h"
 #include "net/proxy/dhcp_proxy_script_fetcher.h"
-#include "net/proxy/in_process_mojo_proxy_resolver_factory.h"
 #include "net/proxy/mock_proxy_script_fetcher.h"
 #include "net/proxy/mojo_proxy_resolver_factory.h"
 #include "net/proxy/proxy_config_service_fixed.h"
 #include "net/proxy/proxy_service.h"
+#include "net/proxy/test_mojo_proxy_resolver_factory.h"
 #include "net/test/event_waiter.h"
 #include "net/test/gtest_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -142,7 +142,7 @@ class ProxyServiceMojoTest : public testing::Test,
       const std::string& pac_script,
       mojo::InterfaceRequest<interfaces::ProxyResolver> req,
       interfaces::ProxyResolverFactoryRequestClientPtr client) override {
-    InProcessMojoProxyResolverFactory::GetInstance()->CreateResolver(
+    TestMojoProxyResolverFactory::GetInstance()->CreateResolver(
         pac_script, std::move(req), std::move(client));
     return base::MakeUnique<base::ScopedClosureRunner>(
         on_delete_closure_.closure());

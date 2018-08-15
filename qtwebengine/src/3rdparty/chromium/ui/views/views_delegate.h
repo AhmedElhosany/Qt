@@ -5,6 +5,7 @@
 #ifndef UI_VIEWS_VIEWS_DELEGATE_H_
 #define UI_VIEWS_VIEWS_DELEGATE_H_
 
+#include <memory>
 #include <string>
 
 #if defined(OS_WIN)
@@ -51,6 +52,8 @@ class View;
 class Widget;
 
 #if defined(USE_AURA)
+class DesktopNativeWidgetAura;
+class DesktopWindowTreeHost;
 class TouchSelectionMenuRunnerViews;
 #endif
 
@@ -69,6 +72,14 @@ class VIEWS_EXPORT ViewsDelegate {
   using NativeWidgetFactory =
       base::Callback<NativeWidget*(const Widget::InitParams&,
                                    internal::NativeWidgetDelegate*)>;
+#if defined(USE_AURA)
+  using DesktopWindowTreeHostFactory =
+      base::Callback<std::unique_ptr<DesktopWindowTreeHost>(
+          const Widget::InitParams&,
+          internal::NativeWidgetDelegate*,
+          DesktopNativeWidgetAura*)>;
+#endif
+
 #if defined(OS_WIN)
   enum AppbarAutohideEdge {
     EDGE_TOP    = 1 << 0,
@@ -95,13 +106,22 @@ class VIEWS_EXPORT ViewsDelegate {
 
   // Call this method to set a factory callback that will be used to construct
   // NativeWidget implementations overriding the platform defaults.
-  void set_native_widget_factory(NativeWidgetFactory factory) {
+  void set_native_widget_factory(const NativeWidgetFactory& factory) {
     native_widget_factory_ = factory;
   }
-  const NativeWidgetFactory& native_widget_factory() {
+  const NativeWidgetFactory& native_widget_factory() const {
     return native_widget_factory_;
   }
 
+#if defined(USE_AURA)
+  void set_desktop_window_tree_host_factory(
+      const DesktopWindowTreeHostFactory& factory) {
+    desktop_window_tree_host_factory_ = factory;
+  }
+  const DesktopWindowTreeHostFactory& desktop_window_tree_host_factory() const {
+    return desktop_window_tree_host_factory_;
+  }
+#endif
   // Saves the position, size and "show" state for the window with the
   // specified name.
   virtual void SaveWindowPlacement(const Widget* widget,
@@ -176,6 +196,9 @@ class VIEWS_EXPORT ViewsDelegate {
   // Returns the context factory for new windows.
   virtual ui::ContextFactory* GetContextFactory();
 
+  // Returns the privileged context factory for new windows.
+  virtual ui::ContextFactoryPrivate* GetContextFactoryPrivate();
+
   // Returns the user-visible name of the application.
   virtual std::string GetApplicationName();
 
@@ -193,21 +216,17 @@ class VIEWS_EXPORT ViewsDelegate {
   // Returns a blocking pool task runner given a TaskRunnerType.
   virtual scoped_refptr<base::TaskRunner> GetBlockingPoolTaskRunner();
 
-  // Returns the insets that should be applied around a DialogClientView.
-  virtual gfx::Insets GetDialogButtonInsets();
-
-  // Returns the spacing between a pair of related horizontal buttons, used for
-  // dialog layout.
-  virtual int GetDialogRelatedButtonHorizontalSpacing();
-
  protected:
   ViewsDelegate();
 
  private:
-  std::unique_ptr<ViewsTouchEditingControllerFactory> views_tsc_factory_;
+  std::unique_ptr<ViewsTouchEditingControllerFactory>
+      editing_controller_factory_;
 
 #if defined(USE_AURA)
   std::unique_ptr<TouchSelectionMenuRunnerViews> touch_selection_menu_runner_;
+
+  DesktopWindowTreeHostFactory desktop_window_tree_host_factory_;
 #endif
 
   NativeWidgetFactory native_widget_factory_;

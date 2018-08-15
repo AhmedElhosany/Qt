@@ -5,31 +5,28 @@
 
 import sys
 
-import in_generator
+import json5_generator
 import trie_builder
 import template_expander
 
 
-class UnitTrieWriter(in_generator.Writer):
-    defaults = {
-        'unit_type': None
-    }
+class UnitTrieWriter(json5_generator.Writer):
+    def __init__(self, json5_file_paths):
+        super(UnitTrieWriter, self).__init__(json5_file_paths)
 
-    def __init__(self, in_file_paths):
-        super(UnitTrieWriter, self).__init__(in_file_paths)
-
-        self._units = {entry['name']: entry['unit_type'] for entry in self.in_file.name_dictionaries}
+        self._units = {entry['name']: entry['unit_type'] for entry in self.json5_file.name_dictionaries}
 
         self._outputs = {
             'CSSPrimitiveValueUnitTrie.cpp': self.generate_implementation
         }
 
-    @template_expander.use_jinja('CSSPrimitiveValueUnitTrie.cpp.tmpl')
+    @template_expander.use_jinja('templates/CSSPrimitiveValueUnitTrie.cpp.tmpl')
     def generate_implementation(self):
         return {
+            'input_files': self._input_files,
             'length_tries': trie_builder.trie_list_by_str_length(self._units)
         }
 
 
 if __name__ == '__main__':
-    in_generator.Maker(UnitTrieWriter).main(sys.argv)
+    json5_generator.Maker(UnitTrieWriter).main()

@@ -231,9 +231,6 @@ class TestResolveProxyDelegate : public ProxyDelegate {
       ProxyServer* alternative_proxy_server) const override {}
   void OnAlternativeProxyBroken(
       const ProxyServer& alternative_proxy_server) override {}
-  ProxyServer GetDefaultAlternativeProxy() const override {
-    return ProxyServer();
-  }
 
  private:
   bool on_resolve_proxy_called_;
@@ -277,9 +274,6 @@ class TestProxyFallbackProxyDelegate : public ProxyDelegate {
       ProxyServer* alternative_proxy_server) const override {}
   void OnAlternativeProxyBroken(
       const ProxyServer& alternative_proxy_server) override {}
-  ProxyServer GetDefaultAlternativeProxy() const override {
-    return ProxyServer();
-  }
 
   bool on_proxy_fallback_called() const {
     return on_proxy_fallback_called_;
@@ -2088,13 +2082,8 @@ TEST_F(ProxyServiceTest, InitialPACScriptDownload) {
   jobs[url2]->results()->UseNamedProxy("request2:80");
   jobs[url2]->CompleteNow(OK);
 
-  //<<<<<<< HEAD
-  //  // Complete and verify that requests ran as expected.
-  //  EXPECT_THAT(callback1.WaitForResult(), IsOk());
-  //=======
   // Complete and verify that jobs ran as expected.
   EXPECT_EQ(OK, callback1.WaitForResult());
-  //>>>>>>> parent of 9c8f424... Revert of Change
   // ProxyResolver::GetProxyForURL() to take a std::unique_ptr<Request>* rather
   // than a RequestHandle* (patchset #11 id:200001 of
   // https://codereview.chromium.org/1439053002/ )
@@ -2337,13 +2326,8 @@ TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomPac) {
   jobs[url1]->results()->UseNamedProxy("request1:80");
   jobs[url1]->CompleteNow(OK);
 
-  //<<<<<<< HEAD
-  //  // Verify that requests ran as expected.
-  //  EXPECT_THAT(callback1.WaitForResult(), IsOk());
-  //=======
   // Verify that jobs ran as expected.
   EXPECT_EQ(OK, callback1.WaitForResult());
-  //>>>>>>> parent of 9c8f424... Revert of Change
   // ProxyResolver::GetProxyForURL() to take a std::unique_ptr<Request>* rather
   // than a RequestHandle* (patchset #11 id:200001 of
   // https://codereview.chromium.org/1439053002/ )
@@ -2427,13 +2411,8 @@ TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomPac2) {
   jobs[url1]->results()->UseNamedProxy("request1:80");
   jobs[url1]->CompleteNow(OK);
 
-  //<<<<<<< HEAD
-  //  // Verify that requests ran as expected.
-  //  EXPECT_THAT(callback1.WaitForResult(), IsOk());
-  //=======
   // Verify that jobs ran as expected.
   EXPECT_EQ(OK, callback1.WaitForResult());
-  //>>>>>>> parent of 9c8f424... Revert of Change
   // ProxyResolver::GetProxyForURL() to take a std::unique_ptr<Request>* rather
   // than a RequestHandle* (patchset #11 id:200001 of
   // https://codereview.chromium.org/1439053002/ )
@@ -3698,6 +3677,67 @@ TEST_F(ProxyServiceTest, SanitizeUrlForPacScriptCryptographic) {
         GURL(test.sanitized_url),
         helper.SanitizeUrl(raw_url, ProxyService::SanitizeUrlPolicy::SAFE));
   }
+}
+
+TEST_F(ProxyServiceTest, OnShutdownWithLiveRequest) {
+  MockProxyConfigService* config_service =
+      new MockProxyConfigService("http://foopy/proxy.pac");
+
+  MockAsyncProxyResolver resolver;
+  MockAsyncProxyResolverFactory* factory =
+      new MockAsyncProxyResolverFactory(true);
+
+  ProxyService service(base::WrapUnique(config_service),
+                       base::WrapUnique(factory), nullptr);
+
+  MockProxyScriptFetcher* fetcher = new MockProxyScriptFetcher;
+  service.SetProxyScriptFetchers(
+      fetcher, base::WrapUnique(new DoNothingDhcpProxyScriptFetcher()));
+
+  ProxyInfo info;
+  TestCompletionCallback callback;
+  ProxyService::PacRequest* request;
+  int rv = service.ResolveProxy(GURL("http://request/"), std::string(), &info,
+                                callback.callback(), &request, nullptr,
+                                NetLogWithSource());
+  EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
+
+  // The first request should have triggered download of PAC script.
+  EXPECT_TRUE(fetcher->has_pending_request());
+  EXPECT_EQ(GURL("http://foopy/proxy.pac"), fetcher->pending_request_url());
+
+  service.OnShutdown();
+  EXPECT_THAT(callback.WaitForResult(), IsOk());
+  EXPECT_FALSE(fetcher->has_pending_request());
+  EXPECT_TRUE(info.is_direct());
+}
+
+TEST_F(ProxyServiceTest, OnShutdownFollowedByRequest) {
+  MockProxyConfigService* config_service =
+      new MockProxyConfigService("http://foopy/proxy.pac");
+
+  MockAsyncProxyResolver resolver;
+  MockAsyncProxyResolverFactory* factory =
+      new MockAsyncProxyResolverFactory(true);
+
+  ProxyService service(base::WrapUnique(config_service),
+                       base::WrapUnique(factory), nullptr);
+
+  MockProxyScriptFetcher* fetcher = new MockProxyScriptFetcher;
+  service.SetProxyScriptFetchers(
+      fetcher, base::WrapUnique(new DoNothingDhcpProxyScriptFetcher()));
+
+  service.OnShutdown();
+
+  ProxyInfo info;
+  TestCompletionCallback callback;
+  ProxyService::PacRequest* request;
+  int rv = service.ResolveProxy(GURL("http://request/"), std::string(), &info,
+                                callback.callback(), &request, nullptr,
+                                NetLogWithSource());
+  EXPECT_THAT(rv, IsOk());
+  EXPECT_FALSE(fetcher->has_pending_request());
+  EXPECT_TRUE(info.is_direct());
 }
 
 }  // namespace net

@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 
 #include "components/autofill/core/browser/test_autofill_client.h"
+#if !defined(OS_ANDROID)
+#include "components/autofill/core/browser/ui/mock_save_card_bubble_controller.h"
+#endif
 
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 
@@ -11,7 +14,11 @@ namespace autofill {
 TestAutofillClient::TestAutofillClient()
     : token_service_(new FakeOAuth2TokenService()),
       identity_provider_(new FakeIdentityProvider(token_service_.get())),
-      rappor_service_(new rappor::TestRapporService()) {}
+      rappor_service_(new rappor::TestRapporServiceImpl()),
+#if !defined(OS_ANDROID)
+      save_card_bubble_controller_(new MockSaveCardBubbleController()),
+#endif
+      form_origin_(GURL("https://example.test")) {}
 
 TestAutofillClient::~TestAutofillClient() {
 }
@@ -36,8 +43,20 @@ IdentityProvider* TestAutofillClient::GetIdentityProvider() {
   return identity_provider_.get();
 }
 
-rappor::RapporService* TestAutofillClient::GetRapporService() {
+rappor::RapporServiceImpl* TestAutofillClient::GetRapporServiceImpl() {
   return rappor_service_.get();
+}
+
+ukm::UkmRecorder* TestAutofillClient::GetUkmRecorder() {
+  return ukm::UkmRecorder::Get();
+}
+
+SaveCardBubbleController* TestAutofillClient::GetSaveCardBubbleController() {
+#if defined(OS_ANDROID)
+  return nullptr;
+#else
+  return save_card_bubble_controller_.get();
+#endif
 }
 
 void TestAutofillClient::ShowAutofillSettings() {
@@ -60,6 +79,7 @@ void TestAutofillClient::ConfirmSaveCreditCardLocally(
 void TestAutofillClient::ConfirmSaveCreditCardToCloud(
     const CreditCard& card,
     std::unique_ptr<base::DictionaryValue> legal_message,
+    bool should_cvc_be_requested,
     const base::Closure& callback) {
   callback.Run();
 }
@@ -112,12 +132,9 @@ void TestAutofillClient::DidFillOrPreviewField(
     const base::string16& profile_full_name) {
 }
 
-void TestAutofillClient::OnFirstUserGestureObserved() {
-}
-
-bool TestAutofillClient::IsContextSecure(const GURL& form_origin) {
+bool TestAutofillClient::IsContextSecure() {
   // Simplified secure context check for tests.
-  return form_origin.SchemeIs("https");
+  return form_origin_.SchemeIs("https");
 }
 
 bool TestAutofillClient::ShouldShowSigninPromo() {
@@ -125,5 +142,11 @@ bool TestAutofillClient::ShouldShowSigninPromo() {
 }
 
 void TestAutofillClient::StartSigninFlow() {}
+
+void TestAutofillClient::ShowHttpNotSecureExplanation() {}
+
+bool TestAutofillClient::IsAutofillSupported() {
+  return true;
+}
 
 }  // namespace autofill

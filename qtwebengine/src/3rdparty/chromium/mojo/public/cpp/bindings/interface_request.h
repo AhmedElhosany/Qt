@@ -9,10 +9,11 @@
 #include <utility>
 
 #include "base/macros.h"
+#include "base/optional.h"
 #include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "mojo/public/cpp/bindings/disconnect_reason.h"
 #include "mojo/public/cpp/bindings/interface_ptr.h"
-#include "mojo/public/cpp/bindings/lib/control_message_proxy.h"
+#include "mojo/public/cpp/bindings/pipe_control_message_proxy.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 
 namespace mojo {
@@ -31,6 +32,9 @@ class InterfaceRequest {
   InterfaceRequest() {}
   InterfaceRequest(decltype(nullptr)) {}
 
+  explicit InterfaceRequest(ScopedMessagePipeHandle handle)
+      : handle_(std::move(handle)) {}
+
   // Takes the message pipe from another InterfaceRequest.
   InterfaceRequest(InterfaceRequest&& other) {
     handle_ = std::move(other.handle_);
@@ -46,11 +50,6 @@ class InterfaceRequest {
     handle_.reset();
     return *this;
   }
-
-  // Binds the request to a message pipe over which Interface is to be
-  // requested.  If the request is already bound to a message pipe, the current
-  // message pipe will be closed.
-  void Bind(ScopedMessagePipeHandle handle) { handle_ = std::move(handle); }
 
   // Indicates whether the request currently contains a valid message pipe.
   bool is_pending() const { return handle_.is_valid(); }
@@ -72,8 +71,8 @@ class InterfaceRequest {
       return;
 
     Message message =
-        internal::ControlMessageProxy::ConstructDisconnectReasonMessage(
-            custom_reason, description);
+        PipeControlMessageProxy::ConstructPeerEndpointClosedMessage(
+            kMasterInterfaceId, DisconnectReason(custom_reason, description));
     MojoResult result = WriteMessageNew(
         handle_.get(), message.TakeMojoMessage(), MOJO_WRITE_MESSAGE_FLAG_NONE);
     DCHECK_EQ(MOJO_RESULT_OK, result);
@@ -86,16 +85,6 @@ class InterfaceRequest {
 
   DISALLOW_COPY_AND_ASSIGN(InterfaceRequest);
 };
-
-// Makes an InterfaceRequest bound to the specified message pipe. If |handle|
-// is empty or invalid, the resulting InterfaceRequest will represent the
-// absence of a request.
-template <typename Interface>
-InterfaceRequest<Interface> MakeRequest(ScopedMessagePipeHandle handle) {
-  InterfaceRequest<Interface> request;
-  request.Bind(std::move(handle));
-  return std::move(request);
-}
 
 // Creates a new message pipe over which Interface is to be served. Binds the
 // specified InterfacePtr to one end of the message pipe, and returns an
@@ -120,9 +109,9 @@ InterfaceRequest<Interface> MakeRequest(ScopedMessagePipeHandle handle) {
 //
 //   DatabasePtr database = ...;  // Connect to database.
 //   TablePtr table;
-//   database->OpenTable(GetProxy(&table));
+//   database->OpenTable(MakeRequest(&table));
 //
-// Upon return from GetProxy, |table| is ready to have methods called on it.
+// Upon return from MakeRequest, |table| is ready to have methods called on it.
 //
 // Example #2: Registering a local implementation with a remote service.
 // =====================================================================
@@ -136,19 +125,28 @@ InterfaceRequest<Interface> MakeRequest(ScopedMessagePipeHandle handle) {
 //
 //   CollectorPtr collector = ...;  // Connect to Collector.
 //   SourcePtr source;
-//   InterfaceRequest<Source> source_request = GetProxy(&source);
+//   InterfaceRequest<Source> source_request(&source);
 //   collector->RegisterSource(std::move(source));
 //   CreateSource(std::move(source_request));  // Create implementation locally.
 //
 template <typename Interface>
-InterfaceRequest<Interface> GetProxy(
+InterfaceRequest<Interface> MakeRequest(
     InterfacePtr<Interface>* ptr,
-    scoped_refptr<base::SingleThreadTaskRunner> runner =
-        base::ThreadTaskRunnerHandle::Get()) {
+    scoped_refptr<base::SingleThreadTaskRunner> runner = nullptr) {
   MessagePipe pipe;
   ptr->Bind(InterfacePtrInfo<Interface>(std::move(pipe.handle0), 0u),
             std::move(runner));
-  return MakeRequest<Interface>(std::move(pipe.handle1));
+  return InterfaceRequest<Interface>(std::move(pipe.handle1));
+}
+
+// Similar to the constructor above, but binds one end of the message pipe to
+// an InterfacePtrInfo instance.
+template <typename Interface>
+InterfaceRequest<Interface> MakeRequest(InterfacePtrInfo<Interface>* ptr_info) {
+  MessagePipe pipe;
+  ptr_info->set_handle(std::move(pipe.handle0));
+  ptr_info->set_version(0u);
+  return InterfaceRequest<Interface>(std::move(pipe.handle1));
 }
 
 // Fuses an InterfaceRequest<T> endpoint with an InterfacePtrInfo<T> endpoint.

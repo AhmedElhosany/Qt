@@ -237,6 +237,34 @@ TEST(Operators, ListRemove) {
   EXPECT_EQ("bar", new_value->list_value()[0].string_value());
 }
 
+TEST(Operators, IntegerAdd) {
+  Err err;
+  TestWithScope setup;
+
+  TestBinaryOpNode node(Token::PLUS, "+");
+  node.SetLeftToValue(Value(nullptr, static_cast<int64_t>(123)));
+  node.SetRightToValue(Value(nullptr, static_cast<int64_t>(456)));
+  Value ret = ExecuteBinaryOperator(setup.scope(), &node, node.left(),
+                                    node.right(), &err);
+  ASSERT_FALSE(err.has_error());
+  ASSERT_EQ(Value::INTEGER, ret.type());
+  EXPECT_EQ(579, ret.int_value());
+}
+
+TEST(Operators, IntegerSubtract) {
+  Err err;
+  TestWithScope setup;
+
+  TestBinaryOpNode node(Token::MINUS, "-");
+  node.SetLeftToValue(Value(nullptr, static_cast<int64_t>(123)));
+  node.SetRightToValue(Value(nullptr, static_cast<int64_t>(456)));
+  Value ret = ExecuteBinaryOperator(setup.scope(), &node, node.left(),
+                                    node.right(), &err);
+  ASSERT_FALSE(err.has_error());
+  ASSERT_EQ(Value::INTEGER, ret.type());
+  EXPECT_EQ(-333, ret.int_value());
+}
+
 TEST(Operators, ShortCircuitAnd) {
   Err err;
   TestWithScope setup;
@@ -308,8 +336,8 @@ TEST(Operators, NonemptyOverwriting) {
 
   // Set up "foo" with a nonempty scope.
   const char bar[] = "bar";
-  old_value = Value(
-      nullptr, std::unique_ptr<Scope>(new Scope(setup.settings())));
+  old_value =
+      Value(nullptr, std::unique_ptr<Scope>(new Scope(setup.settings(), {})));
   old_value.scope_value()->SetValue(bar, Value(nullptr, "bar"), nullptr);
   setup.scope()->SetValue(foo, old_value, nullptr);
 
@@ -322,7 +350,7 @@ TEST(Operators, NonemptyOverwriting) {
 
   // Assigning an empty list should succeed.
   node.SetRightToValue(
-      Value(nullptr, std::unique_ptr<Scope>(new Scope(setup.settings()))));
+      Value(nullptr, std::unique_ptr<Scope>(new Scope(setup.settings(), {}))));
   node.Execute(setup.scope(), &err);
   ASSERT_FALSE(err.has_error());
   new_value = setup.scope()->GetValue(foo);

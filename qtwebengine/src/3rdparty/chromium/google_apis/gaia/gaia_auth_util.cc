@@ -8,12 +8,16 @@
 
 #include <memory>
 
+#include "base/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "google_apis/gaia/gaia_urls.h"
+#include "net/url_request/url_fetcher.h"
+#include "net/url_request/url_request.h"
 #include "url/gurl.h"
 
 namespace gaia {
@@ -22,6 +26,9 @@ namespace {
 
 const char kGmailDomain[] = "gmail.com";
 const char kGooglemailDomain[] = "googlemail.com";
+
+const void* kURLRequestUserDataKey =
+    static_cast<const void*>(&kURLRequestUserDataKey);
 
 std::string CanonicalizeEmailImpl(const std::string& email_address,
                                   bool change_googlemail_to_gmail) {
@@ -43,6 +50,13 @@ std::string CanonicalizeEmailImpl(const std::string& email_address,
   VLOG(1) << "Canonicalized " << email_address << " to " << new_email;
   return new_email;
 }
+
+class GaiaURLRequestUserData : public base::SupportsUserData::Data {
+ public:
+  static std::unique_ptr<base::SupportsUserData::Data> Create() {
+    return base::MakeUnique<GaiaURLRequestUserData>();
+  }
+};
 
 }  // namespace
 
@@ -178,6 +192,16 @@ bool ParseListAccountsData(const std::string& data,
   }
 
   return true;
+}
+
+bool RequestOriginatedFromGaia(const net::URLRequest& request) {
+  return request.GetUserData(kURLRequestUserDataKey) != nullptr;
+}
+
+void MarkURLFetcherAsGaia(net::URLFetcher* fetcher) {
+  DCHECK(fetcher);
+  fetcher->SetURLRequestUserData(kURLRequestUserDataKey,
+                                 base::Bind(&GaiaURLRequestUserData::Create));
 }
 
 }  // namespace gaia

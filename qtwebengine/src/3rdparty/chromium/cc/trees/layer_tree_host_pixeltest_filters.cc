@@ -36,7 +36,8 @@ TEST_F(LayerTreeHostFiltersPixelTest, BackgroundFilterBlur) {
   background->AddChild(blur);
 
   FilterOperations filters;
-  filters.Append(FilterOperation::CreateBlurFilter(2.f));
+  filters.Append(FilterOperation::CreateBlurFilter(
+      2.f, SkBlurImageFilter::kClamp_TileMode));
   blur->SetBackgroundFilters(filters);
 
 #if defined(OS_WIN)
@@ -77,12 +78,13 @@ TEST_F(LayerTreeHostFiltersPixelTest, BackgroundFilterBlurOutsets) {
   background->AddChild(blur);
 
   FilterOperations filters;
-  filters.Append(FilterOperation::CreateBlurFilter(5.f));
+  filters.Append(FilterOperation::CreateBlurFilter(
+      5.f, SkBlurImageFilter::kClamp_TileMode));
   blur->SetBackgroundFilters(filters);
 
 #if defined(OS_WIN)
-  // Windows has 5.6075% pixels by at most 2: crbug.com/259922
-  float percentage_pixels_large_error = 5.7f;
+  // Windows has 5.9325% pixels by at most 2: crbug.com/259922
+  float percentage_pixels_large_error = 6.0f;
   float percentage_pixels_small_error = 0.0f;
   float average_error_allowed_in_bad_pixels = 2.f;
   int large_error_allowed = 2;
@@ -138,7 +140,8 @@ TEST_F(LayerTreeHostFiltersPixelTest, BackgroundFilterBlurOffAxis) {
   blur->SetTransform(blur_transform);
 
   FilterOperations filters;
-  filters.Append(FilterOperation::CreateBlurFilter(2.f));
+  filters.Append(FilterOperation::CreateBlurFilter(
+      2.f, SkBlurImageFilter::kClamp_TileMode));
   blur->SetBackgroundFilters(filters);
 
 #if defined(OS_WIN)
@@ -171,7 +174,7 @@ class LayerTreeHostFiltersScaledPixelTest
   }
 
   void SetupTree() override {
-    layer_tree()->SetDeviceScaleFactor(device_scale_factor_);
+    layer_tree_host()->SetDeviceScaleFactor(device_scale_factor_);
     LayerTreePixelTest::SetupTree();
   }
 
@@ -478,7 +481,8 @@ class ImageBackgroundFilter : public LayerTreeHostFiltersPixelTest {
 
     // Add a blur filter to the blue layer.
     FilterOperations filters;
-    filters.Append(FilterOperation::CreateBlurFilter(5.0f));
+    filters.Append(FilterOperation::CreateBlurFilter(
+        5.0f, SkBlurImageFilter::kClamp_TileMode));
     filter->SetBackgroundFilters(filters);
 
     // Allow some fuzziness so that this doesn't fail when Skia makes minor
@@ -770,11 +774,11 @@ class TranslatedFilterTest : public LayerTreeHostFiltersPixelTest {
     // This is intended to test render pass removal optimizations.
     FakeContentLayerClient client;
     client.set_bounds(child_rect.size());
-    SkPaint paint;
-    paint.setColor(SK_ColorGREEN);
-    client.add_draw_rect(child_rect, paint);
-    paint.setColor(SK_ColorBLUE);
-    client.add_draw_rect(gfx::Rect(100, 50), paint);
+    PaintFlags flags;
+    flags.setColor(SK_ColorGREEN);
+    client.add_draw_rect(child_rect, flags);
+    flags.setColor(SK_ColorBLUE);
+    client.add_draw_rect(gfx::Rect(100, 50), flags);
     scoped_refptr<PictureLayer> child = PictureLayer::Create(&client);
     child->SetBounds(child_rect.size());
     child->SetIsDrawable(true);
@@ -935,7 +939,8 @@ class BlurFilterWithClip : public LayerTreeHostFiltersPixelTest {
     filter_layer->AddChild(child4);
 
     FilterOperations filters;
-    filters.Append(FilterOperation::CreateBlurFilter(2.f));
+    filters.Append(FilterOperation::CreateBlurFilter(
+        2.f, SkBlurImageFilter::kClamp_TileMode));
     filter_layer->SetFilters(filters);
 
     // Force the allocation a larger textures.
@@ -1070,7 +1075,7 @@ class BackgroundFilterWithDeviceScaleFactorTest
   }
 
   void SetupTree() override {
-    layer_tree()->SetDeviceScaleFactor(device_scale_factor_);
+    layer_tree_host()->SetDeviceScaleFactor(device_scale_factor_);
     LayerTreeHostFiltersPixelTest::SetupTree();
   }
 

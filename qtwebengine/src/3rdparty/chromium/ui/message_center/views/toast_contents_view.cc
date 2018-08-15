@@ -12,6 +12,8 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/aura/window.h"
+#include "ui/aura/window_targeter.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -44,6 +46,9 @@ const int kFadeInOutDuration = 200;
 }  // namespace.
 
 // static
+const char ToastContentsView::kViewClassName[] = "ToastContentsView";
+
+// static
 gfx::Size ToastContentsView::GetToastSizeForView(const views::View* view) {
   int width = kNotificationWidth + view->GetInsets().width();
   return gfx::Size(width, view->GetHeightForWidth(width));
@@ -62,7 +67,7 @@ ToastContentsView::ToastContentsView(
   // Sets the transparent background. Then, when the message view is slid out,
   // the whole toast seems to slide although the actual bound of the widget
   // remains. This is hacky but easier to keep the consistency.
-  set_background(views::Background::CreateSolidBackground(0, 0, 0, 0));
+  SetBackground(views::CreateSolidBackground(SK_ColorTRANSPARENT));
 
   fade_animation_.reset(new gfx::SlideAnimation(this));
   fade_animation_->SetSlideDuration(kFadeInOutDuration);
@@ -253,7 +258,7 @@ void ToastContentsView::OnDisplayChanged() {
     return;
 
   collection_->OnDisplayMetricsChanged(
-      Screen::GetScreen()->GetDisplayNearestWindow(native_view));
+      Screen::GetScreen()->GetDisplayNearestView(native_view));
 }
 
 void ToastContentsView::OnWorkAreaChanged() {
@@ -266,7 +271,15 @@ void ToastContentsView::OnWorkAreaChanged() {
     return;
 
   collection_->OnDisplayMetricsChanged(
-      Screen::GetScreen()->GetDisplayNearestWindow(native_view));
+      Screen::GetScreen()->GetDisplayNearestView(native_view));
+}
+
+void ToastContentsView::OnWidgetActivationChanged(views::Widget* widget,
+                                                  bool active) {
+  if (active)
+    collection_->PausePopupTimers();
+  else
+    collection_->RestartPopupTimers();
 }
 
 // views::View
@@ -287,7 +300,7 @@ void ToastContentsView::Layout() {
   }
 }
 
-gfx::Size ToastContentsView::GetPreferredSize() const {
+gfx::Size ToastContentsView::CalculatePreferredSize() const {
   return child_count() ? GetToastSizeForView(child_at(0)) : gfx::Size();
 }
 
@@ -315,6 +328,10 @@ void ToastContentsView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   node_data->role = ui::AX_ROLE_WINDOW;
 }
 
+const char* ToastContentsView::GetClassName() const {
+  return kViewClassName;
+}
+
 void ToastContentsView::ClickOnNotification(
     const std::string& notification_id) {
   if (collection_)
@@ -325,6 +342,12 @@ void ToastContentsView::ClickOnSettingsButton(
     const std::string& notification_id) {
   if (collection_)
     collection_->ClickOnSettingsButton(notification_id);
+}
+
+void ToastContentsView::UpdateNotificationSize(
+    const std::string& notification_id) {
+  if (collection_)
+    collection_->UpdateNotificationSize(notification_id);
 }
 
 void ToastContentsView::RemoveNotification(
@@ -370,6 +393,7 @@ void ToastContentsView::CreateWidget(
   views::Widget* widget = new views::Widget();
   alignment_delegate->ConfigureWidgetInitParamsForContainer(widget, &params);
   widget->set_focus_on_creation(false);
+  widget->AddObserver(this);
 
 #if defined(OS_WIN)
   // We want to ensure that this toast always goes to the native desktop,
@@ -380,6 +404,15 @@ void ToastContentsView::CreateWidget(
 #endif
 
   widget->Init(params);
+
+#if defined(OS_CHROMEOS)
+  // On Chrome OS, this widget is shown in the shelf container. It means this
+  // widget would inherit the parent's window targeter (ShelfWindowTarget) by
+  // default. But it is not good for popup. So we override it with the normal
+  // WindowTargeter.
+  gfx::NativeWindow native_window = widget->GetNativeWindow();
+  native_window->SetEventTargeter(base::MakeUnique<aura::WindowTargeter>());
+#endif
 }
 
 gfx::Rect ToastContentsView::GetClosedToastBounds(gfx::Rect bounds) {

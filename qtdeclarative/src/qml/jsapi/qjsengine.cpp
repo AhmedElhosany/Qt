@@ -166,30 +166,16 @@ Q_DECLARE_METATYPE(QList<int>)
   properties of the proxy object. No binding code is needed because it
   is done dynamically using the Qt meta object system.
 
-  \snippet code/src_script_qjsengine.cpp 5
-
   Use newQMetaObject() to wrap a QMetaObject; this gives you a
   "script representation" of a QObject-based class. newQMetaObject()
   returns a proxy script object; enum values of the class are available
   as properties of the proxy object.
 
-  Constructors exposed to the meta-object system (using Q_INVOKABLE) can be
+  Constructors exposed to the meta-object system ( using Q_INVOKABLE ) can be
   called from the script to create a new QObject instance with
-  JavaScriptOwnership. For example, given the following class definition:
+  JavaScriptOwnership.
 
-  \snippet code/src_script_qjsengine.cpp 7
-
-  The \c staticMetaObject for the class can be exposed to JavaScript like so:
-
-  \snippet code/src_script_qjsengine.cpp 8
-
-  Instances of the class can then be created in JavaScript:
-
-  \snippet code/src_script_qjsengine.cpp 9
-
-  \note Currently only classes using the Q_OBJECT macro are supported; it is
-  not possible to expose the \c staticMetaObject of a Q_GADGET class to
-  JavaScript.
+  \snippet code/src_script_qjsengine.cpp 5
 
   \section2 Dynamic QObject Properties
 
@@ -551,7 +537,7 @@ QJSValue QJSEngine::newQObject(QObject *object)
   When called as a constructor, a new instance of the class will be created.
   Only constructors exposed by Q_INVOKABLE will be visible from the script engine.
 
-  \sa newQObject(), {QObject Integration}
+  \sa newQObject()
 */
 
 QJSValue QJSEngine::newQMetaObject(const QMetaObject* metaObject) {
@@ -568,7 +554,7 @@ QJSValue QJSEngine::newQMetaObject(const QMetaObject* metaObject) {
   Creates a JavaScript object that wraps the static QMetaObject associated
   with class \c{T}.
 
-  \sa newQObject(), {QObject Integration}
+  \sa newQObject()
 */
 
 

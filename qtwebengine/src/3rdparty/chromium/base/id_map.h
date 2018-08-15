@@ -7,22 +7,17 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <memory>
 #include <set>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
-#include "base/containers/hash_tables.h"
+#include "base/containers/flat_set.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/sequence_checker.h"
-
-// Ownership semantics - own pointer means the pointer is deleted in Remove()
-// & during destruction
-enum IDMapOwnershipSemantics {
-  IDMapExternalPointer,
-  IDMapOwnPointer
-};
 
 // This object maintains a list of IDs that can be quickly converted to
 // pointers to objects. It is implemented as a hash table, optimized for
@@ -32,20 +27,18 @@ enum IDMapOwnershipSemantics {
 // Items can be inserted into the container with arbitrary ID, but the caller
 // must ensure they are unique. Inserting IDs and relying on automatically
 // generated ones is not allowed because they can collide.
-//
-// This class does not have a virtual destructor, do not inherit from it when
-// ownership semantics are set to own because pointers will leak.
-template <typename T,
-          IDMapOwnershipSemantics OS = IDMapExternalPointer,
-          typename K = int32_t>
-class IDMap {
+
+// The map's value type (the V param) can be any dereferenceable type, such as a
+// raw pointer or smart pointer
+template <typename V, typename K = int32_t>
+class IDMap final {
  public:
   using KeyType = K;
 
  private:
-  using V = typename std::
-      conditional<OS == IDMapExternalPointer, T*, std::unique_ptr<T>>::type;
-  using HashTable = base::hash_map<KeyType, V>;
+  using T = typename std::remove_reference<decltype(*V())>::type;
+
+  using HashTable = std::unordered_map<KeyType, V>;
 
  public:
   IDMap() : iteration_depth_(0), next_id_(1), check_on_null_data_(false) {
@@ -68,30 +61,13 @@ class IDMap {
   void set_check_on_null_data(bool value) { check_on_null_data_ = value; }
 
   // Adds a view with an automatically generated unique ID. See AddWithID.
-  // (This unique_ptr<> variant will not compile in IDMapExternalPointer mode.)
-  KeyType Add(std::unique_ptr<T> data) {
-    return AddInternal(std::move(data));
-  }
+  KeyType Add(V data) { return AddInternal(std::move(data)); }
 
   // Adds a new data member with the specified ID. The ID must not be in
   // the list. The caller either must generate all unique IDs itself and use
   // this function, or allow this object to generate IDs and call Add. These
   // two methods may not be mixed, or duplicate IDs may be generated.
-  // (This unique_ptr<> variant will not compile in IDMapExternalPointer mode.)
-  void AddWithID(std::unique_ptr<T> data, KeyType id) {
-    AddWithIDInternal(std::move(data), id);
-  }
-
-  // http://crbug.com/647091: Raw pointer Add()s in IDMapOwnPointer mode are
-  // deprecated.  Users of IDMapOwnPointer should transition to the unique_ptr
-  // variant above, and the following methods should only be used in
-  // IDMapExternalPointer mode.
-  KeyType Add(T* data) {
-    return AddInternal(V(data));
-  }
-  void AddWithID(T* data, KeyType id) {
-    AddWithIDInternal(V(data), id);
-  }
+  void AddWithID(V data, KeyType id) { AddWithIDInternal(std::move(data), id); }
 
   void Remove(KeyType id) {
     DCHECK(sequence_checker_.CalledOnValidSequence());
@@ -108,9 +84,8 @@ class IDMap {
     }
   }
 
-  // Replaces the value for |id| with |new_data| and returns the existing value
-  // (as a unique_ptr<> if in IDMapOwnPointer mode).  Should only be called with
-  // an already added id.
+  // Replaces the value for |id| with |new_data| and returns the existing value.
+  // Should only be called with an already added id.
   V Replace(KeyType id, V new_data) {
     DCHECK(sequence_checker_.CalledOnValidSequence());
     DCHECK(!check_on_null_data_ || new_data);
@@ -161,9 +136,7 @@ class IDMap {
   template<class ReturnType>
   class Iterator {
    public:
-    Iterator(IDMap<T, OS, K>* map)
-        : map_(map),
-          iter_(map_->data_.begin()) {
+    Iterator(IDMap<V, K>* map) : map_(map), iter_(map_->data_.begin()) {
       Init();
     }
 
@@ -227,7 +200,7 @@ class IDMap {
       }
     }
 
-    IDMap<T, OS, K>* map_;
+    IDMap<V, K>* map_;
     typename HashTable::const_iterator iter_;
   };
 
@@ -266,7 +239,7 @@ class IDMap {
   // Keep set of IDs that should be removed after the outermost iteration has
   // finished. This way we manage to not invalidate the iterator when an element
   // is removed.
-  std::set<KeyType> removed_ids_;
+  base::flat_set<KeyType> removed_ids_;
 
   // The next ID that we will return from Add()
   KeyType next_id_;

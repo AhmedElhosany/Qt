@@ -126,10 +126,12 @@ FieldTypeGroup AutofillType::group() const {
     case PROBABLY_NEW_PASSWORD:
     case NOT_NEW_PASSWORD:
     case PROBABLY_ACCOUNT_CREATION_PASSWORD:
+    case CONFIRMATION_PASSWORD:
       return PASSWORD_FIELD;
 
     case NO_SERVER_DATA:
     case EMPTY_TYPE:
+    case AMBIGUOUS_TYPE:
     case PHONE_FAX_NUMBER:
     case PHONE_FAX_CITY_CODE:
     case PHONE_FAX_COUNTRY_CODE:
@@ -206,6 +208,10 @@ FieldTypeGroup AutofillType::group() const {
 
     case HTML_TYPE_EMAIL:
       return EMAIL;
+
+    case HTML_TYPE_UPI_VPA:
+      // TODO(crbug/702223): Add support for UPI-VPA.
+      break;
 
     case HTML_TYPE_UNSPECIFIED:
     case HTML_TYPE_UNRECOGNIZED:
@@ -417,6 +423,10 @@ ServerFieldType AutofillType::GetStorableType() const {
     case HTML_TYPE_TRANSACTION_CURRENCY:
       return UNKNOWN_TYPE;
 
+    // TODO(crbug/702223): Add autofill support for UPI-VPA.
+    case HTML_TYPE_UPI_VPA:
+      return UNKNOWN_TYPE;
+
     case HTML_TYPE_UNRECOGNIZED:
       return UNKNOWN_TYPE;
   }
@@ -590,6 +600,8 @@ std::string AutofillType::ToString() const {
       return "HTML_TRANSACTION_AMOUNT";
     case HTML_TYPE_TRANSACTION_CURRENCY:
       return "HTML_TRANSACTION_CURRENCY";
+    case HTML_TYPE_UPI_VPA:
+      return "HTML_TYPE_UPI_VPA";
     case HTML_TYPE_UNRECOGNIZED:
       return "HTML_TYPE_UNRECOGNIZED";
   }
@@ -757,6 +769,11 @@ std::string AutofillType::ServerFieldTypeToString(ServerFieldType type) {
       return "NOT_NEW_PASSWORD";
     case PROBABLY_ACCOUNT_CREATION_PASSWORD:
       return "PROBABLY_ACCOUNT_CREATION_PASSWORD";
+    case CONFIRMATION_PASSWORD:
+      return "CONFIRMATION_PASSWORD";
+
+    case AMBIGUOUS_TYPE:
+      return "AMBIGUOUS_TYPE";
 
     case MAX_VALID_FIELD_TYPE:
       return std::string();

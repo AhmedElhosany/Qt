@@ -73,19 +73,20 @@
 #include "QtWidgets/qgraphicsview.h"
 #endif
 #include <private/qgesture_p.h>
+#include <qpa/qplatformbackingstore.h>
 
 QT_BEGIN_NAMESPACE
 
 // Extra QWidget data
 //  - to minimize memory usage for members that are seldom used.
 //  - top-level widgets have extra extra data to reduce cost further
+class QWidgetWindow;
 class QPaintEngine;
 class QPixmap;
 class QWidgetBackingStore;
 class QGraphicsProxyWidget;
 class QWidgetItemV2;
 class QOpenGLContext;
-class QPlatformTextureList;
 
 class QStyle;
 
@@ -164,7 +165,7 @@ struct QTLWExtra {
     QWidgetBackingStoreTracker backingStoreTracker;
     QBackingStore *backingStore;
     QPainter *sharedPainter;
-    QWindow *window;
+    QWidgetWindow *window;
     QOpenGLContext *shareContext;
 
     // Implicit pointers (shared_null).
@@ -342,6 +343,7 @@ public:
     QPainter *sharedPainter() const;
     void setSharedPainter(QPainter *painter);
     QWidgetBackingStore *maybeBackingStore() const;
+    QWidgetWindow *windowHandle() const;
 
     template <typename T>
     void repaint(T t);
@@ -374,6 +376,7 @@ public:
     void lower_sys();
     void stackUnder_sys(QWidget *);
 
+    QWidget *deepestFocusProxy() const;
     void setFocus_sys();
     void updateFocusChild();
 
@@ -420,7 +423,7 @@ public:
 
     QRect clipRect() const;
     QRegion clipRegion() const;
-    void setSystemClip(QPaintDevice *paintDevice, const QRegion &region);
+    void setSystemClip(QPaintEngine *paintEngine, qreal devicePixelRatio, const QRegion &region);
     void subtractOpaqueChildren(QRegion &rgn, const QRect &clipRect) const;
     void subtractOpaqueSiblings(QRegion &source, bool *hasDirtySiblingsAbove = 0,
                                 bool alsoNonOpaque = false) const;
@@ -644,6 +647,12 @@ public:
 
 #ifndef QT_NO_OPENGL
     virtual GLuint textureId() const { return 0; }
+    virtual QPlatformTextureList::Flags textureListFlags() {
+        Q_Q(QWidget);
+        return q->testAttribute(Qt::WA_AlwaysStackOnTop)
+            ? QPlatformTextureList::StacksOnTop
+            : QPlatformTextureList::Flags(0);
+    }
     virtual QImage grabFramebuffer() { return QImage(); }
     virtual void beginBackingStorePainting() { }
     virtual void endBackingStorePainting() { }
@@ -993,6 +1002,13 @@ inline QWidgetBackingStore *QWidgetPrivate::maybeBackingStore() const
     Q_Q(const QWidget);
     QTLWExtra *x = q->window()->d_func()->maybeTopData();
     return x ? x->backingStoreTracker.data() : 0;
+}
+
+inline QWidgetWindow *QWidgetPrivate::windowHandle() const
+{
+    if (QTLWExtra *x = maybeTopData())
+        return x->window;
+    return nullptr;
 }
 
 QT_END_NAMESPACE

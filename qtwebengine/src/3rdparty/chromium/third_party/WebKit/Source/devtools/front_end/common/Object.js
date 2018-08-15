@@ -22,14 +22,20 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 /**
  * @implements {Common.EventTarget}
  * @unrestricted
  */
 Common.Object = class {
+  constructor() {
+    /** @type {(!Map<symbol, !Array<!Common.Object._listenerCallbackTuple>>|undefined)} */
+    this._listeners;
+  }
+
   /**
    * @override
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
    * @param {function(!Common.Event)} listener
    * @param {!Object=} thisObject
    * @return {!Common.EventTarget.EventDescriptor}
@@ -40,15 +46,30 @@ Common.Object = class {
 
     if (!this._listeners)
       this._listeners = new Map();
+
     if (!this._listeners.has(eventType))
       this._listeners.set(eventType, []);
     this._listeners.get(eventType).push({thisObject: thisObject, listener: listener});
-    return new Common.EventTarget.EventDescriptor(this, eventType, thisObject, listener);
+    return {eventTarget: this, eventType: eventType, thisObject: thisObject, listener: listener};
   }
 
   /**
    * @override
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
+   * @return {!Promise<*>}
+   */
+  once(eventType) {
+    return new Promise(resolve => {
+      var descriptor = this.addEventListener(eventType, event => {
+        this.removeEventListener(eventType, descriptor.listener);
+        resolve(event.data);
+      });
+    });
+  }
+
+  /**
+   * @override
+   * @param {symbol} eventType
    * @param {function(!Common.Event)} listener
    * @param {!Object=} thisObject
    */
@@ -69,76 +90,38 @@ Common.Object = class {
 
   /**
    * @override
-   */
-  removeAllListeners() {
-    delete this._listeners;
-  }
-
-  /**
-   * @override
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
    * @return {boolean}
    */
   hasEventListeners(eventType) {
-    return this._listeners && this._listeners.has(eventType);
+    return !!(this._listeners && this._listeners.has(eventType));
   }
 
   /**
    * @override
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
    * @param {*=} eventData
-   * @return {boolean}
    */
   dispatchEventToListeners(eventType, eventData) {
     if (!this._listeners || !this._listeners.has(eventType))
-      return false;
+      return;
 
-    var event = new Common.Event(this, eventType, eventData);
+    var event = /** @type {!Common.Event} */ ({data: eventData});
     var listeners = this._listeners.get(eventType).slice(0);
-    for (var i = 0; i < listeners.length; ++i) {
+    for (var i = 0; i < listeners.length; ++i)
       listeners[i].listener.call(listeners[i].thisObject, event);
-      if (event._stoppedPropagation)
-        break;
-    }
-
-    return event.defaultPrevented;
   }
 };
 
 /**
- * @unrestricted
+ * @typedef {!{data: *}}
  */
-Common.Event = class {
-  /**
-   * @param {!Common.EventTarget} target
-   * @param {string|symbol} type
-   * @param {*=} data
-   */
-  constructor(target, type, data) {
-    this.target = target;
-    this.type = type;
-    this.data = data;
-    this.defaultPrevented = false;
-    this._stoppedPropagation = false;
-  }
+Common.Event;
 
-  stopPropagation() {
-    this._stoppedPropagation = true;
-  }
-
-  preventDefault() {
-    this.defaultPrevented = true;
-  }
-
-  /**
-   * @param {boolean=} preventDefault
-   */
-  consume(preventDefault) {
-    this.stopPropagation();
-    if (preventDefault)
-      this.preventDefault();
-  }
-};
+/**
+ * @typedef {!{thisObject: (!Object|undefined), listener: function(!Common.Event)}}
+ */
+Common.Object._listenerCallbackTuple;
 
 /**
  * @interface
@@ -146,12 +129,17 @@ Common.Event = class {
 Common.EventTarget = function() {};
 
 /**
+ * @typedef {!{eventTarget: !Common.EventTarget, eventType: symbol, thisObject: (!Object|undefined), listener: function(!Common.Event)}}
+ */
+Common.EventTarget.EventDescriptor;
+
+/**
  * @param {!Array<!Common.EventTarget.EventDescriptor>} eventList
  */
 Common.EventTarget.removeEventListeners = function(eventList) {
   for (var i = 0; i < eventList.length; ++i) {
     var eventInfo = eventList[i];
-    eventInfo.eventTarget.removeEventListener(eventInfo.eventType, eventInfo.method, eventInfo.receiver);
+    eventInfo.eventTarget.removeEventListener(eventInfo.eventType, eventInfo.listener, eventInfo.thisObject);
   }
   // Do not hold references on unused event descriptors.
   eventList.splice(0, eventList.length);
@@ -159,50 +147,35 @@ Common.EventTarget.removeEventListeners = function(eventList) {
 
 Common.EventTarget.prototype = {
   /**
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
    * @param {function(!Common.Event)} listener
    * @param {!Object=} thisObject
    * @return {!Common.EventTarget.EventDescriptor}
    */
-  addEventListener: function(eventType, listener, thisObject) {},
+  addEventListener(eventType, listener, thisObject) {},
 
   /**
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
+   * @return {!Promise<*>}
+   */
+  once(eventType) {},
+
+  /**
+   * @param {symbol} eventType
    * @param {function(!Common.Event)} listener
    * @param {!Object=} thisObject
    */
-  removeEventListener: function(eventType, listener, thisObject) {},
-
-  removeAllListeners: function() {},
+  removeEventListener(eventType, listener, thisObject) {},
 
   /**
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
    * @return {boolean}
    */
-  hasEventListeners: function(eventType) {},
+  hasEventListeners(eventType) {},
 
   /**
-   * @param {string|symbol} eventType
+   * @param {symbol} eventType
    * @param {*=} eventData
-   * @return {boolean}
    */
-  dispatchEventToListeners: function(eventType, eventData) {},
-};
-
-/**
- * @unrestricted
- */
-Common.EventTarget.EventDescriptor = class {
-  /**
-   * @param {!Common.EventTarget} eventTarget
-   * @param {string|symbol} eventType
-   * @param {(!Object|undefined)} receiver
-   * @param {function(?):?} method
-   */
-  constructor(eventTarget, eventType, receiver, method) {
-    this.eventTarget = eventTarget;
-    this.eventType = eventType;
-    this.receiver = receiver;
-    this.method = method;
-  }
+  dispatchEventToListeners(eventType, eventData) {},
 };

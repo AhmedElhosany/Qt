@@ -9,6 +9,7 @@
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "media/base/content_decryption_module.h"
 #include "media/base/key_system_names.h"
 #include "media/base/key_systems.h"
 #include "media/base/media_switches.h"
@@ -55,9 +56,9 @@ void DefaultCdmFactory::Create(
     return;
   }
 
-  scoped_refptr<MediaKeys> cdm(
+  scoped_refptr<ContentDecryptionModule> cdm(
       new AesDecryptor(security_origin, session_message_cb, session_closed_cb,
-                       session_keys_change_cb));
+                       session_keys_change_cb, session_expiration_update_cb));
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::Bind(cdm_created_cb, cdm, ""));
 }

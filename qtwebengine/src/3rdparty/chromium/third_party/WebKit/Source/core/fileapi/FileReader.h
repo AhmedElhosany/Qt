@@ -31,16 +31,16 @@
 #ifndef FileReader_h
 #define FileReader_h
 
-#include "bindings/core/v8/ActiveScriptWrappable.h"
+#include <memory>
 #include "core/CoreExport.h"
-#include "core/dom/ActiveDOMObject.h"
+#include "core/dom/ContextLifecycleObserver.h"
 #include "core/events/EventTarget.h"
 #include "core/fileapi/FileError.h"
 #include "core/fileapi/FileReaderLoader.h"
 #include "core/fileapi/FileReaderLoaderClient.h"
+#include "platform/bindings/ActiveScriptWrappable.h"
 #include "platform/heap/Handle.h"
-#include "wtf/Forward.h"
-#include <memory>
+#include "platform/wtf/Forward.h"
 
 namespace blink {
 
@@ -50,14 +50,14 @@ class ExecutionContext;
 class StringOrArrayBuffer;
 
 class CORE_EXPORT FileReader final : public EventTargetWithInlineData,
-                                     public ActiveScriptWrappable,
-                                     public ActiveDOMObject,
+                                     public ActiveScriptWrappable<FileReader>,
+                                     public ContextLifecycleObserver,
                                      public FileReaderLoaderClient {
   DEFINE_WRAPPERTYPEINFO();
   USING_GARBAGE_COLLECTED_MIXIN(FileReader);
 
  public:
-  static FileReader* create(ExecutionContext*);
+  static FileReader* Create(ExecutionContext*);
 
   ~FileReader() override;
 
@@ -70,27 +70,27 @@ class CORE_EXPORT FileReader final : public EventTargetWithInlineData,
   void readAsDataURL(Blob*, ExceptionState&);
   void abort();
 
-  ReadyState getReadyState() const { return m_state; }
-  DOMException* error() { return m_error; }
-  void result(StringOrArrayBuffer& resultAttribute) const;
+  ReadyState getReadyState() const { return state_; }
+  DOMException* error() { return error_; }
+  void result(StringOrArrayBuffer& result_attribute) const;
 
-  // ActiveDOMObject
-  void contextDestroyed() override;
+  // ContextLifecycleObserver
+  void ContextDestroyed(ExecutionContext*) override;
 
   // ScriptWrappable
-  bool hasPendingActivity() const final;
+  bool HasPendingActivity() const final;
 
   // EventTarget
-  const AtomicString& interfaceName() const override;
-  ExecutionContext* getExecutionContext() const override {
-    return ActiveDOMObject::getExecutionContext();
+  const AtomicString& InterfaceName() const override;
+  ExecutionContext* GetExecutionContext() const override {
+    return ContextLifecycleObserver::GetExecutionContext();
   }
 
   // FileReaderLoaderClient
-  void didStartLoading() override;
-  void didReceiveData() override;
-  void didFinishLoading() override;
-  void didFail(FileError::ErrorCode) override;
+  void DidStartLoading() override;
+  void DidReceiveData() override;
+  void DidFinishLoading() override;
+  void DidFail(FileError::ErrorCode) override;
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(loadstart);
   DEFINE_ATTRIBUTE_EVENT_LISTENER(progress);
@@ -102,37 +102,37 @@ class CORE_EXPORT FileReader final : public EventTargetWithInlineData,
   DECLARE_VIRTUAL_TRACE();
 
  private:
-  explicit FileReader(ExecutionContext*);
-
   class ThrottlingController;
 
-  void terminate();
-  void readInternal(Blob*, FileReaderLoader::ReadType, ExceptionState&);
-  void fireEvent(const AtomicString& type);
+  explicit FileReader(ExecutionContext*);
 
-  void executePendingRead();
+  void Terminate();
+  void ReadInternal(Blob*, FileReaderLoader::ReadType, ExceptionState&);
+  void FireEvent(const AtomicString& type);
 
-  ReadyState m_state;
+  void ExecutePendingRead();
+
+  ReadyState state_;
 
   // Internal loading state, which could differ from ReadyState as it's
   // for script-visible state while this one's for internal state.
   enum LoadingState {
-    LoadingStateNone,
-    LoadingStatePending,
-    LoadingStateLoading,
-    LoadingStateAborted
+    kLoadingStateNone,
+    kLoadingStatePending,
+    kLoadingStateLoading,
+    kLoadingStateAborted
   };
-  LoadingState m_loadingState;
-  bool m_stillFiringEvents;
+  LoadingState loading_state_;
+  bool still_firing_events_;
 
-  String m_blobType;
-  RefPtr<BlobDataHandle> m_blobDataHandle;
-  FileReaderLoader::ReadType m_readType;
-  String m_encoding;
+  String blob_type_;
+  RefPtr<BlobDataHandle> blob_data_handle_;
+  FileReaderLoader::ReadType read_type_;
+  String encoding_;
 
-  std::unique_ptr<FileReaderLoader> m_loader;
-  Member<DOMException> m_error;
-  double m_lastProgressNotificationTimeMS;
+  std::unique_ptr<FileReaderLoader> loader_;
+  Member<DOMException> error_;
+  double last_progress_notification_time_ms_;
 };
 
 }  // namespace blink

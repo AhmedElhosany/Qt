@@ -74,7 +74,9 @@ public:
 */
 QThreadPoolThread::QThreadPoolThread(QThreadPoolPrivate *manager)
     :manager(manager), runnable(nullptr)
-{ }
+{
+    setStackSize(manager->stackSize);
+}
 
 /*
     \internal
@@ -165,11 +167,6 @@ void QThreadPoolThread::registerThreadInactive()
     \internal
 */
 QThreadPoolPrivate:: QThreadPoolPrivate()
-    : isExiting(false),
-      expiryTimeout(30000),
-      maxThreadCount(qAbs(QThread::idealThreadCount())),
-      reservedThreads(0),
-      activeThreads(0)
 { }
 
 bool QThreadPoolPrivate::tryStart(QRunnable *task)
@@ -634,6 +631,32 @@ void QThreadPool::reserveThread()
     Q_D(QThreadPool);
     QMutexLocker locker(&d->mutex);
     ++d->reservedThreads;
+}
+
+/*! \property QThreadPool::stackSize
+
+    This property contains the stack size for the thread pool worker
+    threads.
+
+    The value of the property is only used when the thread pool creates
+    new threads. Changing it has no effect for already created
+    or running threads.
+
+    The default value is 0, which makes QThread use the operating
+    system default stack size.
+
+    \since 5.10
+*/
+void QThreadPool::setStackSize(uint stackSize)
+{
+    Q_D(QThreadPool);
+    d->stackSize = stackSize;
+}
+
+uint QThreadPool::stackSize() const
+{
+    Q_D(const QThreadPool);
+    return d->stackSize;
 }
 
 /*!

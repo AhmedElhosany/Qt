@@ -4,12 +4,33 @@
 
 #include "ui/views/animation/ink_drop.h"
 
+#include "ui/views/animation/ink_drop_observer.h"
+
 namespace views {
+
+InkDrop::~InkDrop() {}
+
+void InkDrop::AddObserver(InkDropObserver* observer) {
+  CHECK(observer);
+  observers_.AddObserver(observer);
+}
+
+void InkDrop::RemoveObserver(InkDropObserver* observer) {
+  CHECK(observer);
+  observers_.RemoveObserver(observer);
+}
+
+InkDrop::InkDrop() {}
+
+void InkDrop::NotifyInkDropAnimationStarted() {
+  for (InkDropObserver& observer : observers_)
+    observer.InkDropAnimationStarted();
+}
 
 InkDropContainerView::InkDropContainerView() {}
 
 void InkDropContainerView::AddInkDropLayer(ui::Layer* ink_drop_layer) {
-  SetPaintToLayer(true);
+  SetPaintToLayer();
   SetVisible(true);
   layer()->SetFillsBoundsOpaquely(false);
   layer()->Add(ink_drop_layer);
@@ -18,7 +39,7 @@ void InkDropContainerView::AddInkDropLayer(ui::Layer* ink_drop_layer) {
 void InkDropContainerView::RemoveInkDropLayer(ui::Layer* ink_drop_layer) {
   layer()->Remove(ink_drop_layer);
   SetVisible(false);
-  SetPaintToLayer(false);
+  DestroyLayer();
 }
 
 bool InkDropContainerView::CanProcessEventsWithinSubtree() const {

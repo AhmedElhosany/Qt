@@ -14,20 +14,28 @@
 
 # Need a separate config to ensure the warnings are added to the end.
 config("swiftshader_libEGL_private_config") {
+  defines = [ "EGL_EGLEXT_PROTOTYPES" ]
+
   if (is_win) {
     cflags = [
-      "/DEGLAPI=",
-      "/DEGL_EGLEXT_PROTOTYPES",
-      "/DLIBEGL_EXPORTS",
-      "/wd4201", # nameless struct/union
-      "/wd4065", # switch statement contains 'default' but no 'case' labels
+      "/wd4201",  # nameless struct/union
+      "/wd4065",  # switch statement contains 'default' but no 'case' labels
+      "/wd5030",  # attribute is not recognized
+    ]
+
+    defines += [
+      "EGLAPI=",
+      "LIBEGL_EXPORTS",
     ]
   } else {
-    cflags = [
-      "-DLOG_TAG=\"swiftshader_libEGL\"",
-      "-DEGLAPI=",
-      "-DEGL_EGLEXT_PROTOTYPES",
-      "-Wno-sign-compare",
+    cflags = [ "-Wno-sign-compare" ]
+    if (!is_clang) {
+      cflags += [ "-Wno-unused-but-set-variable" ]
+    }
+
+    defines += [
+      "LOG_TAG=\"swiftshader_libEGL\"",
+      "EGLAPI=__attribute__((visibility(\"default\")))",
     ]
   }
 }
@@ -38,19 +46,23 @@ shared_library("swiftshader_libEGL") {
     output_dir = "$root_out_dir/swiftshader"
   }
 
+  deps = [
+    "//build/config:exe_and_shlib_deps",
+  ]
+
   sources = [
+    "../common/Object.cpp",
     "Config.cpp",
     "Display.cpp",
     "Surface.cpp",
     "libEGL.cpp",
-    "main.cpp",
-    "../common/Object.cpp",
     "libEGL.def",
     "libEGL.rc",
+    "main.cpp",
     "resource.h",
   ]
 
-  if(is_debug) {
+  if (is_debug) {
     sources += [ "../common/debug.cpp" ]
   }
 
@@ -60,11 +72,14 @@ shared_library("swiftshader_libEGL") {
       "Quartz.framework",
       "Cocoa.framework",
     ]
+    ldflags = [ "-Wl,-install_name,@rpath/libswiftshader_libEGL.dylib" ]
   } else if (is_win) {
     configs -= [ "//build/config/win:unicode" ]
     ldflags = [ "/DEF:" + rebase_path("libGLESv2.def", root_build_dir) ]
   } else if (is_linux) {
     sources += [ "../../Main/libX11.cpp" ]
+    ldflags =
+        [ "-Wl,--version-script=" + rebase_path("exports.map", root_build_dir) ]
   }
 
   configs -= [ "//build/config/compiler:chromium_code" ]

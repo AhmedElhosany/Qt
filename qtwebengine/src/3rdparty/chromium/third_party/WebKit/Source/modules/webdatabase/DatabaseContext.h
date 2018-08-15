@@ -28,7 +28,7 @@
 #ifndef DatabaseContext_h
 #define DatabaseContext_h
 
-#include "core/dom/ActiveDOMObject.h"
+#include "core/dom/ContextLifecycleObserver.h"
 #include "platform/heap/Handle.h"
 
 namespace blink {
@@ -39,40 +39,40 @@ class ExecutionContext;
 class SecurityOrigin;
 
 class DatabaseContext final : public GarbageCollectedFinalized<DatabaseContext>,
-                              public ActiveDOMObject {
+                              public ContextLifecycleObserver {
   USING_GARBAGE_COLLECTED_MIXIN(DatabaseContext);
 
  public:
   friend class DatabaseManager;
 
-  static DatabaseContext* create(ExecutionContext*);
+  static DatabaseContext* Create(ExecutionContext*);
 
-  ~DatabaseContext() override;
+  ~DatabaseContext();
   DECLARE_VIRTUAL_TRACE();
 
-  // For life-cycle management (inherited from ActiveDOMObject):
-  void contextDestroyed() override;
+  // For life-cycle management (inherited from ContextLifecycleObserver):
+  void ContextDestroyed(ExecutionContext*) override;
 
-  DatabaseContext* backend();
-  DatabaseThread* databaseThread();
-  bool databaseThreadAvailable();
+  DatabaseContext* Backend();
+  DatabaseThread* GetDatabaseThread();
+  bool DatabaseThreadAvailable();
 
-  void setHasOpenDatabases() { m_hasOpenDatabases = true; }
+  void SetHasOpenDatabases() { has_open_databases_ = true; }
   // Blocks the caller thread until cleanup tasks are completed.
-  void stopDatabases();
+  void StopDatabases();
 
-  bool allowDatabaseAccess() const;
+  bool AllowDatabaseAccess() const;
 
-  SecurityOrigin* getSecurityOrigin() const;
-  bool isContextThread() const;
+  SecurityOrigin* GetSecurityOrigin() const;
+  bool IsContextThread() const;
 
  private:
   explicit DatabaseContext(ExecutionContext*);
 
-  Member<DatabaseThread> m_databaseThread;
-  bool m_hasOpenDatabases;  // This never changes back to false, even after the
-                            // database thread is closed.
-  bool m_hasRequestedTermination;
+  Member<DatabaseThread> database_thread_;
+  bool has_open_databases_;  // This never changes back to false, even after the
+                             // database thread is closed.
+  bool has_requested_termination_;
 };
 
 }  // namespace blink

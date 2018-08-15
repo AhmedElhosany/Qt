@@ -13,15 +13,33 @@ https://android.googlesource.com/platform/sdk/+/master/files/ant/build.xml
 """
 # pylint: enable=C0301
 
+import multiprocessing.pool
 import optparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 import zipfile
 
 from util import build_utils
 
+
+# A variation of this lists also exists in:
+# //base/android/java/src/org/chromium/base/LocaleUtils.java
+_CHROME_TO_ANDROID_LOCALE_MAP = {
+    'en-GB': 'en-rGB',
+    'en-US': 'en-rUS',
+    'es-419': 'es-rUS',
+    'fin': 'tl',
+    'he': 'iw',
+    'id': 'in',
+    'pt-PT': 'pt-rPT',
+    'pt-BR': 'pt-rBR',
+    'yi': 'ji',
+    'zh-CN': 'zh-rCN',
+    'zh-TW': 'zh-rTW',
+}
 
 # List is generated from the chrome_apk.apk_intermediates.ap_ via:
 #     unzip -l $FILE_AP_ | cut -c31- | grep res/draw | cut -d'/' -f 2 | sort \
@@ -72,6 +90,10 @@ DENSITY_SPLITS = {
 }
 
 
+_PNG_TO_WEBP_ARGS = [
+    '-mt', '-quiet', '-m', '6', '-q', '100', '-lossless', '-o']
+
+
 def _ParseArgs(args):
   """Parses command line options.
 
@@ -113,10 +135,24 @@ def _ParseArgs(args):
       help='Enables density splits')
   parser.add_option('--language-splits',
                     default='[]',
-                    help='GYP list of languages to create splits for')
-
+                    help='GN list of languages to create splits for')
+  parser.add_option('--locale-whitelist',
+                    default='[]',
+                    help='GN list of languages to include. All other language '
+                         'configs will be stripped out. List may include '
+                         'a combination of Android locales or Chrome locales.')
   parser.add_option('--apk-path',
                     help='Path to output (partial) apk.')
+  parser.add_option('--exclude-xxxhdpi', action='store_true',
+                    help='Do not include xxxhdpi drawables.')
+  parser.add_option('--xxxhdpi-whitelist',
+                    default='[]',
+                    help='GN list of globs that say which xxxhdpi images to '
+                         'include even when --exclude-xxxhdpi is set.')
+  parser.add_option('--png-to-webp', action='store_true',
+                    help='Convert png files to webp format.')
+  parser.add_option('--webp-binary', default='',
+                    help='Path to the cwebp binary.')
 
   options, positional_args = parser.parse_args(args)
 
@@ -132,7 +168,25 @@ def _ParseArgs(args):
 
   options.resource_zips = build_utils.ParseGnList(options.resource_zips)
   options.language_splits = build_utils.ParseGnList(options.language_splits)
+  options.locale_whitelist = build_utils.ParseGnList(options.locale_whitelist)
+  options.xxxhdpi_whitelist = build_utils.ParseGnList(options.xxxhdpi_whitelist)
   return options
+
+
+def _ToAaptLocales(locale_whitelist):
+  """Converts the list of Chrome locales to aapt config locales."""
+  ret = set()
+  for locale in locale_whitelist:
+    locale = _CHROME_TO_ANDROID_LOCALE_MAP.get(locale, locale)
+    if locale is None or ('-' in locale and '-r' not in locale):
+      raise Exception('_CHROME_TO_ANDROID_LOCALE_MAP needs updating.'
+                      ' Found: %s' % locale)
+    ret.add(locale)
+    # Always keep non-regional fall-backs.
+    language = locale.split('-')[0]
+    ret.add(language)
+
+  return sorted(ret)
 
 
 def MoveImagesToNonMdpiFolders(res_root):
@@ -170,7 +224,7 @@ def PackageArgsForExtractedZip(d):
   """
   subdirs = [os.path.join(d, s) for s in os.listdir(d)]
   subdirs = [s for s in subdirs if os.path.isdir(s)]
-  is_multi = '0' in [os.path.basename(s) for s in subdirs]
+  is_multi = any(os.path.basename(s).isdigit() for s in subdirs)
   if is_multi:
     res_dirs = sorted(subdirs, key=lambda p : int(os.path.basename(p)))
   else:
@@ -257,18 +311,75 @@ def _ConstructMostAaptArgs(options):
   if 'Debug' in options.configuration_name:
     package_command += ['--debug-mode']
 
+  if options.locale_whitelist:
+    aapt_locales = _ToAaptLocales(options.locale_whitelist)
+    package_command += ['-c', ','.join(aapt_locales)]
+
   return package_command
+
+
+def _ResourceNameFromPath(path):
+  return os.path.splitext(os.path.basename(path))[0]
+
+
+def _CreateExtractPredicate(dep_zips, exclude_xxxhdpi, xxxhdpi_whitelist):
+  if not exclude_xxxhdpi:
+    # Do not extract dotfiles (e.g. ".gitkeep"). aapt ignores them anyways.
+    return lambda path: os.path.basename(path)[0] != '.'
+
+  # Returns False only for xxxhdpi non-mipmap, non-whitelisted drawables.
+  naive_predicate = lambda path: (
+      not re.search(r'[/-]xxxhdpi[/-]', path) or
+      re.search(r'[/-]mipmap[/-]', path) or
+      build_utils.MatchesGlob(path, xxxhdpi_whitelist))
+
+  # Build a set of all non-xxxhdpi drawables to ensure that we never exclude any
+  # xxxhdpi drawable that does not exist in other densities.
+  non_xxxhdpi_drawables = set()
+  for resource_zip_path in dep_zips:
+    with zipfile.ZipFile(resource_zip_path) as zip_file:
+      for path in zip_file.namelist():
+        if re.search(r'[/-]drawable[/-]', path) and naive_predicate(path):
+          non_xxxhdpi_drawables.add(_ResourceNameFromPath(path))
+
+  return lambda path: (naive_predicate(path) or
+                       _ResourceNameFromPath(path) not in non_xxxhdpi_drawables)
+
+
+def _ConvertToWebP(webp_binary, png_files):
+  pool = multiprocessing.pool.ThreadPool(10)
+  def convert_image(png_path):
+    root = os.path.splitext(png_path)[0]
+    webp_path = root + '.webp'
+    args = [webp_binary, png_path] + _PNG_TO_WEBP_ARGS + [webp_path]
+    subprocess.check_call(args)
+    os.remove(png_path)
+  # Android requires pngs for 9-patch images.
+  pool.map(convert_image, [f for f in png_files if not f.endswith('.9.png')])
+  pool.close()
+  pool.join()
 
 
 def _OnStaleMd5(package_command, options):
   with build_utils.TempDir() as temp_dir:
     if options.resource_zips:
       dep_zips = options.resource_zips
+      extract_predicate = _CreateExtractPredicate(
+          dep_zips, options.exclude_xxxhdpi, options.xxxhdpi_whitelist)
+      png_paths = []
+      package_subdirs = []
       for z in dep_zips:
         subdir = os.path.join(temp_dir, os.path.basename(z))
         if os.path.exists(subdir):
           raise Exception('Resource zip name conflict: ' + os.path.basename(z))
-        build_utils.ExtractAll(z, path=subdir)
+        extracted_files = build_utils.ExtractAll(
+            z, path=subdir, predicate=extract_predicate)
+        if extracted_files:
+          package_subdirs.append(subdir)
+          png_paths.extend(f for f in extracted_files if f.endswith('.png'))
+      if png_paths and options.png_to_webp:
+        _ConvertToWebP(options.webp_binary, png_paths)
+      for subdir in package_subdirs:
         package_command += PackageArgsForExtractedZip(subdir)
 
     build_utils.CheckOutput(
@@ -288,7 +399,7 @@ def main(args):
 
   package_command = _ConstructMostAaptArgs(options)
 
-  output_paths = [ options.apk_path ]
+  output_paths = [options.apk_path]
 
   if options.create_density_splits:
     for _, dst_path in _GenerateDensitySplitPaths(options.apk_path):
@@ -297,10 +408,13 @@ def main(args):
       _GenerateLanguageSplitOutputPaths(options.apk_path,
                                         options.language_splits))
 
-  input_paths = [ options.android_manifest ] + options.resource_zips
+  input_paths = [options.android_manifest] + options.resource_zips
 
-  input_strings = []
+  input_strings = [options.exclude_xxxhdpi] + options.xxxhdpi_whitelist
   input_strings.extend(package_command)
+  if options.png_to_webp:
+    # This is necessary to ensure conversion if the option is toggled.
+    input_strings.extend("png_to_webp")
 
   # The md5_check.py doesn't count file path in md5 intentionally,
   # in order to repackage resources when assets' name changed, we need

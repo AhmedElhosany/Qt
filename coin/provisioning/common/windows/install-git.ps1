@@ -35,10 +35,11 @@
 # Install Git version 2.13.0
 
 $version = "2.13.0"
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     $arch = "-64-bit"
     $sha1 = "E1D7C6E5E16ACAF3C108064A2ED158F604FA29A7"
-} else {
+}
+else {
     $arch = "-32-bit"
     $sha1 = "03c7df2e4ef61ea6b6f9c0eb7e6d5151d9682aec"
 }
@@ -46,11 +47,11 @@ $gitPackage = "C:\Windows\Temp\Git-" + $version + $arch + ".exe"
 $url_cache = "\\ci-files01-hki.intra.qt.io\provisioning\windows\Git-" + $version + $arch + ".exe"
 $url_official = "https://github.com/git-for-windows/git/releases/download/v" + $version + ".windows.1/Git-" + $version + $arch + ".exe"
 
-Write-Host "Fetching Git $version..."
+echo "Fetching Git $version..."
 Download $url_official $url_cache $gitPackage
 Verify-Checksum $gitPackage $sha1
-Write-Host "Installing Git $version..."
-Run-Executable "$gitPackage" "/SILENT /COMPONENTS=`"icons,ext\reg\shellhere,assoc,assoc_sh`""
-Remove-Item -Path $gitPackage
+echo "Installing Git $version..."
+cmd /c "$gitPackage /SILENT /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh""
+remove-item $gitPackage
 
-Write-Output "Git = $version" >> ~\versions.txt
+echo "Git = $version" >> ~\versions.txt

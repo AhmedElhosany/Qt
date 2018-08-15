@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <memory>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "public/fpdfview.h"
@@ -16,7 +18,7 @@
 namespace {
 class TestAsyncLoader : public FX_DOWNLOADHINTS, FX_FILEAVAIL {
  public:
-  TestAsyncLoader(const std::string& file_name) {
+  explicit TestAsyncLoader(const std::string& file_name) {
     std::string file_path;
     if (!PathService::GetTestFilePath(file_name, &file_path))
       return;
@@ -192,9 +194,9 @@ TEST_F(FPDFDataAvailEmbeddertest, LoadUsingHintTables) {
 
   // No new data available, to prevent load "Pages" node.
   loader.set_is_new_data_available(false);
-  FPDF_PAGE page = LoadPage(1);
+  FPDF_PAGE page = FPDF_LoadPage(document(), 1);
   EXPECT_TRUE(page);
-  UnloadPage(page);
+  FPDF_ClosePage(page);
 }
 
 TEST_F(FPDFDataAvailEmbeddertest,
@@ -232,7 +234,7 @@ TEST_F(FPDFDataAvailEmbeddertest,
 
   // Prevent loading data, while page loading.
   loader.set_is_new_data_available(false);
-  FPDF_PAGE page = LoadPage(first_page_num);
+  FPDF_PAGE page = FPDF_LoadPage(document(), first_page_num);
   EXPECT_TRUE(page);
-  UnloadPage(page);
+  FPDF_ClosePage(page);
 }

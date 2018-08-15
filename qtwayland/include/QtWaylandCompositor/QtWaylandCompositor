@@ -37,5 +37,6 @@
 #include "qwaylandview.h"
 #include "qwaylandwlshell.h"
 #include "qwaylandxdgshellv5.h"
+#include "qwaylandxdgshellv6.h"
 #include "qtwaylandcompositorversion.h"
 #endif

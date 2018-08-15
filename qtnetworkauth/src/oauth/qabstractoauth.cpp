@@ -192,7 +192,7 @@ QT_BEGIN_NAMESPACE
 /*!
     \fn QNetworkReply *QAbstractOAuth::head(const QUrl &url, const QVariantMap &parameters)
 
-    Posts an authenticated HEAD request and returns a new
+    Sends an authenticated HEAD request and returns a new
     QNetworkReply. The \a url and \a parameters are used to create
     the request.
 
@@ -203,7 +203,7 @@ QT_BEGIN_NAMESPACE
 /*!
     \fn QNetworkReply *QAbstractOAuth::get(const QUrl &url, const QVariantMap &parameters)
 
-    Posts an authenticated GET request and returns a new
+    Sends an authenticated GET request and returns a new
     QNetworkReply. The \a url and \a parameters are used to create
     the request.
 
@@ -214,7 +214,7 @@ QT_BEGIN_NAMESPACE
 /*!
     \fn QNetworkReply *QAbstractOAuth::post(const QUrl &url, const QVariantMap &parameters)
 
-    Posts an authenticated POST request and returns a new
+    Sends an authenticated POST request and returns a new
     QNetworkReply. The \a url and \a parameters are used to create
     the request.
 
@@ -223,9 +223,20 @@ QT_BEGIN_NAMESPACE
 */
 
 /*!
+    \fn QNetworkReply *QAbstractOAuth::put(const QUrl &url, const QVariantMap &parameters)
+
+    Sends an authenticated PUT request and returns a new
+    QNetworkReply. The \a url and \a parameters are used to create
+    the request.
+
+    \b {See also}: \l {https://tools.ietf.org/html/rfc2616#section-9.6}
+    {Hypertext Transfer Protocol -- HTTP/1.1: PUT}
+*/
+
+/*!
     \fn QNetworkReply *QAbstractOAuth::deleteResource(const QUrl &url, const QVariantMap &parameters)
 
-    Posts an authenticated DELETE request and returns a new
+    Sends an authenticated DELETE request and returns a new
     QNetworkReply. The \a url and \a parameters are used to create
     the request.
 
@@ -245,12 +256,12 @@ QT_BEGIN_NAMESPACE
     be used in authenticated calls.
 */
 
-QAbstractOAuthPrivate::QAbstractOAuthPrivate(QNetworkAccessManager *manager) :
-    QAbstractOAuthPrivate(QUrl(), manager)
-{}
-
-QAbstractOAuthPrivate::QAbstractOAuthPrivate(const QUrl &authorizationUrl,
+QAbstractOAuthPrivate::QAbstractOAuthPrivate(const char *loggingCategory,
+                                             const QUrl &authorizationUrl,
+                                             const QString &clientIdentifier,
                                              QNetworkAccessManager *manager) :
+    loggingCategory(loggingCategory),
+    clientIdentifier(clientIdentifier),
     authorizationUrl(authorizationUrl),
     defaultReplyHandler(new QOAuthOobReplyHandler),
     networkAccessManagerPointer(manager)
@@ -343,6 +354,57 @@ QAbstractOAuth::QAbstractOAuth(QAbstractOAuthPrivate &dd, QObject *parent)
 */
 QAbstractOAuth::~QAbstractOAuth()
 {}
+
+/*!
+    Returns the current client identifier used in the authentication
+    process.
+
+    \sa setClientIdentifier()
+*/
+QString QAbstractOAuth::clientIdentifier() const
+{
+    Q_D(const QAbstractOAuth);
+    return d->clientIdentifier;
+}
+
+/*!
+    Sets the current client identifier to \a clientIdentifier.
+
+    \sa clientIdentifier()
+*/
+void QAbstractOAuth::setClientIdentifier(const QString &clientIdentifier)
+{
+    Q_D(QAbstractOAuth);
+    if (d->clientIdentifier != clientIdentifier) {
+        d->clientIdentifier = clientIdentifier;
+        Q_EMIT clientIdentifierChanged(clientIdentifier);
+    }
+}
+
+/*!
+    Returns the token used to sign the authenticated requests.
+
+    \sa setToken()
+*/
+QString QAbstractOAuth::token() const
+{
+    Q_D(const QAbstractOAuth);
+    return d->token;
+}
+
+/*!
+    Sets the token used to sign authenticated requests to \a token.
+
+    \sa token()
+*/
+void QAbstractOAuth::setToken(const QString &token)
+{
+    Q_D(QAbstractOAuth);
+    if (d->token != token) {
+        d->token = token;
+        Q_EMIT tokenChanged(token);
+    }
+}
 
 /*!
     Returns the current network access manager used to send the

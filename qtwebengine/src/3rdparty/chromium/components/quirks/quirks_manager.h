@@ -21,7 +21,7 @@ class PrefRegistrySimple;
 class PrefService;
 
 namespace base {
-class SequencedWorkerPool;
+class TaskRunner;
 }
 
 namespace net {
@@ -78,7 +78,7 @@ class QUIRKS_EXPORT QuirksManager {
 
   static void Initialize(
       std::unique_ptr<Delegate> delegate,
-      scoped_refptr<base::SequencedWorkerPool> blocking_pool,
+      scoped_refptr<base::TaskRunner> task_runner,
       PrefService* local_state,
       scoped_refptr<net::URLRequestContextGetter> url_context_getter);
   static void Shutdown();
@@ -92,6 +92,7 @@ class QUIRKS_EXPORT QuirksManager {
   // Entry point into manager.  Finds or downloads icc file.
   void RequestIccProfilePath(
       int64_t product_id,
+      const std::string& display_name,
       const RequestFinishedCallback& on_request_finished);
 
   void ClientFinished(QuirksClient* client);
@@ -102,7 +103,7 @@ class QUIRKS_EXPORT QuirksManager {
       net::URLFetcherDelegate* delegate);
 
   Delegate* delegate() { return delegate_.get(); }
-  base::SequencedWorkerPool* blocking_pool() { return blocking_pool_.get(); }
+  base::TaskRunner* task_runner() { return task_runner_.get(); }
   net::URLRequestContextGetter* url_context_getter() {
     return url_context_getter_.get();
   }
@@ -117,7 +118,7 @@ class QUIRKS_EXPORT QuirksManager {
 
  private:
   QuirksManager(std::unique_ptr<Delegate> delegate,
-                scoped_refptr<base::SequencedWorkerPool> blocking_pool,
+                scoped_refptr<base::TaskRunner> task_runner,
                 PrefService* local_state,
                 scoped_refptr<net::URLRequestContextGetter> url_context_getter);
   ~QuirksManager();
@@ -125,6 +126,7 @@ class QUIRKS_EXPORT QuirksManager {
   // Callback after checking for existing icc file; proceed if not found.
   void OnIccFilePathRequestCompleted(
       int64_t product_id,
+      const std::string& display_name,
       const RequestFinishedCallback& on_request_finished,
       base::FilePath path);
 
@@ -145,7 +147,7 @@ class QUIRKS_EXPORT QuirksManager {
 
   // These objects provide resources from the browser.
   std::unique_ptr<Delegate> delegate_;  // Impl runs from chrome/browser.
-  scoped_refptr<base::SequencedWorkerPool> blocking_pool_;
+  scoped_refptr<base::TaskRunner> task_runner_;
   PrefService* local_state_;  // For local prefs.
   scoped_refptr<net::URLRequestContextGetter> url_context_getter_;
 

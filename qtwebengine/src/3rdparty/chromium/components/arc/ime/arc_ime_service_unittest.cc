@@ -11,7 +11,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/arc/test/fake_arc_bridge_service.h"
+#include "components/arc/arc_bridge_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/test/test_windows.h"
@@ -98,23 +98,25 @@ class FakeInputMethod : public ui::DummyInputMethod {
 
 // Helper class for testing the window focus tracking feature of ArcImeService,
 // not depending on the full setup of Exo and Ash.
-class FakeArcWindowDetector : public ArcImeService::ArcWindowDetector {
+class FakeArcWindowDelegate : public ArcImeService::ArcWindowDelegate {
  public:
-  FakeArcWindowDetector() : next_id_(0) {}
+  FakeArcWindowDelegate() : next_id_(0) {}
 
-  bool IsArcWindow(const aura::Window* window) const override { return false; }
-  bool IsArcTopLevelWindow(const aura::Window* window) const override {
-    return arc_toplevel_window_id_.count(window->id());
+  bool IsArcWindow(const aura::Window* window) const override {
+    return arc_window_id_.count(window->id());
   }
 
-  std::unique_ptr<aura::Window> CreateFakeArcTopLevelWindow() {
+  void RegisterFocusObserver() override {}
+  void UnregisterFocusObserver() override {}
+
+  std::unique_ptr<aura::Window> CreateFakeArcWindow() {
     const int id = next_id_++;
-    arc_toplevel_window_id_.insert(id);
+    arc_window_id_.insert(id);
     return base::WrapUnique(aura::test::CreateTestWindowWithDelegate(
         &dummy_delegate_, id, gfx::Rect(), nullptr));
   }
 
-  std::unique_ptr<aura::Window> CreateFakeNonArcTopLevelWindow() {
+  std::unique_ptr<aura::Window> CreateFakeNonArcWindow() {
     const int id = next_id_++;
     return base::WrapUnique(aura::test::CreateTestWindowWithDelegate(
         &dummy_delegate_, id, gfx::Rect(), nullptr));
@@ -123,46 +125,47 @@ class FakeArcWindowDetector : public ArcImeService::ArcWindowDetector {
  private:
   aura::test::TestWindowDelegate dummy_delegate_;
   int next_id_;
-  std::set<int> arc_toplevel_window_id_;
+  std::set<int> arc_window_id_;
 };
 
 }  // namespace
 
 class ArcImeServiceTest : public testing::Test {
  public:
-  ArcImeServiceTest() {}
+  ArcImeServiceTest() = default;
 
  protected:
-  std::unique_ptr<FakeArcBridgeService> fake_arc_bridge_service_;
+  std::unique_ptr<ArcBridgeService> arc_bridge_service_;
   std::unique_ptr<FakeInputMethod> fake_input_method_;
   std::unique_ptr<ArcImeService> instance_;
   FakeArcImeBridge* fake_arc_ime_bridge_;  // Owned by |instance_|
 
-  FakeArcWindowDetector* fake_window_detector_; // Owned by |instance_|
+  FakeArcWindowDelegate* fake_window_delegate_;  // Owned by |instance_|
   std::unique_ptr<aura::Window> arc_win_;
 
  private:
   void SetUp() override {
-    fake_arc_bridge_service_.reset(new FakeArcBridgeService);
-    instance_.reset(new ArcImeService(fake_arc_bridge_service_.get()));
-    fake_arc_ime_bridge_ = new FakeArcImeBridge;
+    arc_bridge_service_ = base::MakeUnique<ArcBridgeService>();
+    instance_ =
+        base::MakeUnique<ArcImeService>(nullptr, arc_bridge_service_.get());
+    fake_arc_ime_bridge_ = new FakeArcImeBridge();
     instance_->SetImeBridgeForTesting(base::WrapUnique(fake_arc_ime_bridge_));
 
-    fake_input_method_.reset(new FakeInputMethod);
+    fake_input_method_ = base::MakeUnique<FakeInputMethod>();
     instance_->SetInputMethodForTesting(fake_input_method_.get());
 
-    fake_window_detector_ = new FakeArcWindowDetector();
-    instance_->SetArcWindowDetectorForTesting(
-        base::WrapUnique(fake_window_detector_));
-    arc_win_ = fake_window_detector_->CreateFakeArcTopLevelWindow();
+    fake_window_delegate_ = new FakeArcWindowDelegate();
+    instance_->SetArcWindowDelegateForTesting(
+        base::WrapUnique(fake_window_delegate_));
+    arc_win_ = fake_window_delegate_->CreateFakeArcWindow();
   }
 
   void TearDown() override {
     arc_win_.reset();
-    fake_window_detector_ = nullptr;
+    fake_window_delegate_ = nullptr;
     fake_arc_ime_bridge_ = nullptr;
     instance_.reset();
-    fake_arc_bridge_service_.reset();
+    arc_bridge_service_.reset();
   }
 };
 
@@ -233,9 +236,9 @@ TEST_F(ArcImeServiceTest, InsertChar) {
 
 TEST_F(ArcImeServiceTest, WindowFocusTracking) {
   std::unique_ptr<aura::Window> arc_win2 =
-      fake_window_detector_->CreateFakeArcTopLevelWindow();
+      fake_window_delegate_->CreateFakeArcWindow();
   std::unique_ptr<aura::Window> nonarc_win =
-      fake_window_detector_->CreateFakeNonArcTopLevelWindow();
+      fake_window_delegate_->CreateFakeNonArcWindow();
 
   // ARC window is focused. ArcImeService is set as the text input client.
   instance_->OnWindowFocused(arc_win_.get(), nullptr);
@@ -261,6 +264,31 @@ TEST_F(ArcImeServiceTest, WindowFocusTracking) {
   instance_->OnWindowFocused(nullptr, arc_win_.get());
   EXPECT_EQ(nullptr, fake_input_method_->GetTextInputClient());
   EXPECT_EQ(2, fake_input_method_->count_set_focused_text_input_client());
+}
+
+TEST_F(ArcImeServiceTest, GetTextFromRange) {
+  instance_->OnWindowFocused(arc_win_.get(), nullptr);
+
+  const base::string16 text = base::ASCIIToUTF16("abcdefghijklmn");
+  // Assume the cursor is between 'c' and 'd'.
+  const uint32_t cursor_pos = 3;
+  const gfx::Range text_range(cursor_pos - 1, cursor_pos + 1);
+  const base::string16 text_in_range = text.substr(cursor_pos - 1, 2);
+  const gfx::Range selection_range(cursor_pos, cursor_pos);
+
+  instance_->OnCursorRectChangedWithSurroundingText(
+      gfx::Rect(0, 0, 1, 1), text_range, text_in_range, selection_range);
+
+  gfx::Range temp;
+  instance_->GetTextRange(&temp);
+  EXPECT_EQ(text_range, temp);
+
+  base::string16 temp_str;
+  instance_->GetTextFromRange(text_range, &temp_str);
+  EXPECT_EQ(text_in_range, temp_str);
+
+  instance_->GetSelectionRange(&temp);
+  EXPECT_EQ(selection_range, temp);
 }
 
 }  // namespace arc

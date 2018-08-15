@@ -25,13 +25,14 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_event_synthetic_delay.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/debug_marker_manager.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/sync_token.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
+#include "gpu/command_buffer/service/command_buffer_service.h"
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/context_state.h"
 #include "gpu/command_buffer/service/error_state.h"
@@ -59,6 +60,7 @@
 #include "gpu/command_buffer/service/query_manager.h"
 #include "gpu/command_buffer/service/renderbuffer_manager.h"
 #include "gpu/command_buffer/service/sampler_manager.h"
+#include "gpu/command_buffer/service/service_discardable_manager.h"
 #include "gpu/command_buffer/service/shader_manager.h"
 #include "gpu/command_buffer/service/shader_translator.h"
 #include "gpu/command_buffer/service/texture_manager.h"
@@ -76,6 +78,7 @@
 #include "ui/gfx/overlay_transform.h"
 #include "ui/gfx/transform.h"
 #include "ui/gl/ca_renderer_layer_params.h"
+#include "ui/gl/dc_renderer_layer_params.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_fence.h"
@@ -83,6 +86,7 @@
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_version_info.h"
+#include "ui/gl/gl_workarounds.h"
 #include "ui/gl/gpu_timing.h"
 
 #if defined(OS_MACOSX)
@@ -390,10 +394,7 @@ class BackRenderbuffer {
   void Create();
 
   // Set the initial size and format of a render buffer or resize it.
-  bool AllocateStorage(const FeatureInfo* feature_info,
-                       const gfx::Size& size,
-                       GLenum format,
-                       GLsizei samples);
+  bool AllocateStorage(const gfx::Size& size, GLenum format, GLsizei samples);
 
   // Destroy the render buffer. This must be explicitly called before destroying
   // this object.
@@ -460,6 +461,13 @@ struct FenceCallback {
   std::unique_ptr<gl::GLFence> fence;
 };
 
+// For ensuring that client-side glRenderbufferStorageMultisampleEXT
+// calls go down the correct code path.
+enum ForcedMultisampleMode {
+  kForceExtMultisampledRenderToTexture,
+  kDoNotForce
+};
+
 // }  // anonymous namespace.
 
 // static
@@ -475,11 +483,11 @@ uint32_t GLES2Decoder::GetAndClearBackbufferClearBitsForTest() {
   return 0;
 }
 
-GLES2Decoder::GLES2Decoder()
-    : initialized_(false),
+GLES2Decoder::GLES2Decoder(CommandBufferServiceBase* command_buffer_service)
+    : CommonDecoder(command_buffer_service),
+      initialized_(false),
       debug_(false),
-      log_commands_(false) {
-}
+      log_commands_(false) {}
 
 GLES2Decoder::~GLES2Decoder() {
 }
@@ -488,17 +496,17 @@ void GLES2Decoder::BeginDecoding() {}
 
 void GLES2Decoder::EndDecoding() {}
 
-error::Error GLES2Decoder::DoCommand(unsigned int command,
-                                     unsigned int arg_count,
-                                     const volatile void* cmd_data) {
-  return DoCommands(1, cmd_data, arg_count + 1, 0);
+base::StringPiece GLES2Decoder::GetLogPrefix() {
+  return GetLogger()->GetLogPrefix();
 }
 
 // This class implements GLES2Decoder so we don't have to expose all the GLES2
 // cmd stuff to outside this class.
 class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
  public:
-  explicit GLES2DecoderImpl(ContextGroup* group);
+  GLES2DecoderImpl(GLES2DecoderClient* client,
+                   CommandBufferServiceBase* command_buffer_service,
+                   ContextGroup* group);
   ~GLES2DecoderImpl() override;
 
   error::Error DoCommands(unsigned int num_commands,
@@ -512,10 +520,8 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
                               int num_entries,
                               int* entries_processed);
 
-  // Overridden from AsyncAPIInterface.
-  const char* GetCommandName(unsigned int command_id) const override;
-
   // Overridden from GLES2Decoder.
+  base::WeakPtr<GLES2Decoder> AsWeakPtr() override;
   bool Initialize(const scoped_refptr<gl::GLSurface>& surface,
                   const scoped_refptr<gl::GLContext>& context,
                   bool offscreen,
@@ -538,9 +544,9 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   void RestoreState(const ContextState* prev_state) override;
 
   void RestoreActiveTexture() const override { state_.RestoreActiveTexture(); }
-  void RestoreAllTextureUnitBindings(
+  void RestoreAllTextureUnitAndSamplerBindings(
       const ContextState* prev_state) const override {
-    state_.RestoreAllTextureUnitBindings(prev_state);
+    state_.RestoreAllTextureUnitAndSamplerBindings(prev_state);
   }
   void RestoreActiveTextureUnitBinding(unsigned int target) const override {
     state_.RestoreActiveTextureUnitBinding(target);
@@ -555,6 +561,10 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   void RestoreTextureUnitBindings(unsigned unit) const override {
     state_.RestoreTextureUnitBindings(unit, NULL);
   }
+  void RestoreVertexAttribArray(unsigned index) override {
+    RestoreStateForAttrib(index, true);
+  }
+  void RestoreBufferBinding(unsigned int target) override;
   void RestoreFramebufferBindings() const override;
   void RestoreRenderbufferBindings() override;
   void RestoreTextureState(unsigned service_id) const override;
@@ -563,13 +573,18 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   void RestoreAllAttributes() const override;
 
   QueryManager* GetQueryManager() override { return query_manager_.get(); }
+  FramebufferManager* GetFramebufferManager() override {
+    return framebuffer_manager_.get();
+  }
   TransformFeedbackManager* GetTransformFeedbackManager() override {
     return transform_feedback_manager_.get();
   }
   VertexArrayManager* GetVertexArrayManager() override {
     return vertex_array_manager_.get();
   }
-  ImageManager* GetImageManager() override { return image_manager_.get(); }
+  ImageManager* GetImageManagerForTest() override {
+    return group_->image_manager();
+  }
 
   bool HasPendingQueries() const override;
   void ProcessPendingQueries(bool did_finish) override;
@@ -591,16 +606,6 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   const ContextState* GetContextState() override { return &state_; }
   scoped_refptr<ShaderTranslatorInterface> GetTranslator(GLenum type) override;
 
-  void SetShaderCacheCallback(const ShaderCacheCallback& callback) override;
-  void SetFenceSyncReleaseCallback(
-      const FenceSyncReleaseCallback& callback) override;
-  void SetWaitFenceSyncCallback(const WaitFenceSyncCallback& callback) override;
-
-  void SetDescheduleUntilFinishedCallback(
-      const NoParamCallback& callback) override;
-  void SetRescheduleAfterFinishedCallback(
-      const NoParamCallback& callback) override;
-
   void SetIgnoreCachedStateForTest(bool ignore) override;
   void SetForceShaderNameHashingForTest(bool force) override;
   uint32_t GetAndClearBackbufferClearBitsForTest() override;
@@ -608,11 +613,6 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
 
   bool GetServiceTextureId(uint32_t client_texture_id,
                            uint32_t* service_texture_id) override;
-
-  uint32_t GetTextureUploadCount() override;
-  base::TimeDelta GetTotalTextureUploadTime() override;
-  base::TimeDelta GetTotalProcessingCommandsTime() override;
-  void AddProcessingCommandsTime(base::TimeDelta) override;
 
   // Restores the current state to the user's settings.
   void RestoreCurrentFramebufferBindings();
@@ -627,8 +627,6 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   bool BoundFramebufferHasDepthAttachment();
   bool BoundFramebufferHasStencilAttachment();
 
-  error::ContextLostReason GetContextLostReason() override;
-
   // Overriden from ErrorStateClient.
   void OnContextLostError() override;
   void OnOutOfMemoryError() override;
@@ -637,13 +635,19 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   void EnsureRenderbufferBound();
 
   // Helpers to facilitate calling into compatible extensions.
-  static void RenderbufferStorageMultisampleHelper(
-      const FeatureInfo* feature_info,
-      GLenum target,
-      GLsizei samples,
-      GLenum internal_format,
-      GLsizei width,
-      GLsizei height);
+  void RenderbufferStorageMultisampleWithWorkaround(GLenum target,
+                                                    GLsizei samples,
+                                                    GLenum internal_format,
+                                                    GLsizei width,
+                                                    GLsizei height,
+                                                    ForcedMultisampleMode mode);
+  void RenderbufferStorageMultisampleHelper(GLenum target,
+                                            GLsizei samples,
+                                            GLenum internal_format,
+                                            GLsizei width,
+                                            GLsizei height,
+                                            ForcedMultisampleMode mode);
+  bool RegenerateRenderbufferIfNeeded(Renderbuffer* renderbuffer);
 
   void BlitFramebufferHelper(GLint srcX0,
                              GLint srcY0,
@@ -676,6 +680,8 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
     kBindBufferRange
   };
 
+  const char* GetCommandName(unsigned int command_id) const;
+
   // Initialize or re-initialize the shader translator.
   bool InitializeShaderTranslator();
 
@@ -707,9 +713,7 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // Workarounds
   void OnFboChanged() const;
   void OnUseFramebuffer() const;
-
-  error::ContextLostReason GetContextLostReasonFromResetStatus(
-      GLenum reset_status) const;
+  void UpdateFramebufferSRGB(Framebuffer* framebuffer);
 
   // TODO(gman): Cache these pointers?
   BufferManager* buffer_manager() {
@@ -721,7 +725,7 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   }
 
   FramebufferManager* framebuffer_manager() {
-    return group_->framebuffer_manager();
+    return framebuffer_manager_.get();
   }
 
   ProgramManager* program_manager() {
@@ -752,7 +756,7 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
     return group_->mailbox_manager();
   }
 
-  ImageManager* image_manager() { return image_manager_.get(); }
+  ImageManager* image_manager() { return group_->image_manager(); }
 
   VertexArrayManager* vertex_array_manager() {
     return vertex_array_manager_.get();
@@ -838,7 +842,7 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
 
   // Get the service side ID for the bound draw framebuffer.
   // If it's back buffer, 0 is returned.
-  GLuint GetBoundDrawFramebufferServiceId();
+  GLuint GetBoundDrawFramebufferServiceId() const;
 
   // Get the format/type of the currently bound frame buffer (either FBO or
   // regular back buffer).
@@ -858,6 +862,12 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   GLenum GetBoundFramebufferDepthFormat(GLenum target);
   // Return 0 if no stencil attachment.
   GLenum GetBoundFramebufferStencilFormat(GLenum target);
+
+  gfx::Vector2d GetBoundFramebufferDrawOffset() const {
+    if (GetBoundDrawFramebuffer() || offscreen_target_frame_buffer_.get())
+      return gfx::Vector2d();
+    return surface_->GetDrawOffset();
+  }
 
   void MarkDrawBufferAsCleared(GLenum buffer, GLint drawbuffer_i);
 
@@ -889,6 +899,10 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
       const void* data,
       ContextState::Dimension dimension);
 
+  bool ValidateCopyTexFormatHelper(GLenum internal_format,
+                                   GLenum read_format,
+                                   GLenum read_type,
+                                   std::string* output_error_msg);
   // Validate if |format| is valid for CopyTex{Sub}Image functions.
   // If not, generate a GL error and return false.
   bool ValidateCopyTexFormat(const char* func_name, GLenum internal_format,
@@ -908,7 +922,12 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // Wrapper for SwapBuffers.
   void DoSwapBuffers();
 
+  // Wrapper for SwapBuffersWithBoundsCHROMIUM.
+  void DoSwapBuffersWithBoundsCHROMIUM(GLsizei count,
+                                       const volatile GLint* rects);
+
   // Callback for async SwapBuffers.
+  void FinishAsyncSwapBuffers(gfx::SwapResult result);
   void FinishSwapBuffers(gfx::SwapResult result);
 
   void DoCommitOverlayPlanes();
@@ -947,7 +966,10 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
                            GLsizeiptr size);
 
   void DoCopyTextureCHROMIUM(GLuint source_id,
+                             GLint source_level,
+                             GLenum dest_target,
                              GLuint dest_id,
+                             GLint dest_level,
                              GLenum internal_format,
                              GLenum dest_type,
                              GLboolean unpack_flip_y,
@@ -955,7 +977,10 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
                              GLboolean unpack_unmultiply_alpha);
 
   void DoCopySubTextureCHROMIUM(GLuint source_id,
+                                GLint source_level,
+                                GLenum dest_target,
                                 GLuint dest_id,
+                                GLint dest_level,
                                 GLint xoffset,
                                 GLint yoffset,
                                 GLint x,
@@ -1013,6 +1038,14 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   void DoBindTexImage2DCHROMIUM(
       GLenum target,
       GLint image_id);
+  void DoBindTexImage2DWithInternalformatCHROMIUM(GLenum target,
+                                                  GLenum internalformat,
+                                                  GLint image_id);
+  // Common implementation of DoBindTexImage2DCHROMIUM entry points.
+  void BindTexImage2DCHROMIUMImpl(const char* function_name,
+                                  GLenum target,
+                                  GLenum internalformat,
+                                  GLint image_id);
   void DoReleaseTexImage2DCHROMIUM(
       GLenum target,
       GLint image_id);
@@ -1280,9 +1313,6 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // Returns: true if glEnable/glDisable should actually be called.
   bool SetCapabilityState(GLenum cap, bool enabled);
 
-  // Infer color encoding from internalformat
-  static GLint GetColorEncodingFromInternalFormat(GLenum internalformat);
-
   // Check that the currently bound read framebuffer's color image
   // isn't the target texture of the glCopyTex{Sub}Image{2D|3D}.
   bool FormsTextureCopyingFeedbackLoop(
@@ -1331,6 +1361,10 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // Otherwise, filter out the draw buffers that are not written to but are not
   // NONE through DrawBuffers, to be on the safe side. Return true.
   bool ValidateAndAdjustDrawBuffers(const char* function_name);
+
+  // Filter out the draw buffers that have no images attached but are not NONE
+  // through DrawBuffers, to be on the safe side.
+  void AdjustDrawBuffers();
 
   // Checks if all active uniform blocks in the current program are backed by
   // a buffer of sufficient size.
@@ -1671,6 +1705,17 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // Wrapper for glLinkProgram
   void DoLinkProgram(GLuint program);
 
+  // Wrapper for glOverlayPromotionHintCHROMIUIM
+  void DoOverlayPromotionHintCHROMIUM(GLuint client_id,
+                                      GLboolean promotion_hint,
+                                      GLint display_x,
+                                      GLint display_y);
+
+  // Wrapper for glSetDrawRectangleCHROMIUM
+  void DoSetDrawRectangleCHROMIUM(GLint x, GLint y, GLint width, GLint height);
+
+  void DoSetEnableDCLayersCHROMIUM(GLboolean enable);
+
   // Wrapper for glReadBuffer
   void DoReadBuffer(GLenum src);
 
@@ -1836,6 +1881,9 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // Wrapper for glViewport
   void DoViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 
+  // Wrapper for glScissor
+  void DoScissor(GLint x, GLint y, GLsizei width, GLsizei height);
+
   // Wrapper for glUseProgram
   void DoUseProgram(GLuint program);
 
@@ -1869,9 +1917,16 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // state of |texture| is updated to reflect the new state.
   void DoCopyTexImage(Texture* texture, GLenum textarget, gl::GLImage* image);
 
-  // This will call DoCopyTexImage if texture has an image but that image is
-  // not bound or copied to the texture.
-  void DoCopyTexImageIfNeeded(Texture* texture, GLenum textarget);
+  // If the texture has an image but that image is not bound or copied to the
+  // texture, this will first attempt to bind it, and if that fails
+  // DoCopyTexImage on it. texture_unit is the texture unit it should be bound
+  // to, or 0 if it doesn't matter - setting it to 0 will cause the previous
+  // binding to be restored after the operation. This returns true if a copy
+  // or bind happened and the caller needs to restore the previous texture
+  // binding.
+  bool DoBindOrCopyTexImageIfNeeded(Texture* texture,
+                                    GLenum textarget,
+                                    GLuint texture_unit);
 
   // Returns false if textures were replaced.
   bool PrepareTexturesForRender();
@@ -2000,12 +2055,23 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
     GLsizei width, GLsizei height, GLsizei depth, GLenum format,
     Texture* texture);
   bool ValidateCopyTextureCHROMIUMTextures(const char* function_name,
+                                           GLenum dest_target,
                                            TextureRef* source_texture_ref,
                                            TextureRef* dest_texture_ref);
-  bool ValidateCopyTextureCHROMIUMInternalFormats(
-      const char* function_name,
-      TextureRef* source_texture_ref,
-      GLenum dest_internal_format);
+  bool CanUseCopyTextureCHROMIUMInternalFormat(GLenum dest_internal_format);
+  bool ValidateCopyTextureCHROMIUMInternalFormats(const char* function_name,
+                                                  GLenum source_internal_format,
+                                                  GLenum dest_internal_format);
+  CopyTextureMethod getCopyTextureCHROMIUMMethod(GLenum source_target,
+                                                 GLint source_level,
+                                                 GLenum source_internal_format,
+                                                 GLenum source_type,
+                                                 GLenum dest_target,
+                                                 GLint dest_level,
+                                                 GLenum dest_internal_format,
+                                                 bool flip_y,
+                                                 bool premultiply_alpha,
+                                                 bool unpremultiply_alpha);
   bool ValidateCompressedCopyTextureCHROMIUM(const char* function_name,
                                              TextureRef* source_texture_ref,
                                              TextureRef* dest_texture_ref);
@@ -2124,6 +2190,7 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // The GL_CHROMIUM_schedule_ca_layer extension requires that SwapBuffers and
   // equivalent functions reset shared state.
   void ClearScheduleCALayerState();
+  void ClearScheduleDCLayerState();
 
   // Helper method to call glClear workaround.
   void ClearFramebufferForWorkaround(GLbitfield mask);
@@ -2155,6 +2222,10 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   bool InitializeCopyTexImageBlitter(const char* function_name);
   bool InitializeCopyTextureCHROMIUM(const char* function_name);
   bool InitializeSRGBConverter(const char* function_name);
+
+  void UnbindTexture(TextureRef* texture_ref,
+                     bool supports_separate_framebuffer_binds);
+
   // Generate a member function prototype for each command in an automated and
   // typesafe way.
 #define GLES2_CMD_OP(name) \
@@ -2163,6 +2234,8 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   GLES2_COMMAND_LIST(GLES2_CMD_OP)
 
   #undef GLES2_CMD_OP
+
+  GLES2DecoderClient* client_;
 
   // The GL context this decoder renders to on behalf of the client.
   scoped_refptr<gl::GLSurface> surface_;
@@ -2223,6 +2296,10 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   GLsizei offscreen_target_samples_;
   GLboolean offscreen_target_buffer_preserved_;
 
+  // Whether or not offscreen color buffers exist in front/back pairs that
+  // can be swapped.
+  GLboolean offscreen_single_buffer_;
+
   // The saved copy of the backbuffer after a call to SwapBuffers.
   std::unique_ptr<BackTexture> offscreen_saved_color_texture_;
 
@@ -2264,18 +2341,11 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   // Whether the client requested an offscreen buffer with an alpha channel.
   bool offscreen_buffer_should_have_alpha_;
 
+  std::unique_ptr<FramebufferManager> framebuffer_manager_;
+
   std::unique_ptr<QueryManager> query_manager_;
 
   std::unique_ptr<VertexArrayManager> vertex_array_manager_;
-
-  std::unique_ptr<ImageManager> image_manager_;
-
-  FenceSyncReleaseCallback fence_sync_release_callback_;
-  WaitFenceSyncCallback wait_fence_sync_callback_;
-  NoParamCallback deschedule_until_finished_callback_;
-  NoParamCallback reschedule_after_finished_callback_;
-
-  ShaderCacheCallback shader_cache_callback_;
 
   // The format of the back buffer_
   GLenum back_buffer_color_format_;
@@ -2314,13 +2384,15 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   int commands_to_process_;
 
   bool has_robustness_extension_;
-  error::ContextLostReason context_lost_reason_;
   bool context_was_lost_;
   bool reset_by_robustness_extension_;
   bool supports_post_sub_buffer_;
-  bool supports_swap_buffers_with_damage_;
+  bool supports_swap_buffers_with_bounds_;
   bool supports_commit_overlay_planes_;
   bool supports_async_swap_;
+  uint32_t next_async_swap_id_ = 1;
+  uint32_t pending_swaps_ = 0;
+  bool supports_dc_layers_ = false;
 
   // These flags are used to override the state of the shared feature_info_
   // member.  Because the same FeatureInfo instance may be shared among many
@@ -2354,8 +2426,8 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
   GLsizei viewport_max_width_;
   GLsizei viewport_max_height_;
 
-  // Command buffer stats.
-  base::TimeDelta total_processing_commands_time_;
+  // Cached value for the number of stencil bits for the default framebuffer.
+  GLint num_stencil_bits_;
 
   // States related to each manager.
   DecoderTextureState texture_state_;
@@ -2417,6 +2489,18 @@ class GLES2DecoderImpl : public GLES2Decoder, public ErrorStateClient {
 
   std::unique_ptr<CALayerSharedState> ca_layer_shared_state_;
 
+  struct DCLayerSharedState {
+    float opacity;
+    bool is_clipped;
+    gfx::Rect clip_rect;
+    int z_order;
+    gfx::Transform transform;
+  };
+
+  std::unique_ptr<DCLayerSharedState> dc_layer_shared_state_;
+
+  base::WeakPtrFactory<GLES2DecoderImpl> weak_ptr_factory_;
+
   DISALLOW_COPY_AND_ASSIGN(GLES2DecoderImpl);
 };
 
@@ -2443,19 +2527,21 @@ ScopedGLErrorSuppressor::~ScopedGLErrorSuppressor() {
   ERRORSTATE_CLEAR_REAL_GL_ERRORS(error_state_, function_name_);
 }
 
-static void RestoreCurrentTextureBindings(ContextState* state, GLenum target) {
+static void RestoreCurrentTextureBindings(ContextState* state,
+                                          GLenum target,
+                                          GLuint texture_unit) {
   DCHECK(!state->texture_units.empty());
-  TextureUnit& info = state->texture_units[0];
+  DCHECK_LT(texture_unit, state->texture_units.size());
+  TextureUnit& info = state->texture_units[texture_unit];
   GLuint last_id;
-  scoped_refptr<TextureRef>& texture_ref = info.GetInfoForTarget(target);
-  if (texture_ref.get()) {
+  TextureRef* texture_ref = info.GetInfoForTarget(target);
+  if (texture_ref) {
     last_id = texture_ref->service_id();
   } else {
     last_id = 0;
   }
 
   glBindTexture(target, last_id);
-  glActiveTexture(GL_TEXTURE0 + state->active_texture_unit);
 }
 
 ScopedTextureBinder::ScopedTextureBinder(ContextState* state,
@@ -2475,7 +2561,8 @@ ScopedTextureBinder::ScopedTextureBinder(ContextState* state,
 ScopedTextureBinder::~ScopedTextureBinder() {
   ScopedGLErrorSuppressor suppressor(
       "ScopedTextureBinder::dtor", state_->GetErrorState());
-  RestoreCurrentTextureBindings(state_, target_);
+  RestoreCurrentTextureBindings(state_, target_, 0);
+  state_->RestoreActiveTexture();
 }
 
 ScopedRenderBufferBinder::ScopedRenderBufferBinder(ContextState* state,
@@ -2756,10 +2843,24 @@ GLenum BackTexture::Target() {
 bool BackTexture::AllocateNativeGpuMemoryBuffer(const gfx::Size& size,
                                                 GLenum format,
                                                 bool zero) {
-  gfx::BufferFormat buffer_format = gfx::BufferFormat::RGBA_8888;
+  DCHECK(format == GL_RGB || format == GL_RGBA);
   scoped_refptr<gl::GLImage> image =
       decoder_->GetContextGroup()->image_factory()->CreateAnonymousImage(
-          size, buffer_format, format);
+          size,
+          format == GL_RGB
+              ?
+#if defined(USE_OZONE)
+              // BGRX format is preferred for Ozone as it matches the format
+              // used by the buffer queue and is as a result guaranteed to work
+              // on all devices.
+              // TODO(reveman): Define this format in one place instead of
+              // having to duplicate BGRX_8888.
+              gfx::BufferFormat::BGRX_8888
+#else
+              gfx::BufferFormat::RGBX_8888
+#endif
+              : gfx::BufferFormat::RGBA_8888,
+          format);
   if (!image || !image->BindTexImage(Target()))
     return false;
 
@@ -2828,8 +2929,7 @@ void BackRenderbuffer::Create() {
   glGenRenderbuffersEXT(1, &id_);
 }
 
-bool BackRenderbuffer::AllocateStorage(const FeatureInfo* feature_info,
-                                       const gfx::Size& size,
+bool BackRenderbuffer::AllocateStorage(const gfx::Size& size,
                                        GLenum format,
                                        GLsizei samples) {
   ScopedGLErrorSuppressor suppressor("BackRenderbuffer::AllocateStorage",
@@ -2846,18 +2946,26 @@ bool BackRenderbuffer::AllocateStorage(const FeatureInfo* feature_info,
     return false;
   }
 
+  // TODO(kainino): "samples <= 1" is technically incorrect (it should be
+  // "samples == 0"), but it causes framebuffer incompleteness in some
+  // situations. Once this is fixed, this entire arm is no longer necessary -
+  // RenderbufferStorageMultisampleHelper implements it. http://crbug.com/731286
   if (samples <= 1) {
     glRenderbufferStorageEXT(GL_RENDERBUFFER,
                              format,
                              size.width(),
                              size.height());
   } else {
-    GLES2DecoderImpl::RenderbufferStorageMultisampleHelper(feature_info,
-                                                           GL_RENDERBUFFER,
-                                                           samples,
-                                                           format,
-                                                           size.width(),
-                                                           size.height());
+    // TODO(kainino): This path will not perform RegenerateRenderbufferIfNeeded
+    // on devices where multisample_renderbuffer_resize_emulation is needed.
+    // Thus any code using this path (pepper?) could encounter issues on those
+    // devices. RenderbufferStorageMultisampleWithWorkaround should be used
+    // instead, but can only be used if BackRenderbuffer tracks its
+    // renderbuffers in the renderbuffer manager instead of manually.
+    // http://crbug.com/731287
+    decoder_->RenderbufferStorageMultisampleHelper(GL_RENDERBUFFER, samples,
+                                                   format, size.width(),
+                                                   size.height(), kDoNotForce);
   }
 
   bool alpha_channel_needs_clear =
@@ -2968,17 +3076,25 @@ GLenum BackFramebuffer::CheckStatus() {
   return glCheckFramebufferStatusEXT(GL_FRAMEBUFFER);
 }
 
-GLES2Decoder* GLES2Decoder::Create(ContextGroup* group) {
+GLES2Decoder* GLES2Decoder::Create(
+    GLES2DecoderClient* client,
+    CommandBufferServiceBase* command_buffer_service,
+    ContextGroup* group) {
   if (group->gpu_preferences().use_passthrough_cmd_decoder) {
-    return new GLES2DecoderPassthroughImpl(group);
+    return new GLES2DecoderPassthroughImpl(client, command_buffer_service,
+                                           group);
   }
-  return new GLES2DecoderImpl(group);
+  return new GLES2DecoderImpl(client, command_buffer_service, group);
 }
 
-GLES2DecoderImpl::GLES2DecoderImpl(ContextGroup* group)
-    : GLES2Decoder(),
+GLES2DecoderImpl::GLES2DecoderImpl(
+    GLES2DecoderClient* client,
+    CommandBufferServiceBase* command_buffer_service,
+    ContextGroup* group)
+    : GLES2Decoder(command_buffer_service),
+      client_(client),
       group_(group),
-      logger_(&debug_marker_manager_),
+      logger_(&debug_marker_manager_, client_),
       state_(group_->feature_info(), this, &logger_),
       attrib_0_buffer_id_(0),
       attrib_0_buffer_matches_value_(true),
@@ -2990,6 +3106,7 @@ GLES2DecoderImpl::GLES2DecoderImpl(ContextGroup* group)
       offscreen_target_stencil_format_(0),
       offscreen_target_samples_(0),
       offscreen_target_buffer_preserved_(true),
+      offscreen_single_buffer_(false),
       offscreen_saved_color_format_(0),
       offscreen_buffer_should_have_alpha_(false),
       back_buffer_color_format_(0),
@@ -3005,11 +3122,10 @@ GLES2DecoderImpl::GLES2DecoderImpl(ContextGroup* group)
       feature_info_(group_->feature_info()),
       frame_number_(0),
       has_robustness_extension_(false),
-      context_lost_reason_(error::kUnknown),
       context_was_lost_(false),
       reset_by_robustness_extension_(false),
       supports_post_sub_buffer_(false),
-      supports_swap_buffers_with_damage_(false),
+      supports_swap_buffers_with_bounds_(false),
       supports_commit_overlay_planes_(false),
       supports_async_swap_(false),
       derivatives_explicitly_enabled_(false),
@@ -3023,6 +3139,7 @@ GLES2DecoderImpl::GLES2DecoderImpl(ContextGroup* group)
           group_->gpu_preferences().enable_gpu_service_logging_gpu),
       viewport_max_width_(0),
       viewport_max_height_(0),
+      num_stencil_bits_(0),
       texture_state_(group_->feature_info()->workarounds()),
       gpu_decoder_category_(TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED(
           TRACE_DISABLED_BY_DEFAULT("gpu_decoder"))),
@@ -3032,11 +3149,17 @@ GLES2DecoderImpl::GLES2DecoderImpl(ContextGroup* group)
       validation_fbo_multisample_(0),
       validation_fbo_(0),
       texture_manager_service_id_generation_(0),
-      force_shader_name_hashing_for_test(false) {
+      force_shader_name_hashing_for_test(false),
+      weak_ptr_factory_(this) {
+  DCHECK(client);
   DCHECK(group);
 }
 
 GLES2DecoderImpl::~GLES2DecoderImpl() {
+}
+
+base::WeakPtr<GLES2Decoder> GLES2DecoderImpl::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 bool GLES2DecoderImpl::Initialize(
@@ -3068,8 +3191,19 @@ bool GLES2DecoderImpl::Initialize(
   context_ = context;
   surface_ = surface;
 
+  // Set workarounds for the surface.
+  if (workarounds().rely_on_implicit_sync_for_swap_buffers)
+    surface_->SetRelyOnImplicitSync();
+
   // Create GPU Tracer for timing values.
   gpu_tracer_.reset(new GPUTracer(this));
+
+  // Pass some workarounds to GLContext so that we can apply them in RealGLApi.
+  gl::GLWorkarounds gl_workarounds;
+  if (workarounds().clear_to_zero_or_one_broken) {
+    gl_workarounds.clear_to_zero_or_one_broken = true;
+  }
+  GetGLContext()->SetGLWorkarounds(gl_workarounds);
 
   if (workarounds().disable_timestamp_queries) {
     // Forcing time elapsed query for any GPU Timing Client forces it for all
@@ -3084,7 +3218,7 @@ bool GLES2DecoderImpl::Initialize(
   // If the failIfMajorPerformanceCaveat context creation attribute was true
   // and we are using a software renderer, fail.
   if (attrib_helper.fail_if_major_perf_caveat &&
-      feature_info_->feature_flags().is_swiftshader) {
+      feature_info_->feature_flags().is_swiftshader_for_webgl) {
     group_ = NULL;  // Must not destroy ContextGroup if it is not initialized.
     Destroy(true);
     return false;
@@ -3107,6 +3241,9 @@ bool GLES2DecoderImpl::Initialize(
       switch (image_factory->RequiredTextureType()) {
         case GL_TEXTURE_RECTANGLE_ARB:
           supported = feature_info_->feature_flags().arb_texture_rectangle;
+          break;
+        case GL_TEXTURE_EXTERNAL_OES:
+          supported = feature_info_->feature_flags().oes_egl_image_external;
           break;
         case GL_TEXTURE_2D:
           supported = true;
@@ -3172,9 +3309,12 @@ bool GLES2DecoderImpl::Initialize(
   // vertex_attrib_manager is set to default_vertex_attrib_manager by this call
   DoBindVertexArrayOES(0);
 
-  query_manager_.reset(new QueryManager(this, feature_info_.get()));
+  framebuffer_manager_.reset(new FramebufferManager(
+      group_->max_draw_buffers(), group_->max_color_attachments(),
+      group_->framebuffer_completeness_cache()));
+  group_->texture_manager()->AddFramebufferManager(framebuffer_manager_.get());
 
-  image_manager_.reset(new ImageManager);
+  query_manager_.reset(new QueryManager(this, feature_info_.get()));
 
   util_.set_num_compressed_texture_formats(
       validators_->compressed_texture_format.GetValues().size());
@@ -3246,6 +3386,7 @@ bool GLES2DecoderImpl::Initialize(
       offscreen_target_samples_ = 1;
     }
     offscreen_target_buffer_preserved_ = attrib_helper.buffer_preserved;
+    offscreen_single_buffer_ = attrib_helper.single_buffer;
 
     if (gl_version_info().is_es) {
       const bool rgb8_supported = context_->HasExtension("GL_OES_rgb8_rgba8");
@@ -3368,6 +3509,9 @@ bool GLES2DecoderImpl::Initialize(
       back_buffer_has_depth_ = attrib_helper.depth_size != 0 && depth_bits > 0;
       back_buffer_has_stencil_ =
           attrib_helper.stencil_size != 0 && stencil_bits > 0;
+      num_stencil_bits_ = stencil_bits;
+    } else {
+      num_stencil_bits_ = attrib_helper.stencil_size;
     }
 
     state_.viewport_width = surface->GetSize().width();
@@ -3399,10 +3543,9 @@ bool GLES2DecoderImpl::Initialize(
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
   }
 
-  has_robustness_extension_ =
-      context->HasExtension("GL_ARB_robustness") ||
-      context->HasExtension("GL_KHR_robustness") ||
-      context->HasExtension("GL_EXT_robustness");
+  has_robustness_extension_ = features().arb_robustness ||
+                              features().khr_robustness ||
+                              features().ext_robustness;
 
   if (!InitializeShaderTranslator()) {
     return false;
@@ -3445,13 +3588,14 @@ bool GLES2DecoderImpl::Initialize(
     offscreen_target_stencil_render_buffer_.reset(new BackRenderbuffer(this));
     offscreen_target_stencil_render_buffer_->Create();
 
-    // Create the saved offscreen texture. The target frame buffer is copied
-    // here when SwapBuffers is called.
-    offscreen_saved_frame_buffer_.reset(new BackFramebuffer(this));
-    offscreen_saved_frame_buffer_->Create();
-    //
-    offscreen_saved_color_texture_.reset(new BackTexture(this));
-    offscreen_saved_color_texture_->Create();
+    if (!offscreen_single_buffer_) {
+      // Create the saved offscreen texture. The target frame buffer is copied
+      // here when SwapBuffers is called.
+      offscreen_saved_frame_buffer_.reset(new BackFramebuffer(this));
+      offscreen_saved_frame_buffer_->Create();
+      offscreen_saved_color_texture_.reset(new BackTexture(this));
+      offscreen_saved_color_texture_->Create();
+    }
 
     // Allocate the render buffers at their initial size and check the status
     // of the frame buffers is okay.
@@ -3461,18 +3605,20 @@ bool GLES2DecoderImpl::Initialize(
       Destroy(true);
       return false;
     }
-    // Allocate the offscreen saved color texture.
-    DCHECK(offscreen_saved_color_format_);
-    offscreen_saved_color_texture_->AllocateStorage(
-        gfx::Size(1, 1), offscreen_saved_color_format_, true);
+    if (!offscreen_single_buffer_) {
+      // Allocate the offscreen saved color texture.
+      DCHECK(offscreen_saved_color_format_);
+      offscreen_saved_color_texture_->AllocateStorage(
+          gfx::Size(1, 1), offscreen_saved_color_format_, true);
 
-    offscreen_saved_frame_buffer_->AttachRenderTexture(
-        offscreen_saved_color_texture_.get());
-    if (offscreen_saved_frame_buffer_->CheckStatus() !=
-        GL_FRAMEBUFFER_COMPLETE) {
-      LOG(ERROR) << "Offscreen saved FBO was incomplete.";
-      Destroy(true);
-      return false;
+      offscreen_saved_frame_buffer_->AttachRenderTexture(
+          offscreen_saved_color_texture_.get());
+      if (offscreen_saved_frame_buffer_->CheckStatus() !=
+          GL_FRAMEBUFFER_COMPLETE) {
+        LOG(ERROR) << "Offscreen saved FBO was incomplete.";
+        Destroy(true);
+        return false;
+      }
     }
   }
 
@@ -3482,6 +3628,7 @@ bool GLES2DecoderImpl::Initialize(
   DoBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
   DoBindFramebuffer(GL_FRAMEBUFFER, 0);
   DoBindRenderbuffer(GL_RENDERBUFFER, 0);
+  UpdateFramebufferSRGB(nullptr);
 
   bool call_gl_clear = !surfaceless_ && !offscreen;
 #if defined(OS_ANDROID)
@@ -3515,11 +3662,13 @@ bool GLES2DecoderImpl::Initialize(
       !surface->IsOffscreen())
     supports_post_sub_buffer_ = false;
 
-  supports_swap_buffers_with_damage_ = surface->SupportsSwapBuffersWithDamage();
+  supports_swap_buffers_with_bounds_ = surface->SupportsSwapBuffersWithBounds();
 
   supports_commit_overlay_planes_ = surface->SupportsCommitOverlayPlanes();
 
   supports_async_swap_ = surface->SupportsAsyncSwap();
+
+  supports_dc_layers_ = !offscreen && surface->SupportsDCLayers();
 
   if (workarounds().reverse_point_sprite_coord_origin) {
     glPointParameteri(GL_POINT_SPRITE_COORD_ORIGIN, GL_LOWER_LEFT);
@@ -3574,6 +3723,12 @@ Capabilities GLES2DecoderImpl::GetCapabilities() {
                 &caps.max_vertex_texture_image_units, 1);
   DoGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &caps.max_vertex_uniform_vectors,
                 1);
+  {
+    GLint dims[2] = {0, 0};
+    DoGetIntegerv(GL_MAX_VIEWPORT_DIMS, dims, 2);
+    caps.max_viewport_width = dims[0];
+    caps.max_viewport_height = dims[1];
+  }
   DoGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS,
                 &caps.num_compressed_texture_formats, 1);
   DoGetIntegerv(GL_NUM_SHADER_BINARY_FORMATS, &caps.num_shader_binary_formats,
@@ -3646,6 +3801,8 @@ Capabilities GLES2DecoderImpl::GetCapabilities() {
     DoGetIntegerv(GL_MAX_SAMPLES, &caps.max_samples, 1);
   }
 
+  caps.num_stencil_bits = num_stencil_bits_;
+
   caps.egl_image_external =
       feature_info_->feature_flags().oes_egl_image_external;
   caps.texture_format_astc =
@@ -3681,20 +3838,28 @@ Capabilities GLES2DecoderImpl::GetCapabilities() {
 #endif
 
   caps.post_sub_buffer = supports_post_sub_buffer_;
-  caps.swap_buffers_with_damage = supports_swap_buffers_with_damage_;
+  caps.swap_buffers_with_bounds = supports_swap_buffers_with_bounds_;
   caps.commit_overlay_planes = supports_commit_overlay_planes_;
   caps.surfaceless = surfaceless_;
   bool is_offscreen = !!offscreen_target_frame_buffer_.get();
   caps.flips_vertically = !is_offscreen && surface_->FlipsVertically();
   caps.msaa_is_slow = workarounds().msaa_is_slow;
+  caps.avoid_stencil_buffers = workarounds().avoid_stencil_buffers;
+  caps.multisample_compatibility =
+      feature_info_->feature_flags().ext_multisample_compatibility;
+  caps.dc_layers = supports_dc_layers_;
 
   caps.blend_equation_advanced =
       feature_info_->feature_flags().blend_equation_advanced;
   caps.blend_equation_advanced_coherent =
       feature_info_->feature_flags().blend_equation_advanced_coherent;
   caps.texture_rg = feature_info_->feature_flags().ext_texture_rg;
+  caps.texture_norm16 = feature_info_->feature_flags().ext_texture_norm16;
   caps.texture_half_float_linear =
       feature_info_->feature_flags().enable_texture_half_float_linear;
+  caps.color_buffer_half_float_rgba =
+      feature_info_->feature_flags().enable_color_buffer_float ||
+      feature_info_->feature_flags().enable_color_buffer_half_float;
   caps.image_ycbcr_422 =
       feature_info_->feature_flags().chromium_image_ycbcr_422;
   caps.image_ycbcr_420v =
@@ -3703,16 +3868,27 @@ Capabilities GLES2DecoderImpl::GetCapabilities() {
       workarounds().max_copy_texture_chromium_size;
   caps.render_buffer_format_bgra8888 =
       feature_info_->feature_flags().ext_render_buffer_format_bgra8888;
+  caps.occlusion_query = feature_info_->feature_flags().occlusion_query;
   caps.occlusion_query_boolean =
       feature_info_->feature_flags().occlusion_query_boolean;
   caps.timer_queries =
       query_manager_->GPUTimingAvailable();
   caps.disable_multisampling_color_mask_usage =
       workarounds().disable_multisampling_color_mask_usage;
+  caps.gpu_rasterization =
+      group_->gpu_feature_info()
+          .status_values[GPU_FEATURE_TYPE_GPU_RASTERIZATION] ==
+      kGpuFeatureStatusEnabled;
   caps.disable_webgl_rgb_multisampling_usage =
       workarounds().disable_webgl_rgb_multisampling_usage;
+  caps.software_to_accelerated_canvas_upgrade =
+      !workarounds().disable_software_to_accelerated_canvas_upgrade;
   caps.emulate_rgb_buffer_with_rgba =
       workarounds().disable_gl_rgb_format;
+  if (workarounds().disable_non_empty_post_sub_buffers_for_onscreen_surfaces &&
+      !surface_->IsOffscreen()) {
+    caps.disable_non_empty_post_sub_buffers = true;
+  }
 
   return caps;
 }
@@ -3730,7 +3906,7 @@ bool GLES2DecoderImpl::InitializeShaderTranslator() {
     return true;
   }
   ShBuiltInResources resources;
-  ShInitBuiltInResources(&resources);
+  sh::InitBuiltInResources(&resources);
   resources.MaxVertexAttribs = group_->max_vertex_attribs();
   resources.MaxVertexUniformVectors =
       group_->max_vertex_uniform_vectors();
@@ -3850,6 +4026,8 @@ bool GLES2DecoderImpl::InitializeShaderTranslator() {
     driver_bug_workarounds |= SH_DONT_REMOVE_INVARIANT_FOR_FRAGMENT_INPUT;
   if (workarounds().remove_invariant_and_centroid_for_essl3)
     driver_bug_workarounds |= SH_REMOVE_INVARIANT_AND_CENTROID_FOR_ESSL3;
+  if (workarounds().rewrite_float_unary_minus_operator)
+    driver_bug_workarounds |= SH_REWRITE_FLOAT_UNARY_MINUS_OPERATOR;
 
   resources.WEBGL_debug_shader_precision =
       group_->gpu_preferences().emulate_shader_precision;
@@ -4083,29 +4261,7 @@ void GLES2DecoderImpl::DeleteTexturesHelper(GLsizei n,
     GLuint client_id = client_ids[ii];
     TextureRef* texture_ref = GetTexture(client_id);
     if (texture_ref) {
-      Texture* texture = texture_ref->texture();
-      if (texture->IsAttachedToFramebuffer()) {
-        framebuffer_state_.clear_state_dirty = true;
-      }
-      // Unbind texture_ref from texture_ref units.
-      state_.UnbindTexture(texture_ref);
-
-      // Unbind from current framebuffers.
-      if (supports_separate_framebuffer_binds) {
-        if (framebuffer_state_.bound_read_framebuffer.get()) {
-          framebuffer_state_.bound_read_framebuffer
-              ->UnbindTexture(GL_READ_FRAMEBUFFER_EXT, texture_ref);
-        }
-        if (framebuffer_state_.bound_draw_framebuffer.get()) {
-          framebuffer_state_.bound_draw_framebuffer
-              ->UnbindTexture(GL_DRAW_FRAMEBUFFER_EXT, texture_ref);
-        }
-      } else {
-        if (framebuffer_state_.bound_draw_framebuffer.get()) {
-          framebuffer_state_.bound_draw_framebuffer
-              ->UnbindTexture(GL_FRAMEBUFFER, texture_ref);
-        }
-      }
+      UnbindTexture(texture_ref, supports_separate_framebuffer_binds);
       RemoveTexture(client_id);
     }
   }
@@ -4200,8 +4356,6 @@ bool GLES2DecoderImpl::MakeCurrent() {
 
 void GLES2DecoderImpl::ProcessFinishedAsyncTransfers() {
   ProcessPendingReadPixels(false);
-  if (engine() && query_manager_.get())
-    query_manager_->ProcessPendingTransferQueries();
 }
 
 static void RebindCurrentFramebuffer(
@@ -4315,19 +4469,32 @@ bool GLES2DecoderImpl::CheckBoundDrawFramebufferValid(const char* func_name) {
 
   if (!SupportsSeparateFramebufferBinds())
     OnUseFramebuffer();
-  if (valid && feature_info_->feature_flags().desktop_srgb_support) {
-    // If framebuffer contains sRGB images, then enable FRAMEBUFFER_SRGB.
-    // Otherwise, disable FRAMEBUFFER_SRGB. Assume default fbo does not have
-    // sRGB image.
-    // In theory, we can just leave FRAMEBUFFER_SRGB on. However, many drivers
-    // behave incorrectly when all images are linear encoding, they still apply
-    // the sRGB conversion, but when at least one image is sRGB, then they
-    // behave correctly.
-    bool enable_framebuffer_srgb =
-        framebuffer && framebuffer->HasSRGBAttachments();
-    state_.EnableDisableFramebufferSRGB(enable_framebuffer_srgb);
+
+  UpdateFramebufferSRGB(framebuffer);
+  return true;
+}
+
+void GLES2DecoderImpl::UpdateFramebufferSRGB(Framebuffer* framebuffer) {
+  // Manually set the value of FRAMEBUFFER_SRGB based on the state that was set
+  // by the client.
+  bool needs_enable_disable_framebuffer_srgb = false;
+  bool enable_framebuffer_srgb = true;
+  if (feature_info_->feature_flags().ext_srgb_write_control) {
+    needs_enable_disable_framebuffer_srgb = true;
+    enable_framebuffer_srgb &= state_.GetEnabled(GL_FRAMEBUFFER_SRGB);
   }
-  return valid;
+  // On desktop, enable FRAMEBUFFER_SRGB only if the framebuffer contains sRGB
+  // attachments. In theory, we can just leave FRAMEBUFFER_SRGB enabled,
+  // however,
+  // many drivers behave incorrectly when no attachments are sRGB. When at
+  // least one attachment is sRGB, then they behave correctly.
+  if (feature_info_->feature_flags().desktop_srgb_support) {
+    needs_enable_disable_framebuffer_srgb = true;
+    // Assume that the default fbo does not have an sRGB image.
+    enable_framebuffer_srgb &= framebuffer && framebuffer->HasSRGBAttachments();
+  }
+  if (needs_enable_disable_framebuffer_srgb)
+    state_.EnableDisableFramebufferSRGB(enable_framebuffer_srgb);
 }
 
 bool GLES2DecoderImpl::CheckBoundReadFramebufferValid(
@@ -4348,19 +4515,6 @@ bool GLES2DecoderImpl::CheckBoundFramebufferValid(const char* func_name) {
   valid = valid && CheckFramebufferValid(
       read_framebuffer, GetReadFramebufferTarget(), gl_error, func_name);
   return valid;
-}
-
-GLint GLES2DecoderImpl::GetColorEncodingFromInternalFormat(
-    GLenum internalformat) {
-  switch (internalformat) {
-    case GL_SRGB_EXT:
-    case GL_SRGB_ALPHA_EXT:
-    case GL_SRGB8:
-    case GL_SRGB8_ALPHA8:
-      return GL_SRGB;
-    default:
-      return GL_LINEAR;
-  }
 }
 
 bool GLES2DecoderImpl::FormsTextureCopyingFeedbackLoop(
@@ -4408,7 +4562,7 @@ GLuint GLES2DecoderImpl::GetBoundReadFramebufferServiceId() {
   return 0;
 }
 
-GLuint GLES2DecoderImpl::GetBoundDrawFramebufferServiceId() {
+GLuint GLES2DecoderImpl::GetBoundDrawFramebufferServiceId() const {
   Framebuffer* framebuffer = GetBoundDrawFramebuffer();
   if (framebuffer) {
     return framebuffer->service_id();
@@ -4582,31 +4736,6 @@ ErrorState* GLES2DecoderImpl::GetErrorState() {
   return state_.GetErrorState();
 }
 
-void GLES2DecoderImpl::SetShaderCacheCallback(
-    const ShaderCacheCallback& callback) {
-  shader_cache_callback_ = callback;
-}
-
-void GLES2DecoderImpl::SetFenceSyncReleaseCallback(
-    const FenceSyncReleaseCallback& callback) {
-  fence_sync_release_callback_ = callback;
-}
-
-void GLES2DecoderImpl::SetWaitFenceSyncCallback(
-    const WaitFenceSyncCallback& callback) {
-  wait_fence_sync_callback_ = callback;
-}
-
-void GLES2DecoderImpl::SetDescheduleUntilFinishedCallback(
-    const NoParamCallback& callback) {
-  deschedule_until_finished_callback_ = callback;
-}
-
-void GLES2DecoderImpl::SetRescheduleAfterFinishedCallback(
-    const NoParamCallback& callback) {
-  reschedule_after_finished_callback_ = callback;
-}
-
 bool GLES2DecoderImpl::GetServiceTextureId(uint32_t client_texture_id,
                                            uint32_t* service_texture_id) {
   TextureRef* texture_ref = texture_manager()->GetTexture(client_texture_id);
@@ -4615,22 +4744,6 @@ bool GLES2DecoderImpl::GetServiceTextureId(uint32_t client_texture_id,
     return true;
   }
   return false;
-}
-
-uint32_t GLES2DecoderImpl::GetTextureUploadCount() {
-  return texture_state_.texture_upload_count;
-}
-
-base::TimeDelta GLES2DecoderImpl::GetTotalTextureUploadTime() {
-  return texture_state_.total_texture_upload_time;
-}
-
-base::TimeDelta GLES2DecoderImpl::GetTotalProcessingCommandsTime() {
-  return total_processing_commands_time_;
-}
-
-void GLES2DecoderImpl::AddProcessingCommandsTime(base::TimeDelta time) {
-  total_processing_commands_time_ += time;
 }
 
 void GLES2DecoderImpl::Destroy(bool have_context) {
@@ -4761,6 +4874,14 @@ void GLES2DecoderImpl::Destroy(bool have_context) {
   srgb_converter_.reset();
   clear_framebuffer_blit_.reset();
 
+  if (framebuffer_manager_.get()) {
+    framebuffer_manager_->Destroy(have_context);
+    if (group_->texture_manager())
+      group_->texture_manager()->RemoveFramebufferManager(
+          framebuffer_manager_.get());
+    framebuffer_manager_.reset();
+  }
+
   if (query_manager_.get()) {
     query_manager_->Destroy(have_context);
     query_manager_.reset();
@@ -4779,8 +4900,6 @@ void GLES2DecoderImpl::Destroy(bool have_context) {
     transform_feedback_manager_.reset();
   }
 
-  image_manager_.reset();
-
   offscreen_target_frame_buffer_.reset();
   offscreen_target_color_texture_.reset();
   offscreen_target_color_render_buffer_.reset();
@@ -4790,6 +4909,10 @@ void GLES2DecoderImpl::Destroy(bool have_context) {
   offscreen_saved_color_texture_.reset();
   offscreen_resolved_frame_buffer_.reset();
   offscreen_resolved_color_texture_.reset();
+
+  // Release all fences now, because some fence types need the context to be
+  // current on destruction.
+  pending_readpixel_fences_ = std::queue<FenceCallback>();
 
   // Need to release these before releasing |group_| which may own the
   // ShaderTranslatorCache.
@@ -4806,6 +4929,10 @@ void GLES2DecoderImpl::Destroy(bool have_context) {
     group_->Destroy(this, have_context);
     group_ = NULL;
   }
+
+  // Destroy the surface before the context, some surface destructors make GL
+  // calls.
+  surface_ = nullptr;
 
   if (context_.get()) {
     context_->ReleaseCurrent(NULL);
@@ -4832,6 +4959,12 @@ void GLES2DecoderImpl::ReleaseSurface() {
 }
 
 void GLES2DecoderImpl::TakeFrontBuffer(const Mailbox& mailbox) {
+  if (offscreen_single_buffer_) {
+    mailbox_manager()->ProduceTexture(
+        mailbox, offscreen_target_color_texture_->texture_ref()->texture());
+    return;
+  }
+
   if (!offscreen_saved_color_texture_.get()) {
     DLOG(ERROR) << "Called TakeFrontBuffer on a non-offscreen context";
     return;
@@ -4855,13 +4988,19 @@ void GLES2DecoderImpl::ReturnFrontBuffer(const Mailbox& mailbox, bool is_lost) {
   Texture* texture =
       static_cast<Texture*>(group_->mailbox_manager()->ConsumeTexture(mailbox));
 
+  if (offscreen_single_buffer_)
+    return;
+
   for (auto it = saved_back_textures_.begin(); it != saved_back_textures_.end();
        ++it) {
     if (texture != it->back_texture->texture_ref()->texture())
       continue;
 
     if (is_lost || it->back_texture->size() != offscreen_size_) {
-      it->back_texture->Invalidate();
+      if (is_lost)
+        it->back_texture->Invalidate();
+      else
+        it->back_texture->Destroy();
       saved_back_textures_.erase(it);
       return;
     }
@@ -4952,8 +5091,8 @@ bool GLES2DecoderImpl::ResizeOffscreenFramebuffer(const gfx::Size& size) {
   DCHECK(offscreen_target_color_format_);
   if (IsOffscreenBufferMultisampled()) {
     if (!offscreen_target_color_render_buffer_->AllocateStorage(
-            feature_info_.get(), offscreen_size_,
-            offscreen_target_color_format_, offscreen_target_samples_)) {
+            offscreen_size_, offscreen_target_color_format_,
+            offscreen_target_samples_)) {
       LOG(ERROR) << "GLES2DecoderImpl::ResizeOffscreenFramebuffer failed "
                  << "to allocate storage for offscreen target color buffer.";
       return false;
@@ -4968,9 +5107,7 @@ bool GLES2DecoderImpl::ResizeOffscreenFramebuffer(const gfx::Size& size) {
   }
   if (offscreen_target_depth_format_ &&
       !offscreen_target_depth_render_buffer_->AllocateStorage(
-          feature_info_.get(),
-          offscreen_size_,
-          offscreen_target_depth_format_,
+          offscreen_size_, offscreen_target_depth_format_,
           offscreen_target_samples_)) {
     LOG(ERROR) << "GLES2DecoderImpl::ResizeOffscreenFramebuffer failed "
                << "to allocate storage for offscreen target depth buffer.";
@@ -4978,9 +5115,7 @@ bool GLES2DecoderImpl::ResizeOffscreenFramebuffer(const gfx::Size& size) {
   }
   if (offscreen_target_stencil_format_ &&
       !offscreen_target_stencil_render_buffer_->AllocateStorage(
-          feature_info_.get(),
-          offscreen_size_,
-          offscreen_target_stencil_format_,
+          offscreen_size_, offscreen_target_stencil_format_,
           offscreen_target_samples_)) {
     LOG(ERROR) << "GLES2DecoderImpl::ResizeOffscreenFramebuffer failed "
                << "to allocate storage for offscreen target stencil buffer.";
@@ -5063,11 +5198,6 @@ error::Error GLES2DecoderImpl::HandleResizeCHROMIUM(
   width = std::max(1U, width);
   height = std::max(1U, height);
 
-#if defined(OS_POSIX) && !defined(OS_MACOSX) && \
-    !defined(UI_COMPOSITOR_IMAGE_TRANSPORT)
-  // Make sure that we are done drawing to the back buffer before resizing.
-  glFinish();
-#endif
   bool is_offscreen = !!offscreen_target_frame_buffer_.get();
   if (is_offscreen) {
     if (!ResizeOffscreenFramebuffer(gfx::Size(width, height))) {
@@ -5115,6 +5245,7 @@ error::Error GLES2DecoderImpl::DoCommandsImpl(unsigned int num_commands,
                                               const volatile void* buffer,
                                               int num_entries,
                                               int* entries_processed) {
+  DCHECK(entries_processed);
   commands_to_process_ = num_commands;
   error::Error result = error::kNoError;
   const volatile CommandBufferEntry* cmd_data =
@@ -5195,8 +5326,7 @@ error::Error GLES2DecoderImpl::DoCommandsImpl(unsigned int num_commands,
     }
   }
 
-  if (entries_processed)
-    *entries_processed = process_pos;
+  *entries_processed = process_pos;
 
   if (error::IsError(result)) {
     LOG(ERROR) << "Error: " << result << " for Command "
@@ -5489,6 +5619,17 @@ void GLES2DecoderImpl::RestoreState(const ContextState* prev_state) {
   state_.RestoreState(prev_state);
 }
 
+void GLES2DecoderImpl::RestoreBufferBinding(unsigned int target) {
+  if (target == GL_PIXEL_PACK_BUFFER) {
+    state_.UpdatePackParameters();
+  } else if (target == GL_PIXEL_UNPACK_BUFFER) {
+    state_.UpdateUnpackParameters();
+  }
+  Buffer* bound_buffer =
+      buffer_manager()->GetBufferInfoForTarget(&state_, target);
+  glBindBuffer(target, bound_buffer ? bound_buffer->service_id() : 0);
+}
+
 void GLES2DecoderImpl::RestoreFramebufferBindings() const {
   GLuint service_id =
       framebuffer_state_.bound_draw_framebuffer.get()
@@ -5515,14 +5656,13 @@ void GLES2DecoderImpl::RestoreTextureState(unsigned service_id) const {
   if (texture) {
     GLenum target = texture->target();
     glBindTexture(target, service_id);
-    glTexParameteri(
-        target, GL_TEXTURE_WRAP_S, texture->wrap_s());
-    glTexParameteri(
-        target, GL_TEXTURE_WRAP_T, texture->wrap_t());
-    glTexParameteri(
-        target, GL_TEXTURE_MIN_FILTER, texture->min_filter());
-    glTexParameteri(
-        target, GL_TEXTURE_MAG_FILTER, texture->mag_filter());
+    glTexParameteri(target, GL_TEXTURE_WRAP_S, texture->wrap_s());
+    glTexParameteri(target, GL_TEXTURE_WRAP_T, texture->wrap_t());
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, texture->min_filter());
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, texture->mag_filter());
+    if (feature_info_->IsWebGL2OrES3Context()) {
+      glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, texture->base_level());
+    }
     RestoreTextureUnitBindings(state_.active_texture_unit);
   }
 }
@@ -5561,23 +5701,54 @@ uint32_t GLES2DecoderImpl::GetAndClearBackbufferClearBitsForTest() {
 }
 
 void GLES2DecoderImpl::OnFboChanged() const {
-  if (workarounds().restore_scissor_on_fbo_change)
-    state_.fbo_binding_for_scissor_workaround_dirty = true;
+  state_.fbo_binding_for_scissor_workaround_dirty = true;
 }
 
 // Called after the FBO is checked for completeness.
 void GLES2DecoderImpl::OnUseFramebuffer() const {
-  if (state_.fbo_binding_for_scissor_workaround_dirty) {
-    state_.fbo_binding_for_scissor_workaround_dirty = false;
-    // The driver forgets the correct scissor when modifying the FBO binding.
-    glScissor(state_.scissor_x,
-              state_.scissor_y,
-              state_.scissor_width,
-              state_.scissor_height);
+  if (!state_.fbo_binding_for_scissor_workaround_dirty)
+    return;
+  state_.fbo_binding_for_scissor_workaround_dirty = false;
 
+  if (supports_dc_layers_) {
+    gfx::Vector2d draw_offset = GetBoundFramebufferDrawOffset();
+    glViewport(state_.viewport_x + draw_offset.x(),
+               state_.viewport_y + draw_offset.y(), state_.viewport_width,
+               state_.viewport_height);
+  }
+
+  if (workarounds().restore_scissor_on_fbo_change || supports_dc_layers_) {
+    // The driver forgets the correct scissor when modifying the FBO binding.
+    gfx::Vector2d scissor_offset = GetBoundFramebufferDrawOffset();
+    glScissor(state_.scissor_x + scissor_offset.x(),
+              state_.scissor_y + scissor_offset.y(), state_.scissor_width,
+              state_.scissor_height);
+  }
+
+  if (workarounds().restore_scissor_on_fbo_change) {
     // crbug.com/222018 - Also on QualComm, the flush here avoids flicker,
     // it's unclear how this bug works.
     glFlush();
+  }
+
+  if (workarounds().force_update_scissor_state_when_binding_fbo0 &&
+      GetBoundDrawFramebufferServiceId() == 0) {
+    // The theory is that FBO0 keeps some internal (in HW regs maybe?) scissor
+    // test state, but the driver forgets to update it with GL_SCISSOR_TEST
+    // when FBO0 gets bound. (So it stuck with whatever state we last switched
+    // from it.)
+    // If the internal scissor test state was enabled, it does update its
+    // internal scissor rect with GL_SCISSOR_BOX though.
+    if (state_.enable_flags.cached_scissor_test) {
+      // The driver early outs if the new state matches previous state so some
+      // shake up is needed.
+      glDisable(GL_SCISSOR_TEST);
+      glEnable(GL_SCISSOR_TEST);
+    } else {
+      // Ditto.
+      glEnable(GL_SCISSOR_TEST);
+      glDisable(GL_SCISSOR_TEST);
+    }
   }
 }
 
@@ -5627,6 +5798,7 @@ void GLES2DecoderImpl::DoBindFramebuffer(GLenum target, GLuint client_id) {
 }
 
 void GLES2DecoderImpl::DoBindRenderbuffer(GLenum target, GLuint client_id) {
+  DCHECK_EQ(target, (GLenum)GL_RENDERBUFFER);
   Renderbuffer* renderbuffer = NULL;
   GLuint service_id = 0;
   if (client_id != 0) {
@@ -5708,7 +5880,7 @@ void GLES2DecoderImpl::DoBindTexture(GLenum target, GLuint client_id) {
 
   TextureUnit& unit = state_.texture_units[state_.active_texture_unit];
   unit.bind_target = target;
-  unit.GetInfoForTarget(target) = texture_ref;
+  unit.SetInfoForTarget(target, texture_ref);
 }
 
 void GLES2DecoderImpl::DoBindSampler(GLuint unit, GLuint client_id) {
@@ -5873,7 +6045,7 @@ void GLES2DecoderImpl::InvalidateFramebufferImpl(
     GLsizei height,
     const char* function_name,
     FramebufferOperation op) {
-  Framebuffer* framebuffer = GetFramebufferInfoForTarget(GL_FRAMEBUFFER);
+  Framebuffer* framebuffer = GetFramebufferInfoForTarget(target);
 
   // Because of performance issues, no-op if the format of the attachment is
   // DEPTH_STENCIL and only one part is intended to be invalidated.
@@ -5881,7 +6053,7 @@ void GLES2DecoderImpl::InvalidateFramebufferImpl(
       framebuffer->HasDepthStencilFormatAttachment();
   bool invalidate_depth = false;
   bool invalidate_stencil = false;
-  std::unique_ptr<GLenum[]> validated_attachments(new GLenum[count]);
+  std::unique_ptr<GLenum[]> validated_attachments(new GLenum[count+1]);
   GLsizei validated_count = 0;
 
   // Validates the attachments. If one of them fails, the whole command fails.
@@ -5924,7 +6096,10 @@ void GLES2DecoderImpl::InvalidateFramebufferImpl(
     validated_attachments[validated_count++] = attachment;
   }
   if (invalidate_depth && invalidate_stencil) {
-    validated_attachments[validated_count++] = GL_DEPTH_STENCIL_ATTACHMENT;
+    // We do not use GL_DEPTH_STENCIL_ATTACHMENT here because
+    // it is not a valid token for glDiscardFramebufferEXT.
+    validated_attachments[validated_count++] = GL_DEPTH_ATTACHMENT;
+    validated_attachments[validated_count++] = GL_STENCIL_ATTACHMENT;
   }
 
   // If the default framebuffer is bound but we are still rendering to an
@@ -6131,27 +6306,26 @@ void GLES2DecoderImpl::DoGenerateMipmap(GLenum target) {
   bool enable_srgb = 0;
   if (target == GL_TEXTURE_2D) {
     tex->GetLevelType(target, tex->base_level(), &type, &internal_format);
-    enable_srgb =
-        GetColorEncodingFromInternalFormat(internal_format) == GL_SRGB;
+    enable_srgb = GLES2Util::GetColorEncodingFromInternalFormat(
+                      internal_format) == GL_SRGB;
   }
-  if (!enable_srgb || !feature_info_->feature_flags().desktop_srgb_support ||
-      !workarounds().decode_encode_srgb_for_generatemipmap) {
-    if (feature_info_->feature_flags().desktop_srgb_support) {
-      state_.EnableDisableFramebufferSRGB(enable_srgb);
-    }
-    glGenerateMipmapEXT(target);
-  } else {
+  if (enable_srgb && feature_info_->feature_flags().desktop_srgb_support) {
+    state_.EnableDisableFramebufferSRGB(enable_srgb);
+  }
+  if (enable_srgb && workarounds().decode_encode_srgb_for_generatemipmap) {
     if (target == GL_TEXTURE_2D) {
-      state_.EnableDisableFramebufferSRGB(true);
       if (!InitializeSRGBConverter("generateMipmap")) {
         return;
       }
       srgb_converter_->GenerateMipmap(this, tex, target);
     } else {
-      // TODO(yizhou): If the target is GL_TEXTURE_3D or GL_TEXTURE_2D_ARRAY,
+      // TODO(yizhou): If the target is GL_TEXTURE_3D ,GL_TEXTURE_2D_ARRAY,
+      // GL_TEXTURE_CUBE_MAP,
       // this change can not generate correct mipmap.
       glGenerateMipmapEXT(target);
     }
+  } else {
+    glGenerateMipmapEXT(target);
   }
 
   if (texture_zero_level_set) {
@@ -6713,17 +6887,16 @@ bool GLES2DecoderImpl::GetHelper(
     case GL_SAMPLER_BINDING:
       *num_written = 1;
       if (params) {
-        // TODO(vmiura): Need to implement this for ES3 clients.  WebGL 2 tracks
-        // this on the client side.
-        *params = 0;
+        DCHECK_LT(state_.active_texture_unit, state_.sampler_units.size());
+        Sampler* sampler =
+            state_.sampler_units[state_.active_texture_unit].get();
+        *params = sampler ? sampler->client_id() : 0;
       }
       return true;
     case GL_TRANSFORM_FEEDBACK_BINDING:
       *num_written = 1;
       if (params) {
-        // TODO(vmiura): Need to implement this for ES3 clients.  WebGL 2 tracks
-        // this on the client side.
-        *params = 0;
+        *params = state_.bound_transform_feedback->client_id();
       }
       return true;
     case GL_NUM_PROGRAM_BINARY_FORMATS:
@@ -6799,6 +6972,7 @@ void GLES2DecoderImpl::DoGetBooleanv(GLenum pname,
                                      GLsizei params_size) {
   DCHECK(params);
   std::unique_ptr<GLint[]> values(new GLint[params_size]);
+  memset(values.get(), 0, params_size * sizeof(GLint));
   DoGetIntegerv(pname, values.get(), params_size);
   for (GLsizei ii = 0; ii < params_size; ++ii) {
     params[ii] = static_cast<GLboolean>(values[ii]);
@@ -6826,6 +7000,7 @@ void GLES2DecoderImpl::DoGetFloatv(GLenum pname,
   }
 
   std::unique_ptr<GLint[]> values(new GLint[params_size]);
+  memset(values.get(), 0, params_size * sizeof(GLint));
   DoGetIntegerv(pname, values.get(), params_size);
   for (GLsizei ii = 0; ii < params_size; ++ii) {
     params[ii] = static_cast<GLfloat>(values[ii]);
@@ -6856,6 +7031,7 @@ void GLES2DecoderImpl::DoGetInteger64v(GLenum pname,
   }
 
   std::unique_ptr<GLint[]> values(new GLint[params_size]);
+  memset(values.get(), 0, params_size * sizeof(GLint));
   DoGetIntegerv(pname, values.get(), params_size);
   for (GLsizei ii = 0; ii < params_size; ++ii) {
     params[ii] = static_cast<GLint64>(values[ii]);
@@ -6995,11 +7171,9 @@ void GLES2DecoderImpl::DoBindAttribLocation(GLuint program_id,
   // At this point, the program's shaders may not be translated yet,
   // therefore, we may not find the hashed attribute name.
   // glBindAttribLocation call with original name is useless.
-  // So instead, we should simply cache the binding, and then call
+  // So instead, we simply cache the binding, and then call
   // Program::ExecuteBindAttribLocationCalls() right before link.
   program->SetAttribLocationBinding(name, static_cast<GLint>(index));
-  // TODO(zmo): Get rid of the following glBindAttribLocation call.
-  glBindAttribLocation(program->service_id(), index, name.c_str());
 }
 
 error::Error GLES2DecoderImpl::HandleBindAttribLocationBucket(
@@ -7225,6 +7399,11 @@ error::Error GLES2DecoderImpl::HandleDeleteProgram(
 error::Error GLES2DecoderImpl::DoClear(GLbitfield mask) {
   const char* func_name = "glClear";
   DCHECK(!ShouldDeferDraws());
+  if (mask &
+      ~(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, func_name, "invalid mask");
+    return error::kNoError;
+  }
   if (CheckBoundDrawFramebufferValid(func_name)) {
     ApplyDirtyState();
     if (workarounds().gl_clear_broken) {
@@ -7244,6 +7423,7 @@ error::Error GLES2DecoderImpl::DoClear(GLbitfield mask) {
         return error::kNoError;
       }
     }
+    AdjustDrawBuffers();
     glClear(mask);
   }
   return error::kNoError;
@@ -7367,11 +7547,10 @@ void GLES2DecoderImpl::DoClearBufferfi(
 void GLES2DecoderImpl::DoFramebufferRenderbuffer(
     GLenum target, GLenum attachment, GLenum renderbuffertarget,
     GLuint client_renderbuffer_id) {
+  const char* func_name = "glFramebufferRenderbuffer";
   Framebuffer* framebuffer = GetFramebufferInfoForTarget(target);
   if (!framebuffer) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_OPERATION,
-        "glFramebufferRenderbuffer", "no framebuffer bound");
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name, "no framebuffer bound");
     return;
   }
   GLuint service_id = 0;
@@ -7379,9 +7558,13 @@ void GLES2DecoderImpl::DoFramebufferRenderbuffer(
   if (client_renderbuffer_id) {
     renderbuffer = GetRenderbuffer(client_renderbuffer_id);
     if (!renderbuffer) {
-      LOCAL_SET_GL_ERROR(
-          GL_INVALID_OPERATION,
-          "glFramebufferRenderbuffer", "unknown renderbuffer");
+      LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name,
+                         "unknown renderbuffer");
+      return;
+    }
+    if (!renderbuffer->IsValid()) {
+      LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name,
+                         "renderbuffer never bound or deleted");
       return;
     }
     service_id = renderbuffer->service_id();
@@ -7393,11 +7576,11 @@ void GLES2DecoderImpl::DoFramebufferRenderbuffer(
   } else {
     attachments.push_back(attachment);
   }
-  LOCAL_COPY_REAL_GL_ERRORS_TO_WRAPPER("glFramebufferRenderbuffer");
+  LOCAL_COPY_REAL_GL_ERRORS_TO_WRAPPER(func_name);
   for (GLenum attachment_point : attachments) {
     glFramebufferRenderbufferEXT(
         target, attachment_point, renderbuffertarget, service_id);
-    GLenum error = LOCAL_PEEK_GL_ERROR("glFramebufferRenderbuffer");
+    GLenum error = LOCAL_PEEK_GL_ERROR(func_name);
     if (error == GL_NO_ERROR) {
       framebuffer->AttachRenderbuffer(attachment_point, renderbuffer);
     }
@@ -7416,6 +7599,11 @@ void GLES2DecoderImpl::DoDisable(GLenum cap) {
       // DrawElements* for old desktop GL.
       return;
     }
+    if (cap == GL_FRAMEBUFFER_SRGB) {
+      // Enable and Disable GL_FRAMEBUFFER_SRGB is done manually in
+      // CheckBoundDrawFramebufferValid.
+      return;
+    }
     glDisable(cap);
   }
 }
@@ -7426,6 +7614,11 @@ void GLES2DecoderImpl::DoEnable(GLenum cap) {
         feature_info_->feature_flags().emulate_primitive_restart_fixed_index) {
       // Enable and Disable PRIMITIVE_RESTART only before and after
       // DrawElements* for old desktop GL.
+      return;
+    }
+    if (cap == GL_FRAMEBUFFER_SRGB) {
+      // Enable and Disable GL_FRAMEBUFFER_SRGB is done manually in
+      // CheckBoundDrawFramebufferValid.
       return;
     }
     glEnable(cap);
@@ -7539,7 +7732,9 @@ void GLES2DecoderImpl::RestoreClearState() {
   glClearDepth(state_.depth_clear);
   state_.SetDeviceCapabilityState(GL_SCISSOR_TEST,
                                   state_.enable_flags.scissor_test);
-  glScissor(state_.scissor_x, state_.scissor_y, state_.scissor_width,
+  gfx::Vector2d scissor_offset = GetBoundFramebufferDrawOffset();
+  glScissor(state_.scissor_x + scissor_offset.x(),
+            state_.scissor_y + scissor_offset.y(), state_.scissor_width,
             state_.scissor_height);
 }
 
@@ -7617,7 +7812,7 @@ void GLES2DecoderImpl::DoFramebufferTexture2DCommon(
   }
 
   if (texture_ref)
-    DoCopyTexImageIfNeeded(texture_ref->texture(), textarget);
+    DoBindOrCopyTexImageIfNeeded(texture_ref->texture(), textarget, 0);
 
   std::vector<GLenum> attachments;
   if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
@@ -7861,6 +8056,15 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
     return;
   }
 
+  // If color/depth/stencil buffer have no image, we can remove corresponding
+  // bitfield from mask and return early if mask equals to 0.
+  // But validations should be done against the original mask.
+  GLbitfield mask_blit = mask;
+
+  // Detect that designated read/depth/stencil buffer in read framebuffer miss
+  // image, and the corresponding buffers in draw framebuffer have image.
+  bool read_framebuffer_miss_image = false;
+
   // Check whether read framebuffer and draw framebuffer have identical image
   // TODO(yunchao): consider doing something like CheckFramebufferStatus().
   // We cache the validation results, and if read_framebuffer doesn't change,
@@ -7884,6 +8088,18 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
     is_feedback_loop = FeedbackLoopTrue;
   } else if (!read_framebuffer || !draw_framebuffer) {
     is_feedback_loop = FeedbackLoopFalse;
+    if (read_framebuffer) {
+      if (((mask & GL_COLOR_BUFFER_BIT) != 0 &&
+          !GetBoundReadFramebufferInternalFormat()) ||
+          ((mask & GL_DEPTH_BUFFER_BIT) != 0 &&
+          !read_framebuffer->GetAttachment(GL_DEPTH_ATTACHMENT) &&
+          BoundFramebufferHasDepthAttachment()) ||
+          ((mask & GL_STENCIL_BUFFER_BIT) != 0 &&
+          !read_framebuffer->GetAttachment(GL_STENCIL_ATTACHMENT) &&
+          BoundFramebufferHasStencilAttachment())) {
+        read_framebuffer_miss_image = true;
+      }
+    }
   } else {
     DCHECK(read_framebuffer && draw_framebuffer);
     if ((mask & GL_DEPTH_BUFFER_BIT) != 0) {
@@ -7892,7 +8108,10 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
       const Framebuffer::Attachment* depth_buffer_draw =
           draw_framebuffer->GetAttachment(GL_DEPTH_ATTACHMENT);
       if (!depth_buffer_draw || !depth_buffer_read) {
-        mask &= ~GL_DEPTH_BUFFER_BIT;
+        mask_blit &= ~GL_DEPTH_BUFFER_BIT;
+        if (depth_buffer_draw) {
+          read_framebuffer_miss_image = true;
+        }
       } else if (depth_buffer_draw->IsSameAttachment(depth_buffer_read)) {
         is_feedback_loop = FeedbackLoopTrue;
       }
@@ -7903,20 +8122,21 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
       const Framebuffer::Attachment* stencil_buffer_draw =
           draw_framebuffer->GetAttachment(GL_STENCIL_ATTACHMENT);
       if (!stencil_buffer_draw || !stencil_buffer_read) {
-        mask &= ~GL_STENCIL_BUFFER_BIT;
+        mask_blit &= ~GL_STENCIL_BUFFER_BIT;
+        if (stencil_buffer_draw) {
+          read_framebuffer_miss_image = true;
+        }
       } else if (stencil_buffer_draw->IsSameAttachment(stencil_buffer_read)) {
         is_feedback_loop = FeedbackLoopTrue;
       }
     }
-    if (!mask)
-      return;
   }
 
   GLenum src_internal_format = GetBoundReadFramebufferInternalFormat();
   GLenum src_type = GetBoundReadFramebufferTextureType();
 
-  bool read_buffer_has_srgb =
-      GetColorEncodingFromInternalFormat(src_internal_format) == GL_SRGB;
+  bool read_buffer_has_srgb = GLES2Util::GetColorEncodingFromInternalFormat(
+                                  src_internal_format) == GL_SRGB;
   bool draw_buffers_has_srgb = false;
   if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
     bool is_src_signed_int =
@@ -7937,13 +8157,18 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
     const Framebuffer::Attachment* read_buffer =
         is_feedback_loop == FeedbackLoopUnknown ?
         read_framebuffer->GetReadBufferAttachment() : nullptr;
+    bool draw_buffer_has_image = false;
     for (uint32_t ii = 0; ii < group_->max_draw_buffers(); ++ii) {
       GLenum dst_format = GetBoundColorDrawBufferInternalFormat(
           static_cast<GLint>(ii));
       GLenum dst_type = GetBoundColorDrawBufferType(static_cast<GLint>(ii));
       if (dst_format == 0)
         continue;
-      if (GetColorEncodingFromInternalFormat(dst_format) == GL_SRGB)
+      draw_buffer_has_image = true;
+      if (!src_internal_format) {
+        read_framebuffer_miss_image = true;
+      }
+      if (GLES2Util::GetColorEncodingFromInternalFormat(dst_format) == GL_SRGB)
         draw_buffers_has_srgb = true;
       if (read_buffer_samples > 0 &&
           (src_sized_format !=
@@ -7976,10 +8201,17 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
         }
       }
     }
+    if (draw_framebuffer && !draw_buffer_has_image)
+      mask_blit &= ~GL_COLOR_BUFFER_BIT;
   }
   if (is_feedback_loop == FeedbackLoopTrue) {
     LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name,
         "source buffer and destination buffers are identical");
+    return;
+  }
+  if (read_framebuffer_miss_image == true) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name,
+       "The designated attachment point(s) in read framebuffer miss image");
     return;
   }
 
@@ -7989,16 +8221,23 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
                          "invalid filter for depth/stencil");
       return;
     }
-
-    if ((GetBoundFramebufferDepthFormat(GL_READ_FRAMEBUFFER) !=
-         GetBoundFramebufferDepthFormat(GL_DRAW_FRAMEBUFFER)) ||
-        (GetBoundFramebufferStencilFormat(GL_READ_FRAMEBUFFER) !=
-         GetBoundFramebufferStencilFormat(GL_DRAW_FRAMEBUFFER))) {
-      LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name,
-                         "src and dst formats differ for depth/stencil");
-      return;
-    }
   }
+
+  mask = mask_blit;
+  if (!mask)
+    return;
+
+  if (((mask & GL_DEPTH_BUFFER_BIT) != 0 &&
+      (GetBoundFramebufferDepthFormat(GL_READ_FRAMEBUFFER) !=
+      GetBoundFramebufferDepthFormat(GL_DRAW_FRAMEBUFFER))) ||
+      ((mask & GL_STENCIL_BUFFER_BIT) != 0 &&
+      ((GetBoundFramebufferStencilFormat(GL_READ_FRAMEBUFFER) !=
+      GetBoundFramebufferStencilFormat(GL_DRAW_FRAMEBUFFER))))) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name,
+                       "src and dst formats differ for depth/stencil");
+    return;
+  }
+
 
   if (workarounds().adjust_src_dst_region_for_blitframebuffer) {
     gfx::Size read_size = GetBoundReadFramebufferSize();
@@ -8015,8 +8254,10 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
                          "the width or height of src region overflow");
       return;
     }
-    src_width = std::abs(src_width_temp.ValueOrDefault(0));
-    src_height = std::abs(src_height_temp.ValueOrDefault(0));
+    if (!src_width_temp.Abs().AssignIfValid(&src_width))
+      src_width = 0;
+    if (!src_height_temp.Abs().AssignIfValid(&src_height))
+      src_height = 0;
 
     gfx::Rect src_region(src_x, src_y, src_width, src_height);
     if (!src_bounds.Contains(src_region) &&
@@ -8051,8 +8292,10 @@ void GLES2DecoderImpl::DoBlitFramebufferCHROMIUM(
                            "the width or height of dst region overflow");
         return;
       }
-      dst_width = std::abs(dst_width_temp.ValueOrDefault(0));
-      dst_height = std::abs(dst_height_temp.ValueOrDefault(0));
+      if (!dst_width_temp.Abs().AssignIfValid(&dst_width))
+        dst_width = 0;
+      if (!dst_height_temp.Abs().AssignIfValid(&dst_height))
+        dst_height = 0;
 
       GLfloat dst_mapping_width =
           static_cast<GLfloat>(src_real_width) * dst_width / src_width;
@@ -8145,6 +8388,33 @@ bool GLES2DecoderImpl::InitializeSRGBConverter(
   return true;
 }
 
+void GLES2DecoderImpl::UnbindTexture(TextureRef* texture_ref,
+                                     bool supports_separate_framebuffer_binds) {
+  Texture* texture = texture_ref->texture();
+  if (texture->IsAttachedToFramebuffer()) {
+    framebuffer_state_.clear_state_dirty = true;
+  }
+  // Unbind texture_ref from texture_ref units.
+  state_.UnbindTexture(texture_ref);
+
+  // Unbind from current framebuffers.
+  if (supports_separate_framebuffer_binds) {
+    if (framebuffer_state_.bound_read_framebuffer.get()) {
+      framebuffer_state_.bound_read_framebuffer->UnbindTexture(
+          GL_READ_FRAMEBUFFER_EXT, texture_ref);
+    }
+    if (framebuffer_state_.bound_draw_framebuffer.get()) {
+      framebuffer_state_.bound_draw_framebuffer->UnbindTexture(
+          GL_DRAW_FRAMEBUFFER_EXT, texture_ref);
+    }
+  } else {
+    if (framebuffer_state_.bound_draw_framebuffer.get()) {
+      framebuffer_state_.bound_draw_framebuffer->UnbindTexture(GL_FRAMEBUFFER,
+                                                               texture_ref);
+    }
+  }
+}
+
 void GLES2DecoderImpl::EnsureRenderbufferBound() {
   if (!state_.bound_renderbuffer_valid) {
     state_.bound_renderbuffer_valid = true;
@@ -8155,26 +8425,73 @@ void GLES2DecoderImpl::EnsureRenderbufferBound() {
   }
 }
 
-void GLES2DecoderImpl::RenderbufferStorageMultisampleHelper(
-    const FeatureInfo* feature_info,
+void GLES2DecoderImpl::RenderbufferStorageMultisampleWithWorkaround(
     GLenum target,
     GLsizei samples,
     GLenum internal_format,
     GLsizei width,
-    GLsizei height) {
+    GLsizei height,
+    ForcedMultisampleMode mode) {
+  RegenerateRenderbufferIfNeeded(state_.bound_renderbuffer.get());
+  EnsureRenderbufferBound();
+  RenderbufferStorageMultisampleHelper(target, samples, internal_format, width,
+                                       height, mode);
+}
+
+void GLES2DecoderImpl::RenderbufferStorageMultisampleHelper(
+    GLenum target,
+    GLsizei samples,
+    GLenum internal_format,
+    GLsizei width,
+    GLsizei height,
+    ForcedMultisampleMode mode) {
+  if (samples == 0) {
+    glRenderbufferStorageEXT(target, internal_format, width, height);
+    return;
+  }
+
   // TODO(sievers): This could be resolved at the GL binding level, but the
   // binding process is currently a bit too 'brute force'.
-  if (feature_info->feature_flags().use_core_framebuffer_multisample) {
+
+  // Note that when this is called via the
+  // RenderbufferStorageMultisampleEXT handler,
+  // kForceExtMultisampledRenderToTexture is passed in order to
+  // prevent the core ES 3.0 multisampling code path from being used.
+  if (features().use_core_framebuffer_multisample &&
+      mode != kForceExtMultisampledRenderToTexture) {
     glRenderbufferStorageMultisample(
         target, samples, internal_format, width, height);
-  } else if (feature_info->gl_version_info().is_angle) {
+  } else if (features().angle_framebuffer_multisample) {
     // This is ES2 only.
     glRenderbufferStorageMultisampleANGLE(
         target, samples, internal_format, width, height);
+  } else if (features().use_img_for_multisampled_render_to_texture) {
+    glRenderbufferStorageMultisampleIMG(target, samples, internal_format, width,
+                                        height);
   } else {
     glRenderbufferStorageMultisampleEXT(
         target, samples, internal_format, width, height);
   }
+}
+
+bool GLES2DecoderImpl::RegenerateRenderbufferIfNeeded(
+    Renderbuffer* renderbuffer) {
+  if (!workarounds().multisample_renderbuffer_resize_emulation) {
+    return false;
+  }
+
+  if (!renderbuffer->RegenerateAndBindBackingObjectIfNeeded()) {
+    return false;
+  }
+
+  if (renderbuffer != state_.bound_renderbuffer.get()) {
+    // The renderbuffer bound in the driver has changed to the new
+    // renderbuffer->service_id(). If that isn't state_.bound_renderbuffer,
+    // then state_.bound_renderbuffer is no longer bound in the driver.
+    state_.bound_renderbuffer_valid = false;
+  }
+
+  return true;
 }
 
 void GLES2DecoderImpl::BlitFramebufferHelper(GLint srcX0,
@@ -8192,7 +8509,7 @@ void GLES2DecoderImpl::BlitFramebufferHelper(GLint srcX0,
   if (feature_info_->feature_flags().use_core_framebuffer_multisample) {
     glBlitFramebuffer(
         srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-  } else if (gl_version_info().is_angle) {
+  } else if (feature_info_->feature_flags().angle_framebuffer_multisample) {
     // This is ES2 only.
     glBlitFramebufferANGLE(
         srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -8257,14 +8574,13 @@ void GLES2DecoderImpl::DoRenderbufferStorageMultisampleCHROMIUM(
     return;
   }
 
-  EnsureRenderbufferBound();
   GLenum impl_format =
       renderbuffer_manager()->InternalRenderbufferFormatToImplFormat(
           internalformat);
   LOCAL_COPY_REAL_GL_ERRORS_TO_WRAPPER(
       "glRenderbufferStorageMultisampleCHROMIUM");
-  RenderbufferStorageMultisampleHelper(
-      feature_info_.get(), target, samples, impl_format, width, height);
+  RenderbufferStorageMultisampleWithWorkaround(target, samples, impl_format,
+                                               width, height, kDoNotForce);
   GLenum error =
       LOCAL_PEEK_GL_ERROR("glRenderbufferStorageMultisampleCHROMIUM");
   if (error == GL_NO_ERROR) {
@@ -8278,11 +8594,8 @@ void GLES2DecoderImpl::DoRenderbufferStorageMultisampleCHROMIUM(
       }
     }
 
-    // TODO(gman): If renderbuffers tracked which framebuffers they were
-    // attached to we could just mark those framebuffers as not complete.
-    framebuffer_manager()->IncFramebufferStateChangeCount();
-    renderbuffer_manager()->SetInfo(
-        renderbuffer, samples, internalformat, width, height);
+    renderbuffer_manager()->SetInfoAndInvalidate(renderbuffer, samples,
+                                                 internalformat, width, height);
   }
 }
 
@@ -8303,25 +8616,17 @@ void GLES2DecoderImpl::DoRenderbufferStorageMultisampleEXT(
     return;
   }
 
-  EnsureRenderbufferBound();
   GLenum impl_format =
       renderbuffer_manager()->InternalRenderbufferFormatToImplFormat(
           internalformat);
   LOCAL_COPY_REAL_GL_ERRORS_TO_WRAPPER("glRenderbufferStorageMultisampleEXT");
-  if (features().use_img_for_multisampled_render_to_texture) {
-    glRenderbufferStorageMultisampleIMG(
-        target, samples, impl_format, width, height);
-  } else {
-    glRenderbufferStorageMultisampleEXT(
-        target, samples, impl_format, width, height);
-  }
+  RenderbufferStorageMultisampleWithWorkaround(
+      target, samples, impl_format, width, height,
+      kForceExtMultisampledRenderToTexture);
   GLenum error = LOCAL_PEEK_GL_ERROR("glRenderbufferStorageMultisampleEXT");
   if (error == GL_NO_ERROR) {
-    // TODO(gman): If renderbuffers tracked which framebuffers they were
-    // attached to we could just mark those framebuffers as not complete.
-    framebuffer_manager()->IncFramebufferStateChangeCount();
-    renderbuffer_manager()->SetInfo(
-        renderbuffer, samples, internalformat, width, height);
+    renderbuffer_manager()->SetInfoAndInvalidate(renderbuffer, samples,
+                                                 internalformat, width, height);
   }
 }
 
@@ -8461,21 +8766,16 @@ void GLES2DecoderImpl::DoRenderbufferStorage(
     return;
   }
 
-  EnsureRenderbufferBound();
   LOCAL_COPY_REAL_GL_ERRORS_TO_WRAPPER("glRenderbufferStorage");
-  glRenderbufferStorageEXT(
-      target,
+  RenderbufferStorageMultisampleWithWorkaround(
+      target, 0,
       renderbuffer_manager()->InternalRenderbufferFormatToImplFormat(
           internalformat),
-      width,
-      height);
+      width, height, kDoNotForce);
   GLenum error = LOCAL_PEEK_GL_ERROR("glRenderbufferStorage");
   if (error == GL_NO_ERROR) {
-    // TODO(gman): If tetxures tracked which framebuffers they were attached to
-    // we could just mark those framebuffers as not complete.
-    framebuffer_manager()->IncFramebufferStateChangeCount();
-    renderbuffer_manager()->SetInfo(
-        renderbuffer, 0, internalformat, width, height);
+    renderbuffer_manager()->SetInfoAndInvalidate(renderbuffer, 0,
+                                                 internalformat, width, height);
   }
 }
 
@@ -8495,9 +8795,10 @@ void GLES2DecoderImpl::DoLinkProgram(GLuint program_id) {
 
   LogClientServiceForInfo(program, program_id, "glLinkProgram");
   if (program->Link(shader_manager(),
-                    workarounds().count_all_in_varyings_packing ?
-                        Program::kCountAll : Program::kCountOnlyStaticallyUsed,
-                    shader_cache_callback_)) {
+                    workarounds().count_all_in_varyings_packing
+                        ? Program::kCountAll
+                        : Program::kCountOnlyStaticallyUsed,
+                    client_)) {
     if (program == state_.current_program.get()) {
       if (workarounds().clear_uniforms_before_first_program_use)
         program_manager()->ClearUniforms(program);
@@ -8507,6 +8808,72 @@ void GLES2DecoderImpl::DoLinkProgram(GLuint program_id) {
   // LinkProgram can be very slow.  Exit command processing to allow for
   // context preemption and GPU watchdog checks.
   ExitCommandProcessingEarly();
+}
+
+void GLES2DecoderImpl::DoOverlayPromotionHintCHROMIUM(GLuint client_id,
+                                                      GLboolean promotion_hint,
+                                                      GLint display_x,
+                                                      GLint display_y) {
+  if (client_id == 0)
+    return;
+
+  TextureRef* texture_ref = GetTexture(client_id);
+  if (!texture_ref) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "glOverlayPromotionHintCHROMIUM",
+                       "invalid texture id");
+    return;
+  }
+  GLStreamTextureImage* image =
+      texture_ref->texture()->GetLevelStreamTextureImage(
+          GL_TEXTURE_EXTERNAL_OES, 0);
+  if (!image) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glOverlayPromotionHintCHROMIUM",
+                       "texture has no StreamTextureImage");
+    return;
+  }
+
+  image->NotifyPromotionHint(promotion_hint != GL_FALSE, display_x, display_y);
+}
+
+void GLES2DecoderImpl::DoSetDrawRectangleCHROMIUM(GLint x,
+                                                  GLint y,
+                                                  GLint width,
+                                                  GLint height) {
+  Framebuffer* framebuffer = GetFramebufferInfoForTarget(GL_DRAW_FRAMEBUFFER);
+  if (framebuffer) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSetDrawRectangleCHROMIUM",
+                       "framebuffer must not be bound");
+    return;
+  }
+  if (!supports_dc_layers_) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSetDrawRectangleCHROMIUM",
+                       "surface doesn't support SetDrawRectangle");
+    return;
+  }
+  gfx::Rect rect(x, y, width, height);
+  if (!surface_->SetDrawRectangle(rect)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSetDrawRectangleCHROMIUM",
+                       "failed on surface");
+  }
+  OnFboChanged();
+}
+
+void GLES2DecoderImpl::DoSetEnableDCLayersCHROMIUM(GLboolean enable) {
+  Framebuffer* framebuffer = GetFramebufferInfoForTarget(GL_DRAW_FRAMEBUFFER);
+  if (framebuffer) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSetEnableDCLayersCHROMIUM",
+                       "framebuffer must not be bound");
+    return;
+  }
+  if (!supports_dc_layers_) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSetEnableDCLayersCHROMIUM",
+                       "surface doesn't support SetDrawRectangle");
+    return;
+  }
+  if (!surface_->SetEnableDCLayers(!!enable)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSetEnableDCLayersCHROMIUM",
+                       "failed on surface");
+  }
 }
 
 void GLES2DecoderImpl::DoReadBuffer(GLenum src) {
@@ -8686,7 +9053,7 @@ bool GLES2DecoderImpl::CheckDrawingFeedbackLoops() {
         continue;
       TextureUnit& texture_unit = state_.texture_units[texture_unit_index];
       TextureRef* texture_ref =
-          texture_unit.GetInfoForSamplerType(uniform_info->type).get();
+          texture_unit.GetInfoForSamplerType(uniform_info->type);
       if (attachment->IsTexture(texture_ref))
         return true;
     }
@@ -8718,6 +9085,16 @@ bool GLES2DecoderImpl::ValidateAndAdjustDrawBuffers(const char* func_name) {
       return false;
   }
   return true;
+}
+
+void GLES2DecoderImpl::AdjustDrawBuffers() {
+  if (!SupportsDrawBuffers()) {
+    return;
+  }
+  Framebuffer* framebuffer = framebuffer_state_.bound_draw_framebuffer.get();
+  if (framebuffer) {
+    framebuffer->AdjustDrawBuffers();
+  }
 }
 
 bool GLES2DecoderImpl::ValidateUniformBlockBackings(const char* func_name) {
@@ -9344,20 +9721,33 @@ void GLES2DecoderImpl::DoCopyTexImage(Texture* texture,
   DCHECK(rv) << "CopyTexImage() failed";
 }
 
-void GLES2DecoderImpl::DoCopyTexImageIfNeeded(Texture* texture,
-                                              GLenum textarget) {
+bool GLES2DecoderImpl::DoBindOrCopyTexImageIfNeeded(Texture* texture,
+                                                    GLenum textarget,
+                                                    GLuint texture_unit) {
   // Image is already in use if texture is attached to a framebuffer.
   if (texture && !texture->IsAttachedToFramebuffer()) {
     Texture::ImageState image_state;
     gl::GLImage* image = texture->GetLevelImage(textarget, 0, &image_state);
     if (image && image_state == Texture::UNBOUND) {
       ScopedGLErrorSuppressor suppressor(
-          "GLES2DecoderImpl::DoCopyTexImageIfNeeded", GetErrorState());
+          "GLES2DecoderImpl::DoBindOrCopyTexImageIfNeeded", GetErrorState());
+      if (texture_unit)
+        glActiveTexture(texture_unit);
       glBindTexture(textarget, texture->service_id());
-      DoCopyTexImage(texture, textarget, image);
-      RestoreCurrentTextureBindings(&state_, textarget);
+      if (image->BindTexImage(textarget)) {
+        image_state = Texture::BOUND;
+      } else {
+        DoCopyTexImage(texture, textarget, image);
+      }
+      if (!texture_unit) {
+        RestoreCurrentTextureBindings(&state_, textarget,
+                                      state_.active_texture_unit);
+        return false;
+      }
+      return true;
     }
   }
+  return false;
 }
 
 void GLES2DecoderImpl::DoCopyBufferSubData(GLenum readtarget,
@@ -9384,7 +9774,7 @@ bool GLES2DecoderImpl::PrepareTexturesForRender() {
       if (texture_unit_index < state_.texture_units.size()) {
         TextureUnit& texture_unit = state_.texture_units[texture_unit_index];
         TextureRef* texture_ref =
-            texture_unit.GetInfoForSamplerType(uniform_info->type).get();
+            texture_unit.GetInfoForSamplerType(uniform_info->type);
         GLenum textarget = GetBindTargetForSamplerType(uniform_info->type);
         const SamplerState& sampler_state = GetSamplerStateForTextureUnit(
             uniform_info->type, texture_unit_index);
@@ -9412,16 +9802,9 @@ bool GLES2DecoderImpl::PrepareTexturesForRender() {
 
         if (textarget != GL_TEXTURE_CUBE_MAP) {
           Texture* texture = texture_ref->texture();
-          Texture::ImageState image_state;
-          gl::GLImage* image =
-              texture->GetLevelImage(textarget, 0, &image_state);
-          if (image && image_state == Texture::UNBOUND &&
-              !texture->IsAttachedToFramebuffer()) {
-            ScopedGLErrorSuppressor suppressor(
-                "GLES2DecoderImpl::PrepareTexturesForRender", GetErrorState());
+          if (DoBindOrCopyTexImageIfNeeded(texture, textarget,
+                                           GL_TEXTURE0 + texture_unit_index)) {
             textures_set = true;
-            glActiveTexture(GL_TEXTURE0 + texture_unit_index);
-            DoCopyTexImage(texture, textarget, image);
             continue;
           }
         }
@@ -9445,7 +9828,7 @@ void GLES2DecoderImpl::RestoreStateForTextures() {
       if (texture_unit_index < state_.texture_units.size()) {
         TextureUnit& texture_unit = state_.texture_units[texture_unit_index];
         TextureRef* texture_ref =
-            texture_unit.GetInfoForSamplerType(uniform_info->type).get();
+            texture_unit.GetInfoForSamplerType(uniform_info->type);
         const SamplerState& sampler_state = GetSamplerStateForTextureUnit(
             uniform_info->type, texture_unit_index);
         if (!texture_ref ||
@@ -9454,7 +9837,7 @@ void GLES2DecoderImpl::RestoreStateForTextures() {
           glActiveTexture(GL_TEXTURE0 + texture_unit_index);
           // Get the texture_ref info that was previously bound here.
           texture_ref =
-              texture_unit.GetInfoForTarget(texture_unit.bind_target).get();
+              texture_unit.GetInfoForTarget(texture_unit.bind_target);
           glBindTexture(texture_unit.bind_target,
                         texture_ref ? texture_ref->service_id() : 0);
           continue;
@@ -9485,7 +9868,7 @@ bool GLES2DecoderImpl::ClearUnclearedTextures() {
         if (texture_unit_index < state_.texture_units.size()) {
           TextureUnit& texture_unit = state_.texture_units[texture_unit_index];
           TextureRef* texture_ref =
-              texture_unit.GetInfoForSamplerType(uniform_info->type).get();
+              texture_unit.GetInfoForSamplerType(uniform_info->type);
           if (texture_ref && !texture_ref->texture()->SafeToRenderFrom()) {
             if (!texture_manager()->ClearRenderableLevels(this, texture_ref)) {
               return false;
@@ -9521,15 +9904,24 @@ bool GLES2DecoderImpl::IsDrawValid(
     return false;
   }
 
-  return state_.vertex_attrib_manager
-      ->ValidateBindings(function_name,
-                         this,
-                         feature_info_.get(),
-                         buffer_manager(),
-                         state_.current_program.get(),
-                         max_vertex_accessed,
-                         instanced,
-                         primcount);
+  if (!state_.vertex_attrib_manager->ValidateBindings(
+          function_name, this, feature_info_.get(), buffer_manager(),
+          state_.current_program.get(), max_vertex_accessed, instanced,
+          primcount)) {
+    return false;
+  }
+
+  if (workarounds().disallow_large_instanced_draw) {
+    const GLsizei kMaxInstancedDrawPrimitiveCount = 0x4000000;
+    if (primcount > kMaxInstancedDrawPrimitiveCount) {
+      LOCAL_SET_GL_ERROR(
+          GL_OUT_OF_MEMORY, function_name,
+          "Instanced draw primcount too large for this platform");
+      return false;
+    }
+  }
+
+  return true;
 }
 
 bool GLES2DecoderImpl::SimulateAttrib0(
@@ -10524,6 +10916,7 @@ void GLES2DecoderImpl::GetTexParameterImpl(
         }
         return;
       }
+      break;
     case GL_TEXTURE_MAX_LEVEL:
       if (workarounds().use_shadowed_tex_level_params) {
         if (fparams) {
@@ -10533,6 +10926,35 @@ void GLES2DecoderImpl::GetTexParameterImpl(
         }
         return;
       }
+      break;
+    case GL_TEXTURE_SWIZZLE_R:
+      if (fparams) {
+        fparams[0] = static_cast<GLfloat>(texture->swizzle_r());
+      } else {
+        iparams[0] = texture->swizzle_r();
+      }
+      return;
+    case GL_TEXTURE_SWIZZLE_G:
+      if (fparams) {
+        fparams[0] = static_cast<GLfloat>(texture->swizzle_g());
+      } else {
+        iparams[0] = texture->swizzle_g();
+      }
+      return;
+    case GL_TEXTURE_SWIZZLE_B:
+      if (fparams) {
+        fparams[0] = static_cast<GLfloat>(texture->swizzle_b());
+      } else {
+        iparams[0] = texture->swizzle_b();
+      }
+      return;
+    case GL_TEXTURE_SWIZZLE_A:
+      if (fparams) {
+        fparams[0] = static_cast<GLfloat>(texture->swizzle_a());
+      } else {
+        iparams[0] = texture->swizzle_a();
+      }
+      return;
     default:
       break;
   }
@@ -10751,16 +11173,9 @@ error::Error GLES2DecoderImpl::HandleVertexAttribIPointer(
 
   if (!state_.bound_array_buffer.get() ||
       state_.bound_array_buffer->IsDeleted()) {
-    if (state_.vertex_attrib_manager.get() ==
-        state_.default_vertex_attrib_manager.get()) {
+    if (offset != 0) {
       LOCAL_SET_GL_ERROR(
-          GL_INVALID_OPERATION,
-          "glVertexAttribIPointer", "no array buffer bound");
-      return error::kNoError;
-    } else if (offset != 0) {
-      LOCAL_SET_GL_ERROR(
-          GL_INVALID_OPERATION,
-          "glVertexAttribIPointer", "client side arrays are not allowed");
+          GL_INVALID_OPERATION, "glVertexAttribIPointer", "offset != 0");
       return error::kNoError;
     }
   }
@@ -10844,16 +11259,9 @@ error::Error GLES2DecoderImpl::HandleVertexAttribPointer(
 
   if (!state_.bound_array_buffer.get() ||
       state_.bound_array_buffer->IsDeleted()) {
-    if (state_.vertex_attrib_manager.get() ==
-        state_.default_vertex_attrib_manager.get()) {
+    if (offset != 0) {
       LOCAL_SET_GL_ERROR(
-          GL_INVALID_OPERATION,
-          "glVertexAttribPointer", "no array buffer bound");
-      return error::kNoError;
-    } else if (offset != 0) {
-      LOCAL_SET_GL_ERROR(
-          GL_INVALID_OPERATION,
-          "glVertexAttribPointer", "client side arrays are not allowed");
+          GL_INVALID_OPERATION, "glVertexAttribPointer", "offset != 0");
       return error::kNoError;
     }
   }
@@ -10935,7 +11343,16 @@ void GLES2DecoderImpl::DoViewport(GLint x, GLint y, GLsizei width,
   state_.viewport_y = y;
   state_.viewport_width = std::min(width, viewport_max_width_);
   state_.viewport_height = std::min(height, viewport_max_height_);
-  glViewport(x, y, width, height);
+  gfx::Vector2d viewport_offset = GetBoundFramebufferDrawOffset();
+  glViewport(x + viewport_offset.x(), y + viewport_offset.y(), width, height);
+}
+
+void GLES2DecoderImpl::DoScissor(GLint x,
+                                 GLint y,
+                                 GLsizei width,
+                                 GLsizei height) {
+  gfx::Vector2d draw_offset = GetBoundFramebufferDrawOffset();
+  glScissor(x + draw_offset.x(), y + draw_offset.y(), width, height);
 }
 
 error::Error GLES2DecoderImpl::HandleVertexAttribDivisorANGLE(
@@ -11372,8 +11789,8 @@ error::Error GLES2DecoderImpl::HandleReadPixels(uint32_t immediate_data_size,
         glReadPixels(x, y, width, height, format, type, 0);
         pending_readpixel_fences_.push(FenceCallback());
         WaitForReadPixels(base::Bind(
-            &GLES2DecoderImpl::FinishReadPixels, base::AsWeakPtr(this), width,
-            height, format, type, pixels_shm_id, pixels_shm_offset,
+            &GLES2DecoderImpl::FinishReadPixels, weak_ptr_factory_.GetWeakPtr(),
+            width, height, format, type, pixels_shm_id, pixels_shm_offset,
             result_shm_id, result_shm_offset, state_.pack_alignment,
             read_format, buffer));
         glBindBuffer(GL_PIXEL_PACK_BUFFER_ARB, 0);
@@ -11516,18 +11933,14 @@ error::Error GLES2DecoderImpl::HandlePixelStorei(
   return error::kNoError;
 }
 
-error::Error GLES2DecoderImpl::HandleSwapBuffersWithDamageCHROMIUM(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  const volatile gles2::cmds::SwapBuffersWithDamageCHROMIUM& c =
-      *static_cast<const volatile gles2::cmds::SwapBuffersWithDamageCHROMIUM*>(
-          cmd_data);
-  TRACE_EVENT0("gpu", "GLES2DecoderImpl::SwapBuffersWithDamageCHROMIUM");
-  { TRACE_EVENT_SYNTHETIC_DELAY("gpu.PresentingFrame"); }
-  if (!supports_swap_buffers_with_damage_) {
-    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSwapBuffersWithDamageCHROMIUM",
+void GLES2DecoderImpl::DoSwapBuffersWithBoundsCHROMIUM(
+    GLsizei count,
+    const volatile GLint* rects) {
+  TRACE_EVENT0("gpu", "GLES2DecoderImpl::SwapBuffersWithBoundsCHROMIUM");
+  if (!supports_swap_buffers_with_bounds_) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glSwapBuffersWithBoundsCHROMIUM",
                        "command not supported by surface");
-    return error::kNoError;
+    return;
   }
   bool is_tracing;
   TRACE_EVENT_CATEGORY_GROUP_ENABLED(TRACE_DISABLED_BY_DEFAULT("gpu.debug"),
@@ -11540,11 +11953,14 @@ error::Error GLES2DecoderImpl::HandleSwapBuffersWithDamageCHROMIUM(
   }
 
   ClearScheduleCALayerState();
+  ClearScheduleDCLayerState();
 
-  FinishSwapBuffers(
-      surface_->SwapBuffersWithDamage(c.x, c.y, c.width, c.height));
-
-  return error::kNoError;
+  std::vector<gfx::Rect> bounds(count);
+  for (GLsizei i = 0; i < count; ++i) {
+    bounds[i] = gfx::Rect(rects[i * 4 + 0], rects[i * 4 + 1], rects[i * 4 + 2],
+                          rects[i * 4 + 3]);
+  }
+  FinishSwapBuffers(surface_->SwapBuffersWithBounds(bounds));
 }
 
 error::Error GLES2DecoderImpl::HandlePostSubBufferCHROMIUM(
@@ -11554,9 +11970,6 @@ error::Error GLES2DecoderImpl::HandlePostSubBufferCHROMIUM(
       *static_cast<const volatile gles2::cmds::PostSubBufferCHROMIUM*>(
           cmd_data);
   TRACE_EVENT0("gpu", "GLES2DecoderImpl::HandlePostSubBufferCHROMIUM");
-  {
-    TRACE_EVENT_SYNTHETIC_DELAY("gpu.PresentingFrame");
-  }
   if (!supports_post_sub_buffer_) {
     LOCAL_SET_GL_ERROR(
         GL_INVALID_OPERATION,
@@ -11574,13 +11987,18 @@ error::Error GLES2DecoderImpl::HandlePostSubBufferCHROMIUM(
   }
 
   ClearScheduleCALayerState();
+  ClearScheduleDCLayerState();
 
   if (supports_async_swap_) {
-    TRACE_EVENT_ASYNC_BEGIN0("cc", "GLES2DecoderImpl::AsyncSwapBuffers", this);
+    DCHECK_LT(pending_swaps_, 2u);
+    uint32_t async_swap_id = next_async_swap_id_++;
+    ++pending_swaps_;
+    TRACE_EVENT_ASYNC_BEGIN0("gpu", "AsyncSwapBuffers", async_swap_id);
+
     surface_->PostSubBufferAsync(
         c.x, c.y, c.width, c.height,
-        base::Bind(&GLES2DecoderImpl::FinishSwapBuffers,
-                   base::AsWeakPtr(this)));
+        base::Bind(&GLES2DecoderImpl::FinishAsyncSwapBuffers,
+                   weak_ptr_factory_.GetWeakPtr()));
   } else {
     FinishSwapBuffers(surface_->PostSubBuffer(c.x, c.y, c.width, c.height));
   }
@@ -11713,6 +12131,115 @@ error::Error GLES2DecoderImpl::HandleScheduleCALayerCHROMIUM(
   if (!surface_->ScheduleCALayer(params)) {
     LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glScheduleCALayerCHROMIUM",
                        "failed to schedule CALayer");
+  }
+  return error::kNoError;
+}
+
+error::Error GLES2DecoderImpl::HandleScheduleDCLayerSharedStateCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile gles2::cmds::ScheduleDCLayerSharedStateCHROMIUM& c =
+      *static_cast<
+          const volatile gles2::cmds::ScheduleDCLayerSharedStateCHROMIUM*>(
+          cmd_data);
+
+  const GLfloat* mem = GetSharedMemoryAs<const GLfloat*>(c.shm_id, c.shm_offset,
+                                                         20 * sizeof(GLfloat));
+  if (!mem) {
+    return error::kOutOfBounds;
+  }
+  gfx::RectF clip_rect(mem[0], mem[1], mem[2], mem[3]);
+  gfx::Transform transform(mem[4], mem[8], mem[12], mem[16], mem[5], mem[9],
+                           mem[13], mem[17], mem[6], mem[10], mem[14], mem[18],
+                           mem[7], mem[11], mem[15], mem[19]);
+  dc_layer_shared_state_.reset(new DCLayerSharedState);
+  dc_layer_shared_state_->opacity = c.opacity;
+  dc_layer_shared_state_->is_clipped = c.is_clipped ? true : false;
+  dc_layer_shared_state_->clip_rect = gfx::ToEnclosingRect(clip_rect);
+  dc_layer_shared_state_->z_order = c.z_order;
+  dc_layer_shared_state_->transform = transform;
+  return error::kNoError;
+}
+
+error::Error GLES2DecoderImpl::HandleScheduleDCLayerCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile gles2::cmds::ScheduleDCLayerCHROMIUM& c =
+      *static_cast<const volatile gles2::cmds::ScheduleDCLayerCHROMIUM*>(
+          cmd_data);
+  GLuint filter = c.filter;
+  if (filter != GL_NEAREST && filter != GL_LINEAR) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "glScheduleDCLayerCHROMIUM",
+                       "invalid filter");
+    return error::kNoError;
+  }
+
+  if (!dc_layer_shared_state_) {
+    LOCAL_SET_GL_ERROR(
+        GL_INVALID_OPERATION, "glScheduleDCLayerCHROMIUM",
+        "glScheduleDCLayerSharedStateCHROMIUM has not been called");
+    return error::kNoError;
+  }
+
+  GLsizei num_textures = c.num_textures;
+  if (num_textures < 0 || num_textures > 4) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glScheduleDCLayerCHROMIUM",
+                       "number of textures greater than maximum of 4");
+    return error::kNoError;
+  }
+
+  size_t textures_size = num_textures * sizeof(GLuint);
+
+  base::CheckedNumeric<uint32_t> data_size = textures_size;
+  const uint32_t kRectDataSize = 8 * sizeof(GLfloat);
+  data_size += kRectDataSize;
+  if (!data_size.IsValid())
+    return error::kOutOfBounds;
+  const void* data =
+      GetAddressAndCheckSize(c.shm_id, c.shm_offset, data_size.ValueOrDie());
+  if (!data) {
+    return error::kOutOfBounds;
+  }
+  const GLfloat* mem = reinterpret_cast<const GLfloat*>(data);
+
+  gfx::RectF contents_rect(mem[0], mem[1], mem[2], mem[3]);
+  gfx::RectF bounds_rect(mem[4], mem[5], mem[6], mem[7]);
+
+  const volatile GLuint* texture_ids = reinterpret_cast<const volatile GLuint*>(
+      static_cast<const volatile char*>(data) + kRectDataSize);
+
+  std::vector<scoped_refptr<gl::GLImage>> images;
+  for (int i = 0; i < num_textures; ++i) {
+    GLuint contents_texture_id = texture_ids[i];
+    scoped_refptr<gl::GLImage> image;
+    if (contents_texture_id) {
+      TextureRef* ref = texture_manager()->GetTexture(contents_texture_id);
+      if (!ref) {
+        LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "glScheduleDCLayerCHROMIUM",
+                           "unknown texture");
+        return error::kNoError;
+      }
+      Texture::ImageState image_state;
+      image = ref->texture()->GetLevelImage(ref->texture()->target(), 0,
+                                            &image_state);
+      if (!image) {
+        LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "glScheduleDCLayerCHROMIUM",
+                           "unsupported texture format");
+        return error::kNoError;
+      }
+    }
+    images.push_back(image);
+  }
+
+  ui::DCRendererLayerParams params = ui::DCRendererLayerParams(
+      dc_layer_shared_state_->is_clipped, dc_layer_shared_state_->clip_rect,
+      dc_layer_shared_state_->z_order, dc_layer_shared_state_->transform,
+      images, contents_rect, gfx::ToEnclosingRect(bounds_rect),
+      c.background_color, c.edge_aa_mask, dc_layer_shared_state_->opacity,
+      filter);
+  if (!surface_->ScheduleDCLayer(params)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glScheduleDCLayerCHROMIUM",
+                       "failed to schedule DCLayer");
   }
   return error::kNoError;
 }
@@ -12099,13 +12626,6 @@ error::Error GLES2DecoderImpl::HandleGetString(uint32_t immediate_data_size,
     case GL_SHADING_LANGUAGE_VERSION:
       str = GetServiceShadingLanguageVersionString(feature_info_.get());
       break;
-    case GL_RENDERER:
-      str = GetServiceRendererString(feature_info_.get());
-      break;
-    case GL_VENDOR:
-      str = GetServiceVendorString(feature_info_.get());
-      break;
-      break;
     case GL_EXTENSIONS:
       {
         // For WebGL contexts, strip out shader extensions if they have not
@@ -12225,7 +12745,9 @@ bool GLES2DecoderImpl::ClearLevel(Texture* texture,
     glClearDepth(1.0f);
     state_.SetDeviceDepthMask(GL_TRUE);
     state_.SetDeviceCapabilityState(GL_SCISSOR_TEST, true);
-    glScissor(xoffset, yoffset, width, height);
+    gfx::Vector2d scissor_offset = GetBoundFramebufferDrawOffset();
+    glScissor(xoffset + scissor_offset.x(), yoffset + scissor_offset.y(), width,
+              height);
     glClear(GL_DEPTH_BUFFER_BIT | (have_stencil ? GL_STENCIL_BUFFER_BIT : 0));
 
     RestoreClearState();
@@ -13604,7 +14126,7 @@ error::Error GLES2DecoderImpl::HandleCompressedTexSubImage2D(
     }
     data = reinterpret_cast<const void*>(data_shm_offset);
   } else {
-    if (!data_shm_id && data_shm_offset) {
+    if (!data_shm_id) {
       return error::kInvalidArguments;
     }
     data = GetSharedMemoryAs<const void*>(
@@ -13679,6 +14201,8 @@ error::Error GLES2DecoderImpl::DoCompressedTexSubImage(
           width, height, depth, format, texture)) {
     return error::kNoError;
   }
+  if (image_size > 0 && !state_.bound_pixel_unpack_buffer && !data)
+    return error::kInvalidArguments;
 
   if (!texture->IsLevelCleared(target, level)) {
     // This can only happen if the compressed texture was allocated
@@ -13736,12 +14260,14 @@ error::Error GLES2DecoderImpl::DoCompressedTexSubImage(
   return error::kNoError;
 }
 
-bool GLES2DecoderImpl::ValidateCopyTexFormat(
-    const char* func_name, GLenum internal_format,
-    GLenum read_format, GLenum read_type) {
+bool GLES2DecoderImpl::ValidateCopyTexFormatHelper(
+    GLenum internal_format,
+    GLenum read_format,
+    GLenum read_type,
+    std::string* output_error_msg) {
+  DCHECK(output_error_msg);
   if (read_format == 0) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_OPERATION, func_name, "no valid color image");
+    *output_error_msg = std::string("no valid color image");
     return false;
   }
   // Check we have compatible formats.
@@ -13749,34 +14275,36 @@ bool GLES2DecoderImpl::ValidateCopyTexFormat(
   uint32_t channels_needed = GLES2Util::GetChannelsForFormat(internal_format);
   if (!channels_needed ||
       (channels_needed & channels_exist) != channels_needed) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_OPERATION, func_name, "incompatible format");
+    *output_error_msg = std::string("incompatible format");
     return false;
   }
   if (feature_info_->IsWebGL2OrES3Context()) {
-    GLint color_encoding = GetColorEncodingFromInternalFormat(read_format);
-    bool float_mismatch= feature_info_->ext_color_buffer_float_available() ?
+    GLint color_encoding =
+        GLES2Util::GetColorEncodingFromInternalFormat(read_format);
+    bool float_mismatch = feature_info_->ext_color_buffer_float_available() ?
         (GLES2Util::IsIntegerFormat(internal_format) !=
          GLES2Util::IsIntegerFormat(read_format)) :
         GLES2Util::IsFloatFormat(internal_format);
-    if (color_encoding != GetColorEncodingFromInternalFormat(internal_format) ||
-        float_mismatch ||
-        (GLES2Util::IsSignedIntegerFormat(internal_format) !=
-         GLES2Util::IsSignedIntegerFormat(read_format)) ||
+    if (color_encoding !=
+            GLES2Util::GetColorEncodingFromInternalFormat(internal_format) ||
+        float_mismatch || (GLES2Util::IsSignedIntegerFormat(internal_format) !=
+                           GLES2Util::IsSignedIntegerFormat(read_format)) ||
         (GLES2Util::IsUnsignedIntegerFormat(internal_format) !=
          GLES2Util::IsUnsignedIntegerFormat(read_format))) {
-      LOCAL_SET_GL_ERROR(
-          GL_INVALID_OPERATION, func_name, "incompatible format");
+      *output_error_msg = std::string("incompatible format");
       return false;
     }
   }
   if ((channels_needed & (GLES2Util::kDepth | GLES2Util::kStencil)) != 0) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_OPERATION,
-        func_name, "can not be used with depth or stencil textures");
+    *output_error_msg =
+        std::string("can not be used with depth or stencil textures");
     return false;
   }
-  if (feature_info_->IsWebGL2OrES3Context()) {
+  if (feature_info_->IsWebGL2OrES3Context() ||
+      (feature_info_->feature_flags().chromium_color_buffer_float_rgb &&
+       internal_format == GL_RGB32F) ||
+      (feature_info_->feature_flags().chromium_color_buffer_float_rgba &&
+       internal_format == GL_RGBA32F)) {
     if (GLES2Util::IsSizedColorFormat(internal_format)) {
       int sr, sg, sb, sa;
       GLES2Util::GetColorFormatComponentSizes(
@@ -13790,12 +14318,24 @@ bool GLES2DecoderImpl::ValidateCopyTexFormat(
           (dg > 0 && sg != dg) ||
           (db > 0 && sb != db) ||
           (da > 0 && sa != da)) {
-        LOCAL_SET_GL_ERROR(
-            GL_INVALID_OPERATION,
-            func_name, "incompatible color component sizes");
+        *output_error_msg = std::string("incompatible color component sizes");
         return false;
       }
     }
+  }
+  return true;
+}
+
+bool GLES2DecoderImpl::ValidateCopyTexFormat(const char* func_name,
+                                             GLenum internal_format,
+                                             GLenum read_format,
+                                             GLenum read_type) {
+  std::string output_error_msg;
+  if (!ValidateCopyTexFormatHelper(internal_format, read_format, read_type,
+                                   &output_error_msg)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, func_name,
+                       output_error_msg.c_str());
+    return false;
   }
   return true;
 }
@@ -13924,6 +14464,32 @@ void GLES2DecoderImpl::DoCopyTexImage2D(
   const gfx::Rect dst(0, 0, size.width(), size.height());
   src.Intersect(dst);
 
+  GLenum final_internal_format = TextureManager::AdjustTexInternalFormat(
+      feature_info_.get(), internal_format);
+  if (workarounds().force_int_or_srgb_cube_texture_complete &&
+      texture->target() == GL_TEXTURE_CUBE_MAP &&
+      (GLES2Util::IsIntegerFormat(final_internal_format) ||
+       GLES2Util::GetColorEncodingFromInternalFormat(final_internal_format) ==
+           GL_SRGB)) {
+    TextureManager::DoTexImageArguments args = {
+        target,
+        level,
+        final_internal_format,
+        width,
+        height,
+        1,
+        border,
+        format,
+        type,
+        nullptr,
+        pixels_size,
+        0,
+        TextureManager::DoTexImageArguments::kTexImage2D};
+    texture_manager()->WorkaroundCopyTexImageCubeMap(
+        &texture_state_, &state_, &framebuffer_state_, texture_ref, func_name,
+        args);
+  }
+
   if (src.x() != x || src.y() != y ||
       src.width() != width || src.height() != height) {
     {
@@ -13933,9 +14499,8 @@ void GLES2DecoderImpl::DoCopyTexImage2D(
 
       std::unique_ptr<char[]> zero(new char[pixels_size]);
       memset(zero.get(), 0, pixels_size);
-      glTexImage2D(target, level, TextureManager::AdjustTexInternalFormat(
-        feature_info_.get(), internal_format),
-        width, height, border, format, type, zero.get());
+      glTexImage2D(target, level, final_internal_format, width, height, border,
+                   format, type, zero.get());
     }
 
     if (!src.IsEmpty()) {
@@ -13954,15 +14519,13 @@ void GLES2DecoderImpl::DoCopyTexImage2D(
       }
     }
   } else {
-    GLenum final_internal_format = TextureManager::AdjustTexInternalFormat(
-        feature_info_.get(), internal_format);
     if (workarounds().init_two_cube_map_levels_before_copyteximage &&
         texture->target() == GL_TEXTURE_CUBE_MAP &&
         target != GL_TEXTURE_CUBE_MAP_POSITIVE_X) {
       for (int i = 0; i < 2; ++i) {
         TextureManager::DoTexImageArguments args = {
-          target, i, final_internal_format, 1, 1, 1, border,
-          format, type, nullptr, 1, 0,
+          target, i, final_internal_format, width, height, 1, border,
+          format, type, nullptr, pixels_size, 0,
           TextureManager::DoTexImageArguments::kTexImage2D };
         texture_manager()->WorkaroundCopyTexImageCubeMap(&texture_state_,
             &state_, &framebuffer_state_, texture_ref, func_name, args);
@@ -14296,6 +14859,8 @@ error::Error GLES2DecoderImpl::HandleTexSubImage2D(
     }
     params = state_.GetUnpackParams(ContextState::k2D);
   } else {
+    if (!pixels_shm_id && pixels_shm_offset)
+      return error::kInvalidArguments;
     // When reading from client buffer, the command buffer client side took
     // the responsibility to take the pixels from the client buffer and
     // unpack them according to the full ES3 pack parameters as source, all
@@ -14325,6 +14890,7 @@ error::Error GLES2DecoderImpl::HandleTexSubImage2D(
     if (!pixels)
       return error::kOutOfBounds;
   } else {
+    DCHECK(buffer || !pixels_shm_offset);
     pixels = reinterpret_cast<const void*>(pixels_shm_offset);
   }
 
@@ -14387,6 +14953,8 @@ error::Error GLES2DecoderImpl::HandleTexSubImage3D(
     }
     params = state_.GetUnpackParams(ContextState::k3D);
   } else {
+    if (!pixels_shm_id && pixels_shm_offset)
+      return error::kInvalidArguments;
     // When reading from client buffer, the command buffer client side took
     // the responsibility to take the pixels from the client buffer and
     // unpack them according to the full ES3 pack parameters as source, all
@@ -14416,6 +14984,7 @@ error::Error GLES2DecoderImpl::HandleTexSubImage3D(
     if (!pixels)
       return error::kOutOfBounds;
   } else {
+    DCHECK(buffer || !pixels_shm_offset);
     pixels = reinterpret_cast<const void*>(pixels_shm_offset);
   }
 
@@ -15003,9 +15572,6 @@ void GLES2DecoderImpl::DoSwapBuffers() {
   TRACE_EVENT2("gpu", "GLES2DecoderImpl::DoSwapBuffers",
                "offscreen", is_offscreen,
                "frame", this_frame_number);
-  {
-    TRACE_EVENT_SYNTHETIC_DELAY("gpu.PresentingFrame");
-  }
 
   ScopedGPUTrace scoped_gpu_trace(gpu_tracer_.get(), kTraceDecoder,
                                   "GLES2Decoder", "SwapBuffer");
@@ -15020,12 +15586,17 @@ void GLES2DecoderImpl::DoSwapBuffers() {
   }
 
   ClearScheduleCALayerState();
+  ClearScheduleDCLayerState();
 
   // If offscreen then don't actually SwapBuffers to the display. Just copy
   // the rendered frame to another frame buffer.
   if (is_offscreen) {
     TRACE_EVENT2("gpu", "Offscreen",
         "width", offscreen_size_.width(), "height", offscreen_size_.height());
+
+    if (offscreen_single_buffer_)
+      return;
+
     if (offscreen_size_ != offscreen_saved_color_texture_->size()) {
       // Workaround for NVIDIA driver bug on OS X; crbug.com/89557,
       // crbug.com/94163. TODO(kbr): figure out reproduction so Apple will
@@ -15100,9 +15671,14 @@ void GLES2DecoderImpl::DoSwapBuffers() {
         glFlush();
     }
   } else if (supports_async_swap_) {
-    TRACE_EVENT_ASYNC_BEGIN0("cc", "GLES2DecoderImpl::AsyncSwapBuffers", this);
-    surface_->SwapBuffersAsync(base::Bind(&GLES2DecoderImpl::FinishSwapBuffers,
-                                          base::AsWeakPtr(this)));
+    DCHECK_LT(pending_swaps_, 2u);
+    uint32_t async_swap_id = next_async_swap_id_++;
+    ++pending_swaps_;
+    TRACE_EVENT_ASYNC_BEGIN0("gpu", "AsyncSwapBuffers", async_swap_id);
+
+    surface_->SwapBuffersAsync(
+        base::Bind(&GLES2DecoderImpl::FinishAsyncSwapBuffers,
+                   weak_ptr_factory_.GetWeakPtr()));
   } else {
     FinishSwapBuffers(surface_->SwapBuffers());
   }
@@ -15110,6 +15686,15 @@ void GLES2DecoderImpl::DoSwapBuffers() {
   // This may be a slow command.  Exit command processing to allow for
   // context preemption and GPU watchdog checks.
   ExitCommandProcessingEarly();
+}
+
+void GLES2DecoderImpl::FinishAsyncSwapBuffers(gfx::SwapResult result) {
+  DCHECK_NE(0u, pending_swaps_);
+  uint32_t async_swap_id = next_async_swap_id_ - pending_swaps_;
+  --pending_swaps_;
+  TRACE_EVENT_ASYNC_END0("gpu", "AsyncSwapBuffers", async_swap_id);
+
+  FinishSwapBuffers(result);
 }
 
 void GLES2DecoderImpl::FinishSwapBuffers(gfx::SwapResult result) {
@@ -15126,10 +15711,6 @@ void GLES2DecoderImpl::FinishSwapBuffers(gfx::SwapResult result) {
     // known values.
     backbuffer_needs_clear_bits_ |= GL_COLOR_BUFFER_BIT;
   }
-
-  if (supports_async_swap_) {
-    TRACE_EVENT_ASYNC_END0("cc", "GLES2DecoderImpl::AsyncSwapBuffers", this);
-  }
 }
 
 void GLES2DecoderImpl::DoCommitOverlayPlanes() {
@@ -15140,9 +15721,10 @@ void GLES2DecoderImpl::DoCommitOverlayPlanes() {
     return;
   }
   ClearScheduleCALayerState();
+  ClearScheduleDCLayerState();
   if (supports_async_swap_) {
     surface_->CommitOverlayPlanesAsync(base::Bind(
-        &GLES2DecoderImpl::FinishSwapBuffers, base::AsWeakPtr(this)));
+        &GLES2DecoderImpl::FinishSwapBuffers, weak_ptr_factory_.GetWeakPtr()));
   } else {
     FinishSwapBuffers(surface_->CommitOverlayPlanes());
   }
@@ -15426,29 +16008,6 @@ error::Error GLES2DecoderImpl::HandleGetTransformFeedbackVaryingsCHROMIUM(
   return error::kNoError;
 }
 
-error::ContextLostReason GLES2DecoderImpl::GetContextLostReason() {
-  return context_lost_reason_;
-}
-
-error::ContextLostReason GLES2DecoderImpl::GetContextLostReasonFromResetStatus(
-    GLenum reset_status) const {
-  switch (reset_status) {
-    case GL_NO_ERROR:
-      // TODO(kbr): improve the precision of the error code in this case.
-      // Consider delegating to context for error code if MakeCurrent fails.
-      return error::kUnknown;
-    case GL_GUILTY_CONTEXT_RESET_ARB:
-      return error::kGuilty;
-    case GL_INNOCENT_CONTEXT_RESET_ARB:
-      return error::kInnocent;
-    case GL_UNKNOWN_CONTEXT_RESET_ARB:
-      return error::kUnknown;
-  }
-
-  NOTREACHED();
-  return error::kUnknown;
-}
-
 bool GLES2DecoderImpl::WasContextLost() const {
   return context_was_lost_;
 }
@@ -15463,7 +16022,7 @@ void GLES2DecoderImpl::MarkContextLost(error::ContextLostReason reason) {
     return;
 
   // Don't make GL calls in here, the context might not be current.
-  context_lost_reason_ = reason;
+  command_buffer_service()->SetContextLostReason(reason);
   current_decoder_error_ = error::kLostContext;
   context_was_lost_ = true;
 
@@ -15514,14 +16073,6 @@ bool GLES2DecoderImpl::CheckResetStatus() {
 error::Error GLES2DecoderImpl::HandleDescheduleUntilFinishedCHROMIUM(
     uint32_t immediate_data_size,
     const volatile void* cmd_data) {
-  if (deschedule_until_finished_callback_.is_null() ||
-      reschedule_after_finished_callback_.is_null()) {
-    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION,
-                       "glDescheduleUntilFinishedCHROMIUM",
-                       "Not fully implemented.");
-    return error::kNoError;
-  }
-
   std::unique_ptr<gl::GLFence> fence(gl::GLFence::Create());
   deschedule_until_finished_fences_.push_back(std::move(fence));
 
@@ -15537,7 +16088,7 @@ error::Error GLES2DecoderImpl::HandleDescheduleUntilFinishedCHROMIUM(
 
   TRACE_EVENT_ASYNC_BEGIN0("cc", "GLES2DecoderImpl::DescheduleUntilFinished",
                            this);
-  deschedule_until_finished_callback_.Run();
+  client_->OnDescheduleUntilFinished();
   return error::kDeferLaterCommands;
 }
 
@@ -15549,8 +16100,10 @@ error::Error GLES2DecoderImpl::HandleInsertFenceSyncCHROMIUM(
           cmd_data);
 
   const uint64_t release_count = c.release_count();
-  if (!fence_sync_release_callback_.is_null())
-    fence_sync_release_callback_.Run(release_count);
+  client_->OnFenceSyncRelease(release_count);
+  // Exit inner command processing loop so that we check the scheduling state
+  // and yield if necessary as we may have unblocked a higher priority context.
+  ExitCommandProcessingEarly();
   return error::kNoError;
 }
 
@@ -15575,12 +16128,11 @@ error::Error GLES2DecoderImpl::HandleWaitSyncTokenCHROMIUM(
   const CommandBufferId command_buffer_id =
       CommandBufferId::FromUnsafeValue(c.command_buffer_id());
   const uint64_t release = c.release_count();
-  if (wait_fence_sync_callback_.is_null())
-    return error::kNoError;
 
-  return wait_fence_sync_callback_.Run(namespace_id, command_buffer_id, release)
-             ? error::kNoError
-             : error::kDeferCommandUntilLater;
+  gpu::SyncToken sync_token;
+  sync_token.Set(namespace_id, 0, command_buffer_id, release);
+  return client_->OnWaitSyncToken(sync_token) ? error::kDeferCommandUntilLater
+                                              : error::kNoError;
 }
 
 error::Error GLES2DecoderImpl::HandleDiscardBackbufferCHROMIUM(
@@ -15623,8 +16175,7 @@ bool GLES2DecoderImpl::HasPendingQueries() const {
 void GLES2DecoderImpl::ProcessPendingQueries(bool did_finish) {
   if (!query_manager_.get())
     return;
-  if (!query_manager_->ProcessPendingQueries(did_finish))
-    current_decoder_error_ = error::kOutOfBounds;
+  query_manager_->ProcessPendingQueries(did_finish);
 }
 
 // Note that if there are no pending readpixels right now,
@@ -15665,7 +16216,7 @@ void GLES2DecoderImpl::ProcessDescheduleUntilFinished() {
                          this);
   deschedule_until_finished_fences_.erase(
       deschedule_until_finished_fences_.begin());
-  reschedule_after_finished_callback_.Run();
+  client_->OnRescheduleAfterFinished();
 }
 
 bool GLES2DecoderImpl::HasMoreIdleWork() const {
@@ -15710,13 +16261,20 @@ error::Error GLES2DecoderImpl::HandleBeginQueryEXT(
         return error::kNoError;
       }
       break;
-    case GL_SAMPLES_PASSED:
+    case GL_SAMPLES_PASSED_ARB:
+      if (!features().occlusion_query) {
+        LOCAL_SET_GL_ERROR(
+            GL_INVALID_OPERATION, "glBeginQueryEXT",
+            "not enabled for occlusion queries");
+        return error::kNoError;
+      }
+      break;
     case GL_ANY_SAMPLES_PASSED:
     case GL_ANY_SAMPLES_PASSED_CONSERVATIVE:
       if (!features().occlusion_query_boolean) {
         LOCAL_SET_GL_ERROR(
             GL_INVALID_OPERATION, "glBeginQueryEXT",
-            "not enabled for occlusion queries");
+            "not enabled for boolean occlusion queries");
         return error::kNoError;
       }
       break;
@@ -15751,6 +16309,14 @@ error::Error GLES2DecoderImpl::HandleBeginQueryEXT(
     return error::kNoError;
   }
 
+  scoped_refptr<gpu::Buffer> buffer = GetSharedMemoryBuffer(sync_shm_id);
+  if (!buffer)
+    return error::kInvalidArguments;
+  QuerySync* sync = static_cast<QuerySync*>(
+      buffer->GetDataAddress(sync_shm_offset, sizeof(QuerySync)));
+  if (!sync)
+    return error::kOutOfBounds;
+
   QueryManager::Query* query = query_manager_->GetQuery(client_id);
   if (!query) {
     if (!query_manager_->IsValidQuery(client_id)) {
@@ -15759,24 +16325,21 @@ error::Error GLES2DecoderImpl::HandleBeginQueryEXT(
                          "id not made by glGenQueriesEXT");
       return error::kNoError;
     }
-    query = query_manager_->CreateQuery(
-        target, client_id, sync_shm_id, sync_shm_offset);
+
+    query =
+        query_manager_->CreateQuery(target, client_id, std::move(buffer), sync);
+  } else {
+    if (query->target() != target) {
+      LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glBeginQueryEXT",
+                         "target does not match");
+      return error::kNoError;
+    } else if (query->sync() != sync) {
+      DLOG(ERROR) << "Shared memory used by query not the same as before";
+      return error::kInvalidArguments;
+    }
   }
 
-  if (query->target() != target) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_OPERATION, "glBeginQueryEXT", "target does not match");
-    return error::kNoError;
-  } else if (query->shm_id() != sync_shm_id ||
-             query->shm_offset() != sync_shm_offset) {
-    DLOG(ERROR) << "Shared memory used by query not the same as before";
-    return error::kInvalidArguments;
-  }
-
-  if (!query_manager_->BeginQuery(query)) {
-    return error::kOutOfBounds;
-  }
-
+  query_manager_->BeginQuery(query);
   return error::kNoError;
 }
 
@@ -15795,12 +16358,7 @@ error::Error GLES2DecoderImpl::HandleEndQueryEXT(
     return error::kNoError;
   }
 
-  if (!query_manager_->EndQuery(query, submit_count)) {
-    return error::kOutOfBounds;
-  }
-
-  query_manager_->ProcessPendingTransferQueries();
-
+  query_manager_->EndQuery(query, submit_count);
   return error::kNoError;
 }
 
@@ -15831,6 +16389,14 @@ error::Error GLES2DecoderImpl::HandleQueryCounterEXT(
       return error::kNoError;
   }
 
+  scoped_refptr<gpu::Buffer> buffer = GetSharedMemoryBuffer(sync_shm_id);
+  if (!buffer)
+    return error::kInvalidArguments;
+  QuerySync* sync = static_cast<QuerySync*>(
+      buffer->GetDataAddress(sync_shm_offset, sizeof(QuerySync)));
+  if (!sync)
+    return error::kOutOfBounds;
+
   QueryManager::Query* query = query_manager_->GetQuery(client_id);
   if (!query) {
     if (!query_manager_->IsValidQuery(client_id)) {
@@ -15839,12 +16405,10 @@ error::Error GLES2DecoderImpl::HandleQueryCounterEXT(
                          "id not made by glGenQueriesEXT");
       return error::kNoError;
     }
-    query = query_manager_->CreateQuery(
-        target, client_id, sync_shm_id, sync_shm_offset);
+    query =
+        query_manager_->CreateQuery(target, client_id, std::move(buffer), sync);
   }
-  if (!query_manager_->QueryCounter(query, submit_count)) {
-    return error::kOutOfBounds;
-  }
+  query_manager_->QueryCounter(query, submit_count);
 
   return error::kNoError;
 }
@@ -15964,6 +16528,7 @@ bool GLES2DecoderImpl::DoIsSync(GLuint client_id) {
 
 bool GLES2DecoderImpl::ValidateCopyTextureCHROMIUMTextures(
     const char* function_name,
+    GLenum dest_target,
     TextureRef* source_texture_ref,
     TextureRef* dest_texture_ref) {
   if (!source_texture_ref || !dest_texture_ref) {
@@ -15979,8 +16544,15 @@ bool GLES2DecoderImpl::ValidateCopyTextureCHROMIUMTextures(
     return false;
   }
 
+  if (dest_texture->target() !=
+      GLES2Util::GLFaceTargetToTextureTarget(dest_target)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, function_name,
+                       "target should be aligned with dest target");
+    return false;
+  }
   switch (dest_texture->target()) {
     case GL_TEXTURE_2D:
+    case GL_TEXTURE_CUBE_MAP:
     case GL_TEXTURE_RECTANGLE_ARB:
       break;
     default:
@@ -16002,24 +16574,114 @@ bool GLES2DecoderImpl::ValidateCopyTextureCHROMIUMTextures(
   return true;
 }
 
+bool GLES2DecoderImpl::CanUseCopyTextureCHROMIUMInternalFormat(
+    GLenum dest_internal_format) {
+  switch (dest_internal_format) {
+    case GL_RGB:
+    case GL_RGBA:
+    case GL_RGB8:
+    case GL_RGBA8:
+    case GL_BGRA_EXT:
+    case GL_BGRA8_EXT:
+    case GL_SRGB_EXT:
+    case GL_SRGB_ALPHA_EXT:
+    case GL_R8:
+    case GL_R8UI:
+    case GL_RG8:
+    case GL_RG8UI:
+    case GL_SRGB8:
+    case GL_RGB565:
+    case GL_RGB8UI:
+    case GL_SRGB8_ALPHA8:
+    case GL_RGB5_A1:
+    case GL_RGBA4:
+    case GL_RGBA8UI:
+    case GL_RGB9_E5:
+    case GL_R16F:
+    case GL_R32F:
+    case GL_RG16F:
+    case GL_RG32F:
+    case GL_RGB16F:
+    case GL_RGB32F:
+    case GL_RGBA16F:
+    case GL_RGBA32F:
+    case GL_R11F_G11F_B10F:
+      return true;
+    default:
+      return false;
+  }
+}
+
 bool GLES2DecoderImpl::ValidateCopyTextureCHROMIUMInternalFormats(
     const char* function_name,
-    TextureRef* source_texture_ref,
+    GLenum source_internal_format,
     GLenum dest_internal_format) {
-  GLenum source_type = 0;
-  GLenum source_internal_format = 0;
-  Texture* source_texture = source_texture_ref->texture();
-  source_texture->GetLevelType(source_texture->target(), 0, &source_type,
-                               &source_internal_format);
+  bool valid_dest_format = false;
+  // TODO(qiankun.miao@intel.com): ALPHA, LUMINANCE and LUMINANCE_ALPHA formats
+  // are not supported on GL core profile. See crbug.com/577144. Enable the
+  // workaround for glCopyTexImage and glCopyTexSubImage in
+  // gles2_cmd_copy_tex_image.cc for glCopyTextureCHROMIUM implementation.
+  switch (dest_internal_format) {
+    case GL_RGB:
+    case GL_RGBA:
+    case GL_RGB8:
+    case GL_RGBA8:
+      valid_dest_format = true;
+      break;
+    case GL_BGRA_EXT:
+    case GL_BGRA8_EXT:
+      valid_dest_format =
+          feature_info_->feature_flags().ext_texture_format_bgra8888;
+      break;
+    case GL_SRGB_EXT:
+    case GL_SRGB_ALPHA_EXT:
+      valid_dest_format = feature_info_->feature_flags().ext_srgb;
+      break;
+    case GL_R8:
+    case GL_R8UI:
+    case GL_RG8:
+    case GL_RG8UI:
+    case GL_SRGB8:
+    case GL_RGB565:
+    case GL_RGB8UI:
+    case GL_SRGB8_ALPHA8:
+    case GL_RGB5_A1:
+    case GL_RGBA4:
+    case GL_RGBA8UI:
+    case GL_RGB10_A2:
+      valid_dest_format = feature_info_->IsWebGL2OrES3Context();
+      break;
+    case GL_RGB9_E5:
+    case GL_R16F:
+    case GL_R32F:
+    case GL_RG16F:
+    case GL_RG32F:
+    case GL_RGB16F:
+    case GL_RGBA16F:
+    case GL_R11F_G11F_B10F:
+      valid_dest_format = feature_info_->ext_color_buffer_float_available();
+      break;
+    case GL_RGB32F:
+      valid_dest_format =
+          feature_info_->ext_color_buffer_float_available() ||
+          feature_info_->feature_flags().chromium_color_buffer_float_rgb;
+      break;
+    case GL_RGBA32F:
+      valid_dest_format =
+          feature_info_->ext_color_buffer_float_available() ||
+          feature_info_->feature_flags().chromium_color_buffer_float_rgba;
+      break;
+    case GL_ALPHA:
+    case GL_LUMINANCE:
+    case GL_LUMINANCE_ALPHA:
+      valid_dest_format = true;
+      break;
+    default:
+      valid_dest_format = false;
+      break;
+  }
 
-  // The destination format should be GL_RGB, or GL_RGBA. GL_ALPHA,
-  // GL_LUMINANCE, and GL_LUMINANCE_ALPHA are not supported because they are not
-  // renderable on some platforms.
-  bool valid_dest_format =
-      dest_internal_format == GL_RGB || dest_internal_format == GL_RGBA ||
-      dest_internal_format == GL_RGB8 || dest_internal_format == GL_RGBA8 ||
-      dest_internal_format == GL_BGRA_EXT ||
-      dest_internal_format == GL_BGRA8_EXT;
+  // TODO(aleksandar.stojiljkovic): Use sized internal formats: crbug.com/628064
   bool valid_source_format =
       source_internal_format == GL_RED || source_internal_format == GL_ALPHA ||
       source_internal_format == GL_RGB || source_internal_format == GL_RGBA ||
@@ -16029,7 +16691,8 @@ bool GLES2DecoderImpl::ValidateCopyTextureCHROMIUMInternalFormats(
       source_internal_format == GL_BGRA_EXT ||
       source_internal_format == GL_BGRA8_EXT ||
       source_internal_format == GL_RGB_YCBCR_420V_CHROMIUM ||
-      source_internal_format == GL_RGB_YCBCR_422_CHROMIUM;
+      source_internal_format == GL_RGB_YCBCR_422_CHROMIUM ||
+      source_internal_format == GL_R16_EXT;
   if (!valid_source_format) {
     std::string msg = "invalid source internal format " +
         GLES2Util::GetStringEnum(source_internal_format);
@@ -16044,7 +16707,90 @@ bool GLES2DecoderImpl::ValidateCopyTextureCHROMIUMInternalFormats(
                        msg.c_str());
     return false;
   }
+
   return true;
+}
+
+CopyTextureMethod GLES2DecoderImpl::getCopyTextureCHROMIUMMethod(
+    GLenum source_target,
+    GLint source_level,
+    GLenum source_internal_format,
+    GLenum source_type,
+    GLenum dest_target,
+    GLint dest_level,
+    GLenum dest_internal_format,
+    bool flip_y,
+    bool premultiply_alpha,
+    bool unpremultiply_alpha) {
+  bool premultiply_alpha_change = premultiply_alpha ^ unpremultiply_alpha;
+  bool source_format_color_renderable =
+      Texture::ColorRenderable(GetFeatureInfo(), source_internal_format, false);
+  bool dest_format_color_renderable =
+      Texture::ColorRenderable(GetFeatureInfo(), dest_internal_format, false);
+  std::string output_error_msg;
+
+  switch (dest_internal_format) {
+#if defined(OS_MACOSX)
+    // RGB5_A1 is not color-renderable on NVIDIA Mac, see crbug.com/676209.
+    case GL_RGB5_A1:
+      return DRAW_AND_READBACK;
+#endif
+    // RGB9_E5 isn't accepted by glCopyTexImage2D if underlying context is ES.
+    case GL_RGB9_E5:
+      if (gl_version_info().is_es)
+        return DRAW_AND_READBACK;
+      break;
+    // SRGB format has color-space conversion issue. WebGL spec doesn't define
+    // clearly if linear-to-srgb color space conversion is required or not when
+    // uploading DOM elements to SRGB textures. WebGL conformance test expects
+    // no linear-to-srgb conversion, while current GPU path for
+    // CopyTextureCHROMIUM does the conversion. Do a fallback path before the
+    // issue is resolved. see https://github.com/KhronosGroup/WebGL/issues/2165.
+    // TODO(qiankun.miao@intel.com): revisit this once the above issue is
+    // resolved.
+    case GL_SRGB_EXT:
+    case GL_SRGB_ALPHA_EXT:
+    case GL_SRGB8:
+    case GL_SRGB8_ALPHA8:
+      if (feature_info_->IsWebGLContext())
+        return DRAW_AND_READBACK;
+      break;
+    default:
+      break;
+  }
+
+  // CopyTexImage* should not allow internalformat of GL_BGRA_EXT and
+  // GL_BGRA8_EXT. crbug.com/663086.
+  bool copy_tex_image_format_valid =
+      source_internal_format != GL_BGRA_EXT &&
+      dest_internal_format != GL_BGRA_EXT &&
+      source_internal_format != GL_BGRA8_EXT &&
+      dest_internal_format != GL_BGRA8_EXT &&
+      ValidateCopyTexFormatHelper(dest_internal_format, source_internal_format,
+                                  source_type, &output_error_msg);
+
+  // TODO(qiankun.miao@intel.com): for WebGL 2.0 or OpenGL ES 3.0, both
+  // DIRECT_DRAW path for dest_level > 0 and DIRECT_COPY path for source_level >
+  // 0 are not available due to a framebuffer completeness bug:
+  // crbug.com/678526. Once the bug is fixed, the limitation for WebGL 2.0 and
+  // OpenGL ES 3.0 can be lifted.
+  // For WebGL 1.0 or OpenGL ES 2.0, DIRECT_DRAW path isn't available for
+  // dest_level > 0 due to level > 0 isn't supported by glFramebufferTexture2D
+  // in ES2 context. DIRECT_DRAW path isn't available for cube map dest texture
+  // either due to it may be cube map incomplete. Go to DRAW_AND_COPY path in
+  // these cases.
+  if (source_target == GL_TEXTURE_2D &&
+      (dest_target == GL_TEXTURE_2D || dest_target == GL_TEXTURE_CUBE_MAP) &&
+      source_format_color_renderable && copy_tex_image_format_valid &&
+      source_level == 0 && !flip_y && !premultiply_alpha_change)
+    return DIRECT_COPY;
+  if (dest_format_color_renderable && dest_level == 0 &&
+      dest_target != GL_TEXTURE_CUBE_MAP)
+    return DIRECT_DRAW;
+
+  // Draw to a fbo attaching level 0 of an intermediate texture,
+  // then copy from the fbo to dest texture level with glCopyTexImage2D.
+  return DRAW_AND_COPY;
 }
 
 bool GLES2DecoderImpl::ValidateCompressedCopyTextureCHROMIUM(
@@ -16096,7 +16842,10 @@ bool GLES2DecoderImpl::ValidateCompressedCopyTextureCHROMIUM(
 
 void GLES2DecoderImpl::DoCopyTextureCHROMIUM(
     GLuint source_id,
+    GLint source_level,
+    GLenum dest_target,
     GLuint dest_id,
+    GLint dest_level,
     GLenum internal_format,
     GLenum dest_type,
     GLboolean unpack_flip_y,
@@ -16108,60 +16857,76 @@ void GLES2DecoderImpl::DoCopyTextureCHROMIUM(
   TextureRef* source_texture_ref = GetTexture(source_id);
   TextureRef* dest_texture_ref = GetTexture(dest_id);
 
-  if (!texture_manager()->ValidateTextureParameters(
-          GetErrorState(), kFunctionName, true, internal_format, dest_type,
-          internal_format, 0))
-    return;
-
-  if (!ValidateCopyTextureCHROMIUMTextures(kFunctionName, source_texture_ref,
-                                           dest_texture_ref)) {
+  if (!ValidateCopyTextureCHROMIUMTextures(
+          kFunctionName, dest_target, source_texture_ref, dest_texture_ref)) {
     return;
   }
 
-  if (!ValidateCopyTextureCHROMIUMInternalFormats(
-          kFunctionName, source_texture_ref, internal_format)) {
+  if (source_level < 0 || dest_level < 0 ||
+      (feature_info_->IsWebGL1OrES2Context() && source_level > 0)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName,
+                       "source_level or dest_level out of range");
     return;
   }
 
   Texture* source_texture = source_texture_ref->texture();
   Texture* dest_texture = dest_texture_ref->texture();
   GLenum source_target = source_texture->target();
-  GLenum dest_target = dest_texture->target();
+  GLenum dest_binding_target = dest_texture->target();
+
+  GLenum source_type = 0;
+  GLenum source_internal_format = 0;
+  source_texture->GetLevelType(source_target, source_level, &source_type,
+                               &source_internal_format);
+  GLenum format =
+      TextureManager::ExtractFormatFromStorageFormat(internal_format);
+  if (!texture_manager()->ValidateTextureParameters(
+          GetErrorState(), kFunctionName, true, format, dest_type,
+          internal_format, dest_level)) {
+    return;
+  }
+
+  if (!ValidateCopyTextureCHROMIUMInternalFormats(
+          kFunctionName, source_internal_format, internal_format)) {
+    return;
+  }
+
+  if (feature_info_->feature_flags().desktop_srgb_support) {
+    bool enable_framebuffer_srgb =
+        GLES2Util::GetColorEncodingFromInternalFormat(source_internal_format) ==
+            GL_SRGB ||
+        GLES2Util::GetColorEncodingFromInternalFormat(internal_format) ==
+            GL_SRGB;
+    state_.EnableDisableFramebufferSRGB(enable_framebuffer_srgb);
+  }
+
   int source_width = 0;
   int source_height = 0;
   gl::GLImage* image =
-      source_texture->GetLevelImage(source_target, 0);
+      source_texture->GetLevelImage(source_target, source_level);
   if (image) {
     gfx::Size size = image->GetSize();
     source_width = size.width();
     source_height = size.height();
     if (source_width <= 0 || source_height <= 0) {
-      LOCAL_SET_GL_ERROR(
-          GL_INVALID_VALUE,
-          "glCopyTextureChromium", "invalid image size");
+      LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName, "invalid image size");
       return;
     }
   } else {
-    if (!source_texture->GetLevelSize(source_target, 0,
+    if (!source_texture->GetLevelSize(source_target, source_level,
                                       &source_width, &source_height, nullptr)) {
-      LOCAL_SET_GL_ERROR(GL_INVALID_VALUE,
-                         "glCopyTextureChromium",
-                         "source texture has no level 0");
+      LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName,
+                         "source texture has no data for level");
       return;
     }
 
     // Check that this type of texture is allowed.
-    if (!texture_manager()->ValidForTarget(source_target, 0,
+    if (!texture_manager()->ValidForTarget(source_target, source_level,
                                            source_width, source_height, 1)) {
       LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName, "Bad dimensions");
       return;
     }
   }
-
-  GLenum source_type = 0;
-  GLenum source_internal_format = 0;
-  source_texture->GetLevelType(source_target, 0, &source_type,
-                               &source_internal_format);
 
   if (dest_texture->IsImmutable()) {
     LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, kFunctionName,
@@ -16171,7 +16936,7 @@ void GLES2DecoderImpl::DoCopyTextureCHROMIUM(
 
   // Clear the source texture if necessary.
   if (!texture_manager()->ClearTextureLevel(this, source_texture_ref,
-                                            source_target, 0)) {
+                                            source_target, source_level)) {
     LOCAL_SET_GL_ERROR(GL_OUT_OF_MEMORY, kFunctionName, "dimensions too big");
     return;
   }
@@ -16184,10 +16949,10 @@ void GLES2DecoderImpl::DoCopyTextureCHROMIUM(
   int dest_width = 0;
   int dest_height = 0;
   bool dest_level_defined = dest_texture->GetLevelSize(
-      dest_target, 0, &dest_width, &dest_height, nullptr);
+      dest_target, dest_level, &dest_width, &dest_height, nullptr);
 
   if (dest_level_defined) {
-    dest_texture->GetLevelType(dest_target, 0, &dest_type_previous,
+    dest_texture->GetLevelType(dest_target, dest_level, &dest_type_previous,
                                &dest_internal_format);
   }
 
@@ -16198,66 +16963,81 @@ void GLES2DecoderImpl::DoCopyTextureCHROMIUM(
       dest_type_previous != dest_type) {
     // Ensure that the glTexImage2D succeeds.
     LOCAL_COPY_REAL_GL_ERRORS_TO_WRAPPER(kFunctionName);
-    glBindTexture(dest_target, dest_texture->service_id());
-    glTexImage2D(
-        dest_target, 0, TextureManager::AdjustTexInternalFormat(
-                            feature_info_.get(), internal_format),
-        source_width, source_height, 0,
-        TextureManager::AdjustTexFormat(feature_info_.get(), internal_format),
-        dest_type, NULL);
+    glBindTexture(dest_binding_target, dest_texture->service_id());
+    glTexImage2D(dest_target, dest_level,
+                 TextureManager::AdjustTexInternalFormat(feature_info_.get(),
+                                                         internal_format),
+                 source_width, source_height, 0,
+                 TextureManager::AdjustTexFormat(feature_info_.get(), format),
+                 dest_type, nullptr);
     GLenum error = LOCAL_PEEK_GL_ERROR(kFunctionName);
     if (error != GL_NO_ERROR) {
-      RestoreCurrentTextureBindings(&state_, dest_target);
+      RestoreCurrentTextureBindings(&state_, dest_binding_target,
+                                    state_.active_texture_unit);
       return;
     }
 
-    texture_manager()->SetLevelInfo(
-        dest_texture_ref, dest_target, 0, internal_format, source_width,
-        source_height, 1, 0, internal_format, dest_type,
-        gfx::Rect(source_width, source_height));
+    texture_manager()->SetLevelInfo(dest_texture_ref, dest_target, dest_level,
+                                    internal_format, source_width,
+                                    source_height, 1, 0, format, dest_type,
+                                    gfx::Rect(source_width, source_height));
     dest_texture->ApplyFormatWorkarounds(feature_info_.get());
   } else {
-    texture_manager()->SetLevelCleared(dest_texture_ref, dest_target, 0,
-                                       true);
+    texture_manager()->SetLevelCleared(dest_texture_ref, dest_target,
+                                       dest_level, true);
   }
 
   // Try using GLImage::CopyTexImage when possible.
   bool unpack_premultiply_alpha_change =
       (unpack_premultiply_alpha ^ unpack_unmultiply_alpha) != 0;
-  if (image && !unpack_flip_y && !unpack_premultiply_alpha_change) {
-    glBindTexture(dest_target, dest_texture->service_id());
+  // TODO(qiankun.miao@intel.com): Support level > 0 for CopyTexImage.
+  if (image && dest_level == 0 && !unpack_flip_y &&
+      !unpack_premultiply_alpha_change) {
+    glBindTexture(dest_binding_target, dest_texture->service_id());
     if (image->CopyTexImage(dest_target))
       return;
   }
 
-  DoCopyTexImageIfNeeded(source_texture, source_target);
+  DoBindOrCopyTexImageIfNeeded(source_texture, source_target, 0);
 
   // GL_TEXTURE_EXTERNAL_OES texture requires that we apply a transform matrix
   // before presenting.
   if (source_target == GL_TEXTURE_EXTERNAL_OES) {
     if (GLStreamTextureImage* image =
             source_texture->GetLevelStreamTextureImage(GL_TEXTURE_EXTERNAL_OES,
-                                                       0)) {
+                                                       source_level)) {
       GLfloat transform_matrix[16];
       image->GetTextureMatrix(transform_matrix);
       copy_texture_CHROMIUM_->DoCopyTextureWithTransform(
-          this, source_target, source_texture->service_id(), dest_target,
-          dest_texture->service_id(), source_width, source_height,
+          this, source_target, source_texture->service_id(), source_level,
+          source_internal_format, dest_target, dest_texture->service_id(),
+          dest_level, internal_format, source_width, source_height,
           unpack_flip_y == GL_TRUE, unpack_premultiply_alpha == GL_TRUE,
-          unpack_unmultiply_alpha == GL_TRUE, transform_matrix);
+          unpack_unmultiply_alpha == GL_TRUE, transform_matrix,
+          copy_tex_image_blit_.get());
       return;
     }
   }
+
+  CopyTextureMethod method = getCopyTextureCHROMIUMMethod(
+      source_target, source_level, source_internal_format, source_type,
+      dest_binding_target, dest_level, internal_format,
+      unpack_flip_y == GL_TRUE, unpack_premultiply_alpha == GL_TRUE,
+      unpack_unmultiply_alpha == GL_TRUE);
   copy_texture_CHROMIUM_->DoCopyTexture(
-      this, source_target, source_texture->service_id(), source_internal_format,
-      dest_target, dest_texture->service_id(), internal_format, source_width,
-      source_height, unpack_flip_y == GL_TRUE,
-      unpack_premultiply_alpha == GL_TRUE, unpack_unmultiply_alpha == GL_TRUE);
+      this, source_target, source_texture->service_id(), source_level,
+      source_internal_format, dest_target, dest_texture->service_id(),
+      dest_level, internal_format, source_width, source_height,
+      unpack_flip_y == GL_TRUE, unpack_premultiply_alpha == GL_TRUE,
+      unpack_unmultiply_alpha == GL_TRUE, method, copy_tex_image_blit_.get());
 }
 
 void GLES2DecoderImpl::DoCopySubTextureCHROMIUM(
     GLuint source_id,
+    GLint source_level,
+    GLenum dest_target,
     GLuint dest_id,
+    GLint dest_level,
     GLint xoffset,
     GLint yoffset,
     GLint x,
@@ -16273,19 +17053,26 @@ void GLES2DecoderImpl::DoCopySubTextureCHROMIUM(
   TextureRef* source_texture_ref = GetTexture(source_id);
   TextureRef* dest_texture_ref = GetTexture(dest_id);
 
-  if (!ValidateCopyTextureCHROMIUMTextures(kFunctionName, source_texture_ref,
-                                           dest_texture_ref)) {
+  if (!ValidateCopyTextureCHROMIUMTextures(
+          kFunctionName, dest_target, source_texture_ref, dest_texture_ref)) {
+    return;
+  }
+
+  if (source_level < 0 || dest_level < 0 ||
+      (feature_info_->IsWebGL1OrES2Context() && source_level > 0)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName,
+                       "source_level or dest_level out of range");
     return;
   }
 
   Texture* source_texture = source_texture_ref->texture();
   Texture* dest_texture = dest_texture_ref->texture();
   GLenum source_target = source_texture->target();
-  GLenum dest_target = dest_texture->target();
+  GLenum dest_binding_target = dest_texture->target();
   int source_width = 0;
   int source_height = 0;
   gl::GLImage* image =
-      source_texture->GetLevelImage(source_target, 0);
+      source_texture->GetLevelImage(source_target, source_level);
   if (image) {
     gfx::Size size = image->GetSize();
     source_width = size.width();
@@ -16310,23 +17097,23 @@ void GLES2DecoderImpl::DoCopySubTextureCHROMIUM(
       return;
     }
   } else {
-    if (!source_texture->GetLevelSize(source_target, 0,
+    if (!source_texture->GetLevelSize(source_target, source_level,
                                       &source_width, &source_height, nullptr)) {
       LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName,
-                         "source texture has no level 0");
+                         "source texture has no data for level");
       return;
     }
 
     // Check that this type of texture is allowed.
-    if (!texture_manager()->ValidForTarget(source_target, 0,
+    if (!texture_manager()->ValidForTarget(source_target, source_level,
                                            source_width, source_height, 1)) {
       LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName,
                          "source texture bad dimensions");
       return;
     }
 
-    if (!source_texture->ValidForTexture(source_target, 0, x, y, 0, width,
-                                         height, 1)) {
+    if (!source_texture->ValidForTexture(source_target, source_level, x, y, 0,
+                                         width, height, 1)) {
       LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName,
                          "source texture bad dimensions.");
       return;
@@ -16335,33 +17122,42 @@ void GLES2DecoderImpl::DoCopySubTextureCHROMIUM(
 
   GLenum source_type = 0;
   GLenum source_internal_format = 0;
-  source_texture->GetLevelType(source_target, 0, &source_type,
+  source_texture->GetLevelType(source_target, source_level, &source_type,
                                &source_internal_format);
 
   GLenum dest_type = 0;
   GLenum dest_internal_format = 0;
   bool dest_level_defined = dest_texture->GetLevelType(
-      dest_target, 0, &dest_type, &dest_internal_format);
+      dest_target, dest_level, &dest_type, &dest_internal_format);
   if (!dest_level_defined) {
     LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, kFunctionName,
                        "destination texture is not defined");
     return;
   }
-  if (!dest_texture->ValidForTexture(dest_target, 0, xoffset,
-                                     yoffset, 0, width, height, 1)) {
+  if (!dest_texture->ValidForTexture(dest_target, dest_level, xoffset, yoffset,
+                                     0, width, height, 1)) {
     LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, kFunctionName,
                        "destination texture bad dimensions.");
     return;
   }
 
   if (!ValidateCopyTextureCHROMIUMInternalFormats(
-          kFunctionName, source_texture_ref, dest_internal_format)) {
+          kFunctionName, source_internal_format, dest_internal_format)) {
     return;
+  }
+
+  if (feature_info_->feature_flags().desktop_srgb_support) {
+    bool enable_framebuffer_srgb =
+        GLES2Util::GetColorEncodingFromInternalFormat(source_internal_format) ==
+            GL_SRGB ||
+        GLES2Util::GetColorEncodingFromInternalFormat(dest_internal_format) ==
+            GL_SRGB;
+    state_.EnableDisableFramebufferSRGB(enable_framebuffer_srgb);
   }
 
   // Clear the source texture if necessary.
   if (!texture_manager()->ClearTextureLevel(this, source_texture_ref,
-                                            source_target, 0)) {
+                                            source_target, source_level)) {
     LOCAL_SET_GL_ERROR(GL_OUT_OF_MEMORY, kFunctionName,
                        "source texture dimensions too big");
     return;
@@ -16372,72 +17168,95 @@ void GLES2DecoderImpl::DoCopySubTextureCHROMIUM(
 
   int dest_width = 0;
   int dest_height = 0;
-  bool ok = dest_texture->GetLevelSize(
-      dest_target, 0, &dest_width, &dest_height, nullptr);
+  bool ok = dest_texture->GetLevelSize(dest_target, dest_level, &dest_width,
+                                       &dest_height, nullptr);
   DCHECK(ok);
   if (xoffset != 0 || yoffset != 0 || width != dest_width ||
       height != dest_height) {
     gfx::Rect cleared_rect;
     if (TextureManager::CombineAdjacentRects(
-            dest_texture->GetLevelClearedRect(dest_target, 0),
+            dest_texture->GetLevelClearedRect(dest_target, dest_level),
             gfx::Rect(xoffset, yoffset, width, height), &cleared_rect)) {
-      DCHECK_GE(
-          cleared_rect.size().GetArea(),
-          dest_texture->GetLevelClearedRect(dest_target, 0).size().GetArea());
-      texture_manager()->SetLevelClearedRect(dest_texture_ref, dest_target, 0,
-                                             cleared_rect);
+      DCHECK_GE(cleared_rect.size().GetArea(),
+                dest_texture->GetLevelClearedRect(dest_target, dest_level)
+                    .size()
+                    .GetArea());
+      texture_manager()->SetLevelClearedRect(dest_texture_ref, dest_target,
+                                             dest_level, cleared_rect);
     } else {
       // Otherwise clear part of texture level that is not already cleared.
       if (!texture_manager()->ClearTextureLevel(this, dest_texture_ref,
-                                                dest_target, 0)) {
+                                                dest_target, dest_level)) {
         LOCAL_SET_GL_ERROR(GL_OUT_OF_MEMORY, kFunctionName,
                            "destination texture dimensions too big");
         return;
       }
     }
   } else {
-    texture_manager()->SetLevelCleared(dest_texture_ref, dest_target, 0,
-                                       true);
+    texture_manager()->SetLevelCleared(dest_texture_ref, dest_target,
+                                       dest_level, true);
   }
 
   // Try using GLImage::CopyTexSubImage when possible.
   bool unpack_premultiply_alpha_change =
       (unpack_premultiply_alpha ^ unpack_unmultiply_alpha) != 0;
-  if (image && !unpack_flip_y && !unpack_premultiply_alpha_change) {
-    ScopedTextureBinder binder(
-        &state_, dest_texture->service_id(), dest_target);
+  // TODO(qiankun.miao@intel.com): Support level > 0 for CopyTexSubImage.
+  if (image && dest_level == 0 && !unpack_flip_y &&
+      !unpack_premultiply_alpha_change) {
+    ScopedTextureBinder binder(&state_, dest_texture->service_id(),
+                               dest_binding_target);
     if (image->CopyTexSubImage(dest_target, gfx::Point(xoffset, yoffset),
                                gfx::Rect(x, y, width, height))) {
       return;
     }
   }
 
-  DoCopyTexImageIfNeeded(source_texture, source_target);
+  DoBindOrCopyTexImageIfNeeded(source_texture, source_target, 0);
 
   // GL_TEXTURE_EXTERNAL_OES texture requires apply a transform matrix
   // before presenting.
   if (source_target == GL_TEXTURE_EXTERNAL_OES) {
     if (GLStreamTextureImage* image =
             source_texture->GetLevelStreamTextureImage(GL_TEXTURE_EXTERNAL_OES,
-                                                       0)) {
+                                                       source_level)) {
       GLfloat transform_matrix[16];
       image->GetTextureMatrix(transform_matrix);
       copy_texture_CHROMIUM_->DoCopySubTextureWithTransform(
-          this, source_target, source_texture->service_id(),
+          this, source_target, source_texture->service_id(), source_level,
           source_internal_format, dest_target, dest_texture->service_id(),
-          dest_internal_format, xoffset, yoffset, x, y, width, height,
-          dest_width, dest_height, source_width, source_height,
+          dest_level, dest_internal_format, xoffset, yoffset, x, y, width,
+          height, dest_width, dest_height, source_width, source_height,
           unpack_flip_y == GL_TRUE, unpack_premultiply_alpha == GL_TRUE,
-          unpack_unmultiply_alpha == GL_TRUE, transform_matrix);
+          unpack_unmultiply_alpha == GL_TRUE, transform_matrix,
+          copy_tex_image_blit_.get());
       return;
     }
   }
+
+  CopyTextureMethod method = getCopyTextureCHROMIUMMethod(
+      source_target, source_level, source_internal_format, source_type,
+      dest_binding_target, dest_level, dest_internal_format,
+      unpack_flip_y == GL_TRUE, unpack_premultiply_alpha == GL_TRUE,
+      unpack_unmultiply_alpha == GL_TRUE);
+#if defined(OS_CHROMEOS) && defined(ARCH_CPU_X86_FAMILY)
+  // glDrawArrays is faster than glCopyTexSubImage2D on IA Mesa driver,
+  // although opposite in Android.
+  // TODO(dshwang): After Mesa fixes this issue, remove this hack.
+  // https://bugs.freedesktop.org/show_bug.cgi?id=98478, crbug.com/535198.
+  if (Texture::ColorRenderable(GetFeatureInfo(), dest_internal_format,
+                               dest_texture->IsImmutable()) &&
+      method == DIRECT_COPY) {
+    method = DIRECT_DRAW;
+  }
+#endif
+
   copy_texture_CHROMIUM_->DoCopySubTexture(
-      this, source_target, source_texture->service_id(), source_internal_format,
-      dest_target, dest_texture->service_id(), dest_internal_format, xoffset,
-      yoffset, x, y, width, height, dest_width, dest_height, source_width,
-      source_height, unpack_flip_y == GL_TRUE,
-      unpack_premultiply_alpha == GL_TRUE, unpack_unmultiply_alpha == GL_TRUE);
+      this, source_target, source_texture->service_id(), source_level,
+      source_internal_format, dest_target, dest_texture->service_id(),
+      dest_level, dest_internal_format, xoffset, yoffset, x, y, width, height,
+      dest_width, dest_height, source_width, source_height,
+      unpack_flip_y == GL_TRUE, unpack_premultiply_alpha == GL_TRUE,
+      unpack_unmultiply_alpha == GL_TRUE, method, copy_tex_image_blit_.get());
 }
 
 bool GLES2DecoderImpl::InitializeCopyTexImageBlitter(
@@ -16463,6 +17282,15 @@ bool GLES2DecoderImpl::InitializeCopyTextureCHROMIUM(
     copy_texture_CHROMIUM_->Initialize(this, features());
     if (LOCAL_PEEK_GL_ERROR(function_name) != GL_NO_ERROR)
       return false;
+
+    // On the desktop core profile this also needs emulation of
+    // CopyTex{Sub}Image2D for luminance, alpha, and luminance_alpha
+    // textures.
+    if (CopyTexImageResourceManager::CopyTexImageRequiresBlit(
+            feature_info_.get(), GL_LUMINANCE)) {
+      if (!InitializeCopyTexImageBlitter(function_name))
+        return false;
+    }
   }
   return true;
 }
@@ -16570,7 +17398,8 @@ void GLES2DecoderImpl::DoCompressedCopyTextureCHROMIUM(GLuint source_id,
                              NULL);
       GLenum error = LOCAL_PEEK_GL_ERROR(kFunctionName);
       if (error != GL_NO_ERROR) {
-        RestoreCurrentTextureBindings(&state_, dest_texture->target());
+        RestoreCurrentTextureBindings(&state_, dest_texture->target(),
+                                      state_.active_texture_unit);
         return;
       }
 
@@ -16591,7 +17420,7 @@ void GLES2DecoderImpl::DoCompressedCopyTextureCHROMIUM(GLuint source_id,
       "gpu",
       "GLES2DecoderImpl::DoCompressedCopyTextureCHROMIUM, fallback");
 
-  DoCopyTexImageIfNeeded(source_texture, source_texture->target());
+  DoBindOrCopyTexImageIfNeeded(source_texture, source_texture->target(), 0);
 
   // As a fallback, copy into a non-compressed GL_RGBA texture.
   LOCAL_COPY_REAL_GL_ERRORS_TO_WRAPPER(kFunctionName);
@@ -16599,7 +17428,8 @@ void GLES2DecoderImpl::DoCompressedCopyTextureCHROMIUM(GLuint source_id,
                0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
   GLenum error = LOCAL_PEEK_GL_ERROR(kFunctionName);
   if (error != GL_NO_ERROR) {
-    RestoreCurrentTextureBindings(&state_, dest_texture->target());
+    RestoreCurrentTextureBindings(&state_, dest_texture->target(),
+                                  state_.active_texture_unit);
     return;
   }
 
@@ -16609,10 +17439,10 @@ void GLES2DecoderImpl::DoCompressedCopyTextureCHROMIUM(GLuint source_id,
       gfx::Rect(source_width, source_height));
 
   copy_texture_CHROMIUM_->DoCopyTexture(
-      this, source_texture->target(), source_texture->service_id(),
+      this, source_texture->target(), source_texture->service_id(), 0,
       source_internal_format, dest_texture->target(),
-      dest_texture->service_id(), GL_RGBA, source_width, source_height, false,
-      false, false);
+      dest_texture->service_id(), 0, GL_RGBA, source_width, source_height,
+      false, false, false, DIRECT_DRAW, copy_tex_image_blit_.get());
 }
 
 void GLES2DecoderImpl::TexStorageImpl(GLenum target,
@@ -16633,9 +17463,14 @@ void GLES2DecoderImpl::TexStorageImpl(GLenum target,
         GL_INVALID_OPERATION, function_name, "target invalid for format");
     return;
   }
+  // The glTexStorage entry points require width, height, and depth to be
+  // at least 1, but the other texture entry points (those which use
+  // ValidForTarget) do not. So we have to add an extra check here.
+  bool is_invalid_texstorage_size = width < 1 || height < 1 || depth < 1;
   if (!texture_manager()->ValidForTarget(target, 0, width, height, depth) ||
-      TextureManager::ComputeMipMapCount(
-          target, width, height, depth) < levels) {
+      is_invalid_texstorage_size ||
+      TextureManager::ComputeMipMapCount(target, width, height, depth) <
+          levels) {
     LOCAL_SET_GL_ERROR(
         GL_INVALID_VALUE, function_name, "dimensions out of range");
     return;
@@ -16737,8 +17572,7 @@ void GLES2DecoderImpl::TexStorageImpl(GLenum target,
     GLsizei level_depth = depth;
 
     GLenum adjusted_internal_format =
-        feature_info_->context_type() == CONTEXT_TYPE_OPENGLES2 ?
-        format : internal_format;
+        feature_info_->IsWebGL1OrES2Context() ? format : internal_format;
     for (int ii = 0; ii < levels; ++ii) {
       if (target == GL_TEXTURE_CUBE_MAP) {
         for (int jj = 0; jj < 6; ++jj) {
@@ -16859,9 +17693,9 @@ void GLES2DecoderImpl::DoConsumeTextureCHROMIUM(GLenum target,
                                        "mailbox that was not generated by "
                                        "GenMailboxCHROMIUM.";
 
-  scoped_refptr<TextureRef> texture_ref =
+  TextureRef* texture_ref =
       texture_manager()->GetTextureInfoForTargetUnlessDefault(&state_, target);
-  if (!texture_ref.get()) {
+  if (!texture_ref) {
     LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION,
                        "glConsumeTextureCHROMIUM",
                        "unknown texture for target");
@@ -16890,13 +17724,16 @@ void GLES2DecoderImpl::DoConsumeTextureCHROMIUM(GLenum target,
     return;
   }
 
+  if (texture_ref->texture() == texture)
+    return;
+
   DeleteTexturesHelper(1, &client_id);
   texture_ref = texture_manager()->Consume(client_id, texture);
   glBindTexture(target, texture_ref->service_id());
 
   TextureUnit& unit = state_.texture_units[state_.active_texture_unit];
   unit.bind_target = target;
-  unit.GetInfoForTarget(target) = texture_ref;
+  unit.SetInfoForTarget(target, texture_ref);
 }
 
 void GLES2DecoderImpl::EnsureTextureForClientId(
@@ -16910,7 +17747,7 @@ void GLES2DecoderImpl::EnsureTextureForClientId(
     texture_ref = CreateTexture(client_id, service_id);
     texture_manager()->SetTarget(texture_ref, target);
     glBindTexture(target, service_id);
-    RestoreCurrentTextureBindings(&state_, target);
+    RestoreCurrentTextureBindings(&state_, target, state_.active_texture_unit);
   }
 }
 
@@ -16926,6 +17763,12 @@ void GLES2DecoderImpl::DoCreateAndConsumeTextureINTERNAL(
   DLOG_IF(ERROR, !mailbox.Verify()) << "CreateAndConsumeTextureCHROMIUM was "
                                        "passed a mailbox that was not "
                                        "generated by GenMailboxCHROMIUM.";
+  if (!client_id) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION,
+                       "glCreateAndConsumeTextureCHROMIUM",
+                       "invalid client id");
+    return;
+  }
 
   TextureRef* texture_ref = GetTexture(client_id);
   if (texture_ref) {
@@ -16985,7 +17828,6 @@ void GLES2DecoderImpl::DoApplyScreenSpaceAntialiasingCHROMIUM() {
       apply_framebuffer_attachment_cmaa_intel_.reset(
           new ApplyFramebufferAttachmentCMAAINTELResourceManager());
       apply_framebuffer_attachment_cmaa_intel_->Initialize(this);
-      RestoreCurrentFramebufferBindings();
       if (LOCAL_PEEK_GL_ERROR("glApplyFramebufferAttachmentCMAAINTEL") !=
           GL_NO_ERROR)
         return;
@@ -16994,9 +17836,24 @@ void GLES2DecoderImpl::DoApplyScreenSpaceAntialiasingCHROMIUM() {
         "glApplyScreenSpaceAntialiasingCHROMIUM";
     if (!InitializeCopyTextureCHROMIUM(kFunctionName))
       return;
+    for (uint32_t i = 0; i < group_->max_draw_buffers(); ++i) {
+      const Framebuffer::Attachment* attachment =
+          bound_framebuffer->GetAttachment(GL_COLOR_ATTACHMENT0 + i);
+      if (attachment && attachment->IsTextureAttachment()) {
+        GLenum internal_format = attachment->internal_format();
+        if (!CanUseCopyTextureCHROMIUMInternalFormat(internal_format)) {
+          LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, kFunctionName,
+                             "Apply CMAA on framebuffer with attachment in "
+                             "invalid internalformat.");
+          return;
+        }
+      }
+    }
+
     apply_framebuffer_attachment_cmaa_intel_
         ->ApplyFramebufferAttachmentCMAAINTEL(this, bound_framebuffer,
-                                              copy_texture_CHROMIUM_.get());
+                                              copy_texture_CHROMIUM_.get(),
+                                              texture_manager());
   }
 }
 
@@ -17020,10 +17877,26 @@ void GLES2DecoderImpl::DoBindTexImage2DCHROMIUM(
     GLenum target, GLint image_id) {
   TRACE_EVENT0("gpu", "GLES2DecoderImpl::DoBindTexImage2DCHROMIUM");
 
+  BindTexImage2DCHROMIUMImpl("glBindTexImage2DCHROMIUM", target, 0, image_id);
+}
+
+void GLES2DecoderImpl::DoBindTexImage2DWithInternalformatCHROMIUM(
+    GLenum target,
+    GLenum internalformat,
+    GLint image_id) {
+  TRACE_EVENT0("gpu",
+               "GLES2DecoderImpl::DoBindTexImage2DWithInternalformatCHROMIUM");
+
+  BindTexImage2DCHROMIUMImpl("glBindTexImage2DWithInternalformatCHROMIUM",
+                             target, internalformat, image_id);
+}
+
+void GLES2DecoderImpl::BindTexImage2DCHROMIUMImpl(const char* function_name,
+                                                  GLenum target,
+                                                  GLenum internalformat,
+                                                  GLint image_id) {
   if (target == GL_TEXTURE_CUBE_MAP) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_ENUM,
-        "glBindTexImage2DCHROMIUM", "invalid target");
+    LOCAL_SET_GL_ERROR(GL_INVALID_ENUM, function_name, "invalid target");
     return;
   }
 
@@ -17032,17 +17905,14 @@ void GLES2DecoderImpl::DoBindTexImage2DCHROMIUM(
   TextureRef* texture_ref =
       texture_manager()->GetTextureInfoForTargetUnlessDefault(&state_, target);
   if (!texture_ref) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_OPERATION,
-        "glBindTexImage2DCHROMIUM", "no texture bound");
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, function_name, "no texture bound");
     return;
   }
 
   gl::GLImage* image = image_manager()->LookupImage(image_id);
   if (!image) {
-    LOCAL_SET_GL_ERROR(
-        GL_INVALID_OPERATION,
-        "glBindTexImage2DCHROMIUM", "no image found with the given ID");
+    LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, function_name,
+                       "no image found with the given ID");
     return;
   }
 
@@ -17054,15 +17924,22 @@ void GLES2DecoderImpl::DoBindTexImage2DCHROMIUM(
 
     // Note: We fallback to using CopyTexImage() before the texture is used
     // when BindTexImage() fails.
-    if (image->BindTexImage(target))
-      image_state = Texture::BOUND;
+    if (internalformat) {
+      if (image->BindTexImageWithInternalformat(target, internalformat))
+        image_state = Texture::BOUND;
+    } else {
+      if (image->BindTexImage(target))
+        image_state = Texture::BOUND;
+    }
   }
 
   gfx::Size size = image->GetSize();
-  GLenum internalformat = image->GetInternalFormat();
-  texture_manager()->SetLevelInfo(
-      texture_ref, target, 0, internalformat, size.width(), size.height(), 1, 0,
-      internalformat, GL_UNSIGNED_BYTE, gfx::Rect(size));
+  GLenum texture_internalformat =
+      internalformat ? internalformat : image->GetInternalFormat();
+  texture_manager()->SetLevelInfo(texture_ref, target, 0,
+                                  texture_internalformat, size.width(),
+                                  size.height(), 1, 0, texture_internalformat,
+                                  GL_UNSIGNED_BYTE, gfx::Rect(size));
   texture_manager()->SetLevelImage(texture_ref, target, 0, image, image_state);
 }
 
@@ -18631,7 +19508,7 @@ const SamplerState& GLES2DecoderImpl::GetSamplerStateForTextureUnit(
       return sampler->sampler_state();
   }
   TextureUnit& texture_unit = state_.texture_units[unit];
-  TextureRef* texture_ref = texture_unit.GetInfoForSamplerType(target).get();
+  TextureRef* texture_ref = texture_unit.GetInfoForSamplerType(target);
   if (texture_ref)
     return texture_ref->texture()->sampler_state();
 
@@ -18688,6 +19565,10 @@ bool GLES2DecoderImpl::ChromiumImageNeedsRGBEmulation() {
 
 void GLES2DecoderImpl::ClearScheduleCALayerState() {
   ca_layer_shared_state_.reset();
+}
+
+void GLES2DecoderImpl::ClearScheduleDCLayerState() {
+  dc_layer_shared_state_.reset();
 }
 
 void GLES2DecoderImpl::ClearFramebufferForWorkaround(GLbitfield mask) {
@@ -18854,6 +19735,72 @@ void GLES2DecoderImpl::RestoreAllExternalTextureBindingsIfNeeded() {
 
   texture_manager_service_id_generation_ =
       texture_manager()->GetServiceIdGeneration();
+}
+
+error::Error GLES2DecoderImpl::HandleInitializeDiscardableTextureCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile gles2::cmds::InitializeDiscardableTextureCHROMIUM& c =
+      *static_cast<
+          const volatile gles2::cmds::InitializeDiscardableTextureCHROMIUM*>(
+          cmd_data);
+  GLuint texture_id = c.texture_id;
+  uint32_t shm_id = c.shm_id;
+  uint32_t shm_offset = c.shm_offset;
+
+  TextureRef* texture = texture_manager()->GetTexture(texture_id);
+  if (!texture) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE,
+                       "glInitializeDiscardableTextureCHROMIUM",
+                       "Invalid texture ID");
+    return error::kNoError;
+  }
+  scoped_refptr<gpu::Buffer> buffer = GetSharedMemoryBuffer(shm_id);
+  if (!DiscardableHandleBase::ValidateParameters(buffer.get(), shm_offset))
+    return error::kInvalidArguments;
+
+  size_t size = texture->texture()->estimated_size();
+  ServiceDiscardableHandle handle(std::move(buffer), shm_offset, shm_id);
+  GetContextGroup()->discardable_manager()->InsertLockedTexture(
+      texture_id, size, group_->texture_manager(), std::move(handle));
+  return error::kNoError;
+}
+
+error::Error GLES2DecoderImpl::HandleUnlockDiscardableTextureCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile gles2::cmds::UnlockDiscardableTextureCHROMIUM& c =
+      *static_cast<
+          const volatile gles2::cmds::UnlockDiscardableTextureCHROMIUM*>(
+          cmd_data);
+  GLuint texture_id = c.texture_id;
+  ServiceDiscardableManager* discardable_manager =
+      GetContextGroup()->discardable_manager();
+  TextureRef* texture_to_unbind;
+  if (!discardable_manager->UnlockTexture(texture_id, group_->texture_manager(),
+                                          &texture_to_unbind)) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "glUnlockDiscardableTextureCHROMIUM",
+                       "Texture ID not initialized");
+  }
+  if (texture_to_unbind)
+    UnbindTexture(texture_to_unbind, SupportsSeparateFramebufferBinds());
+
+  return error::kNoError;
+}
+
+error::Error GLES2DecoderImpl::HandleLockDiscardableTextureCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile gles2::cmds::LockDiscardableTextureCHROMIUM& c =
+      *static_cast<const volatile gles2::cmds::LockDiscardableTextureCHROMIUM*>(
+          cmd_data);
+  GLuint texture_id = c.texture_id;
+  if (!GetContextGroup()->discardable_manager()->LockTexture(
+          texture_id, group_->texture_manager())) {
+    LOCAL_SET_GL_ERROR(GL_INVALID_VALUE, "glLockDiscardableTextureCHROMIUM",
+                       "Texture ID not initialized");
+  }
+  return error::kNoError;
 }
 
 // Include the auto-generated part of this file. We split this because it means

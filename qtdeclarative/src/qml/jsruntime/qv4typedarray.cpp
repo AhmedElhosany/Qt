@@ -229,8 +229,8 @@ void TypedArrayCtor::construct(const Managed *m, Scope &scope, CallData *callDat
             return;
         }
 
-        Scoped<TypedArray > array(scope, TypedArray::create(scope.engine, that->d()->type));
-        array->d()->buffer = buffer->d();
+        Scoped<TypedArray> array(scope, TypedArray::create(scope.engine, that->d()->type));
+        array->d()->buffer.set(scope.engine, buffer->d());
         array->d()->byteLength = byteLength;
         array->d()->byteOffset = 0;
 
@@ -252,8 +252,8 @@ void TypedArrayCtor::construct(const Managed *m, Scope &scope, CallData *callDat
             return;
         }
 
-        Scoped<TypedArray > array(scope, TypedArray::create(scope.engine, that->d()->type));
-        array->d()->buffer = newBuffer->d();
+        Scoped<TypedArray> array(scope, TypedArray::create(scope.engine, that->d()->type));
+        array->d()->buffer.set(scope.engine, newBuffer->d());
         array->d()->byteLength = destByteLength;
         array->d()->byteOffset = 0;
 
@@ -311,8 +311,8 @@ void TypedArrayCtor::construct(const Managed *m, Scope &scope, CallData *callDat
             byteLength = (uint)l;
         }
 
-        Scoped<TypedArray > array(scope, TypedArray::create(scope.engine, that->d()->type));
-        array->d()->buffer = buffer->d();
+        Scoped<TypedArray> array(scope, TypedArray::create(scope.engine, that->d()->type));
+        array->d()->buffer.set(scope.engine, buffer->d());
         array->d()->byteLength = byteLength;
         array->d()->byteOffset = byteOffset;
         scope.result = array.asReturnedValue();
@@ -335,8 +335,8 @@ void TypedArrayCtor::construct(const Managed *m, Scope &scope, CallData *callDat
         return;
     }
 
-    Scoped<TypedArray > array(scope, TypedArray::create(scope.engine, that->d()->type));
-    array->d()->buffer = newBuffer->d();
+    Scoped<TypedArray> array(scope, TypedArray::create(scope.engine, that->d()->type));
+    array->d()->buffer.set(scope.engine, newBuffer->d());
     array->d()->byteLength = l * elementSize;
     array->d()->byteOffset = 0;
 
@@ -377,12 +377,6 @@ Heap::TypedArray *TypedArray::create(ExecutionEngine *e, Heap::TypedArray::Type 
     return e->memoryManager->allocObject<TypedArray>(ic, e->typedArrayPrototype + t, t);
 }
 
-void TypedArray::markObjects(Heap::Base *that, ExecutionEngine *e)
-{
-    static_cast<TypedArray::Data *>(that)->buffer->mark(e);
-    Object::markObjects(that, e);
-}
-
 ReturnedValue TypedArray::getIndexed(const Managed *m, uint index, bool *hasProperty)
 {
     Scope scope(static_cast<const Object *>(m)->engine());
@@ -400,11 +394,11 @@ ReturnedValue TypedArray::getIndexed(const Managed *m, uint index, bool *hasProp
     return a->d()->type->read(a->d()->buffer->data->data(), byteOffset);
 }
 
-void TypedArray::putIndexed(Managed *m, uint index, const Value &value)
+bool TypedArray::putIndexed(Managed *m, uint index, const Value &value)
 {
     ExecutionEngine *v4 = static_cast<Object *>(m)->engine();
     if (v4->hasException)
-        return;
+        return false;
 
     Scope scope(v4);
     Scoped<TypedArray> a(scope, static_cast<TypedArray *>(m));
@@ -415,11 +409,12 @@ void TypedArray::putIndexed(Managed *m, uint index, const Value &value)
         goto reject;
 
     a->d()->type->write(scope.engine, a->d()->buffer->data->data(), byteOffset, value);
-    return;
+    return true;
 
 reject:
   if (scope.engine->current->strictMode)
       scope.engine->throwTypeError();
+  return false;
 }
 
 void TypedArrayPrototype::init(ExecutionEngine *engine, TypedArrayCtor *ctor)

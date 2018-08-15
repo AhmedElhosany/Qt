@@ -25,16 +25,17 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "media/base/bind_to_current_loop.h"
 #include "media/base/media_switches.h"
 #include "media/gpu/shared_memory_region.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/scoped_binders.h"
 
-#define LOGF(level) LOG(level) << __FUNCTION__ << "(): "
-#define DLOGF(level) DLOG(level) << __FUNCTION__ << "(): "
-#define DVLOGF(level) DVLOG(level) << __FUNCTION__ << "(): "
-#define PLOGF(level) PLOG(level) << __FUNCTION__ << "(): "
+#define LOGF(level) LOG(level) << __func__ << "(): "
+#define DLOGF(level) DLOG(level) << __func__ << "(): "
+#define DVLOGF(level) DVLOG(level) << __func__ << "(): "
+#define PLOGF(level) PLOG(level) << __func__ << "(): "
 
 #define NOTIFY_ERROR(x)                         \
   do {                                          \
@@ -88,6 +89,11 @@ class V4L2SliceVideoDecodeAccelerator::V4L2DecodeSurface
   int input_record() const { return input_record_; }
   int output_record() const { return output_record_; }
   uint32_t config_store() const { return config_store_; }
+  gfx::Rect visible_rect() const { return visible_rect_; }
+
+  void set_visible_rect(const gfx::Rect& visible_rect) {
+    visible_rect_ = visible_rect;
+  }
 
   // Take references to each reference surface and keep them until the
   // target surface is decoded.
@@ -112,6 +118,7 @@ class V4L2SliceVideoDecodeAccelerator::V4L2DecodeSurface
   int input_record_;
   int output_record_;
   uint32_t config_store_;
+  gfx::Rect visible_rect_;
 
   bool decoded_;
   ReleaseCB release_cb_;
@@ -518,7 +525,7 @@ bool V4L2SliceVideoDecodeAccelerator::Initialize(const Config& config,
   DCHECK(child_task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, kUninitialized);
 
-  if (config.is_encrypted) {
+  if (config.is_encrypted()) {
     NOTREACHED() << "Encrypted streams are not supported for this VDA";
     return false;
   }
@@ -799,18 +806,18 @@ bool V4L2SliceVideoDecodeAccelerator::CreateOutputBuffers() {
   DCHECK(surfaces_at_display_.empty());
   DCHECK(surfaces_at_device_.empty());
 
-  visible_size_ = decoder_->GetPicSize();
+  gfx::Size pic_size = decoder_->GetPicSize();
   size_t num_pictures = decoder_->GetRequiredNumOfPictures();
 
   DCHECK_GT(num_pictures, 0u);
-  DCHECK(!visible_size_.IsEmpty());
+  DCHECK(!pic_size.IsEmpty());
 
   struct v4l2_format format;
   memset(&format, 0, sizeof(format));
   format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   format.fmt.pix_mp.pixelformat = output_format_fourcc_;
-  format.fmt.pix_mp.width = visible_size_.width();
-  format.fmt.pix_mp.height = visible_size_.height();
+  format.fmt.pix_mp.width = pic_size.width();
+  format.fmt.pix_mp.height = pic_size.height();
   format.fmt.pix_mp.num_planes = input_planes_count_;
 
   if (device_->Ioctl(VIDIOC_S_FMT, &format) != 0) {
@@ -824,14 +831,14 @@ bool V4L2SliceVideoDecodeAccelerator::CreateOutputBuffers() {
   DCHECK_EQ(coded_size_.width() % 16, 0);
   DCHECK_EQ(coded_size_.height() % 16, 0);
 
-  if (!gfx::Rect(coded_size_).Contains(gfx::Rect(visible_size_))) {
+  if (!gfx::Rect(coded_size_).Contains(gfx::Rect(pic_size))) {
     LOGF(ERROR) << "Got invalid adjusted coded size: "
                 << coded_size_.ToString();
     return false;
   }
 
   DVLOGF(3) << "buffer_count=" << num_pictures
-            << ", visible size=" << visible_size_.ToString()
+            << ", pic size=" << pic_size.ToString()
             << ", coded size=" << coded_size_.ToString();
 
   // With ALLOCATE mode the client can sample it as RGB and doesn't need to
@@ -2528,6 +2535,7 @@ bool V4L2SliceVideoDecodeAccelerator::V4L2H264Accelerator::OutputPicture(
     const scoped_refptr<H264Picture>& pic) {
   scoped_refptr<V4L2DecodeSurface> dec_surface =
       H264PictureToV4L2DecodeSurface(pic);
+  dec_surface->set_visible_rect(pic->visible_rect);
   v4l2_dec_->SurfaceReady(dec_surface);
   return true;
 }
@@ -2759,7 +2767,7 @@ bool V4L2SliceVideoDecodeAccelerator::V4L2VP8Accelerator::OutputPicture(
     const scoped_refptr<VP8Picture>& pic) {
   scoped_refptr<V4L2DecodeSurface> dec_surface =
       VP8PictureToV4L2DecodeSurface(pic);
-
+  dec_surface->set_visible_rect(pic->visible_rect);
   v4l2_dec_->SurfaceReady(dec_surface);
   return true;
 }
@@ -3062,7 +3070,7 @@ bool V4L2SliceVideoDecodeAccelerator::V4L2VP9Accelerator::OutputPicture(
     const scoped_refptr<VP9Picture>& pic) {
   scoped_refptr<V4L2DecodeSurface> dec_surface =
       VP9PictureToV4L2DecodeSurface(pic);
-
+  dec_surface->set_visible_rect(pic->visible_rect);
   v4l2_dec_->SurfaceReady(dec_surface);
   return true;
 }
@@ -3186,15 +3194,13 @@ void V4L2SliceVideoDecodeAccelerator::OutputSurface(
   DCHECK_NE(output_record.picture_id, -1);
   output_record.at_client = true;
 
-  // TODO(posciak): Use visible size from decoder here instead
-  // (crbug.com/402760). Passing (0, 0) results in the client using the
-  // visible size extracted from the container instead.
   // TODO(hubbe): Insert correct color space. http://crbug.com/647725
   Picture picture(output_record.picture_id, dec_surface->bitstream_id(),
-                  gfx::Rect(0, 0), gfx::ColorSpace(), false);
+                  dec_surface->visible_rect(), gfx::ColorSpace(), false);
   DVLOGF(3) << dec_surface->ToString()
             << ", bitstream_id: " << picture.bitstream_buffer_id()
-            << ", picture_id: " << picture.picture_buffer_id();
+            << ", picture_id: " << picture.picture_buffer_id()
+            << ", visible_rect: " << picture.visible_rect().ToString();
   pending_picture_ready_.push(PictureRecord(output_record.cleared, picture));
   SendPictureReady();
   output_record.cleared = true;

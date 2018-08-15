@@ -114,6 +114,11 @@
            \macos menubar \e{may not} pick up a change in this attribute. Changes
            in the QAction::iconVisibleInMenu property will always be picked up.
 
+    \value AA_DontShowShortcutsInContextMenus Actions with the Shortcut property
+           won't be shown in any shortcut menus unless specifically set by the
+           QAction::shortcutVisibleInContextMenu property. This value has
+           been added in Qt 5.10.
+
     \value AA_NativeWindows Ensures that widgets have native windows.
 
     \value AA_DontCreateNativeWidgetSiblings Ensures that siblings of native
@@ -244,7 +249,14 @@
            (In the future, the compression feature may be implemented across platforms.)
            You can test the attribute to see whether compression is enabled.
            If your application needs to handle all events with no compression,
-           you can unset this attribute. This value has been added in Qt 5.7.
+           you can unset this attribute. Notice that input events from tablet devices
+           will not be compressed. See AA_CompressTabletEvents if you want these to be
+           compressed as well. This value has been added in Qt 5.7.
+
+    \value AA_CompressTabletEvents Enables compression of input events from tablet devices.
+           Notice that AA_CompressHighFrequencyEvents must be true for events compression
+           to be enabled, and that this flag extends the former to tablet events. Its default
+           value is false. This value has been added in Qt 5.10.
 
     \value AA_DontCheckOpenGLContextThreadAffinity When making a context
            current using QOpenGLContext, do not check that the
@@ -261,6 +273,12 @@
            or per-process cache storage location, on systems that support
            \e glProgramBinary(). In the unlikely event of this being problematic,
            set this attribute to disable all disk-based caching of shaders.
+
+    \value AA_DisableWindowContextHelpButton Disables the WindowContextHelpButtonHint
+           by default on Qt::Sheet and Qt::Dialog widgets. This hides the \gui ? button
+           on Windows, which only makes sense if you use \l QWhatsThis functionality.
+           This value has been added in Qt 5.10. For Qt 6, WindowContextHelpButtonHint
+           will not be set by default.
 
     The following values are deprecated or obsolete:
 
@@ -664,8 +682,9 @@
     be short, localized names. This is basically equivalent to using the date format
     string, "ddd MMM d yyyy". See QDate::toString() for more information.
 
-    \value ISODate \l{ISO 8601} extended format: either \c{YYYY-MM-DD} for dates or
-    \c{YYYY-MM-DDTHH:mm:ss}, \c{YYYY-MM-DDTHH:mm:ssTZD} (e.g., 1997-07-16T19:20:30+01:00)
+    \value ISODate \l{ISO 8601} extended format: either \c{yyyy-MM-dd} for dates or
+    \c{yyyy-MM-ddTHH:mm:ss} (e.g. 2017-07-24T15:46:29), or with a time-zone
+    suffix (Z for UTC otherwise an offset as [+|-]HH:mm) where appropriate
     for combined dates and times.
 
     \value ISODateWithMs \l{ISO 8601} extended format, including milliseconds if applicable.
@@ -2940,10 +2959,10 @@
 
     This enum specifies the coordinate system.
 
-    \value DeviceCoordinates Coordinates are relative to the upper-left corner
+    \value DeviceCoordinates Coordinates are relative to the top-left corner
     of the object's paint device.
 
-    \value LogicalCoordinates Coordinates are relative to the upper-left corner
+    \value LogicalCoordinates Coordinates are relative to the top-left corner
     of the object.
 */
 

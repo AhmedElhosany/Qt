@@ -34,6 +34,7 @@ import "../mock-delegates/TestParams" 1.0
 
 TestWebEngineView {
     id: webEngineView
+    anchors.fill: parent
 
     testSupport: WebEngineTestSupport {
         property bool windowCloseRejectedSignalEmitted: false
@@ -52,6 +53,7 @@ TestWebEngineView {
     TestCase {
         id: test
         name: "WebEngineViewJavaScriptDialogs"
+        when: windowShown
 
         function init() {
             JSDialogParams.dialogMessage = "";
@@ -81,12 +83,32 @@ TestWebEngineView {
             compare(webEngineView.title, "REJECTED")
 
         }
+        function readMousePressRecieved() {
+            var mousePressReceived;
+            runJavaScript("window.mousePressReceived", function(result) {
+                mousePressReceived = result;
+            });
+
+            _waitFor(function() { return mousePressReceived != undefined; });
+            return mousePressReceived;
+        }
+
+        function simulateUserGesture() {
+            // A user gesture after page load is required since Chromium 60 to allow showing
+            // an onbeforeunload dialog.
+            // See https://www.chromestatus.com/feature/5082396709879808
+            mouseClick(webEngineView, 10, 10, Qt.LeftButton)
+
+            tryVerify(readMousePressRecieved)
+        }
 
         function test_confirmClose() {
             webEngineView.url = Qt.resolvedUrl("confirmclose.html");
             verify(webEngineView.waitForLoadSucceeded());
             webEngineView.windowCloseRequestedSignalEmitted = false;
             JSDialogParams.shouldAcceptDialog = true;
+
+            simulateUserGesture()
             webEngineView.triggerWebAction(WebEngineView.RequestClose);
             verify(webEngineView.waitForWindowCloseRequested());
         }
@@ -96,6 +118,8 @@ TestWebEngineView {
             verify(webEngineView.waitForLoadSucceeded());
             webEngineView.testSupport.windowCloseRejectedSignalEmitted = false;
             JSDialogParams.shouldAcceptDialog = false;
+
+            simulateUserGesture()
             webEngineView.triggerWebAction(WebEngineView.RequestClose);
             verify(webEngineView.testSupport.waitForWindowCloseRejected());
         }

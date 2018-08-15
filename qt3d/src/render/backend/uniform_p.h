@@ -111,6 +111,11 @@ public:
         BufferValue
     };
 
+    struct Texture {
+        int textureId = 0; // Set first so that glUniform1iv will work
+        Qt3DCore::QNodeId nodeId;
+    };
+
     // UniformValue implicitely converts doubles to floats to ensure
     // correct rendering behavior for the cases where Qt3D parameters created from
     // a double or QVariant(double) are used to fill uniform values that in reality
@@ -147,11 +152,16 @@ public:
         memcpy(m_data.data(), mat44.constData(), 16 * sizeof(float));
     }
 
-    // Reserve data to be filled in later
-    UniformValue(int byteSize, ValueType valueType)
-        : m_data(byteSize / sizeof(float))
-        , m_valueType(valueType)
+    UniformValue(const QVector<QMatrix4x4> &v)
+        : m_data(16 * v.size())
     {
+        int offset = 0;
+        const int byteSize = 16 * sizeof(float);
+        float *data = m_data.data();
+        for (const auto m : v) {
+            memcpy(data + offset, m.constData(), byteSize);
+            offset += 16;
+        }
     }
 
     // For nodes which will later be replaced by a Texture or Buffer
@@ -162,8 +172,25 @@ public:
         memcpy(m_data.data(), &id, sizeof(Qt3DCore::QNodeId));
     }
 
+    // For textures
+    UniformValue(UniformValue::Texture t)
+        : UniformValue()
+    {
+        m_valueType = TextureValue;
+        memcpy(m_data.data(), &t, sizeof(Texture));
+    }
+
     ValueType valueType() const { return m_valueType; }
     UniformType storedType() const { return m_storedType; }
+
+    template<typename T>
+    void setData(const QVector<T> &v)
+    {
+        m_data.resize(v.size() * sizeof(T) / sizeof(float));
+        m_valueType = ScalarValue;
+        float *data = m_data.data();
+        memcpy(data, v.constData(), v.size() * sizeof(T));
+    }
 
     static UniformValue fromVariant(const QVariant &variant);
 
@@ -200,6 +227,9 @@ private:
     // TODO: Replace this hack see QTBUG-57510
     UniformType m_storedType = Unknown;
 };
+
+template<>
+Q_AUTOTEST_EXPORT void UniformValue::setData<QMatrix4x4>(const QVector<QMatrix4x4> &v);
 
 } // namespace Render
 } // namespace Qt3DRender

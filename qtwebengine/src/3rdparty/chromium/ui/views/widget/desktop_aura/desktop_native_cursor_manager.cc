@@ -9,22 +9,17 @@
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/cursor/cursor_loader.h"
-#include "ui/views/widget/desktop_aura/desktop_cursor_loader_updater.h"
 
 namespace views {
 
-DesktopNativeCursorManager::DesktopNativeCursorManager(
-    std::unique_ptr<DesktopCursorLoaderUpdater> cursor_loader_updater)
-    : cursor_loader_updater_(std::move(cursor_loader_updater)),
-      cursor_loader_(ui::CursorLoader::Create()) {
-  if (cursor_loader_updater_.get())
-    cursor_loader_updater_->OnCreate(1.0f, cursor_loader_.get());
-}
+DesktopNativeCursorManager::DesktopNativeCursorManager()
+    : cursor_loader_(ui::CursorLoader::Create()) {}
 
 DesktopNativeCursorManager::~DesktopNativeCursorManager() {
 }
 
-gfx::NativeCursor DesktopNativeCursorManager::GetInitializedCursor(int type) {
+gfx::NativeCursor DesktopNativeCursorManager::GetInitializedCursor(
+    ui::CursorType type) {
   gfx::NativeCursor cursor(type);
   cursor_loader_->SetPlatformCursor(&cursor);
   return cursor;
@@ -44,9 +39,6 @@ void DesktopNativeCursorManager::SetDisplay(
   cursor_loader_->UnloadAll();
   cursor_loader_->set_rotation(display.rotation());
   cursor_loader_->set_scale(display.device_scale_factor());
-
-  if (cursor_loader_updater_.get())
-    cursor_loader_updater_->OnDisplayUpdated(display, cursor_loader_.get());
 
   SetCursor(delegate->GetCursor(), delegate);
 }
@@ -72,7 +64,7 @@ void DesktopNativeCursorManager::SetVisibility(
   if (visible) {
     SetCursor(delegate->GetCursor(), delegate);
   } else {
-    gfx::NativeCursor invisible_cursor(ui::kCursorNone);
+    gfx::NativeCursor invisible_cursor(ui::CursorType::kNone);
     cursor_loader_->SetPlatformCursor(&invisible_cursor);
     for (Hosts::const_iterator i = hosts_.begin(); i != hosts_.end(); ++i)
       (*i)->SetCursor(invisible_cursor);
@@ -82,8 +74,8 @@ void DesktopNativeCursorManager::SetVisibility(
     (*i)->OnCursorVisibilityChanged(visible);
 }
 
-void DesktopNativeCursorManager::SetCursorSet(
-    ui::CursorSetType cursor_set,
+void DesktopNativeCursorManager::SetCursorSize(
+    ui::CursorSize cursor_size,
     wm::NativeCursorManagerDelegate* delegate) {
   NOTIMPLEMENTED();
 }

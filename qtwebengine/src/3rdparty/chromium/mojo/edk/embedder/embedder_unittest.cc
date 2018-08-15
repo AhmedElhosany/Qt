@@ -16,6 +16,7 @@
 #include "base/files/file.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/shared_memory.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -23,28 +24,24 @@
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
+#include "mojo/edk/embedder/embedder.h"
 #include "mojo/edk/embedder/named_platform_handle.h"
 #include "mojo/edk/embedder/named_platform_handle_utils.h"
+#include "mojo/edk/embedder/outgoing_broker_client_invitation.h"
+#include "mojo/edk/embedder/peer_connection.h"
 #include "mojo/edk/embedder/platform_channel_pair.h"
 #include "mojo/edk/embedder/test_embedder.h"
 #include "mojo/edk/system/test_utils.h"
 #include "mojo/edk/test/mojo_test_base.h"
-#include "mojo/edk/test/scoped_ipc_support.h"
 #include "mojo/public/c/system/core.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "mojo/public/cpp/system/message_pipe.h"
+#include "mojo/public/cpp/system/wait.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
 namespace edk {
 namespace {
-
-const MojoHandleSignals kSignalReadadableWritable =
-    MOJO_HANDLE_SIGNAL_READABLE | MOJO_HANDLE_SIGNAL_WRITABLE;
-
-const MojoHandleSignals kSignalAll = MOJO_HANDLE_SIGNAL_READABLE |
-                                     MOJO_HANDLE_SIGNAL_WRITABLE |
-                                     MOJO_HANDLE_SIGNAL_PEER_CLOSED;
 
 // The multiprocess tests that use these don't compile on iOS.
 #if !defined(OS_IOS)
@@ -64,50 +61,6 @@ TEST_F(EmbedderTest, ChannelBasic) {
   WriteMessage(server_mp, kHello);
   EXPECT_EQ(kHello, ReadMessage(client_mp));
 
-  ASSERT_EQ(MOJO_RESULT_OK, MojoClose(server_mp));
-  ASSERT_EQ(MOJO_RESULT_OK, MojoClose(client_mp));
-}
-
-// Test sending a MP which has read messages out of the OS pipe but which have
-// not been consumed using MojoReadMessage yet.
-TEST_F(EmbedderTest, SendReadableMessagePipe) {
-  MojoHandle server_mp, client_mp;
-  CreateMessagePipe(&server_mp, &client_mp);
-
-  MojoHandle server_mp2, client_mp2;
-  CreateMessagePipe(&server_mp2, &client_mp2);
-
-  // Write to server2 and wait for client2 to be readable before sending it.
-  // client2's MessagePipeDispatcher will have the message below in its
-  // message_queue_. For extra measures, also verify that this pending message
-  // can contain a message pipe.
-  MojoHandle server_mp3, client_mp3;
-  CreateMessagePipe(&server_mp3, &client_mp3);
-
-  const std::string kHello = "hello";
-  WriteMessageWithHandles(server_mp2, kHello, &client_mp3, 1);
-
-  MojoHandleSignalsState state;
-  ASSERT_EQ(MOJO_RESULT_OK, MojoWait(client_mp2, MOJO_HANDLE_SIGNAL_READABLE,
-                                     MOJO_DEADLINE_INDEFINITE, &state));
-  ASSERT_EQ(kSignalReadadableWritable, state.satisfied_signals);
-  ASSERT_EQ(kSignalAll, state.satisfiable_signals);
-
-  // Now send client2
-  WriteMessageWithHandles(server_mp, kHello, &client_mp2, 1);
-
-  MojoHandle port;
-  std::string message = ReadMessageWithHandles(client_mp, &port, 1);
-  EXPECT_EQ(kHello, message);
-
-  client_mp2 = port;
-  message = ReadMessageWithHandles(client_mp2, &client_mp3, 1);
-  EXPECT_EQ(kHello, message);
-
-  ASSERT_EQ(MOJO_RESULT_OK, MojoClose(server_mp3));
-  ASSERT_EQ(MOJO_RESULT_OK, MojoClose(client_mp3));
-  ASSERT_EQ(MOJO_RESULT_OK, MojoClose(server_mp2));
-  ASSERT_EQ(MOJO_RESULT_OK, MojoClose(client_mp2));
   ASSERT_EQ(MOJO_RESULT_OK, MojoClose(server_mp));
   ASSERT_EQ(MOJO_RESULT_OK, MojoClose(client_mp));
 }
@@ -188,56 +141,35 @@ TEST_F(EmbedderTest, ChannelsHandlePassing) {
   ASSERT_EQ(MOJO_RESULT_OK, MojoClose(h1));
 }
 
-TEST_F(EmbedderTest, PipeSetup) {
-  std::string child_token = GenerateRandomToken();
-  std::string pipe_token = GenerateRandomToken();
-
-  ScopedMessagePipeHandle parent_mp =
-      CreateParentMessagePipe(pipe_token, child_token);
-  ScopedMessagePipeHandle child_mp =
-      CreateChildMessagePipe(pipe_token);
-
-  const std::string kHello = "hello";
-  WriteMessage(parent_mp.get().value(), kHello);
-
-  EXPECT_EQ(kHello, ReadMessage(child_mp.get().value()));
-}
-
 TEST_F(EmbedderTest, PipeSetup_LaunchDeath) {
   PlatformChannelPair pair;
 
-  std::string child_token = GenerateRandomToken();
-  std::string pipe_token = GenerateRandomToken();
+  OutgoingBrokerClientInvitation invitation;
+  ScopedMessagePipeHandle parent_mp = invitation.AttachMessagePipe("unused");
+  invitation.Send(
+      base::GetCurrentProcessHandle(),
+      ConnectionParams(TransportProtocol::kLegacy, pair.PassServerHandle()));
 
-  ScopedMessagePipeHandle parent_mp =
-      CreateParentMessagePipe(pipe_token, child_token);
-  ChildProcessLaunched(base::GetCurrentProcessHandle(), pair.PassServerHandle(),
-                       child_token);
-
-  // Close the remote end, simulating child death before the child connects to
-  // the reserved port.
+  // Close the remote end, simulating child death before the child extracts the
+  // attached message pipe.
   ignore_result(pair.PassClientHandle());
 
-  EXPECT_EQ(MOJO_RESULT_OK, MojoWait(parent_mp.get().value(),
-                                     MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                                     MOJO_DEADLINE_INDEFINITE,
-                                     nullptr));
+  EXPECT_EQ(MOJO_RESULT_OK, WaitForSignals(parent_mp.get().value(),
+                                           MOJO_HANDLE_SIGNAL_PEER_CLOSED));
 }
 
 TEST_F(EmbedderTest, PipeSetup_LaunchFailure) {
   PlatformChannelPair pair;
 
-  std::string child_token = GenerateRandomToken();
-  std::string pipe_token = GenerateRandomToken();
+  auto invitation = base::MakeUnique<OutgoingBrokerClientInvitation>();
+  ScopedMessagePipeHandle parent_mp = invitation->AttachMessagePipe("unused");
 
-  ScopedMessagePipeHandle parent_mp =
-      CreateParentMessagePipe(pipe_token, child_token);
+  // Ensure that if an OutgoingBrokerClientInvitation goes away before Send() is
+  // called, any message pipes attachde to it detect peer closure.
+  invitation.reset();
 
-  ChildProcessLaunchFailed(child_token);
-  EXPECT_EQ(MOJO_RESULT_OK, MojoWait(parent_mp.get().value(),
-                                     MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                                     MOJO_DEADLINE_INDEFINITE,
-                                     nullptr));
+  EXPECT_EQ(MOJO_RESULT_OK, WaitForSignals(parent_mp.get().value(),
+                                           MOJO_HANDLE_SIGNAL_PEER_CLOSED));
 }
 
 // The sequence of messages sent is:
@@ -258,7 +190,7 @@ TEST_F(EmbedderTest, PipeSetup_LaunchFailure) {
 #if !defined(OS_IOS)
 
 TEST_F(EmbedderTest, MultiprocessChannels) {
-  RUN_CHILD_ON_PIPE(MultiprocessChannelsClient, server_mp)
+  RunTestClient("MultiprocessChannelsClient", [&](MojoHandle server_mp) {
     // 1. Write a message to |server_mp| (attaching nothing).
     WriteMessage(server_mp, "hello");
 
@@ -292,17 +224,16 @@ TEST_F(EmbedderTest, MultiprocessChannels) {
     // 10. Wait on |mp2| (which should eventually fail) and then close it.
     MojoHandleSignalsState state;
     ASSERT_EQ(MOJO_RESULT_FAILED_PRECONDITION,
-              MojoWait(mp2, MOJO_HANDLE_SIGNAL_READABLE,
-                       MOJO_DEADLINE_INDEFINITE,
-                       &state));
+              WaitForSignals(mp2, MOJO_HANDLE_SIGNAL_READABLE, &state));
     ASSERT_EQ(MOJO_HANDLE_SIGNAL_PEER_CLOSED, state.satisfied_signals);
     ASSERT_EQ(MOJO_HANDLE_SIGNAL_PEER_CLOSED, state.satisfiable_signals);
 
     ASSERT_EQ(MOJO_RESULT_OK, MojoClose(mp2));
-  END_CHILD()
+  });
 }
 
-DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessChannelsClient, EmbedderTest,
+DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessChannelsClient,
+                                  EmbedderTest,
                                   client_mp) {
   // 1. Read the first message from |client_mp|.
   EXPECT_EQ("hello", ReadMessage(client_mp));
@@ -336,23 +267,22 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessChannelsClient, EmbedderTest,
   // 10. Wait on |mp1| (which should eventually fail) and then close it.
   MojoHandleSignalsState state;
   ASSERT_EQ(MOJO_RESULT_FAILED_PRECONDITION,
-            MojoWait(mp1, MOJO_HANDLE_SIGNAL_READABLE,
-                      MOJO_DEADLINE_INDEFINITE, &state));
+            WaitForSignals(mp1, MOJO_HANDLE_SIGNAL_READABLE, &state));
   ASSERT_EQ(MOJO_HANDLE_SIGNAL_PEER_CLOSED, state.satisfied_signals);
   ASSERT_EQ(MOJO_HANDLE_SIGNAL_PEER_CLOSED, state.satisfiable_signals);
   ASSERT_EQ(MOJO_RESULT_OK, MojoClose(mp1));
 }
 
 TEST_F(EmbedderTest, MultiprocessBaseSharedMemory) {
-  RUN_CHILD_ON_PIPE(MultiprocessSharedMemoryClient, server_mp)
+  RunTestClient("MultiprocessSharedMemoryClient", [&](MojoHandle server_mp) {
     // 1. Create a base::SharedMemory object and create a mojo shared buffer
     // from it.
     base::SharedMemoryCreateOptions options;
     options.size = 123;
     base::SharedMemory shared_memory;
     ASSERT_TRUE(shared_memory.Create(options));
-    base::SharedMemoryHandle shm_handle = base::SharedMemory::DuplicateHandle(
-        shared_memory.handle());
+    base::SharedMemoryHandle shm_handle =
+        base::SharedMemory::DuplicateHandle(shared_memory.handle());
     MojoHandle sb1;
     ASSERT_EQ(MOJO_RESULT_OK,
               CreateSharedBufferWrapper(shm_handle, 123, false, &sb1));
@@ -383,10 +313,11 @@ TEST_F(EmbedderTest, MultiprocessBaseSharedMemory) {
               std::string(static_cast<char*>(shared_memory.memory())));
 
     ASSERT_EQ(MOJO_RESULT_OK, MojoClose(sb1));
-  END_CHILD()
+  });
 }
 
-DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessSharedMemoryClient, EmbedderTest,
+DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessSharedMemoryClient,
+                                  EmbedderTest,
                                   client_mp) {
   // 1. Read the first message from |client_mp|, which should have |sb1| which
   // should be a shared buffer handle.
@@ -423,15 +354,15 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessSharedMemoryClient, EmbedderTest,
 
 #if defined(OS_MACOSX) && !defined(OS_IOS)
 TEST_F(EmbedderTest, MultiprocessMachSharedMemory) {
-  RUN_CHILD_ON_PIPE(MultiprocessSharedMemoryClient, server_mp)
+  RunTestClient("MultiprocessSharedMemoryClient", [&](MojoHandle server_mp) {
     // 1. Create a Mach base::SharedMemory object and create a mojo shared
     // buffer from it.
     base::SharedMemoryCreateOptions options;
     options.size = 123;
     base::SharedMemory shared_memory;
     ASSERT_TRUE(shared_memory.Create(options));
-    base::SharedMemoryHandle shm_handle = base::SharedMemory::DuplicateHandle(
-        shared_memory.handle());
+    base::SharedMemoryHandle shm_handle =
+        base::SharedMemory::DuplicateHandle(shared_memory.handle());
     MojoHandle sb1;
     ASSERT_EQ(MOJO_RESULT_OK,
               CreateSharedBufferWrapper(shm_handle, 123, false, &sb1));
@@ -462,7 +393,7 @@ TEST_F(EmbedderTest, MultiprocessMachSharedMemory) {
               std::string(static_cast<char*>(shared_memory.memory())));
 
     ASSERT_EQ(MOJO_RESULT_OK, MojoClose(sb1));
-  END_CHILD()
+  });
 }
 
 enum class HandleType {
@@ -472,17 +403,14 @@ enum class HandleType {
 };
 
 const HandleType kTestHandleTypes[] = {
-  HandleType::MACH,
-  HandleType::MACH_NULL,
-  HandleType::POSIX,
-  HandleType::POSIX,
-  HandleType::MACH,
+    HandleType::MACH,  HandleType::MACH_NULL, HandleType::POSIX,
+    HandleType::POSIX, HandleType::MACH,
 };
 
 // Test that we can mix file descriptors and mach port handles.
 TEST_F(EmbedderTest, MultiprocessMixMachAndFds) {
   const size_t kShmSize = 1234;
-  RUN_CHILD_ON_PIPE(MultiprocessMixMachAndFdsClient, server_mp)
+  RunTestClient("MultiprocessMixMachAndFdsClient", [&](MojoHandle server_mp) {
     // 1. Create fds or Mach objects and mojo handles from them.
     MojoHandle platform_handles[arraysize(kTestHandleTypes)];
     for (size_t i = 0; i < arraysize(kTestHandleTypes); i++) {
@@ -496,8 +424,8 @@ TEST_F(EmbedderTest, MultiprocessMixMachAndFds) {
         scoped_handle.reset(PlatformHandle(file.TakePlatformFile()));
         EXPECT_EQ(PlatformHandle::Type::POSIX, scoped_handle.get().type);
       } else if (type == HandleType::MACH_NULL) {
-        scoped_handle.reset(PlatformHandle(
-            static_cast<mach_port_t>(MACH_PORT_NULL)));
+        scoped_handle.reset(
+            PlatformHandle(static_cast<mach_port_t>(MACH_PORT_NULL)));
         EXPECT_EQ(PlatformHandle::Type::MACH, scoped_handle.get().type);
       } else {
         base::SharedMemoryCreateOptions options;
@@ -509,8 +437,9 @@ TEST_F(EmbedderTest, MultiprocessMixMachAndFds) {
         scoped_handle.reset(PlatformHandle(shm_handle.GetMemoryObject()));
         EXPECT_EQ(PlatformHandle::Type::MACH, scoped_handle.get().type);
       }
-      ASSERT_EQ(MOJO_RESULT_OK, CreatePlatformHandleWrapper(
-          std::move(scoped_handle), platform_handles + i));
+      ASSERT_EQ(MOJO_RESULT_OK,
+                CreatePlatformHandleWrapper(std::move(scoped_handle),
+                                            platform_handles + i));
     }
 
     // 2. Send all the handles to the child.
@@ -519,10 +448,11 @@ TEST_F(EmbedderTest, MultiprocessMixMachAndFds) {
 
     // 3. Read a message from |server_mp|.
     EXPECT_EQ("bye", ReadMessage(server_mp));
-  END_CHILD()
+  });
 }
 
-DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessMixMachAndFdsClient, EmbedderTest,
+DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessMixMachAndFdsClient,
+                                  EmbedderTest,
                                   client_mp) {
   const int kNumHandles = arraysize(kTestHandleTypes);
   MojoHandle platform_handles[kNumHandles];
@@ -579,21 +509,17 @@ void CreateClientHandleOnIoThread(const NamedPlatformHandle& named_handle,
   *output = CreateClientHandle(named_handle);
 }
 
-#if defined(OS_ANDROID)
-// Disabled on Android as suspected source of flake. https://crbug.com/666356.
-#define MAYBE_ClosePendingPeerConnection DISABLED_ClosePendingPeerConnection
-#else
-#define MAYBE_ClosePendingPeerConnection ClosePendingPeerConnection
-#endif
-TEST_F(EmbedderTest, MAYBE_ClosePendingPeerConnection) {
+TEST_F(EmbedderTest, ClosePendingPeerConnection) {
   NamedPlatformHandle named_handle = GenerateChannelName();
   std::string peer_token = GenerateRandomToken();
+
+  auto peer_connection = base::MakeUnique<PeerConnection>();
   ScopedMessagePipeHandle server_pipe =
-      ConnectToPeerProcess(CreateServerHandle(named_handle), peer_token);
-  ClosePeerConnection(peer_token);
+      peer_connection->Connect(ConnectionParams(
+          TransportProtocol::kLegacy, CreateServerHandle(named_handle)));
+  peer_connection.reset();
   EXPECT_EQ(MOJO_RESULT_OK,
-            Wait(server_pipe.get(), MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                 MOJO_DEADLINE_INDEFINITE, nullptr));
+            Wait(server_pipe.get(), MOJO_HANDLE_SIGNAL_PEER_CLOSED));
   base::MessageLoop message_loop;
   base::RunLoop run_loop;
   ScopedPlatformHandle client_handle;
@@ -601,7 +527,7 @@ TEST_F(EmbedderTest, MAYBE_ClosePendingPeerConnection) {
   // work. By the time the local message pipe has been observerd as closed,
   // that task will have been posted. Therefore, a task to create the client
   // connection should be handled after the channel is closed.
-  test::GetIoTaskRunner()->PostTaskAndReply(
+  GetIOTaskRunner()->PostTaskAndReply(
       FROM_HERE,
       base::Bind(&CreateClientHandleOnIoThread, named_handle, &client_handle),
       run_loop.QuitClosure());
@@ -611,13 +537,7 @@ TEST_F(EmbedderTest, MAYBE_ClosePendingPeerConnection) {
 
 #if !defined(OS_IOS)
 
-#if defined(OS_ANDROID)
-// Disabled on Android as suspected source of flake. https://crbug.com/666356.
-#define MAYBE_ClosePipeToConnectedPeer DISABLED_ClosePipeToConnectedPeer
-#else
-#define MAYBE_ClosePipeToConnectedPeer ClosePipeToConnectedPeer
-#endif
-TEST_F(EmbedderTest, MAYBE_ClosePipeToConnectedPeer) {
+TEST_F(EmbedderTest, ClosePipeToConnectedPeer) {
   set_launch_type(LaunchType::PEER);
   auto& controller = StartClient("ClosePipeToConnectedPeerClient");
   MojoHandle server_mp = controller.pipe();
@@ -629,13 +549,14 @@ TEST_F(EmbedderTest, MAYBE_ClosePipeToConnectedPeer) {
 
   controller.ClosePeerConnection();
 
-  EXPECT_EQ(MOJO_RESULT_OK, MojoWait(server_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                                     MOJO_DEADLINE_INDEFINITE, nullptr));
+  EXPECT_EQ(MOJO_RESULT_OK,
+            WaitForSignals(server_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED));
 
   EXPECT_EQ(0, controller.WaitForShutdown());
 }
 
-DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ClosePipeToConnectedPeerClient, EmbedderTest,
+DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ClosePipeToConnectedPeerClient,
+                                  EmbedderTest,
                                   client_mp) {
   // 1. Read the first message from |client_mp|.
   EXPECT_EQ("hello", ReadMessage(client_mp));
@@ -644,33 +565,27 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ClosePipeToConnectedPeerClient, EmbedderTest,
   WriteMessage(client_mp, "world!");
 
   ASSERT_EQ(MOJO_RESULT_OK,
-            MojoWait(client_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                      MOJO_DEADLINE_INDEFINITE, nullptr));
+            WaitForSignals(client_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED));
 }
 
-#if defined(OS_ANDROID)
-// Disabled on Android as suspected source of flake. https://crbug.com/666356.
-#define MAYBE_ClosePipeToConnectingPeer DISABLED_ClosePipeToConnectingPeer
-#else
-#define MAYBE_ClosePipeToConnectingPeer ClosePipeToConnectingPeer
-#endif
-TEST_F(EmbedderTest, MAYBE_ClosePipeToConnectingPeer) {
+TEST_F(EmbedderTest, ClosePipeToConnectingPeer) {
   set_launch_type(LaunchType::PEER);
   auto& controller = StartClient("ClosePipeToConnectingPeerClient");
   controller.ClosePeerConnection();
 
   MojoHandle server_mp = controller.pipe();
 
-  EXPECT_EQ(MOJO_RESULT_OK, MojoWait(server_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                                     MOJO_DEADLINE_INDEFINITE, nullptr));
+  EXPECT_EQ(MOJO_RESULT_OK,
+            WaitForSignals(server_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED));
 
   EXPECT_EQ(0, controller.WaitForShutdown());
 }
 
-DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ClosePipeToConnectingPeerClient, EmbedderTest,
+DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ClosePipeToConnectingPeerClient,
+                                  EmbedderTest,
                                   client_mp) {
-  ASSERT_EQ(MOJO_RESULT_OK, MojoWait(client_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                                     MOJO_DEADLINE_INDEFINITE, nullptr));
+  ASSERT_EQ(MOJO_RESULT_OK,
+            WaitForSignals(client_mp, MOJO_HANDLE_SIGNAL_PEER_CLOSED));
 }
 
 #endif  // !defined(OS_IOS)

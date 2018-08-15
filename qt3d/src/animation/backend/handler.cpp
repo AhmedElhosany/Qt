@@ -1,6 +1,6 @@
 /****************************************************************************
 **
-** Copyright (C) 2016 Klaralvdalens Datakonsult AB (KDAB).
+** Copyright (C) 2017 Klaralvdalens Datakonsult AB (KDAB).
 ** Contact: http://www.qt-project.org/legal
 **
 ** This file is part of the Qt3D module of the Qt Toolkit.
@@ -52,11 +52,13 @@ namespace Animation {
 
 Handler::Handler()
     : m_animationClipLoaderManager(new AnimationClipLoaderManager)
+    , m_clockManager(new ClockManager)
     , m_clipAnimatorManager(new ClipAnimatorManager)
     , m_blendedClipAnimatorManager(new BlendedClipAnimatorManager)
     , m_channelMappingManager(new ChannelMappingManager)
     , m_channelMapperManager(new ChannelMapperManager)
     , m_clipBlendNodeManager(new ClipBlendNodeManager)
+    , m_skeletonManager(new SkeletonManager)
     , m_loadAnimationClipJob(new LoadAnimationClipJob)
     , m_findRunningClipAnimatorsJob(new FindRunningClipAnimatorsJob)
     , m_buildBlendTreesJob(new BuildBlendTreesJob)
@@ -190,7 +192,8 @@ QVector<Qt3DCore::QAspectJobPtr> Handler::jobsToExecute(qint64 time)
 
     // If there are any dirty animation clips that need loading,
     // queue up a job for them
-    if (!m_dirtyAnimationClips.isEmpty()) {
+    const bool hasLoadAnimationClipJob = !m_dirtyAnimationClips.isEmpty();
+    if (hasLoadAnimationClipJob) {
         qCDebug(HandlerLogic) << "Added LoadAnimationClipJob";
         cleanupHandleList(&m_dirtyAnimationClips);
         m_loadAnimationClipJob->addDirtyAnimationClips(m_dirtyAnimationClips);
@@ -201,19 +204,22 @@ QVector<Qt3DCore::QAspectJobPtr> Handler::jobsToExecute(qint64 time)
     // If there are dirty clip animators, find the set that are able to
     // run. I.e. are marked as running and have animation clips and
     // channel mappings
-    if (!m_dirtyClipAnimators.isEmpty()) {
+
+    const bool hasFindRunningClipAnimatorsJob = !m_dirtyClipAnimators.isEmpty();
+    if (hasFindRunningClipAnimatorsJob) {
         qCDebug(HandlerLogic) << "Added FindRunningClipAnimatorsJob";
         m_findRunningClipAnimatorsJob->removeDependency(QWeakPointer<Qt3DCore::QAspectJob>());
         cleanupHandleList(&m_dirtyClipAnimators);
         m_findRunningClipAnimatorsJob->setDirtyClipAnimators(m_dirtyClipAnimators);
         jobs.push_back(m_findRunningClipAnimatorsJob);
-        if (jobs.contains(m_loadAnimationClipJob))
+        if (hasLoadAnimationClipJob)
             m_findRunningClipAnimatorsJob->addDependency(m_loadAnimationClipJob);
         m_dirtyClipAnimators.clear();
     }
 
     // Rebuild blending trees if a blend tree is dirty
-    if (!m_dirtyBlendedAnimators.isEmpty()) {
+    const bool hasBuildBlendTreesJob = !m_dirtyBlendedAnimators.isEmpty();
+    if (hasBuildBlendTreesJob) {
         const QVector<HBlendedClipAnimator> dirtyBlendedAnimators = std::move(m_dirtyBlendedAnimators);
         m_buildBlendTreesJob->setBlendedClipAnimators(dirtyBlendedAnimators);
         jobs.push_back(m_buildBlendTreesJob);
@@ -242,9 +248,9 @@ QVector<Qt3DCore::QAspectJobPtr> Handler::jobsToExecute(qint64 time)
         for (int i = 0; i < newSize; ++i) {
             m_evaluateClipAnimatorJobs[i]->setClipAnimator(m_runningClipAnimators[i]);
             m_evaluateClipAnimatorJobs[i]->removeDependency(QWeakPointer<Qt3DCore::QAspectJob>());
-            if (jobs.contains(m_loadAnimationClipJob))
+            if (hasLoadAnimationClipJob)
                 m_evaluateClipAnimatorJobs[i]->addDependency(m_loadAnimationClipJob);
-            if (jobs.contains(m_findRunningClipAnimatorsJob))
+            if (hasFindRunningClipAnimatorsJob)
                 m_evaluateClipAnimatorJobs[i]->addDependency(m_findRunningClipAnimatorsJob);
             jobs.push_back(m_evaluateClipAnimatorJobs[i]);
         }
@@ -268,9 +274,9 @@ QVector<Qt3DCore::QAspectJobPtr> Handler::jobsToExecute(qint64 time)
         for (int i = 0; i < newSize; ++i) {
             m_evaluateBlendClipAnimatorJobs[i]->setBlendClipAnimator(m_runningBlendedClipAnimators[i]);
             m_evaluateBlendClipAnimatorJobs[i]->removeDependency(QWeakPointer<Qt3DCore::QAspectJob>());
-            if (jobs.contains(m_loadAnimationClipJob))
+            if (hasLoadAnimationClipJob)
                 m_evaluateBlendClipAnimatorJobs[i]->addDependency(m_loadAnimationClipJob);
-            if (jobs.contains(m_buildBlendTreesJob))
+            if (hasBuildBlendTreesJob)
                 m_evaluateBlendClipAnimatorJobs[i]->addDependency(m_buildBlendTreesJob);
             jobs.push_back(m_evaluateBlendClipAnimatorJobs[i]);
         }

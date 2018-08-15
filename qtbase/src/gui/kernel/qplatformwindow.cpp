@@ -71,6 +71,17 @@ QPlatformWindow::~QPlatformWindow()
 }
 
 /*!
+    Called as part of QWindow::create(), after constructing
+    the window. Platforms should prefer to do initialization
+    here instead of in the constructor, as the platform window
+    object will be fully constructed, and associated to the
+    corresponding QWindow, allowing synchronous event delivery.
+*/
+void QPlatformWindow::initialize()
+{
+}
+
+/*!
     Returns the window which belongs to the QPlatformWindow
 */
 QWindow *QPlatformWindow::window() const
@@ -105,10 +116,18 @@ QSurfaceFormat QPlatformWindow::format() const
 }
 
 /*!
-    This function is called by Qt whenever a window is moved or the window is resized. The resize
-    can happen programatically(from ie. user application) or by the window manager. This means that
-    there is no need to call this function specifically from the window manager callback, instead
-    call QWindowSystemInterface::handleGeometryChange(QWindow *w, const QRect &newRect);
+    This function is called by Qt whenever a window is moved or resized using the QWindow API.
+
+    Unless you also override QPlatformWindow::geometry(), you need to call the baseclass
+    implementation of this function in any override of QPlatformWindow::setGeometry(), as
+    QWindow::geometry() is expected to report back the set geometry until a confirmation
+    (or rejection) of the new geometry comes back from the window manager and is reported
+    via QWindowSystemInterface::handleGeometryChange().
+
+    Window move/resizes can also be triggered spontaneously by the window manager, or as a
+    response to an earlier requested move/resize via the Qt APIs. There is no need to call
+    this function from the window manager callback, instead call
+    QWindowSystemInterface::handleGeometryChange().
 
     The position(x, y) part of the rect might be inclusive or exclusive of the window frame
     as returned by frameMargins(). You can detect this in the plugin by checking
@@ -271,7 +290,7 @@ QPoint QPlatformWindow::mapFromGlobal(const QPoint &pos) const
 
     Qt::WindowActive can be ignored.
 */
-void QPlatformWindow::setWindowState(Qt::WindowState)
+void QPlatformWindow::setWindowState(Qt::WindowStates)
 {
 }
 

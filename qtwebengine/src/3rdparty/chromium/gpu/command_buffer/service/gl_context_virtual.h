@@ -14,7 +14,6 @@
 #include "ui/gl/gl_context.h"
 
 namespace gl {
-class GPUPreference;
 class GPUTimingClient;
 class GLShareGroup;
 class GLSurface;
@@ -41,11 +40,14 @@ class GPU_EXPORT GLContextVirtual : public gl::GLContext {
   void* GetHandle() override;
   scoped_refptr<gl::GPUTimingClient> CreateGPUTimingClient() override;
   void OnSetSwapInterval(int interval) override;
+  std::string GetGLVersion() override;
+  std::string GetGLRenderer() override;
   std::string GetExtensions() override;
   void SetSafeToForceGpuSwitch() override;
   bool WasAllocatedUsingRobustnessExtension() override;
   void SetUnbindFboOnMakeCurrent() override;
   gl::YUVToRGBConverter* GetYUVToRGBConverter() override;
+  void ForceReleaseVirtuallyCurrent() override;
 
  protected:
   ~GLContextVirtual() override;

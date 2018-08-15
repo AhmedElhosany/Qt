@@ -53,7 +53,9 @@ TimelineModel.TimelineJSProfileProcessor = class {
      * @return {boolean}
      */
     function equalFrames(frame1, frame2) {
-      return frame1.scriptId === frame2.scriptId && frame1.functionName === frame2.functionName;
+      return frame1.scriptId === frame2.scriptId &&
+             frame1.functionName === frame2.functionName &&
+             frame1.lineNumber === frame2.lineNumber;
     }
 
     /**
@@ -141,18 +143,21 @@ TimelineModel.TimelineJSProfileProcessor = class {
     function filterStackFrames(stack) {
       if (showAllEvents)
         return;
-      var isPreviousFrameNative = false;
+      var previousNativeFrameName = null;
       for (var i = 0, j = 0; i < stack.length; ++i) {
         const frame = stack[i];
         const url = frame.url;
         const isNativeFrame = url && url.startsWith('native ');
         if (!showNativeFunctions && isNativeFrame)
           continue;
-        if (TimelineModel.TimelineJSProfileProcessor.isNativeRuntimeFrame(frame) && !showNativeName(frame.functionName))
+        var isNativeRuntimeFrame = TimelineModel.TimelineJSProfileProcessor.isNativeRuntimeFrame(frame);
+        if (isNativeRuntimeFrame && !showNativeName(frame.functionName))
           continue;
-        if (isPreviousFrameNative && isNativeFrame)
+        var nativeFrameName =
+            isNativeRuntimeFrame ? TimelineModel.TimelineJSProfileProcessor.nativeGroup(frame.functionName) : null;
+        if (previousNativeFrameName && previousNativeFrameName === nativeFrameName)
           continue;
-        isPreviousFrameNative = isNativeFrame;
+        previousNativeFrameName = nativeFrameName;
         stack[j++] = frame;
       }
       stack.length = j;
@@ -212,22 +217,91 @@ TimelineModel.TimelineJSProfileProcessor = class {
    * @return {?TimelineModel.TimelineJSProfileProcessor.NativeGroups}
    */
   static nativeGroup(nativeName) {
-    var map = TimelineModel.TimelineJSProfileProcessor.nativeGroup._map;
-    if (!map) {
-      const nativeGroups = TimelineModel.TimelineJSProfileProcessor.NativeGroups;
-      map = new Map([
-        ['Compile', nativeGroups.Compile], ['CompileCode', nativeGroups.Compile],
-        ['CompileCodeLazy', nativeGroups.Compile], ['CompileDeserialize', nativeGroups.Compile],
-        ['CompileEval', nativeGroups.Compile], ['CompileFullCode', nativeGroups.Compile],
-        ['CompileIgnition', nativeGroups.Compile], ['CompilerDispatcher', nativeGroups.Compile],
-        ['CompileSerialize', nativeGroups.Compile], ['ParseProgram', nativeGroups.Parse],
-        ['ParseFunction', nativeGroups.Parse], ['RecompileConcurrent', nativeGroups.Compile],
-        ['RecompileSynchronous', nativeGroups.Compile], ['ParseLazy', nativeGroups.Parse]
-      ]);
-      /** @type {!Map<string, !TimelineModel.TimelineJSProfileProcessor.NativeGroups>} */
-      TimelineModel.TimelineJSProfileProcessor.nativeGroup._map = map;
+    if (nativeName.startsWith('Parse'))
+      return TimelineModel.TimelineJSProfileProcessor.NativeGroups.Parse;
+    if (nativeName.startsWith('Compile') || nativeName.startsWith('Recompile'))
+      return TimelineModel.TimelineJSProfileProcessor.NativeGroups.Compile;
+    return null;
+  }
+
+  /**
+   * @param {*} profile
+   * @return {!Array<!SDK.TracingManager.EventPayload>}
+   */
+  static buildTraceProfileFromCpuProfile(profile) {
+    if (!profile)
+      return [];
+    var events = [];
+    appendEvent('TracingStartedInPage', {'sessionId': '1'}, 0, 0, 'M');
+    var idToNode = new Map();
+    var nodes = profile['nodes'];
+    for (var i = 0; i < nodes.length; ++i)
+      idToNode.set(nodes[i].id, nodes[i]);
+    var programEvent = null;
+    var functionEvent = null;
+    var nextTime = profile.startTime;
+    var currentTime;
+    var samples = profile['samples'];
+    var timeDeltas = profile['timeDeltas'];
+    for (var i = 0; i < samples.length; ++i) {
+      currentTime = nextTime;
+      nextTime += timeDeltas[i];
+      var node = idToNode.get(samples[i]);
+      var name = node.callFrame.functionName;
+      if (name === '(idle)') {
+        closeEvents();
+        continue;
+      }
+      if (!programEvent)
+        programEvent = appendEvent('MessageLoop::RunTask', {}, currentTime, 0, 'X', 'toplevel');
+      if (name === '(program)') {
+        if (functionEvent) {
+          functionEvent.dur = currentTime - functionEvent.ts;
+          functionEvent = null;
+        }
+      } else {
+        // A JS function.
+        if (!functionEvent)
+          functionEvent = appendEvent('FunctionCall', {'sessionId': '1'}, currentTime);
+      }
     }
-    return map.get(nativeName) || null;
+    closeEvents();
+    appendEvent('CpuProfile', {'cpuProfile': profile}, profile.endTime, 0, 'I');
+    return events;
+
+    function closeEvents() {
+      if (programEvent)
+        programEvent.dur = currentTime - programEvent.ts;
+      if (functionEvent)
+        functionEvent.dur = currentTime - functionEvent.ts;
+      programEvent = null;
+      functionEvent = null;
+    }
+
+    /**
+     * @param {string} name
+     * @param {*} data
+     * @param {number} ts
+     * @param {number=} dur
+     * @param {string=} ph
+     * @param {string=} cat
+     * @return {!SDK.TracingManager.EventPayload}
+     */
+    function appendEvent(name, data, ts, dur, ph, cat) {
+      var event = /** @type {!SDK.TracingManager.EventPayload} */ ({
+        cat: cat || 'disabled-by-default-devtools.timeline',
+        name: name,
+        ph: ph || 'X',
+        pid: 1,
+        tid: 1,
+        ts: ts,
+        args: {data: data}
+      });
+      if (dur)
+        event.dur = dur;
+      events.push(event);
+      return event;
+    }
   }
 };
 

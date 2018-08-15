@@ -48,19 +48,18 @@
 // We mean it.
 //
 
+#include <QtQml/private/qlazilyallocated_p.h>
 #include <QtQuick/private/qquicktextinput_p_p.h>
 #include <QtQuickTemplates2/private/qquickpresshandler_p_p.h>
 #include <QtQuickTemplates2/private/qquickdeferredpointer_p_p.h>
 
-#include "qquicktextfield_p.h"
+#include <QtQuickTemplates2/private/qquicktextfield_p.h>
 
 #if QT_CONFIG(accessibility)
 #include <QtGui/qaccessible.h>
 #endif
 
 QT_BEGIN_NAMESPACE
-
-class QQuickAccessibleAttached;
 
 class QQuickTextFieldPrivate : public QQuickTextInputPrivate
 #if QT_CONFIG(accessibility)
@@ -77,8 +76,24 @@ public:
         return static_cast<QQuickTextFieldPrivate *>(QObjectPrivate::get(item)); }
 
     void resizeBackground();
+
     void resolveFont();
-    void inheritFont(const QFont &f);
+    void inheritFont(const QFont &font);
+    void updateFont(const QFont &font);
+    inline void setFont_helper(const QFont &font) {
+        if (sourceFont.resolve() == font.resolve() && sourceFont == font)
+            return;
+        updateFont(font);
+    }
+
+    void resolvePalette();
+    void inheritPalette(const QPalette &palette);
+    void updatePalette(const QPalette &palette);
+    inline void setPalette_helper(const QPalette &palette) {
+        if (resolvedPalette.resolve() == palette.resolve() && resolvedPalette == palette)
+            return;
+        updatePalette(palette);
+    }
 
 #if QT_CONFIG(quicktemplates2_hover)
     void updateHoverEnabled(bool h, bool e);
@@ -105,12 +120,18 @@ public:
     bool hovered;
     bool explicitHoverEnabled;
 #endif
-    QFont font;
+
+    struct ExtraData {
+        QFont requestedFont;
+        QPalette requestedPalette;
+    };
+    QLazilyAllocated<ExtraData> extra;
+
+    QPalette resolvedPalette;
     QQuickDeferredPointer<QQuickItem> background;
     QString placeholder;
     Qt::FocusReason focusReason;
     QQuickPressHandler pressHandler;
-    QQuickAccessibleAttached *accessibleAttached;
 };
 
 QT_END_NAMESPACE

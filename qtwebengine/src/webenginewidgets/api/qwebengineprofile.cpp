@@ -143,7 +143,7 @@ using QtWebEngineCore::BrowserContextAdapter;
   will be deleted immediately after the signal emission.
   This signal cannot be used with a queued connection.
 
-  \sa QWebEngineDownloadItem
+  \sa QWebEngineDownloadItem, QWebEnginePage::download()
 */
 
 QWebEngineProfilePrivate::QWebEngineProfilePrivate(QSharedPointer<QtWebEngineCore::BrowserContextAdapter> browserContext)
@@ -151,7 +151,7 @@ QWebEngineProfilePrivate::QWebEngineProfilePrivate(QSharedPointer<QtWebEngineCor
         , m_scriptCollection(new QWebEngineScriptCollection(new QWebEngineScriptCollectionPrivate(browserContext->userResourceController())))
         , m_browserContext(new QWebEngineBrowserContext(browserContext, this))
 {
-    m_settings->d_ptr->initDefaults(browserContext->isOffTheRecord());
+    m_settings->d_ptr->initDefaults();
 }
 
 QWebEngineProfilePrivate::~QWebEngineProfilePrivate()
@@ -172,12 +172,6 @@ QWebEngineProfilePrivate::~QWebEngineProfilePrivate()
 QSharedPointer<QtWebEngineCore::BrowserContextAdapter> QWebEngineProfilePrivate::browserContext() const
 {
     return m_browserContext ? m_browserContext->browserContextRef : nullptr;
-}
-
-void QWebEngineProfilePrivate::cancelDownload(quint32 downloadId)
-{
-    if (m_browserContext)
-        m_browserContext->browserContextRef->cancelDownload(downloadId);
 }
 
 void QWebEngineProfilePrivate::downloadDestroyed(quint32 downloadId)
@@ -581,34 +575,8 @@ QWebEngineProfile *QWebEngineProfile::defaultProfile()
     For example, the language \c en-US will load the \c en-US.bdic
     dictionary file.
 
-    Qt WebEngine checks for the \c qtwebengine_dictionaries subdirectory
-    first in the local directory and if it is not found, in the Qt
-    installation directory.
-
-    On macOS, depending on how Qt WebEngine is configured at build time, there are two possibilities
-    how spellchecking data is found:
-
-    \list
-        \li Hunspell dictionaries (default) - .bdic dictionaries are used, just like on other
-            platforms
-        \li Native dictionaries - the macOS spellchecking APIs are used (which means the results
-            will depend on the installed OS dictionaries)
-    \endlist
-
-    Thus, in the macOS Hunspell case, Qt WebEngine will look in the \e qtwebengine_dictionaries
-    subdirectory located inside the application bundle \c Resources directory, and also in the
-    \c Resources directory located inside the Qt framework bundle.
-
-    To summarize, in case of Hunspell usage, the following paths are considered:
-
-    \list
-        \li QCoreApplication::applicationDirPath()/qtwebengine_dictionaries
-            or QCoreApplication::applicationDirPath()/../Contents/Resources/qtwebengine_dictionaries
-            (on macOS)
-        \li [QLibraryInfo::DataPath]/qtwebengine_dictionaries
-            or path/to/QtWebEngineCore.framework/Resources/qtwebengine_dictionaries (Qt framework
-            bundle on macOS)
-    \endlist
+    See the \l {Spellchecker}{Spellchecker feature documentation} for how
+    dictionary files are searched.
 
     For more information about how to compile \c .bdic dictionaries, see the
     \l{WebEngine Widgets Spellchecker Example}{Spellchecker Example}.
@@ -681,7 +649,8 @@ static bool checkInternalScheme(const QByteArray &scheme)
     static QSet<QByteArray> internalSchemes;
     if (internalSchemes.isEmpty()) {
         internalSchemes << QByteArrayLiteral("qrc") << QByteArrayLiteral("data") << QByteArrayLiteral("blob")
-                        << QByteArrayLiteral("http") << QByteArrayLiteral("ftp") << QByteArrayLiteral("javascript");
+                        << QByteArrayLiteral("http") << QByteArrayLiteral("https") << QByteArrayLiteral("ftp")
+                        << QByteArrayLiteral("javascript");
     }
     return internalSchemes.contains(scheme);
 }

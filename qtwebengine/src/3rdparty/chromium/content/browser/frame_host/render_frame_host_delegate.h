@@ -16,13 +16,20 @@
 #include "content/common/content_export.h"
 #include "content/common/frame_message_enums.h"
 #include "content/public/browser/site_instance.h"
-#include "content/public/common/javascript_message_type.h"
+#include "content/public/common/javascript_dialog_type.h"
 #include "content/public/common/media_stream_request.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "net/http/http_response_headers.h"
+#include "services/device/public/interfaces/wake_lock.mojom.h"
+#include "ui/base/window_open_disposition.h"
 
 #if defined(OS_WIN)
 #include "ui/gfx/native_widget_types.h"
+#endif
+
+#if defined(OS_ANDROID)
+#include "base/android/scoped_java_ref.h"
+#include "services/device/public/interfaces/nfc.mojom.h"
 #endif
 
 class GURL;
@@ -32,12 +39,15 @@ class Message;
 }
 
 namespace device {
-class GeolocationServiceContext;
-class WakeLockServiceContext;
+class GeolocationContext;
 }
 
 namespace gfx {
 class Rect;
+}
+
+namespace url {
+class Origin;
 }
 
 namespace content {
@@ -46,18 +56,23 @@ class InterstitialPage;
 class PageState;
 class RenderFrameHost;
 class RenderFrameHostImpl;
+class SessionStorageNamespace;
 class WebContents;
 struct AXEventNotificationDetails;
 struct AXLocationChangeNotificationDetails;
 struct ContextMenuParams;
 struct FileChooserParams;
 
+namespace mojom {
+class CreateNewWindowParams;
+}
+
 // An interface implemented by an object interested in knowing about the state
 // of the RenderFrameHost.
 class CONTENT_EXPORT RenderFrameHostDelegate {
  public:
   // This is used to give the delegate a chance to filter IPC messages.
-  virtual bool OnMessageReceived(RenderFrameHost* render_frame_host,
+  virtual bool OnMessageReceived(RenderFrameHostImpl* render_frame_host,
                                  const IPC::Message& message);
 
   // Allows the delegate to filter incoming associated inteface requests.
@@ -87,13 +102,13 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   virtual void ShowContextMenu(RenderFrameHost* render_frame_host,
                                const ContextMenuParams& params) {}
 
-  // A JavaScript message, confirmation or prompt should be shown.
-  virtual void RunJavaScriptMessage(RenderFrameHost* render_frame_host,
-                                    const base::string16& message,
-                                    const base::string16& default_prompt,
-                                    const GURL& frame_url,
-                                    JavaScriptMessageType type,
-                                    IPC::Message* reply_msg) {}
+  // A JavaScript alert, confirmation or prompt dialog should be shown.
+  virtual void RunJavaScriptDialog(RenderFrameHost* render_frame_host,
+                                   const base::string16& message,
+                                   const base::string16& default_prompt,
+                                   const GURL& frame_url,
+                                   JavaScriptDialogType type,
+                                   IPC::Message* reply_msg) {}
 
   virtual void RunBeforeUnloadConfirm(RenderFrameHost* render_frame_host,
                                       bool is_reload,
@@ -148,14 +163,21 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // Checks if we have permission to access the microphone or camera. Note that
   // this does not query the user. |type| must be MEDIA_DEVICE_AUDIO_CAPTURE
   // or MEDIA_DEVICE_VIDEO_CAPTURE.
+  // TODO(guidou): use url::Origin for |security_origin|. See crbug.com/683115.
   virtual bool CheckMediaAccessPermission(const GURL& security_origin,
                                           MediaStreamType type);
+
+  // Returns the ID of the default device for the given media device |type|.
+  // If the returned value is an empty string, it means that there is no
+  // default device for the given |type|.
+  virtual std::string GetDefaultMediaDeviceID(MediaStreamType type);
 
   // Get the accessibility mode for the WebContents that owns this frame.
   virtual AccessibilityMode GetAccessibilityMode() const;
 
-  // Forward accessibility messages to other potential listeners like
-  // the automation extension API.
+  // Called when accessibility events or location changes are received
+  // from a render frame, when the accessibility mode has the
+  // AccessibilityMode::kWebContents flag set.
   virtual void AccessibilityEventReceived(
       const std::vector<AXEventNotificationDetails>& details) {}
   virtual void AccessibilityLocationChangesReceived(
@@ -167,11 +189,16 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
       RenderFrameHost* render_frame_host,
       int browser_plugin_instance_id);
 
-  // Gets the GeolocationServiceContext associated with this delegate.
-  virtual device::GeolocationServiceContext* GetGeolocationServiceContext();
+  // Gets the GeolocationContext associated with this delegate.
+  virtual device::GeolocationContext* GetGeolocationContext();
 
-  // Gets the WakeLockServiceContext associated with this delegate.
-  virtual device::WakeLockServiceContext* GetWakeLockServiceContext();
+  // Gets the WakeLock that serves wake lock requests from the renderer.
+  virtual device::mojom::WakeLock* GetRendererWakeLock();
+
+#if defined(OS_ANDROID)
+  // Gets an NFC implementation within the context of this delegate.
+  virtual void GetNFC(device::mojom::NFCRequest request);
+#endif
 
   // Notification that the frame wants to go into fullscreen mode.
   // |origin| represents the origin of the frame that requests fullscreen.
@@ -207,8 +234,17 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // possibly changing focus in distinct but related inner/outer WebContents.
   virtual void SetFocusedFrame(FrameTreeNode* node, SiteInstance* source) {}
 
-  // The frame called |window.focus()|.
-  virtual void DidCallFocus() {}
+  // Searches the WebContents for a focused frame, potentially in an inner
+  // WebContents. If this WebContents has no focused frame, returns |nullptr|.
+  // If there is no inner WebContents at the focused tree node, returns its
+  // RenderFrameHost. If there is an inner WebContents, search it for focused
+  // frames and inner contents. If an inner WebContents does not have a focused
+  // frame, return its main frame, since the attachment frame in its outer
+  // WebContents is not live.
+  virtual RenderFrameHost* GetFocusedFrameIncludingInnerWebContents();
+
+  // Called by when |source_rfh| advances focus to a RenderFrameProxyHost.
+  virtual void OnAdvanceFocus(RenderFrameHostImpl* source_rfh) {}
 
   // Creates a WebUI object for a frame navigating to |url|. If no WebUI
   // applies, returns null.
@@ -222,6 +258,70 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   virtual void OnFocusedElementChangedInFrame(
       RenderFrameHostImpl* frame,
       const gfx::Rect& bounds_in_root_view) {}
+
+  // The page is trying to open a new page (e.g. a popup window). The window
+  // should be created associated with the given |main_frame_widget_route_id| in
+  // the process of |opener|, but it should not be shown yet. That should happen
+  // in response to ShowCreatedWindow. |params.window_container_type| describes
+  // the type of RenderViewHost container that is requested -- in particular,
+  // the window.open call may have specified 'background' and 'persistent' in
+  // the feature string.
+  //
+  // The passed |opener| is the RenderFrameHost initiating the window creation.
+  // It will never be null, even if the opener is suppressed via |params|.
+  //
+  // The passed |params.frame_name| parameter is the name parameter that was
+  // passed to window.open(), and will be empty if none was passed.
+  //
+  // Note: this is not called "CreateWindow" because that will clash with
+  // the Windows function which is actually a #define.
+  //
+  // The caller is expected to handle cleanup if this operation fails or is
+  // suppressed, by looking for the existence of a RenderFrameHost in
+  // |opener|'s process with |main_frame_route_id| after this method returns.
+  virtual void CreateNewWindow(
+      RenderFrameHost* opener,
+      int32_t render_view_route_id,
+      int32_t main_frame_route_id,
+      int32_t main_frame_widget_route_id,
+      const mojom::CreateNewWindowParams& params,
+      SessionStorageNamespace* session_storage_namespace) {}
+
+  // Show a previously created page with the specified disposition and bounds.
+  // The window is identified by the |main_frame_widget_route_id| passed to
+  // CreateNewWindow.
+  //
+  // Note: this is not called "ShowWindow" because that will clash with
+  // the Windows function which is actually a #define.
+  virtual void ShowCreatedWindow(int process_id,
+                                 int main_frame_widget_route_id,
+                                 WindowOpenDisposition disposition,
+                                 const gfx::Rect& initial_rect,
+                                 bool user_gesture) {}
+
+  // Notifies that mixed content was displayed or ran.
+  virtual void DidDisplayInsecureContent() {}
+  virtual void DidRunInsecureContent(const GURL& security_origin,
+                                     const GURL& target_url) {}
+
+  // Reports that passive mixed content was found at the specified url.
+  virtual void PassiveInsecureContentFound(const GURL& resource_url) {}
+
+  // Checks if running of active mixed content is allowed for the specified
+  // WebContents/tab.
+  virtual bool ShouldAllowRunningInsecureContent(WebContents* web_contents,
+                                                 bool allowed_per_prefs,
+                                                 const url::Origin& origin,
+                                                 const GURL& resource_url);
+
+#if defined(OS_ANDROID)
+  virtual base::android::ScopedJavaLocalRef<jobject>
+  GetJavaRenderFrameHostDelegate();
+#endif
+
+  // Whether the delegate is being destroyed, in which case the RenderFrameHost
+  // should not be asked to create a RenderFrame.
+  virtual bool IsBeingDestroyed() const;
 
  protected:
   virtual ~RenderFrameHostDelegate() {}

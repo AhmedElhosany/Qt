@@ -78,6 +78,12 @@ QWaylandQuickShellSurfaceItem::QWaylandQuickShellSurfaceItem(QQuickItem *parent)
 {
 }
 
+QWaylandQuickShellSurfaceItem::~QWaylandQuickShellSurfaceItem()
+{
+    Q_D(QWaylandQuickShellSurfaceItem);
+    delete d->m_shellIntegration;
+}
+
 /*!
  * \internal
  */

@@ -56,7 +56,6 @@
 #include <private/qqmlpropertyindex_p.h>
 #include <private/qv4value_p.h>
 #include <private/qv4persistent_p.h>
-#include <private/qqmlrefcount_p.h>
 #include <qjsengine.h>
 #include <qvector.h>
 
@@ -117,7 +116,6 @@ class Q_QML_PRIVATE_EXPORT QQmlData : public QAbstractDeclarativeData
 {
 public:
     QQmlData();
-    ~QQmlData();
 
     static inline void init() {
         static bool initialized = false;
@@ -221,15 +219,12 @@ public:
     quint32 jsEngineId; // id of the engine that created the jsWrapper
 
     struct DeferredData {
-        DeferredData();
-        ~DeferredData();
         unsigned int deferredIdx;
         QMultiHash<int, const QV4::CompiledData::Binding *> bindings;
-        QQmlRefPointer<QV4::CompiledData::CompilationUnit> compilationUnit;//Not always the same as the other compilation unit
+        QV4::CompiledData::CompilationUnit *compilationUnit;//Not always the same as the other compilation unit
         QQmlContextData *context;//Could be either context or outerContext
-        Q_DISABLE_COPY(DeferredData);
     };
-    QQmlRefPointer<QV4::CompiledData::CompilationUnit> compilationUnit;
+    QV4::CompiledData::CompilationUnit *compilationUnit;
     QVector<DeferredData *> deferredData;
 
     void deferData(int objectIndex, QV4::CompiledData::CompilationUnit *, QQmlContextData *);
@@ -304,7 +299,6 @@ private:
         const BindingBitsType *bits = (bindingBitsArraySize == InlineBindingArraySize) ? bindingBitsValue : bindingBits;
         return bits[offset] & bitFlagForBit(bit);
     }
-    Q_DISABLE_COPY(QQmlData);
 };
 
 bool QQmlData::wasDeleted(const QObject *object)

@@ -5,22 +5,22 @@
 #include "content/renderer/media/webrtc/webrtc_video_capturer_adapter.h"
 
 #include "base/bind.h"
-#include "base/memory/aligned_memory.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
-#include "content/common/gpu/client/context_provider_command_buffer.h"
+#include "cc/paint/skia_paint_canvas.h"
 #include "content/renderer/media/webrtc/webrtc_video_frame_adapter.h"
 #include "content/renderer/render_thread_impl.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/video_util.h"
 #include "media/renderers/skcanvas_video_renderer.h"
+#include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/libyuv/include/libyuv/convert.h"
 #include "third_party/libyuv/include/libyuv/convert_from.h"
 #include "third_party/libyuv/include/libyuv/scale.h"
-#include "third_party/skia/include/core/SkSurface.h"
-#include "third_party/webrtc/common_video/rotation.h"
+#include "third_party/webrtc/api/video/video_rotation.h"
 
 namespace content {
 
@@ -100,27 +100,30 @@ class WebRtcVideoCapturerAdapter::TextureFrameCopier
            frame->format() == media::PIXEL_FORMAT_UYVY ||
            frame->format() == media::PIXEL_FORMAT_NV12);
     ScopedWaitableEvent event(waiter);
-    sk_sp<SkSurface> surface = SkSurface::MakeRasterN32Premul(
-        frame->visible_rect().width(), frame->visible_rect().height());
 
-    if (!surface || !provider_) {
+    if (!provider_) {
       // Return a black frame (yuv = {0, 0x80, 0x80}).
       *new_frame = media::VideoFrame::CreateColorFrame(
           frame->visible_rect().size(), 0u, 0x80, 0x80, frame->timestamp());
       return;
     }
 
+    SkBitmap bitmap;
+    bitmap.allocPixels(SkImageInfo::MakeN32Premul(
+        frame->visible_rect().width(), frame->visible_rect().height()));
+    cc::SkiaPaintCanvas paint_canvas(bitmap);
+
     *new_frame = media::VideoFrame::CreateFrame(
         media::PIXEL_FORMAT_I420, frame->coded_size(), frame->visible_rect(),
         frame->natural_size(), frame->timestamp());
     DCHECK(provider_->ContextGL());
     canvas_video_renderer_->Copy(
-        frame.get(), surface->getCanvas(),
+        frame.get(), &paint_canvas,
         media::Context3D(provider_->ContextGL(), provider_->GrContext()));
 
     SkPixmap pixmap;
-    const bool result = surface->getCanvas()->peekPixels(&pixmap);
-    DCHECK(result) << "Error trying to access SkSurface's pixels";
+    const bool result = bitmap.peekPixels(&pixmap);
+    DCHECK(result) << "Error trying to access SkBitmap's pixels";
     const uint32 source_pixel_format =
         (kN32_SkColorType == kRGBA_8888_SkColorType) ? cricket::FOURCC_ABGR
                                                      : cricket::FOURCC_ARGB;
@@ -139,13 +142,16 @@ class WebRtcVideoCapturerAdapter::TextureFrameCopier
   }
 
   const scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner_;
-  scoped_refptr<ContextProviderCommandBuffer> provider_;
+  scoped_refptr<ui::ContextProviderCommandBuffer> provider_;
   std::unique_ptr<media::SkCanvasVideoRenderer> canvas_video_renderer_;
 };
 
-WebRtcVideoCapturerAdapter::WebRtcVideoCapturerAdapter(bool is_screencast)
+WebRtcVideoCapturerAdapter::WebRtcVideoCapturerAdapter(
+    bool is_screencast,
+    blink::WebMediaStreamTrack::ContentHintType content_hint)
     : texture_copier_(new WebRtcVideoCapturerAdapter::TextureFrameCopier()),
       is_screencast_(is_screencast),
+      content_hint_(content_hint),
       running_(false) {
   thread_checker_.DetachFromThread();
 }
@@ -300,8 +306,33 @@ bool WebRtcVideoCapturerAdapter::GetPreferredFourccs(
   return true;
 }
 
+void WebRtcVideoCapturerAdapter::SetContentHint(
+    blink::WebMediaStreamTrack::ContentHintType content_hint) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  content_hint_ = content_hint;
+}
+
 bool WebRtcVideoCapturerAdapter::IsScreencast() const {
-  return is_screencast_;
+  // IsScreencast() is misleading since content hints were added to
+  // MediaStreamTracks. What IsScreencast() really signals is whether or not
+  // video frames should ever be scaled before being handed over to WebRTC.
+  // TODO(pbos): Remove the need for IsScreencast() -> ShouldAdaptResolution()
+  // by inlining VideoCapturer::AdaptFrame() and removing it from VideoCapturer.
+  return !ShouldAdaptResolution();
+}
+
+bool WebRtcVideoCapturerAdapter::ShouldAdaptResolution() const {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  if (content_hint_ ==
+      blink::WebMediaStreamTrack::ContentHintType::kVideoMotion) {
+    return true;
+  }
+  if (content_hint_ ==
+      blink::WebMediaStreamTrack::ContentHintType::kVideoDetail) {
+    return false;
+  }
+  // Screencast does not adapt by default.
+  return !is_screencast_;
 }
 
 bool WebRtcVideoCapturerAdapter::GetBestCaptureFormat(

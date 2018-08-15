@@ -13,6 +13,7 @@
 #include "content/browser/service_worker/service_worker_navigation_handle_core.h"
 #include "content/common/navigation_params.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_request_id.h"
 #include "content/public/browser/navigation_data.h"
 #include "content/public/browser/navigation_ui_data.h"
 #include "content/public/browser/ssl_status.h"
@@ -20,6 +21,8 @@
 #include "content/public/common/resource_response.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/redirect_info.h"
+#include "net/url_request/url_request_context_getter.h"
+#include "storage/browser/fileapi/file_system_context.h"
 
 namespace content {
 
@@ -31,16 +34,14 @@ NavigationURLLoaderImplCore::NavigationURLLoaderImplCore(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 }
 
-NavigationURLLoaderImplCore::~NavigationURLLoaderImplCore() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  if (resource_handler_)
-    resource_handler_->Cancel();
-}
+NavigationURLLoaderImplCore::~NavigationURLLoaderImplCore() {}
 
 void NavigationURLLoaderImplCore::Start(
     ResourceContext* resource_context,
+    net::URLRequestContextGetter* url_request_context_getter,
+    storage::FileSystemContext* upload_file_system_context,
     ServiceWorkerNavigationHandleCore* service_worker_handle_core,
+    AppCacheNavigationHandleCore* appcache_handle_core,
     std::unique_ptr<NavigationRequestInfo> request_info,
     std::unique_ptr<NavigationUIData> navigation_ui_data) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
@@ -53,8 +54,10 @@ void NavigationURLLoaderImplCore::Start(
   // The ResourceDispatcherHostImpl can be null in unit tests.
   if (ResourceDispatcherHostImpl::Get()) {
     ResourceDispatcherHostImpl::Get()->BeginNavigationRequest(
-        resource_context, *request_info, std::move(navigation_ui_data), this,
-        service_worker_handle_core);
+        resource_context, url_request_context_getter->GetURLRequestContext(),
+        upload_file_system_context, *request_info,
+        std::move(navigation_ui_data), this, service_worker_handle_core,
+        appcache_handle_core);
   }
 }
 
@@ -70,6 +73,13 @@ void NavigationURLLoaderImplCore::ProceedWithResponse() {
 
   if (resource_handler_)
     resource_handler_->ProceedWithResponse();
+}
+
+void NavigationURLLoaderImplCore::CancelRequestIfNeeded() {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+
+  if (resource_handler_)
+    resource_handler_->Cancel();
 }
 
 void NavigationURLLoaderImplCore::NotifyRequestRedirected(
@@ -100,7 +110,10 @@ void NavigationURLLoaderImplCore::NotifyResponseStarted(
     ResourceResponse* response,
     std::unique_ptr<StreamHandle> body,
     const SSLStatus& ssl_status,
-    std::unique_ptr<NavigationData> navigation_data) {
+    std::unique_ptr<NavigationData> navigation_data,
+    const GlobalRequestID& request_id,
+    bool is_download,
+    bool is_stream) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   TRACE_EVENT_ASYNC_END0("navigation", "Navigation redirectDelay", this);
   TRACE_EVENT_ASYNC_END2("navigation", "Navigation timeToResponseStarted", this,
@@ -119,7 +132,8 @@ void NavigationURLLoaderImplCore::NotifyResponseStarted(
       BrowserThread::UI, FROM_HERE,
       base::Bind(&NavigationURLLoaderImpl::NotifyResponseStarted, loader_,
                  response->DeepCopy(), base::Passed(&body), ssl_status,
-                 base::Passed(&navigation_data)));
+                 base::Passed(&navigation_data), request_id, is_download,
+                 is_stream));
 }
 
 void NavigationURLLoaderImplCore::NotifyRequestFailed(bool in_cache,

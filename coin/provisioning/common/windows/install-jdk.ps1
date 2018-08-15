@@ -38,10 +38,11 @@
 $installdir = "C:\Program Files\Java\jdk1.8.0_144"
 
 $version = "8u144"
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     $arch = "x64"
     $sha1 = "adb03bc3f4b40bcb3227687860798981d58e1858"
-} else {
+}
+else {
     $arch = "i586"
     $sha1 = "3b9ab95914514eaefd72b815c5d9dd84c8e216fc"
 }
@@ -50,13 +51,13 @@ $url_cache = "\\ci-files01-hki.intra.qt.io\provisioning\windows\jdk-" + $version
 $official_url = "http://download.oracle.com/otn-pub/java/jdk/8u144-b01/090f390dda5b47b9b721c7dfaa008135/jdk-" + $version + "-windows-" + $arch + ".exe"
 $javaPackage = "C:\Windows\Temp\jdk-$version.exe"
 
-Write-Host "Fetching Java SE $version..."
+echo "Fetching Java SE $version..."
 $ProgressPreference = 'SilentlyContinue'
 try {
-    Write-Host "...from local cache"
-    Download $url_cache $url_cache $javaPackage
+    echo "...from local cache"
+    Invoke-WebRequest -UseBasicParsing $url_cache -OutFile $javaPackage
 } catch {
-    Write-Host "...from oracle.com"
+    echo "...from oracle.com"
     $client = new-object System.Net.WebClient
     $cookie = "oraclelicense=accept-securebackup-cookie"
     $client.Headers.Add("Cookie", $cookie)
@@ -67,11 +68,11 @@ try {
 
 Verify-Checksum $javaPackage $sha1
 
-Run-Executable "$javaPackage" "/s SPONSORS=0"
-Write-Host "Cleaning $javaPackage.."
-Remove-Item -Recurse -Force -Path "$javaPackage"
+cmd /c "$javaPackage /s SPONSORS=0"
+echo "Cleaning $javaPackage.."
+Remove-Item -Recurse -Force "$javaPackage"
 
-Set-EnvironmentVariable "JAVA_HOME" "$installdir"
+[Environment]::SetEnvironmentVariable("JAVA_HOME", "$installdir", [EnvironmentVariableTarget]::Machine)
 Add-Path "$installdir\bin"
 
-Write-Output "Java SE = $version $arch" >> ~\versions.txt
+echo "Java SE = $version $arch" >> ~\versions.txt

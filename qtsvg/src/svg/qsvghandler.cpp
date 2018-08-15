@@ -1288,49 +1288,6 @@ static void parsePen(QSvgNode *node,
     }
 }
 
-enum FontSizeSpec { XXSmall, XSmall, Small, Medium, Large, XLarge, XXLarge,
-                   FontSizeNone, FontSizeValue };
-
-static const qreal sizeTable[] =
-{ qreal(6.9), qreal(8.3), qreal(10.0), qreal(12.0), qreal(14.4), qreal(17.3), qreal(20.7) };
-
-Q_STATIC_ASSERT(sizeof(sizeTable)/sizeof(sizeTable[0]) == FontSizeNone);
-
-static FontSizeSpec fontSizeSpec(const QStringRef &spec)
-{
-    switch (spec.at(0).unicode()) {
-    case 'x':
-        if (spec == QLatin1String("xx-small"))
-            return XXSmall;
-        if (spec == QLatin1String("x-small"))
-            return XSmall;
-        if (spec == QLatin1String("x-large"))
-            return XLarge;
-        if (spec == QLatin1String("xx-large"))
-            return XXLarge;
-        break;
-    case 's':
-        if (spec == QLatin1String("small"))
-            return Small;
-        break;
-    case 'm':
-        if (spec == QLatin1String("medium"))
-            return Medium;
-        break;
-    case 'l':
-        if (spec == QLatin1String("large"))
-            return Large;
-        break;
-    case 'n':
-        if (spec == QLatin1String("none"))
-            return FontSizeNone;
-        break;
-    default:
-        break;
-    }
-    return FontSizeValue;
-}
-
 static void parseFont(QSvgNode *node,
                       const QSvgAttributes &attributes,
                       QSvgHandler *handler)
@@ -1354,19 +1311,38 @@ static void parseFont(QSvgNode *node,
 
     if (!attributes.fontSize.isEmpty() && attributes.fontSize != QT_INHERIT) {
         // TODO: Support relative sizes 'larger' and 'smaller'.
-        const FontSizeSpec spec = fontSizeSpec(attributes.fontSize);
-        switch (spec) {
-        case FontSizeNone:
+        QSvgHandler::LengthType dummy; // should always be pixel size
+        qreal size = 0;
+        static const qreal sizeTable[] = { qreal(6.9), qreal(8.3), qreal(10.0), qreal(12.0), qreal(14.4), qreal(17.3), qreal(20.7) };
+        enum AbsFontSize { XXSmall, XSmall, Small, Medium, Large, XLarge, XXLarge };
+        switch (attributes.fontSize.at(0).unicode()) {
+        case 'x':
+            if (attributes.fontSize == QLatin1String("xx-small"))
+                size = sizeTable[XXSmall];
+            else if (attributes.fontSize == QLatin1String("x-small"))
+                size = sizeTable[XSmall];
+            else if (attributes.fontSize == QLatin1String("x-large"))
+                size = sizeTable[XLarge];
+            else if (attributes.fontSize == QLatin1String("xx-large"))
+                size = sizeTable[XXLarge];
             break;
-        case FontSizeValue: {
-            QSvgHandler::LengthType dummy; // should always be pixel size
-            fontStyle->setSize(parseLength(attributes.fontSize.toString(), dummy, handler));
-        }
+        case 's':
+            if (attributes.fontSize == QLatin1String("small"))
+                size = sizeTable[Small];
+            break;
+        case 'm':
+            if (attributes.fontSize == QLatin1String("medium"))
+                size = sizeTable[Medium];
+            break;
+        case 'l':
+            if (attributes.fontSize == QLatin1String("large"))
+                size = sizeTable[Large];
             break;
         default:
-            fontStyle->setSize(sizeTable[spec]);
+            size = parseLength(attributes.fontSize.toString(), dummy, handler);
             break;
         }
+        fontStyle->setSize(size);
     }
 
     if (!attributes.fontStyle.isEmpty() && attributes.fontStyle != QT_INHERIT) {
@@ -2225,7 +2201,7 @@ static inline QSvgNode::DisplayMode displayStringToEnum(const QString &str)
         return QSvgNode::TableMode;
     } else if (str == QLatin1String("inline-table")) {
         return QSvgNode::InlineTableMode;
-    } else if (str == QLatin1String("table-row")) {
+    } else if (str == QLatin1String("table-row-group")) {
         return QSvgNode::TableRowGroupMode;
     } else if (str == QLatin1String("table-header-group")) {
         return QSvgNode::TableHeaderGroupMode;

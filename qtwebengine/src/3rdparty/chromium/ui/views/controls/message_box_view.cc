@@ -13,6 +13,7 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
@@ -20,7 +21,7 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/layout/layout_constants.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/client_view.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -75,7 +76,8 @@ MessageBoxView::InitParams::InitParams(const base::string16& message)
     : options(NO_OPTIONS),
       message(message),
       message_width(kDefaultMessageWidth),
-      inter_row_vertical_spacing(kRelatedControlVerticalSpacing) {}
+      inter_row_vertical_spacing(LayoutProvider::Get()->GetDistanceMetric(
+          DISTANCE_RELATED_CONTROL_VERTICAL)) {}
 
 MessageBoxView::InitParams::~InitParams() {
 }
@@ -148,11 +150,16 @@ void MessageBoxView::ViewHierarchyChanged(
 }
 
 bool MessageBoxView::AcceleratorPressed(const ui::Accelerator& accelerator) {
-  // We only accepts Ctrl-C.
+  // We only accept Ctrl-C.
   DCHECK(accelerator.key_code() == 'C' && accelerator.IsCtrlDown());
 
   // We must not intercept Ctrl-C when we have a text box and it's focused.
   if (prompt_field_ && prompt_field_->HasFocus())
+    return false;
+
+  // Don't intercept Ctrl-C if we only use a single message label supporting
+  // text selection.
+  if (message_labels_.size() == 1u && message_labels_[0]->selectable())
     return false;
 
   ui::ScopedClipboardWriter scw(ui::CLIPBOARD_TYPE_COPY_PASTE);
@@ -189,6 +196,10 @@ void MessageBoxView::Init(const InitParams& params) {
     message_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     message_labels_.push_back(message_label);
   }
+  // Don't enable text selection if multiple labels are used, since text
+  // selection can't span multiple labels.
+  if (message_labels_.size() == 1u)
+    message_labels_[0]->SetSelectable(true);
 
   if (params.options & HAS_PROMPT_FIELD) {
     prompt_field_ = new Textfield;
@@ -222,7 +233,7 @@ void MessageBoxView::ResetLayoutManager() {
   const int kMaxScrollViewHeight = 400;
   views::View* message_contents = new views::View();
   message_contents->SetLayoutManager(
-      new views::BoxLayout(views::BoxLayout::kVertical, 0, 0, 0));
+      new views::BoxLayout(views::BoxLayout::kVertical));
   for (size_t i = 0; i < message_labels_.size(); ++i)
     message_contents->AddChildView(message_labels_[i]);
   ScrollView* scroll_view = new views::ScrollView();

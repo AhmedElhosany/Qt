@@ -49,6 +49,9 @@
 #include <QtQuick/private/qsgdefaultcontext_p.h>
 #endif
 
+#include <QtGui/private/qguiapplication_p.h>
+#include <QtGui/qpa/qplatformintegration.h>
+
 QT_BEGIN_NAMESPACE
 
 Q_DECLARE_LOGGING_CATEGORY(QSG_LOG_INFO)
@@ -119,21 +122,21 @@ QSGAdaptationBackendData *contextFactory()
             }
         }
 
-        if (requestedBackend.isEmpty() && qEnvironmentVariableIsSet("QMLSCENE_DEVICE"))
-            requestedBackend = QString::fromLocal8Bit(qgetenv("QMLSCENE_DEVICE"));
+        if (requestedBackend.isEmpty())
+            requestedBackend = qEnvironmentVariable("QMLSCENE_DEVICE");
 
         // A modern alternative. Scenegraph adaptations can represent backends
         // for different graphics APIs as well, instead of being specific to
         // some device or platform.
-        if (requestedBackend.isEmpty() && qEnvironmentVariableIsSet("QT_QUICK_BACKEND"))
-            requestedBackend = QString::fromLocal8Bit(qgetenv("QT_QUICK_BACKEND"));
-
-#if !QT_CONFIG(opengl)
-        // If this is a build without OpenGL, and no backend has been set
-        // default to the software renderer
         if (requestedBackend.isEmpty())
+            requestedBackend = qEnvironmentVariable("QT_QUICK_BACKEND");
+
+        // If this platform does not support OpenGL, and no backend has been set
+        // default to the software renderer
+        if (requestedBackend.isEmpty()
+            && !QGuiApplicationPrivate::platformIntegration()->hasCapability(QPlatformIntegration::OpenGL)) {
             requestedBackend = QString::fromLocal8Bit("software");
-#endif
+        }
 
         if (!requestedBackend.isEmpty()) {
             qCDebug(QSG_LOG_INFO) << "Loading backend" << requestedBackend;

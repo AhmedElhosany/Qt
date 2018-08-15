@@ -35,12 +35,12 @@ class DISPLAY_EXPORT DisplayListObserverLock {
   DISALLOW_COPY_AND_ASSIGN(DisplayListObserverLock);
 };
 
-// Maintains an ordered list of display::Displays as well as operations to add,
-// remove and update said list. Additionally maintains display::DisplayObservers
-// and updates them as appropriate.
+// Maintains an ordered list of Displays as well as operations to add, remove
+// and update said list. Additionally maintains DisplayObservers and updates
+// them as appropriate.
 class DISPLAY_EXPORT DisplayList {
  public:
-  using Displays = std::vector<display::Display>;
+  using Displays = std::vector<Display>;
 
   enum class Type {
     PRIMARY,
@@ -50,8 +50,8 @@ class DISPLAY_EXPORT DisplayList {
   DisplayList();
   ~DisplayList();
 
-  void AddObserver(display::DisplayObserver* observer);
-  void RemoveObserver(display::DisplayObserver* observer);
+  void AddObserver(DisplayObserver* observer);
+  void RemoveObserver(DisplayObserver* observer);
 
   const Displays& displays() const { return displays_; }
 
@@ -64,22 +64,25 @@ class DISPLAY_EXPORT DisplayList {
   // callers release the last lock they call the observers appropriately.
   std::unique_ptr<DisplayListObserverLock> SuspendObserverUpdates();
 
-  // Updates the cached display based on display.id().
-  void UpdateDisplay(const display::Display& display);
+  void AddOrUpdateDisplay(const Display& display, Type type);
+
+  // Updates the cached display based on display.id(). This returns a bitmask
+  // of the changed values suitable for passing to
+  // DisplayObserver::OnDisplayMetricsChanged().
+  uint32_t UpdateDisplay(const Display& display);
 
   // Updates the cached display based on display.id(). Also updates the primary
-  // display if |type| indicates |display| is the primary display.
-  void UpdateDisplay(const display::Display& display, Type type);
+  // display if |type| indicates |display| is the primary display. See single
+  // argument version for description of return value.
+  uint32_t UpdateDisplay(const Display& display, Type type);
 
   // Adds a new Display.
-  void AddDisplay(const display::Display& display, Type type);
+  void AddDisplay(const Display& display, Type type);
 
   // Removes the Display with the specified id.
   void RemoveDisplay(int64_t id);
 
-  base::ObserverList<display::DisplayObserver>* observers() {
-    return &observers_;
-  }
+  base::ObserverList<DisplayObserver>* observers() { return &observers_; }
 
  private:
   friend class DisplayListObserverLock;
@@ -94,9 +97,9 @@ class DISPLAY_EXPORT DisplayList {
 
   Displays::iterator FindDisplayByIdInternal(int64_t id);
 
-  std::vector<display::Display> displays_;
+  std::vector<Display> displays_;
   int primary_display_index_ = -1;
-  base::ObserverList<display::DisplayObserver> observers_;
+  base::ObserverList<DisplayObserver> observers_;
 
   int observer_suspend_lock_count_ = 0;
 

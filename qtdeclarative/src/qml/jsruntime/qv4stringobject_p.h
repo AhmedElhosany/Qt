@@ -60,14 +60,18 @@ namespace QV4 {
 
 namespace Heap {
 
-struct StringObject : Object {
+#define StringObjectMembers(class, Member) \
+    Member(class, Pointer, String *, string)
+
+DECLARE_HEAP_OBJECT(StringObject, Object) {
+    DECLARE_MARK_TABLE(StringObject);
+
     enum {
         LengthPropertyIndex = 0
     };
 
     void init();
     void init(const QV4::String *string);
-    String *string;
 
     Heap::String *getIndex(uint index) const;
     uint length() const;
@@ -96,7 +100,6 @@ struct StringObject: Object {
 
 protected:
     static void advanceIterator(Managed *m, ObjectIterator *it, Value *name, uint *index, Property *p, PropertyAttributes *attrs);
-    static void markObjects(Heap::Base *that, ExecutionEngine *e);
 };
 
 struct StringCtor: FunctionObject
@@ -122,6 +125,7 @@ struct StringPrototype: StringObject
     static void method_lastIndexOf(const BuiltinFunction *, Scope &scope, CallData *callData);
     static void method_localeCompare(const BuiltinFunction *, Scope &scope, CallData *callData);
     static void method_match(const BuiltinFunction *, Scope &scope, CallData *callData);
+    static void method_repeat(const BuiltinFunction *, Scope &scope, CallData *callData);
     static void method_replace(const BuiltinFunction *, Scope &scope, CallData *callData);
     static void method_search(const BuiltinFunction *, Scope &scope, CallData *callData);
     static void method_slice(const BuiltinFunction *, Scope &scope, CallData *callData);

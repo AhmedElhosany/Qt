@@ -6,14 +6,22 @@
 
 #include <stddef.h>
 
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "components/autofill/core/browser/autofill_data_util.h"
 #include "components/autofill/core/browser/credit_card.h"
+#include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/autofill/core/browser/state_names.h"
+#include "components/autofill/core/common/autofill_clock.h"
+#include "components/autofill/core/common/autofill_regex_constants.h"
 #include "components/autofill/core/common/autofill_regexes.h"
+#include "components/strings/grit/components_strings.h"
+#include "third_party/libphonenumber/phonenumber_api.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace autofill {
 
@@ -38,25 +46,31 @@ bool IsValidCreditCardExpirationDate(int year,
 bool IsValidCreditCardNumber(const base::string16& text) {
   base::string16 number = CreditCard::StripSeparators(text);
 
-  // Credit card numbers are at most 19 digits in length [1]. 12 digits seems to
-  // be a fairly safe lower-bound [2].  Specific card issuers have more rigidly
-  // defined sizes.
-  // [1] http://www.merriampark.com/anatomycc.htm
-  // [2] http://en.wikipedia.org/wiki/Bank_card_number
-  const char* const type = CreditCard::GetCreditCardType(text);
+  // Credit card numbers are at most 19 digits in length, 12 digits seems to
+  // be a fairly safe lower-bound [1].  Specific card issuers have more rigidly
+  // defined sizes. 
+  // (Last updated: May 29, 2017)
+  // [1] https://en.wikipedia.org/wiki/Payment_card_number.
+  // CardEditor.isCardNumberLengthMaxium() needs to be kept in sync.
+  const char* const type = CreditCard::GetCardNetwork(text);
   if (type == kAmericanExpressCard && number.size() != 15)
     return false;
   if (type == kDinersCard && number.size() != 14)
     return false;
   if (type == kDiscoverCard && number.size() != 16)
     return false;
+  if (type == kEloCard && number.size() != 16)
+    return false;
   if (type == kJCBCard && number.size() != 16)
     return false;
   if (type == kMasterCard && number.size() != 16)
     return false;
+  if (type == kMirCard && number.size() != 16)
+    return false;
   if (type == kUnionPay && (number.size() < 16 || number.size() > 19))
     return false;
-  if (type == kVisaCard && number.size() != 13 && number.size() != 16)
+  if (type == kVisaCard && number.size() != 13 && number.size() != 16 &&
+      number.size() != 19)
     return false;
   if (type == kGenericCard && (number.size() < 12 || number.size() > 19))
     return false;
@@ -84,25 +98,82 @@ bool IsValidCreditCardNumber(const base::string16& text) {
   return (sum % 10) == 0;
 }
 
-bool IsValidCreditCardSecurityCode(const base::string16& text) {
-  if (text.size() < 3U || text.size() > 4U)
-    return false;
-
-  for (const base::char16& it : text) {
-    if (!base::IsAsciiDigit(it))
-      return false;
-  }
-  return true;
+bool IsValidCreditCardSecurityCode(const base::string16& code,
+                                   const base::StringPiece card_type) {
+  return code.length() == GetCvcLengthForCardType(card_type) &&
+         base::ContainsOnlyChars(code, base::ASCIIToUTF16("0123456789"));
 }
 
-bool IsValidCreditCardSecurityCode(const base::string16& code,
-                                   const base::string16& number) {
-  const char* const type = CreditCard::GetCreditCardType(number);
-  size_t required_length = 3;
-  if (type == kAmericanExpressCard)
-    required_length = 4;
+bool IsValidCreditCardNumberForBasicCardNetworks(
+    const base::string16& text,
+    const std::set<std::string>& supported_basic_card_networks,
+    base::string16* error_message) {
+  DCHECK(error_message);
 
-  return code.length() == required_length;
+  // The type check is cheaper than the credit card number check.
+  const std::string basic_card_issuer_network =
+      autofill::data_util::GetPaymentRequestData(
+          CreditCard::GetCardNetwork(text))
+          .basic_card_issuer_network;
+  if (!supported_basic_card_networks.count(basic_card_issuer_network)) {
+    *error_message = l10n_util::GetStringUTF16(
+        IDS_PAYMENTS_VALIDATION_UNSUPPORTED_CREDIT_CARD_TYPE);
+    return false;
+  }
+
+  if (IsValidCreditCardNumber(text))
+    return true;
+
+  *error_message = l10n_util::GetStringUTF16(
+      IDS_PAYMENTS_CARD_NUMBER_INVALID_VALIDATION_MESSAGE);
+  return false;
+}
+
+CreditCardCompletionStatus GetCompletionStatusForCard(
+    const CreditCard& card,
+    const std::string& app_locale,
+    const std::vector<AutofillProfile*> billing_addresses) {
+  CreditCardCompletionStatus status = CREDIT_CARD_COMPLETE;
+  if (card.IsExpired(autofill::AutofillClock::Now()))
+    status |= CREDIT_CARD_EXPIRED;
+
+  if (card.number().empty())
+    status |= CREDIT_CARD_NO_NUMBER;
+
+  if (card.GetInfo(autofill::AutofillType(autofill::CREDIT_CARD_NAME_FULL),
+                   app_locale)
+          .empty()) {
+    status |= CREDIT_CARD_NO_CARDHOLDER;
+  }
+
+  if (card.billing_address_id().empty() ||
+      !autofill::PersonalDataManager::GetProfileFromProfilesByGUID(
+          card.billing_address_id(), billing_addresses)) {
+    status |= CREDIT_CARD_NO_BILLING_ADDRESS;
+  }
+
+  return status;
+}
+
+base::string16 GetCompletionMessageForCard(CreditCardCompletionStatus status) {
+  switch (status) {
+    // No message is shown for complete or expired card (which will be fixable)
+    // in the CVC screen.
+    case CREDIT_CARD_COMPLETE:
+    case CREDIT_CARD_EXPIRED:
+      return base::string16();
+    case CREDIT_CARD_NO_CARDHOLDER:
+      return l10n_util::GetStringUTF16(IDS_PAYMENTS_NAME_ON_CARD_REQUIRED);
+    case CREDIT_CARD_NO_NUMBER:
+      return l10n_util::GetStringUTF16(
+          IDS_PAYMENTS_CARD_NUMBER_INVALID_VALIDATION_MESSAGE);
+    case CREDIT_CARD_NO_BILLING_ADDRESS:
+      return l10n_util::GetStringUTF16(
+          IDS_PAYMENTS_CARD_BILLING_ADDRESS_REQUIRED);
+    default:
+      // Multiple things are missing
+      return l10n_util::GetStringUTF16(IDS_PAYMENTS_MORE_INFORMATION_REQUIRED);
+  }
 }
 
 bool IsValidEmailAddress(const base::string16& text) {
@@ -116,6 +187,20 @@ bool IsValidEmailAddress(const base::string16& text) {
 bool IsValidState(const base::string16& text) {
   return !state_names::GetAbbreviationForName(text).empty() ||
          !state_names::GetNameForAbbreviation(text).empty();
+}
+
+bool IsValidPhoneNumber(const base::string16& text,
+                        const std::string& country_code) {
+  ::i18n::phonenumbers::PhoneNumber parsed_number;
+  ::i18n::phonenumbers::PhoneNumberUtil* phone_number_util =
+      ::i18n::phonenumbers::PhoneNumberUtil::GetInstance();
+  if (phone_number_util->Parse(base::UTF16ToUTF8(text), country_code,
+                               &parsed_number) !=
+      ::i18n::phonenumbers::PhoneNumberUtil::NO_PARSING_ERROR) {
+    return false;
+  }
+
+  return phone_number_util->IsValidNumber(parsed_number);
 }
 
 bool IsValidZip(const base::string16& text) {
@@ -183,6 +268,121 @@ bool IsSSN(const base::string16& text) {
   }
 
   return true;
+}
+
+bool IsValidForType(const base::string16& value,
+                    ServerFieldType type,
+                    base::string16* error_message) {
+  switch (type) {
+    case CREDIT_CARD_NAME_FULL:
+      if (!value.empty())
+        return true;
+
+      if (error_message) {
+        *error_message =
+            l10n_util::GetStringUTF16(IDS_PAYMENTS_VALIDATION_INVALID_NAME);
+      }
+      break;
+
+    case CREDIT_CARD_EXP_MONTH: {
+      CreditCard temp;
+      // Expiration month was in an invalid format.
+      temp.SetExpirationMonthFromString(value, /* app_locale= */ std::string());
+      if (temp.expiration_month() == 0) {
+        if (error_message) {
+          *error_message = l10n_util::GetStringUTF16(
+              IDS_PAYMENTS_VALIDATION_INVALID_CREDIT_CARD_EXPIRATION_MONTH);
+        }
+        break;
+      }
+      return true;
+    }
+
+    case CREDIT_CARD_EXP_2_DIGIT_YEAR:
+    case CREDIT_CARD_EXP_4_DIGIT_YEAR: {
+      CreditCard temp;
+      temp.SetExpirationYearFromString(value);
+      // Expiration year was in an invalid format.
+      if ((temp.expiration_year() == 0) ||
+          (type == CREDIT_CARD_EXP_2_DIGIT_YEAR && value.size() != 2u) ||
+          (type == CREDIT_CARD_EXP_4_DIGIT_YEAR && value.size() != 4u)) {
+        if (error_message) {
+          *error_message = l10n_util::GetStringUTF16(
+              IDS_PAYMENTS_VALIDATION_INVALID_CREDIT_CARD_EXPIRATION_YEAR);
+        }
+        break;
+      }
+
+      base::Time::Exploded now_exploded;
+      AutofillClock::Now().LocalExplode(&now_exploded);
+      if (temp.expiration_year() >= now_exploded.year)
+        return true;
+
+      // If the year is before this year, it's expired.
+      if (error_message) {
+        *error_message = l10n_util::GetStringUTF16(
+            IDS_PAYMENTS_VALIDATION_INVALID_CREDIT_CARD_EXPIRED);
+      }
+      break;
+    }
+
+    case CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR:
+    case CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR: {
+      const base::string16 pattern =
+          type == CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR
+              ? base::UTF8ToUTF16("^[0-9]{1,2}[-/|]?[0-9]{2}$")
+              : base::UTF8ToUTF16("^[0-9]{1,2}[-/|]?[0-9]{4}$");
+
+      CreditCard temp;
+      temp.SetExpirationDateFromString(value);
+
+      // Expiration date was in an invalid format.
+      if (temp.expiration_month() == 0 || temp.expiration_year() == 0 ||
+          !MatchesPattern(value, pattern)) {
+        if (error_message) {
+          *error_message = l10n_util::GetStringUTF16(
+              IDS_PAYMENTS_CARD_EXPIRATION_INVALID_VALIDATION_MESSAGE);
+        }
+        break;
+      }
+
+      // Checking for card expiration.
+      if (IsValidCreditCardExpirationDate(temp.expiration_year(),
+                                          temp.expiration_month(),
+                                          AutofillClock::Now())) {
+        return true;
+      }
+
+      if (error_message) {
+        *error_message = l10n_util::GetStringUTF16(
+            IDS_PAYMENTS_VALIDATION_INVALID_CREDIT_CARD_EXPIRED);
+      }
+      break;
+    }
+
+    case CREDIT_CARD_NUMBER:
+      NOTREACHED() << "IsValidCreditCardNumberForBasicCardNetworks should be "
+                   << "used to validate credit card numbers";
+      break;
+
+    default:
+      // Other types such as CREDIT_CARD_TYPE and CREDIT_CARD_VERIFICATION_CODE
+      // are not validated for now.
+      NOTREACHED() << "Attempting to validate unsupported type " << type;
+      break;
+  }
+  return false;
+}
+
+size_t GetCvcLengthForCardType(const base::StringPiece card_type) {
+  if (card_type == kAmericanExpressCard)
+    return AMEX_CVC_LENGTH;
+
+  return GENERAL_CVC_LENGTH;
+}
+
+bool IsUPIVirtualPaymentAddress(const base::string16& value) {
+  return MatchesPattern(value, base::ASCIIToUTF16(kUPIVirtualPaymentAddressRe));
 }
 
 }  // namespace autofill

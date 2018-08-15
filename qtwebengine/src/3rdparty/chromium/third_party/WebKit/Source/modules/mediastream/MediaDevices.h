@@ -5,13 +5,13 @@
 #ifndef MediaDevices_h
 #define MediaDevices_h
 
-#include "bindings/core/v8/ActiveScriptWrappable.h"
 #include "bindings/core/v8/ScriptPromise.h"
-#include "core/dom/ActiveDOMObject.h"
+#include "core/dom/SuspendableObject.h"
 #include "core/events/EventTarget.h"
 #include "modules/EventTargetModules.h"
 #include "modules/ModulesExport.h"
 #include "platform/AsyncMethodRunner.h"
+#include "platform/bindings/ActiveScriptWrappable.h"
 
 namespace blink {
 
@@ -20,15 +20,16 @@ class MediaTrackSupportedConstraints;
 class ScriptState;
 class UserMediaController;
 
-class MODULES_EXPORT MediaDevices final : public EventTargetWithInlineData,
-                                          public ActiveScriptWrappable,
-                                          public ActiveDOMObject {
+class MODULES_EXPORT MediaDevices final
+    : public EventTargetWithInlineData,
+      public ActiveScriptWrappable<MediaDevices>,
+      public SuspendableObject {
   USING_GARBAGE_COLLECTED_MIXIN(MediaDevices);
   DEFINE_WRAPPERTYPEINFO();
-  USING_PRE_FINALIZER(MediaDevices, dispose);
+  USING_PRE_FINALIZER(MediaDevices, Dispose);
 
  public:
-  static MediaDevices* create(ExecutionContext*);
+  static MediaDevices* Create(ExecutionContext*);
   ~MediaDevices() override;
 
   ScriptPromise enumerateDevices(ScriptState*);
@@ -36,20 +37,20 @@ class MODULES_EXPORT MediaDevices final : public EventTargetWithInlineData,
   ScriptPromise getUserMedia(ScriptState*,
                              const MediaStreamConstraints&,
                              ExceptionState&);
-  void didChangeMediaDevices();
+  void DidChangeMediaDevices();
 
   // EventTarget overrides.
-  const AtomicString& interfaceName() const override;
-  ExecutionContext* getExecutionContext() const override;
-  void removeAllEventListeners() override;
+  const AtomicString& InterfaceName() const override;
+  ExecutionContext* GetExecutionContext() const override;
+  void RemoveAllEventListeners() override;
 
   // ScriptWrappable
-  bool hasPendingActivity() const override;
+  bool HasPendingActivity() const override;
 
-  // ActiveDOMObject overrides.
-  void contextDestroyed() override;
-  void suspend() override;
-  void resume() override;
+  // SuspendableObject overrides.
+  void ContextDestroyed(ExecutionContext*) override;
+  void Suspend() override;
+  void Resume() override;
 
   DECLARE_VIRTUAL_TRACE();
 
@@ -57,24 +58,24 @@ class MODULES_EXPORT MediaDevices final : public EventTargetWithInlineData,
 
  protected:
   // EventTarget overrides.
-  void addedEventListener(const AtomicString& eventType,
+  void AddedEventListener(const AtomicString& event_type,
                           RegisteredEventListener&) override;
-  void removedEventListener(const AtomicString& eventType,
+  void RemovedEventListener(const AtomicString& event_type,
                             const RegisteredEventListener&) override;
 
  private:
   explicit MediaDevices(ExecutionContext*);
-  void scheduleDispatchEvent(Event*);
-  void dispatchScheduledEvent();
-  void startObserving();
-  void stopObserving();
-  UserMediaController* getUserMediaController();
-  void dispose();
+  void ScheduleDispatchEvent(Event*);
+  void DispatchScheduledEvent();
+  void StartObserving();
+  void StopObserving();
+  UserMediaController* GetUserMediaController();
+  void Dispose();
 
-  bool m_observing;
-  bool m_stopped;
-  Member<AsyncMethodRunner<MediaDevices>> m_dispatchScheduledEventRunner;
-  HeapVector<Member<Event>> m_scheduledEvents;
+  bool observing_;
+  bool stopped_;
+  Member<AsyncMethodRunner<MediaDevices>> dispatch_scheduled_event_runner_;
+  HeapVector<Member<Event>> scheduled_events_;
 };
 
 }  // namespace blink

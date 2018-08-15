@@ -39,21 +39,14 @@
 #ifndef QWINDOWSMSAAACCESSIBLE_H
 #define QWINDOWSMSAAACCESSIBLE_H
 
-#include <QtCore/QtConfig>
-#ifndef QT_NO_ACCESSIBILITY
 #include <QtCore/qglobal.h>
+#ifndef QT_NO_ACCESSIBILITY
 
 #include <QtCore/qt_windows.h>
 #include <QtCore/qsharedpointer.h>
 #include <QtGui/qaccessible.h>
-#ifndef Q_CC_MINGW
-# include <oleacc.h>
-# include "ia2_api_all.h"   // IAccessible2 inherits from IAccessible
-#else
-    // MinGW
-# include <basetyps.h>
-# include <oleacc.h>
-#endif
+#include <oleacc.h>
+#include "ia2_api_all.h"   // IAccessible2 inherits from IAccessible
 
 QT_BEGIN_NAMESPACE
 
@@ -69,16 +62,26 @@ void accessibleDebugClientCalls_helper(const char* funcName, const QAccessibleIn
 
 QWindow *window_helper(const QAccessibleInterface *iface);
 
+class QWindowsAccessibleGuid // Helper for QDebug, outputs known ids by name.
+{
+public:
+    explicit QWindowsAccessibleGuid(const GUID &g) : m_guid(g) {}
+    GUID guid () const { return m_guid; }
+    static const char *iidToString(const GUID &id);
+
+private:
+    GUID m_guid;
+};
+
+#ifndef QT_NO_DEBUG_STREAM
+QDebug operator<<(QDebug d, const QWindowsAccessibleGuid &aguid);
+#endif
+
 /**************************************************************\
  *                     QWindowsAccessible                     *
  **************************************************************/
-class QWindowsMsaaAccessible : public
-#ifdef Q_CC_MINGW
-        IAccessible
-#else
-        IAccessible2
-#endif
-        , public IOleWindow
+
+class QWindowsMsaaAccessible : public IAccessible2, public IOleWindow
 {
 public:
     QWindowsMsaaAccessible(QAccessibleInterface *a)
@@ -132,8 +135,6 @@ public:
     HRESULT STDMETHODCALLTYPE ContextSensitiveHelp(BOOL fEnterMode);
 
 protected:
-    virtual QByteArray IIDToString(REFIID id);
-
     QAccessible::Id id;
 
     QAccessibleInterface *accessibleInterface() const

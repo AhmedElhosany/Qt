@@ -25,61 +25,36 @@
 
 #include "modules/webgl/WebGLContextGroup.h"
 
-#include "modules/webgl/WebGLSharedObject.h"
-
 namespace blink {
 
-PassRefPtr<WebGLContextGroup> WebGLContextGroup::create() {
-  RefPtr<WebGLContextGroup> contextGroup = adoptRef(new WebGLContextGroup());
-  return contextGroup.release();
+WebGLContextGroup::WebGLContextGroup() : number_of_context_losses_(0) {}
+
+gpu::gles2::GLES2Interface* WebGLContextGroup::GetAGLInterface() {
+  DCHECK(!contexts_.IsEmpty());
+  return (*contexts_.begin())->ContextGL();
 }
 
-WebGLContextGroup::WebGLContextGroup() {}
-
-WebGLContextGroup::~WebGLContextGroup() {
-  detachAndRemoveAllObjects();
+void WebGLContextGroup::AddContext(WebGLRenderingContextBase* context) {
+  contexts_.insert(
+      TraceWrapperMember<WebGLRenderingContextBase>(this, context));
 }
 
-gpu::gles2::GLES2Interface* WebGLContextGroup::getAGLInterface() {
-  ASSERT(!m_contexts.isEmpty());
-  return (*m_contexts.begin())->contextGL();
-}
-
-void WebGLContextGroup::addContext(WebGLRenderingContextBase* context) {
-  m_contexts.add(context);
-}
-
-void WebGLContextGroup::removeContext(WebGLRenderingContextBase* context) {
-  // We must call detachAndRemoveAllObjects before removing the last context.
-  if (m_contexts.size() == 1 && m_contexts.contains(context))
-    detachAndRemoveAllObjects();
-
-  m_contexts.remove(context);
-}
-
-void WebGLContextGroup::removeObject(WebGLSharedObject* object) {
-  m_groupObjects.remove(object);
-}
-
-void WebGLContextGroup::addObject(WebGLSharedObject* object) {
-  m_groupObjects.add(object);
-}
-
-void WebGLContextGroup::detachAndRemoveAllObjects() {
-  while (!m_groupObjects.isEmpty()) {
-    (*m_groupObjects.begin())->detachContextGroup();
-  }
-}
-
-void WebGLContextGroup::loseContextGroup(
+void WebGLContextGroup::LoseContextGroup(
     WebGLRenderingContextBase::LostContextMode mode,
-    WebGLRenderingContextBase::AutoRecoveryMethod autoRecoveryMethod) {
-  // Detach must happen before loseContextImpl, which destroys the
-  // GraphicsContext3D and prevents groupObjects from being properly deleted.
-  detachAndRemoveAllObjects();
+    WebGLRenderingContextBase::AutoRecoveryMethod auto_recovery_method) {
+  ++number_of_context_losses_;
+  for (WebGLRenderingContextBase* const context : contexts_)
+    context->LoseContextImpl(mode, auto_recovery_method);
+}
 
-  for (WebGLRenderingContextBase* const context : m_contexts)
-    context->loseContextImpl(mode, autoRecoveryMethod);
+uint32_t WebGLContextGroup::NumberOfContextLosses() const {
+  return number_of_context_losses_;
+}
+
+DEFINE_TRACE_WRAPPERS(WebGLContextGroup) {
+  for (auto context : contexts_) {
+    visitor->TraceWrappers(context);
+  }
 }
 
 }  // namespace blink

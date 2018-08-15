@@ -104,6 +104,7 @@ int FileSystemContext::GetPermissionPolicy(FileSystemType type) {
 
     case kFileSystemTypeRestrictedNativeLocal:
     case kFileSystemTypeArcContent:
+    case kFileSystemTypeArcDocumentsProvider:
       return FILE_PERMISSION_READ_ONLY |
              FILE_PERMISSION_USE_FILE_PERMISSION;
 
@@ -144,7 +145,7 @@ FileSystemContext::FileSystemContext(
     ExternalMountPoints* external_mount_points,
     storage::SpecialStoragePolicy* special_storage_policy,
     storage::QuotaManagerProxy* quota_manager_proxy,
-    ScopedVector<FileSystemBackend> additional_backends,
+    std::vector<std::unique_ptr<FileSystemBackend>> additional_backends,
     const std::vector<URLRequestAutoMountHandler>& auto_mount_handlers,
     const base::FilePath& partition_path,
     const FileSystemOptions& options)
@@ -172,11 +173,8 @@ FileSystemContext::FileSystemContext(
   RegisterBackend(sandbox_backend_.get());
   RegisterBackend(plugin_private_backend_.get());
 
-  for (ScopedVector<FileSystemBackend>::const_iterator iter =
-          additional_backends_.begin();
-       iter != additional_backends_.end(); ++iter) {
-    RegisterBackend(*iter);
-  }
+  for (const auto& backend : additional_backends_)
+    RegisterBackend(backend.get());
 
   // If the embedder's additional backends already provide support for
   // kFileSystemTypeNativeLocal and kFileSystemTypeNativeForPlatformApp then
@@ -197,11 +195,8 @@ FileSystemContext::FileSystemContext(
   sandbox_backend_->Initialize(this);
   isolated_backend_->Initialize(this);
   plugin_private_backend_->Initialize(this);
-  for (ScopedVector<FileSystemBackend>::const_iterator iter =
-          additional_backends_.begin();
-       iter != additional_backends_.end(); ++iter) {
-    (*iter)->Initialize(this);
-  }
+  for (const auto& backend : additional_backends_)
+    backend->Initialize(this);
 
   // Additional mount points must be added before regular system-wide
   // mount points.
@@ -213,7 +208,7 @@ FileSystemContext::FileSystemContext(
 
 bool FileSystemContext::DeleteDataForOriginOnFileTaskRunner(
     const GURL& origin_url) {
-  DCHECK(default_file_task_runner()->RunsTasksOnCurrentThread());
+  DCHECK(default_file_task_runner()->RunsTasksInCurrentSequence());
   DCHECK(origin_url == origin_url.GetOrigin());
 
   bool success = true;
@@ -238,7 +233,7 @@ scoped_refptr<QuotaReservation>
 FileSystemContext::CreateQuotaReservationOnFileTaskRunner(
     const GURL& origin_url,
     FileSystemType type) {
-  DCHECK(default_file_task_runner()->RunsTasksOnCurrentThread());
+  DCHECK(default_file_task_runner()->RunsTasksInCurrentSequence());
   FileSystemBackend* backend = GetFileSystemBackend(type);
   if (!backend || !backend->GetQuotaUtil())
     return scoped_refptr<QuotaReservation>();
@@ -247,7 +242,7 @@ FileSystemContext::CreateQuotaReservationOnFileTaskRunner(
 }
 
 void FileSystemContext::Shutdown() {
-  if (!io_task_runner_->RunsTasksOnCurrentThread()) {
+  if (!io_task_runner_->RunsTasksInCurrentSequence()) {
     io_task_runner_->PostTask(
         FROM_HERE, base::Bind(&FileSystemContext::Shutdown,
                               make_scoped_refptr(this)));
@@ -343,7 +338,7 @@ void FileSystemContext::OpenFileSystem(
     FileSystemType type,
     OpenFileSystemMode mode,
     const OpenFileSystemCallback& callback) {
-  DCHECK(io_task_runner_->RunsTasksOnCurrentThread());
+  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!callback.is_null());
 
   if (!FileSystemContext::IsSandboxFileSystem(type)) {
@@ -370,7 +365,7 @@ void FileSystemContext::ResolveURL(
   DCHECK(!callback.is_null());
 
   // If not on IO thread, forward before passing the task to the backend.
-  if (!io_task_runner_->RunsTasksOnCurrentThread()) {
+  if (!io_task_runner_->RunsTasksInCurrentSequence()) {
     ResolveURLCallback relay_callback =
         base::Bind(&RelayResolveURLCallback,
                    base::ThreadTaskRunnerHandle::Get(), callback);
@@ -417,7 +412,7 @@ void FileSystemContext::DeleteFileSystem(
     const GURL& origin_url,
     FileSystemType type,
     const StatusCallback& callback) {
-  DCHECK(io_task_runner_->RunsTasksOnCurrentThread());
+  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(origin_url == origin_url.GetOrigin());
   DCHECK(!callback.is_null());
 
@@ -517,8 +512,8 @@ void FileSystemContext::OpenPluginPrivateFileSystem(
 FileSystemContext::~FileSystemContext() {
 }
 
-void FileSystemContext::DeleteOnCorrectThread() const {
-  if (!io_task_runner_->RunsTasksOnCurrentThread() &&
+void FileSystemContext::DeleteOnCorrectSequence() const {
+  if (!io_task_runner_->RunsTasksInCurrentSequence() &&
       io_task_runner_->DeleteSoon(FROM_HERE, this)) {
     return;
   }
@@ -609,7 +604,7 @@ void FileSystemContext::DidOpenFileSystemForResolveURL(
     const GURL& filesystem_root,
     const std::string& filesystem_name,
     base::File::Error error) {
-  DCHECK(io_task_runner_->RunsTasksOnCurrentThread());
+  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
 
   if (error != base::File::FILE_OK) {
     callback.Run(error, FileSystemInfo(), base::FilePath(),

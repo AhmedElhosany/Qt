@@ -116,6 +116,28 @@ public:
     QQuickTabBar::Position position;
 };
 
+class QQuickTabBarAttachedPrivate : public QObjectPrivate
+{
+    Q_DECLARE_PUBLIC(QQuickTabBarAttached)
+
+public:
+    QQuickTabBarAttachedPrivate()
+        : index(-1),
+          tabBar(nullptr)
+    {
+    }
+
+    static QQuickTabBarAttachedPrivate *get(QQuickTabBarAttached *attached)
+    {
+        return attached->d_func();
+    }
+
+    void update(QQuickTabBar *tabBar, int index);
+
+    int index;
+    QQuickTabBar *tabBar;
+};
+
 QQuickTabBarPrivate::QQuickTabBarPrivate()
     : updatingLayout(false),
       hasContentWidth(false),
@@ -152,38 +174,47 @@ void QQuickTabBarPrivate::updateLayout()
     qreal maxHeight = 0;
     qreal totalWidth = 0;
     qreal reservedWidth = 0;
+    int resizableCount = 0;
 
-    QVector<QQuickItem *> resizableItems;
-    resizableItems.reserve(count);
+    QVector<QQuickItem *> allItems;
+    allItems.reserve(count);
 
     for (int i = 0; i < count; ++i) {
         QQuickItem *item = q->itemAt(i);
         if (item) {
             QQuickItemPrivate *p = QQuickItemPrivate::get(item);
             if (!p->widthValid) {
-                resizableItems += item;
+                ++resizableCount;
                 totalWidth += item->implicitWidth();
             } else {
                 reservedWidth += item->width();
                 totalWidth += item->width();
             }
             maxHeight = qMax(maxHeight, item->implicitHeight());
+            allItems += item;
         }
     }
 
     const qreal totalSpacing = qMax(0, count - 1) * spacing;
     totalWidth += totalSpacing;
 
-    if (!resizableItems.isEmpty()) {
-        const qreal itemWidth = (contentItem->width() - reservedWidth - totalSpacing) / resizableItems.count();
+    const qreal itemWidth = (contentItem->width() - reservedWidth - totalSpacing) / qMax(1, resizableCount);
 
-        updatingLayout = true;
-        for (QQuickItem *item : qAsConst(resizableItems)) {
+    updatingLayout = true;
+    for (QQuickItem *item : qAsConst(allItems)) {
+        QQuickItemPrivate *p = QQuickItemPrivate::get(item);
+        if (!p->widthValid) {
             item->setWidth(itemWidth);
-            QQuickItemPrivate::get(item)->widthValid = false;
+            p->widthValid = false;
         }
-        updatingLayout = false;
+        if (!p->heightValid) {
+            item->setHeight(hasContentHeight ? contentHeight : maxHeight);
+            p->heightValid = false;
+        } else {
+            item->setY((maxHeight - item->height()) / 2);
+        }
     }
+    updatingLayout = false;
 
     bool contentWidthChange = false;
     if (!hasContentWidth && !qFuzzyCompare(contentWidth, totalWidth)) {
@@ -342,6 +373,11 @@ void QQuickTabBar::resetContentHeight()
         d->updateLayout();
 }
 
+QQuickTabBarAttached *QQuickTabBar::qmlAttachedProperties(QObject *object)
+{
+    return new QQuickTabBarAttached(object);
+}
+
 void QQuickTabBar::updatePolish()
 {
     Q_D(QQuickTabBar);
@@ -376,8 +412,18 @@ void QQuickTabBar::itemAdded(int index, QQuickItem *item)
     QQuickItemPrivate::get(item)->setCulled(true); // QTBUG-55129
     if (QQuickTabButton *button = qobject_cast<QQuickTabButton *>(item))
         QObjectPrivate::connect(button, &QQuickTabButton::checkedChanged, d, &QQuickTabBarPrivate::updateCurrentIndex);
+    QQuickTabBarAttached *attached = qobject_cast<QQuickTabBarAttached *>(qmlAttachedPropertiesObject<QQuickTabBar>(item));
+    if (attached)
+        QQuickTabBarAttachedPrivate::get(attached)->update(this, index);
     if (isComponentComplete())
         polish();
+}
+
+void QQuickTabBar::itemMoved(int index, QQuickItem *item)
+{
+    QQuickTabBarAttached *attached = qobject_cast<QQuickTabBarAttached *>(qmlAttachedPropertiesObject<QQuickTabBar>(item));
+    if (attached)
+        QQuickTabBarAttachedPrivate::get(attached)->update(this, index);
 }
 
 void QQuickTabBar::itemRemoved(int index, QQuickItem *item)
@@ -386,8 +432,16 @@ void QQuickTabBar::itemRemoved(int index, QQuickItem *item)
     Q_UNUSED(index);
     if (QQuickTabButton *button = qobject_cast<QQuickTabButton *>(item))
         QObjectPrivate::disconnect(button, &QQuickTabButton::checkedChanged, d, &QQuickTabBarPrivate::updateCurrentIndex);
+    QQuickTabBarAttached *attached = qobject_cast<QQuickTabBarAttached *>(qmlAttachedPropertiesObject<QQuickTabBar>(item));
+    if (attached)
+        QQuickTabBarAttachedPrivate::get(attached)->update(nullptr, -1);
     if (isComponentComplete())
         polish();
+}
+
+QPalette QQuickTabBar::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::TabBarPalette);
 }
 
 #if QT_CONFIG(accessibility)
@@ -396,5 +450,88 @@ QAccessible::Role QQuickTabBar::accessibleRole() const
     return QAccessible::PageTabList;
 }
 #endif
+
+/*!
+    \qmlattachedproperty int QtQuick.Controls::TabBar::index
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \readonly
+
+    This attached property holds the index of each tab button in the TabBar.
+
+    It is attached to each tab button of the TabBar.
+*/
+
+/*!
+    \qmlattachedproperty TabBar QtQuick.Controls::TabBar::tabBar
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \readonly
+
+    This attached property holds the tab bar that manages this tab button.
+
+    It is attached to each tab button of the TabBar.
+*/
+
+/*!
+    \qmlattachedproperty enumeration QtQuick.Controls::TabBar::position
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \readonly
+
+    This attached property holds the position of the tab bar.
+
+    It is attached to each tab button of the TabBar.
+
+    Possible values:
+    \value TabBar.Header The tab bar is at the top, as a window or page header.
+    \value TabBar.Footer The tab bar is at the bottom, as a window or page footer.
+*/
+
+void QQuickTabBarAttachedPrivate::update(QQuickTabBar *newTabBar, int newIndex)
+{
+    Q_Q(QQuickTabBarAttached);
+    const int oldIndex = index;
+    const QQuickTabBar *oldTabBar = tabBar;
+    const QQuickTabBar::Position oldPos = q->position();
+
+    index = newIndex;
+    tabBar = newTabBar;
+
+    if (oldTabBar != newTabBar) {
+        if (oldTabBar)
+            QObject::disconnect(oldTabBar, &QQuickTabBar::positionChanged, q, &QQuickTabBarAttached::positionChanged);
+        if (newTabBar)
+            QObject::connect(newTabBar, &QQuickTabBar::positionChanged, q, &QQuickTabBarAttached::positionChanged);
+        emit q->tabBarChanged();
+    }
+
+    if (oldIndex != newIndex)
+        emit q->indexChanged();
+    if (oldPos != q->position())
+        emit q->positionChanged();
+}
+
+QQuickTabBarAttached::QQuickTabBarAttached(QObject *parent)
+    : QObject(*(new QQuickTabBarAttachedPrivate), parent)
+{
+}
+
+int QQuickTabBarAttached::index() const
+{
+    Q_D(const QQuickTabBarAttached);
+    return d->index;
+}
+
+QQuickTabBar *QQuickTabBarAttached::tabBar() const
+{
+    Q_D(const QQuickTabBarAttached);
+    return d->tabBar;
+}
+
+QQuickTabBar::Position QQuickTabBarAttached::position() const
+{
+    Q_D(const QQuickTabBarAttached);
+    if (!d->tabBar)
+        return QQuickTabBar::Header;
+    return d->tabBar->position();
+}
 
 QT_END_NAMESPACE

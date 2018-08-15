@@ -298,6 +298,10 @@ UI.ContextMenu = class extends UI.ContextSubMenuItem {
     this._id = 0;
     /** @type {!Map<string, !UI.ContextSubMenuItem>} */
     this._namedSubMenus = new Map();
+
+    var target = event.deepElementFromPoint();
+    if (target)
+      this.appendApplicableItems(/** @type {!Object} */ (target));
   }
 
   static initialize() {
@@ -321,7 +325,6 @@ UI.ContextMenu = class extends UI.ContextSubMenuItem {
      */
     function handler(event) {
       var contextMenu = new UI.ContextMenu(event);
-      contextMenu.appendApplicableItems(/** @type {!Object} */ (event.deepElementFromPoint()));
       contextMenu.show();
     }
   }
@@ -384,11 +387,9 @@ UI.ContextMenu = class extends UI.ContextSubMenuItem {
     }
 
     var menuObject = this._buildDescriptors();
-
-    UI._contextMenu = this;
     if (this._useSoftMenu || UI.ContextMenu._useSoftMenu || InspectorFrontendHost.isHostedMode()) {
       this._softMenu = new UI.SoftContextMenu(menuObject, this._itemSelected.bind(this));
-      this._softMenu.show(this._event.target.ownerDocument, this._x, this._y);
+      this._softMenu.show(this._event.target.ownerDocument, new AnchorBox(this._x, this._y, 0, 0));
     } else {
       InspectorFrontendHost.showContextMenuAtPoint(this._x, this._y, menuObject, this._event.target.ownerDocument);
 
@@ -479,5 +480,5 @@ UI.ContextMenu.Provider.prototype = {
    * @param {!UI.ContextMenu} contextMenu
    * @param {!Object} target
    */
-  appendApplicableItems: function(event, contextMenu, target) {}
+  appendApplicableItems(event, contextMenu, target) {}
 };

@@ -4,12 +4,9 @@
 
 #include "net/quic/test_tools/quic_crypto_server_config_peer.h"
 
-#include <cstdarg>
-
 #include "net/quic/test_tools/mock_clock.h"
 #include "net/quic/test_tools/mock_random.h"
 #include "net/quic/test_tools/quic_test_utils.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 using std::string;
 
@@ -20,18 +17,18 @@ ProofSource* QuicCryptoServerConfigPeer::GetProofSource() {
   return server_config_->proof_source_.get();
 }
 
-scoped_refptr<QuicCryptoServerConfig::Config>
+QuicReferenceCountedPointer<QuicCryptoServerConfig::Config>
 QuicCryptoServerConfigPeer::GetPrimaryConfig() {
-  base::AutoLock locked(server_config_->configs_lock_);
-  return scoped_refptr<QuicCryptoServerConfig::Config>(
+  QuicReaderMutexLock locked(&server_config_->configs_lock_);
+  return QuicReferenceCountedPointer<QuicCryptoServerConfig::Config>(
       server_config_->primary_config_);
 }
 
-scoped_refptr<QuicCryptoServerConfig::Config>
+QuicReferenceCountedPointer<QuicCryptoServerConfig::Config>
 QuicCryptoServerConfigPeer::GetConfig(string config_id) {
-  base::AutoLock locked(server_config_->configs_lock_);
+  QuicReaderMutexLock locked(&server_config_->configs_lock_);
   if (config_id == "<primary>") {
-    return scoped_refptr<QuicCryptoServerConfig::Config>(
+    return QuicReferenceCountedPointer<QuicCryptoServerConfig::Config>(
         server_config_->primary_config_);
   } else {
     return server_config_->GetConfigWithScid(config_id);
@@ -42,10 +39,15 @@ ProofSource* QuicCryptoServerConfigPeer::GetProofSource() const {
   return server_config_->proof_source_.get();
 }
 
+void QuicCryptoServerConfigPeer::ResetProofSource(
+    std::unique_ptr<ProofSource> proof_source) {
+  server_config_->proof_source_ = std::move(proof_source);
+}
+
 string QuicCryptoServerConfigPeer::NewSourceAddressToken(
     string config_id,
     SourceAddressTokens previous_tokens,
-    const IPAddress& ip,
+    const QuicIpAddress& ip,
     QuicRandom* rand,
     QuicWallTime now,
     CachedNetworkParameters* cached_network_params) {
@@ -56,8 +58,8 @@ string QuicCryptoServerConfigPeer::NewSourceAddressToken(
 
 HandshakeFailureReason QuicCryptoServerConfigPeer::ValidateSourceAddressTokens(
     string config_id,
-    StringPiece srct,
-    const IPAddress& ip,
+    QuicStringPiece srct,
+    const QuicIpAddress& ip,
     QuicWallTime now,
     CachedNetworkParameters* cached_network_params) {
   SourceAddressTokens tokens;
@@ -73,8 +75,8 @@ HandshakeFailureReason QuicCryptoServerConfigPeer::ValidateSourceAddressTokens(
 
 HandshakeFailureReason
 QuicCryptoServerConfigPeer::ValidateSingleSourceAddressToken(
-    StringPiece token,
-    const IPAddress& ip,
+    QuicStringPiece token,
+    const QuicIpAddress& ip,
     QuicWallTime now) {
   SourceAddressTokens tokens;
   HandshakeFailureReason parse_status = server_config_->ParseSourceAddressToken(
@@ -92,53 +94,19 @@ string QuicCryptoServerConfigPeer::NewServerNonce(QuicRandom* rand,
   return server_config_->NewServerNonce(rand, now);
 }
 
-HandshakeFailureReason QuicCryptoServerConfigPeer::ValidateServerNonce(
-    StringPiece token,
-    QuicWallTime now) {
-  return server_config_->ValidateServerNonce(token, now);
-}
+void QuicCryptoServerConfigPeer::CheckConfigs(
+    std::vector<std::pair<string, bool>> expected_ids_and_status) {
+  QuicReaderMutexLock locked(&server_config_->configs_lock_);
 
-base::Lock* QuicCryptoServerConfigPeer::GetStrikeRegisterClientLock() {
-  return &server_config_->strike_register_client_lock_;
-}
+  ASSERT_EQ(expected_ids_and_status.size(), server_config_->configs_.size())
+      << ConfigsDebug();
 
-void QuicCryptoServerConfigPeer::CheckConfigs(const char* server_config_id1,
-                                              ...) {
-  va_list ap;
-  va_start(ap, server_config_id1);
-
-  std::vector<std::pair<ServerConfigID, bool>> expected;
-  bool first = true;
-  for (;;) {
-    const char* server_config_id;
-    if (first) {
-      server_config_id = server_config_id1;
-      first = false;
-    } else {
-      server_config_id = va_arg(ap, const char*);
-    }
-
-    if (!server_config_id) {
-      break;
-    }
-
-    // varargs will promote the value to an int so we have to read that from
-    // the stack and cast down.
-    const bool is_primary = static_cast<bool>(va_arg(ap, int));
-    expected.push_back(std::make_pair(server_config_id, is_primary));
-  }
-
-  va_end(ap);
-
-  base::AutoLock locked(server_config_->configs_lock_);
-
-  ASSERT_EQ(expected.size(), server_config_->configs_.size()) << ConfigsDebug();
-
-  for (const std::pair<const ServerConfigID,
-                       scoped_refptr<QuicCryptoServerConfig::Config>>& i :
+  for (const std::pair<
+           const ServerConfigID,
+           QuicReferenceCountedPointer<QuicCryptoServerConfig::Config>>& i :
        server_config_->configs_) {
     bool found = false;
-    for (std::pair<ServerConfigID, bool>& j : expected) {
+    for (std::pair<ServerConfigID, bool>& j : expected_ids_and_status) {
       if (i.first == j.first && i.second->is_primary == j.second) {
         found = true;
         j.first.clear();
@@ -162,7 +130,8 @@ string QuicCryptoServerConfigPeer::ConfigsDebug() {
   string s;
 
   for (const auto& i : server_config_->configs_) {
-    const scoped_refptr<QuicCryptoServerConfig::Config> config = i.second;
+    const QuicReferenceCountedPointer<QuicCryptoServerConfig::Config> config =
+        i.second;
     if (config->is_primary) {
       s += "(primary) ";
     } else {
@@ -176,14 +145,14 @@ string QuicCryptoServerConfigPeer::ConfigsDebug() {
 }
 
 void QuicCryptoServerConfigPeer::SelectNewPrimaryConfig(int seconds) {
-  base::AutoLock locked(server_config_->configs_lock_);
+  QuicWriterMutexLock locked(&server_config_->configs_lock_);
   server_config_->SelectNewPrimaryConfig(
       QuicWallTime::FromUNIXSeconds(seconds));
 }
 
 string QuicCryptoServerConfigPeer::CompressChain(
     QuicCompressedCertsCache* compressed_certs_cache,
-    const scoped_refptr<ProofSource::Chain>& chain,
+    const QuicReferenceCountedPointer<ProofSource::Chain>& chain,
     const string& client_common_set_hashes,
     const string& client_cached_cert_hashes,
     const CommonCertSets* common_sets) {
@@ -198,16 +167,6 @@ uint32_t QuicCryptoServerConfigPeer::source_address_token_future_secs() {
 
 uint32_t QuicCryptoServerConfigPeer::source_address_token_lifetime_secs() {
   return server_config_->source_address_token_lifetime_secs_;
-}
-
-uint32_t
-QuicCryptoServerConfigPeer::server_nonce_strike_register_max_entries() {
-  return server_config_->server_nonce_strike_register_max_entries_;
-}
-
-uint32_t
-QuicCryptoServerConfigPeer::server_nonce_strike_register_window_secs() {
-  return server_config_->server_nonce_strike_register_window_secs_;
 }
 
 }  // namespace test

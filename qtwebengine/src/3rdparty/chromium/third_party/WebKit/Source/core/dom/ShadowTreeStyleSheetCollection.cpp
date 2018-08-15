@@ -32,10 +32,10 @@
 #include "core/css/CSSStyleSheet.h"
 #include "core/css/resolver/StyleResolver.h"
 #include "core/dom/Element.h"
+#include "core/dom/ShadowRoot.h"
 #include "core/dom/StyleChangeReason.h"
 #include "core/dom/StyleEngine.h"
 #include "core/dom/StyleSheetCandidate.h"
-#include "core/dom/shadow/ShadowRoot.h"
 #include "core/html/HTMLStyleElement.h"
 
 namespace blink {
@@ -43,61 +43,35 @@ namespace blink {
 using namespace HTMLNames;
 
 ShadowTreeStyleSheetCollection::ShadowTreeStyleSheetCollection(
-    ShadowRoot& shadowRoot)
-    : TreeScopeStyleSheetCollection(shadowRoot) {}
+    ShadowRoot& shadow_root)
+    : TreeScopeStyleSheetCollection(shadow_root) {}
 
-void ShadowTreeStyleSheetCollection::collectStyleSheets(
-    StyleEngine& engine,
+void ShadowTreeStyleSheetCollection::CollectStyleSheets(
+    StyleEngine& master_engine,
     StyleSheetCollection& collection) {
-  for (Node* n : m_styleSheetCandidateNodes) {
+  for (Node* n : style_sheet_candidate_nodes_) {
     StyleSheetCandidate candidate(*n);
-    DCHECK(!candidate.isXSL());
+    DCHECK(!candidate.IsXSL());
 
-    StyleSheet* sheet = candidate.sheet();
+    StyleSheet* sheet = candidate.Sheet();
     if (!sheet)
       continue;
 
-    collection.appendSheetForList(sheet);
-    if (candidate.canBeActivated(nullAtom))
-      collection.appendActiveStyleSheet(toCSSStyleSheet(sheet));
+    collection.AppendSheetForList(sheet);
+    if (candidate.CanBeActivated(g_null_atom)) {
+      CSSStyleSheet* css_sheet = ToCSSStyleSheet(sheet);
+      collection.AppendActiveStyleSheet(
+          std::make_pair(css_sheet, master_engine.RuleSetForSheet(*css_sheet)));
+    }
   }
 }
 
-void ShadowTreeStyleSheetCollection::updateActiveStyleSheets(
-    StyleEngine& engine,
-    StyleResolverUpdateMode updateMode) {
+void ShadowTreeStyleSheetCollection::UpdateActiveStyleSheets(
+    StyleEngine& master_engine) {
   // StyleSheetCollection is GarbageCollected<>, allocate it on the heap.
-  StyleSheetCollection* collection = StyleSheetCollection::create();
-  collectStyleSheets(engine, *collection);
-
-  StyleSheetChange change;
-  analyzeStyleSheetChange(updateMode, collection->activeAuthorStyleSheets(),
-                          change);
-
-  if (StyleResolver* styleResolver = engine.resolver()) {
-    if (change.styleResolverUpdateType != Additive) {
-      // We should not destroy StyleResolver when we find any stylesheet update
-      // in a shadow tree.  In this case, we will reset rulesets created from
-      // style elements in the shadow tree.
-      engine.resetAuthorStyle(treeScope());
-      styleResolver->removePendingAuthorStyleSheets(m_activeAuthorStyleSheets);
-      styleResolver->lazyAppendAuthorStyleSheets(
-          0, collection->activeAuthorStyleSheets());
-    } else {
-      styleResolver->lazyAppendAuthorStyleSheets(
-          m_activeAuthorStyleSheets.size(),
-          collection->activeAuthorStyleSheets());
-    }
-  }
-  if (change.requiresFullStyleRecalc)
-    toShadowRoot(treeScope().rootNode())
-        .host()
-        .setNeedsStyleRecalc(SubtreeStyleChange,
-                             StyleChangeReasonForTracing::create(
-                                 StyleChangeReason::ActiveStylesheetsUpdate));
-
-  collection->swap(*this);
-  collection->dispose();
+  StyleSheetCollection* collection = StyleSheetCollection::Create();
+  CollectStyleSheets(master_engine, *collection);
+  ApplyActiveStyleSheetChanges(*collection);
 }
 
 }  // namespace blink

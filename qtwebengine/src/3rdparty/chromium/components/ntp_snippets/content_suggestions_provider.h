@@ -82,7 +82,7 @@ class ContentSuggestionsProvider {
 
   // Dismisses the suggestion with the given ID. A provider needs to ensure that
   // a once-dismissed suggestion is never delivered again (through the
-  // Observer). The provider must not call Observer::OnSuggestionsChanged if the
+  // Observer). The provider must not call Observer::OnNewSuggestions if the
   // removal of the dismissed suggestion is the only change.
   virtual void DismissSuggestion(
       const ContentSuggestion::ID& suggestion_id) = 0;
@@ -97,12 +97,20 @@ class ContentSuggestionsProvider {
 
   // Fetches more suggestions for the given category. The new suggestions
   // will not include any suggestion of the |known_suggestion_ids| sets.
-  // The given |callback| is called with these suggestions, along with all
-  // existing suggestions. It has to be invoked exactly once as the front-end
-  // might wait for its completion.
+  // As a result of this call, the provider:
+  //  - should call the |callback| with these additional suggestions (exactly
+  //  once as the front-end might wait for its completion);
+  //  - should *not* notify its Observer by OnNewSuggestions() with these
+  //  additional suggestions.
   virtual void Fetch(const Category& category,
                      const std::set<std::string>& known_suggestion_ids,
                      const FetchDoneCallback& callback) = 0;
+
+  // Reloads suggestions from all categories. If the suggestions change, the
+  // observer must be notified via OnNewSuggestions();
+  // TODO(jkcal): make pure virtual (involves touching all providers) or remove
+  // by resolving the pull/push dichotomy.
+  virtual void ReloadSuggestions() {}
 
   // Removes history from the specified time range where the URL matches the
   // |filter|. The data removed depends on the provider. Note that the
@@ -118,6 +126,12 @@ class ContentSuggestionsProvider {
   // Clears all caches for the given category, so that the next fetch starts
   // from scratch.
   virtual void ClearCachedSuggestions(Category category) = 0;
+
+  // Called when the sign in state has changed. Should be used instead of
+  // directly registering with the SignInManager so that the
+  // ContentSuggestionService can control the order of the updates between
+  // the providers and the observers.
+  virtual void OnSignInStateChanged() {}
 
   // Used only for debugging purposes. Retrieves suggestions for the given
   // |category| that have previously been dismissed and are still stored in the
@@ -136,15 +150,12 @@ class ContentSuggestionsProvider {
   virtual void ClearDismissedSuggestionsForDebugging(Category category) = 0;
 
  protected:
-  ContentSuggestionsProvider(Observer* observer,
-                             CategoryFactory* category_factory);
+  ContentSuggestionsProvider(Observer* observer);
 
   Observer* observer() const { return observer_; }
-  CategoryFactory* category_factory() const { return category_factory_; }
 
  private:
   Observer* observer_;
-  CategoryFactory* category_factory_;
 };
 
 }  // namespace ntp_snippets

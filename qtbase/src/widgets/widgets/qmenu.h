@@ -107,7 +107,7 @@ public:
 #else
         result->setShortcut(shortcut);
 #endif
-        connect(result, &QAction::triggered, object, slot);
+        connect(result, &QAction::triggered, object, std::move(slot));
         return result;
     }
     // addAction(QString): Connect to a functor or function pointer (without context)
@@ -120,7 +120,7 @@ public:
 #else
         result->setShortcut(shortcut);
 #endif
-        connect(result, &QAction::triggered, slot);
+        connect(result, &QAction::triggered, std::move(slot));
         return result;
     }
     // addAction(QIcon, QString): Connect to a QObject slot / functor or function pointer (with context)
@@ -135,7 +135,7 @@ public:
 #else
         result->setShortcut(shortcut);
 #endif
-        connect(result, &QAction::triggered, object, slot);
+        connect(result, &QAction::triggered, object, std::move(slot));
         return result;
     }
     // addAction(QIcon, QString): Connect to a functor or function pointer (without context)
@@ -148,7 +148,7 @@ public:
 #else
         result->setShortcut(shortcut);
 #endif
-        connect(result, &QAction::triggered, slot);
+        connect(result, &QAction::triggered, std::move(slot));
         return result;
     }
 #endif // !Q_QDOC

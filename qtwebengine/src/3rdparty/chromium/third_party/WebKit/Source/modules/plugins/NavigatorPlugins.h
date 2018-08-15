@@ -5,7 +5,7 @@
 #ifndef NavigatorPlugins_h
 #define NavigatorPlugins_h
 
-#include "core/frame/DOMWindowProperty.h"
+#include "core/frame/Navigator.h"
 #include "platform/Supplementable.h"
 
 namespace blink {
@@ -16,13 +16,12 @@ class LocalFrame;
 class Navigator;
 
 class NavigatorPlugins final : public GarbageCollected<NavigatorPlugins>,
-                               public Supplement<Navigator>,
-                               public DOMWindowProperty {
+                               public Supplement<Navigator> {
   USING_GARBAGE_COLLECTED_MIXIN(NavigatorPlugins);
 
  public:
-  static NavigatorPlugins& from(Navigator&);
-  static NavigatorPlugins* toNavigatorPlugins(Navigator&);
+  static NavigatorPlugins& From(Navigator&);
+  static NavigatorPlugins* ToNavigatorPlugins(Navigator&);
 
   static DOMPluginArray* plugins(Navigator&);
   static DOMMimeTypeArray* mimeTypes(Navigator&);
@@ -33,13 +32,13 @@ class NavigatorPlugins final : public GarbageCollected<NavigatorPlugins>,
  private:
   explicit NavigatorPlugins(Navigator&);
 
-  static const char* supplementName();
+  static const char* SupplementName();
 
   DOMPluginArray* plugins(LocalFrame*) const;
   DOMMimeTypeArray* mimeTypes(LocalFrame*) const;
 
-  mutable Member<DOMPluginArray> m_plugins;
-  mutable Member<DOMMimeTypeArray> m_mimeTypes;
+  mutable Member<DOMPluginArray> plugins_;
+  mutable Member<DOMMimeTypeArray> mime_types_;
 };
 
 }  // namespace blink

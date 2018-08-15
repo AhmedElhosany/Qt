@@ -13,12 +13,11 @@ class EXTBlendMinMax final : public WebGLExtension {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static EXTBlendMinMax* create(WebGLRenderingContextBase*);
-  static bool supported(WebGLRenderingContextBase*);
-  static const char* extensionName();
+  static EXTBlendMinMax* Create(WebGLRenderingContextBase*);
+  static bool Supported(WebGLRenderingContextBase*);
+  static const char* ExtensionName();
 
-  ~EXTBlendMinMax() override;
-  WebGLExtensionName name() const override;
+  WebGLExtensionName GetName() const override;
 
  private:
   explicit EXTBlendMinMax(WebGLRenderingContextBase*);

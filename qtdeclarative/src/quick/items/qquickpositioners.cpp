@@ -44,9 +44,6 @@
 #include <QtQml/qqmlinfo.h>
 #include <QtCore/qcoreapplication.h>
 
-#include <QtQuick/private/qquickstate_p.h>
-#include <QtQuick/private/qquickstategroup_p.h>
-#include <private/qquickstatechangescript_p.h>
 #include <QtQuick/private/qquicktransition_p.h>
 
 QT_BEGIN_NAMESPACE
@@ -1137,7 +1134,7 @@ public:
         : QQuickBasePositionerPrivate()
     {}
 
-    void effectiveLayoutDirectionChange()
+    void effectiveLayoutDirectionChange() override
     {
         Q_Q(QQuickRow);
         // For RTL layout the positioning changes when the width changes.
@@ -1436,7 +1433,7 @@ public:
         : QQuickBasePositionerPrivate()
     {}
 
-    void effectiveLayoutDirectionChange()
+    void effectiveLayoutDirectionChange() override
     {
         Q_Q(QQuickGrid);
         // For RTL layout the positioning changes when the width changes.
@@ -2023,7 +2020,7 @@ public:
         : QQuickBasePositionerPrivate(), flow(QQuickFlow::LeftToRight)
     {}
 
-    void effectiveLayoutDirectionChange()
+    void effectiveLayoutDirectionChange() override
     {
         Q_Q(QQuickFlow);
         // Don't postpone, as it might be the only trigger for visible changes.

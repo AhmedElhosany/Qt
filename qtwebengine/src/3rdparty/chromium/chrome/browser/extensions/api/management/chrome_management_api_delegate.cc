@@ -10,7 +10,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/bookmark_app_helper.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
-#include "chrome/browser/extensions/chrome_requirements_checker.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/launch_util.h"
@@ -225,11 +224,6 @@ ChromeManagementAPIDelegate::SetEnabledFunctionDelegate(
           web_contents, browser_context, extension, callback));
 }
 
-std::unique_ptr<extensions::RequirementsChecker>
-ChromeManagementAPIDelegate::CreateRequirementsChecker() const {
-  return base::MakeUnique<extensions::ChromeRequirementsChecker>();
-}
-
 std::unique_ptr<extensions::UninstallDialogDelegate>
 ChromeManagementAPIDelegate::UninstallFunctionDelegate(
     extensions::ManagementUninstallFunctionBase* function,
@@ -338,8 +332,7 @@ GURL ChromeManagementAPIDelegate::GetIconURL(
     const extensions::Extension* extension,
     int icon_size,
     ExtensionIconSet::MatchType match,
-    bool grayscale,
-    bool* exists) const {
+    bool grayscale) const {
   return extensions::ExtensionIconSource::GetIconURL(extension, icon_size,
-                                                     match, grayscale, exists);
+                                                     match, grayscale);
 }

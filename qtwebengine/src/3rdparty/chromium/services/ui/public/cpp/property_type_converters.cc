@@ -7,18 +7,11 @@
 #include <stdint.h>
 
 #include "base/strings/utf_string_conversions.h"
+#include "skia/public/interfaces/bitmap.mojom.h"
+#include "skia/public/interfaces/bitmap_skbitmap_struct_traits.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-
-namespace {
-
-// Maximum allowed height or width of a bitmap, in pixels. This limit prevents
-// malformed bitmap headers from causing arbitrarily large memory allocations
-// for pixel data.
-const int kMaxBitmapSize = 4096;
-
-}  // namespace
 
 namespace mojo {
 
@@ -48,6 +41,9 @@ std::vector<uint8_t> TypeConverter<std::vector<uint8_t>, gfx::Rect>::Convert(
 // static
 gfx::Rect TypeConverter<gfx::Rect, std::vector<uint8_t>>::Convert(
     const std::vector<uint8_t>& input) {
+  if (input.size() != 16)
+    return gfx::Rect();
+
   return gfx::Rect(
       input[0] << 24 | input[1] << 16 | input[2] << 8 | input[3],
       input[4] << 24 | input[5] << 16 | input[6] << 8 | input[7],
@@ -73,6 +69,9 @@ std::vector<uint8_t> TypeConverter<std::vector<uint8_t>, gfx::Size>::Convert(
 // static
 gfx::Size TypeConverter<gfx::Size, std::vector<uint8_t>>::Convert(
     const std::vector<uint8_t>& input) {
+  if (input.size() != 8)
+    return gfx::Size();
+
   return gfx::Size(input[0] << 24 | input[1] << 16 | input[2] << 8 | input[3],
                    input[4] << 24 | input[5] << 16 | input[6] << 8 | input[7]);
 }
@@ -91,6 +90,9 @@ std::vector<uint8_t> TypeConverter<std::vector<uint8_t>, int32_t>::Convert(
 // static
 int32_t TypeConverter<int32_t, std::vector<uint8_t>>::Convert(
     const std::vector<uint8_t>& input) {
+  if (input.size() != 4)
+    return 0;
+
   return input[0] << 24 | input[1] << 16 | input[2] << 8 | input[3];
 }
 
@@ -112,10 +114,9 @@ std::vector<uint8_t> TypeConverter<std::vector<uint8_t>, int64_t>::Convert(
 // static
 int64_t TypeConverter<int64_t, std::vector<uint8_t>>::Convert(
     const std::vector<uint8_t>& input) {
-  if (input.size() < 8) {
-    NOTREACHED();
+  if (input.size() != 8)
     return 0;
-  }
+
   return static_cast<int64_t>(input[0]) << 56 |
          static_cast<int64_t>(input[1]) << 48 |
          static_cast<int64_t>(input[2]) << 40 |
@@ -153,71 +154,14 @@ std::string TypeConverter<std::string, std::vector<uint8_t>>::Convert(
 // static
 std::vector<uint8_t> TypeConverter<std::vector<uint8_t>, SkBitmap>::Convert(
     const SkBitmap& input) {
-  // Empty images are valid to serialize and are represented by an empty vector.
-  if (input.isNull())
-    return std::vector<uint8_t>();
-
-  // Only RGBA 8888 bitmaps with premultiplied alpha are supported.
-  if (input.colorType() != kBGRA_8888_SkColorType ||
-      input.alphaType() != kPremul_SkAlphaType) {
-    NOTREACHED();
-    return std::vector<uint8_t>();
-  }
-
-  // Sanity check the bitmap size.
-  int width = input.width();
-  int height = input.height();
-  if (width < 0 || width > kMaxBitmapSize || height < 0 ||
-      height > kMaxBitmapSize) {
-    NOTREACHED();
-    return std::vector<uint8_t>();
-  }
-
-  // Serialize the bitmap. The size is restricted so only 2 bytes are required
-  // per dimension.
-  std::vector<uint8_t> vec(4 + input.getSize());
-  vec[0] = (width >> 8) & 0xFF;
-  vec[1] = width & 0xFF;
-  vec[2] = (height >> 8) & 0xFF;
-  vec[3] = height & 0xFF;
-  if (!input.copyPixelsTo(&vec[4], input.getSize()))
-    return std::vector<uint8_t>();
-  return vec;
+  return skia::mojom::Bitmap::Serialize(&input);
 }
 
 // static
 SkBitmap TypeConverter<SkBitmap, std::vector<uint8_t>>::Convert(
     const std::vector<uint8_t>& input) {
-  // Empty images are represented by empty vectors.
-  if (input.empty())
-    return SkBitmap();
-
-  // Read and sanity check size.
-  int width = input[0] << 8 | input[1];
-  int height = input[2] << 8 | input[3];
-  if (width < 0 || width > kMaxBitmapSize || height < 0 ||
-      height > kMaxBitmapSize) {
-    NOTREACHED();
-    return SkBitmap();
-  }
-
-  // Try to allocate a bitmap of the appropriate size.
-  SkBitmap bitmap;
-  if (!bitmap.tryAllocPixels(SkImageInfo::Make(
-          width, height, kBGRA_8888_SkColorType, kPremul_SkAlphaType))) {
-    return SkBitmap();
-  }
-
-  // Ensure the vector contains the right amount of data.
-  if (input.size() != bitmap.getSize() + 4) {
-    NOTREACHED();
-    return SkBitmap();
-  }
-
-  // Read the pixel data.
-  SkAutoLockPixels lock(bitmap);
-  memcpy(bitmap.getPixels(), &input[4], bitmap.getSize());
-  return bitmap;
+  SkBitmap output;
+  return skia::mojom::Bitmap::Deserialize(input, &output) ? output : SkBitmap();
 }
 
 // static

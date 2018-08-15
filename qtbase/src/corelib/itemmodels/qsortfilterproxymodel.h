@@ -67,6 +67,7 @@ class Q_CORE_EXPORT QSortFilterProxyModel : public QAbstractProxyModel
     Q_PROPERTY(bool isSortLocaleAware READ isSortLocaleAware WRITE setSortLocaleAware)
     Q_PROPERTY(int sortRole READ sortRole WRITE setSortRole)
     Q_PROPERTY(int filterRole READ filterRole WRITE setFilterRole)
+    Q_PROPERTY(bool recursiveFilteringEnabled READ isRecursiveFilteringEnabled WRITE setRecursiveFilteringEnabled)
 
 public:
     explicit QSortFilterProxyModel(QObject *parent = Q_NULLPTR);
@@ -106,6 +107,9 @@ public:
 
     int filterRole() const;
     void setFilterRole(int role);
+
+    bool isRecursiveFilteringEnabled() const;
+    void setRecursiveFilteringEnabled(bool recursive);
 
 public Q_SLOTS:
     void setFilterRegExp(const QString &pattern);

@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
@@ -20,8 +21,6 @@
 #include "net/http/http_stream_factory.h"
 #include "net/log/net_log_with_source.h"
 
-class GURL;
-
 namespace net {
 
 class HttpAuthController;
@@ -32,6 +31,7 @@ class IOBuffer;
 class ProxyInfo;
 class SpdyHeaderBlock;
 struct BidirectionalStreamRequestInfo;
+struct NetErrorDetails;
 struct SSLConfig;
 
 // A class to do HTTP/2 bidirectional streaming. Note that at most one each of
@@ -148,11 +148,6 @@ class NET_EXPORT BidirectionalStream
   // invoked, and should not be called again until Delegate::OnDataSent is
   // invoked. If |end_stream| is true, the DATA frame will have an END_STREAM
   // flag.
-  void SendData(const scoped_refptr<IOBuffer>& data,
-                int length,
-                bool end_stream);
-
-  // Same as SendData except this takes in a vector of IOBuffers.
   void SendvData(const std::vector<scoped_refptr<IOBuffer>>& buffers,
                  const std::vector<int>& lengths,
                  bool end_stream);
@@ -176,6 +171,11 @@ class NET_EXPORT BidirectionalStream
   // Gets LoadTimingInfo of this stream.
   void GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const;
 
+  // Get the network error details this stream is encountering.
+  // Fills in |details| if it is available; leaves |details| unchanged if it
+  // is unavailable.
+  void PopulateNetErrorDetails(NetErrorDetails* details);
+
  private:
   // BidirectionalStreamImpl::Delegate implementation:
   void OnStreamReady(bool request_headers_sent) override;
@@ -188,15 +188,15 @@ class NET_EXPORT BidirectionalStream
   // HttpStreamRequest::Delegate implementation:
   void OnStreamReady(const SSLConfig& used_ssl_config,
                      const ProxyInfo& used_proxy_info,
-                     HttpStream* stream) override;
+                     std::unique_ptr<HttpStream> stream) override;
   void OnBidirectionalStreamImplReady(
       const SSLConfig& used_ssl_config,
       const ProxyInfo& used_proxy_info,
-      BidirectionalStreamImpl* stream_impl) override;
+      std::unique_ptr<BidirectionalStreamImpl> stream) override;
   void OnWebSocketHandshakeStreamReady(
       const SSLConfig& used_ssl_config,
       const ProxyInfo& used_proxy_info,
-      WebSocketHandshakeStreamBase* stream) override;
+      std::unique_ptr<WebSocketHandshakeStreamBase> stream) override;
   void OnStreamFailed(int status, const SSLConfig& used_ssl_config) override;
   void OnCertificateError(int status,
                           const SSLConfig& used_ssl_config,
@@ -210,7 +210,7 @@ class NET_EXPORT BidirectionalStream
   void OnHttpsProxyTunnelResponse(const HttpResponseInfo& response_info,
                                   const SSLConfig& used_ssl_config,
                                   const ProxyInfo& used_proxy_info,
-                                  HttpStream* stream) override;
+                                  std::unique_ptr<HttpStream> stream) override;
   void OnQuicBroken() override;
 
   // Helper method to notify delegate if there is an error.

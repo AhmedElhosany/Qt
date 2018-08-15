@@ -7,33 +7,43 @@
 #include "components/physical_web/data_source/physical_web_data_source_impl.h"
 #include "components/physical_web/data_source/physical_web_listener.h"
 
+namespace physical_web {
+
 PhysicalWebDataSourceImpl::PhysicalWebDataSourceImpl() {}
 
 PhysicalWebDataSourceImpl::~PhysicalWebDataSourceImpl() {}
 
 void PhysicalWebDataSourceImpl::RegisterListener(
-    PhysicalWebListener* physical_web_listener) {
-  observer_list_.AddObserver(physical_web_listener);
+    PhysicalWebListener* physical_web_listener, ScanMode scan_mode) {
+  if (!observer_list_.HasObserver(physical_web_listener)) {
+    observer_list_.AddObserver(physical_web_listener);
+  }
+  scan_modes_[physical_web_listener] = scan_mode;
 }
 
 void PhysicalWebDataSourceImpl::UnregisterListener(
     PhysicalWebListener* physical_web_listener) {
+  if (!observer_list_.HasObserver(physical_web_listener)) return;
+
   observer_list_.RemoveObserver(physical_web_listener);
+  scan_modes_.erase(physical_web_listener);
 }
 
-void PhysicalWebDataSourceImpl::NotifyOnFound(const std::string& url) {
+void PhysicalWebDataSourceImpl::NotifyOnFound(const GURL& url) {
   for (PhysicalWebListener& observer : observer_list_)
     observer.OnFound(url);
 }
 
-void PhysicalWebDataSourceImpl::NotifyOnLost(const std::string& url) {
+void PhysicalWebDataSourceImpl::NotifyOnLost(const GURL& url) {
   for (PhysicalWebListener& observer : observer_list_)
     observer.OnLost(url);
 }
 
 void PhysicalWebDataSourceImpl::NotifyOnDistanceChanged(
-    const std::string& url,
+    const GURL& url,
     double distance_estimate) {
   for (PhysicalWebListener& observer : observer_list_)
     observer.OnDistanceChanged(url, distance_estimate);
 }
+
+}  // namespace physical_web

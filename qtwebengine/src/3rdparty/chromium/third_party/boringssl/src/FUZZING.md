@@ -23,7 +23,7 @@ Then copy `libFuzzer.a` to the top-level of your BoringSSL source directory.
 From the `build/` directory, you can then run the fuzzers. For example:
 
 ```
-./fuzz/cert -max_len=3072 -jobs=32 -workers=32 ../fuzz/cert_corpus/
+./fuzz/cert -max_len=10000 -jobs=32 -workers=32 ../fuzz/cert_corpus/
 ```
 
 The arguments to `jobs` and `workers` should be the number of cores that you wish to dedicate to fuzzing. By default, libFuzzer uses the largest test in the corpus (or 64 if empty) as the maximum test case length. The `max_len` argument overrides this.
@@ -32,11 +32,12 @@ The recommended values of `max_len` for each test are:
 
 | Test          | `max_len` value |
 |---------------|-----------------|
-| `cert`        | 3072            |
+| `cert`        | 10000           |
 | `client`      | 20000           |
 | `pkcs8`       | 2048            |
 | `privkey`     | 2048            |
 | `server`      | 4096            |
+| `session`     | 8192            |
 | `spki`        | 1024            |
 | `read_pem`    | 512             |
 | `ssl_ctx_api` | 256             |
@@ -67,17 +68,19 @@ Additionally, if `BORINGSSL_UNSAFE_FUZZER_MODE` is set, BoringSSL will:
 
 * Tickets are unencrypted and the MAC check is performed but ignored.
 
+* renegotiation\_info checks are ignored.
+
 This is to prevent the fuzzer from getting stuck at a cryptographic invariant in the protocol.
 
 ## TLS transcripts
 
 The `client` and `server` corpora are seeded from the test suite. The test suite has a `-fuzzer` flag which mirrors the fuzzer mode changes above and a `-deterministic` flag which removes all non-determinism on the Go side. Not all tests pass, so `ssl/test/runner/fuzzer_mode.json` contains the necessary suppressions. The `run_tests` target will pass appropriate command-line flags.
 
-There are separate corpora, `client_corpus_no_fuzzer_mode` and `server_corpus_no_fuzzer_mode`. These are transcripts for fuzzers with only `BORINGSSL_UNSAFE_DETERMINISTIC_MODE` defined. To build in this mode, pass `-DNO_FUZZER_MODE=1` into CMake. This configuration is run in the same way but without `-fuzzer` and `-shim-path` flags.
+There are separate corpora, `client_corpus_no_fuzzer_mode` and `server_corpus_no_fuzzer_mode`. These are transcripts for fuzzers with only `BORINGSSL_UNSAFE_DETERMINISTIC_MODE` defined. To build in this mode, pass `-DNO_FUZZER_MODE=1` into CMake. This configuration is run in the same way but without `-fuzzer` and `-shim-config` flags.
 
 If both sets of tests pass, refresh the fuzzer corpora with `refresh_ssl_corpora.sh`:
 
 ```
 cd fuzz
-./refresh_fuzzer_corpora.sh /path/to/fuzzer/mode/build /path/to/non/fuzzer/mode/build
+./refresh_ssl_corpora.sh /path/to/fuzzer/mode/build /path/to/non/fuzzer/mode/build
 ```

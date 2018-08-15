@@ -130,7 +130,7 @@ struct ForceVoidReturn<R(Args...)> {
 // FunctorTraits<>
 //
 // See description at top of file.
-template <typename Functor, typename SFINAE = void>
+template <typename Functor, typename SFINAE>
 struct FunctorTraits;
 
 // For a callable type that is convertible to the corresponding function type.
@@ -206,12 +206,7 @@ struct FunctorTraits<R (Receiver::*)(Args...)> {
   static R Invoke(R (Receiver::*method)(Args...),
                   ReceiverPtr&& receiver_ptr,
                   RunArgs&&... args) {
-    // Clang skips CV qualifier check on a method pointer invocation when the
-    // receiver is a subclass. Store the receiver into a const reference to
-    // T to ensure the CV check works.
-    // https://llvm.org/bugs/show_bug.cgi?id=27037
-    Receiver& receiver = *receiver_ptr;
-    return (receiver.*method)(std::forward<RunArgs>(args)...);
+    return ((*receiver_ptr).*method)(std::forward<RunArgs>(args)...);
   }
 };
 
@@ -226,12 +221,7 @@ struct FunctorTraits<R (Receiver::*)(Args...) const> {
   static R Invoke(R (Receiver::*method)(Args...) const,
                   ReceiverPtr&& receiver_ptr,
                   RunArgs&&... args) {
-    // Clang skips CV qualifier check on a method pointer invocation when the
-    // receiver is a subclass. Store the receiver into a const reference to
-    // T to ensure the CV check works.
-    // https://llvm.org/bugs/show_bug.cgi?id=27037
-    const Receiver& receiver = *receiver_ptr;
-    return (receiver.*method)(std::forward<RunArgs>(args)...);
+    return ((*receiver_ptr).*method)(std::forward<RunArgs>(args)...);
   }
 };
 
@@ -360,7 +350,7 @@ struct Invoker<StorageType, R(UnboundArgs...)> {
 
     return InvokeHelper<is_weak_call, R>::MakeItSo(
         std::forward<Functor>(functor),
-        Unwrap(base::get<indices>(std::forward<BoundArgsTuple>(bound)))...,
+        Unwrap(std::get<indices>(std::forward<BoundArgsTuple>(bound)))...,
         std::forward<UnboundArgs>(unbound_args)...);
   }
 };
@@ -387,43 +377,24 @@ IsNull(const Functor&) {
   return false;
 }
 
-template <typename Functor, typename... BoundArgs>
-struct BindState;
+// Used by ApplyCancellationTraits below.
+template <typename Functor, typename BoundArgsTuple, size_t... indices>
+bool ApplyCancellationTraitsImpl(const Functor& functor,
+                                 const BoundArgsTuple& bound_args,
+                                 IndexSequence<indices...>) {
+  return CallbackCancellationTraits<Functor, BoundArgsTuple>::IsCancelled(
+      functor, std::get<indices>(bound_args)...);
+}
 
-template <typename BindStateType, typename SFINAE = void>
-struct CancellationChecker {
-  static constexpr bool is_cancellable = false;
-  static bool Run(const BindStateBase*) {
-    return false;
-  }
-};
-
-template <typename Functor, typename... BoundArgs>
-struct CancellationChecker<
-    BindState<Functor, BoundArgs...>,
-    typename std::enable_if<IsWeakMethod<FunctorTraits<Functor>::is_method,
-                                         BoundArgs...>::value>::type> {
-  static constexpr bool is_cancellable = true;
-  static bool Run(const BindStateBase* base) {
-    using BindStateType = BindState<Functor, BoundArgs...>;
-    const BindStateType* bind_state = static_cast<const BindStateType*>(base);
-    return !base::get<0>(bind_state->bound_args_);
-  }
-};
-
-template <typename Signature,
-          typename... BoundArgs,
-          CopyMode copy_mode,
-          RepeatMode repeat_mode>
-struct CancellationChecker<
-    BindState<Callback<Signature, copy_mode, repeat_mode>, BoundArgs...>> {
-  static constexpr bool is_cancellable = true;
-  static bool Run(const BindStateBase* base) {
-    using Functor = Callback<Signature, copy_mode, repeat_mode>;
-    using BindStateType = BindState<Functor, BoundArgs...>;
-    const BindStateType* bind_state = static_cast<const BindStateType*>(base);
-    return bind_state->functor_.IsCancelled();
-  }
+// Relays |base| to corresponding CallbackCancellationTraits<>::Run(). Returns
+// true if the callback |base| represents is canceled.
+template <typename BindStateType>
+bool ApplyCancellationTraits(const BindStateBase* base) {
+  const BindStateType* storage = static_cast<const BindStateType*>(base);
+  static constexpr size_t num_bound_args =
+      std::tuple_size<decltype(storage->bound_args_)>::value;
+  return ApplyCancellationTraitsImpl(storage->functor_, storage->bound_args_,
+                                     MakeIndexSequence<num_bound_args>());
 };
 
 // Template helpers to detect using Bind() on a base::Callback without any
@@ -449,14 +420,17 @@ struct BindingCallbackWithNoArgs<Callback<Signature, copy_mode, repeat_mode>,
 template <typename Functor, typename... BoundArgs>
 struct BindState final : BindStateBase {
   using IsCancellable = std::integral_constant<
-      bool, CancellationChecker<BindState>::is_cancellable>;
+      bool,
+      CallbackCancellationTraits<Functor,
+                                 std::tuple<BoundArgs...>>::is_cancellable>;
 
   template <typename ForwardFunctor, typename... ForwardBoundArgs>
   explicit BindState(BindStateBase::InvokeFuncStorage invoke_func,
                      ForwardFunctor&& functor,
                      ForwardBoundArgs&&... bound_args)
-      // IsCancellable is std::false_type if the CancellationChecker<>::Run
-      // returns always false. Otherwise, it's std::true_type.
+      // IsCancellable is std::false_type if
+      // CallbackCancellationTraits<>::IsCancelled returns always false.
+      // Otherwise, it's std::true_type.
       : BindState(IsCancellable{},
                   invoke_func,
                   std::forward<ForwardFunctor>(functor),
@@ -476,8 +450,9 @@ struct BindState final : BindStateBase {
                      BindStateBase::InvokeFuncStorage invoke_func,
                      ForwardFunctor&& functor,
                      ForwardBoundArgs&&... bound_args)
-      : BindStateBase(invoke_func, &Destroy,
-                      &CancellationChecker<BindState>::Run),
+      : BindStateBase(invoke_func,
+                      &Destroy,
+                      &ApplyCancellationTraits<BindState>),
         functor_(std::forward<ForwardFunctor>(functor)),
         bound_args_(std::forward<ForwardBoundArgs>(bound_args)...) {
     DCHECK(!IsNull(functor_));
@@ -507,7 +482,8 @@ struct MakeBindStateTypeImpl;
 
 template <typename Functor, typename... BoundArgs>
 struct MakeBindStateTypeImpl<false, Functor, BoundArgs...> {
-  static_assert(!HasRefCountedTypeAsRawPtr<BoundArgs...>::value,
+  static_assert(!HasRefCountedTypeAsRawPtr<
+                    typename std::decay<BoundArgs>::type...>::value,
                 "A parameter is a refcounted type and needs scoped_refptr.");
   using Type = BindState<typename std::decay<Functor>::type,
                          typename std::decay<BoundArgs>::type...>;
@@ -523,7 +499,8 @@ struct MakeBindStateTypeImpl<true, Functor, Receiver, BoundArgs...> {
   static_assert(
       !std::is_array<typename std::remove_reference<Receiver>::type>::value,
       "First bound argument to a method cannot be an array.");
-  static_assert(!HasRefCountedTypeAsRawPtr<BoundArgs...>::value,
+  static_assert(!HasRefCountedTypeAsRawPtr<
+                    typename std::decay<BoundArgs>::type...>::value,
                 "A parameter is a refcounted type and needs scoped_refptr.");
 
  private:

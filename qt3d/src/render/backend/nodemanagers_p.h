@@ -76,6 +76,7 @@ class MaterialManager;
 class MatrixManager;
 class VAOManager;
 class ShaderManager;
+class ShaderBuilderManager;
 class TechniqueManager;
 class EffectManager;
 class RenderPassManager;
@@ -99,12 +100,16 @@ class LightManager;
 class EnvironmentLightManager;
 class ComputeCommandManager;
 class RenderStateManager;
+class ArmatureManager;
+class SkeletonManager;
+class JointManager;
 
 class FrameGraphNode;
 class Entity;
 class CameraLens;
 class Material;
 class Shader;
+class ShaderBuilder;
 class Technique;
 class Effect;
 class RenderPass;
@@ -131,6 +136,9 @@ class Light;
 class EnvironmentLight;
 class ComputeCommand;
 class RenderStateNode;
+class Armature;
+class Skeleton;
+class Joint;
 class OpenGLVertexArrayObject;
 
 class ResourceAccessor;
@@ -181,6 +189,7 @@ public:
     inline MatrixManager *worldMatrixManager() const Q_DECL_NOEXCEPT { return m_worldMatrixManager; }
     inline VAOManager *vaoManager() const Q_DECL_NOEXCEPT { return m_vaoManager; }
     inline ShaderManager *shaderManager() const Q_DECL_NOEXCEPT { return m_shaderManager; }
+    inline ShaderBuilderManager *shaderBuilderManager() const Q_DECL_NOEXCEPT { return m_shaderBuilderManager; }
     inline TechniqueManager *techniqueManager() const Q_DECL_NOEXCEPT { return m_techniqueManager; }
     inline EffectManager *effectManager() const Q_DECL_NOEXCEPT { return m_effectManager; }
     inline RenderPassManager *renderPassManager() const Q_DECL_NOEXCEPT { return m_renderPassManager; }
@@ -210,6 +219,9 @@ public:
     inline EnvironmentLightManager *environmentLightManager() const Q_DECL_NOEXCEPT { return m_environmentLightManager; }
     inline ComputeCommandManager *computeJobManager() const Q_DECL_NOEXCEPT { return m_computeJobManager; }
     inline RenderStateManager *renderStateManager() const Q_DECL_NOEXCEPT { return m_renderStateManager; }
+    inline ArmatureManager *armatureManager() const Q_DECL_NOEXCEPT { return m_armatureManager; }
+    inline SkeletonManager *skeletonManager() const Q_DECL_NOEXCEPT { return m_skeletonManager; }
+    inline JointManager *jointManager() const Q_DECL_NOEXCEPT { return m_jointManager; }
 
     QSharedPointer<ResourceAccessor> resourceAccessor();
 
@@ -220,6 +232,7 @@ private:
     MatrixManager *m_worldMatrixManager;
     VAOManager *m_vaoManager;
     ShaderManager *m_shaderManager;
+    ShaderBuilderManager *m_shaderBuilderManager;
     TechniqueManager *m_techniqueManager;
     EffectManager *m_effectManager;
     RenderPassManager *m_renderPassManager;
@@ -249,6 +262,9 @@ private:
     EnvironmentLightManager *m_environmentLightManager;
     ComputeCommandManager *m_computeJobManager;
     RenderStateManager *m_renderStateManager;
+    ArmatureManager *m_armatureManager;
+    SkeletonManager *m_skeletonManager;
+    JointManager *m_jointManager;
 
     QSharedPointer<ResourceAccessor> m_resourceAccessor;
 };
@@ -272,6 +288,9 @@ QT3DRENDERSHARED_PRIVATE_EXPORT VAOManager *NodeManagers::manager<OpenGLVertexAr
 
 template<>
 QT3DRENDERSHARED_PRIVATE_EXPORT ShaderManager *NodeManagers::manager<Shader>() const Q_DECL_NOEXCEPT;
+
+template<>
+QT3DRENDERSHARED_PRIVATE_EXPORT ShaderBuilderManager *NodeManagers::manager<ShaderBuilder>() const Q_DECL_NOEXCEPT;
 
 template<>
 QT3DRENDERSHARED_PRIVATE_EXPORT TechniqueManager *NodeManagers::manager<Technique>() const Q_DECL_NOEXCEPT;
@@ -353,6 +372,15 @@ QT3DRENDERSHARED_PRIVATE_EXPORT ComputeCommandManager *NodeManagers::manager<Com
 
 template<>
 QT3DRENDERSHARED_PRIVATE_EXPORT RenderStateManager *NodeManagers::manager<RenderStateNode>() const Q_DECL_NOEXCEPT;
+
+template<>
+QT3DRENDERSHARED_PRIVATE_EXPORT ArmatureManager *NodeManagers::manager<Armature>() const Q_DECL_NOEXCEPT;
+
+template<>
+QT3DRENDERSHARED_PRIVATE_EXPORT SkeletonManager *NodeManagers::manager<Skeleton>() const Q_DECL_NOEXCEPT;
+
+template<>
+QT3DRENDERSHARED_PRIVATE_EXPORT JointManager *NodeManagers::manager<Joint>() const Q_DECL_NOEXCEPT;
 
 } // Render
 

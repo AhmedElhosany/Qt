@@ -13,8 +13,10 @@
 #include "base/files/file.h"
 #include "base/files/file_proxy.h"
 #include "base/macros.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/renderer_host/pepper/browser_ppapi_host_impl.h"
+#include "content/public/common/quarantine.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_platform_file.h"
 #include "ppapi/c/pp_file_info.h"
@@ -24,6 +26,10 @@
 #include "ppapi/shared_impl/file_io_state_manager.h"
 #include "storage/browser/fileapi/file_system_context.h"
 #include "url/gurl.h"
+
+namespace base {
+class SequencedTaskRunner;
+}
 
 namespace ppapi {
 struct FileGrowth;
@@ -82,8 +88,16 @@ class PepperFileIOHost : public ppapi::host::ResourceHost,
       ppapi::host::ReplyMessageContext reply_context,
       base::File::Error error_code);
 
-  void OnOpenProxyCallback(ppapi::host::ReplyMessageContext reply_context,
-                           base::File::Error error_code);
+  void OnLocalFileOpened(ppapi::host::ReplyMessageContext reply_context,
+                         const base::FilePath& path,
+                         base::File::Error error_code);
+
+  void OnLocalFileQuarantined(ppapi::host::ReplyMessageContext reply_context,
+                              const base::FilePath& path,
+                              QuarantineFileResult quarantine_result);
+
+  void SendFileOpenReply(ppapi::host::ReplyMessageContext reply_context,
+                         base::File::Error error_code);
 
   void GotUIThreadStuffForInternalFileSystems(
       ppapi::host::ReplyMessageContext reply_context,
@@ -118,6 +132,7 @@ class PepperFileIOHost : public ppapi::host::ResourceHost,
   int render_process_id_;
   base::ProcessId resolved_render_process_id_;
 
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
   base::FileProxy file_;
   int32_t open_flags_;
 

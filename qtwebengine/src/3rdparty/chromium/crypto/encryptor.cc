@@ -19,7 +19,7 @@ namespace crypto {
 
 namespace {
 
-const EVP_CIPHER* GetCipherForKey(SymmetricKey* key) {
+const EVP_CIPHER* GetCipherForKey(const SymmetricKey* key) {
   switch (key->key().length()) {
     case 16: return EVP_aes_128_cbc();
     case 32: return EVP_aes_256_cbc();
@@ -32,7 +32,7 @@ const EVP_CIPHER* GetCipherForKey(SymmetricKey* key) {
 // ERR stack as a convenience.
 class ScopedCipherCTX {
  public:
-  explicit ScopedCipherCTX() {
+  ScopedCipherCTX() {
     EVP_CIPHER_CTX_init(&ctx_);
   }
   ~ScopedCipherCTX() {
@@ -90,7 +90,7 @@ Encryptor::Encryptor() : key_(nullptr), mode_(CBC) {}
 Encryptor::~Encryptor() {
 }
 
-bool Encryptor::Init(SymmetricKey* key,
+bool Encryptor::Init(const SymmetricKey* key,
                      Mode mode,
                      const base::StringPiece& iv) {
   DCHECK(key);

@@ -7,6 +7,8 @@
 #ifndef CORE_FPDFAPI_PARSER_CPDF_BOOLEAN_H_
 #define CORE_FPDFAPI_PARSER_CPDF_BOOLEAN_H_
 
+#include <memory>
+
 #include "core/fpdfapi/parser/cpdf_object.h"
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
@@ -26,6 +28,7 @@ class CPDF_Boolean : public CPDF_Object {
   bool IsBoolean() const override;
   CPDF_Boolean* AsBoolean() override;
   const CPDF_Boolean* AsBoolean() const override;
+  bool WriteTo(IFX_ArchiveStream* archive) const override;
 
  protected:
   bool m_bValue;

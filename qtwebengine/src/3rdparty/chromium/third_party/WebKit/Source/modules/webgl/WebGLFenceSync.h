@@ -13,9 +13,7 @@ class WebGL2RenderingContextBase;
 
 class WebGLFenceSync : public WebGLSync {
  public:
-  ~WebGLFenceSync() override;
-
-  static WebGLSync* create(WebGL2RenderingContextBase*,
+  static WebGLSync* Create(WebGL2RenderingContextBase*,
                            GLenum condition,
                            GLbitfield flags);
 

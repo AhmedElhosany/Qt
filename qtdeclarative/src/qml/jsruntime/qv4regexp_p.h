@@ -122,8 +122,6 @@ struct RegExp : public Managed
 
     int captureCount() const { return subPatternCount() + 1; }
 
-    static void markObjects(Heap::Base *that, QV4::ExecutionEngine *e);
-
     friend class RegExpCache;
 };
 

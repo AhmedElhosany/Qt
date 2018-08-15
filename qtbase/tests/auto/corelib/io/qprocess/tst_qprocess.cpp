@@ -127,7 +127,8 @@ private slots:
     void systemEnvironment();
     void lockupsInStartDetached();
     void waitForReadyReadForNonexistantProcess();
-    void detachedWorkingDirectoryAndPid();
+    void detachedProcessParameters_data();
+    void detachedProcessParameters();
     void startFinishStartFinish();
     void invalidProgramString_data();
     void invalidProgramString();
@@ -2072,21 +2073,54 @@ void tst_QProcess::fileWriterProcess()
     } while (stopWatch.elapsed() < 3000);
 }
 
-void tst_QProcess::detachedWorkingDirectoryAndPid()
+void tst_QProcess::detachedProcessParameters_data()
 {
+    QTest::addColumn<QString>("outChannel");
+    QTest::newRow("none") << QString();
+    QTest::newRow("stdout") << QString("stdout");
+    QTest::newRow("stderr") << QString("stderr");
+}
+
+void tst_QProcess::detachedProcessParameters()
+{
+    QFETCH(QString, outChannel);
     qint64 pid;
 
     QFile infoFile(m_temporaryDir.path() + QLatin1String("/detachedinfo.txt"));
     if (infoFile.exists())
         QVERIFY(infoFile.remove());
+    QFile channelFile(m_temporaryDir.path() + QLatin1String("detachedinfo2.txt"));
+    if (channelFile.exists())
+        QVERIFY(channelFile.remove());
 
     QString workingDir = QDir::currentPath() + "/testDetached";
 
     QVERIFY(QFile::exists(workingDir));
 
-    QStringList args;
-    args << infoFile.fileName();
-    QVERIFY(QProcess::startDetached(QDir::currentPath() + QLatin1String("/testDetached/testDetached"), args, workingDir, &pid));
+    QVERIFY(qgetenv("tst_QProcess").isEmpty());
+    QByteArray envVarValue("foobarbaz");
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("tst_QProcess"), QString::fromUtf8(envVarValue));
+
+    QProcess process;
+    process.setProgram(QDir::currentPath() + QLatin1String("/testDetached/testDetached"));
+#ifdef Q_OS_WIN
+    int modifierCalls = 0;
+    process.setCreateProcessArgumentsModifier(
+        [&modifierCalls] (QProcess::CreateProcessArguments *) { modifierCalls++; });
+#endif
+    QStringList args(infoFile.fileName());
+    if (!outChannel.isEmpty()) {
+        args << QStringLiteral("--out-channel=") + outChannel;
+        if (outChannel == "stdout")
+            process.setStandardOutputFile(channelFile.fileName());
+        else if (outChannel == "stderr")
+            process.setStandardErrorFile(channelFile.fileName());
+    }
+    process.setArguments(args);
+    process.setWorkingDirectory(workingDir);
+    process.setProcessEnvironment(environment);
+    QVERIFY(process.startDetached(&pid));
 
     QFileInfo fi(infoFile);
     fi.setCaching(false);
@@ -2097,12 +2131,24 @@ void tst_QProcess::detachedWorkingDirectoryAndPid()
     }
 
     QVERIFY(infoFile.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString actualWorkingDir = QString::fromUtf8(infoFile.readLine());
-    actualWorkingDir.chop(1); // strip off newline
-    QByteArray processIdString = infoFile.readLine();
-    processIdString.chop(1);
+    QString actualWorkingDir = QString::fromUtf8(infoFile.readLine()).trimmed();
+    QByteArray processIdString = infoFile.readLine().trimmed();
+    QByteArray actualEnvVarValue = infoFile.readLine().trimmed();
+    QByteArray infoFileContent;
+    if (!outChannel.isEmpty()) {
+        infoFile.seek(0);
+        infoFileContent = infoFile.readAll();
+    }
     infoFile.close();
     infoFile.remove();
+
+    if (!outChannel.isEmpty()) {
+        QVERIFY(channelFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QByteArray channelContent = channelFile.readAll();
+        channelFile.close();
+        channelFile.remove();
+        QCOMPARE(channelContent, infoFileContent);
+    }
 
     bool ok = false;
     qint64 actualPid = processIdString.toLongLong(&ok);
@@ -2110,6 +2156,10 @@ void tst_QProcess::detachedWorkingDirectoryAndPid()
 
     QCOMPARE(actualWorkingDir, workingDir);
     QCOMPARE(actualPid, pid);
+    QCOMPARE(actualEnvVarValue, envVarValue);
+#ifdef Q_OS_WIN
+    QCOMPARE(modifierCalls, 1);
+#endif
 }
 
 void tst_QProcess::switchReadChannels()

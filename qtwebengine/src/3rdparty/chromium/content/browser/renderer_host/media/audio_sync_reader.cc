@@ -5,6 +5,7 @@
 #include "content/browser/renderer_host/media/audio_sync_reader.h"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -18,6 +19,7 @@
 #include "build/build_config.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/public/common/content_switches.h"
+#include "media/audio/audio_device_thread.h"
 #include "media/base/audio_parameters.h"
 
 using media::AudioBus;
@@ -46,18 +48,17 @@ namespace content {
 AudioSyncReader::AudioSyncReader(
     const media::AudioParameters& params,
     std::unique_ptr<base::SharedMemory> shared_memory,
-    std::unique_ptr<base::CancelableSyncSocket> socket,
-    std::unique_ptr<base::CancelableSyncSocket> foreign_socket)
+    std::unique_ptr<base::CancelableSyncSocket> socket)
     : shared_memory_(std::move(shared_memory)),
       mute_audio_(base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kMuteAudio)),
+      had_socket_error_(false),
       socket_(std::move(socket)),
-      foreign_socket_(std::move(foreign_socket)),
       packet_size_(shared_memory_->requested_size()),
       renderer_callback_count_(0),
       renderer_missed_callback_count_(0),
       trailing_renderer_missed_callback_count_(0),
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(OS_CHROMEOS)
       maximum_wait_time_(params.GetBufferDuration() / 2),
 #else
       // TODO(dalecurtis): Investigate if we can reduce this on all platforms.
@@ -117,7 +118,8 @@ AudioSyncReader::~AudioSyncReader() {
 
 // static
 std::unique_ptr<AudioSyncReader> AudioSyncReader::Create(
-    const media::AudioParameters& params) {
+    const media::AudioParameters& params,
+    base::CancelableSyncSocket* foreign_socket) {
   base::CheckedNumeric<size_t> memory_size =
       sizeof(media::AudioOutputBufferParameters);
   memory_size += AudioBus::CalculateMemorySize(params);
@@ -125,35 +127,58 @@ std::unique_ptr<AudioSyncReader> AudioSyncReader::Create(
   std::unique_ptr<base::SharedMemory> shared_memory(new base::SharedMemory());
   std::unique_ptr<base::CancelableSyncSocket> socket(
       new base::CancelableSyncSocket());
-  std::unique_ptr<base::CancelableSyncSocket> foreign_socket(
-      new base::CancelableSyncSocket());
 
   if (!memory_size.IsValid() ||
       !shared_memory->CreateAndMapAnonymous(memory_size.ValueOrDie()) ||
-      !base::CancelableSyncSocket::CreatePair(socket.get(),
-                                              foreign_socket.get())) {
+      !base::CancelableSyncSocket::CreatePair(socket.get(), foreign_socket)) {
     return nullptr;
   }
-  return base::WrapUnique(new AudioSyncReader(params, std::move(shared_memory),
-                                              std::move(socket),
-                                              std::move(foreign_socket)));
+  return base::MakeUnique<AudioSyncReader>(params, std::move(shared_memory),
+                                           std::move(socket));
 }
 
 // media::AudioOutputController::SyncReader implementations.
-void AudioSyncReader::UpdatePendingBytes(uint32_t bytes,
-                                         uint32_t frames_skipped) {
-  // Increase the number of skipped frames stored in shared memory. We don't
-  // send it over the socket since sending more than 4 bytes might lead to being
-  // descheduled. The reading side will zero it when consumed.
+void AudioSyncReader::RequestMoreData(base::TimeDelta delay,
+                                      base::TimeTicks delay_timestamp,
+                                      int prior_frames_skipped) {
+  // We don't send arguments over the socket since sending more than 4
+  // bytes might lead to being descheduled. The reading side will zero
+  // them when consumed.
   AudioOutputBuffer* buffer =
       reinterpret_cast<AudioOutputBuffer*>(shared_memory_->memory());
-  buffer->params.frames_skipped += frames_skipped;
+  // Increase the number of skipped frames stored in shared memory.
+  buffer->params.frames_skipped += prior_frames_skipped;
+  buffer->params.delay = delay.InMicroseconds();
+  buffer->params.delay_timestamp
+      = (delay_timestamp - base::TimeTicks()).InMicroseconds();
 
   // Zero out the entire output buffer to avoid stuttering/repeating-buffers
   // in the anomalous case if the renderer is unable to keep up with real-time.
   output_bus_->Zero();
 
-  socket_->Send(&bytes, sizeof(bytes));
+  uint32_t control_signal = 0;
+  if (delay.is_max()) {
+    // std::numeric_limits<uint32_t>::max() is a special signal which is
+    // returned after the browser stops the output device in response to a
+    // renderer side request.
+    control_signal = std::numeric_limits<uint32_t>::max();
+  }
+
+  size_t sent_bytes = socket_->Send(&control_signal, sizeof(control_signal));
+  if (sent_bytes != sizeof(control_signal)) {
+    // Ensure we don't log consecutive errors as this can lead to a large
+    // amount of logs.
+    if (!had_socket_error_) {
+      had_socket_error_ = true;
+      const std::string error_message = "ASR: No room in socket buffer.";
+      PLOG(WARNING) << error_message;
+      MediaStreamManager::SendMessageToNativeLog(error_message);
+      TRACE_EVENT_INSTANT0("audio", "AudioSyncReader: No room in socket buffer",
+                           TRACE_EVENT_SCOPE_THREAD);
+    }
+  } else {
+    had_socket_error_ = false;
+  }
   ++buffer_index_;
 }
 

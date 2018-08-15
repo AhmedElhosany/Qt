@@ -6,18 +6,14 @@
 
 #include "xfa/fwl/theme/cfwl_carettp.h"
 
-#include "xfa/fwl/core/cfwl_themebackground.h"
-#include "xfa/fwl/core/ifwl_caret.h"
-#include "xfa/fwl/core/ifwl_widget.h"
-#include "xfa/fxgraphics/cfx_color.h"
-#include "xfa/fxgraphics/cfx_path.h"
+#include "xfa/fwl/cfwl_caret.h"
+#include "xfa/fwl/cfwl_themebackground.h"
+#include "xfa/fwl/cfwl_widget.h"
+#include "xfa/fxgraphics/cxfa_color.h"
+#include "xfa/fxgraphics/cxfa_path.h"
 
 CFWL_CaretTP::CFWL_CaretTP() {}
 CFWL_CaretTP::~CFWL_CaretTP() {}
-
-bool CFWL_CaretTP::IsValidWidget(IFWL_Widget* pWidget) {
-  return pWidget && pWidget->GetClassID() == FWL_Type::Caret;
-}
 
 void CFWL_CaretTP::DrawBackground(CFWL_ThemeBackground* pParams) {
   if (!pParams)
@@ -29,7 +25,7 @@ void CFWL_CaretTP::DrawBackground(CFWL_ThemeBackground* pParams) {
         return;
 
       DrawCaretBK(pParams->m_pGraphics, pParams->m_dwStates,
-                  &(pParams->m_rtPart), (CFX_Color*)pParams->m_pData,
+                  &(pParams->m_rtPart), (CXFA_Color*)pParams->m_pData,
                   &(pParams->m_matrix));
       break;
     }
@@ -38,19 +34,18 @@ void CFWL_CaretTP::DrawBackground(CFWL_ThemeBackground* pParams) {
   }
 }
 
-void CFWL_CaretTP::DrawCaretBK(CFX_Graphics* pGraphics,
+void CFWL_CaretTP::DrawCaretBK(CXFA_Graphics* pGraphics,
                                uint32_t dwStates,
                                const CFX_RectF* pRect,
-                               CFX_Color* crFill,
+                               CXFA_Color* crFill,
                                CFX_Matrix* pMatrix) {
-  CFX_Path path;
-  path.Create();
+  CXFA_Path path;
   CFX_RectF rect = *pRect;
   path.AddRectangle(rect.left, rect.top, rect.width, rect.height);
   if (crFill) {
     pGraphics->SetFillColor(crFill);
   } else {
-    CFX_Color crFilltemp(ArgbEncode(255, 0, 0, 0));
+    CXFA_Color crFilltemp(ArgbEncode(255, 0, 0, 0));
     pGraphics->SetFillColor(&crFilltemp);
   }
   pGraphics->FillPath(&path, FXFILL_WINDING, pMatrix);

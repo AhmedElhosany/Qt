@@ -17,6 +17,7 @@
 #include "SkRSXform.h"
 #include "SkTextBlob.h"
 #include "SkTypeface.h"
+#include "SkVertices.h"
 
 class SkPipeReader;
 
@@ -243,6 +244,14 @@ static void saveLayer_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanva
     if (extra & kHasBackdrop_SaveLayerMask) {
         backdrop = reader.readImageFilter();
     }
+    sk_sp<SkImage> clipMask;
+    if (extra & kHasClipMask_SaveLayerMask) {
+        clipMask = reader.readImage();
+    }
+    SkMatrix clipMatrix;
+    if (extra & kHasClipMatrix_SaveLayerMask) {
+        reader.readMatrix(&clipMatrix);
+    }
     SkCanvas::SaveLayerFlags flags = (SkCanvas::SaveLayerFlags)(extra & kFlags_SaveLayerMask);
 
     // unremap this wacky flag
@@ -250,7 +259,8 @@ static void saveLayer_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanva
         flags |= (1 << 31);//SkCanvas::kDontClipToLayer_PrivateSaveLayerFlag;
     }
 
-    canvas->saveLayer(SkCanvas::SaveLayerRec(bounds, paint, backdrop.get(), flags));
+    canvas->saveLayer(SkCanvas::SaveLayerRec(bounds, paint, backdrop.get(), clipMask.get(),
+                      (extra & kHasClipMatrix_SaveLayerMask) ? &clipMatrix : nullptr, flags));
 }
 
 static void restore_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* canvas) {
@@ -271,21 +281,21 @@ static void concat_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* 
 
 static void clipRect_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* canvas) {
     SkASSERT(SkPipeVerb::kClipRect == unpack_verb(packedVerb));
-    SkCanvas::ClipOp op = (SkCanvas::ClipOp)(unpack_verb_extra(packedVerb) >> 1);
+    SkClipOp op = (SkClipOp)(unpack_verb_extra(packedVerb) >> 1);
     bool isAA = unpack_verb_extra(packedVerb) & 1;
     canvas->clipRect(*skip<SkRect>(reader), op, isAA);
 }
 
 static void clipRRect_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* canvas) {
     SkASSERT(SkPipeVerb::kClipRRect == unpack_verb(packedVerb));
-    SkCanvas::ClipOp op = (SkCanvas::ClipOp)(unpack_verb_extra(packedVerb) >> 1);
+    SkClipOp op = (SkClipOp)(unpack_verb_extra(packedVerb) >> 1);
     bool isAA = unpack_verb_extra(packedVerb) & 1;
     canvas->clipRRect(read_rrect(reader), op, isAA);
 }
 
 static void clipPath_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* canvas) {
     SkASSERT(SkPipeVerb::kClipPath == unpack_verb(packedVerb));
-    SkCanvas::ClipOp op = (SkCanvas::ClipOp)(unpack_verb_extra(packedVerb) >> 1);
+    SkClipOp op = (SkClipOp)(unpack_verb_extra(packedVerb) >> 1);
     bool isAA = unpack_verb_extra(packedVerb) & 1;
     SkPath path;
     reader.readPath(&path);
@@ -294,7 +304,7 @@ static void clipPath_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas
 
 static void clipRegion_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* canvas) {
     SkASSERT(SkPipeVerb::kClipRegion == unpack_verb(packedVerb));
-    SkCanvas::ClipOp op = (SkCanvas::ClipOp)(unpack_verb_extra(packedVerb) >> 1);
+    SkClipOp op = (SkClipOp)(unpack_verb_extra(packedVerb) >> 1);
     SkRegion region;
     reader.readRegion(&region);
     canvas->clipRegion(region, op);
@@ -567,32 +577,9 @@ static void drawImageLattice_handler(SkPipeReader& reader, uint32_t packedVerb, 
 
 static void drawVertices_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* canvas) {
     SkASSERT(SkPipeVerb::kDrawVertices == unpack_verb(packedVerb));
-    SkCanvas::VertexMode vmode = (SkCanvas::VertexMode)
-            ((packedVerb & kVMode_DrawVerticesMask) >> kVMode_DrawVerticesShift);
-    int vertexCount = packedVerb & kVCount_DrawVerticesMask;
-    if (0 == vertexCount) {
-        vertexCount = reader.read32();
-    }
-    SkBlendMode bmode = (SkBlendMode)
-            ((packedVerb & kXMode_DrawVerticesMask) >> kXMode_DrawVerticesShift);
-    const SkPoint* vertices = skip<SkPoint>(reader, vertexCount);
-    const SkPoint* texs = nullptr;
-    if (packedVerb & kHasTex_DrawVerticesMask) {
-        texs = skip<SkPoint>(reader, vertexCount);
-    }
-    const SkColor* colors = nullptr;
-    if (packedVerb & kHasColors_DrawVerticesMask) {
-        colors = skip<SkColor>(reader, vertexCount);
-    }
-    int indexCount = 0;
-    const uint16_t* indices = nullptr;
-    if (packedVerb & kHasIndices_DrawVerticesMask) {
-        indexCount = reader.read32();
-        indices = skip<uint16_t>(reader, indexCount);
-    }
-
-    canvas->drawVertices(vmode, vertexCount, vertices, texs, colors, bmode,
-                         indices, indexCount, read_paint(reader));
+    SkBlendMode bmode = (SkBlendMode)unpack_verb_extra(packedVerb);
+    sk_sp<SkData> data = reader.readByteArrayAsData();
+    canvas->drawVertices(SkVertices::Decode(data->data(), data->size()), bmode, read_paint(reader));
 }
 
 static void drawPicture_handler(SkPipeReader& reader, uint32_t packedVerb, SkCanvas* canvas) {

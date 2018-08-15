@@ -15,6 +15,7 @@
 #include "client/crashpad_client.h"
 
 #include <windows.h>
+#include <signal.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -29,8 +30,10 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "util/file/file_io.h"
+#include "util/misc/from_pointer_cast.h"
 #include "util/misc/random_string.h"
 #include "util/win/address_types.h"
+#include "util/win/capture_context.h"
 #include "util/win/command_line.h"
 #include "util/win/critical_section_with_debug_info.h"
 #include "util/win/get_function.h"
@@ -40,6 +43,7 @@
 #include "util/win/ntstatus_logging.h"
 #include "util/win/process_info.h"
 #include "util/win/registration_protocol_win.h"
+#include "util/win/safe_terminate_process.h"
 #include "util/win/scoped_process_suspend.h"
 #include "util/win/termination_codes.h"
 #include "util/win/xp_compat.h"
@@ -107,13 +111,24 @@ StartupState BlockUntilHandlerStartedOrFailed() {
   return static_cast<StartupState>(startup_state);
 }
 
+#if defined(ADDRESS_SANITIZER)
+extern "C" LONG __asan_unhandled_exception_filter(EXCEPTION_POINTERS* info);
+#endif
+
 LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* exception_pointers) {
+#if defined(ADDRESS_SANITIZER)
+  // In ASan builds, delegate to the ASan exception filter.
+  LONG status = __asan_unhandled_exception_filter(exception_pointers);
+  if (status != EXCEPTION_CONTINUE_SEARCH)
+    return status;
+#endif
+
   if (BlockUntilHandlerStartedOrFailed() == StartupState::kFailed) {
     // If we know for certain that the handler has failed to start, then abort
     // here, rather than trying to signal to a handler that will never arrive,
     // and then sleeping unnecessarily.
     LOG(ERROR) << "crash server failed to launch, self-terminating";
-    TerminateProcess(GetCurrentProcess(), kTerminationCodeCrashNoDump);
+    SafeTerminateProcess(GetCurrentProcess(), kTerminationCodeCrashNoDump);
     return EXCEPTION_CONTINUE_SEARCH;
   }
 
@@ -142,7 +157,7 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* exception_pointers) {
   // signal the crash handler.
   g_crash_exception_information.thread_id = GetCurrentThreadId();
   g_crash_exception_information.exception_pointers =
-      reinterpret_cast<WinVMAddress>(exception_pointers);
+      FromPointerCast<WinVMAddress>(exception_pointers);
 
   // Now signal the crash server, which will take a dump and then terminate us
   // when it's complete.
@@ -158,9 +173,31 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* exception_pointers) {
 
   LOG(ERROR) << "crash server did not respond, self-terminating";
 
-  TerminateProcess(GetCurrentProcess(), kTerminationCodeCrashNoDump);
+  SafeTerminateProcess(GetCurrentProcess(), kTerminationCodeCrashNoDump);
 
   return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void HandleAbortSignal(int signum) {
+  DCHECK_EQ(signum, SIGABRT);
+
+  CONTEXT context;
+  CaptureContext(&context);
+
+  EXCEPTION_RECORD record = {};
+  record.ExceptionCode = STATUS_FATAL_APP_EXIT;
+  record.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+#if defined(ARCH_CPU_64_BITS)
+  record.ExceptionAddress = reinterpret_cast<void*>(context.Rip);
+#else
+  record.ExceptionAddress = reinterpret_cast<void*>(context.Eip);
+#endif  // ARCH_CPU_64_BITS
+
+  EXCEPTION_POINTERS exception_pointers;
+  exception_pointers.ContextRecord = &context;
+  exception_pointers.ExceptionRecord = &record;
+
+  UnhandledExceptionHandler(&exception_pointers);
 }
 
 std::wstring FormatArgumentString(const std::string& name,
@@ -354,9 +391,9 @@ bool StartHandlerProcess(
       g_non_crash_dump_done,
       data->ipc_pipe_handle.get(),
       this_process.get(),
-      reinterpret_cast<WinVMAddress>(&g_crash_exception_information),
-      reinterpret_cast<WinVMAddress>(&g_non_crash_exception_information),
-      reinterpret_cast<WinVMAddress>(&g_critical_section_with_debug_info));
+      FromPointerCast<WinVMAddress>(&g_crash_exception_information),
+      FromPointerCast<WinVMAddress>(&g_non_crash_exception_information),
+      FromPointerCast<WinVMAddress>(&g_critical_section_with_debug_info));
   AppendCommandLineArgument(
       base::UTF8ToUTF16(std::string("--initial-client-data=") +
                         initial_client_data.StringRepresentation()),
@@ -500,6 +537,32 @@ void CommonInProcessInitialization() {
   g_non_crash_dump_lock = new base::Lock();
 }
 
+void RegisterHandlers() {
+  SetUnhandledExceptionFilter(&UnhandledExceptionHandler);
+
+  // The Windows CRT's signal.h lists:
+  // - SIGINT
+  // - SIGILL
+  // - SIGFPE
+  // - SIGSEGV
+  // - SIGTERM
+  // - SIGBREAK
+  // - SIGABRT
+  // SIGILL and SIGTERM are documented as not being generated. SIGBREAK and
+  // SIGINT are for Ctrl-Break and Ctrl-C, and aren't something for which
+  // capturing a dump is warranted. SIGFPE and SIGSEGV are captured as regular
+  // exceptions through the unhandled exception filter. This leaves SIGABRT. In
+  // the standard CRT, abort() is implemented as a synchronous call to the
+  // SIGABRT signal handler if installed, but after doing so, the unhandled
+  // exception filter is not triggered (it instead __fastfail()s). So, register
+  // to handle SIGABRT to catch abort() calls, as client code might use this and
+  // expect it to cause a crash dump. This will only work when the abort()
+  // that's called in client code is the same (or has the same behavior) as the
+  // one in use here.
+  void (*rv)(int) = signal(SIGABRT, HandleAbortSignal);
+  DCHECK_NE(rv, SIG_ERR);
+}
+
 }  // namespace
 
 CrashpadClient::CrashpadClient() : ipc_pipe_(), handler_start_thread_() {}
@@ -536,7 +599,7 @@ bool CrashpadClient::StartHandler(
 
   CommonInProcessInitialization();
 
-  SetUnhandledExceptionFilter(&UnhandledExceptionHandler);
+  RegisterHandlers();
 
   auto data = new BackgroundHandlerStartThreadData(handler,
                                                    database,
@@ -593,14 +656,14 @@ bool CrashpadClient::SetHandlerIPCPipe(const std::wstring& ipc_pipe) {
   message.registration.version = RegistrationRequest::kMessageVersion;
   message.registration.client_process_id = GetCurrentProcessId();
   message.registration.crash_exception_information =
-      reinterpret_cast<WinVMAddress>(&g_crash_exception_information);
+      FromPointerCast<WinVMAddress>(&g_crash_exception_information);
   message.registration.non_crash_exception_information =
-      reinterpret_cast<WinVMAddress>(&g_non_crash_exception_information);
+      FromPointerCast<WinVMAddress>(&g_non_crash_exception_information);
 
   CommonInProcessInitialization();
 
   message.registration.critical_section_address =
-      reinterpret_cast<WinVMAddress>(&g_critical_section_with_debug_info);
+      FromPointerCast<WinVMAddress>(&g_critical_section_with_debug_info);
 
   ServerToClientMessage response = {};
 
@@ -609,7 +672,8 @@ bool CrashpadClient::SetHandlerIPCPipe(const std::wstring& ipc_pipe) {
   }
 
   SetHandlerStartupState(StartupState::kSucceeded);
-  SetUnhandledExceptionFilter(&UnhandledExceptionHandler);
+
+  RegisterHandlers();
 
   // The server returns these already duplicated to be valid in this process.
   g_signal_exception =
@@ -627,10 +691,16 @@ std::wstring CrashpadClient::GetHandlerIPCPipe() const {
   return ipc_pipe_;
 }
 
-bool CrashpadClient::WaitForHandlerStart() {
+bool CrashpadClient::WaitForHandlerStart(unsigned int timeout_ms) {
   DCHECK(handler_start_thread_.is_valid());
-  if (WaitForSingleObject(handler_start_thread_.get(), INFINITE) !=
-      WAIT_OBJECT_0) {
+  DWORD result = WaitForSingleObject(handler_start_thread_.get(), timeout_ms);
+  if (result == WAIT_TIMEOUT) {
+    LOG(ERROR) << "WaitForSingleObject timed out";
+    return false;
+  } else if (result == WAIT_ABANDONED) {
+    LOG(ERROR) << "WaitForSingleObject abandoned";
+    return false;
+  } else if (result != WAIT_OBJECT_0) {
     PLOG(ERROR) << "WaitForSingleObject";
     return false;
   }
@@ -665,8 +735,8 @@ void CrashpadClient::DumpWithoutCrash(const CONTEXT& context) {
   // Win32 APIs, so just use regular locking here in case of multiple threads
   // calling this function. If a crash occurs while we're in here, the worst
   // that can happen is that the server captures a partial dump for this path
-  // because on the other thread gathering a crash dump, it TerminateProcess()d,
-  // causing this one to abort.
+  // because another thread’s crash processing finished and the process was
+  // terminated before this thread’s non-crash processing could be completed.
   base::AutoLock lock(*g_non_crash_dump_lock);
 
   // Create a fake EXCEPTION_POINTERS to give the handler something to work
@@ -696,7 +766,7 @@ void CrashpadClient::DumpWithoutCrash(const CONTEXT& context) {
 
   g_non_crash_exception_information.thread_id = GetCurrentThreadId();
   g_non_crash_exception_information.exception_pointers =
-      reinterpret_cast<WinVMAddress>(&exception_pointers);
+      FromPointerCast<WinVMAddress>(&exception_pointers);
 
   bool set_event_result = !!SetEvent(g_signal_non_crash_dump);
   PLOG_IF(ERROR, !set_event_result) << "SetEvent";
@@ -709,8 +779,8 @@ void CrashpadClient::DumpWithoutCrash(const CONTEXT& context) {
 void CrashpadClient::DumpAndCrash(EXCEPTION_POINTERS* exception_pointers) {
   if (g_signal_exception == INVALID_HANDLE_VALUE) {
     LOG(ERROR) << "not connected";
-    TerminateProcess(GetCurrentProcess(),
-                     kTerminationCodeNotConnectedToHandler);
+    SafeTerminateProcess(GetCurrentProcess(),
+                         kTerminationCodeNotConnectedToHandler);
     return;
   }
 
@@ -761,11 +831,11 @@ bool CrashpadClient::DumpAndCrashTargetProcess(HANDLE process,
 
   const size_t kInjectBufferSize = 4 * 1024;
   WinVMAddress inject_memory =
-      reinterpret_cast<WinVMAddress>(VirtualAllocEx(process,
-                                                    nullptr,
-                                                    kInjectBufferSize,
-                                                    MEM_RESERVE | MEM_COMMIT,
-                                                    PAGE_READWRITE));
+      FromPointerCast<WinVMAddress>(VirtualAllocEx(process,
+                                                   nullptr,
+                                                   kInjectBufferSize,
+                                                   MEM_RESERVE | MEM_COMMIT,
+                                                   PAGE_READWRITE));
   if (!inject_memory) {
     PLOG(ERROR) << "VirtualAllocEx";
     return false;
@@ -775,7 +845,7 @@ bool CrashpadClient::DumpAndCrashTargetProcess(HANDLE process,
   // loaded at the same address in our process as the target, and just look up
   // its address here.
   WinVMAddress raise_exception_address =
-      reinterpret_cast<WinVMAddress>(&RaiseException);
+      FromPointerCast<WinVMAddress>(&RaiseException);
 
   WinVMAddress code_entry_point = 0;
   std::vector<unsigned char> data_to_write;

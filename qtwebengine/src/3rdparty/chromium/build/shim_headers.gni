@@ -14,17 +14,17 @@ template("shim_headers") {
   action(action_name) {
     script = "//tools/generate_shim_headers/generate_shim_headers.py"
     args = [
-             "--generate",
-             "--headers-root",
-             rebase_path(invoker.root_path),
-             "--output-directory",
-             rebase_path(shim_headers_path),
-           ]
+      "--generate",
+      "--headers-root",
+      rebase_path(invoker.root_path),
+      "--output-directory",
+      rebase_path(shim_headers_path),
+    ]
     if (defined(invoker.prefix)) {
       args += [
-                "--prefix",
-                invoker.prefix
-              ]
+        "--prefix",
+        invoker.prefix,
+      ]
     }
     args += invoker.headers
 

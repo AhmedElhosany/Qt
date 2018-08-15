@@ -29,22 +29,13 @@ const CPDF_FormObject* CPDF_FormObject::AsForm() const {
   return this;
 }
 
-CPDF_FormObject* CPDF_FormObject::Clone() const {
-  CPDF_FormObject* obj = new CPDF_FormObject;
-  obj->CopyData(this);
-
-  obj->m_pForm.reset(m_pForm->Clone());
-  obj->m_FormMatrix = m_FormMatrix;
-  return obj;
-}
-
 CPDF_PageObject::Type CPDF_FormObject::GetType() const {
   return FORM;
 }
 
 void CPDF_FormObject::CalcBoundingBox() {
   CFX_FloatRect form_rect = m_pForm->CalcBoundingBox();
-  form_rect.Transform(&m_FormMatrix);
+  m_FormMatrix.TransformRect(form_rect);
   m_Left = form_rect.left;
   m_Bottom = form_rect.bottom;
   m_Right = form_rect.right;

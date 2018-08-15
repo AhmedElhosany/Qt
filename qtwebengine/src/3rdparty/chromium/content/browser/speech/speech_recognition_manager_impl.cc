@@ -26,7 +26,6 @@
 #include "content/public/common/speech_recognition_error.h"
 #include "content/public/common/speech_recognition_result.h"
 #include "media/audio/audio_device_description.h"
-#include "media/audio/audio_manager.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -43,11 +42,6 @@ SpeechRecognitionManager* SpeechRecognitionManager::manager_for_tests_;
 namespace {
 
 SpeechRecognitionManagerImpl* g_speech_recognition_manager_impl;
-
-void ShowAudioInputSettingsOnFileThread(media::AudioManager* audio_manager) {
-  DCHECK_CURRENTLY_ON(BrowserThread::FILE);
-  audio_manager->ShowAudioInputSettings();
-}
 
 }  // namespace
 
@@ -67,32 +61,33 @@ SpeechRecognitionManagerImpl* SpeechRecognitionManagerImpl::GetInstance() {
 }
 
 SpeechRecognitionManagerImpl::SpeechRecognitionManagerImpl(
-      media::AudioManager* audio_manager,
-      MediaStreamManager* media_stream_manager)
-    : audio_manager_(audio_manager),
+    media::AudioSystem* audio_system,
+    media::AudioManager* audio_manager,
+    MediaStreamManager* media_stream_manager)
+    : audio_system_(audio_system),
+      audio_manager_(audio_manager),
       media_stream_manager_(media_stream_manager),
       primary_session_id_(kSessionIDInvalid),
       last_session_id_(kSessionIDInvalid),
       is_dispatching_event_(false),
-      delegate_(GetContentClient()->browser()->
-                    CreateSpeechRecognitionManagerDelegate()),
+      delegate_(GetContentClient()
+                    ->browser()
+                    ->CreateSpeechRecognitionManagerDelegate()),
       weak_factory_(this) {
   DCHECK(!g_speech_recognition_manager_impl);
   g_speech_recognition_manager_impl = this;
 }
 
 SpeechRecognitionManagerImpl::~SpeechRecognitionManagerImpl() {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(g_speech_recognition_manager_impl);
+
   g_speech_recognition_manager_impl = NULL;
 
   for (SessionsTable::iterator it = sessions_.begin(); it != sessions_.end();
        ++it) {
-    // MediaStreamUIProxy must be deleted on the IO thread.
-    BrowserThread::DeleteSoon(BrowserThread::IO, FROM_HERE,
-                              it->second->ui.release());
     delete it->second;
   }
-  sessions_.clear();
 }
 
 int SpeechRecognitionManagerImpl::CreateSession(
@@ -137,11 +132,8 @@ int SpeechRecognitionManagerImpl::CreateSession(
   google_remote_engine->SetConfig(remote_engine_config);
 
   session->recognizer = new SpeechRecognizerImpl(
-      this,
-      session_id,
-      config.continuous,
-      config.interim_results,
-      google_remote_engine);
+      this, audio_system_, audio_manager_, session_id, config.continuous,
+      config.interim_results, google_remote_engine);
 #else
   session->recognizer = new SpeechRecognizerImplAndroid(this, session_id);
 #endif
@@ -164,9 +156,9 @@ void SpeechRecognitionManagerImpl::StartSession(int session_id) {
   if (delegate_) {
     delegate_->CheckRecognitionIsAllowed(
         session_id,
-        base::Bind(&SpeechRecognitionManagerImpl::RecognitionAllowedCallback,
-                   weak_factory_.GetWeakPtr(),
-                   session_id));
+        base::BindOnce(
+            &SpeechRecognitionManagerImpl::RecognitionAllowedCallback,
+            weak_factory_.GetWeakPtr(), session_id));
   }
 }
 
@@ -189,7 +181,7 @@ void SpeechRecognitionManagerImpl::RecognitionAllowedCallback(int session_id,
     context.label = media_stream_manager_->MakeMediaAccessRequest(
         context.render_process_id, context.render_frame_id, context.request_id,
         StreamControls(true, false), url::Origin(GURL(context.context_name)),
-        base::Bind(
+        base::BindOnce(
             &SpeechRecognitionManagerImpl::MediaRequestPermissionCallback,
             weak_factory_.GetWeakPtr(), session_id));
     return;
@@ -282,7 +274,7 @@ void SpeechRecognitionManagerImpl::OnRecognitionStart(int session_id) {
   SessionsTable::iterator iter = sessions_.find(session_id);
   if (iter->second->ui) {
     // Notify the UI that the devices are being used.
-    iter->second->ui->OnStarted(base::Closure(),
+    iter->second->ui->OnStarted(base::OnceClosure(),
                                 MediaStreamUIProxy::WindowIdCallback());
   }
 
@@ -647,22 +639,6 @@ SpeechRecognitionManagerImpl::GetDelegateListener() const {
 const SpeechRecognitionSessionConfig&
 SpeechRecognitionManagerImpl::GetSessionConfig(int session_id) const {
   return GetSession(session_id)->config;
-}
-
-bool SpeechRecognitionManagerImpl::HasAudioInputDevices() {
-  return audio_manager_->HasAudioInputDevices();
-}
-
-base::string16 SpeechRecognitionManagerImpl::GetAudioInputDeviceModel() {
-  return audio_manager_->GetAudioInputDeviceModel();
-}
-
-void SpeechRecognitionManagerImpl::ShowAudioInputSettings() {
-  // Since AudioManager::ShowAudioInputSettings can potentially launch external
-  // processes, do that in the FILE thread to not block the calling threads.
-  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-                          base::Bind(&ShowAudioInputSettingsOnFileThread,
-                                     audio_manager_));
 }
 
 SpeechRecognitionManagerImpl::Session::Session()

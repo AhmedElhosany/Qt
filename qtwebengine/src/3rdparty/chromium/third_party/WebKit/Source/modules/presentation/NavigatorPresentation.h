@@ -5,6 +5,7 @@
 #ifndef NavigatorPresentation_h
 #define NavigatorPresentation_h
 
+#include "core/frame/Navigator.h"
 #include "platform/Supplementable.h"
 #include "platform/heap/Handle.h"
 
@@ -19,7 +20,7 @@ class NavigatorPresentation final
   USING_GARBAGE_COLLECTED_MIXIN(NavigatorPresentation);
 
  public:
-  static NavigatorPresentation& from(Navigator&);
+  static NavigatorPresentation& From(Navigator&);
   static Presentation* presentation(Navigator&);
 
   DECLARE_VIRTUAL_TRACE();
@@ -27,10 +28,10 @@ class NavigatorPresentation final
  private:
   NavigatorPresentation();
 
-  static const char* supplementName();
+  static const char* SupplementName();
   Presentation* presentation();
 
-  Member<Presentation> m_presentation;
+  Member<Presentation> presentation_;
 };
 
 }  // namespace blink

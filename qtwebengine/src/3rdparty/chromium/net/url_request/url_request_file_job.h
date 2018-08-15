@@ -24,9 +24,6 @@
 namespace base {
 class TaskRunner;
 }
-namespace file_util {
-struct FileInfo;
-}
 
 namespace net {
 
@@ -49,7 +46,18 @@ class NET_EXPORT URLRequestFileJob : public URLRequestJob {
   void SetExtraRequestHeaders(const HttpRequestHeaders& headers) override;
 
   // An interface for subclasses who wish to monitor read operations.
+  //
+  // |result| is the net::Error code resulting from attempting to open the file.
+  // Called before OnSeekComplete, only called if the request advanced to the
+  // point the file was opened, without being canceled.
+  virtual void OnOpenComplete(int result);
+  // Called at most once.  On success, |result| is the non-negative offset into
+  // the file that the request will read from.  On seek failure, it's a negative
+  // net:Error code.
   virtual void OnSeekComplete(int64_t result);
+  // Called once per read attempt.  |buf| contains the read data, if any.
+  // |result| is the number of read bytes.  0 (net::OK) indicates EOF, negative
+  // numbers indicate it's a net::Error code.
   virtual void OnReadComplete(IOBuffer* buf, int result);
 
  protected:
@@ -64,6 +72,11 @@ class NET_EXPORT URLRequestFileJob : public URLRequestJob {
   base::FilePath file_path_;
 
  private:
+  // This class checks if a path is accessible via file: scheme, with
+  // NetworkDelegate. Subclasses can disable the check if needed.
+  virtual bool CanAccessFile(const base::FilePath& original_path,
+                             const base::FilePath& absolute_path);
+
   // Meta information about the file. It's used as a member in the
   // URLRequestFileJob and also passed between threads because disk access is
   // necessary to obtain it.
@@ -81,6 +94,8 @@ class NET_EXPORT URLRequestFileJob : public URLRequestJob {
     bool file_exists;
     // Flag showing whether the file name actually refers to a directory.
     bool is_directory;
+    // Absolute path of the file (i.e. symbolic link is resolved).
+    base::FilePath absolute_path;
   };
 
   // Fetches file info on a background thread.

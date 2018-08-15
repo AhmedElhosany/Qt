@@ -5,7 +5,13 @@
 #ifndef UI_DISPLAY_TYPES_DISPLAY_CONSTANTS_H_
 #define UI_DISPLAY_TYPES_DISPLAY_CONSTANTS_H_
 
-namespace ui {
+#include <stdint.h>
+
+namespace display {
+
+// Display ID that represents an invalid display. Often used as a default value
+// before display IDs are known.
+constexpr int64_t kInvalidDisplayId = -1;
 
 // Used to describe the state of a multi-display configuration.
 enum MultipleDisplayState {
@@ -28,10 +34,9 @@ enum DisplayConnectionType {
   DISPLAY_CONNECTION_TYPE_DVI = 1 << 4,
   DISPLAY_CONNECTION_TYPE_DISPLAYPORT = 1 << 5,
   DISPLAY_CONNECTION_TYPE_NETWORK = 1 << 6,
-  DISPLAY_CONNECTION_TYPE_VIRTUAL = 1 << 7,
 
   // Update this when adding a new type.
-  DISPLAY_CONNECTION_TYPE_LAST = DISPLAY_CONNECTION_TYPE_VIRTUAL
+  DISPLAY_CONNECTION_TYPE_LAST = DISPLAY_CONNECTION_TYPE_NETWORK
 };
 
 // Content protection methods applied on video output.
@@ -60,6 +65,6 @@ enum ColorCalibrationProfile {
   NUM_COLOR_PROFILES,
 };
 
-}  // namespace ui
+}  // namespace display
 
 #endif  // UI_DISPLAY_TYPES_DISPLAY_CONSTANTS_H_

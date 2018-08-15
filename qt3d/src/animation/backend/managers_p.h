@@ -54,10 +54,12 @@
 #include <QtGlobal>
 #include <Qt3DAnimation/private/handle_types_p.h>
 #include <Qt3DAnimation/private/animationclip_p.h>
+#include <Qt3DAnimation/private/clock_p.h>
 #include <Qt3DAnimation/private/blendedclipanimator_p.h>
 #include <Qt3DAnimation/private/clipanimator_p.h>
 #include <Qt3DAnimation/private/channelmapping_p.h>
 #include <Qt3DAnimation/private/channelmapper_p.h>
+#include <Qt3DAnimation/private/skeleton_p.h>
 #include <Qt3DCore/private/qresourcemanager_p.h>
 
 QT_BEGIN_NAMESPACE
@@ -73,6 +75,14 @@ class AnimationClipLoaderManager : public Qt3DCore::QResourceManager<
 {
 public:
     AnimationClipLoaderManager() {}
+};
+
+class ClockManager : public Qt3DCore::QResourceManager<
+    Clock,
+    Qt3DCore::QNodeId>
+{
+public:
+    ClockManager() {}
 };
 
 class ClipAnimatorManager : public Qt3DCore::QResourceManager<
@@ -122,6 +132,14 @@ private:
     QHash<Qt3DCore::QNodeId, ClipBlendNode *> m_nodes;
 };
 
+class SkeletonManager : public Qt3DCore::QResourceManager<
+        Skeleton,
+        Qt3DCore::QNodeId>
+{
+public:
+    SkeletonManager() {}
+};
+
 } // namespace Animation
 } // namespace Qt3DAnimation
 
@@ -130,6 +148,7 @@ Q_DECLARE_RESOURCE_INFO(Qt3DAnimation::Animation::ClipAnimator, Q_REQUIRES_CLEAN
 Q_DECLARE_RESOURCE_INFO(Qt3DAnimation::Animation::BlendedClipAnimator, Q_REQUIRES_CLEANUP)
 Q_DECLARE_RESOURCE_INFO(Qt3DAnimation::Animation::ChannelMapping, Q_REQUIRES_CLEANUP)
 Q_DECLARE_RESOURCE_INFO(Qt3DAnimation::Animation::ChannelMapper, Q_REQUIRES_CLEANUP)
+Q_DECLARE_RESOURCE_INFO(Qt3DAnimation::Animation::Skeleton, Q_REQUIRES_CLEANUP)
 
 QT_END_NAMESPACE
 

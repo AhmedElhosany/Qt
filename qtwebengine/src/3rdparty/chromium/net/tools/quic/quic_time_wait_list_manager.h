@@ -15,13 +15,14 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "net/base/linked_hash_map.h"
 #include "net/quic/core/quic_blocked_writer_interface.h"
 #include "net/quic/core/quic_connection.h"
 #include "net/quic/core/quic_framer.h"
 #include "net/quic/core/quic_packet_writer.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/quic/core/quic_session.h"
+#include "net/quic/platform/api/quic_containers.h"
+#include "net/quic/platform/api/quic_flags.h"
 
 namespace net {
 
@@ -82,11 +83,9 @@ class QuicTimeWaitListManager : public QuicBlockedWriterInterface {
   // connection_id. Sending of the public reset packet is throttled by using
   // exponential back off. DCHECKs for the connection_id to be in time wait
   // state. virtual to override in tests.
-  virtual void ProcessPacket(const IPEndPoint& server_address,
-                             const IPEndPoint& client_address,
-                             QuicConnectionId connection_id,
-                             QuicPacketNumber packet_number,
-                             const QuicEncryptedPacket& packet);
+  virtual void ProcessPacket(const QuicSocketAddress& server_address,
+                             const QuicSocketAddress& client_address,
+                             QuicConnectionId connection_id);
 
   // Called by the dispatcher when the underlying socket becomes writable again,
   // since we might need to send pending public reset packets which we didn't
@@ -113,12 +112,17 @@ class QuicTimeWaitListManager : public QuicBlockedWriterInterface {
   virtual void SendVersionNegotiationPacket(
       QuicConnectionId connection_id,
       const QuicVersionVector& supported_versions,
-      const IPEndPoint& server_address,
-      const IPEndPoint& client_address);
+      const QuicSocketAddress& server_address,
+      const QuicSocketAddress& client_address);
 
  protected:
   virtual std::unique_ptr<QuicEncryptedPacket> BuildPublicReset(
       const QuicPublicResetPacket& packet);
+
+  // Creates a public reset packet and sends it or queues it to be sent later.
+  virtual void SendPublicReset(const QuicSocketAddress& server_address,
+                               const QuicSocketAddress& client_address,
+                               QuicConnectionId connection_id);
 
  private:
   friend class test::QuicDispatcherPeer;
@@ -130,12 +134,6 @@ class QuicTimeWaitListManager : public QuicBlockedWriterInterface {
   // Decides if a packet should be sent for this connection_id based on the
   // number of received packets.
   bool ShouldSendResponse(int received_packet_count);
-
-  // Creates a public reset packet and sends it or queues it to be sent later.
-  void SendPublicReset(const IPEndPoint& server_address,
-                       const IPEndPoint& client_address,
-                       QuicConnectionId connection_id,
-                       QuicPacketNumber rejected_packet_number);
 
   // Either sends the packet and deletes it or makes pending_packets_queue_ the
   // owner of the packet.
@@ -181,8 +179,8 @@ class QuicTimeWaitListManager : public QuicBlockedWriterInterface {
     bool connection_rejected_statelessly;
   };
 
-  // linked_hash_map allows lookup by ConnectionId and traversal in add order.
-  typedef linked_hash_map<QuicConnectionId, ConnectionIdData> ConnectionIdMap;
+  // QuicLinkedHashMap allows lookup by ConnectionId and traversal in add order.
+  typedef QuicLinkedHashMap<QuicConnectionId, ConnectionIdData> ConnectionIdMap;
   ConnectionIdMap connection_id_map_;
 
   // Pending public reset packets that need to be sent out to the client

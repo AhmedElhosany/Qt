@@ -29,7 +29,6 @@
 """Chromium Mac implementation of the Port interface."""
 
 import logging
-import signal
 
 from webkitpy.layout_tests.port import base
 
@@ -38,7 +37,7 @@ _log = logging.getLogger(__name__)
 
 
 class MacPort(base.Port):
-    SUPPORTED_VERSIONS = ('mac10.9', 'mac10.10', 'mac10.11', 'retina')
+    SUPPORTED_VERSIONS = ('mac10.9', 'mac10.10', 'mac10.11', 'mac10.12', 'retina')
     port_name = 'mac'
 
     # FIXME: We treat Retina (High-DPI) devices as if they are running
@@ -49,12 +48,11 @@ class MacPort(base.Port):
     # We also currently only support Retina on 10.11.
 
     FALLBACK_PATHS = {}
-    FALLBACK_PATHS['mac10.11'] = ['mac']
+    FALLBACK_PATHS['mac10.12'] = ['mac']
+    FALLBACK_PATHS['mac10.11'] = ['mac-mac10.11'] + FALLBACK_PATHS['mac10.12']
     FALLBACK_PATHS['mac10.10'] = ['mac-mac10.10'] + FALLBACK_PATHS['mac10.11']
     FALLBACK_PATHS['mac10.9'] = ['mac-mac10.9'] + FALLBACK_PATHS['mac10.10']
     FALLBACK_PATHS['retina'] = ['mac-retina', 'mac']
-
-    DEFAULT_BUILD_DIRECTORIES = ('xcodebuild', 'out')
 
     CONTENT_SHELL_NAME = 'Content Shell'
 
@@ -63,10 +61,7 @@ class MacPort(base.Port):
     @classmethod
     def determine_full_port_name(cls, host, options, port_name):
         if port_name.endswith('mac'):
-            if host.platform.os_version in ('future',):
-                version = 'mac10.11'
-            else:
-                version = host.platform.os_version
+            version = host.platform.os_version
             if host.platform.is_highdpi():
                 version = 'retina'
             return port_name + '-' + version
@@ -93,9 +88,6 @@ class MacPort(base.Port):
     # PROTECTED METHODS
     #
 
-    def _wdiff_missing_message(self):
-        return 'wdiff is not installed; please install from MacPorts or elsewhere'
-
     def path_to_apache(self):
         return '/usr/sbin/httpd'
 
@@ -105,6 +97,3 @@ class MacPort(base.Port):
 
     def _path_to_driver(self, target=None):
         return self._build_path_with_target(target, self.driver_name() + '.app', 'Contents', 'MacOS', self.driver_name())
-
-    def _path_to_wdiff(self):
-        return 'wdiff'

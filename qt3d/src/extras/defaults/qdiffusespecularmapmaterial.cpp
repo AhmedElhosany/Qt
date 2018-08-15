@@ -46,6 +46,7 @@
 #include <Qt3DRender/qtexture.h>
 #include <Qt3DRender/qtechnique.h>
 #include <Qt3DRender/qshaderprogram.h>
+#include <Qt3DRender/qshaderprogrambuilder.h>
 #include <Qt3DRender/qparameter.h>
 #include <Qt3DRender/qrenderpass.h>
 #include <Qt3DRender/qgraphicsapifilter.h>
@@ -76,7 +77,9 @@ QDiffuseSpecularMapMaterialPrivate::QDiffuseSpecularMapMaterialPrivate()
     , m_diffuseSpecularMapGL2RenderPass(new QRenderPass())
     , m_diffuseSpecularMapES2RenderPass(new QRenderPass())
     , m_diffuseSpecularMapGL3Shader(new QShaderProgram())
+    , m_diffuseSpecularMapGL3ShaderBuilder(new QShaderProgramBuilder())
     , m_diffuseSpecularMapGL2ES2Shader(new QShaderProgram())
+    , m_diffuseSpecularMapGL2ES2ShaderBuilder(new QShaderProgramBuilder())
     , m_filterKey(new QFilterKey)
 {
     m_diffuseTexture->setMagnificationFilter(QAbstractTexture::Linear);
@@ -94,6 +97,8 @@ QDiffuseSpecularMapMaterialPrivate::QDiffuseSpecularMapMaterialPrivate()
 
 void QDiffuseSpecularMapMaterialPrivate::init()
 {
+    Q_Q(QDiffuseSpecularMapMaterial);
+
     connect(m_ambientParameter, &Qt3DRender::QParameter::valueChanged,
             this, &QDiffuseSpecularMapMaterialPrivate::handleAmbientChanged);
     connect(m_diffuseParameter, &Qt3DRender::QParameter::valueChanged,
@@ -105,10 +110,21 @@ void QDiffuseSpecularMapMaterialPrivate::init()
     connect(m_textureScaleParameter, &Qt3DRender::QParameter::valueChanged,
             this, &QDiffuseSpecularMapMaterialPrivate::handleTextureScaleChanged);
 
-    m_diffuseSpecularMapGL3Shader->setVertexShaderCode(QShaderProgram::loadSource(QUrl(QStringLiteral("qrc:/shaders/gl3/diffusemap.vert"))));
-    m_diffuseSpecularMapGL3Shader->setFragmentShaderCode(QShaderProgram::loadSource(QUrl(QStringLiteral("qrc:/shaders/gl3/diffusespecularmap.frag"))));
-    m_diffuseSpecularMapGL2ES2Shader->setVertexShaderCode(QShaderProgram::loadSource(QUrl(QStringLiteral("qrc:/shaders/es2/diffusemap.vert"))));
-    m_diffuseSpecularMapGL2ES2Shader->setFragmentShaderCode(QShaderProgram::loadSource(QUrl(QStringLiteral("qrc:/shaders/es2/diffusespecularmap.frag"))));
+    m_diffuseSpecularMapGL3Shader->setVertexShaderCode(QShaderProgram::loadSource(QUrl(QStringLiteral("qrc:/shaders/gl3/default.vert"))));
+    m_diffuseSpecularMapGL3ShaderBuilder->setParent(q);
+    m_diffuseSpecularMapGL3ShaderBuilder->setShaderProgram(m_diffuseSpecularMapGL3Shader);
+    m_diffuseSpecularMapGL3ShaderBuilder->setFragmentShaderGraph(QUrl(QStringLiteral("qrc:/shaders/graphs/phong.frag.json")));
+    m_diffuseSpecularMapGL3ShaderBuilder->setEnabledLayers({QStringLiteral("diffuseTexture"),
+                                                            QStringLiteral("specularTexture"),
+                                                            QStringLiteral("normal")});
+
+    m_diffuseSpecularMapGL2ES2Shader->setVertexShaderCode(QShaderProgram::loadSource(QUrl(QStringLiteral("qrc:/shaders/es2/default.vert"))));
+    m_diffuseSpecularMapGL2ES2ShaderBuilder->setParent(q);
+    m_diffuseSpecularMapGL2ES2ShaderBuilder->setShaderProgram(m_diffuseSpecularMapGL2ES2Shader);
+    m_diffuseSpecularMapGL2ES2ShaderBuilder->setFragmentShaderGraph(QUrl(QStringLiteral("qrc:/shaders/graphs/phong.frag.json")));
+    m_diffuseSpecularMapGL2ES2ShaderBuilder->setEnabledLayers({QStringLiteral("diffuseTexture"),
+                                                               QStringLiteral("specularTexture"),
+                                                               QStringLiteral("normal")});
 
     m_diffuseSpecularMapGL3Technique->graphicsApiFilter()->setApi(QGraphicsApiFilter::OpenGL);
     m_diffuseSpecularMapGL3Technique->graphicsApiFilter()->setMajorVersion(3);
@@ -125,7 +141,6 @@ void QDiffuseSpecularMapMaterialPrivate::init()
     m_diffuseSpecularMapES2Technique->graphicsApiFilter()->setMinorVersion(0);
     m_diffuseSpecularMapES2Technique->graphicsApiFilter()->setProfile(QGraphicsApiFilter::NoProfile);
 
-    Q_Q(QDiffuseSpecularMapMaterial);
     m_filterKey->setParent(q);
     m_filterKey->setName(QStringLiteral("renderingStyle"));
     m_filterKey->setValue(QStringLiteral("forward"));
@@ -192,6 +207,9 @@ void QDiffuseSpecularMapMaterialPrivate::handleTextureScaleChanged(const QVarian
     \inmodule Qt3DExtras
     \since 5.7
     \inherits Qt3DRender::QMaterial
+
+    \deprecated
+    This class is deprecated; use Qt3DExtras::QDiffuseSpecularMaterial instead.
 
     The specular lighting effect is based on the combination of 3 lighting components ambient,
     diffuse and specular. The relative strengths of these components are controlled by means of

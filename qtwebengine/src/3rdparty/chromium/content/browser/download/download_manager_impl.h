@@ -40,6 +40,7 @@ class DownloadRequestHandleInterface;
 class ResourceContext;
 
 class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
+                                           public UrlDownloader::Delegate,
                                            private DownloadItemImplDelegate {
  public:
   using DownloadItemImplCreated = base::Callback<void(DownloadItemImpl*)>;
@@ -61,9 +62,6 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
       std::unique_ptr<DownloadRequestHandleInterface> request_handle,
       const DownloadItemImplCreated& item_created);
 
-  // Notifies DownloadManager about a successful completion of |download_item|.
-  void OnSavePackageSuccessfullyFinished(DownloadItem* download_item);
-
   // DownloadManager functions.
   void SetDelegate(DownloadManagerDelegate* delegate) override;
   DownloadManagerDelegate* GetDelegate() const override;
@@ -78,7 +76,6 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
       const base::Callback<bool(const GURL&)>& url_filter,
       base::Time remove_begin,
       base::Time remove_end) override;
-  int RemoveAllDownloads() override;
   void DownloadUrl(std::unique_ptr<DownloadUrlParameters> params) override;
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
@@ -94,8 +91,8 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
       const GURL& tab_refererr_url,
       const std::string& mime_type,
       const std::string& original_mime_type,
-      const base::Time& start_time,
-      const base::Time& end_time,
+      base::Time start_time,
+      base::Time end_time,
       const std::string& etag,
       const std::string& last_modified,
       int64_t received_bytes,
@@ -104,7 +101,12 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
       content::DownloadItem::DownloadState state,
       DownloadDangerType danger_type,
       DownloadInterruptReason interrupt_reason,
-      bool opened) override;
+      bool opened,
+      base::Time last_access_time,
+      bool transient,
+      const std::vector<DownloadItem::ReceivedSlice>& received_slices) override;
+  void PostInitialization() override;
+  bool IsManagerInitialized() const override;
   int InProgressCount() const override;
   int NonMaliciousInProgressCount() const override;
   BrowserContext* GetBrowserContext() const override;
@@ -112,14 +114,19 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
   DownloadItem* GetDownload(uint32_t id) override;
   DownloadItem* GetDownloadByGuid(const std::string& guid) override;
 
+  // UrlDownloader::Delegate implementation.
+  void OnUrlDownloaderStarted(
+      std::unique_ptr<DownloadCreateInfo> download_create_info,
+      std::unique_ptr<ByteStreamReader> stream_reader,
+      const DownloadUrlParameters::OnStartedCallback& callback) override;
+  void OnUrlDownloaderStopped(UrlDownloader* downloader) override;
+
   // For testing; specifically, accessed from TestFileErrorInjector.
   void SetDownloadItemFactoryForTesting(
       std::unique_ptr<DownloadItemFactory> item_factory);
   void SetDownloadFileFactoryForTesting(
       std::unique_ptr<DownloadFileFactory> file_factory);
   virtual DownloadFileFactory* GetDownloadFileFactoryForTesting();
-
-  void RemoveUrlDownloader(UrlDownloader* downloader);
 
   // Helper function to initiate a download request. This function initiates
   // the download using functionality provided by the
@@ -140,7 +147,6 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
   using DownloadSet = std::set<DownloadItem*>;
   using DownloadGuidMap = std::unordered_map<std::string, DownloadItemImpl*>;
   using DownloadItemImplVector = std::vector<DownloadItemImpl*>;
-  using DownloadRemover = base::Callback<bool(const DownloadItemImpl*)>;
 
   // For testing.
   friend class DownloadManagerTest;
@@ -174,9 +180,6 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
   // Updates the state of the file and then notifies this update to the file's
   // observer.
   void OnFileExistenceChecked(uint32_t download_id, bool result);
-
-  // Remove all downloads for which |remover| returns true.
-  int RemoveDownloads(const DownloadRemover& remover);
 
   // Overridden from DownloadItemImplDelegate
   // (Note that |GetBrowserContext| are present in both interfaces.)
@@ -223,6 +226,9 @@ class CONTENT_EXPORT DownloadManagerImpl : public DownloadManager,
 
   // True if the download manager has been initialized and requires a shutdown.
   bool shutdown_needed_;
+
+  // True if the download manager has been initialized and loaded all the data.
+  bool initialized_;
 
   // Observers that want to be notified of changes to the set of downloads.
   base::ObserverList<Observer> observers_;

@@ -14,10 +14,9 @@
 #include "base/bind_helpers.h"
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/message_loop/message_loop.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/sys_info.h"
 #include "base/task_runner_util.h"
 #include "base/threading/thread.h"
@@ -27,7 +26,7 @@
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/ipc/service/gpu_channel.h"
-#include "media/base/android/media_codec_bridge.h"
+#include "media/base/android/media_codec_bridge_impl.h"
 #include "media/base/android/media_codec_util.h"
 #include "media/base/bind_to_current_loop.h"
 #include "media/base/bitstream_buffer.h"
@@ -35,15 +34,20 @@
 #include "media/base/media.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/video_decoder_config.h"
+#include "media/gpu/android/device_info.h"
+#include "media/gpu/android/promotion_hint_aggregator_impl.h"
+#include "media/gpu/android_video_surface_chooser_impl.h"
 #include "media/gpu/avda_picture_buffer_manager.h"
+#include "media/gpu/content_video_view_overlay.h"
 #include "media/gpu/shared_memory_region.h"
+#include "media/mojo/features.h"
 #include "media/video/picture.h"
 #include "ui/gl/android/scoped_java_surface.h"
 #include "ui/gl/android/surface_texture.h"
 #include "ui/gl/gl_bindings.h"
 
-#if defined(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
-#include "media/mojo/services/mojo_cdm_service.h"
+#if BUILDFLAG(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
+#include "media/cdm/cdm_manager.h"  // nogncheck
 #endif
 
 #define NOTIFY_ERROR(error_code, error_message)      \
@@ -106,23 +110,30 @@ constexpr base::TimeDelta NoWaitTimeOut = base::TimeDelta::FromMicroseconds(0);
 
 constexpr base::TimeDelta IdleTimerTimeOut = base::TimeDelta::FromSeconds(1);
 
+// On low end devices (< KitKat is always low-end due to buggy MediaCodec),
+// defer the surface creation until the codec is actually used if we know no
+// software fallback exists.
+bool ShouldDeferSurfaceCreation(AVDACodecAllocator* codec_allocator,
+                                const OverlayInfo& overlay_info,
+                                VideoCodec codec,
+                                DeviceInfo* device_info) {
+  // TODO(liberato): We might still want to defer if we've got a routing
+  // token.  It depends on whether we want to use it right away or not.
+  if (overlay_info.HasValidSurfaceId() || overlay_info.HasValidRoutingToken())
+    return false;
+
+  return codec == kCodecH264 && codec_allocator->IsAnyRegisteredAVDA() &&
+         device_info->SdkVersion() <= base::android::SDK_VERSION_JELLY_BEAN_MR2;
+}
+
 }  // namespace
 
-static base::LazyInstance<AVDACodecAllocator>::Leaky g_avda_codec_allocator =
-    LAZY_INSTANCE_INITIALIZER;
-
-// AVDAManager manages shared resources for a number of AVDA instances.
-// Its responsibilities include:
-//  - Starting and stopping a shared "construction" thread for instantiating and
-//    releasing MediaCodecs.
-//  - Detecting when a task has hung on the construction thread so AVDAs can
-//    stop using it.
-//  - Running a RepeatingTimer so that AVDAs can get a regular callback to
-//    DoIOTask().
-//  - Tracking the allocation of surfaces to AVDAs and delivering callbacks when
-//    surfaces are released.
+// AVDAManager manages a RepeatingTimer so that AVDAs can get a regular callback
+// to DoIOTask().
 class AVDAManager {
  public:
+  AVDAManager() {}
+
   // Request periodic callback of |avda|->DoIOTask(). Does nothing if the
   // instance is already registered and the timer started. The first request
   // will start the repeating timer on an interval of DecodePollDelay.
@@ -158,79 +169,8 @@ class AVDAManager {
       io_timer_.Stop();
   }
 
-  // |avda| would like to use |surface_id|.  If it is not busy, then mark it
-  // as busy and return true.  If it is busy, then replace any existing waiter,
-  // make |avda| the current waiter, and return false.  Any existing waiter
-  // is assumed to be on the way out, so we fail its allocation request.
-  bool AllocateSurface(int surface_id, AndroidVideoDecodeAccelerator* avda) {
-    // Nobody has to wait for no surface.
-    if (surface_id == SurfaceManager::kNoSurfaceID)
-      return true;
-
-    auto iter = surface_waiter_map_.find(surface_id);
-    if (iter == surface_waiter_map_.end()) {
-      // SurfaceView isn't allocated.  Succeed.
-      surface_waiter_map_[surface_id].owner = avda;
-      return true;
-    }
-
-    // SurfaceView is already allocated.
-    if (iter->second.waiter) {
-      // Some other AVDA is waiting.  |avda| will replace it, so notify it
-      // that it will fail.
-      iter->second.waiter->OnSurfaceAvailable(false);
-      iter->second.waiter = nullptr;
-    }
-
-    // |avda| is now waiting.
-    iter->second.waiter = avda;
-    return false;
-  }
-
-  // Clear any waiting request for |surface_id| by |avda|.  It is okay if
-  // |waiter| is not waiting and/or isn't the owner of |surface_id|.
-  void DeallocateSurface(int surface_id, AndroidVideoDecodeAccelerator* avda) {
-    SurfaceWaiterMap::iterator iter = surface_waiter_map_.find(surface_id);
-    if (iter == surface_waiter_map_.end())
-      return;
-
-    // If |avda| was waiting, then remove it without OnSurfaceAvailable.
-    if (iter->second.waiter == avda)
-      iter->second.waiter = nullptr;
-
-    // If |avda| is the owner, then let the waiter have it.
-    if (iter->second.owner != avda)
-      return;
-
-    AndroidVideoDecodeAccelerator* waiter = iter->second.waiter;
-    if (!waiter) {
-      // No waiter -- remove the record and return explicitly since |iter| is
-      // no longer valid.
-      surface_waiter_map_.erase(iter);
-      return;
-    }
-
-    // Promote |waiter| to be the owner.
-    iter->second.owner = waiter;
-    iter->second.waiter = nullptr;
-    waiter->OnSurfaceAvailable(true);
-  }
-
-  // On low end devices (< KitKat is always low-end due to buggy MediaCodec),
-  // defer the surface creation until the codec is actually used if we know no
-  // software fallback exists.
-  bool ShouldDeferSurfaceCreation(int surface_id, VideoCodec codec) {
-    return surface_id == SurfaceManager::kNoSurfaceID && codec == kCodecH264 &&
-           g_avda_codec_allocator.Get().IsAnyRegisteredAVDA() &&
-           (base::android::BuildInfo::GetInstance()->sdk_int() <= 18 ||
-            base::SysInfo::IsLowEndDevice());
-  }
-
  private:
-  friend struct base::DefaultLazyInstanceTraits<AVDAManager>;
-
-  AVDAManager() {}
-  ~AVDAManager() { NOTREACHED(); }
+  ~AVDAManager() = delete;
 
   void RunTimer() {
     {
@@ -254,14 +194,6 @@ class AVDAManager {
   // All AVDA instances that would like us to poll DoIOTask.
   std::set<AndroidVideoDecodeAccelerator*> timer_avda_instances_;
 
-  struct OwnerRecord {
-    AndroidVideoDecodeAccelerator* owner = nullptr;
-    AndroidVideoDecodeAccelerator* waiter = nullptr;
-  };
-  // [surface id] = OwnerRecord for that surface.
-  using SurfaceWaiterMap = std::map<int, OwnerRecord>;
-  SurfaceWaiterMap surface_waiter_map_;
-
   // Since we can't delete while iterating when using a set, defer erasure until
   // after iteration complete.
   bool timer_running_ = false;
@@ -275,12 +207,10 @@ class AVDAManager {
   DISALLOW_COPY_AND_ASSIGN(AVDAManager);
 };
 
-static base::LazyInstance<AVDAManager>::Leaky g_avda_manager =
-    LAZY_INSTANCE_INITIALIZER;
-
-AndroidVideoDecodeAccelerator::CodecConfig::CodecConfig() {}
-
-AndroidVideoDecodeAccelerator::CodecConfig::~CodecConfig() {}
+static AVDAManager* GetManager() {
+  static AVDAManager* manager = new AVDAManager();
+  return manager;
+}
 
 AndroidVideoDecodeAccelerator::BitstreamRecord::BitstreamRecord(
     const BitstreamBuffer& bitstream_buffer)
@@ -296,29 +226,40 @@ AndroidVideoDecodeAccelerator::BitstreamRecord::BitstreamRecord(
 AndroidVideoDecodeAccelerator::BitstreamRecord::~BitstreamRecord() {}
 
 AndroidVideoDecodeAccelerator::AndroidVideoDecodeAccelerator(
+    AVDACodecAllocator* codec_allocator,
+    std::unique_ptr<AndroidVideoSurfaceChooser> surface_chooser,
     const MakeGLContextCurrentCallback& make_context_current_cb,
-    const GetGLES2DecoderCallback& get_gles2_decoder_cb)
-    : client_(NULL),
+    const GetGLES2DecoderCallback& get_gles2_decoder_cb,
+    const AndroidOverlayMojoFactoryCB& overlay_factory_cb,
+    DeviceInfo* device_info)
+    : client_(nullptr),
+      codec_allocator_(codec_allocator),
       make_context_current_cb_(make_context_current_cb),
       get_gles2_decoder_cb_(get_gles2_decoder_cb),
-      state_(NO_ERROR),
+      state_(BEFORE_OVERLAY_INIT),
       picturebuffers_requested_(false),
       picture_buffer_manager_(this),
-      drain_type_(DRAIN_TYPE_NONE),
       media_drm_bridge_cdm_context_(nullptr),
       cdm_registration_id_(0),
       pending_input_buf_index_(-1),
+      during_initialize_(false),
       deferred_initialization_pending_(false),
       codec_needs_reset_(false),
       defer_surface_creation_(false),
+      surface_chooser_(std::move(surface_chooser)),
+      device_info_(device_info),
+      force_defer_surface_creation_for_testing_(false),
+      overlay_factory_cb_(overlay_factory_cb),
+      promotion_hint_aggregator_(
+          base::MakeUnique<PromotionHintAggregatorImpl>()),
       weak_this_factory_(this) {}
 
 AndroidVideoDecodeAccelerator::~AndroidVideoDecodeAccelerator() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  g_avda_manager.Get().StopTimer(this);
-  g_avda_codec_allocator.Get().StopThread(this);
+  GetManager()->StopTimer(this);
+  codec_allocator_->StopThread(this);
 
-#if defined(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
+#if BUILDFLAG(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
   if (!media_drm_bridge_cdm_context_)
     return;
 
@@ -329,15 +270,16 @@ AndroidVideoDecodeAccelerator::~AndroidVideoDecodeAccelerator() {
       MediaDrmBridgeCdmContext::MediaCryptoReadyCB());
 
   media_drm_bridge_cdm_context_->UnregisterPlayer(cdm_registration_id_);
-#endif  // defined(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
+#endif  // BUILDFLAG(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
 }
 
 bool AndroidVideoDecodeAccelerator::Initialize(const Config& config,
                                                Client* client) {
-  DVLOG(1) << __FUNCTION__ << ": " << config.AsHumanReadableString();
+  DVLOG(1) << __func__ << ": " << config.AsHumanReadableString();
   TRACE_EVENT0("media", "AVDA::Initialize");
   DCHECK(!media_codec_);
   DCHECK(thread_checker_.CalledOnValidThread());
+  base::AutoReset<bool> scoper(&during_initialize_, true);
 
   if (make_context_current_cb_.is_null() || get_gles2_decoder_cb_.is_null()) {
     DLOG(ERROR) << "GL callbacks are required for this VDA";
@@ -353,32 +295,33 @@ bool AndroidVideoDecodeAccelerator::Initialize(const Config& config,
   client_ = client;
   config_ = config;
   codec_config_ = new CodecConfig();
-  codec_config_->codec_ = VideoCodecProfileToVideoCodec(config.profile);
-  codec_config_->initial_expected_coded_size_ =
+  codec_config_->codec = VideoCodecProfileToVideoCodec(config.profile);
+  codec_config_->initial_expected_coded_size =
       config.initial_expected_coded_size;
 
-  if (codec_config_->codec_ != kCodecVP8 &&
-      codec_config_->codec_ != kCodecVP9 &&
+  if (codec_config_->codec != kCodecVP8 && codec_config_->codec != kCodecVP9 &&
 #if BUILDFLAG(ENABLE_HEVC_DEMUXING)
-      codec_config_->codec_ != kCodecHEVC &&
+      codec_config_->codec != kCodecHEVC &&
 #endif
-      codec_config_->codec_ != kCodecH264) {
-    DLOG(ERROR) << "Unsupported profile: " << config.profile;
+      codec_config_->codec != kCodecH264) {
+    DLOG(ERROR) << "Unsupported profile: " << GetProfileName(config.profile);
     return false;
   }
 
-  if (codec_config_->codec_ == kCodecH264) {
-    codec_config_->csd0_ = config.sps;
-    codec_config_->csd1_ = config.pps;
+  codec_config_->software_codec_forbidden =
+      IsMediaCodecSoftwareDecodingForbidden();
+
+  if (codec_config_->codec == kCodecH264) {
+    codec_config_->csd0 = config.sps;
+    codec_config_->csd1 = config.pps;
   }
 
   // Only use MediaCodec for VP8/9 if it's likely backed by hardware
   // or if the stream is encrypted.
   if (IsMediaCodecSoftwareDecodingForbidden() &&
-      VideoCodecBridge::IsKnownUnaccelerated(codec_config_->codec_,
-                                             MEDIA_CODEC_DECODER)) {
-    DVLOG(1) << "Initialization failed: "
-             << (codec_config_->codec_ == kCodecVP8 ? "vp8" : "vp9")
+      MediaCodecUtil::IsKnownUnaccelerated(codec_config_->codec,
+                                           MediaCodecDirection::DECODER)) {
+    DVLOG(1) << "Initialization failed: " << GetCodecName(codec_config_->codec)
              << " is not hardware accelerated";
     return false;
   }
@@ -393,80 +336,190 @@ bool AndroidVideoDecodeAccelerator::Initialize(const Config& config,
   // surface ID from the codec configuration.
   DCHECK(!pending_surface_id_);
 
-  // If we're low on resources, we may decide to defer creation of the surface
-  // until the codec is actually used.
-  if (g_avda_manager.Get().ShouldDeferSurfaceCreation(config_.surface_id,
-                                                      codec_config_->codec_)) {
-    DCHECK(!deferred_initialization_pending_);
-
-    // We should never be here if a SurfaceView is required.
-    DCHECK_EQ(config_.surface_id, SurfaceManager::kNoSurfaceID);
-    DCHECK(g_avda_manager.Get().AllocateSurface(config_.surface_id, this));
-
-    defer_surface_creation_ = true;
-    NotifyInitializationComplete(true);
-    return true;
-  }
-
   // We signaled that we support deferred initialization, so see if the client
   // does also.
   deferred_initialization_pending_ = config.is_deferred_initialization_allowed;
-  if (config_.is_encrypted && !deferred_initialization_pending_) {
-    DLOG(ERROR) << "Deferred initialization must be used for encrypted streams";
+
+  // If we're low on resources, we may decide to defer creation of the surface
+  // until the codec is actually used.
+  if (force_defer_surface_creation_for_testing_ ||
+      ShouldDeferSurfaceCreation(codec_allocator_, config_.overlay_info,
+                                 codec_config_->codec, device_info_)) {
+    // We should never be here if a SurfaceView is required.
+    // TODO(liberato): This really isn't true with AndroidOverlay.
+    DCHECK(!config_.overlay_info.HasValidSurfaceId());
+    defer_surface_creation_ = true;
+  }
+
+  if (!codec_allocator_->StartThread(this)) {
+    LOG(ERROR) << "Unable to start thread";
     return false;
   }
 
-  if (g_avda_manager.Get().AllocateSurface(config_.surface_id, this)) {
-    // We have successfully owned the surface, so finish initialization now.
-    return InitializePictureBufferManager();
-  }
-
-  // We have to wait for some other AVDA instance to free up the surface.
-  // OnSurfaceAvailable will be called when it's available.
-  return true;
-}
-
-void AndroidVideoDecodeAccelerator::OnSurfaceAvailable(bool success) {
-  DCHECK(deferred_initialization_pending_);
-  DCHECK(!defer_surface_creation_);
-
-  if (!success || !InitializePictureBufferManager()) {
-    NotifyInitializationComplete(false);
-    deferred_initialization_pending_ = false;
-  }
-}
-
-bool AndroidVideoDecodeAccelerator::InitializePictureBufferManager() {
-  if (!make_context_current_cb_.Run()) {
-    LOG(ERROR) << "Failed to make this decoder's GL context current.";
-    return false;
-  }
-
-  codec_config_->surface_ =
-      picture_buffer_manager_.Initialize(config_.surface_id);
-  if (codec_config_->surface_.IsEmpty())
-    return false;
-
-  on_destroying_surface_cb_ =
-      base::Bind(&AndroidVideoDecodeAccelerator::OnDestroyingSurface,
-                 weak_this_factory_.GetWeakPtr());
-  AVDASurfaceTracker::GetInstance()->RegisterOnDestroyingSurfaceCallback(
-      on_destroying_surface_cb_);
-
-  if (!g_avda_codec_allocator.Get().StartThread(this))
-    return false;
-
-  // If we are encrypted, then we aren't able to create the codec yet.
-  if (config_.is_encrypted) {
+  // For encrypted media, start by initializing the CDM.  Otherwise, start with
+  // the surface.
+  if (config_.is_encrypted()) {
+    if (!deferred_initialization_pending_) {
+      DLOG(ERROR)
+          << "Deferred initialization must be used for encrypted streams";
+      return false;
+    }
     InitializeCdm();
-    return true;
+  } else {
+    StartSurfaceChooser();
   }
 
-  if (deferred_initialization_pending_ || defer_surface_creation_) {
-    defer_surface_creation_ = false;
-    ConfigureMediaCodecAsynchronously();
-    return true;
+  // Fail / complete / defer initialization.
+  return state_ != ERROR;
+}
+
+void AndroidVideoDecodeAccelerator::StartSurfaceChooser() {
+  DCHECK_EQ(state_, BEFORE_OVERLAY_INIT);
+
+  // If we're trying to defer surface creation, then don't notify the chooser
+  // that it may start getting surfaces yet.  We'll do that later.
+  if (defer_surface_creation_) {
+    if (deferred_initialization_pending_)
+      NotifyInitializationSucceeded();
+    return;
   }
+
+  chooser_state_.is_fullscreen = config_.overlay_info.is_fullscreen;
+
+  // Handle the sync path, which must use SurfaceTexture anyway.  Note that we
+  // check both |during_initialize_| and |deferred_initialization_pending_|,
+  // since we might get here during deferred surface creation.  In that case,
+  // Decode will call us (after clearing |defer_surface_creation_|), but
+  // deferred init will have already been signaled optimistically as success.
+  //
+  // Also note that we might choose to defer surface creation for the sync path,
+  // which won't get here.  We'll exit above, successfully, during init, and
+  // will fall through to the below when Decode calls us back.  That's okay.
+  // We only handle this case specially since |surface_chooser_| is allowed to
+  // post callbacks to us.  Here, we guarantee that the sync case is actually
+  // resolved synchronously.  The only exception will be if we need to defer
+  // surface creation for other reasons, in which case the sync path with just
+  // signal success optimistically.
+  if (during_initialize_ && !deferred_initialization_pending_) {
+    DCHECK(!config_.overlay_info.HasValidSurfaceId());
+    DCHECK(!config_.overlay_info.HasValidRoutingToken());
+    OnSurfaceTransition(nullptr);
+    return;
+  }
+
+  // If we have a surface, then notify |surface_chooser_| about it.  If we were
+  // told not to use an overlay (kNoSurfaceID or a null routing token), then we
+  // leave the factory blank.
+  AndroidOverlayFactoryCB factory;
+  if (config_.overlay_info.HasValidSurfaceId()) {
+    factory = base::Bind(&ContentVideoViewOverlay::Create,
+                         config_.overlay_info.surface_id);
+  } else if (config_.overlay_info.HasValidRoutingToken() &&
+             overlay_factory_cb_) {
+    factory =
+        base::Bind(overlay_factory_cb_, *config_.overlay_info.routing_token);
+  }
+
+  // Notify |surface_chooser_| that we've started.  This guarantees that we'll
+  // get a callback.  It might not be a synchronous callback, but we're not in
+  // the synchronous case.  It will be soon, though.  For pre-M, we rely on the
+  // fact that |surface_chooser_| won't tell us to use a SurfaceTexture while
+  // waiting for an overlay to become ready, for example.
+  surface_chooser_->Initialize(
+      base::Bind(&AndroidVideoDecodeAccelerator::OnSurfaceTransition,
+                 weak_this_factory_.GetWeakPtr()),
+      base::Bind(&AndroidVideoDecodeAccelerator::OnSurfaceTransition,
+                 weak_this_factory_.GetWeakPtr(), nullptr),
+      std::move(factory), chooser_state_);
+}
+
+void AndroidVideoDecodeAccelerator::OnSurfaceTransition(
+    std::unique_ptr<AndroidOverlay> overlay) {
+  if (overlay) {
+    overlay->AddSurfaceDestroyedCallback(base::Bind(
+        &AndroidVideoDecodeAccelerator::OnStopUsingOverlayImmediately,
+        weak_this_factory_.GetWeakPtr()));
+  }
+
+  // If we're waiting for a surface (e.g., during startup), then proceed
+  // immediately.  Otherwise, wait for Dequeue to handle it.  This can probably
+  // be merged with UpdateSurface.
+  if (state_ == BEFORE_OVERLAY_INIT) {
+    DCHECK(!incoming_overlay_);
+    incoming_bundle_ = new AVDASurfaceBundle(std::move(overlay));
+    InitializePictureBufferManager();
+    return;
+  }
+
+  // If, for some reason, |surface_chooser_| decides that we really should
+  // change our output surface pre-M, ignore it.  For example, if the
+  // compositor tells us that it can't use an overlay, well, there's not much
+  // that we can do here unless we start falling forward to keyframes.
+  if (!device_info_->IsSetOutputSurfaceSupported())
+    return;
+
+  // If we're using a SurfaceTexture and are told to switch to one, then just
+  // do nothing.  |surface_chooser_| doesn't really know if we've switched to
+  // SurfaceTexture or not.  Note that it can't ask us to switch to the same
+  // overlay we're using, since it's unique_ptr.
+  if (!overlay && codec_config_->surface_bundle &&
+      !codec_config_->surface_bundle->overlay) {
+    // Also stop transitioning to an overlay, if we were doing so.
+    incoming_overlay_.reset();
+    return;
+  }
+
+  incoming_overlay_ = std::move(overlay);
+}
+
+void AndroidVideoDecodeAccelerator::InitializePictureBufferManager() {
+  DCHECK(!defer_surface_creation_);
+  DCHECK(incoming_bundle_);
+
+  if (!make_context_current_cb_.Run()) {
+    NOTIFY_ERROR(PLATFORM_FAILURE,
+                 "Failed to make this decoder's GL context current");
+    incoming_bundle_ = nullptr;
+    return;
+  }
+
+  // Move |incoming_bundle_| to |codec_config_|.  Our caller must set up an
+  // incoming bundle properly, since we don't want to accidentally overwrite
+  // |surface_bundle| for a codec that's being released elsewhere.
+  // TODO(liberato): it doesn't make sense anymore for the PictureBufferManager
+  // to create the surface texture.  We can probably make an overlay impl out
+  // of it, and provide the surface texture to |picture_buffer_manager_|.
+  if (!picture_buffer_manager_.Initialize(incoming_bundle_)) {
+    NOTIFY_ERROR(PLATFORM_FAILURE, "Could not allocate surface texture");
+    incoming_bundle_ = nullptr;
+    return;
+  }
+
+  // If we have a media codec, then SetSurface.  If that doesn't work, then we
+  // do not try to allocate a new codec; we might not be at a keyframe, etc.
+  // If we get here with a codec, then we must setSurface.
+  if (media_codec_) {
+    // TODO(liberato): fail on api check?
+    if (!media_codec_->SetSurface(incoming_bundle_->GetJavaSurface().obj())) {
+      NOTIFY_ERROR(PLATFORM_FAILURE, "MediaCodec failed to switch surfaces.");
+      // We're not going to use |incoming_bundle_|.
+    } else {
+      // We've switched surfaces, so replace |surface_bundle|.
+      codec_config_->surface_bundle = incoming_bundle_;
+      // We could be in BEFORE_OVERLAY_INIT, but we're not anymore.
+      state_ = NO_ERROR;
+    }
+    incoming_bundle_ = nullptr;
+    return;
+  }
+
+  // We're going to create a codec with |incoming_bundle_|.  It might fail, but
+  // either way, we're done with any previous bundle.  Note that, since we
+  // never get here after init (i.e., we never change surfaces without using
+  // SetSurface), there shouldn't be any previous bundle.  However, this is the
+  // right thing to do even if we can switch.
+  codec_config_->surface_bundle = incoming_bundle_;
+  incoming_bundle_ = nullptr;
 
   // If the client doesn't support deferred initialization (WebRTC), then we
   // should complete it now and return a meaningful result.  Note that it would
@@ -474,14 +527,25 @@ bool AndroidVideoDecodeAccelerator::InitializePictureBufferManager() {
   // all (::Initialize or the wrapper can do it), but then they have to remember
   // not to start codec config if we have to wait for the cdm.  It's somewhat
   // clearer for us to handle both cases.
-  return ConfigureMediaCodecSynchronously();
+  // For this to be a case for sync configuration, we must be called from
+  // Initialize(), and the client must not want deferred init.  Note that having
+  // |deferred_initialization_pending_| false by itself isn't enough; if we're
+  // deferring surface creation, then we'll finish deferred init before asking
+  // for the surface.  We'll be called via Decode.
+  if (during_initialize_ && !deferred_initialization_pending_) {
+    ConfigureMediaCodecSynchronously();
+    return;
+  }
+
+  // In all other cases, we don't have to wait for the codec.
+  ConfigureMediaCodecAsynchronously();
 }
 
 void AndroidVideoDecodeAccelerator::DoIOTask(bool start_timer) {
   DCHECK(thread_checker_.CalledOnValidThread());
   TRACE_EVENT0("media", "AVDA::DoIOTask");
   if (state_ == ERROR || state_ == WAITING_FOR_CODEC ||
-      state_ == SURFACE_DESTROYED) {
+      state_ == SURFACE_DESTROYED || state_ == BEFORE_OVERLAY_INIT) {
     return;
   }
 
@@ -501,7 +565,7 @@ bool AndroidVideoDecodeAccelerator::QueueInput() {
   DCHECK(thread_checker_.CalledOnValidThread());
   TRACE_EVENT0("media", "AVDA::QueueInput");
   if (state_ == ERROR || state_ == WAITING_FOR_CODEC ||
-      state_ == WAITING_FOR_KEY) {
+      state_ == WAITING_FOR_KEY || state_ == BEFORE_OVERLAY_INIT) {
     return false;
   }
   if (bitstreams_notified_in_advance_.size() > kMaxBitstreamsNotifiedInAdvance)
@@ -518,7 +582,7 @@ bool AndroidVideoDecodeAccelerator::QueueInput() {
     MediaCodecStatus status =
         media_codec_->DequeueInputBuffer(NoWaitTimeOut, &input_buf_index);
     switch (status) {
-      case MEDIA_CODEC_DEQUEUE_INPUT_AGAIN_LATER:
+      case MEDIA_CODEC_TRY_AGAIN_LATER:
         return false;
       case MEDIA_CODEC_ERROR:
         NOTIFY_ERROR(PLATFORM_FAILURE, "DequeueInputBuffer failed");
@@ -587,10 +651,10 @@ bool AndroidVideoDecodeAccelerator::QueueInput() {
   } else {
     status = media_codec_->QueueSecureInputBuffer(
         input_buf_index, memory, bitstream_buffer.size(), key_id, iv,
-        subsamples, presentation_timestamp);
+        subsamples, config_.encryption_scheme, presentation_timestamp);
   }
 
-  DVLOG(2) << __FUNCTION__
+  DVLOG(2) << __func__
            << ": Queue(Secure)InputBuffer: pts:" << presentation_timestamp
            << " status:" << status;
 
@@ -631,8 +695,10 @@ bool AndroidVideoDecodeAccelerator::QueueInput() {
 bool AndroidVideoDecodeAccelerator::DequeueOutput() {
   DCHECK(thread_checker_.CalledOnValidThread());
   TRACE_EVENT0("media", "AVDA::DequeueOutput");
-  if (state_ == ERROR || state_ == WAITING_FOR_CODEC)
+  if (state_ == ERROR || state_ == WAITING_FOR_CODEC ||
+      state_ == BEFORE_OVERLAY_INIT) {
     return false;
+  }
   // If we're draining for reset or destroy, then we don't need picture buffers
   // since we won't send any decoded frames anyway.  There might not be any,
   // since the pipeline might not be sending them back and / or they don't
@@ -651,11 +717,14 @@ bool AndroidVideoDecodeAccelerator::DequeueOutput() {
   // If we're waiting to switch surfaces pause output release until we have all
   // picture buffers returned. This is so we can ensure the right flags are set
   // on the picture buffers returned to the client.
-  if (pending_surface_id_) {
+  if (incoming_overlay_) {
     if (picture_buffer_manager_.HasUnrenderedPictures())
       return false;
     if (!UpdateSurface())
       return false;
+
+    // UpdateSurface should fail if we've transitioned to the error state.
+    DCHECK(state_ == NO_ERROR);
   }
 
   bool eos = false;
@@ -676,9 +745,9 @@ bool AndroidVideoDecodeAccelerator::DequeueOutput() {
     switch (status) {
       case MEDIA_CODEC_ERROR:
         // Do not post an error if we are draining for reset and destroy.
-        // Instead, run the drain completion task.
+        // Instead, signal completion of the drain.
         if (IsDrainingForResetOrDestroy()) {
-          DVLOG(1) << __FUNCTION__ << ": error while codec draining";
+          DVLOG(1) << __func__ << ": error while draining";
           state_ = ERROR;
           OnDrainCompleted();
         } else {
@@ -686,7 +755,7 @@ bool AndroidVideoDecodeAccelerator::DequeueOutput() {
         }
         return false;
 
-      case MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER:
+      case MEDIA_CODEC_TRY_AGAIN_LATER:
         return false;
 
       case MEDIA_CODEC_OUTPUT_FORMAT_CHANGED: {
@@ -701,7 +770,7 @@ bool AndroidVideoDecodeAccelerator::DequeueOutput() {
           return false;
         }
 
-        DVLOG(3) << __FUNCTION__
+        DVLOG(3) << __func__
                  << " OUTPUT_FORMAT_CHANGED, new size: " << size_.ToString();
 
         // Don't request picture buffers if we already have some. This avoids
@@ -728,7 +797,7 @@ bool AndroidVideoDecodeAccelerator::DequeueOutput() {
 
       case MEDIA_CODEC_OK:
         DCHECK_GE(buf_index, 0);
-        DVLOG(3) << __FUNCTION__ << ": pts:" << presentation_timestamp
+        DVLOG(3) << __func__ << ": pts:" << presentation_timestamp
                  << " buf_index:" << buf_index << " offset:" << offset
                  << " size:" << size << " eos:" << eos;
         break;
@@ -785,7 +854,7 @@ bool AndroidVideoDecodeAccelerator::DequeueOutput() {
     // correction and provides a non-decreasing timestamp sequence, which might
     // result in timestamp duplicates. Discard the frame if we cannot get the
     // corresponding buffer id.
-    DVLOG(3) << __FUNCTION__ << ": Releasing buffer with unexpected PTS: "
+    DVLOG(3) << __func__ << ": Releasing buffer with unexpected PTS: "
              << presentation_timestamp;
     media_codec_->ReleaseOutputBuffer(buf_index, false);
   }
@@ -823,12 +892,23 @@ void AndroidVideoDecodeAccelerator::SendDecodedFrameToClient(
   if (size_changed)
     picture_buffer.set_size(size_);
 
+  // Only ask for promotion hints if we can actually switch surfaces.
+  const bool want_promotion_hint = device_info_->IsSetOutputSurfaceSupported();
   const bool allow_overlay = picture_buffer_manager_.ArePicturesOverlayable();
   UMA_HISTOGRAM_BOOLEAN("Media.AVDA.FrameSentAsOverlay", allow_overlay);
+  // We unconditionally mark the picture as overlayable, even if
+  // |!allow_overlay|, if we want to get hints.  It's required, else we won't
+  // get hints.
   // TODO(hubbe): Insert the correct color space. http://crbug.com/647725
   Picture picture(picture_buffer_id, bitstream_id, gfx::Rect(size_),
-                  gfx::ColorSpace(), allow_overlay);
+                  gfx::ColorSpace(),
+                  want_promotion_hint ? true : allow_overlay);
   picture.set_size_changed(size_changed);
+  if (want_promotion_hint) {
+    picture.set_wants_promotion_hint(true);
+    // This will prevent it from actually being promoted if it shouldn't be.
+    picture.set_surface_texture(!allow_overlay);
+  }
 
   // Notify picture ready before calling UseCodecBufferForPictureBuffer() since
   // that process may be slow and shouldn't delay delivery of the frame to the
@@ -845,16 +925,23 @@ void AndroidVideoDecodeAccelerator::Decode(
     const BitstreamBuffer& bitstream_buffer) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (defer_surface_creation_ && !InitializePictureBufferManager()) {
-    NOTIFY_ERROR(PLATFORM_FAILURE,
-                 "Failed deferred surface and MediaCodec initialization.");
-    return;
+  // If we deferred getting a surface, then start getting one now.
+  if (defer_surface_creation_) {
+    // We should still be in BEFORE_OVERLAY_INIT, since we've deferred doing it
+    // until now.
+    DCHECK_EQ(state_, BEFORE_OVERLAY_INIT);
+    defer_surface_creation_ = false;
+    StartSurfaceChooser();
+    if (state_ == ERROR) {
+      DLOG(ERROR) << "Failed deferred surface and MediaCodec initialization.";
+      return;
+    }
   }
 
   // If we previously deferred a codec restart, take care of it now. This can
   // happen on older devices where configuration changes require a codec reset.
   if (codec_needs_reset_) {
-    DCHECK_EQ(drain_type_, DRAIN_TYPE_NONE);
+    DCHECK(!drain_type_);
     ResetCodecState();
   }
 
@@ -935,8 +1022,8 @@ void AndroidVideoDecodeAccelerator::ReusePictureBuffer(
 
   auto it = output_picture_buffers_.find(picture_buffer_id);
   if (it == output_picture_buffers_.end()) {
-    NOTIFY_ERROR(PLATFORM_FAILURE, "Can't find PictureBuffer id "
-                                       << picture_buffer_id);
+    NOTIFY_ERROR(PLATFORM_FAILURE,
+                 "Can't find PictureBuffer id " << picture_buffer_id);
     return;
   }
 
@@ -945,132 +1032,64 @@ void AndroidVideoDecodeAccelerator::ReusePictureBuffer(
 }
 
 void AndroidVideoDecodeAccelerator::Flush() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(thread_checker_.CalledOnValidThread());
-
-  if (state_ == SURFACE_DESTROYED || defer_surface_creation_)
-    NotifyFlushDone();
-  else
-    StartCodecDrain(DRAIN_FOR_FLUSH);
+  StartCodecDrain(DRAIN_FOR_FLUSH);
 }
 
 void AndroidVideoDecodeAccelerator::ConfigureMediaCodecAsynchronously() {
   DCHECK(thread_checker_.CalledOnValidThread());
-
-  // It's probably okay just to return here, since the codec will be configured
-  // asynchronously.  It's unclear that any state for the new request could
-  // be different, unless somebody modifies |codec_config_| while we're already
-  // waiting for a codec.  One shouldn't do that for thread safety.
+  DCHECK(!media_codec_);
   DCHECK_NE(state_, WAITING_FOR_CODEC);
-
   state_ = WAITING_FOR_CODEC;
 
-  // Tell the picture buffer manager that we're changing codecs.  The codec
-  // itself could be used normally, since we don't replace it until we're back
-  // on the main thread.  However, if we're using an output surface, then the
-  // incoming codec might access that surface while the main thread is drawing.
-  // Telling the manager to forget the codec avoids this.
-  if (media_codec_) {
-    ReleaseMediaCodec();
-    picture_buffer_manager_.CodecChanged(nullptr);
-  }
-
-  codec_config_->task_type_ =
-      g_avda_codec_allocator.Get().TaskTypeForAllocation();
-  if (codec_config_->task_type_ == AVDACodecAllocator::TaskType::FAILED_CODEC) {
-    // If there is no free thread, then just fail.
-    OnCodecConfigured(nullptr);
-    return;
-  }
-
-  // If autodetection is disallowed, fall back to Chrome's software decoders
-  // instead of using the software decoders provided by MediaCodec.
-  if (codec_config_->task_type_ == AVDACodecAllocator::TaskType::SW_CODEC &&
-      IsMediaCodecSoftwareDecodingForbidden()) {
-    OnCodecConfigured(nullptr);
-    return;
-  }
-
-  base::PostTaskAndReplyWithResult(
-      g_avda_codec_allocator.Get()
-          .TaskRunnerFor(codec_config_->task_type_)
-          .get(),
-      FROM_HERE,
-      base::Bind(&AndroidVideoDecodeAccelerator::ConfigureMediaCodecOnAnyThread,
-                 codec_config_),
-      base::Bind(&AndroidVideoDecodeAccelerator::OnCodecConfigured,
-                 weak_this_factory_.GetWeakPtr()));
+  codec_allocator_->CreateMediaCodecAsync(weak_this_factory_.GetWeakPtr(),
+                                          codec_config_);
 }
 
-bool AndroidVideoDecodeAccelerator::ConfigureMediaCodecSynchronously() {
+void AndroidVideoDecodeAccelerator::ConfigureMediaCodecSynchronously() {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK(!media_codec_);
+  DCHECK_NE(state_, WAITING_FOR_CODEC);
   state_ = WAITING_FOR_CODEC;
 
-  ReleaseMediaCodec();
-
-  codec_config_->task_type_ =
-      g_avda_codec_allocator.Get().TaskTypeForAllocation();
-  if (codec_config_->task_type_ == AVDACodecAllocator::TaskType::FAILED_CODEC) {
-    OnCodecConfigured(nullptr);
-    return false;
-  }
-
-  std::unique_ptr<VideoCodecBridge> media_codec =
-      ConfigureMediaCodecOnAnyThread(codec_config_);
+  std::unique_ptr<MediaCodecBridge> media_codec =
+      codec_allocator_->CreateMediaCodecSync(codec_config_);
   OnCodecConfigured(std::move(media_codec));
-  return !!media_codec_;
-}
-
-std::unique_ptr<VideoCodecBridge>
-AndroidVideoDecodeAccelerator::ConfigureMediaCodecOnAnyThread(
-    scoped_refptr<CodecConfig> codec_config) {
-  TRACE_EVENT0("media", "AVDA::ConfigureMediaCodec");
-
-  jobject media_crypto = codec_config->media_crypto_
-                             ? codec_config->media_crypto_->obj()
-                             : nullptr;
-
-  // |needs_protected_surface_| implies encrypted stream.
-  DCHECK(!codec_config->needs_protected_surface_ || media_crypto);
-
-  const bool require_software_codec =
-      codec_config->task_type_ == AVDACodecAllocator::TaskType::SW_CODEC;
-
-  std::unique_ptr<VideoCodecBridge> codec(VideoCodecBridge::CreateDecoder(
-      codec_config->codec_, codec_config->needs_protected_surface_,
-      codec_config->initial_expected_coded_size_,
-      codec_config->surface_.j_surface().obj(), media_crypto,
-      codec_config->csd0_, codec_config->csd1_, true, require_software_codec));
-
-  return codec;
 }
 
 void AndroidVideoDecodeAccelerator::OnCodecConfigured(
-    std::unique_ptr<VideoCodecBridge> media_codec) {
+    std::unique_ptr<MediaCodecBridge> media_codec) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(state_ == WAITING_FOR_CODEC || state_ == SURFACE_DESTROYED);
-
   // If we are supposed to notify that initialization is complete, then do so
-  // now.  Otherwise, this is a reconfiguration.
-  if (deferred_initialization_pending_) {
-    // Losing the output surface is not considered an error state, so notify
-    // success. The client will destroy this soon.
-    NotifyInitializationComplete(state_ == SURFACE_DESTROYED ? true
-                                                             : !!media_codec);
-    deferred_initialization_pending_ = false;
-  }
-
-  // If |state_| changed to SURFACE_DESTROYED while we were configuring a codec,
-  // then the codec is already invalid so we return early and drop it.
-  if (state_ == SURFACE_DESTROYED)
-    return;
+  // before returning.  Otherwise, this is a reconfiguration.
 
   DCHECK(!media_codec_);
   media_codec_ = std::move(media_codec);
+
+  // If |state_| changed to SURFACE_DESTROYED while we were configuring a codec,
+  // then the codec is already invalid so we return early and drop it.
+  if (state_ == SURFACE_DESTROYED) {
+    if (deferred_initialization_pending_) {
+      // Losing the output surface is not considered an error state, so notify
+      // success. The client will destroy |this| soon.
+      NotifyInitializationSucceeded();
+    }
+
+    // Post it to the right thread.
+    ReleaseCodecAndBundle();
+    return;
+  }
+
   picture_buffer_manager_.CodecChanged(media_codec_.get());
   if (!media_codec_) {
     NOTIFY_ERROR(PLATFORM_FAILURE, "Failed to create MediaCodec");
     return;
   }
+
+  if (deferred_initialization_pending_)
+    NotifyInitializationSucceeded();
 
   state_ = NO_ERROR;
 
@@ -1078,20 +1097,35 @@ void AndroidVideoDecodeAccelerator::OnCodecConfigured(
 }
 
 void AndroidVideoDecodeAccelerator::StartCodecDrain(DrainType drain_type) {
-  DVLOG(2) << __FUNCTION__ << " drain_type:" << drain_type;
+  DVLOG(2) << __func__ << " drain_type:" << drain_type;
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  // We assume that DRAIN_FOR_FLUSH and DRAIN_FOR_RESET cannot come while
-  // another drain request is present, but DRAIN_FOR_DESTROY can.
-  DCHECK_NE(drain_type, DRAIN_TYPE_NONE);
-  DCHECK(drain_type_ == DRAIN_TYPE_NONE || drain_type == DRAIN_FOR_DESTROY)
-      << "Unexpected StartCodecDrain() with drain type " << drain_type
-      << " while already draining with drain type " << drain_type_;
-
-  const bool enqueue_eos = drain_type_ == DRAIN_TYPE_NONE;
+  auto previous_drain_type = drain_type_;
   drain_type_ = drain_type;
 
-  if (enqueue_eos)
+  // Only DRAIN_FOR_DESTROY is allowed while a drain is already in progress.
+  DCHECK(!previous_drain_type || drain_type == DRAIN_FOR_DESTROY)
+      << "StartCodecDrain(" << drain_type
+      << ") while already draining with type " << previous_drain_type.value();
+
+  // Skip the drain if:
+  // * There's no codec.
+  // * The codec is not currently decoding and we have no more inputs to submit.
+  //   (Reset() and Destroy() should clear pending inputs before calling this).
+  // * The drain is for reset or destroy (where we can drop pending decodes) and
+  //   the codec is not VP8. We still have to drain VP8 in this case because
+  //   MediaCodec can hang in release() or flush() if we don't drain it.
+  //   http://crbug.com/598963
+  if (!media_codec_ ||
+      (pending_bitstream_records_.empty() &&
+       bitstream_buffers_in_decoder_.empty()) ||
+      (drain_type != DRAIN_FOR_FLUSH && codec_config_->codec != kCodecVP8)) {
+    OnDrainCompleted();
+    return;
+  }
+
+  // Queue EOS if one is not already queued.
+  if (!previous_drain_type)
     DecodeBuffer(BitstreamBuffer(-1, base::SharedMemoryHandle(), 0));
 }
 
@@ -1100,22 +1134,17 @@ bool AndroidVideoDecodeAccelerator::IsDrainingForResetOrDestroy() const {
 }
 
 void AndroidVideoDecodeAccelerator::OnDrainCompleted() {
-  DVLOG(2) << __FUNCTION__;
+  DVLOG(2) << __func__;
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  // If we were waiting for an EOS, clear the state and reset the MediaCodec
-  // as normal.
-  //
-  // Some Android platforms seem to send an EOS buffer even when we're not
-  // expecting it. In this case, destroy and reset the codec but don't notify
-  // flush done since it violates the state machine. http://crbug.com/585959.
+  // Sometimes MediaCodec returns an EOS buffer even if we didn't queue one.
+  // Consider it an error. http://crbug.com/585959.
+  if (!drain_type_) {
+    NOTIFY_ERROR(PLATFORM_FAILURE, "Unexpected EOS");
+    return;
+  }
 
-  switch (drain_type_) {
-    case DRAIN_TYPE_NONE:
-      // Unexpected EOS.
-      state_ = ERROR;
-      ResetCodecState();
-      break;
+  switch (*drain_type_) {
     case DRAIN_FOR_FLUSH:
       ResetCodecState();
       base::ThreadTaskRunnerHandle::Get()->PostTask(
@@ -1129,13 +1158,12 @@ void AndroidVideoDecodeAccelerator::OnDrainCompleted() {
                                 weak_this_factory_.GetWeakPtr()));
       break;
     case DRAIN_FOR_DESTROY:
-      ResetCodecState();
       base::ThreadTaskRunnerHandle::Get()->PostTask(
           FROM_HERE, base::Bind(&AndroidVideoDecodeAccelerator::ActualDestroy,
                                 weak_this_factory_.GetWeakPtr()));
       break;
   }
-  drain_type_ = DRAIN_TYPE_NONE;
+  drain_type_.reset();
 }
 
 void AndroidVideoDecodeAccelerator::ResetCodecState() {
@@ -1143,9 +1171,13 @@ void AndroidVideoDecodeAccelerator::ResetCodecState() {
 
   // If there is already a reset in flight, then that counts.  This can really
   // only happen if somebody calls Reset.
-  // If the surface is destroyed there's nothing to do.
-  if (state_ == WAITING_FOR_CODEC || state_ == SURFACE_DESTROYED)
+  // If the surface is destroyed or we're in an error state there's nothing to
+  // do. Note that BEFORE_OVERLAY_INIT implies that we have no codec, but it's
+  // included for completeness.
+  if (state_ == WAITING_FOR_CODEC || state_ == SURFACE_DESTROYED ||
+      state_ == BEFORE_OVERLAY_INIT || state_ == ERROR || !media_codec_) {
     return;
+  }
 
   bitstream_buffers_in_decoder_.clear();
 
@@ -1158,43 +1190,42 @@ void AndroidVideoDecodeAccelerator::ResetCodecState() {
     pending_input_buf_index_ = -1;
   }
 
-  const bool did_codec_error_happen = state_ == ERROR;
-  state_ = NO_ERROR;
-
-  // Don't reset the codec here if there's no error and we're only flushing;
-  // instead defer until the next decode call; this prevents us from unbacking
-  // frames that might be out for display at end of stream.
-  codec_needs_reset_ = false;
-  if (drain_type_ == DRAIN_FOR_FLUSH && !did_codec_error_happen) {
-    codec_needs_reset_ = true;
+  // If we've just completed a flush don't reset the codec yet. Instead defer
+  // until the next decode call. This prevents us from unbacking frames that
+  // might be out for display at end of stream.
+  codec_needs_reset_ =
+      (drain_type_ == DRAIN_FOR_FLUSH) || (drain_type_ == DRAIN_FOR_RESET);
+  if (codec_needs_reset_)
     return;
-  }
 
   // Flush the codec if possible, or create a new one if not.
-  if (!did_codec_error_happen &&
-      !MediaCodecUtil::CodecNeedsFlushWorkaround(media_codec_.get())) {
-    DVLOG(3) << __FUNCTION__ << " Flushing MediaCodec.";
+  if (!MediaCodecUtil::CodecNeedsFlushWorkaround(media_codec_.get())) {
+    DVLOG(3) << __func__ << " Flushing MediaCodec.";
     media_codec_->Flush();
     // Since we just flushed all the output buffers, make sure that nothing is
     // using them.
     picture_buffer_manager_.CodecChanged(media_codec_.get());
   } else {
-    DVLOG(3) << __FUNCTION__
-             << " Deleting the MediaCodec and creating a new one.";
-    g_avda_manager.Get().StopTimer(this);
+    DVLOG(3) << __func__ << " Deleting the MediaCodec and creating a new one.";
+    GetManager()->StopTimer(this);
+    // Release the codec, retain the bundle, and allocate a new codec.  It will
+    // not wait for the old one to finish up with the bundle, which is bad.  It
+    // works (usually) because it ends up allocating the codec on the same
+    // thread as is used to release the old one, so it's serialized anyway.
+    ReleaseCodec();
     ConfigureMediaCodecAsynchronously();
   }
 }
 
 void AndroidVideoDecodeAccelerator::Reset() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(thread_checker_.CalledOnValidThread());
   TRACE_EVENT0("media", "AVDA::Reset");
 
   if (defer_surface_creation_) {
     DCHECK(!media_codec_);
     DCHECK(pending_bitstream_records_.empty());
-    DCHECK_EQ(state_, NO_ERROR);
+    DCHECK_EQ(state_, BEFORE_OVERLAY_INIT);
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::Bind(&AndroidVideoDecodeAccelerator::NotifyResetDone,
                               weak_this_factory_.GetWeakPtr()));
@@ -1217,76 +1248,82 @@ void AndroidVideoDecodeAccelerator::Reset() {
   bitstreams_notified_in_advance_.clear();
 
   picture_buffer_manager_.ReleaseCodecBuffers(output_picture_buffers_);
-
-  // Some VP8 files require complete MediaCodec drain before we can call
-  // MediaCodec.flush() or MediaCodec.reset(). http://crbug.com/598963.
-  if (media_codec_ && codec_config_->codec_ == kCodecVP8 &&
-      !bitstream_buffers_in_decoder_.empty()) {
-    // Postpone ResetCodecState() after the drain.
-    StartCodecDrain(DRAIN_FOR_RESET);
-  } else {
-    ResetCodecState();
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::Bind(&AndroidVideoDecodeAccelerator::NotifyResetDone,
-                              weak_this_factory_.GetWeakPtr()));
-  }
+  StartCodecDrain(DRAIN_FOR_RESET);
 }
 
-void AndroidVideoDecodeAccelerator::SetSurface(int32_t surface_id) {
-  if (surface_id == config_.surface_id) {
-    pending_surface_id_.reset();
+void AndroidVideoDecodeAccelerator::SetOverlayInfo(
+    const OverlayInfo& overlay_info) {
+  DVLOG(1) << __func__;
+  DCHECK(thread_checker_.CalledOnValidThread());
+
+  // Update |config_| to contain the most recent info.  Also save a copy, so
+  // that we can check for duplicate info later.
+  OverlayInfo previous_info = config_.overlay_info;
+  config_.overlay_info = overlay_info;
+
+  // It's possible that we'll receive SetSurface before initializing the surface
+  // chooser.  For example, if we defer surface creation, then we'll signal
+  // success to WMPI before initializing it.  WMPI is then free to change
+  // |surface_id|.  In this case, take no additional action, since |config_| is
+  // up to date.  We'll use it later.
+  if (state_ == BEFORE_OVERLAY_INIT)
     return;
+
+  // Release any overlay immediately when hiding a frame.  Otherwise, it will
+  // stick around as long as the VideoFrame does, which can be a long time.
+  if (overlay_info.is_frame_hidden)
+    picture_buffer_manager_.ImmediatelyForgetOverlay(output_picture_buffers_);
+
+  chooser_state_.is_frame_hidden = overlay_info.is_frame_hidden;
+
+  // Notify the chooser about the fullscreen state.
+  chooser_state_.is_fullscreen = overlay_info.is_fullscreen;
+
+  // Note that these might be kNoSurfaceID / empty.  In that case, we will
+  // revoke the factory.
+  int32_t surface_id = overlay_info.surface_id;
+  OverlayInfo::RoutingToken routing_token = overlay_info.routing_token;
+
+  // We don't want to change the factory unless this info has actually changed.
+  // We'll get the same info many times if some other part of the config is now
+  // different, such as fullscreen state.
+  base::Optional<AndroidOverlayFactoryCB> new_factory;
+  if (surface_id != previous_info.surface_id ||
+      routing_token != previous_info.routing_token) {
+    if (routing_token && overlay_factory_cb_)
+      new_factory = base::Bind(overlay_factory_cb_, *routing_token);
+    else if (surface_id != SurfaceManager::kNoSurfaceID)
+      new_factory = base::Bind(&ContentVideoViewOverlay::Create, surface_id);
   }
 
-  // Surface changes never take effect immediately, they will be handled during
-  // DequeOutput() once we get to a good switch point or immediately during an
-  // OnDestroyingSurface() call.
-  pending_surface_id_ = surface_id;
+  surface_chooser_->UpdateState(new_factory, chooser_state_);
 }
 
 void AndroidVideoDecodeAccelerator::Destroy() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(thread_checker_.CalledOnValidThread());
 
   picture_buffer_manager_.Destroy(output_picture_buffers_);
-
   client_ = nullptr;
 
-  // Some VP8 files require a complete MediaCodec drain before we can call
-  // MediaCodec.flush() or MediaCodec.release(). http://crbug.com/598963. In
-  // that case, postpone ActualDestroy() until after the drain.
-  if (media_codec_ && codec_config_->codec_ == kCodecVP8) {
-    // Clear |pending_bitstream_records_|.
-    while (!pending_bitstream_records_.empty())
-      pending_bitstream_records_.pop();
-
-    StartCodecDrain(DRAIN_FOR_DESTROY);
-  } else {
-    ActualDestroy();
-  }
+  // We don't want to queue more inputs while draining.
+  std::queue<BitstreamRecord>().swap(pending_bitstream_records_);
+  StartCodecDrain(DRAIN_FOR_DESTROY);
 }
 
 void AndroidVideoDecodeAccelerator::ActualDestroy() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
   DCHECK(thread_checker_.CalledOnValidThread());
-
-  if (!on_destroying_surface_cb_.is_null()) {
-    AVDASurfaceTracker::GetInstance()->UnregisterOnDestroyingSurfaceCallback(
-        on_destroying_surface_cb_);
-  }
-
-  // We no longer care about |surface_id|, in case we did before.  It's okay
-  // if we have no surface and/or weren't the owner or a waiter.
-  g_avda_manager.Get().DeallocateSurface(config_.surface_id, this);
 
   // Note that async codec construction might still be in progress.  In that
   // case, the codec will be deleted when it completes once we invalidate all
   // our weak refs.
   weak_this_factory_.InvalidateWeakPtrs();
-  if (media_codec_) {
-    g_avda_manager.Get().StopTimer(this);
-    ReleaseMediaCodec();
-  }
+  GetManager()->StopTimer(this);
+  // We only release the codec here, in case codec allocation is in progress.
+  // We don't want to modify |codec_config_|.  Note that the ref will sill be
+  // dropped when it completes, or when we delete |this|.
+  ReleaseCodec();
 
   delete this;
 }
@@ -1306,58 +1343,99 @@ AndroidVideoDecodeAccelerator::GetGlDecoder() const {
   return get_gles2_decoder_cb_.Run();
 }
 
-void AndroidVideoDecodeAccelerator::OnDestroyingSurface(int surface_id) {
+void AndroidVideoDecodeAccelerator::OnStopUsingOverlayImmediately(
+    AndroidOverlay* overlay) {
+  DVLOG(1) << __func__;
+  TRACE_EVENT0("media", "AVDA::OnStopUsingOverlayImmediately");
   DCHECK(thread_checker_.CalledOnValidThread());
-  TRACE_EVENT0("media", "AVDA::OnDestroyingSurface");
-  DVLOG(1) << __FUNCTION__ << " surface_id: " << surface_id;
 
-  if (surface_id != config_.surface_id)
+  // We cannot get here if we're before surface allocation, since we transition
+  // to WAITING_FOR_CODEC (or NO_ERROR, if sync) when we get the surface without
+  // posting.  If we do ever lose the surface before starting codec allocation,
+  // then we could just update the config to use a SurfaceTexture and return
+  // without changing state.
+  DCHECK_NE(state_, BEFORE_OVERLAY_INIT);
+
+  // If we're transitioning to |overlay|, then just stop here.  We're not also
+  // using the overlay if we're transitioning to it.
+  if (!!incoming_overlay_ && incoming_overlay_->get() == overlay) {
+    incoming_overlay_.reset();
     return;
+  }
+
+  // If we have no codec, or if our current config doesn't refer to |overlay|,
+  // then do nothing.  |overlay| might be for some overlay that's waiting for
+  // codec destruction on some other thread.
+  if (!codec_config_->surface_bundle ||
+      codec_config_->surface_bundle->overlay.get() != overlay) {
+    return;
+  }
+
+  // If we have a codec, or if codec allocation is in flight, then it's using an
+  // overlay that was destroyed.
+  if (state_ == WAITING_FOR_CODEC) {
+    // What we should do here is to set |incoming_overlay_| to nullptr, to start
+    // a transistion to SurfaceTexture.  OnCodecConfigured could notice that
+    // there's an incoming overlay, and then immediately transition the codec /
+    // drop and re-allocate the codec using it.  However, for CVV, that won't
+    // work, since CVV-based overlays block the main thread waiting for the
+    // overlay to be dropped, so OnCodecConfigured won't run.  For DS, it's the
+    // right thing.
+    // So, for now, we just fail, and let OnCodecConfigured drop the codec.
+    // Note that this case really can only happen on pre-M anyway, unless it's
+    // during initial construction.  This will result in the overlay being
+    // destroyed after timeout, since OnCodecConfigured can't run until the
+    // synchronous CVV destruction quits.
+    state_ = SURFACE_DESTROYED;
+    return;
+  }
 
   // If the API is available avoid having to restart the decoder in order to
   // leave fullscreen. If we don't clear the surface immediately during this
   // callback, the MediaCodec will throw an error as the surface is destroyed.
-  if (base::android::BuildInfo::GetInstance()->sdk_int() >= 23) {
+  if (device_info_->IsSetOutputSurfaceSupported()) {
     // Since we can't wait for a transition, we must invalidate all outstanding
     // picture buffers to avoid putting the GL system in a broken state.
     picture_buffer_manager_.ReleaseCodecBuffers(output_picture_buffers_);
 
-    // Switch away from the surface being destroyed to a surface texture.
-    DCHECK_NE(config_.surface_id, SurfaceManager::kNoSurfaceID);
+    // If we aren't transitioning to some other surface, then transition to a
+    // SurfaceTexture.  Remember that, if |incoming_overlay_| is an overlay,
+    // then it's already ready and can be transitioned to immediately.  We were
+    // just waiting for codec buffers to come back, but we just dropped them.
+    // Note that we want |incoming_overlay_| to has_value(), but that value
+    // should be a nullptr to indicate that we should switch to SurfaceTexture.
+    if (!incoming_overlay_)
+      incoming_overlay_ = std::unique_ptr<AndroidOverlay>();
 
-    // The leaving fullscreen notification may come in before this point.
-    if (pending_surface_id_)
-      DCHECK_EQ(pending_surface_id_.value(), SurfaceManager::kNoSurfaceID);
-
-    pending_surface_id_ = SurfaceManager::kNoSurfaceID;
     UpdateSurface();
+    // Switching to a SurfaceTexture should never need to wait.  If it does,
+    // then the codec might still be using the destroyed surface, which is bad.
     return;
   }
 
   // If we're currently asynchronously configuring a codec, it will be destroyed
   // when configuration completes and it notices that |state_| has changed to
-  // SURFACE_DESTROYED.
+  // SURFACE_DESTROYED.  It's safe to modify |codec_config_| here, since we
+  // checked above for WAITING_FOR_CODEC.
   state_ = SURFACE_DESTROYED;
-  if (media_codec_) {
-    ReleaseMediaCodec();
-    picture_buffer_manager_.CodecChanged(media_codec_.get());
-  }
+  ReleaseCodecAndBundle();
+
   // If we're draining, signal completion now because the drain can no longer
   // proceed.
-  if (drain_type_ != DRAIN_TYPE_NONE)
+  if (drain_type_)
     OnDrainCompleted();
 }
 
 void AndroidVideoDecodeAccelerator::InitializeCdm() {
-  DVLOG(2) << __FUNCTION__ << ": " << config_.cdm_id;
+  DVLOG(2) << __func__ << ": " << config_.cdm_id;
 
-#if !defined(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
+#if !BUILDFLAG(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
   NOTIMPLEMENTED();
-  NotifyInitializationComplete(false);
+  NOTIFY_ERROR(PLATFORM_FAILURE, "Cdm support needs mojo in the gpu process");
 #else
   // Store the CDM to hold a reference to it.
   cdm_for_reference_holding_only_ =
-      MojoCdmService::LegacyGetCdm(config_.cdm_id);
+      CdmManager::GetInstance()->GetCdm(config_.cdm_id);
   DCHECK(cdm_for_reference_holding_only_);
 
   // On Android platform the CdmContext must be a MediaDrmBridgeCdmContext.
@@ -1382,19 +1460,19 @@ void AndroidVideoDecodeAccelerator::InitializeCdm() {
   media_drm_bridge_cdm_context_->SetMediaCryptoReadyCB(BindToCurrentLoop(
       base::Bind(&AndroidVideoDecodeAccelerator::OnMediaCryptoReady,
                  weak_this_factory_.GetWeakPtr())));
-#endif  // !defined(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
+#endif  // !BUILDFLAG(ENABLE_MOJO_MEDIA_IN_GPU_PROCESS)
 }
 
 void AndroidVideoDecodeAccelerator::OnMediaCryptoReady(
     MediaDrmBridgeCdmContext::JavaObjectPtr media_crypto,
-    bool needs_protected_surface) {
-  DVLOG(1) << __FUNCTION__;
+    bool requires_secure_video_codec) {
+  DVLOG(1) << __func__;
 
   if (!media_crypto) {
     LOG(ERROR) << "MediaCrypto is not available, can't play encrypted stream.";
     cdm_for_reference_holding_only_ = nullptr;
     media_drm_bridge_cdm_context_ = nullptr;
-    NotifyInitializationComplete(false);
+    NOTIFY_ERROR(PLATFORM_FAILURE, "MediaCrypto is not available");
     return;
   }
 
@@ -1403,26 +1481,34 @@ void AndroidVideoDecodeAccelerator::OnMediaCryptoReady(
   // We assume this is a part of the initialization process, thus MediaCodec
   // is not created yet.
   DCHECK(!media_codec_);
+  DCHECK(deferred_initialization_pending_);
 
-  codec_config_->media_crypto_ = std::move(media_crypto);
-  codec_config_->needs_protected_surface_ = needs_protected_surface;
+  codec_config_->media_crypto = std::move(media_crypto);
+  codec_config_->requires_secure_codec = requires_secure_video_codec;
+  chooser_state_.is_secure = requires_secure_video_codec;
 
-  // After receiving |media_crypto_| we can configure MediaCodec.
-  ConfigureMediaCodecAsynchronously();
+  // After receiving |media_crypto_| we can start with surface creation.
+  StartSurfaceChooser();
 }
 
 void AndroidVideoDecodeAccelerator::OnKeyAdded() {
-  DVLOG(1) << __FUNCTION__;
+  DVLOG(1) << __func__;
 
+  // This can also be called before initial surface allocation has completed,
+  // so we might not have a surface / codec yet.  In that case, we'll never
+  // transition to WAITING_FOR_KEY, which is fine.
   if (state_ == WAITING_FOR_KEY)
     state_ = NO_ERROR;
 
   DoIOTask(true);
 }
 
-void AndroidVideoDecodeAccelerator::NotifyInitializationComplete(bool success) {
+void AndroidVideoDecodeAccelerator::NotifyInitializationSucceeded() {
+  DCHECK(deferred_initialization_pending_);
+
   if (client_)
-    client_->NotifyInitializationComplete(success);
+    client_->NotifyInitializationComplete(true);
+  deferred_initialization_pending_ = false;
 }
 
 void AndroidVideoDecodeAccelerator::NotifyPictureReady(const Picture& picture) {
@@ -1448,8 +1534,39 @@ void AndroidVideoDecodeAccelerator::NotifyResetDone() {
 
 void AndroidVideoDecodeAccelerator::NotifyError(Error error) {
   state_ = ERROR;
+
+  // If we're in the middle of Initialize, then stop.  It will notice |state_|.
+  if (during_initialize_)
+    return;
+
+  // If deferred init is pending, then notify the client that it failed.
+  if (deferred_initialization_pending_) {
+    if (client_)
+      client_->NotifyInitializationComplete(false);
+    deferred_initialization_pending_ = false;
+    return;
+  }
+
+  // We're after all init.  Just signal an error.
   if (client_)
     client_->NotifyError(error);
+}
+
+PromotionHintAggregator::NotifyPromotionHintCB
+AndroidVideoDecodeAccelerator::GetPromotionHintCB() {
+  return base::Bind(&AndroidVideoDecodeAccelerator::NotifyPromotionHint,
+                    weak_this_factory_.GetWeakPtr());
+}
+
+void AndroidVideoDecodeAccelerator::NotifyPromotionHint(
+    const PromotionHintAggregator::Hint& hint) {
+  promotion_hint_aggregator_->NotifyPromotionHint(hint);
+  bool promotable = promotion_hint_aggregator_->IsSafeToPromote();
+  if (promotable != chooser_state_.is_compositor_promotable) {
+    chooser_state_.is_compositor_promotable = promotable;
+    surface_chooser_->UpdateState(base::Optional<AndroidOverlayFactoryCB>(),
+                                  chooser_state_);
+  }
 }
 
 void AndroidVideoDecodeAccelerator::ManageTimer(bool did_work) {
@@ -1467,21 +1584,9 @@ void AndroidVideoDecodeAccelerator::ManageTimer(bool did_work) {
   }
 
   if (should_be_running)
-    g_avda_manager.Get().StartTimer(this);
+    GetManager()->StartTimer(this);
   else
-    g_avda_manager.Get().StopTimer(this);
-}
-
-void AndroidVideoDecodeAccelerator::ReleaseMediaCodec() {
-  if (!media_codec_)
-    return;
-
-  // Post it to the same thread as was used to allocate it, and it'll get freed
-  // if that thread isn't hung waiting on mediaserver.  We can't release it
-  // on this thread since it might hang up.
-  g_avda_codec_allocator.Get()
-      .TaskRunnerFor(codec_config_->task_type_)
-      ->DeleteSoon(FROM_HERE, media_codec_.release());
+    GetManager()->StopTimer(this);
 }
 
 // static
@@ -1505,8 +1610,8 @@ AndroidVideoDecodeAccelerator::GetCapabilities(
     // within the renderer sandbox. However if the content is encrypted, we
     // must use MediaCodec anyways since MediaDrm offers no way to decrypt
     // the buffers and let us use our internal software decoders.
-    profile.encrypted_only =
-        VideoCodecBridge::IsKnownUnaccelerated(kCodecVP8, MEDIA_CODEC_DECODER);
+    profile.encrypted_only = MediaCodecUtil::IsKnownUnaccelerated(
+        kCodecVP8, MediaCodecDirection::DECODER);
     profiles.push_back(profile);
 
     // Always allow encrypted content, even at low resolutions.
@@ -1519,8 +1624,8 @@ AndroidVideoDecodeAccelerator::GetCapabilities(
     const VideoCodecProfile profile_types[] = {
         VP9PROFILE_PROFILE0, VP9PROFILE_PROFILE1, VP9PROFILE_PROFILE2,
         VP9PROFILE_PROFILE3, VIDEO_CODEC_PROFILE_UNKNOWN};
-    const bool is_known_unaccelerated =
-        VideoCodecBridge::IsKnownUnaccelerated(kCodecVP9, MEDIA_CODEC_DECODER);
+    const bool is_known_unaccelerated = MediaCodecUtil::IsKnownUnaccelerated(
+        kCodecVP9, MediaCodecDirection::DECODER);
     for (int i = 0; profile_types[i] != VIDEO_CODEC_PROFILE_UNKNOWN; i++) {
       SupportedProfile profile;
       // Limit to 360p, like we do for vp8.  See above.
@@ -1553,20 +1658,19 @@ AndroidVideoDecodeAccelerator::GetCapabilities(
     profiles.push_back(profile);
   }
 
-  capabilities.flags =
-      VideoDecodeAccelerator::Capabilities::SUPPORTS_DEFERRED_INITIALIZATION;
-  capabilities.flags |=
-      VideoDecodeAccelerator::Capabilities::NEEDS_ALL_PICTURE_BUFFERS_TO_DECODE;
+  capabilities.flags = Capabilities::SUPPORTS_DEFERRED_INITIALIZATION |
+                       Capabilities::NEEDS_ALL_PICTURE_BUFFERS_TO_DECODE |
+                       Capabilities::SUPPORTS_ENCRYPTED_STREAMS;
 
   // If we're using threaded texture mailboxes the COPY_REQUIRED flag must be
   // set on the video frames (http://crbug.com/582170), and SurfaceView output
   // is disabled (http://crbug.com/582170).
   if (gpu_preferences.enable_threaded_texture_mailboxes) {
-    capabilities.flags |=
-        VideoDecodeAccelerator::Capabilities::REQUIRES_TEXTURE_COPY;
+    capabilities.flags |= Capabilities::REQUIRES_TEXTURE_COPY;
   } else if (MediaCodecUtil::IsSurfaceViewOutputSupported()) {
-    capabilities.flags |=
-        VideoDecodeAccelerator::Capabilities::SUPPORTS_EXTERNAL_OUTPUT_SURFACE;
+    capabilities.flags |= Capabilities::SUPPORTS_EXTERNAL_OUTPUT_SURFACE;
+    if (MediaCodecUtil::IsSetOutputSurfaceSupported())
+      capabilities.flags |= Capabilities::SUPPORTS_SET_EXTERNAL_OUTPUT_SURFACE;
   }
 
 #if BUILDFLAG(ENABLE_HEVC_DEMUXING)
@@ -1586,39 +1690,54 @@ bool AndroidVideoDecodeAccelerator::IsMediaCodecSoftwareDecodingForbidden()
     const {
   // Prevent MediaCodec from using its internal software decoders when we have
   // more secure and up to date versions in the renderer process.
-  return !config_.is_encrypted && (codec_config_->codec_ == kCodecVP8 ||
-                                   codec_config_->codec_ == kCodecVP9);
+  return !config_.is_encrypted() && (codec_config_->codec == kCodecVP8 ||
+                                     codec_config_->codec == kCodecVP9);
 }
 
 bool AndroidVideoDecodeAccelerator::UpdateSurface() {
-  DCHECK(pending_surface_id_);
-  DCHECK_NE(config_.surface_id, pending_surface_id_.value());
+  DCHECK(incoming_overlay_);
+  DCHECK_NE(state_, WAITING_FOR_CODEC);
 
-  // Ensure the current context is active when switching surfaces; we may need
-  // to create a new texture.
-  if (!make_context_current_cb_.Run()) {
-    NOTIFY_ERROR(PLATFORM_FAILURE,
-                 "Failed to make this decoder's GL context current when "
-                 "switching surfaces.");
-    return false;
+  // Start surface creation.  Note that if we're called via surfaceDestroyed,
+  // then this must complete synchronously or it will DCHECK.  Otherwise, we
+  // might still be using the destroyed surface.  We don't enforce this, but
+  // it's worth remembering that there are cases where it's required.
+  // Note that we don't re-use |surface_bundle|, since the codec is using it!
+  incoming_bundle_ =
+      new AVDASurfaceBundle(std::move(incoming_overlay_.value()));
+  incoming_overlay_.reset();
+  InitializePictureBufferManager();
+  if (state_ == ERROR) {
+    // This might be called from OnSurfaceDestroyed(), so we have to release the
+    // MediaCodec if we failed to switch the surface.  We reset the surface ID
+    // to the previous one, since failures never result in the codec using the
+    // new surface.  This is only guaranteed because of how OnCodecConfigured
+    // works.  If it could fail after getting a codec, then this assumption
+    // wouldn't be necessarily true anymore.
+    // Also note that we might not have switched surfaces yet, which is also bad
+    // for OnSurfaceDestroyed, because of BEFORE_OVERLAY_INIT.  Shouldn't
+    // happen with SurfaceTexture, and OnSurfaceDestroyed checks for it.  In
+    // either case, we definitely should not still have an incoming bundle; it
+    // should have been dropped.
+    DCHECK(!incoming_bundle_);
+    ReleaseCodecAndBundle();
   }
 
-  config_.surface_id = pending_surface_id_.value();
-  codec_config_->surface_ =
-      picture_buffer_manager_.Initialize(pending_surface_id_.value());
-  if (codec_config_->surface_.IsEmpty()) {
-    NOTIFY_ERROR(PLATFORM_FAILURE, "Failed to switch surfaces.");
-    return false;
-  }
+  return state_ != ERROR;
+}
 
-  if (media_codec_ &&
-      !media_codec_->SetSurface(codec_config_->surface_.j_surface().obj())) {
-    NOTIFY_ERROR(PLATFORM_FAILURE, "MediaCodec failed to switch surfaces.");
-    return false;
-  }
+void AndroidVideoDecodeAccelerator::ReleaseCodec() {
+  if (!media_codec_)
+    return;
 
-  pending_surface_id_.reset();
-  return true;
+  picture_buffer_manager_.CodecChanged(nullptr);
+  codec_allocator_->ReleaseMediaCodec(std::move(media_codec_),
+                                      codec_config_->surface_bundle);
+}
+
+void AndroidVideoDecodeAccelerator::ReleaseCodecAndBundle() {
+  ReleaseCodec();
+  codec_config_->surface_bundle = nullptr;
 }
 
 }  // namespace media

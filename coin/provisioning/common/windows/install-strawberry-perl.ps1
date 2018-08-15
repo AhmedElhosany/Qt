@@ -36,23 +36,23 @@
 # This script installs Strawberry Perl
 
 $version = "5.26.0.1"
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     $arch = "-64bit"
     $sha1 = "2AE2EDA36A190701399130CBFEE04D00E9BA036D"
-} else {
+}
+else {
     $arch = "-32bit"
     $sha1 = "b50b688a879f33941433774b2813bfd4b917e4ee"
 }
-$installer_name = "strawberry-perl-" + $version + $arch + ".msi"
-$url_cache = "\\ci-files01-hki.intra.qt.io\provisioning\windows\" + $installer_name
-$url_official = "http://strawberryperl.com/download/" + $version + "/" + $installer_name
-$strawberryPackage = "C:\Windows\Temp\" + $installer_name
+$url_cache = "\\ci-files01-hki.intra.qt.io\provisioning\windows\strawberry-perl-" + $version + $arch + ".msi"
+$url_official = "http://strawberryperl.com/download/" + $version + "/strawberry-perl-" + $version + $arch + ".msi"
+$strawberryPackage = "C:\Windows\Temp\strawberry-installer-$version.msi"
 
 Download $url_official $url_cache $strawberryPackage
 Verify-Checksum $strawberryPackage $sha1
-Run-Executable "$strawberryPackage" "/QB INSTALLDIR=C:\strawberry REBOOT=REALLYSUPPRESS"
+cmd /c "$strawberryPackage /QB INSTALLDIR=C:\strawberry REBOOT=REALLYSUPPRESS"
 
-Write-Host "Cleaning $strawberryPackage.."
-Remove-Item -Recurse -Force -Path "$strawberryPackage"
+echo "Cleaning $strawberryPackage.."
+Remove-Item -Recurse -Force "$strawberryPackage"
 
-Write-Output "strawberry = $version" >> ~\versions.txt
+echo "strawberry = $version" >> ~\versions.txt

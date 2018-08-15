@@ -53,7 +53,8 @@ LayerAnimator::LayerAnimator(base::TimeDelta transition_duration)
       tween_type_(gfx::Tween::LINEAR),
       is_started_(false),
       disable_timer_for_test_(false),
-      adding_animations_(false) {
+      adding_animations_(false),
+      animation_metrics_reporter_(nullptr) {
   animation_player_ =
       cc::AnimationPlayer::Create(cc::AnimationIdProvider::NextPlayerId());
 }
@@ -94,10 +95,10 @@ LayerAnimator* LayerAnimator::CreateImplicitAnimator() {
       delegate()->Set##name##FromAnimation(value);                      \
       return;                                                           \
     }                                                                   \
-    std::unique_ptr<LayerAnimationElement> element(                     \
-        LayerAnimationElement::Create##name##Element(value, duration)); \
+    std::unique_ptr<LayerAnimationElement> element =                    \
+        LayerAnimationElement::Create##name##Element(value, duration);  \
     element->set_tween_type(tween_type_);                               \
-    StartAnimation(new LayerAnimationSequence(element.release()));      \
+    StartAnimation(new LayerAnimationSequence(std::move(element)));     \
   }                                                                     \
                                                                         \
   member_type LayerAnimator::GetTarget##name() const {                  \
@@ -114,6 +115,7 @@ ANIMATED_PROPERTY(bool, VISIBILITY, Visibility, bool, visibility);
 ANIMATED_PROPERTY(float, BRIGHTNESS, Brightness, float, brightness);
 ANIMATED_PROPERTY(float, GRAYSCALE, Grayscale, float, grayscale);
 ANIMATED_PROPERTY(SkColor, COLOR, Color, SkColor, color);
+ANIMATED_PROPERTY(float, TEMPERATURE, Temperature, float, temperature);
 
 base::TimeDelta LayerAnimator::GetTransitionDuration() const {
   return transition_duration_;
@@ -164,7 +166,7 @@ void LayerAnimator::DetachLayerAndTimeline(Compositor* compositor) {
 
 void LayerAnimator::AttachLayerToAnimationPlayer(int layer_id) {
   // For ui, layer and element ids are equivalent.
-  cc::ElementId element_id(layer_id, 0);
+  cc::ElementId element_id(layer_id);
   if (!animation_player_->element_id())
     animation_player_->AttachElement(element_id);
   else
@@ -195,6 +197,8 @@ cc::AnimationPlayer* LayerAnimator::GetAnimationPlayerForTesting() const {
 
 void LayerAnimator::StartAnimation(LayerAnimationSequence* animation) {
   scoped_refptr<LayerAnimator> retain(this);
+  if (animation_metrics_reporter_)
+    animation->SetAnimationMetricsReporter(animation_metrics_reporter_);
   OnScheduled(animation);
   if (!StartSequenceImmediately(animation)) {
     // Attempt to preempt a running animation.
@@ -211,11 +215,6 @@ void LayerAnimator::StartAnimation(LayerAnimationSequence* animation) {
       case REPLACE_QUEUED_ANIMATIONS:
         ReplaceQueuedAnimations(animation);
         break;
-      case BLEND_WITH_CURRENT_ANIMATION: {
-        // TODO(vollick) Add support for blended sequences and use them here.
-        NOTIMPLEMENTED();
-        break;
-      }
     }
   }
   FinishAnyAnimationWithZeroDuration();

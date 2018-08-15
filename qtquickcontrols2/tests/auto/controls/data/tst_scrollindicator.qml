@@ -223,6 +223,20 @@ TestCase {
         compare(horizontal.contentItem.width, 0.2 * horizontal.availableWidth)
     }
 
+    function test_orientation() {
+        var control = createTemporaryObject(scrollIndicator, testCase)
+        verify(control)
+
+        compare(control.orientation, Qt.Vertical)
+        compare(control.horizontal, false)
+        compare(control.vertical, true)
+
+        control.orientation = Qt.Horizontal
+        compare(control.orientation, Qt.Horizontal)
+        compare(control.horizontal, true)
+        compare(control.vertical, false)
+    }
+
     // QTBUG-61785
     function test_mouseArea() {
         var ma = createTemporaryObject(mouseArea, testCase, {width: testCase.width, height: testCase.height})

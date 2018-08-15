@@ -301,4 +301,15 @@ void QQuickStackViewPrivate::setBusy(bool b)
     emit q->busyChanged();
 }
 
+void QQuickStackViewPrivate::depthChange(int newDepth, int oldDepth)
+{
+    Q_Q(QQuickStackView);
+    if (newDepth == oldDepth)
+        return;
+
+    emit q->depthChanged();
+    if (newDepth == 0 || oldDepth == 0)
+        emit q->emptyChanged();
+}
+
 QT_END_NAMESPACE

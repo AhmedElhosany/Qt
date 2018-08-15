@@ -25,7 +25,7 @@
 #include "content/public/common/child_process_host.h"
 #include "content/public/common/result_codes.h"
 #include "extensions/common/error_utils.h"
-#include "third_party/WebKit/public/web/WebCache.h"
+#include "third_party/WebKit/public/platform/WebCache.h"
 
 namespace extensions {
 
@@ -37,8 +37,8 @@ const char kInvalidArgument[] = "Invalid argument: *.";
 
 namespace {
 
-base::LazyInstance<BrowserContextKeyedAPIFactory<ProcessesAPI>>
-    g_processes_api_factory = LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<BrowserContextKeyedAPIFactory<ProcessesAPI>>::
+    DestructorAtExit g_processes_api_factory = LAZY_INSTANCE_INITIALIZER;
 
 int64_t GetRefreshTypesFlagOnlyEssentialData() {
   // This is the only non-optional data in the Process as defined by the API in
@@ -60,7 +60,7 @@ std::unique_ptr<api::processes::Cache> CreateCacheData(
     const blink::WebCache::ResourceTypeStat& stat) {
   std::unique_ptr<api::processes::Cache> cache(new api::processes::Cache());
   cache->size = static_cast<double>(stat.size);
-  cache->live_size = static_cast<double>(stat.liveSize);
+  cache->live_size = static_cast<double>(stat.size);
   return cache;
 }
 
@@ -160,7 +160,7 @@ void FillProcessData(
   if (task_manager->GetWebCacheStats(id, &cache_stats)) {
     out_process->image_cache = CreateCacheData(cache_stats.images);
     out_process->script_cache = CreateCacheData(cache_stats.scripts);
-    out_process->css_cache = CreateCacheData(cache_stats.cssStyleSheets);
+    out_process->css_cache = CreateCacheData(cache_stats.css_style_sheets);
   }
 }
 

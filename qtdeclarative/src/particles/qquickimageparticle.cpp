@@ -44,6 +44,7 @@
 #include <QtQuick/qsgtexturematerial.h>
 #include <QtQuick/qsgtexture.h>
 #include <QFile>
+#include <QRandomGenerator>
 #include "qquickimageparticle_p.h"
 #include "qquickparticleemitter_p.h"
 #include <private/qquicksprite_p.h>
@@ -118,15 +119,15 @@ public:
         Q_ASSERT(!m_fragment_code.isNull());
     }
 
-    const char *vertexShader() const { return m_vertex_code.constData(); }
-    const char *fragmentShader() const { return m_fragment_code.constData(); }
+    const char *vertexShader() const override { return m_vertex_code.constData(); }
+    const char *fragmentShader() const override { return m_fragment_code.constData(); }
 
-    QList<QByteArray> attributes() const {
+    QList<QByteArray> attributes() const override {
         return QList<QByteArray>() << "vPosTex" << "vData" << "vVec"
             << "vColor" << "vDeformVec" << "vRotation";
     };
 
-    void initialize() {
+    void initialize() override {
         QSGSimpleMaterialShader<TabledMaterialData>::initialize();
         program()->bind();
         program()->setUniformValue("_qt_texture", 0);
@@ -138,7 +139,7 @@ public:
         m_opacitytable_id = program()->uniformLocation("opacitytable");
     }
 
-    void updateState(const TabledMaterialData* d, const TabledMaterialData*) {
+    void updateState(const TabledMaterialData* d, const TabledMaterialData*) override {
         glFuncs->glActiveTexture(GL_TEXTURE1);
         d->colorTable->bind();
 
@@ -192,15 +193,15 @@ public:
         Q_ASSERT(!m_fragment_code.isNull());
     }
 
-    const char *vertexShader() const { return m_vertex_code.constData(); }
-    const char *fragmentShader() const { return m_fragment_code.constData(); }
+    const char *vertexShader() const override { return m_vertex_code.constData(); }
+    const char *fragmentShader() const override { return m_fragment_code.constData(); }
 
-    QList<QByteArray> attributes() const {
+    QList<QByteArray> attributes() const override {
         return QList<QByteArray>() << "vPosTex" << "vData" << "vVec"
             << "vColor" << "vDeformVec" << "vRotation";
     };
 
-    void initialize() {
+    void initialize() override {
         QSGSimpleMaterialShader<DeformableMaterialData>::initialize();
         program()->bind();
         program()->setUniformValue("_qt_texture", 0);
@@ -209,7 +210,7 @@ public:
         m_entry_id = program()->uniformLocation("entry");
     }
 
-    void updateState(const DeformableMaterialData* d, const DeformableMaterialData*) {
+    void updateState(const DeformableMaterialData* d, const DeformableMaterialData*) override {
         d->texture->bind();
 
         program()->setUniformValue(m_timestamp_id, (float) d->timestamp);
@@ -259,15 +260,15 @@ public:
         Q_ASSERT(!m_fragment_code.isNull());
     }
 
-    const char *vertexShader() const { return m_vertex_code.constData(); }
-    const char *fragmentShader() const { return m_fragment_code.constData(); }
+    const char *vertexShader() const override { return m_vertex_code.constData(); }
+    const char *fragmentShader() const override { return m_fragment_code.constData(); }
 
-    QList<QByteArray> attributes() const {
+    QList<QByteArray> attributes() const override {
         return QList<QByteArray>() << "vPosTex" << "vData" << "vVec"
             << "vColor" << "vDeformVec" << "vRotation" << "vAnimData" << "vAnimPos";
     }
 
-    void initialize() {
+    void initialize() override {
         QSGSimpleMaterialShader<SpriteMaterialData>::initialize();
         program()->bind();
         program()->setUniformValue("_qt_texture", 0);
@@ -280,7 +281,7 @@ public:
         m_opacitytable_id = program()->uniformLocation("opacitytable");
     }
 
-    void updateState(const SpriteMaterialData* d, const SpriteMaterialData*) {
+    void updateState(const SpriteMaterialData* d, const SpriteMaterialData*) override {
         glFuncs->glActiveTexture(GL_TEXTURE1);
         d->colorTable->bind();
 
@@ -333,10 +334,10 @@ public:
         Q_ASSERT(!m_fragment_code.isNull());
     }
 
-    const char *vertexShader() const { return m_vertex_code.constData(); }
-    const char *fragmentShader() const { return m_fragment_code.constData(); }
+    const char *vertexShader() const override { return m_vertex_code.constData(); }
+    const char *fragmentShader() const override { return m_fragment_code.constData(); }
 
-    void activate() {
+    void activate() override {
         QSGSimpleMaterialShader<ColoredMaterialData>::activate();
 #if !defined(QT_OPENGL_ES_2) && !defined(Q_OS_WIN)
         glEnable(GL_POINT_SPRITE);
@@ -344,7 +345,7 @@ public:
 #endif
     }
 
-    void deactivate() {
+    void deactivate() override {
         QSGSimpleMaterialShader<ColoredMaterialData>::deactivate();
 #if !defined(QT_OPENGL_ES_2) && !defined(Q_OS_WIN)
         glDisable(GL_POINT_SPRITE);
@@ -352,11 +353,11 @@ public:
 #endif
     }
 
-    QList<QByteArray> attributes() const {
+    QList<QByteArray> attributes() const override {
         return QList<QByteArray>() << "vPos" << "vData" << "vVec" << "vColor";
     }
 
-    void initialize() {
+    void initialize() override {
         QSGSimpleMaterialShader<ColoredMaterialData>::initialize();
         program()->bind();
         program()->setUniformValue("_qt_texture", 0);
@@ -365,7 +366,7 @@ public:
         m_entry_id = program()->uniformLocation("entry");
     }
 
-    void updateState(const ColoredMaterialData* d, const ColoredMaterialData*) {
+    void updateState(const ColoredMaterialData* d, const ColoredMaterialData*) override {
         d->texture->bind();
 
         program()->setUniformValue(m_timestamp_id, (float) d->timestamp);
@@ -407,10 +408,10 @@ public:
         Q_ASSERT(!m_fragment_code.isNull());
     }
 
-    const char *vertexShader() const { return m_vertex_code.constData(); }
-    const char *fragmentShader() const { return m_fragment_code.constData(); }
+    const char *vertexShader() const override { return m_vertex_code.constData(); }
+    const char *fragmentShader() const override { return m_fragment_code.constData(); }
 
-    void activate() {
+    void activate() override {
         QSGSimpleMaterialShader<SimpleMaterialData>::activate();
 #if !defined(QT_OPENGL_ES_2) && !defined(Q_OS_WIN)
         glEnable(GL_POINT_SPRITE);
@@ -418,7 +419,7 @@ public:
 #endif
     }
 
-    void deactivate() {
+    void deactivate() override {
         QSGSimpleMaterialShader<SimpleMaterialData>::deactivate();
 #if !defined(QT_OPENGL_ES_2) && !defined(Q_OS_WIN)
         glDisable(GL_POINT_SPRITE);
@@ -426,11 +427,11 @@ public:
 #endif
     }
 
-    QList<QByteArray> attributes() const {
+    QList<QByteArray> attributes() const override {
         return QList<QByteArray>() << "vPos" << "vData" << "vVec";
     }
 
-    void initialize() {
+    void initialize() override {
         QSGSimpleMaterialShader<SimpleMaterialData>::initialize();
         program()->bind();
         program()->setUniformValue("_qt_texture", 0);
@@ -439,7 +440,7 @@ public:
         m_entry_id = program()->uniformLocation("entry");
     }
 
-    void updateState(const SimpleMaterialData* d, const SimpleMaterialData*) {
+    void updateState(const SimpleMaterialData* d, const SimpleMaterialData*) override {
         d->texture->bind();
 
         program()->setUniformValue(m_timestamp_id, (float) d->timestamp);
@@ -1729,9 +1730,9 @@ void QQuickImageParticle::initialize(int gIdx, int pIdx)
                 if (!datum->rotationOwner)
                     datum->rotationOwner = this;
                 rotation =
-                        (m_rotation + (m_rotationVariation - 2*((qreal)rand()/RAND_MAX)*m_rotationVariation) ) * CONV;
+                        (m_rotation + (m_rotationVariation - 2*QRandomGenerator::global()->bounded(m_rotationVariation)) ) * CONV;
                 rotationVelocity =
-                        (m_rotationVelocity + (m_rotationVelocityVariation - 2*((qreal)rand()/RAND_MAX)*m_rotationVelocityVariation) ) * CONV;
+                        (m_rotationVelocity + (m_rotationVelocityVariation - 2*QRandomGenerator::global()->bounded(m_rotationVelocityVariation)) ) * CONV;
                 autoRotate = m_autoRotation?1.0:0.0;
                 if (datum->rotationOwner == this) {
                     datum->rotation = rotation;
@@ -1750,10 +1751,10 @@ void QQuickImageParticle::initialize(int gIdx, int pIdx)
             if (m_explicitColor) {
                 if (!datum->colorOwner)
                     datum->colorOwner = this;
-                color.r = m_color.red() * (1 - redVariation) + rand() % 256 * redVariation;
-                color.g = m_color.green() * (1 - greenVariation) + rand() % 256 * greenVariation;
-                color.b = m_color.blue() * (1 - blueVariation) + rand() % 256 * blueVariation;
-                color.a = m_alpha * m_color.alpha() * (1 - m_alphaVariation) + rand() % 256 * m_alphaVariation;
+                color.r = m_color.red() * (1 - redVariation) + QRandomGenerator::global()->bounded(256) * redVariation;
+                color.g = m_color.green() * (1 - greenVariation) + QRandomGenerator::global()->bounded(256) * greenVariation;
+                color.b = m_color.blue() * (1 - blueVariation) + QRandomGenerator::global()->bounded(256) * blueVariation;
+                color.a = m_alpha * m_color.alpha() * (1 - m_alphaVariation) + QRandomGenerator::global()->bounded(256) * m_alphaVariation;
                 if (datum->colorOwner == this)
                     datum->color = color;
                 else

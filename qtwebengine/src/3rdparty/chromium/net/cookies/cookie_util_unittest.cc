@@ -45,11 +45,7 @@ TEST(CookieUtilTest, TestDomainIsHostOnly) {
   const struct {
     const char* str;
     const bool is_host_only;
-  } tests[] = {
-    { "",               true },
-    { "www.google.com", true },
-    { ".google.com",    false }
-  };
+  } tests[] = {{"", true}, {"www.foo.com", true}, {".foo.com", false}};
 
   for (size_t i = 0; i < arraysize(tests); ++i) {
     EXPECT_EQ(tests[i].is_host_only,
@@ -158,7 +154,7 @@ TEST(CookieUtilTest, ParseCookieExpirationTimeBeyond2038) {
       "2039 April 15 21:01:22", "2038 April 15 21:01:22",
   };
 
-  for (const auto& test : kTests) {
+  for (auto* test : kTests) {
     base::Time parsed_time = cookie_util::ParseCookieExpirationTime(test);
     EXPECT_FALSE(parsed_time.is_null());
 
@@ -183,7 +179,7 @@ TEST(CookieUtilTest, ParseCookieExpirationTimeBefore1970) {
       "1969 March 3 21:01:22", "1600 April 15 21:01:22",
   };
 
-  for (const auto& test : kTests) {
+  for (auto* test : kTests) {
     base::Time parsed_time = cookie_util::ParseCookieExpirationTime(test);
     EXPECT_FALSE(parsed_time.is_null());
 

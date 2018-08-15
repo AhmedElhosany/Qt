@@ -15,6 +15,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/threading/thread.h"
 #include "base/trace_event/memory_dump_manager.h"
@@ -42,7 +43,7 @@ const char kTestLevelDBClientName[] = "Test";
 
 class MockDB : public LevelDB {
  public:
-  MOCK_METHOD1(Init, bool(const base::FilePath&));
+  MOCK_METHOD1(Init, bool(const leveldb_proto::Options& options));
   MOCK_METHOD2(Save, bool(const KeyValueVector&, const KeyVector&));
   MOCK_METHOD1(Load, bool(std::vector<std::string>*));
   MOCK_METHOD3(Get, bool(const std::string&, bool*, std::string*));
@@ -67,6 +68,11 @@ class MockDatabaseCaller {
 };
 
 }  // namespace
+
+bool operator==(const Options& lhs, const Options& rhs) {
+  return lhs.database_dir == rhs.database_dir &&
+         lhs.write_buffer_size == rhs.write_buffer_size;
+}
 
 EntryMap GetSmallModel() {
   EntryMap model;
@@ -119,7 +125,7 @@ TEST_F(ProtoDatabaseImplTest, TestDBInitSuccess) {
   base::FilePath path(FILE_PATH_LITERAL("/fake/path"));
 
   MockDB* mock_db = new MockDB();
-  EXPECT_CALL(*mock_db, Init(path)).WillOnce(Return(true));
+  EXPECT_CALL(*mock_db, Init(Options(path))).WillOnce(Return(true));
 
   MockDatabaseCaller caller;
   EXPECT_CALL(caller, InitCallback(true));
@@ -135,7 +141,7 @@ TEST_F(ProtoDatabaseImplTest, TestDBInitFailure) {
   base::FilePath path(FILE_PATH_LITERAL("/fake/path"));
 
   MockDB* mock_db = new MockDB();
-  EXPECT_CALL(*mock_db, Init(path)).WillOnce(Return(false));
+  EXPECT_CALL(*mock_db, Init(Options(path))).WillOnce(Return(false));
 
   MockDatabaseCaller caller;
   EXPECT_CALL(caller, InitCallback(false));
@@ -641,16 +647,13 @@ TEST(ProtoDatabaseImplLevelDBTest, TestOnMemoryDumpEmitsData) {
       new base::trace_event::ProcessMemoryDump(nullptr, dump_args));
   db->OnMemoryDump(dump_args, process_memory_dump.get());
 
-  const auto& allocator_dumps = process_memory_dump->allocator_dumps();
-  const char* system_allocator_pool_name =
-      base::trace_event::MemoryDumpManager::GetInstance()
-          ->system_allocator_pool_name();
-  size_t expected_dump_count = system_allocator_pool_name ? 2 : 1;
-  EXPECT_EQ(expected_dump_count, allocator_dumps.size());
-  for (const auto& dump : allocator_dumps) {
-    ASSERT_TRUE(dump.first.find("leveldb/leveldb_proto/") == 0 ||
-                dump.first.find(system_allocator_pool_name) == 0);
+  size_t leveldb_dump_count = 0;
+  for (const auto& dump : process_memory_dump->allocator_dumps()) {
+    if (dump.first.find("leveldb/leveldb_proto/") == 0) {
+      leveldb_dump_count++;
+    }
   }
+  ASSERT_EQ(1u, leveldb_dump_count);
 }
 
 }  // namespace leveldb_proto

@@ -4,50 +4,58 @@
 
 #include "modules/compositorworker/WindowAnimationWorklet.h"
 
+#include "core/dom/Document.h"
 #include "core/frame/LocalDOMWindow.h"
 #include "core/frame/LocalFrame.h"
-#include "modules/compositorworker/AnimationWorklet.h"
 
 namespace blink {
 
-WindowAnimationWorklet::WindowAnimationWorklet(LocalDOMWindow& window)
-    : DOMWindowProperty(window.frame()) {}
+// static
+AnimationWorklet* WindowAnimationWorklet::animationWorklet(
+    LocalDOMWindow& window) {
+  if (!window.GetFrame())
+    return nullptr;
+  return From(window).animation_worklet_.Get();
+}
 
-const char* WindowAnimationWorklet::supplementName() {
-  return "WindowAnimationWorklet";
+// Break the following cycle when the context gets detached.
+// Otherwise, the worklet object will leak.
+//
+// window => window.animationWorklet
+// => WindowAnimationWorklet
+// => AnimationWorklet  <--- break this reference
+// => ThreadedWorkletMessagingProxy
+// => Document
+// => ... => window
+void WindowAnimationWorklet::ContextDestroyed(ExecutionContext*) {
+  animation_worklet_ = nullptr;
+}
+
+DEFINE_TRACE(WindowAnimationWorklet) {
+  visitor->Trace(animation_worklet_);
+  Supplement<LocalDOMWindow>::Trace(visitor);
+  ContextLifecycleObserver::Trace(visitor);
 }
 
 // static
-WindowAnimationWorklet& WindowAnimationWorklet::from(LocalDOMWindow& window) {
+WindowAnimationWorklet& WindowAnimationWorklet::From(LocalDOMWindow& window) {
   WindowAnimationWorklet* supplement = static_cast<WindowAnimationWorklet*>(
-      Supplement<LocalDOMWindow>::from(window, supplementName()));
+      Supplement<LocalDOMWindow>::From(window, SupplementName()));
   if (!supplement) {
     supplement = new WindowAnimationWorklet(window);
-    provideTo(window, supplementName(), supplement);
+    ProvideTo(window, SupplementName(), supplement);
   }
   return *supplement;
 }
 
-// static
-Worklet* WindowAnimationWorklet::animationWorklet(DOMWindow& window) {
-  return from(toLocalDOMWindow(window)).animationWorklet();
+WindowAnimationWorklet::WindowAnimationWorklet(LocalDOMWindow& window)
+    : ContextLifecycleObserver(window.GetFrame()->GetDocument()),
+      animation_worklet_(AnimationWorklet::Create(window.GetFrame())) {
+  DCHECK(GetExecutionContext());
 }
 
-AnimationWorklet* WindowAnimationWorklet::animationWorklet() {
-  if (!m_animationWorklet && frame())
-    m_animationWorklet = AnimationWorklet::create(frame());
-  return m_animationWorklet.get();
-}
-
-void WindowAnimationWorklet::frameDestroyed() {
-  m_animationWorklet.clear();
-  DOMWindowProperty::frameDestroyed();
-}
-
-DEFINE_TRACE(WindowAnimationWorklet) {
-  visitor->trace(m_animationWorklet);
-  Supplement<LocalDOMWindow>::trace(visitor);
-  DOMWindowProperty::trace(visitor);
+const char* WindowAnimationWorklet::SupplementName() {
+  return "WindowAnimationWorklet";
 }
 
 }  // namespace blink

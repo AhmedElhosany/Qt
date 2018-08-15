@@ -31,8 +31,7 @@
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "third_party/WebKit/public/platform/WebInputEvent.h"
-#include "ui/events/event_switches.h"
-#include "ui/events/latency_info.h"
+#include "ui/latency/latency_info.h"
 
 using blink::WebInputEvent;
 
@@ -93,8 +92,7 @@ class TouchActionBrowserTest : public ContentBrowserTest {
     NavigateToURL(shell(), data_url);
 
     RenderWidgetHostImpl* host = GetWidgetHost();
-    scoped_refptr<FrameWatcher> frame_watcher(new FrameWatcher());
-    frame_watcher->AttachTo(shell()->web_contents());
+    FrameWatcher frame_watcher(shell()->web_contents());
     host->GetView()->SetSize(gfx::Size(400, 400));
 
     base::string16 ready_title(base::ASCIIToUTF16("ready"));
@@ -105,13 +103,13 @@ class TouchActionBrowserTest : public ContentBrowserTest {
     // otherwise the injection of the synthetic gestures may get
     // dropped because of MainThread/Impl thread sync of touch event
     // regions.
-    frame_watcher->WaitFrames(1);
+    frame_watcher.WaitFrames(1);
   }
 
   // ContentBrowserTest:
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitchASCII(switches::kTouchEvents,
-                           switches::kTouchEventsEnabled);
+    cmd->AppendSwitchASCII(switches::kTouchEventFeatureDetection,
+                           switches::kTouchEventFeatureDetectionEnabled);
     // TODO(rbyers): Remove this switch once touch-action ships.
     // http://crbug.com/241964
     cmd->AppendSwitch(switches::kEnableExperimentalWebPlatformFeatures);
@@ -140,8 +138,7 @@ class TouchActionBrowserTest : public ContentBrowserTest {
         "document.documentElement.scrollHeight");
     EXPECT_EQ(10200, scrollHeight);
 
-    scoped_refptr<FrameWatcher> frame_watcher(new FrameWatcher());
-    frame_watcher->AttachTo(shell()->web_contents());
+    FrameWatcher frame_watcher(shell()->web_contents());
 
     SyntheticSmoothScrollGestureParams params;
     params.gesture_source_type = SyntheticGestureParams::TOUCH_INPUT;
@@ -164,9 +161,9 @@ class TouchActionBrowserTest : public ContentBrowserTest {
     // Expect that the compositor scrolled at least one pixel while the
     // main thread was in a busy loop.
     while (wait_until_scrolled &&
-           frame_watcher->LastMetadata().root_scroll_offset.y() <
+           frame_watcher.LastMetadata().root_scroll_offset.y() <
                (distance.y() / 2)) {
-      frame_watcher->WaitFrames(1);
+      frame_watcher.WaitFrames(1);
     }
 
     // Check the scroll offset

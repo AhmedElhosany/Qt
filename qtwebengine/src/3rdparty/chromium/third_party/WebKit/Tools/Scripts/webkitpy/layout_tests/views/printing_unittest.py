@@ -28,16 +28,12 @@
 
 """Unit tests for printing.py."""
 
-import StringIO
 import optparse
+import StringIO
 import sys
 import unittest
 
 from webkitpy.common.host_mock import MockHost
-
-from webkitpy.common.system import logtesting
-from webkitpy.layout_tests import port
-from webkitpy.layout_tests.controllers import manager
 from webkitpy.layout_tests.models import test_expectations
 from webkitpy.layout_tests.models import test_failures
 from webkitpy.layout_tests.models import test_results
@@ -83,9 +79,6 @@ class FakeShard(object):
 
 class Testprinter(unittest.TestCase):
 
-    def assertEmpty(self, stream):
-        self.assertFalse(stream.getvalue())
-
     def assertNotEmpty(self, stream):
         self.assertTrue(stream.getvalue())
 
@@ -129,7 +122,6 @@ class Testprinter(unittest.TestCase):
         # FIXME: Make it so these options don't have to be set directly.
         # pylint: disable=protected-access
         printer._options.pixel_tests = True
-        printer._options.new_baseline = True
         printer._options.time_out_ms = 6000
         printer._options.slow_time_out_ms = 12000
         printer._options.order = 'random'
@@ -138,7 +130,6 @@ class Testprinter(unittest.TestCase):
         self.assertIn("Using port 'test-mac-mac10.10'", err.getvalue())
         self.assertIn('Test configuration: <mac10.10, x86, release>', err.getvalue())
         self.assertIn('View the test results at file:///tmp', err.getvalue())
-        self.assertIn('View the archived results dashboard at file:///tmp', err.getvalue())
         self.assertIn('Baseline search path: test-mac-mac10.10 -> test-mac-mac10.11 -> generic', err.getvalue())
         self.assertIn('Using Release build', err.getvalue())
         self.assertIn('Pixel tests enabled', err.getvalue())
@@ -157,9 +148,9 @@ class Testprinter(unittest.TestCase):
 
         run_results = FakeRunResults()
         run_results.results_by_name = {
-            "slowShard": FakeShard("slowShard", 16),
-            "borderlineShard": FakeShard("borderlineShard", 15),
-            "fastShard": FakeShard("fastShard", 1),
+            'slowShard': FakeShard('slowShard', 16),
+            'borderlineShard': FakeShard('borderlineShard', 15),
+            'fastShard': FakeShard('fastShard', 1),
         }
 
         printer._print_directory_timings(run_results)
@@ -170,8 +161,8 @@ class Testprinter(unittest.TestCase):
         printer._options.debug_rwt_logging = True
 
         run_results.results_by_name = {
-            "borderlineShard": FakeShard("borderlineShard", 15),
-            "fastShard": FakeShard("fastShard", 1),
+            'borderlineShard': FakeShard('borderlineShard', 15),
+            'fastShard': FakeShard('fastShard', 1),
         }
 
         printer._print_directory_timings(run_results)
@@ -186,17 +177,17 @@ class Testprinter(unittest.TestCase):
             self.assertWritten(err, result)
 
         # Without times:
-        run_test(1, 1, 0, [], ["The test ran as expected.\n", "\n"])
-        run_test(2, 1, 1, [], ["\n", "1 test ran as expected, 1 didn't:\n", "\n"])
-        run_test(3, 2, 1, [], ["\n", "2 tests ran as expected, 1 didn't:\n", "\n"])
-        run_test(3, 2, 0, [], ["\n", "2 tests ran as expected (1 didn't run).\n", "\n"])
+        run_test(1, 1, 0, [], ['The test ran as expected.\n', '\n'])
+        run_test(2, 1, 1, [], ['\n', "1 test ran as expected, 1 didn't:\n", '\n'])
+        run_test(3, 2, 1, [], ['\n', "2 tests ran as expected, 1 didn't:\n", '\n'])
+        run_test(3, 2, 0, [], ['\n', "2 tests ran as expected (1 didn't run).\n", '\n'])
 
         # With times:
-        fake_shards = [FakeShard("foo", 1), FakeShard("bar", 2)]
-        run_test(1, 1, 0, fake_shards, ["The test ran as expected in 5.00s (2.00s in rwt, 1x).\n", "\n"])
-        run_test(2, 1, 1, fake_shards, ["\n", "1 test ran as expected, 1 didn't in 5.00s (2.00s in rwt, 1x):\n", "\n"])
-        run_test(3, 2, 1, fake_shards, ["\n", "2 tests ran as expected, 1 didn't in 5.00s (2.00s in rwt, 1x):\n", "\n"])
-        run_test(3, 2, 0, fake_shards, ["\n", "2 tests ran as expected (1 didn't run) in 5.00s (2.00s in rwt, 1x).\n", "\n"])
+        fake_shards = [FakeShard('foo', 1), FakeShard('bar', 2)]
+        run_test(1, 1, 0, fake_shards, ['The test ran as expected in 5.00s (2.00s in rwt, 1x).\n', '\n'])
+        run_test(2, 1, 1, fake_shards, ['\n', "1 test ran as expected, 1 didn't in 5.00s (2.00s in rwt, 1x):\n", '\n'])
+        run_test(3, 2, 1, fake_shards, ['\n', "2 tests ran as expected, 1 didn't in 5.00s (2.00s in rwt, 1x):\n", '\n'])
+        run_test(3, 2, 0, fake_shards, ['\n', "2 tests ran as expected (1 didn't run) in 5.00s (2.00s in rwt, 1x).\n", '\n'])
 
     def test_test_status_line(self):
         printer, _ = self.get_printer()
@@ -239,12 +230,17 @@ class Testprinter(unittest.TestCase):
     def test_print_found(self):
         printer, err = self.get_printer()
 
-        printer.print_found(100, 10, 1, 1)
-        self.assertWritten(err, ["Found 100 tests; running 10, skipping 90.\n"])
+        self.reset(err)
+        printer.print_found(100, 100, 10, 1, 1)
+        self.assertWritten(err, ['Found 100 tests; running 10, skipping 90.\n'])
 
         self.reset(err)
-        printer.print_found(100, 10, 2, 3)
-        self.assertWritten(err, ["Found 100 tests; running 10 (6 times each: --repeat-each=2 --iterations=3), skipping 90.\n"])
+        printer.print_found(100, 20, 10, 1, 1)
+        self.assertWritten(err, ['Found 20 tests (total 100); running 10, skipping 10.\n'])
+
+        self.reset(err)
+        printer.print_found(100, 100, 10, 2, 3)
+        self.assertWritten(err, ['Found 100 tests; running 10 (6 times each: --repeat-each=2 --iterations=3), skipping 90.\n'])
 
     def test_debug_rwt_logging_is_throttled(self):
         printer, err = self.get_printer(['--debug-rwt-logging'])

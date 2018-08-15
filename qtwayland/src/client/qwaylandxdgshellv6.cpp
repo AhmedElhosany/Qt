@@ -165,14 +165,14 @@ void QWaylandXdgSurfaceV6::setAppId(const QString &appId)
 
 void QWaylandXdgSurfaceV6::setType(Qt::WindowType type, QWaylandWindow *transientParent)
 {
-    QWaylandDisplay *display = m_window->display();
-    if ((type == Qt::Popup || type == Qt::ToolTip) && transientParent && display->lastInputDevice()) {
-        setPopup(transientParent, display->lastInputDevice(), display->lastInputSerial(), type == Qt::Popup);
+    if ((type == Qt::Popup || type == Qt::ToolTip) && transientParent) {
+        setPopup(transientParent, m_window->display()->lastInputDevice(), m_window->display()->lastInputSerial(), type == Qt::Popup);
     } else {
         setToplevel();
         if (transientParent) {
             auto parentXdgSurface = static_cast<QWaylandXdgSurfaceV6 *>(transientParent->shellSurface());
-            m_toplevel->set_parent(parentXdgSurface->m_toplevel->object());
+            if (parentXdgSurface)
+                m_toplevel->set_parent(parentXdgSurface->m_toplevel->object());
         }
     }
 }

@@ -37,7 +37,6 @@ class HttpUserAgentSettings;
 class ProxyInfo;
 class SSLPrivateKey;
 class UploadDataStream;
-class URLRequestContext;
 
 // A URLRequestJob subclass that is built on top of HttpTransaction. It
 // provides an implementation for both HTTP and HTTPS.
@@ -99,6 +98,10 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
   // when a connection violates the Expect CT policy.
   void ProcessExpectCTHeader();
 
+  // Processes the Report-To header, if one exists. This header configures where
+  // the Reporting API (in //net/reporting) will send reports for the origin.
+  void ProcessReportToHeader();
+
   // |result| should be OK, or the request is canceled.
   void OnHeadersReceivedCallback(int result);
   void OnStartCompleted(int result);
@@ -126,8 +129,9 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
   void GetAuthChallengeInfo(scoped_refptr<AuthChallengeInfo>*) override;
   void SetAuth(const AuthCredentials& credentials) override;
   void CancelAuth() override;
-  void ContinueWithCertificate(X509Certificate* client_cert,
-                               SSLPrivateKey* client_private_key) override;
+  void ContinueWithCertificate(
+      scoped_refptr<X509Certificate> client_cert,
+      scoped_refptr<SSLPrivateKey> client_private_key) override;
   void ContinueDespiteLastError() override;
   int ReadRawData(IOBuffer* buf, int buf_size) override;
   void StopCaching() override;

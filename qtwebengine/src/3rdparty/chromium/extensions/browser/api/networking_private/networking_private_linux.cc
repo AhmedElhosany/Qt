@@ -9,6 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_split.h"
@@ -134,11 +135,8 @@ void GetCachedNetworkPropertiesCallback(
 
 }  // namespace
 
-NetworkingPrivateLinux::NetworkingPrivateLinux(
-    std::unique_ptr<VerifyDelegate> verify_delegate)
-    : NetworkingPrivateDelegate(std::move(verify_delegate)),
-      dbus_thread_("Networking Private DBus"),
-      network_manager_proxy_(NULL) {
+NetworkingPrivateLinux::NetworkingPrivateLinux()
+    : dbus_thread_("Networking Private DBus"), network_manager_proxy_(NULL) {
   base::Thread::Options thread_options(base::MessageLoop::Type::TYPE_IO, 0);
 
   dbus_thread_.StartWithOptions(thread_options);
@@ -152,7 +150,7 @@ NetworkingPrivateLinux::~NetworkingPrivateLinux() {
 }
 
 void NetworkingPrivateLinux::AssertOnDBusThread() {
-  DCHECK(dbus_task_runner_->RunsTasksOnCurrentThread());
+  DCHECK(dbus_task_runner_->RunsTasksInCurrentSequence());
 }
 
 void NetworkingPrivateLinux::Initialize() {
@@ -253,6 +251,7 @@ void NetworkingPrivateLinux::GetCachedNetworkProperties(
 void NetworkingPrivateLinux::SetProperties(
     const std::string& guid,
     std::unique_ptr<base::DictionaryValue> properties,
+    bool allow_set_shared_config,
     const VoidCallback& success_callback,
     const FailureCallback& failure_callback) {
   ReportNotSupported("SetProperties", failure_callback);
@@ -268,6 +267,7 @@ void NetworkingPrivateLinux::CreateNetwork(
 
 void NetworkingPrivateLinux::ForgetNetwork(
     const std::string& guid,
+    bool allow_forget_shared_config,
     const VoidCallback& success_callback,
     const FailureCallback& failure_callback) {
   // TODO(zentaro): Implement for Linux.
@@ -589,6 +589,16 @@ NetworkingPrivateLinux::GetDeviceStateList() {
   return device_state_list;
 }
 
+std::unique_ptr<base::DictionaryValue>
+NetworkingPrivateLinux::GetGlobalPolicy() {
+  return base::MakeUnique<base::DictionaryValue>();
+}
+
+std::unique_ptr<base::DictionaryValue>
+NetworkingPrivateLinux ::GetCertificateLists() {
+  return base::MakeUnique<base::DictionaryValue>();
+}
+
 bool NetworkingPrivateLinux::EnableNetworkType(const std::string& type) {
   return false;
 }
@@ -638,8 +648,8 @@ void NetworkingPrivateLinux::SendNetworkListChangedEvent(
 
   for (const auto& network : network_list) {
     std::string guid;
-    base::DictionaryValue* dict;
-    if (network->GetAsDictionary(&dict)) {
+    const base::DictionaryValue* dict = nullptr;
+    if (network.GetAsDictionary(&dict)) {
       if (dict->GetString(kAccessPointInfoGuid, &guid)) {
         guidsForEventCallback.push_back(guid);
       }

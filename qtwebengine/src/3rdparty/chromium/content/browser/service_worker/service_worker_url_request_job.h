@@ -10,19 +10,26 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "base/time/time.h"
 #include "content/browser/service_worker/embedded_worker_status.h"
 #include "content/browser/service_worker/service_worker_metrics.h"
+#include "content/browser/service_worker/service_worker_response_type.h"
+#include "content/browser/service_worker/service_worker_url_job_wrapper.h"
 #include "content/common/content_export.h"
+#include "content/common/service_worker/service_worker_event_dispatcher.mojom.h"
 #include "content/common/service_worker/service_worker_status_code.h"
 #include "content/common/service_worker/service_worker_types.h"
 #include "content/public/common/request_context_frame_type.h"
 #include "content/public/common/request_context_type.h"
 #include "content/public/common/resource_type.h"
+#include "content/public/common/service_worker_modes.h"
+#include "mojo/public/cpp/system/data_pipe.h"
 #include "net/http/http_byte_range.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_job.h"
@@ -43,41 +50,15 @@ class BlobStorageContext;
 namespace content {
 
 class ResourceContext;
-class ResourceRequestBodyImpl;
+class ResourceRequestBody;
 class ServiceWorkerBlobReader;
-class ServiceWorkerStreamReader;
+class ServiceWorkerDataPipeReader;
 class ServiceWorkerFetchDispatcher;
 class ServiceWorkerVersion;
-class Stream;
 
 class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
  public:
-  class CONTENT_EXPORT Delegate {
-   public:
-    virtual ~Delegate() {}
-
-    // Will be invoked before the request is restarted. The caller
-    // can use this opportunity to grab state from the
-    // ServiceWorkerURLRequestJob to determine how it should behave when the
-    // request is restarted.
-    virtual void OnPrepareToRestart() = 0;
-
-    // Returns the ServiceWorkerVersion fetch events for this request job should
-    // be dispatched to. If no appropriate worker can be determined, returns
-    // nullptr and sets |*result| to an appropriate error.
-    virtual ServiceWorkerVersion* GetServiceWorkerVersion(
-        ServiceWorkerMetrics::URLRequestJobResult* result) = 0;
-
-    // Called after dispatching the fetch event to determine if processing of
-    // the request should still continue, or if processing should be aborted.
-    // When false is returned, this sets |*result| to an appropriate error.
-    virtual bool RequestStillValid(
-        ServiceWorkerMetrics::URLRequestJobResult* result);
-
-    // Called to signal that loading failed, and that the resource being loaded
-    // was a main resource.
-    virtual void MainResourceLoadFailed() {}
-  };
+  using Delegate = ServiceWorkerURLJobWrapper::Delegate;
 
   ServiceWorkerURLRequestJob(
       net::URLRequest* request,
@@ -88,16 +69,28 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
       FetchRequestMode request_mode,
       FetchCredentialsMode credentials_mode,
       FetchRedirectMode redirect_mode,
+      const std::string& integrity,
       ResourceType resource_type,
       RequestContextType request_context_type,
       RequestContextFrameType frame_type,
-      scoped_refptr<ResourceRequestBodyImpl> body,
+      scoped_refptr<ResourceRequestBody> body,
       ServiceWorkerFetchType fetch_type,
+      const base::Optional<base::TimeDelta>& timeout,
       Delegate* delegate);
 
   ~ServiceWorkerURLRequestJob() override;
 
   const ResourceContext* resource_context() const { return resource_context_; }
+  bool did_navigation_preload() const { return did_navigation_preload_; }
+
+  // When set, this job will pretend that navigation preload was triggered, but
+  // not actually do navigation preload. This is to aid unit tests that check
+  // UMA logging. It's difficult to get navigation preload to work in a unit
+  // test: there is a much setup of ResourceRequestInfoImpl,
+  // ResourceRequesterInfo, etc. required.
+  void set_simulate_navigation_preload_for_test() {
+    simulate_navigation_preload_for_test_ = true;
+  }
 
   // Sets the response type.
   // When an in-flight request possibly needs CORS check, use
@@ -111,6 +104,10 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
   void FallbackToNetwork();
   void FallbackToNetworkOrRenderer();
   void ForwardToServiceWorker();
+  // Tells the job to abort with a start error. Currently this is only called
+  // because the controller was lost. This function could be made more generic
+  // if needed later.
+  void FailDueToLostController();
 
   bool ShouldFallbackToNetwork() const {
     return response_type_ == FALLBACK_TO_NETWORK;
@@ -127,28 +124,27 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
   bool GetMimeType(std::string* mime_type) const override;
   void GetResponseInfo(net::HttpResponseInfo* info) override;
   void GetLoadTimingInfo(net::LoadTimingInfo* load_timing_info) const override;
-  int GetResponseCode() const override;
   void SetExtraRequestHeaders(const net::HttpRequestHeaders& headers) override;
   int ReadRawData(net::IOBuffer* buf, int buf_size) override;
 
   //----------------------------------------------------------------------------
-  // The following are intended for use by ServiceWorker(Blob|Stream)Reader.
-  void OnResponseStarted();
-  void OnReadRawDataComplete(int bytes_read);
-  void RecordResult(ServiceWorkerMetrics::URLRequestJobResult result);
+  // The following are intended for use by ServiceWorker(Blob|DataPipe)Reader.
+  virtual void OnResponseStarted();
+  virtual void OnReadRawDataComplete(int bytes_read);
+  virtual void RecordResult(ServiceWorkerMetrics::URLRequestJobResult result);
   //----------------------------------------------------------------------------
 
   base::WeakPtr<ServiceWorkerURLRequestJob> GetWeakPtr();
 
  private:
   class FileSizeResolver;
+  class NavigationPreloadMetrics;
+  friend class DelayHelper;
+  friend class ServiceWorkerURLRequestJobTest;
+  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerControlleeRequestHandlerTest,
+                           LostActiveVersion);
 
-  enum ResponseType {
-    NOT_DETERMINED,
-    FALLBACK_TO_NETWORK,
-    FALLBACK_TO_RENDERER,  // Use this when falling back with CORS check
-    FORWARD_TO_SERVICE_WORKER,
-  };
+  using ResponseType = ServiceWorkerResponseType;
 
   enum ResponseBodyType {
     UNKNOWN,
@@ -171,12 +167,19 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
   // their sizes populated.
   void CreateRequestBodyBlob(std::string* blob_uuid, uint64_t* blob_size);
 
+  // Returns true if this job performed a navigation that should be logged to
+  // performance-related UMA. It returns false in certain cases that are not
+  // relevant to performance analysis, such as if the worker was not already
+  // activated or DevTools was attached to the worker.
+  bool ShouldRecordNavigationMetrics(const ServiceWorkerVersion* version) const;
+
   // For FORWARD_TO_SERVICE_WORKER case.
   void DidPrepareFetchEvent(scoped_refptr<ServiceWorkerVersion> version);
   void DidDispatchFetchEvent(
       ServiceWorkerStatusCode status,
       ServiceWorkerFetchEventResult fetch_result,
       const ServiceWorkerResponse& response,
+      blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
       const scoped_refptr<ServiceWorkerVersion>& version);
   void SetResponse(const ServiceWorkerResponse& response);
 
@@ -228,16 +231,55 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
   bool HasRequestBody();
   void RequestBodyFileSizesResolved(bool success);
 
+  // Called back from
+  // ServiceWorkerFetchEventDispatcher::MaybeStartNavigationPreload when the
+  // navigation preload response starts.
+  void OnNavigationPreloadResponse();
+
+  void MaybeReportNavigationPreloadMetrics();
+
   // Not owned.
   Delegate* delegate_;
 
   // Timing info to show on the popup in Devtools' Network tab.
   net::LoadTimingInfo load_timing_info_;
+
+  // When the worker was asked to prepare for the fetch event. Preparation may
+  // include activation and startup.
   base::TimeTicks worker_start_time_;
+
+  // When the worker confirmed it's ready for the fetch event. If it was already
+  // activated and running when asked to prepare, this should be nearly the same
+  // as |worker_start_time_|).
   base::TimeTicks worker_ready_time_;
+
+  // When the response started.
   base::Time response_time_;
 
+  // When the navigation preload response started.
+  base::TimeTicks navigation_preload_response_time_;
+
+  // True if the worker was already in ACTIVATED status when asked to prepare
+  // for the fetch event.
+  bool worker_already_activated_ = false;
+
+  // The status the worker was in when asked to prepare for the fetch event.
+  EmbeddedWorkerStatus initial_worker_status_ = EmbeddedWorkerStatus::STOPPED;
+
+  // If worker startup occurred during preparation, the situation that startup
+  // occurred in.
+  ServiceWorkerMetrics::StartSituation worker_start_situation_ =
+      ServiceWorkerMetrics::StartSituation::UNKNOWN;
+
+  // True if navigation preload was enabled.
+  bool did_navigation_preload_ = false;
+  bool simulate_navigation_preload_for_test_ = false;
+
+  std::unique_ptr<NavigationPreloadMetrics> nav_preload_metrics_;
+
   ResponseType response_type_;
+
+  // True if URLRequestJob::Start() has been called.
   bool is_started_;
 
   net::HttpByteRange byte_range_;
@@ -245,7 +287,7 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
   std::unique_ptr<net::HttpResponseInfo> http_response_info_;
   // Headers that have not yet been committed to |http_response_info_|.
   scoped_refptr<net::HttpResponseHeaders> http_response_headers_;
-  GURL response_url_;
+  std::vector<GURL> response_url_list_;
   blink::WebServiceWorkerResponseType service_worker_response_type_;
 
   // Used when response type is FORWARD_TO_SERVICE_WORKER.
@@ -253,22 +295,24 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
   std::string client_id_;
   base::WeakPtr<storage::BlobStorageContext> blob_storage_context_;
   const ResourceContext* resource_context_;
-  // Only one of |blob_reader_| and |stream_reader_| can be non-null.
+  // Only one of |blob_reader_| and |data_pipe_reader_| can be non-null.
   std::unique_ptr<ServiceWorkerBlobReader> blob_reader_;
-  std::unique_ptr<ServiceWorkerStreamReader> stream_reader_;
+  std::unique_ptr<ServiceWorkerDataPipeReader> data_pipe_reader_;
 
   FetchRequestMode request_mode_;
   FetchCredentialsMode credentials_mode_;
   FetchRedirectMode redirect_mode_;
+  std::string integrity_;
   const ResourceType resource_type_;
   RequestContextType request_context_type_;
   RequestContextFrameType frame_type_;
   bool fall_back_required_;
   // ResourceRequestBody has a collection of BlobDataHandles attached to it
   // using the userdata mechanism. So we have to keep it not to free the blobs.
-  scoped_refptr<ResourceRequestBodyImpl> body_;
+  scoped_refptr<ResourceRequestBody> body_;
   std::unique_ptr<storage::BlobDataHandle> request_body_blob_data_handle_;
   ServiceWorkerFetchType fetch_type_;
+  base::Optional<base::TimeDelta> timeout_;
 
   ResponseBodyType response_body_type_ = UNKNOWN;
   bool did_record_result_ = false;
@@ -279,9 +323,6 @@ class CONTENT_EXPORT ServiceWorkerURLRequestJob : public net::URLRequestJob {
   ServiceWorkerHeaderList cors_exposed_header_names_;
 
   std::unique_ptr<FileSizeResolver> file_size_resolver_;
-
-  bool worker_already_activated_ = false;
-  EmbeddedWorkerStatus initial_worker_status_ = EmbeddedWorkerStatus::STOPPED;
 
   base::WeakPtrFactory<ServiceWorkerURLRequestJob> weak_factory_;
 

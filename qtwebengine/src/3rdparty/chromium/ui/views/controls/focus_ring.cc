@@ -5,7 +5,6 @@
 #include "ui/views/controls/focus_ring.h"
 
 #include "ui/gfx/canvas.h"
-#include "ui/native_theme/native_theme.h"
 #include "ui/views/controls/focusable_border.h"
 
 namespace views {
@@ -21,7 +20,7 @@ constexpr float kFocusHaloThicknessDp = 2.f;
 constexpr float kFocusHaloCornerRadiusDp =
     FocusableBorder::kCornerRadiusDp + kFocusHaloThicknessDp / 2.f;
 
-FocusRing* GetFocusRing(views::View* parent) {
+FocusRing* GetFocusRing(View* parent) {
   for (int i = 0; i < parent->child_count(); ++i) {
     if (parent->child_at(i)->GetClassName() == FocusRing::kViewClassName)
       return static_cast<FocusRing*>(parent->child_at(i));
@@ -34,9 +33,8 @@ FocusRing* GetFocusRing(views::View* parent) {
 const char FocusRing::kViewClassName[] = "FocusRing";
 
 // static
-views::View* FocusRing::Install(views::View* parent,
+views::View* FocusRing::Install(View* parent,
                                 ui::NativeTheme::ColorId override_color_id) {
-  DCHECK(parent->HasFocus());
   FocusRing* ring = GetFocusRing(parent);
   if (!ring) {
     ring = new FocusRing();
@@ -49,16 +47,21 @@ views::View* FocusRing::Install(views::View* parent,
 }
 
 // static
-void FocusRing::Uninstall(views::View* parent) {
+void FocusRing::Uninstall(View* parent) {
   delete GetFocusRing(parent);
+}
+
+// static
+void FocusRing::InitFocusRing(View* view) {
+  // A layer is necessary to paint beyond the parent's bounds.
+  view->SetPaintToLayer();
+  view->layer()->SetFillsBoundsOpaquely(false);
+  // Don't allow the view to process events.
+  view->set_can_process_events_within_subtree(false);
 }
 
 const char* FocusRing::GetClassName() const {
   return kViewClassName;
-}
-
-bool FocusRing::CanProcessEventsWithinSubtree() const {
-  return false;
 }
 
 void FocusRing::Layout() {
@@ -70,26 +73,24 @@ void FocusRing::Layout() {
 }
 
 void FocusRing::OnPaint(gfx::Canvas* canvas) {
-  SkPaint paint;
-  paint.setAntiAlias(true);
-  paint.setColor(
+  cc::PaintFlags flags;
+  flags.setAntiAlias(true);
+  flags.setColor(
       SkColorSetA(GetNativeTheme()->GetSystemColor(
                       override_color_id_ != ui::NativeTheme::kColorId_NumColors
                           ? override_color_id_
                           : ui::NativeTheme::kColorId_FocusedBorderColor),
                   0x66));
-  paint.setStyle(SkPaint::kStroke_Style);
-  paint.setStrokeWidth(kFocusHaloThicknessDp);
+  flags.setStyle(cc::PaintFlags::kStroke_Style);
+  flags.setStrokeWidth(kFocusHaloThicknessDp);
   gfx::RectF rect(GetLocalBounds());
   rect.Inset(gfx::InsetsF(kFocusHaloThicknessDp / 2.f));
-  canvas->DrawRoundRect(rect, kFocusHaloCornerRadiusDp, paint);
+  canvas->DrawRoundRect(rect, kFocusHaloCornerRadiusDp, flags);
 }
 
 FocusRing::FocusRing()
     : override_color_id_(ui::NativeTheme::kColorId_NumColors) {
-  // A layer is necessary to paint beyond the parent's bounds.
-  SetPaintToLayer(true);
-  layer()->SetFillsBoundsOpaquely(false);
+  InitFocusRing(this);
 }
 
 FocusRing::~FocusRing() {}

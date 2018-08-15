@@ -32,7 +32,8 @@
  */
 Elements.PropertiesWidget = class extends UI.ThrottledWidget {
   constructor() {
-    super();
+    super(true /* isWebComponent */);
+    this.registerRequiredCSS('elements/propertiesWidget.css');
 
     SDK.targetManager.addModelListener(SDK.DOMModel, SDK.DOMModel.Events.AttrModified, this._onNodeChange, this);
     SDK.targetManager.addModelListener(SDK.DOMModel, SDK.DOMModel.Events.AttrRemoved, this._onNodeChange, this);
@@ -60,18 +61,18 @@ Elements.PropertiesWidget = class extends UI.ThrottledWidget {
    */
   doUpdate() {
     if (this._lastRequestedNode) {
-      this._lastRequestedNode.target().runtimeAgent().releaseObjectGroup(Elements.PropertiesWidget._objectGroupName);
+      this._lastRequestedNode.domModel().runtimeModel().releaseObjectGroup(Elements.PropertiesWidget._objectGroupName);
       delete this._lastRequestedNode;
     }
 
     if (!this._node) {
-      this.element.removeChildren();
+      this.contentElement.removeChildren();
       this.sections = [];
       return Promise.resolve();
     }
 
     this._lastRequestedNode = this._node;
-    return this._node.resolveToObjectPromise(Elements.PropertiesWidget._objectGroupName).then(nodeResolved.bind(this));
+    return this._node.resolveToObject(Elements.PropertiesWidget._objectGroupName).then(nodeResolved.bind(this));
 
     /**
      * @param {?SDK.RemoteObject} object
@@ -108,7 +109,7 @@ Elements.PropertiesWidget = class extends UI.ThrottledWidget {
       if (!result.object || result.wasThrown)
         return;
 
-      var promise = result.object.getOwnPropertiesPromise().then(fillSection.bind(this));
+      var promise = result.object.getOwnPropertiesPromise(false /* generatePreview */).then(fillSection.bind(this));
       result.object.release();
       return promise;
     }
@@ -127,7 +128,7 @@ Elements.PropertiesWidget = class extends UI.ThrottledWidget {
       for (var i = 0; i < sections.length; ++i)
         expanded.push(sections[i].expanded);
 
-      this.element.removeChildren();
+      this.contentElement.removeChildren();
       this.sections = [];
 
       // Get array of property user-friendly names.
@@ -137,13 +138,13 @@ Elements.PropertiesWidget = class extends UI.ThrottledWidget {
         var property = properties[i].value;
         var title = property.description;
         title = title.replace(/Prototype$/, '');
-        var section = new Components.ObjectPropertiesSection(property, title);
+        var section = new ObjectUI.ObjectPropertiesSection(property, title);
         section.element.classList.add('properties-widget-section');
         this.sections.push(section);
-        this.element.appendChild(section.element);
+        this.contentElement.appendChild(section.element);
         if (expanded[this.sections.length - 1])
           section.expand();
-        section.addEventListener(TreeOutline.Events.ElementExpanded, this._propertyExpanded, this);
+        section.addEventListener(UI.TreeOutline.Events.ElementExpanded, this._propertyExpanded, this);
       }
     }
   }
@@ -154,7 +155,7 @@ Elements.PropertiesWidget = class extends UI.ThrottledWidget {
   _propertyExpanded(event) {
     Host.userMetrics.actionTaken(Host.UserMetrics.Action.DOMPropertiesExpanded);
     for (var section of this.sections)
-      section.removeEventListener(TreeOutline.Events.ElementExpanded, this._propertyExpanded, this);
+      section.removeEventListener(UI.TreeOutline.Events.ElementExpanded, this._propertyExpanded, this);
   }
 
   /**

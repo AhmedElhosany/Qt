@@ -5,6 +5,8 @@
 #include "extensions/common/permissions/usb_device_permission.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -20,7 +22,7 @@
 #include "extensions/common/features/feature.h"
 #include "extensions/common/features/feature_provider.h"
 #include "extensions/common/permissions/permissions_info.h"
-#include "grit/extensions_strings.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace extensions {
@@ -31,7 +33,7 @@ const int kHidInterfaceClass = 3;
 
 bool IsInterfaceClassPermissionAlowed(const Extension* extension) {
   const Feature* feature = FeatureProvider::GetBehaviorFeature(
-      BehaviorFeature::kAllowUsbDevicesPermissionInterfaceClass);
+      behavior_feature::kAllowUsbDevicesPermissionInterfaceClass);
   if (!feature)
     return false;
   if (!extension)

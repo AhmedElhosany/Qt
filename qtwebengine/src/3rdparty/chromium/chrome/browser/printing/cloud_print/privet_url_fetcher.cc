@@ -11,18 +11,16 @@
 #include <memory>
 
 #include "base/bind.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/json/json_reader.h"
 #include "base/location.h"
 #include "base/memory/singleton.h"
 #include "base/rand_util.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/printing/cloud_print/privet_constants.h"
 #include "components/data_use_measurement/core/data_use_user_data.h"
-#include "content/public/browser/browser_thread.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/url_request_context.h"
@@ -76,10 +74,12 @@ PrivetURLFetcher::PrivetURLFetcher(
     const GURL& url,
     net::URLFetcher::RequestType request_type,
     const scoped_refptr<net::URLRequestContextGetter>& context_getter,
+    const net::NetworkTrafficAnnotationTag& traffic_annotation,
     PrivetURLFetcher::Delegate* delegate)
     : url_(url),
       request_type_(request_type),
       context_getter_(context_getter),
+      traffic_annotation_(traffic_annotation),
       delegate_(delegate),
       max_retries_(kPrivetMaxRetries),
       do_not_retry_on_transient_error_(false),
@@ -150,7 +150,8 @@ void PrivetURLFetcher::Try() {
   tries_++;
   if (tries_ <= max_retries_) {
     DVLOG(1) << "Attempt: " << tries_;
-    url_fetcher_ = net::URLFetcher::Create(url_, request_type_, this);
+    url_fetcher_ =
+        net::URLFetcher::Create(url_, request_type_, this, traffic_annotation_);
     data_use_measurement::DataUseUserData::AttachToFetcher(
         url_fetcher_.get(), data_use_measurement::DataUseUserData::CLOUD_PRINT);
 
@@ -173,11 +174,8 @@ void PrivetURLFetcher::Try() {
           MakeRangeHeader(byte_range_start_, byte_range_end_));
     }
 
-    if (make_response_file_) {
-      url_fetcher_->SaveResponseToTemporaryFile(
-          content::BrowserThread::GetTaskRunnerForThread(
-              content::BrowserThread::FILE));
-    }
+    if (make_response_file_)
+      url_fetcher_->SaveResponseToTemporaryFile(GetFileTaskRunner());
 
     // URLFetcher requires us to set upload data for POST requests.
     if (request_type_ == net::URLFetcher::POST) {
@@ -185,8 +183,7 @@ void PrivetURLFetcher::Try() {
         url_fetcher_->SetUploadFilePath(
             upload_content_type_, upload_file_path_, 0 /*offset*/,
             std::numeric_limits<uint64_t>::max() /*length*/,
-            content::BrowserThread::GetTaskRunnerForThread(
-                content::BrowserThread::FILE));
+            GetFileTaskRunner());
       } else {
         url_fetcher_->SetUploadData(upload_content_type_, upload_data_);
       }
@@ -202,8 +199,6 @@ void PrivetURLFetcher::Start() {
   DCHECK_EQ(tries_, 0);  // We haven't called |Start()| yet.
 
   if (!url_.is_valid()) {
-    // Not yet clear why it's possible. crbug.com/513505
-    base::debug::DumpWithoutCrashing();
     return delegate_->OnError(this, UNKNOWN_ERROR);
   }
 
@@ -365,7 +360,8 @@ void PrivetURLFetcher::ScheduleRetry(int timeout_seconds) {
     timeout_seconds_randomized = 0;
 
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, base::Bind(&PrivetURLFetcher::Try, weak_factory_.GetWeakPtr()),
+      FROM_HERE,
+      base::BindOnce(&PrivetURLFetcher::Try, weak_factory_.GetWeakPtr()),
       base::TimeDelta::FromSeconds(timeout_seconds_randomized));
 }
 
@@ -386,9 +382,17 @@ void PrivetURLFetcher::RefreshToken(const std::string& token) {
 
 bool PrivetURLFetcher::PrivetErrorTransient(const std::string& error) {
   return (error == kPrivetErrorDeviceBusy) ||
-         (error == kPrivetV3ErrorDeviceBusy) ||
          (error == kPrivetErrorPendingUserAction) ||
          (error == kPrivetErrorPrinterBusy);
+}
+
+scoped_refptr<base::SequencedTaskRunner> PrivetURLFetcher::GetFileTaskRunner() {
+  if (!file_task_runner_) {
+    file_task_runner_ = base::CreateSequencedTaskRunnerWithTraits(
+        {base::TaskPriority::BACKGROUND, base::MayBlock()});
+  }
+
+  return file_task_runner_;
 }
 
 }  // namespace cloud_print

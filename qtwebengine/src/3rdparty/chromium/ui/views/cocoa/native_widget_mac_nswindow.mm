@@ -118,7 +118,10 @@
 
   // If a window drag event monitor is not used, query the BridgedNativeWidget
   // to decide if a window drag should be performed.
-  if (!views::BridgedNativeWidget::ShouldUseDragEventMonitor()) {
+  // This conditional is equivalent to
+  // !views::BridgedNativeWidget::ShouldUseDragEventMonitor(), but it also
+  // supresses the -Wunguarded-availability warning.
+  if (@available(macOS 10.11, *)) {
     views::BridgedNativeWidget* bridge =
         views::NativeWidgetMac::GetBridgeForNativeWindow(self);
 
@@ -198,32 +201,25 @@
   return [super performKeyEquivalent:event];
 }
 
+- (BOOL)defaultValidateUserInterfaceItem:
+    (id<NSValidatedUserInterfaceItem>)item {
+  return [super validateUserInterfaceItem:item];
+}
+
 - (void)commandDispatch:(id)sender {
-  [commandHandler_ commandDispatch:sender window:self];
+  [commandDispatcher_ dispatch:sender forHandler:commandHandler_];
 }
 
 - (void)commandDispatchUsingKeyModifiers:(id)sender {
-  [commandHandler_ commandDispatchUsingKeyModifiers:sender window:self];
+  [commandDispatcher_ dispatchUsingKeyModifiers:sender
+                                     forHandler:commandHandler_];
 }
 
 // NSWindow overrides (NSUserInterfaceItemValidations implementation)
 
 - (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item {
-  // Since this class implements these selectors, |super| will always say they
-  // are enabled. Only use [super] to validate other selectors. If there is no
-  // command handler, defer to AppController.
-  if ([item action] == @selector(commandDispatch:) ||
-      [item action] == @selector(commandDispatchUsingKeyModifiers:)) {
-    if (commandHandler_)
-      return [commandHandler_ validateUserInterfaceItem:item window:self];
-
-    id appController = [NSApp delegate];
-    DCHECK([appController
-        conformsToProtocol:@protocol(NSUserInterfaceValidations)]);
-    return [appController validateUserInterfaceItem:item];
-  }
-
-  return [super validateUserInterfaceItem:item];
+  return [commandDispatcher_ validateUserInterfaceItem:item
+                                            forHandler:commandHandler_];
 }
 
 @end

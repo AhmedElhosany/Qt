@@ -4,17 +4,50 @@
 
 #include "core/layout/ng/ng_fragment.h"
 
-#include "core/layout/ng/ng_macros.h"
-#include "core/layout/ng/ng_physical_fragment.h"
+#include "core/layout/ng/geometry/ng_logical_size.h"
 
 namespace blink {
 
-NGMarginStrut NGFragment::MarginStrut() const {
-  WRITING_MODE_IGNORED(
-      "Accessing the margin strut is fine here. Changing the writing mode"
-      "establishes a new formatting context, for which a margin strut is never"
-      "set for a fragment.");
-  return toNGPhysicalFragment(physical_fragment_)->MarginStrut();
+LayoutUnit NGFragment::InlineSize() const {
+  return writing_mode_ == kHorizontalTopBottom
+             ? physical_fragment_->Size().width
+             : physical_fragment_->Size().height;
+}
+
+LayoutUnit NGFragment::BlockSize() const {
+  return writing_mode_ == kHorizontalTopBottom
+             ? physical_fragment_->Size().height
+             : physical_fragment_->Size().width;
+}
+
+NGLogicalSize NGFragment::Size() const {
+  return physical_fragment_->Size().ConvertToLogical(
+      static_cast<NGWritingMode>(writing_mode_));
+}
+
+LayoutUnit NGFragment::InlineOffset() const {
+  return writing_mode_ == kHorizontalTopBottom
+             ? physical_fragment_->Offset().left
+             : physical_fragment_->Offset().top;
+}
+
+LayoutUnit NGFragment::BlockOffset() const {
+  return writing_mode_ == kHorizontalTopBottom
+             ? physical_fragment_->Offset().top
+             : physical_fragment_->Offset().left;
+}
+
+NGLogicalOffset NGFragment::Offset() const {
+  return NGLogicalOffset(InlineOffset(), BlockOffset());
+}
+
+NGBorderEdges NGFragment::BorderEdges() const {
+  return NGBorderEdges::FromPhysical(physical_fragment_->BorderEdges(),
+                                     WritingMode());
+}
+
+NGPhysicalFragment::NGFragmentType NGFragment::Type() const {
+  return physical_fragment_->Type();
 }
 
 }  // namespace blink

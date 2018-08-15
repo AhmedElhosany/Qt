@@ -11,8 +11,8 @@
 #include "base/observer_list.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/lock.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "base/threading/worker_pool.h"
 #include "net/proxy/proxy_config.h"
 
 namespace net {
@@ -34,7 +34,7 @@ class PollingProxyConfigService::Core
   // Called when the parent PollingProxyConfigService is destroyed
   // (observers should not be called past this point).
   void Orphan() {
-    base::AutoLock l(lock_);
+    base::AutoLock lock(lock_);
     origin_task_runner_ = NULL;
   }
 
@@ -90,21 +90,21 @@ class PollingProxyConfigService::Core
     last_poll_time_ = base::TimeTicks::Now();
     poll_task_outstanding_ = true;
     poll_task_queued_ = false;
-    base::WorkerPool::PostTask(
+    base::PostTaskWithTraits(
         FROM_HERE,
-        base::Bind(&Core::PollOnWorkerThread, this, get_config_func_),
-        true);
+        {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+        base::Bind(&Core::PollAsync, this, get_config_func_));
   }
 
  private:
   friend class base::RefCountedThreadSafe<Core>;
   ~Core() {}
 
-  void PollOnWorkerThread(GetConfigFunction func) {
+  void PollAsync(GetConfigFunction func) {
     ProxyConfig config;
     func(&config);
 
-    base::AutoLock l(lock_);
+    base::AutoLock lock(lock_);
     if (origin_task_runner_.get()) {
       origin_task_runner_->PostTask(
           FROM_HERE, base::Bind(&Core::GetConfigCompleted, this, config));

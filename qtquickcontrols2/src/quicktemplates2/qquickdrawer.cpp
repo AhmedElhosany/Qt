@@ -237,6 +237,16 @@ void QQuickDrawerPrivate::reposition()
     QQuickPopupPrivate::reposition();
 }
 
+void QQuickDrawerPrivate::showOverlay()
+{
+    // managed in setPosition()
+}
+
+void QQuickDrawerPrivate::hideOverlay()
+{
+    // managed in setPosition()
+}
+
 void QQuickDrawerPrivate::resizeOverlay()
 {
     if (!dimmer || !window)

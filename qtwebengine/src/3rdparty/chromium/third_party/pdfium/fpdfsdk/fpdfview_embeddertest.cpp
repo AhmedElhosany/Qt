@@ -9,6 +9,7 @@
 #include "public/fpdfview.h"
 #include "testing/embedder_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "testing/utils/path_service.h"
 
 TEST(fpdf, CApiTest) {
   EXPECT_TRUE(CheckPDFiumCApi());
@@ -97,6 +98,7 @@ TEST_F(FPDFViewEmbeddertest, ViewerRef) {
   EXPECT_EQ(0U, FPDF_VIEWERREF_GetName(document(), "foo", buf, sizeof(buf)));
 
   // Make sure |buf| does not get written into when it appears to be too small.
+  // NOLINTNEXTLINE(runtime/printf)
   strcpy(buf, "ABCD");
   EXPECT_EQ(4U, FPDF_VIEWERREF_GetName(document(), "Foo", buf, 1));
   EXPECT_STREQ("ABCD", buf);
@@ -325,4 +327,95 @@ TEST_F(FPDFViewEmbeddertest, Hang_355) {
 // The test should pass even when the file has circular references to pages.
 TEST_F(FPDFViewEmbeddertest, Hang_360) {
   EXPECT_FALSE(OpenDocument("bug_360.pdf"));
+}
+
+TEST_F(FPDFViewEmbeddertest, FPDF_RenderPageBitmapWithMatrix) {
+  const char kAllBlackMd5sum[] = "5708fc5c4a8bd0abde99c8e8f0390615";
+  const char kTopLeftQuarterBlackMd5sum[] = "24e4d1ec06fa0258af758cfc8b2ad50a";
+
+  EXPECT_TRUE(OpenDocument("black.pdf"));
+  FPDF_PAGE page = LoadPage(0);
+  EXPECT_NE(nullptr, page);
+  const int width = static_cast<int>(FPDF_GetPageWidth(page));
+  const int height = static_cast<int>(FPDF_GetPageHeight(page));
+  EXPECT_EQ(612, width);
+  EXPECT_EQ(792, height);
+
+  FPDF_BITMAP bitmap = RenderPage(page);
+  CompareBitmap(bitmap, width, height, kAllBlackMd5sum);
+  FPDFBitmap_Destroy(bitmap);
+
+  // Try rendering with an identity matrix. The output should be the same as
+  // the RenderPage() output.
+  FS_MATRIX matrix;
+  matrix.a = 1;
+  matrix.b = 0;
+  matrix.c = 0;
+  matrix.d = 1;
+  matrix.e = 0;
+  matrix.f = 0;
+
+  FS_RECTF rect;
+  rect.left = 0;
+  rect.top = 0;
+  rect.right = width;
+  rect.bottom = height;
+
+  bitmap = FPDFBitmap_Create(width, height, 0);
+  FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
+  FPDF_RenderPageBitmapWithMatrix(bitmap, page, &matrix, &rect, 0);
+  CompareBitmap(bitmap, width, height, kAllBlackMd5sum);
+  FPDFBitmap_Destroy(bitmap);
+
+  // Now render again with the image scaled.
+  matrix.a = 0.5;
+  matrix.d = 0.5;
+
+  bitmap = FPDFBitmap_Create(width, height, 0);
+  FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
+  FPDF_RenderPageBitmapWithMatrix(bitmap, page, &matrix, &rect, 0);
+  CompareBitmap(bitmap, width, height, kTopLeftQuarterBlackMd5sum);
+  FPDFBitmap_Destroy(bitmap);
+
+  UnloadPage(page);
+}
+
+class UnSupRecordDelegate : public EmbedderTest::Delegate {
+ public:
+  UnSupRecordDelegate() : type_(-1) {}
+  ~UnSupRecordDelegate() override {}
+
+  void UnsupportedHandler(int type) override { type_ = type; }
+
+  int type_;
+};
+
+TEST_F(FPDFViewEmbeddertest, UnSupportedOperations_NotFound) {
+  UnSupRecordDelegate delegate;
+  SetDelegate(&delegate);
+  ASSERT_TRUE(OpenDocument("hello_world.pdf"));
+  EXPECT_EQ(delegate.type_, -1);
+  SetDelegate(nullptr);
+}
+
+TEST_F(FPDFViewEmbeddertest, UnSupportedOperations_LoadCustomDocument) {
+  UnSupRecordDelegate delegate;
+  SetDelegate(&delegate);
+  ASSERT_TRUE(OpenDocument("unsupported_feature.pdf"));
+  EXPECT_EQ(FPDF_UNSP_DOC_PORTABLECOLLECTION, delegate.type_);
+  SetDelegate(nullptr);
+}
+
+TEST_F(FPDFViewEmbeddertest, UnSupportedOperations_LoadDocument) {
+  std::string file_path;
+  ASSERT_TRUE(
+      PathService::GetTestFilePath("unsupported_feature.pdf", &file_path));
+
+  UnSupRecordDelegate delegate;
+  SetDelegate(&delegate);
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(file_path.c_str(), "");
+  EXPECT_TRUE(doc != nullptr);
+  EXPECT_EQ(FPDF_UNSP_DOC_PORTABLECOLLECTION, delegate.type_);
+  FPDF_CloseDocument(doc);
+  SetDelegate(nullptr);
 }

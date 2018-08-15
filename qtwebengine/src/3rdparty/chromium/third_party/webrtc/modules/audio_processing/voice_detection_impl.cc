@@ -10,9 +10,9 @@
 
 #include "webrtc/modules/audio_processing/voice_detection_impl.h"
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/common_audio/vad/include/webrtc_vad.h"
 #include "webrtc/modules/audio_processing/audio_buffer.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 class VoiceDetectionImpl::Vad {
@@ -63,7 +63,7 @@ void VoiceDetectionImpl::ProcessCaptureAudio(AudioBuffer* audio) {
     return;
   }
 
-  RTC_DCHECK_GE(160u, audio->num_frames_per_band());
+  RTC_DCHECK_GE(160, audio->num_frames_per_band());
   // TODO(ajm): concatenate data in frame buffer here.
   int vad_ret = WebRtcVad_Process(vad_->state(), sample_rate_hz_,
                                   audio->mixed_low_pass_data(),

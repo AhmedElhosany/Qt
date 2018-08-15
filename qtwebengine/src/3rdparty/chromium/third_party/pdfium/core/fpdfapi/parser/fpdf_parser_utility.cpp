@@ -7,6 +7,7 @@
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 
 #include "core/fpdfapi/parser/cpdf_array.h"
+#include "core/fpdfapi/parser/cpdf_boolean.h"
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_number.h"
 #include "core/fpdfapi/parser/cpdf_reference.h"
@@ -14,7 +15,8 @@
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
 #include "core/fpdfapi/parser/cpdf_string.h"
 #include "core/fpdfapi/parser/fpdf_parser_decode.h"
-#include "core/fxcrt/fx_ext.h"
+#include "core/fxcrt/fx_extension.h"
+#include "third_party/base/logging.h"
 
 // Indexed by 8-bit character code, contains either:
 //   'W' - for whitespace: NUL, TAB, CR, LF, FF, SPACE, 0x80, 0xff
@@ -68,7 +70,7 @@ const char PDF_CharType[256] = {
     'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R', 'R',
     'R', 'R', 'R', 'R', 'R', 'R', 'R', 'W'};
 
-int32_t GetHeaderOffset(IFX_SeekableReadStream* pFile) {
+int32_t GetHeaderOffset(const CFX_RetainPtr<IFX_SeekableReadStream>& pFile) {
   const size_t kBufSize = 4;
   uint8_t buf[kBufSize];
   for (int32_t offset = 0; offset <= 1024; ++offset) {
@@ -92,12 +94,12 @@ CFX_ByteString PDF_NameDecode(const CFX_ByteStringC& bstr) {
 
   int size = bstr.GetLength();
   CFX_ByteString result;
-  FX_CHAR* pDestStart = result.GetBuffer(size);
-  FX_CHAR* pDest = pDestStart;
+  char* pDestStart = result.GetBuffer(size);
+  char* pDest = pDestStart;
   for (int i = 0; i < size; i++) {
     if (bstr[i] == '#' && i < size - 2) {
-      *pDest++ =
-          FXSYS_toHexDigit(bstr[i + 1]) * 16 + FXSYS_toHexDigit(bstr[i + 2]);
+      *pDest++ = FXSYS_HexCharToInt(bstr[i + 1]) * 16 +
+                 FXSYS_HexCharToInt(bstr[i + 2]);
       i += 2;
     } else {
       *pDest++ = bstr[i];
@@ -131,15 +133,15 @@ CFX_ByteString PDF_NameEncode(const CFX_ByteString& orig) {
     return orig;
 
   CFX_ByteString res;
-  FX_CHAR* dest_buf = res.GetBuffer(dest_len);
+  char* dest_buf = res.GetBuffer(dest_len);
   dest_len = 0;
   for (i = 0; i < src_len; i++) {
     uint8_t ch = src_buf[i];
     if (ch >= 0x80 || PDFCharIsWhitespace(ch) || ch == '#' ||
         PDFCharIsDelimiter(ch)) {
       dest_buf[dest_len++] = '#';
-      dest_buf[dest_len++] = "0123456789ABCDEF"[ch / 16];
-      dest_buf[dest_len++] = "0123456789ABCDEF"[ch % 16];
+      FXSYS_IntToTwoHexChars(ch, dest_buf + dest_len);
+      dest_len += 2;
     } else {
       dest_buf[dest_len++] = ch;
     }
@@ -193,7 +195,7 @@ CFX_ByteTextBuf& operator<<(CFX_ByteTextBuf& buf, const CPDF_Object* pObj) {
       buf << "<<";
       for (const auto& it : *p) {
         const CFX_ByteString& key = it.first;
-        CPDF_Object* pValue = it.second;
+        CPDF_Object* pValue = it.second.get();
         buf << "/" << PDF_NameEncode(key);
         if (pValue && !pValue->IsInline()) {
           buf << " " << pValue->GetObjNum() << " 0 R ";
@@ -207,14 +209,14 @@ CFX_ByteTextBuf& operator<<(CFX_ByteTextBuf& buf, const CPDF_Object* pObj) {
     case CPDF_Object::STREAM: {
       const CPDF_Stream* p = pObj->AsStream();
       buf << p->GetDict() << "stream\r\n";
-      CPDF_StreamAcc acc;
-      acc.LoadAllData(p, true);
-      buf.AppendBlock(acc.GetData(), acc.GetSize());
+      auto pAcc = pdfium::MakeRetain<CPDF_StreamAcc>(p);
+      pAcc->LoadAllData(true);
+      buf.AppendBlock(pAcc->GetData(), pAcc->GetSize());
       buf << "\r\nendstream";
       break;
     }
     default:
-      ASSERT(false);
+      NOTREACHED();
       break;
   }
   return buf;

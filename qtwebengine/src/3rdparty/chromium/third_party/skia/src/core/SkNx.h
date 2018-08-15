@@ -8,16 +8,11 @@
 #ifndef SkNx_DEFINED
 #define SkNx_DEFINED
 
+#include "SkSafe_math.h"
 #include "SkScalar.h"
 #include "SkTypes.h"
 #include <limits>
-#include <math.h>
 #include <type_traits>
-
-// These _abi types are data-only, and so can be used to store SkNx in structs or
-// pass them as function parameters or return values, even across compilation units.
-template <int N, typename T> struct SkNx_abi      { SkNx_abi<N/2,T> lo, hi; };
-template <       typename T> struct SkNx_abi<1,T> {              T     val; };
 
 // Every single SkNx method wants to be fully inlined.  (We know better than MSVC).
 #define AI SK_ALWAYS_INLINE
@@ -47,9 +42,6 @@ struct SkNx {
         static_assert(N==16, "");
     }
 
-    AI SkNx(const SkNx_abi<N,T>& a) : fLo(a.lo), fHi(a.hi) {}
-    AI operator SkNx_abi<N,T>() const { return { (SkNx_abi<N/2,T>)fLo, (SkNx_abi<N/2,T>)fHi }; }
-
     AI T operator[](int k) const {
         SkASSERT(0 <= k && k < N);
         return k < N/2 ? fLo[k] : fHi[k-N/2];
@@ -75,6 +67,16 @@ struct SkNx {
         *b = SkNx{bl, bh};
         *c = SkNx{cl, ch};
         *d = SkNx{dl, dh};
+    }
+    AI static void Load3(const void* vptr, SkNx* a, SkNx* b, SkNx* c) {
+        auto ptr = (const char*)vptr;
+        Half al, bl, cl,
+             ah, bh, ch;
+        Half::Load3(ptr                  , &al, &bl, &cl);
+        Half::Load3(ptr + 3*N/2*sizeof(T), &ah, &bh, &ch);
+        *a = SkNx{al, ah};
+        *b = SkNx{bl, bh};
+        *c = SkNx{cl, ch};
     }
     AI static void Store4(void* vptr, const SkNx& a, const SkNx& b, const SkNx& c, const SkNx& d) {
         auto ptr = (char*)vptr;
@@ -137,9 +139,6 @@ struct SkNx<1,T> {
     AI SkNx() = default;
     AI SkNx(T v) : fVal(v) {}
 
-    AI SkNx(const SkNx_abi<1,T>& a) : fVal(a.val) {}
-    AI operator SkNx_abi<1,T>() const { return { fVal }; }
-
     // Android complains against unused parameters, so we guard it
     AI T operator[](int SkDEBUGCODE(k)) const {
         SkASSERT(k == 0);
@@ -159,6 +158,12 @@ struct SkNx<1,T> {
         *b = Load(ptr + 1*sizeof(T));
         *c = Load(ptr + 2*sizeof(T));
         *d = Load(ptr + 3*sizeof(T));
+    }
+    AI static void Load3(const void* vptr, SkNx* a, SkNx* b, SkNx* c) {
+        auto ptr = (const char*)vptr;
+        *a = Load(ptr + 0*sizeof(T));
+        *b = Load(ptr + 1*sizeof(T));
+        *c = Load(ptr + 2*sizeof(T));
     }
     AI static void Store4(void* vptr, const SkNx& a, const SkNx& b, const SkNx& c, const SkNx& d) {
         auto ptr = (char*)vptr;
@@ -213,6 +218,8 @@ struct SkNx<1,T> {
 
 private:
     // Helper functions to choose the right float/double methods.  (In <cmath> madness lies...)
+    AI static int     Abs(int val) { return  val < 0 ? -val : val; }
+
     AI static float   Abs(float val) { return  ::fabsf(val); }
     AI static float  Sqrt(float val) { return  ::sqrtf(val); }
     AI static float Floor(float val) { return ::floorf(val); }

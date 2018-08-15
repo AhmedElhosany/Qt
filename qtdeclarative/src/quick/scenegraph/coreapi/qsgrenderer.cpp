@@ -136,6 +136,7 @@ QSGRenderer::QSGRenderer(QSGRenderContext *context)
     , m_bindable(0)
     , m_changed_emitted(false)
     , m_is_rendering(false)
+    , m_is_preprocessing(false)
 {
 }
 
@@ -191,7 +192,7 @@ void QSGRenderer::renderScene(uint fboId)
         class B : public QSGBindable
         {
         public:
-            void bind() const { QOpenGLFramebufferObject::bindDefault(); }
+            void bind() const override { QOpenGLFramebufferObject::bindDefault(); }
         } bindable;
         renderScene(bindable);
     }
@@ -289,6 +290,8 @@ void QSGRenderer::nodeChanged(QSGNode *node, QSGNode::DirtyState state)
 
 void QSGRenderer::preprocess()
 {
+    m_is_preprocessing = true;
+
     QSGRootNode *root = rootNode();
     Q_ASSERT(root);
 
@@ -300,6 +303,11 @@ void QSGRenderer::preprocess()
     for (QSet<QSGNode *>::const_iterator it = items.constBegin();
          it != items.constEnd(); ++it) {
         QSGNode *n = *it;
+
+        // If we are currently preprocessing, check this node hasn't been
+        // deleted or something. we don't want a use-after-free!
+        if (m_nodes_dont_preprocess.contains(n)) // skip
+            continue;
         if (!nodeUpdater()->isNodeBlocked(n, root)) {
             n->preprocess();
         }
@@ -317,7 +325,12 @@ void QSGRenderer::preprocess()
         updatePassTime = frameTimer.nsecsElapsed();
     Q_QUICK_SG_PROFILE_RECORD(QQuickProfiler::SceneGraphRendererFrame,
                               QQuickProfiler::SceneGraphRendererUpdate);
+
+    m_is_preprocessing = false;
+    m_nodes_dont_preprocess.clear();
 }
+
+
 
 void QSGRenderer::addNodesToPreprocess(QSGNode *node)
 {
@@ -331,8 +344,13 @@ void QSGRenderer::removeNodesToPreprocess(QSGNode *node)
 {
     for (QSGNode *c = node->firstChild(); c; c = c->nextSibling())
         removeNodesToPreprocess(c);
-    if (node->flags() & QSGNode::UsePreprocess)
+    if (node->flags() & QSGNode::UsePreprocess) {
         m_nodes_to_preprocess.remove(node);
+
+        // If preprocessing *now*, mark the node as gone.
+        if (m_is_preprocessing)
+            m_nodes_dont_preprocess.insert(node);
+    }
 }
 
 

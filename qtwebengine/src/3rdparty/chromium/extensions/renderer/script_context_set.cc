@@ -10,7 +10,7 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/render_frame.h"
 #include "extensions/common/extension.h"
-#include "extensions/renderer/extension_groups.h"
+#include "extensions/renderer/extensions_renderer_client.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_injection.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
@@ -37,7 +37,6 @@ ScriptContextSet::~ScriptContextSet() {
 ScriptContext* ScriptContextSet::Register(
     blink::WebLocalFrame* frame,
     const v8::Local<v8::Context>& v8_context,
-    int extension_group,
     int world_id) {
   const Extension* extension =
       GetExtensionFromFrameAndWorld(frame, world_id, false);
@@ -45,13 +44,12 @@ ScriptContext* ScriptContextSet::Register(
       GetExtensionFromFrameAndWorld(frame, world_id, true);
 
   GURL frame_url = ScriptContext::GetDataSourceURLForFrame(frame);
-  Feature::Context context_type =
-      ClassifyJavaScriptContext(extension, extension_group, frame_url,
-                                frame->document().getSecurityOrigin());
+  Feature::Context context_type = ClassifyJavaScriptContext(
+      extension, world_id, frame_url, frame->GetDocument().GetSecurityOrigin());
   Feature::Context effective_context_type = ClassifyJavaScriptContext(
-      effective_extension, extension_group,
+      effective_extension, world_id,
       ScriptContext::GetEffectiveDocumentURL(frame, frame_url, true),
-      frame->document().getSecurityOrigin());
+      frame->GetDocument().GetSecurityOrigin());
 
   ScriptContext* context =
       new ScriptContext(v8_context, frame, extension, context_type,
@@ -123,16 +121,17 @@ void ScriptContextSet::ForEach(
   }
 }
 
-std::set<ScriptContext*> ScriptContextSet::OnExtensionUnloaded(
-    const std::string& extension_id) {
-  std::set<ScriptContext*> removed;
-  ForEach(extension_id, base::Bind(&ScriptContextSet::RecordAndRemove,
-                                   base::Unretained(this), &removed));
-  return removed;
+void ScriptContextSet::OnExtensionUnloaded(const std::string& extension_id) {
+  ForEach(extension_id,
+          base::Bind(&ScriptContextSet::Remove, base::Unretained(this)));
+}
+
+void ScriptContextSet::AddForTesting(std::unique_ptr<ScriptContext> context) {
+  contexts_.insert(context.release());  // Takes ownership
 }
 
 const Extension* ScriptContextSet::GetExtensionFromFrameAndWorld(
-    const blink::WebLocalFrame* frame,
+    blink::WebLocalFrame* frame,
     int world_id,
     bool use_effective_url) {
   std::string extension_id;
@@ -167,14 +166,17 @@ const Extension* ScriptContextSet::GetExtensionFromFrameAndWorld(
 
 Feature::Context ScriptContextSet::ClassifyJavaScriptContext(
     const Extension* extension,
-    int extension_group,
+    int world_id,
     const GURL& url,
     const blink::WebSecurityOrigin& origin) {
   // WARNING: This logic must match ProcessMap::GetContextType, as much as
   // possible.
 
-  DCHECK_GE(extension_group, 0);
-  if (extension_group == EXTENSION_GROUP_CONTENT_SCRIPTS) {
+  // Worlds not within this range are not for content scripts, so ignore them.
+  // TODO(devlin): Isolated worlds with a non-zero id could belong to
+  // chrome-internal pieces, like dom distiller and translate. Do we need any
+  // bindings (even those for basic web pages) for those?
+  if (world_id >= ExtensionsRendererClient::Get()->GetLowestIsolatedWorldId()) {
     return extension ?  // TODO(kalman): when does this happen?
                Feature::CONTENT_SCRIPT_CONTEXT
                      : Feature::UNSPECIFIED_CONTEXT;
@@ -197,15 +199,18 @@ Feature::Context ScriptContextSet::ClassifyJavaScriptContext(
     // case this would usually be considered a (blessed) web page context,
     // unless the extension in question is a component extension, in which case
     // we cheat and call it blessed.
-    return (extension->is_hosted_app() &&
-            extension->location() != Manifest::COMPONENT)
-               ? Feature::BLESSED_WEB_PAGE_CONTEXT
-               : Feature::BLESSED_EXTENSION_CONTEXT;
+    if (extension->is_hosted_app() &&
+        extension->location() != Manifest::COMPONENT) {
+      return Feature::BLESSED_WEB_PAGE_CONTEXT;
+    }
+
+    return is_lock_screen_context_ ? Feature::LOCK_SCREEN_EXTENSION_CONTEXT
+                                   : Feature::BLESSED_EXTENSION_CONTEXT;
   }
 
   // TODO(kalman): This isUnique() check is wrong, it should be performed as
   // part of ScriptContext::IsSandboxedPage().
-  if (!origin.isUnique() &&
+  if (!origin.IsUnique() &&
       RendererExtensionRegistry::Get()->ExtensionBindingsAllowed(url)) {
     if (!extension)  // TODO(kalman): when does this happen?
       return Feature::UNSPECIFIED_CONTEXT;
@@ -220,12 +225,6 @@ Feature::Context ScriptContextSet::ClassifyJavaScriptContext(
     return Feature::WEBUI_CONTEXT;
 
   return Feature::WEB_PAGE_CONTEXT;
-}
-
-void ScriptContextSet::RecordAndRemove(std::set<ScriptContext*>* removed,
-                                       ScriptContext* context) {
-  removed->insert(context);
-  Remove(context);  // Note: context deletion is deferred to the message loop.
 }
 
 }  // namespace extensions

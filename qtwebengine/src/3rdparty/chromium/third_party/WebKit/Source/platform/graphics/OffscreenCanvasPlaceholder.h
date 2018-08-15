@@ -5,50 +5,61 @@
 #ifndef OffscreenCanvasPlaceholder_h
 #define OffscreenCanvasPlaceholder_h
 
-#include "platform/PlatformExport.h"
-#include "wtf/RefPtr.h"
-#include "wtf/WeakPtr.h"
 #include <memory>
+#include "platform/PlatformExport.h"
+#include "platform/wtf/RefPtr.h"
+#include "platform/wtf/WeakPtr.h"
 
 namespace blink {
 
-class Image;
-class IntSize;
 class OffscreenCanvasFrameDispatcher;
+class StaticBitmapImage;
 class WebTaskRunner;
 
 class PLATFORM_EXPORT OffscreenCanvasPlaceholder {
  public:
   ~OffscreenCanvasPlaceholder();
 
-  void setPlaceholderFrame(RefPtr<Image>,
-                           WeakPtr<OffscreenCanvasFrameDispatcher>,
-                           std::unique_ptr<WebTaskRunner>,
-                           unsigned resourceId);
-  void releasePlaceholderFrame();
+  virtual void SetPlaceholderFrame(RefPtr<StaticBitmapImage>,
+                                   WeakPtr<OffscreenCanvasFrameDispatcher>,
+                                   RefPtr<WebTaskRunner>,
+                                   unsigned resource_id);
+  void ReleasePlaceholderFrame();
 
-  virtual void setSize(const IntSize&) = 0;
+  void SetSuspendOffscreenCanvasAnimation(bool);
 
-  static OffscreenCanvasPlaceholder* getPlaceholderById(unsigned placeholderId);
+  static OffscreenCanvasPlaceholder* GetPlaceholderById(
+      unsigned placeholder_id);
 
-  void registerPlaceholder(unsigned placeholderId);
-  void unregisterPlaceholder();
-  const RefPtr<Image>& placeholderFrame() const { return m_placeholderFrame; }
-
- private:
-  bool isPlaceholderRegistered() const {
-    return m_placeholderId != kNoPlaceholderId;
+  void RegisterPlaceholder(unsigned placeholder_id);
+  void UnregisterPlaceholder();
+  const RefPtr<StaticBitmapImage>& PlaceholderFrame() const {
+    return placeholder_frame_;
   }
 
-  RefPtr<Image> m_placeholderFrame;
-  WeakPtr<OffscreenCanvasFrameDispatcher> m_frameDispatcher;
-  std::unique_ptr<WebTaskRunner> m_frameDispatcherTaskRunner;
-  unsigned m_placeholderFrameResourceId = 0;
+ private:
+  bool IsPlaceholderRegistered() const {
+    return placeholder_id_ != kNoPlaceholderId;
+  }
+  bool PostSetSuspendAnimationToOffscreenCanvasThread(bool suspend);
+
+  RefPtr<StaticBitmapImage> placeholder_frame_;
+  WeakPtr<OffscreenCanvasFrameDispatcher> frame_dispatcher_;
+  RefPtr<WebTaskRunner> frame_dispatcher_task_runner_;
+  unsigned placeholder_frame_resource_id_ = 0;
 
   enum {
     kNoPlaceholderId = -1,
   };
-  int m_placeholderId = kNoPlaceholderId;
+  int placeholder_id_ = kNoPlaceholderId;
+
+  enum AnimationState {
+    kActiveAnimation,
+    kSuspendedAnimation,
+    kShouldSuspendAnimation,
+    kShouldActivateAnimation,
+  };
+  AnimationState animation_state_ = kActiveAnimation;
 };
 
 }  // blink

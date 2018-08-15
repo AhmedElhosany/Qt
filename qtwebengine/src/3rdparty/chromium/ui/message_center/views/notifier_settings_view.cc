@@ -21,6 +21,7 @@
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
 #include "ui/message_center/message_center_style.h"
@@ -121,7 +122,7 @@ class EntryView : public views::View {
 
   // views::View:
   void Layout() override;
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnFocus() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
@@ -151,7 +152,7 @@ void EntryView::Layout() {
   content->SetBounds(0, y, content_width, content_height);
 }
 
-gfx::Size EntryView::GetPreferredSize() const {
+gfx::Size EntryView::CalculatePreferredSize() const {
   DCHECK_EQ(1, child_count());
   gfx::Size size = child_at(0)->GetPreferredSize();
   size.SetToMax(gfx::Size(kWidth, settings::kEntryHeight));
@@ -231,17 +232,17 @@ base::string16 NotifierGroupComboboxModel::GetItemAt(int index) {
 // showing 'icon'.
 NotifierSettingsView::NotifierButton::NotifierButton(
     NotifierSettingsProvider* provider,
-    Notifier* notifier,
+    std::unique_ptr<Notifier> notifier,
     views::ButtonListener* listener)
     : views::CustomButton(listener),
       provider_(provider),
-      notifier_(notifier),
+      notifier_(std::move(notifier)),
       icon_view_(new views::ImageView()),
       name_view_(new views::Label(notifier_->name)),
       checkbox_(new views::Checkbox(base::string16())),
       learn_more_(nullptr) {
-  DCHECK(provider);
-  DCHECK(notifier);
+  DCHECK(provider_);
+  DCHECK(notifier_);
 
   // Since there may never be an icon (but that could change at a later time),
   // we own the icon view here.
@@ -424,14 +425,12 @@ NotifierSettingsView::NotifierSettingsView(NotifierSettingsProvider* provider)
     provider_->AddObserver(this);
 
   SetFocusBehavior(FocusBehavior::ALWAYS);
-  set_background(
-      views::Background::CreateSolidBackground(kMessageCenterBackgroundColor));
-  SetPaintToLayer(true);
+  SetBackground(views::CreateSolidBackground(kMessageCenterBackgroundColor));
+  SetPaintToLayer();
 
   title_label_ = new views::Label(
       l10n_util::GetStringUTF16(IDS_MESSAGE_CENTER_SETTINGS_BUTTON_LABEL),
-      ui::ResourceBundle::GetSharedInstance().GetFontList(
-          ui::ResourceBundle::MediumFont));
+      views::style::CONTEXT_DIALOG_TITLE);
   title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   title_label_->SetMultiLine(true);
   title_label_->SetBorder(
@@ -441,14 +440,16 @@ NotifierSettingsView::NotifierSettingsView(NotifierSettingsProvider* provider)
   AddChildView(title_label_);
 
   scroller_ = new views::ScrollView();
+  scroller_->SetBackgroundColor(kMessageCenterBackgroundColor);
   scroller_->SetVerticalScrollBar(new views::OverlayScrollBar(false));
+  scroller_->SetHorizontalScrollBar(new views::OverlayScrollBar(true));
   AddChildView(scroller_);
 
-  std::vector<Notifier*> notifiers;
+  std::vector<std::unique_ptr<Notifier>> notifiers;
   if (provider_)
     provider_->GetNotifierList(&notifiers);
 
-  UpdateContentsView(notifiers);
+  UpdateContentsView(std::move(notifiers));
 }
 
 NotifierSettingsView::~NotifierSettingsView() {
@@ -474,27 +475,29 @@ void NotifierSettingsView::UpdateIconImage(const NotifierId& notifier_id,
 }
 
 void NotifierSettingsView::NotifierGroupChanged() {
-  std::vector<Notifier*> notifiers;
+  std::vector<std::unique_ptr<Notifier>> notifiers;
   if (provider_)
     provider_->GetNotifierList(&notifiers);
 
-  UpdateContentsView(notifiers);
+  UpdateContentsView(std::move(notifiers));
 }
 
 void NotifierSettingsView::NotifierEnabledChanged(const NotifierId& notifier_id,
                                                   bool enabled) {}
 
 void NotifierSettingsView::UpdateContentsView(
-    const std::vector<Notifier*>& notifiers) {
+    std::vector<std::unique_ptr<Notifier>> notifiers) {
   buttons_.clear();
 
   views::View* contents_view = new views::View();
-  contents_view->SetLayoutManager(new views::BoxLayout(
-      views::BoxLayout::kVertical, settings::kHorizontalMargin, 0, 0));
+  contents_view->SetLayoutManager(
+      new views::BoxLayout(views::BoxLayout::kVertical,
+                           gfx::Insets(0, settings::kHorizontalMargin)));
 
   views::View* contents_title_view = new views::View();
-  contents_title_view->SetLayoutManager(new views::BoxLayout(
-      views::BoxLayout::kVertical, 0, 0, kComputedTitleElementSpacing));
+  contents_title_view->SetLayoutManager(
+      new views::BoxLayout(views::BoxLayout::kVertical, gfx::Insets(),
+                           kComputedTitleElementSpacing));
 
   bool need_account_switcher =
       provider_ && provider_->GetNotifierGroupCount() > 1;
@@ -536,7 +539,8 @@ void NotifierSettingsView::UpdateContentsView(
 
   size_t notifier_count = notifiers.size();
   for (size_t i = 0; i < notifier_count; ++i) {
-    NotifierButton* button = new NotifierButton(provider_, notifiers[i], this);
+    NotifierButton* button =
+        new NotifierButton(provider_, std::move(notifiers[i]), this);
     EntryView* entry = new EntryView(button);
 
     // This code emulates separators using borders.  We will create an invisible
@@ -570,7 +574,7 @@ void NotifierSettingsView::Layout() {
   int content_width = width();
   int content_height = contents_view->GetHeightForWidth(content_width);
   if (title_height + content_height > height()) {
-    content_width -= scroller_->GetScrollBarWidth();
+    content_width -= scroller_->GetScrollBarLayoutWidth();
     content_height = contents_view->GetHeightForWidth(content_width);
   }
   contents_view->SetBounds(0, 0, content_width, content_height);
@@ -582,11 +586,11 @@ gfx::Size NotifierSettingsView::GetMinimumSize() const {
   int total_height = title_label_->GetPreferredSize().height() +
                      scroller_->contents()->GetPreferredSize().height();
   if (total_height > kMinimumHeight)
-    size.Enlarge(scroller_->GetScrollBarWidth(), 0);
+    size.Enlarge(scroller_->GetScrollBarLayoutWidth(), 0);
   return size;
 }
 
-gfx::Size NotifierSettingsView::GetPreferredSize() const {
+gfx::Size NotifierSettingsView::CalculatePreferredSize() const {
   gfx::Size preferred_size;
   gfx::Size title_size = title_label_->GetPreferredSize();
   gfx::Size content_size = scroller_->contents()->GetPreferredSize();

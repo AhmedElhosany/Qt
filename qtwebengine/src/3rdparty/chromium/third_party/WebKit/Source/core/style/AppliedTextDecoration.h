@@ -5,9 +5,9 @@
 #ifndef AppliedTextDecoration_h
 #define AppliedTextDecoration_h
 
-#include "core/css/StyleColor.h"
 #include "core/style/ComputedStyleConstants.h"
-#include "wtf/Allocator.h"
+#include "platform/graphics/Color.h"
+#include "platform/wtf/Allocator.h"
 
 namespace blink {
 
@@ -15,27 +15,24 @@ class AppliedTextDecoration {
   DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
 
  public:
-  AppliedTextDecoration(TextDecoration, TextDecorationStyle, StyleColor);
-  explicit AppliedTextDecoration(TextDecoration);
+  AppliedTextDecoration(TextDecoration, ETextDecorationStyle, Color);
 
-  TextDecoration line() const { return static_cast<TextDecoration>(m_line); }
-  TextDecorationStyle style() const {
-    return static_cast<TextDecorationStyle>(m_style);
+  TextDecoration Lines() const { return static_cast<TextDecoration>(lines_); }
+  ETextDecorationStyle Style() const {
+    return static_cast<ETextDecorationStyle>(style_);
   }
+  Color GetColor() const { return color_; }
+  void SetColor(Color color) { color_ = color; }
 
-  bool isSimpleUnderline() const {
-    return m_line == TextDecorationUnderline &&
-           m_style == TextDecorationStyleSolid && m_color.isCurrentColor();
-  }
   bool operator==(const AppliedTextDecoration&) const;
   bool operator!=(const AppliedTextDecoration& o) const {
     return !(*this == o);
   }
 
  private:
-  unsigned m_line : TextDecorationBits;
-  unsigned m_style : 3;  // TextDecorationStyle
-  StyleColor m_color;
+  unsigned lines_ : kTextDecorationBits;
+  unsigned style_ : 3;  // ETextDecorationStyle
+  Color color_;
 };
 
 }  // namespace blink

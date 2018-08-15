@@ -22,7 +22,6 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/x/x11_atom_cache.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host.h"
 
@@ -39,6 +38,7 @@ class XScopedEventSelector;
 namespace views {
 class DesktopDragDropClientAuraX11;
 class DesktopWindowTreeHostObserverX11;
+class NonClientFrameView;
 class X11DesktopWindowMoveClient;
 
 class VIEWS_EXPORT DesktopWindowTreeHostX11
@@ -84,17 +84,15 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
   static void CleanUpWindowList(void (*func)(aura::Window* window));
 
   // Disables event listening to make |dialog| modal.
-  std::unique_ptr<base::Closure> DisableEventListening(XID dialog);
-
-  // Returns XID of dialog currently displayed. When it returns 0,
-  // there is no dialog on the host window.
-  XID GetModalDialog();
+  std::unique_ptr<base::Closure> DisableEventListening();
 
  protected:
   // Overridden from DesktopWindowTreeHost:
   void Init(aura::Window* content_window,
             const Widget::InitParams& params) override;
   void OnNativeWidgetCreated(const Widget::InitParams& params) override;
+  void OnWidgetInitDone() override;
+  void OnNativeWidgetActivationChanged(bool active) override;
   std::unique_ptr<corewm::Tooltip> CreateTooltip() override;
   std::unique_ptr<aura::client::DragDropClient> CreateDragDropClient(
       DesktopNativeCursorManager* cursor_manager) override;
@@ -137,6 +135,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
       Widget::MoveLoopEscapeBehavior escape_behavior) override;
   void EndMoveLoop() override;
   void SetVisibilityChangedAnimationsEnabled(bool value) override;
+  NonClientFrameView* CreateNonClientFrameView() override;
   bool ShouldUseNativeFrame() const override;
   bool ShouldWindowContentsBeTransparent() const override;
   void FrameTypeChanged() override;
@@ -147,10 +146,12 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
                       const gfx::ImageSkia& app_icon) override;
   void InitModalType(ui::ModalType modal_type) override;
   void FlashFrame(bool flash_frame) override;
-  void OnRootViewLayout() override;
   bool IsAnimatingClosed() const override;
   bool IsTranslucentWindowOpacitySupported() const override;
   void SizeConstraintsChanged() override;
+  bool ShouldUpdateWindowTransparency() const override;
+  bool ShouldUseDesktopNativeCursorManager() const override;
+  bool ShouldCreateVisibilityController() const override;
 
   // Overridden from aura::WindowTreeHost:
   gfx::Transform GetRootTransform() const override;
@@ -158,14 +159,19 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
   gfx::AcceleratedWidget GetAcceleratedWidget() override;
   void ShowImpl() override;
   void HideImpl() override;
-  gfx::Rect GetBounds() const override;
-  void SetBounds(const gfx::Rect& requested_bounds_in_pixels) override;
-  gfx::Point GetLocationOnNativeScreen() const override;
+  gfx::Rect GetBoundsInPixels() const override;
+  void SetBoundsInPixels(const gfx::Rect& requested_bounds_in_pixels) override;
+  gfx::Point GetLocationOnScreenInPixels() const override;
   void SetCapture() override;
   void ReleaseCapture() override;
   void SetCursorNative(gfx::NativeCursor cursor) override;
-  void MoveCursorToNative(const gfx::Point& location) override;
+  void MoveCursorToScreenLocationInPixels(
+      const gfx::Point& location_in_pixels) override;
   void OnCursorVisibilityChangedNative(bool show) override;
+
+  // Overridden from display::DisplayObserver via aura::WindowTreeHost:
+  void OnDisplayMetricsChanged(const display::Display& display,
+                               uint32_t changed_metrics) override;
 
  private:
   friend class DesktopWindowTreeHostX11HighDPITest;
@@ -266,6 +272,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
   uint32_t DispatchEvent(const ui::PlatformEvent& event) override;
 
   void DelayedResize(const gfx::Size& size_in_pixels);
+  void DelayedChangeFrameType(Widget::FrameType new_type);
 
   gfx::Rect GetWorkAreaBoundsInPixels() const;
   gfx::Rect ToDIPRect(const gfx::Rect& rect_in_pixels) const;
@@ -273,6 +280,10 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
 
   // Enables event listening after closing |dialog|.
   void EnableEventListening();
+
+  // Removes |delayed_resize_task_| from the task queue (if it's in
+  // the queue) and adds it back at the end of the queue.
+  void RestartDelayedResizeTask();
 
   // X11 things
   // The display and the native X window hosting the root window.
@@ -285,15 +296,11 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
   // The native root window.
   ::Window x_root_window_;
 
-  ui::X11AtomCache atom_cache_;
+  // Whether the window is mapped with respect to the X server.
+  bool window_mapped_in_server_;
 
-  // Is the window mapped to the screen?
-  bool window_mapped_;
-
-  // Should we wait for an UnmapNotify before trying to remap the window?
-  // If |wait_for_unmap_| is true, we have sent an XUnmapWindow request to the
-  // server and have yet to receive an UnmapNotify.
-  bool wait_for_unmap_;
+  // Whether the window is visible with respect to Aura.
+  bool window_mapped_in_client_;
 
   // The bounds of |xwindow_|.
   gfx::Rect bounds_in_pixels_;
@@ -422,7 +429,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostX11
 
   std::unique_ptr<aura::ScopedWindowTargeter> targeter_for_modal_;
 
-  XID modal_dialog_xid_;
+  uint32_t modal_dialog_counter_;
 
   base::WeakPtrFactory<DesktopWindowTreeHostX11> close_widget_factory_;
   base::WeakPtrFactory<DesktopWindowTreeHostX11> weak_factory_;

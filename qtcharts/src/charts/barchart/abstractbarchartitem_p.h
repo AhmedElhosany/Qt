@@ -42,6 +42,7 @@
 
 #include <private/chartitem_p.h>
 #include <QtCharts/QAbstractBarSeries>
+#include <QtCharts/private/qchartglobal_p.h>
 #include <QtGui/QPen>
 #include <QtGui/QBrush>
 
@@ -54,7 +55,7 @@ class BarAnimation;
 class QBarSetPrivate;
 class QAbstractAxis;
 
-class AbstractBarChartItem : public ChartItem
+class QT_CHARTS_PRIVATE_EXPORT AbstractBarChartItem : public ChartItem
 {
     Q_OBJECT
 public:
@@ -70,7 +71,6 @@ public:
     virtual void initializeLayout(int set, int category, int layoutIndex, bool resetAnimation) = 0;
     virtual void applyLayout(const QVector<QRectF> &layout);
     virtual void setAnimation(BarAnimation *animation);
-    virtual ChartAnimation *animation() const;
     void setLayout(const QVector<QRectF> &layout);
     QRectF geometry() const { return m_rect;}
     void resetAnimation();

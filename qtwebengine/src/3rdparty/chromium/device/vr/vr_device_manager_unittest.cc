@@ -10,30 +10,38 @@
 #include "base/macros.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "device/vr/test/fake_vr_device.h"
 #include "device/vr/test/fake_vr_device_provider.h"
+#include "device/vr/test/fake_vr_service_client.h"
 #include "device/vr/vr_device_provider.h"
+#include "device/vr/vr_service.mojom.h"
+#include "device/vr/vr_service_impl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace device {
 
 class VRDeviceManagerTest : public testing::Test {
+ public:
+  void onDisplaySynced(unsigned int number_of_devices) {}
+
  protected:
   VRDeviceManagerTest();
   ~VRDeviceManagerTest() override;
 
   void SetUp() override;
 
-  bool HasServiceInstance() { return VRDeviceManager::HasInstance(); }
+  std::unique_ptr<VRServiceImpl> BindService();
 
   VRDevice* GetDevice(unsigned int index) {
     return device_manager_->GetDevice(index);
   }
 
  protected:
+  base::MessageLoop message_loop_;
   FakeVRDeviceProvider* provider_ = nullptr;
   std::unique_ptr<VRDeviceManager> device_manager_;
-  std::unique_ptr<VRServiceImpl> vr_service_;
 
   DISALLOW_COPY_AND_ASSIGN(VRDeviceManagerTest);
 };
@@ -45,7 +53,16 @@ VRDeviceManagerTest::~VRDeviceManagerTest() {}
 void VRDeviceManagerTest::SetUp() {
   provider_ = new FakeVRDeviceProvider();
   device_manager_.reset(new VRDeviceManager(base::WrapUnique(provider_)));
-  vr_service_.reset(new VRServiceImpl());
+}
+
+std::unique_ptr<VRServiceImpl> VRDeviceManagerTest::BindService() {
+  mojom::VRServiceClientPtr proxy;
+  FakeVRServiceClient client(mojo::MakeRequest(&proxy));
+  auto service = base::WrapUnique(new VRServiceImpl(-1, -1));
+  service->SetClient(std::move(proxy),
+                     base::Bind(&VRDeviceManagerTest::onDisplaySynced,
+                                base::Unretained(this)));
+  return service;
 }
 
 TEST_F(VRDeviceManagerTest, InitializationTest) {
@@ -54,16 +71,18 @@ TEST_F(VRDeviceManagerTest, InitializationTest) {
   // Calling GetDevices should initialize the service if it hasn't been
   // initialized yet or the providesr have been released.
   // The mojom::VRService should initialize each of it's providers upon it's own
-  // initialization.
-  device_manager_->GetVRDevices(vr_service_.get());
+  // initialization. And SetClient method in VRService class will invoke
+  // GetVRDevices too.
+  auto service = BindService();
+  device_manager_->AddService(service.get());
   EXPECT_TRUE(provider_->IsInitialized());
 }
 
-TEST_F(VRDeviceManagerTest, GetDevicesBasicTest) {
-  bool success = device_manager_->GetVRDevices(vr_service_.get());
+TEST_F(VRDeviceManagerTest, GetDevicesTest) {
+  auto service = BindService();
+  device_manager_->AddService(service.get());
   // Calling GetVRDevices should initialize the providers.
   EXPECT_TRUE(provider_->IsInitialized());
-  EXPECT_FALSE(success);
 
   // GetDeviceByIndex should return nullptr if an invalid index in queried.
   VRDevice* queried_device = GetDevice(1);
@@ -71,16 +90,15 @@ TEST_F(VRDeviceManagerTest, GetDevicesBasicTest) {
 
   FakeVRDevice* device1 = new FakeVRDevice();
   provider_->AddDevice(base::WrapUnique(device1));
-  success = device_manager_->GetVRDevices(vr_service_.get());
-  EXPECT_TRUE(success);
+  // VRDeviceManager will query devices as a side effect.
+  service = BindService();
   // Should have successfully returned one device.
   EXPECT_EQ(device1, GetDevice(device1->id()));
 
   FakeVRDevice* device2 = new FakeVRDevice();
   provider_->AddDevice(base::WrapUnique(device2));
-  success = device_manager_->GetVRDevices(vr_service_.get());
-  EXPECT_TRUE(success);
-
+  // VRDeviceManager will query devices as a side effect.
+  service = BindService();
   // Querying the WebVRDevice index should return the correct device.
   EXPECT_EQ(device1, GetDevice(device1->id()));
   EXPECT_EQ(device2, GetDevice(device2->id()));

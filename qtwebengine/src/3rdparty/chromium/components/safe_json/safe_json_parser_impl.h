@@ -17,8 +17,6 @@
 #include "content/public/browser/utility_process_mojo_client.h"
 
 namespace base {
-class ListValue;
-class SequencedTaskRunner;
 class Value;
 }
 
@@ -40,7 +38,7 @@ class SafeJsonParserImpl : public SafeJsonParser {
   void OnConnectionError();
 
   // mojom::SafeJsonParser::Parse callback.
-  void OnParseDone(const base::ListValue& wrapper,
+  void OnParseDone(std::unique_ptr<base::Value> result,
                    const base::Optional<std::string>& error);
 
   // Reports the result on the calling task runner via the |success_callback_|
@@ -51,16 +49,11 @@ class SafeJsonParserImpl : public SafeJsonParser {
   const std::string unsafe_json_;
   SuccessCallback success_callback_;
   ErrorCallback error_callback_;
-  scoped_refptr<base::SequencedTaskRunner> caller_task_runner_;
 
   std::unique_ptr<content::UtilityProcessMojoClient<mojom::SafeJsonParser>>
       mojo_json_parser_;
 
-  // Used instead of DCHECK_CURRENTLY_ON(BrowserThread::IO) because it's
-  // posssible that it fails when the IO thread message loop is shutting down.
-  // This happens after the IO thread has unregistered from the BrowserThread
-  // list.
-  base::ThreadChecker io_thread_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(SafeJsonParserImpl);
 };

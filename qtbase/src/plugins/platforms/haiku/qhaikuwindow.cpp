@@ -205,26 +205,23 @@ void QHaikuWindow::requestActivateWindow()
     m_window->Activate(true);
 }
 
-void QHaikuWindow::setWindowState(Qt::WindowState state)
+void QHaikuWindow::setWindowState(Qt::WindowStates state)
 {
     if (m_windowState == state)
         return;
 
-    const Qt::WindowState oldState = m_windowState;
+    const Qt::WindowStates oldState = m_windowState;
 
     m_windowState = state;
 
-    if (m_windowState == Qt::WindowMaximized) {
-        m_window->zoomByQt();
-    } else if (m_windowState == Qt::WindowMinimized) {
+    if (m_windowState & Qt::WindowMinimized)
         m_window->Minimize(true);
-    } else if (m_windowState == Qt::WindowNoState) {
-        if (oldState == Qt::WindowMaximized)
-            m_window->zoomByQt(); // undo zoom
-
-        if (oldState == Qt::WindowMinimized)
-            m_window->Minimize(false); // undo minimize
-    }
+    else if (m_windowState & Qt::WindowMaximized)
+        m_window->zoomByQt();
+    else if (oldState & Qt::WindowMinimized)
+        m_window->Minimize(false); // undo minimize
+    else if (oldState & Qt::WindowMaximized)
+        m_window->zoomByQt(); // undo zoom
 }
 
 void QHaikuWindow::setWindowFlags(Qt::WindowFlags flags)
@@ -312,7 +309,6 @@ void QHaikuWindow::haikuWindowMoved(const QPoint &pos)
 {
     const QRect newGeometry(pos, geometry().size());
 
-    QPlatformWindow::setGeometry(newGeometry);
     QWindowSystemInterface::handleGeometryChange(window(), newGeometry);
     QWindowSystemInterface::handleExposeEvent(window(), QRect(QPoint(0, 0), newGeometry.size()));
 }
@@ -321,7 +317,6 @@ void QHaikuWindow::haikuWindowResized(const QSize &size, bool zoomInProgress)
 {
     const QRect newGeometry(geometry().topLeft(), size);
 
-    QPlatformWindow::setGeometry(newGeometry);
     QWindowSystemInterface::handleGeometryChange(window(), newGeometry);
     QWindowSystemInterface::handleExposeEvent(window(), QRect(QPoint(0, 0), newGeometry.size()));
 

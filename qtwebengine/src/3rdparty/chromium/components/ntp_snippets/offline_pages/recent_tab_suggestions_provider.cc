@@ -12,70 +12,79 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "components/ntp_snippets/features.h"
 #include "components/ntp_snippets/pref_names.h"
 #include "components/ntp_snippets/pref_util.h"
-#include "components/offline_pages/client_policy_controller.h"
-#include "components/offline_pages/offline_page_item.h"
-#include "components/offline_pages/offline_page_model_query.h"
+#include "components/offline_pages/core/client_policy_controller.h"
+#include "components/offline_pages/core/recent_tabs/recent_tabs_ui_adapter_delegate.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "grit/components_strings.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/variations/variations_associated_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image.h"
 
 using offline_pages::ClientId;
-using offline_pages::OfflinePageItem;
-using offline_pages::OfflinePageModelQuery;
-using offline_pages::OfflinePageModelQueryBuilder;
+using offline_pages::DownloadUIAdapter;
+using offline_pages::DownloadUIItem;
 
 namespace ntp_snippets {
 
 namespace {
 
-const int kMaxSuggestionsCount = 5;
+const int kDefaultMaxSuggestionsCount = 5;
 
-struct OrderOfflinePagesByMostRecentlyVisitedFirst {
-  bool operator()(const OfflinePageItem* left,
-                  const OfflinePageItem* right) const {
-    return left->last_access_time > right->last_access_time;
+const char* kMaxSuggestionsCountParamName = "recent_tabs_max_count";
+
+int GetMaxSuggestionsCount() {
+  return variations::GetVariationParamByFeatureAsInt(
+      kRecentOfflineTabSuggestionsFeature, kMaxSuggestionsCountParamName,
+      kDefaultMaxSuggestionsCount);
+}
+
+struct OrderUIItemsByMostRecentlyCreatedFirst {
+  bool operator()(const DownloadUIItem* left,
+                  const DownloadUIItem* right) const {
+    return left->start_time > right->start_time;
   }
 };
 
-std::unique_ptr<OfflinePageModelQuery> BuildRecentTabsQuery(
-    offline_pages::OfflinePageModel* model) {
-  OfflinePageModelQueryBuilder builder;
-  builder.RequireShownAsRecentlyVisitedSite(
-      OfflinePageModelQuery::Requirement::INCLUDE_MATCHING);
-  return builder.Build(model->GetPolicyController());
-}
+struct OrderUIItemsByUrlAndThenMostRecentlyCreatedFirst {
+  bool operator()(const DownloadUIItem* left,
+                  const DownloadUIItem* right) const {
+    if (left->url != right->url) {
+      return left->url < right->url;
+    }
+    return left->start_time > right->start_time;
+  }
+};
 
 }  // namespace
 
 RecentTabSuggestionsProvider::RecentTabSuggestionsProvider(
     ContentSuggestionsProvider::Observer* observer,
-    CategoryFactory* category_factory,
-    offline_pages::OfflinePageModel* offline_page_model,
+    offline_pages::DownloadUIAdapter* ui_adapter,
     PrefService* pref_service)
-    : ContentSuggestionsProvider(observer, category_factory),
+    : ContentSuggestionsProvider(observer),
       category_status_(CategoryStatus::AVAILABLE_LOADING),
       provided_category_(
-          category_factory->FromKnownCategory(KnownCategories::RECENT_TABS)),
-      offline_page_model_(offline_page_model),
+          Category::FromKnownCategory(KnownCategories::RECENT_TABS)),
+      recent_tabs_ui_adapter_(ui_adapter),
       pref_service_(pref_service),
       weak_ptr_factory_(this) {
   observer->OnCategoryStatusChanged(this, provided_category_, category_status_);
-  offline_page_model_->AddObserver(this);
-  FetchRecentTabs();
+  recent_tabs_ui_adapter_->AddObserver(this);
 }
 
 RecentTabSuggestionsProvider::~RecentTabSuggestionsProvider() {
-  offline_page_model_->RemoveObserver(this);
+  recent_tabs_ui_adapter_->RemoveObserver(this);
 }
 
 CategoryStatus RecentTabSuggestionsProvider::GetCategoryStatus(
     Category category) {
-  if (category == provided_category_)
+  if (category == provided_category_) {
     return category_status_;
+  }
   NOTREACHED() << "Unknown category " << category.id();
   return CategoryStatus::NOT_PROVIDED;
 }
@@ -85,13 +94,9 @@ CategoryInfo RecentTabSuggestionsProvider::GetCategoryInfo(Category category) {
   return CategoryInfo(
       l10n_util::GetStringUTF16(IDS_NTP_RECENT_TAB_SUGGESTIONS_SECTION_HEADER),
       ContentSuggestionsCardLayout::MINIMAL_CARD,
-      /*has_more_action=*/false,
-      /*has_reload_action=*/false,
-      /*has_view_all_action=*/false,
+      ContentSuggestionsAdditionalAction::NONE,
       /*show_if_empty=*/false,
-      l10n_util::GetStringUTF16(IDS_NTP_SUGGESTIONS_SECTION_EMPTY));
-  // TODO(vitaliii): Replace IDS_NTP_SUGGESTIONS_SECTION_EMPTY with a
-  // category-specific string.
+      l10n_util::GetStringUTF16(IDS_NTP_RECENT_TAB_SUGGESTIONS_SECTION_EMPTY));
 }
 
 void RecentTabSuggestionsProvider::DismissSuggestion(
@@ -142,12 +147,21 @@ void RecentTabSuggestionsProvider::GetDismissedSuggestionsForDebugging(
     const DismissedSuggestionsCallback& callback) {
   DCHECK_EQ(provided_category_, category);
 
-  // TODO(vitaliii): Query all pages instead by using an empty query.
-  offline_page_model_->GetPagesMatchingQuery(
-      BuildRecentTabsQuery(offline_page_model_),
-      base::Bind(&RecentTabSuggestionsProvider::
-                     GetPagesMatchingQueryCallbackForGetDismissedSuggestions,
-                 weak_ptr_factory_.GetWeakPtr(), callback));
+  std::vector<const DownloadUIItem*> items =
+      recent_tabs_ui_adapter_->GetAllItems();
+
+  std::set<std::string> dismissed_ids = ReadDismissedIDsFromPrefs();
+  std::vector<ContentSuggestion> suggestions;
+  for (const DownloadUIItem* item : items) {
+    int64_t offline_page_id =
+        recent_tabs_ui_adapter_->GetOfflineIdByGuid(item->guid);
+    if (!dismissed_ids.count(base::IntToString(offline_page_id))) {
+      continue;
+    }
+
+    suggestions.push_back(ConvertUIItem(*item));
+  }
+  callback.Run(std::move(suggestions));
 }
 
 void RecentTabSuggestionsProvider::ClearDismissedSuggestionsForDebugging(
@@ -166,118 +180,116 @@ void RecentTabSuggestionsProvider::RegisterProfilePrefs(
 ////////////////////////////////////////////////////////////////////////////////
 // Private methods
 
-void RecentTabSuggestionsProvider::
-    GetPagesMatchingQueryCallbackForGetDismissedSuggestions(
-        const DismissedSuggestionsCallback& callback,
-        const std::vector<OfflinePageItem>& offline_pages) const {
-  std::set<std::string> dismissed_ids = ReadDismissedIDsFromPrefs();
-  std::vector<ContentSuggestion> suggestions;
-  for (const OfflinePageItem& item : offline_pages) {
-    if (!dismissed_ids.count(base::IntToString(item.offline_id)))
-      continue;
-
-    suggestions.push_back(ConvertOfflinePage(item));
-  }
-  callback.Run(std::move(suggestions));
-}
-
-void RecentTabSuggestionsProvider::OfflinePageModelLoaded(
-    offline_pages::OfflinePageModel* model) {}
-
-void RecentTabSuggestionsProvider::OfflinePageModelChanged(
-    offline_pages::OfflinePageModel* model) {
-  DCHECK_EQ(offline_page_model_, model);
+void RecentTabSuggestionsProvider::ItemsLoaded() {
   FetchRecentTabs();
 }
 
-void RecentTabSuggestionsProvider::
-    GetPagesMatchingQueryCallbackForFetchRecentTabs(
-        const std::vector<OfflinePageItem>& offline_pages) {
+void RecentTabSuggestionsProvider::ItemAdded(const DownloadUIItem& ui_item) {
+  FetchRecentTabs();
+}
+
+void RecentTabSuggestionsProvider::ItemUpdated(const DownloadUIItem& ui_item) {
+  FetchRecentTabs();
+}
+
+void RecentTabSuggestionsProvider::ItemDeleted(
+    const std::string& ui_item_guid) {
+  // Because we never switch to NOT_PROVIDED dynamically, there can be no open
+  // UI containing an invalidated suggestion unless the status is something
+  // other than NOT_PROVIDED, so only notify invalidation in that case.
+  if (category_status_ != CategoryStatus::NOT_PROVIDED) {
+    InvalidateSuggestion(ui_item_guid);
+  }
+}
+
+void RecentTabSuggestionsProvider::FetchRecentTabs() {
+  std::vector<const DownloadUIItem*> ui_items =
+      recent_tabs_ui_adapter_->GetAllItems();
   NotifyStatusChanged(CategoryStatus::AVAILABLE);
   std::set<std::string> old_dismissed_ids = ReadDismissedIDsFromPrefs();
   std::set<std::string> new_dismissed_ids;
-  std::vector<const OfflinePageItem*> recent_tab_items;
-  for (const OfflinePageItem& item : offline_pages) {
-    std::string offline_page_id = base::IntToString(item.offline_id);
-    if (old_dismissed_ids.count(offline_page_id))
+  std::vector<const DownloadUIItem*> non_dismissed_items;
+
+  for (const DownloadUIItem* item : ui_items) {
+    std::string offline_page_id = base::IntToString(
+        recent_tabs_ui_adapter_->GetOfflineIdByGuid(item->guid));
+    if (old_dismissed_ids.count(offline_page_id)) {
       new_dismissed_ids.insert(offline_page_id);
-    else
-      recent_tab_items.push_back(&item);
+    } else {
+      non_dismissed_items.push_back(item);
+    }
   }
 
   observer()->OnNewSuggestions(
       this, provided_category_,
-      GetMostRecentlyVisited(std::move(recent_tab_items)));
-  if (new_dismissed_ids.size() != old_dismissed_ids.size())
+      GetMostRecentlyCreatedWithoutDuplicates(std::move(non_dismissed_items)));
+  if (new_dismissed_ids.size() != old_dismissed_ids.size()) {
     StoreDismissedIDsToPrefs(new_dismissed_ids);
-}
-
-void RecentTabSuggestionsProvider::OfflinePageDeleted(
-    int64_t offline_id,
-    const ClientId& client_id) {
-  // Because we never switch to NOT_PROVIDED dynamically, there can be no open
-  // UI containing an invalidated suggestion unless the status is something
-  // other than NOT_PROVIDED, so only notify invalidation in that case.
-  if (category_status_ != CategoryStatus::NOT_PROVIDED)
-    InvalidateSuggestion(offline_id);
-}
-
-void RecentTabSuggestionsProvider::FetchRecentTabs() {
-  offline_page_model_->GetPagesMatchingQuery(
-      BuildRecentTabsQuery(offline_page_model_),
-      base::Bind(&RecentTabSuggestionsProvider::
-                     GetPagesMatchingQueryCallbackForFetchRecentTabs,
-                 weak_ptr_factory_.GetWeakPtr()));
+  }
 }
 
 void RecentTabSuggestionsProvider::NotifyStatusChanged(
     CategoryStatus new_status) {
   DCHECK_NE(CategoryStatus::NOT_PROVIDED, category_status_);
-  if (category_status_ == new_status)
+  if (category_status_ == new_status) {
     return;
+  }
   category_status_ = new_status;
   observer()->OnCategoryStatusChanged(this, provided_category_, new_status);
 }
 
-ContentSuggestion RecentTabSuggestionsProvider::ConvertOfflinePage(
-    const OfflinePageItem& offline_page) const {
-  // TODO(vitaliii): Make sure the URL is opened in the existing tab.
+ContentSuggestion RecentTabSuggestionsProvider::ConvertUIItem(
+    const DownloadUIItem& ui_item) const {
+  // UI items have the Tab ID embedded in the GUID and the offline ID is
+  // available by querying.
+  int64_t offline_page_id =
+      recent_tabs_ui_adapter_->GetOfflineIdByGuid(ui_item.guid);
   ContentSuggestion suggestion(provided_category_,
-                               base::IntToString(offline_page.offline_id),
-                               offline_page.url);
-
-  if (offline_page.title.empty()) {
-    // TODO(vitaliii): Remove this fallback once the OfflinePageModel provides
-    // titles for all (relevant) OfflinePageItems.
-    suggestion.set_title(base::UTF8ToUTF16(offline_page.url.spec()));
-  } else {
-    suggestion.set_title(offline_page.title);
-  }
-  suggestion.set_publish_date(offline_page.creation_time);
-  suggestion.set_publisher_name(base::UTF8ToUTF16(offline_page.url.host()));
+                               base::IntToString(offline_page_id), ui_item.url);
+  suggestion.set_title(ui_item.title);
+  suggestion.set_publish_date(ui_item.start_time);
+  suggestion.set_publisher_name(base::UTF8ToUTF16(ui_item.url.host()));
   auto extra = base::MakeUnique<RecentTabSuggestionExtra>();
-  extra->tab_id = offline_page.client_id.id;
-  extra->offline_page_id = offline_page.offline_id;
+  int tab_id;
+  bool success = base::StringToInt(ui_item.guid, &tab_id);
+  DCHECK(success);
+  extra->tab_id = tab_id;
+  extra->offline_page_id = offline_page_id;
   suggestion.set_recent_tab_suggestion_extra(std::move(extra));
+
   return suggestion;
 }
 
 std::vector<ContentSuggestion>
-RecentTabSuggestionsProvider::GetMostRecentlyVisited(
-    std::vector<const OfflinePageItem*> offline_page_items) const {
-  std::sort(offline_page_items.begin(), offline_page_items.end(),
-            OrderOfflinePagesByMostRecentlyVisitedFirst());
+RecentTabSuggestionsProvider::GetMostRecentlyCreatedWithoutDuplicates(
+    std::vector<const DownloadUIItem*> ui_items) const {
+  // |std::unique| only removes duplicates that immediately follow each other.
+  // Thus, first, we have to sort by URL and creation time and only then remove
+  // duplicates and sort the remaining items by creation time.
+  std::sort(ui_items.begin(), ui_items.end(),
+            OrderUIItemsByUrlAndThenMostRecentlyCreatedFirst());
+  std::vector<const DownloadUIItem*>::iterator new_end =
+      std::unique(ui_items.begin(), ui_items.end(),
+                  [](const DownloadUIItem* left, const DownloadUIItem* right) {
+                    return left->url == right->url;
+                  });
+  ui_items.erase(new_end, ui_items.end());
+  std::sort(ui_items.begin(), ui_items.end(),
+            OrderUIItemsByMostRecentlyCreatedFirst());
   std::vector<ContentSuggestion> suggestions;
-  for (const OfflinePageItem* offline_page_item : offline_page_items) {
-    suggestions.push_back(ConvertOfflinePage(*offline_page_item));
-    if (suggestions.size() == kMaxSuggestionsCount)
+  for (const DownloadUIItem* ui_item : ui_items) {
+    suggestions.push_back(ConvertUIItem(*ui_item));
+    if (static_cast<int>(suggestions.size()) == GetMaxSuggestionsCount()) {
       break;
+    }
   }
   return suggestions;
 }
 
-void RecentTabSuggestionsProvider::InvalidateSuggestion(int64_t offline_id) {
-  std::string offline_page_id = base::IntToString(offline_id);
+void RecentTabSuggestionsProvider::InvalidateSuggestion(
+    const std::string& ui_item_guid) {
+  std::string offline_page_id = base::IntToString(
+      recent_tabs_ui_adapter_->GetOfflineIdByGuid(ui_item_guid));
   observer()->OnSuggestionInvalidated(
       this, ContentSuggestion::ID(provided_category_, offline_page_id));
 

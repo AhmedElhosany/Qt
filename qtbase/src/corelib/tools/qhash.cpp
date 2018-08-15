@@ -63,12 +63,8 @@
 
 #ifndef QT_BOOTSTRAPPED
 #include <qcoreapplication.h>
+#include <qrandom.h>
 #endif // QT_BOOTSTRAPPED
-
-#ifdef Q_OS_UNIX
-#include <stdio.h>
-#include "private/qcore_unix_p.h"
-#endif // Q_OS_UNIX
 
 #include <limits.h>
 
@@ -205,7 +201,7 @@ static inline uint hash(const uchar *p, size_t len, uint seed) Q_DECL_NOTHROW
 {
     uint h = seed;
 
-    if (hasFastCrc32())
+    if (seed && hasFastCrc32())
         return crc32(p, len, h);
 
     for (size_t i = 0; i < len; ++i)
@@ -223,7 +219,7 @@ static inline uint hash(const QChar *p, size_t len, uint seed) Q_DECL_NOTHROW
 {
     uint h = seed;
 
-    if (hasFastCrc32())
+    if (seed && hasFastCrc32())
         return crc32(p, len, h);
 
     for (size_t i = 0; i < len; ++i)
@@ -237,6 +233,7 @@ uint qHash(const QByteArray &key, uint seed) Q_DECL_NOTHROW
     return hash(reinterpret_cast<const uchar *>(key.constData()), size_t(key.size()), seed);
 }
 
+#if QT_STRINGVIEW_LEVEL < 2
 uint qHash(const QString &key, uint seed) Q_DECL_NOTHROW
 {
     return hash(key.unicode(), size_t(key.size()), seed);
@@ -245,6 +242,12 @@ uint qHash(const QString &key, uint seed) Q_DECL_NOTHROW
 uint qHash(const QStringRef &key, uint seed) Q_DECL_NOTHROW
 {
     return hash(key.unicode(), size_t(key.size()), seed);
+}
+#endif
+
+uint qHash(QStringView key, uint seed) Q_DECL_NOTHROW
+{
+    return hash(key.data(), key.size(), seed);
 }
 
 uint qHash(const QBitArray &bitArray, uint seed) Q_DECL_NOTHROW
@@ -283,42 +286,17 @@ static uint qt_create_qhash_seed()
 
 #ifndef QT_BOOTSTRAPPED
     QByteArray envSeed = qgetenv("QT_HASH_SEED");
-    if (!envSeed.isNull())
-        return envSeed.toUInt();
-
-#ifdef Q_OS_UNIX
-    int randomfd = qt_safe_open("/dev/urandom", O_RDONLY);
-    if (randomfd == -1)
-        randomfd = qt_safe_open("/dev/random", O_RDONLY | O_NONBLOCK);
-    if (randomfd != -1) {
-        if (qt_safe_read(randomfd, reinterpret_cast<char *>(&seed), sizeof(seed)) == sizeof(seed)) {
-            qt_safe_close(randomfd);
-            return seed;
+    if (!envSeed.isNull()) {
+        uint seed = envSeed.toUInt();
+        if (seed) {
+            // can't use qWarning here (reentrancy)
+            fprintf(stderr, "QT_HASH_SEED: forced seed value is not 0, cannot guarantee that the "
+                     "hashing functions will produce a stable value.");
         }
-        qt_safe_close(randomfd);
-    }
-#endif // Q_OS_UNIX
-
-#if defined(Q_OS_WIN32) && !defined(Q_CC_GNU)
-    errno_t err;
-    err = rand_s(&seed);
-    if (err == 0)
         return seed;
-#endif // Q_OS_WIN32
+    }
 
-    // general fallback: initialize from the current timestamp, pid,
-    // and address of a stack-local variable
-    quint64 timestamp = QDateTime::currentMSecsSinceEpoch();
-    seed ^= timestamp;
-    seed ^= (timestamp >> 32);
-
-    quint64 pid = QCoreApplication::applicationPid();
-    seed ^= pid;
-    seed ^= (pid >> 32);
-
-    quintptr seedPtr = reinterpret_cast<quintptr>(&seed);
-    seed ^= seedPtr;
-    seed ^= (qulonglong(seedPtr) >> 32); // no-op on 32-bit platforms
+    seed = QRandomGenerator::system()->generate();
 #endif // QT_BOOTSTRAPPED
 
     return seed;
@@ -375,13 +353,16 @@ int qGlobalQHashSeed()
     is needed. We discourage to do it in production code as it can make your
     application susceptible to \l{algorithmic complexity attacks}.
 
+    From Qt 5.10 and onwards, the only allowed values are 0 and -1. Passing the
+    value -1 will reinitialize the global QHash seed to a random value, while
+    the value of 0 is used to request a stable algorithm for C++ primitive
+    types types (like \c int) and string types (QString, QByteArray).
+
     The seed is set in any newly created QHash. See \l{qHash} about how this seed
     is being used by QHash.
 
     If the environment variable \c QT_HASH_SEED is set, calling this function will
     result in a no-op.
-
-    Passing the value -1 will reinitialize the global QHash seed to a random value.
 
     \sa qGlobalQHashSeed
  */
@@ -393,6 +374,11 @@ void qSetGlobalQHashSeed(int newSeed)
         int x(qt_create_qhash_seed() & INT_MAX);
         qt_qhash_seed.store(x);
     } else {
+        if (newSeed) {
+            // can't use qWarning here (reentrancy)
+            fprintf(stderr, "qSetGlobalQHashSeed: forced seed value is not 0, cannot guarantee that the "
+                            "hashing functions will produce a stable value.");
+        }
         qt_qhash_seed.store(newSeed & INT_MAX);
     }
 }
@@ -408,35 +394,23 @@ void qSetGlobalQHashSeed(int newSeed)
     results.
 
     The qt_hash functions must *never* change their results.
+
+    This function can hash discontiguous memory by invoking it on each chunk,
+    passing the previous's result in the next call's \a chained argument.
 */
-static uint qt_hash(const QChar *p, int n) Q_DECL_NOTHROW
+uint qt_hash(QStringView key, uint chained) Q_DECL_NOTHROW
 {
-    uint h = 0;
+    auto n = key.size();
+    auto p = key.utf16();
+
+    uint h = chained;
 
     while (n--) {
-        h = (h << 4) + (*p++).unicode();
+        h = (h << 4) + *p++;
         h ^= (h & 0xf0000000) >> 23;
         h &= 0x0fffffff;
     }
     return h;
-}
-
-/*!
-    \internal
-    \overload
-*/
-uint qt_hash(const QString &key) Q_DECL_NOTHROW
-{
-    return qt_hash(key.unicode(), key.size());
-}
-
-/*!
-    \internal
-    \overload
-*/
-uint qt_hash(const QStringRef &key) Q_DECL_NOTHROW
-{
-    return qt_hash(key.unicode(), key.size());
 }
 
 /*
@@ -1036,6 +1010,13 @@ uint qHash(long double key, uint seed) Q_DECL_NOTHROW
     Returns the hash value for the \a key, using \a seed to seed the calculation.
 */
 
+/*! \fn uint qHash(QStringView key, uint seed = 0)
+    \relates QStringView
+    \since 5.10
+
+    Returns the hash value for the \a key, using \a seed to seed the calculation.
+*/
+
 /*! \fn uint qHash(QLatin1String key, uint seed = 0)
     \relates QHash
     \since 5.0
@@ -1255,9 +1236,8 @@ uint qHash(long double key, uint seed) Q_DECL_NOTHROW
     should never depend on a particular QHash ordering, there may be situations
     where you temporarily need deterministic behavior, for example for debugging or
     regression testing. To disable the randomization, define the environment
-    variable \c QT_HASH_SEED. The contents of that variable, interpreted as a
-    decimal value, will be used as the seed for qHash(). Alternatively, you can
-    call the qSetGlobalQHashSeed() function.
+    variable \c QT_HASH_SEED to have the value 0. Alternatively, you can call
+    the qSetGlobalQHashSeed() function with the value 0.
 
     \sa QHashIterator, QMutableHashIterator, QMap, QSet
 */
@@ -1707,6 +1687,60 @@ uint qHash(long double key, uint seed) Q_DECL_NOTHROW
     item after the last key in the hash.
 
     \sa keyBegin()
+*/
+
+/*! \fn QHash::key_value_iterator QHash::keyValueBegin()
+    \since 5.10
+
+    Returns an \l{STL-style iterators}{STL-style iterator} pointing to the first entry
+    in the hash.
+
+    \sa keyValueEnd()
+*/
+
+/*! \fn QHash::key_value_iterator QHash::keyValueEnd()
+    \since 5.10
+
+    Returns an \l{STL-style iterators}{STL-style iterator} pointing to the imaginary
+    entry after the last entry in the hash.
+
+    \sa keyValueBegin()
+*/
+
+/*! \fn QHash::const_key_value_iterator QHash::keyValueBegin() const
+    \since 5.10
+
+    Returns a const \l{STL-style iterators}{STL-style iterator} pointing to the first entry
+    in the hash.
+
+    \sa keyValueEnd()
+*/
+
+/*! \fn QHash::const_key_value_iterator QHash::constKeyValueBegin() const
+    \since 5.10
+
+    Returns a const \l{STL-style iterators}{STL-style iterator} pointing to the first entry
+    in the hash.
+
+    \sa keyValueBegin()
+*/
+
+/*! \fn QHash::const_key_value_iterator QHash::keyValueEnd() const
+    \since 5.10
+
+    Returns a const \l{STL-style iterators}{STL-style iterator} pointing to the imaginary
+    entry after the last entry in the hash.
+
+    \sa keyValueBegin()
+*/
+
+/*! \fn QHash::const_key_value_iterator QHash::constKeyValueEnd() const
+    \since 5.10
+
+    Returns a const \l{STL-style iterators}{STL-style iterator} pointing to the imaginary
+    entry after the last entry in the hash.
+
+    \sa constKeyValueBegin()
 */
 
 /*! \fn QHash::iterator QHash::erase(const_iterator pos)
@@ -2442,6 +2476,18 @@ uint qHash(long double key, uint seed) Q_DECL_NOTHROW
 
 /*! \fn const_iterator QHash::key_iterator::base() const
     Returns the underlying const_iterator this key_iterator is based on.
+*/
+
+/*! \typedef QHash::key_value_iterator
+    \inmodule QtCore
+    \since 5.10
+    \brief The QMap::key_value_iterator typedef provides an STL-style iterator for QHash and QMultiHash.
+
+    QHash::key_value_iterator is essentially the same as QHash::iterator
+    with the difference that operator*() returns a key/value pair instead of a
+    value.
+
+    \sa QKeyValueIterator
 */
 
 /*! \fn QDataStream &operator<<(QDataStream &out, const QHash<Key, T>& hash)

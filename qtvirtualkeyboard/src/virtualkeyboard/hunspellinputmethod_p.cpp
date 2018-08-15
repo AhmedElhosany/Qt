@@ -94,6 +94,7 @@ bool HunspellInputMethodPrivate::createHunspell(const QString &locale)
         QSharedPointer<HunspellLoadDictionaryTask> loadDictionaryTask(new HunspellLoadDictionaryTask(locale, searchPaths));
         QObject::connect(loadDictionaryTask.data(), &HunspellLoadDictionaryTask::completed, q, &HunspellInputMethod::dictionaryLoadCompleted);
         dictionaryState = HunspellInputMethodPrivate::DictionaryLoading;
+        emit q->selectionListsChanged();
         hunspellWorker->addTask(loadDictionaryTask);
         this->locale = locale;
     }
@@ -173,7 +174,7 @@ bool HunspellInputMethodPrivate::isAutoSpaceAllowed() const
     Q_Q(const HunspellInputMethod);
     if (!autoSpaceAllowed)
         return false;
-    if (q->inputEngine()->inputMode() != InputEngine::Latin)
+    if (q->inputEngine()->inputMode() == InputEngine::Numeric)
         return false;
     InputContext *ic = q->inputContext();
     if (!ic)

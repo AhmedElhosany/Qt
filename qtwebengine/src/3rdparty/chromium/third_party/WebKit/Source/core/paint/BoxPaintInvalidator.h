@@ -5,41 +5,49 @@
 #ifndef BoxPaintInvalidator_h
 #define BoxPaintInvalidator_h
 
+#include "core/CoreExport.h"
 #include "platform/graphics/PaintInvalidationReason.h"
-#include "wtf/Allocator.h"
+#include "platform/wtf/Allocator.h"
 
 namespace blink {
 
 class LayoutBox;
 class LayoutRect;
-class LayoutSize;
 struct PaintInvalidatorContext;
 
-class BoxPaintInvalidator {
+class CORE_EXPORT BoxPaintInvalidator {
   STACK_ALLOCATED();
 
  public:
   BoxPaintInvalidator(const LayoutBox& box,
                       const PaintInvalidatorContext& context)
-      : m_box(box), m_context(context) {}
+      : box_(box), context_(context) {}
 
-  static void boxWillBeDestroyed(const LayoutBox&);
+  static void BoxWillBeDestroyed(const LayoutBox&);
 
-  PaintInvalidationReason invalidatePaintIfNeeded();
+  PaintInvalidationReason InvalidatePaint();
 
  private:
-  PaintInvalidationReason computePaintInvalidationReason();
+  friend class BoxPaintInvalidatorTest;
 
-  bool incrementallyInvalidatePaint();
+  bool BackgroundGeometryDependsOnLayoutOverflowRect();
+  bool BackgroundPaintsOntoScrollingContentsLayer();
+  bool ShouldFullyInvalidateBackgroundOnLayoutOverflowChange(
+      const LayoutRect& old_layout_overflow,
+      const LayoutRect& new_layout_overflow);
+  void InvalidateScrollingContentsBackgroundIfNeeded();
 
-  bool needsToSavePreviousBoxGeometries();
-  void savePreviousBoxGeometriesIfNeeded();
-  LayoutSize previousBorderBoxSize(const LayoutSize& previousVisualRectSize);
-  LayoutRect previousContentBoxRect();
-  LayoutRect previousLayoutOverflowRect();
+  PaintInvalidationReason ComputePaintInvalidationReason();
 
-  const LayoutBox& m_box;
-  const PaintInvalidatorContext& m_context;
+  void IncrementallyInvalidatePaint(PaintInvalidationReason,
+                                    const LayoutRect& old_rect,
+                                    const LayoutRect& new_rect);
+
+  bool NeedsToSavePreviousContentBoxSizeOrLayoutOverflowRect();
+  void SavePreviousBoxGeometriesIfNeeded();
+
+  const LayoutBox& box_;
+  const PaintInvalidatorContext& context_;
 };
 
 }  // namespace blink

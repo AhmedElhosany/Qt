@@ -276,12 +276,30 @@ QJsonValue::QJsonValue(const QJsonValue &other)
 QJsonValue &QJsonValue::operator =(const QJsonValue &other)
 {
     QJsonValue copy(other);
-    // swap(copy);
-    qSwap(dbl, copy.dbl);
-    qSwap(d,   copy.d);
-    qSwap(t,   copy.t);
+    swap(copy);
     return *this;
 }
+
+/*!
+    \fn QJsonValue::QJsonValue(QJsonValue &&other)
+    \since 5.10
+
+    Move-constructs a QJsonValue from \a other.
+*/
+
+/*!
+    \fn QJsonValue &QJsonValue::operator =(QJsonValue &&other)
+    \since 5.10
+
+    Move-assigns \a other to this value.
+*/
+
+/*!
+    \fn void QJsonValue::swap(QJsonValue &other)
+    \since 5.10
+
+    Swaps the value \a other with this. This operation is very fast and never fails.
+*/
 
 /*!
     \fn bool QJsonValue::isNull() const
@@ -622,6 +640,58 @@ QJsonObject QJsonValue::toObject(const QJsonObject &defaultValue) const
 QJsonObject QJsonValue::toObject() const
 {
     return toObject(QJsonObject());
+}
+
+/*!
+    Returns a QJsonValue representing the value for the key \a key.
+
+    Equivalent to calling toObject().value(key).
+
+    The returned QJsonValue is QJsonValue::Undefined if the key does not exist,
+    or if isObject() is false.
+
+    \since 5.10
+
+    \sa QJsonValue, QJsonValue::isUndefined(), QJsonObject
+ */
+const QJsonValue QJsonValue::operator[](const QString &key) const
+{
+    if (!isObject())
+        return QJsonValue(QJsonValue::Undefined);
+
+    return toObject().value(key);
+}
+
+/*!
+    \overload
+    \since 5.10
+*/
+const QJsonValue QJsonValue::operator[](QLatin1String key) const
+{
+    if (!isObject())
+        return QJsonValue(QJsonValue::Undefined);
+
+    return toObject().value(key);
+}
+
+/*!
+    Returns a QJsonValue representing the value for index \a i.
+
+    Equivalent to calling toArray().at(i).
+
+    The returned QJsonValue is QJsonValue::Undefined, if \a i is out of bounds,
+    or if isArray() is false.
+
+    \since 5.10
+
+    \sa QJsonValue, QJsonValue::isUndefined(), QJsonArray
+ */
+const QJsonValue QJsonValue::operator[](int i) const
+{
+    if (!isArray())
+        return QJsonValue(QJsonValue::Undefined);
+
+    return toArray().at(i);
 }
 
 /*!

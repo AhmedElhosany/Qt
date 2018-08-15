@@ -22,22 +22,25 @@ ForwardingAgentHost::~ForwardingAgentHost() {
 }
 
 void ForwardingAgentHost::DispatchOnClientHost(const std::string& message) {
-  SendMessageToClient(session() ? session()->session_id() : 0, message);
+  if (sessions().empty())
+    return;
+  (*sessions().begin())->SendMessageToClient(message);
 }
 
 void ForwardingAgentHost::ConnectionClosed() {
-  HostClosed();
+  ForceDetachAllClients(false);
 }
 
-void ForwardingAgentHost::Attach() {
+void ForwardingAgentHost::AttachSession(DevToolsSession* session) {
   delegate_->Attach(this);
 }
 
-void ForwardingAgentHost::Detach() {
+void ForwardingAgentHost::DetachSession(int session_id) {
   delegate_->Detach();
 }
 
 bool ForwardingAgentHost::DispatchProtocolMessage(
+    DevToolsSession* session,
     const std::string& message) {
   delegate_->SendMessageToBackend(message);
   return true;
@@ -73,6 +76,10 @@ void ForwardingAgentHost::Reload() {
 
 bool ForwardingAgentHost::Close() {
   return delegate_->Close();
+}
+
+base::TimeTicks ForwardingAgentHost::GetLastActivityTime() {
+  return delegate_->GetLastActivityTime();
 }
 
 }  // content

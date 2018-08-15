@@ -31,28 +31,27 @@
  * @implements {Common.ContentProvider}
  * @unrestricted
  */
-SDK.NetworkRequest = class extends SDK.SDKObject {
+SDK.NetworkRequest = class extends Common.Object {
   /**
    * @param {!Protocol.Network.RequestId} requestId
-   * @param {!SDK.Target} target
    * @param {string} url
    * @param {string} documentURL
    * @param {!Protocol.Page.FrameId} frameId
    * @param {!Protocol.Network.LoaderId} loaderId
    * @param {?Protocol.Network.Initiator} initiator
    */
-  constructor(target, requestId, url, documentURL, frameId, loaderId, initiator) {
-    super(target);
+  constructor(requestId, url, documentURL, frameId, loaderId, initiator) {
+    super();
 
-    this._networkLog = /** @type {!SDK.NetworkLog} */ (SDK.NetworkLog.fromTarget(target));
-    this._networkManager = /** @type {!SDK.NetworkManager} */ (SDK.NetworkManager.fromTarget(target));
     this._requestId = requestId;
-    this.url = url;
+    this.setUrl(url);
     this._documentURL = documentURL;
     this._frameId = frameId;
     this._loaderId = loaderId;
     /** @type {?Protocol.Network.Initiator} */
     this._initiator = initiator;
+    /** @type {?SDK.NetworkRequest} */
+    this._redirectSource = null;
     this._issueTime = -1;
     this._startTime = -1;
     this._endTime = -1;
@@ -64,8 +63,8 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
     this.requestMethod = '';
     this.requestTime = 0;
     this.protocol = '';
-    /** @type {!Protocol.Network.RequestMixedContentType} */
-    this.mixedContentType = Protocol.Network.RequestMixedContentType.None;
+    /** @type {!Protocol.Security.MixedContentType} */
+    this.mixedContentType = Protocol.Security.MixedContentType.None;
 
     /** @type {?Protocol.Network.ResourcePriority} */
     this._initialPriority = null;
@@ -74,16 +73,26 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
 
     /** @type {!Common.ResourceType} */
     this._resourceType = Common.resourceTypes.Other;
-    this._contentEncoded = false;
-    this._pendingContentCallbacks = [];
+    /** @type {?Promise<!SDK.NetworkRequest.ContentData>} */
+    this._contentData = null;
     /** @type {!Array.<!SDK.NetworkRequest.WebSocketFrame>} */
     this._frames = [];
     /** @type {!Array.<!SDK.NetworkRequest.EventSourceMessage>} */
     this._eventSourceMessages = [];
 
+    /** @type {!Object<string, (string|undefined)>} */
     this._responseHeaderValues = {};
+    this._responseHeadersText = '';
+
+    /** @type {!Array<!SDK.NetworkRequest.NameValue>} */
+    this._requestHeaders = [];
+    /** @type {!Object<string, (string|undefined)>} */
+    this._requestHeaderValues = {};
 
     this._remoteAddress = '';
+
+    /** @type {?Protocol.Network.RequestReferrerPolicy} */
+    this._referrerPolicy = null;
 
     /** @type {!Protocol.Security.SecurityState} */
     this._securityState = Protocol.Security.SecurityState.Unknown;
@@ -109,28 +118,28 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
   /**
    * @return {!Protocol.Network.RequestId}
    */
-  get requestId() {
+  requestId() {
     return this._requestId;
   }
 
   /**
    * @param {!Protocol.Network.RequestId} requestId
    */
-  set requestId(requestId) {
+  setRequestId(requestId) {
     this._requestId = requestId;
   }
 
   /**
    * @return {string}
    */
-  get url() {
+  url() {
     return this._url;
   }
 
   /**
    * @param {string} x
    */
-  set url(x) {
+  setUrl(x) {
     if (this._url === x)
       return;
 
@@ -181,6 +190,20 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    */
   remoteAddress() {
     return this._remoteAddress;
+  }
+
+  /**
+   * @param {!Protocol.Network.RequestReferrerPolicy} referrerPolicy
+   */
+  setReferrerPolicy(referrerPolicy) {
+    this._referrerPolicy = referrerPolicy;
+  }
+
+  /**
+   * @return {?Protocol.Network.RequestReferrerPolicy}
+   */
+  referrerPolicy() {
+    return this._referrerPolicy;
   }
 
   /**
@@ -349,11 +372,8 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
 
     this._finished = x;
 
-    if (x) {
+    if (x)
       this.dispatchEventToListeners(SDK.NetworkRequest.Events.FinishedLoading, this);
-      if (this._pendingContentCallbacks.length)
-        this._innerRequestContent();
-    }
   }
 
   /**
@@ -450,18 +470,22 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
   }
 
   /**
-   * @param {!Protocol.Network.ResourceTiming|undefined} x
+   * @param {!Protocol.Network.ResourceTiming|undefined} timingInfo
    */
-  set timing(x) {
-    if (x && !this._fromMemoryCache) {
-      // Take startTime and responseReceivedTime from timing data for better accuracy.
-      // Timing's requestTime is a baseline in seconds, rest of the numbers there are ticks in millis.
-      this._startTime = x.requestTime;
-      this._responseReceivedTime = x.requestTime + x.receiveHeadersEnd / 1000.0;
+  set timing(timingInfo) {
+    if (!timingInfo || this._fromMemoryCache)
+      return;
+    // Take startTime and responseReceivedTime from timing data for better accuracy.
+    // Timing's requestTime is a baseline in seconds, rest of the numbers there are ticks in millis.
+    this._startTime = timingInfo.requestTime;
+    var headersReceivedTime = timingInfo.requestTime + timingInfo.receiveHeadersEnd / 1000.0;
+    if ((this._responseReceivedTime || -1) < 0 || this._responseReceivedTime > headersReceivedTime)
+      this._responseReceivedTime = headersReceivedTime;
+    if (this._startTime > this._responseReceivedTime)
+      this._responseReceivedTime = this._startTime;
 
-      this._timing = x;
-      this.dispatchEventToListeners(SDK.NetworkRequest.Events.TimingChanged, this);
-    }
+    this._timing = timingInfo;
+    this.dispatchEventToListeners(SDK.NetworkRequest.Events.TimingChanged, this);
   }
 
   /**
@@ -515,7 +539,8 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
     } else {
       this._path = this._parsedURL.host + this._parsedURL.folderPathComponents;
 
-      var inspectedURL = this.target().inspectedURL().asParsedURL();
+      var networkManager = SDK.NetworkManager.forRequest(this);
+      var inspectedURL = networkManager ? networkManager.target().inspectedURL().asParsedURL() : null;
       this._path = this._path.trimURL(inspectedURL ? inspectedURL.host : '');
       if (this._parsedURL.lastPathComponent || this._parsedURL.queryParams) {
         this._name =
@@ -575,25 +600,22 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
   /**
    * @return {?SDK.NetworkRequest}
    */
-  get redirectSource() {
-    if (this.redirects && this.redirects.length > 0)
-      return this.redirects[this.redirects.length - 1];
+  redirectSource() {
     return this._redirectSource;
   }
 
   /**
-   * @param {?SDK.NetworkRequest} x
+   * @param {?SDK.NetworkRequest} originatingRequest
    */
-  set redirectSource(x) {
-    this._redirectSource = x;
-    delete this._initiatorInfo;
+  setRedirectSource(originatingRequest) {
+    this._redirectSource = originatingRequest;
   }
 
   /**
    * @return {!Array.<!SDK.NetworkRequest.NameValue>}
    */
   requestHeaders() {
-    return this._requestHeaders || [];
+    return this._requestHeaders;
   }
 
   /**
@@ -627,7 +649,10 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    * @return {string|undefined}
    */
   requestHeaderValue(headerName) {
-    return this._headerValue(this.requestHeaders(), headerName);
+    if (headerName in this._requestHeaderValues)
+      return this._requestHeaderValues[headerName];
+    this._requestHeaderValues[headerName] = this._computeHeaderValue(this.requestHeaders(), headerName);
+    return this._requestHeaderValues[headerName];
   }
 
   /**
@@ -635,7 +660,7 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    */
   get requestCookies() {
     if (!this._requestCookies)
-      this._requestCookies = SDK.CookieParser.parseCookie(this.target(), this.requestHeaderValue('Cookie'));
+      this._requestCookies = SDK.CookieParser.parseCookie(this.requestHeaderValue('Cookie'));
     return this._requestCookies;
   }
 
@@ -657,10 +682,24 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
   /**
    * @return {string}
    */
+  _filteredProtocolName() {
+    var protocol = this.protocol.toLowerCase();
+    if (protocol === 'h2')
+      return 'http/2.0';
+    return protocol.replace(/^http\/2(\.0)?\+/, 'http/2.0+');
+  }
+
+  /**
+   * @return {string}
+   */
   requestHttpVersion() {
     var headersText = this.requestHeadersText();
-    if (!headersText)
-      return this.requestHeaderValue('version') || this.requestHeaderValue(':version') || 'unknown';
+    if (!headersText) {
+      var version = this.requestHeaderValue('version') || this.requestHeaderValue(':version');
+      if (version)
+        return version;
+      return this._filteredProtocolName();
+    }
     var firstLine = headersText.split(/\r\n/)[0];
     var match = firstLine.match(/(HTTP\/\d+\.\d+)$/);
     return match ? match[1] : 'HTTP/0.9';
@@ -721,12 +760,10 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    * @return {string|undefined}
    */
   responseHeaderValue(headerName) {
-    var value = this._responseHeaderValues[headerName];
-    if (value === undefined) {
-      value = this._headerValue(this.responseHeaders, headerName);
-      this._responseHeaderValues[headerName] = (value !== undefined) ? value : null;
-    }
-    return (value !== null) ? value : undefined;
+    if (headerName in this._responseHeaderValues)
+      return this._responseHeaderValues[headerName];
+    this._responseHeaderValues[headerName] = this._computeHeaderValue(this.responseHeaders, headerName);
+    return this._responseHeaderValues[headerName];
   }
 
   /**
@@ -734,7 +771,7 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    */
   get responseCookies() {
     if (!this._responseCookies)
-      this._responseCookies = SDK.CookieParser.parseSetCookie(this.target(), this.responseHeaderValue('Set-Cookie'));
+      this._responseCookies = SDK.CookieParser.parseSetCookie(this.responseHeaderValue('Set-Cookie'));
     return this._responseCookies;
   }
 
@@ -762,7 +799,7 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
       return this._queryString;
 
     var queryString = null;
-    var url = this.url;
+    var url = this.url();
     var questionMarkPosition = url.indexOf('?');
     if (questionMarkPosition !== -1) {
       queryString = url.substring(questionMarkPosition + 1);
@@ -807,8 +844,12 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    */
   responseHttpVersion() {
     var headersText = this._responseHeadersText;
-    if (!headersText)
-      return this.responseHeaderValue('version') || this.responseHeaderValue(':version') || 'unknown';
+    if (!headersText) {
+      var version = this.responseHeaderValue('version') || this.responseHeaderValue(':version');
+      if (version)
+        return version;
+      return this._filteredProtocolName();
+    }
     var firstLine = headersText.split(/\r\n/)[0];
     var match = firstLine.match(/^(HTTP\/\d+\.\d+)/);
     return match ? match[1] : 'HTTP/0.9';
@@ -834,7 +875,7 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    * @param {string} headerName
    * @return {string|undefined}
    */
-  _headerValue(headers, headerName) {
+  _computeHeaderValue(headers, headerName) {
     headerName = headerName.toLowerCase();
 
     var values = [];
@@ -851,24 +892,21 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
   }
 
   /**
-   * @return {?string|undefined}
+   * @return {!Promise<!SDK.NetworkRequest.ContentData>}
    */
-  get content() {
-    return this._content;
+  contentData() {
+    if (this._contentData)
+      return this._contentData;
+    this._contentData = SDK.NetworkManager.requestContentData(this);
+    return this._contentData;
   }
 
   /**
-   * @return {?Protocol.Error|undefined}
+   * @param {!SDK.NetworkRequest.ContentData} data
    */
-  contentError() {
-    return this._contentError;
-  }
-
-  /**
-   * @return {boolean}
-   */
-  get contentEncoded() {
-    return this._contentEncoded;
+  setContentData(data) {
+    console.assert(!this._contentData, 'contentData can only be set once.');
+    this._contentData = Promise.resolve(data);
   }
 
   /**
@@ -891,20 +929,8 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    * @override
    * @return {!Promise<?string>}
    */
-  requestContent() {
-    // We do not support content retrieval for WebSockets at the moment.
-    // Since WebSockets are potentially long-living, fail requests immediately
-    // to prevent caller blocking until resource is marked as finished.
-    if (this._resourceType === Common.resourceTypes.WebSocket)
-      return Promise.resolve(/** @type {?string} */ (null));
-    if (typeof this._content !== 'undefined')
-      return Promise.resolve(/** @type {?string} */ (this.content || null));
-    var callback;
-    var promise = new Promise(fulfill => callback = fulfill);
-    this._pendingContentCallbacks.push(callback);
-    if (this.finished)
-      this._innerRequestContent();
-    return promise;
+  async requestContent() {
+    return (await this.contentData()).content;
   }
 
   /**
@@ -912,17 +938,17 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
    * @param {string} query
    * @param {boolean} caseSensitive
    * @param {boolean} isRegex
-   * @param {function(!Array.<!Common.ContentProvider.SearchMatch>)} callback
+   * @return {!Promise<!Array<!Common.ContentProvider.SearchMatch>>}
    */
-  searchInContent(query, caseSensitive, isRegex, callback) {
-    callback([]);
+  searchInContent(query, caseSensitive, isRegex) {
+    return Promise.resolve([]);
   }
 
   /**
    * @return {boolean}
    */
   isHttpFamily() {
-    return !!this.url.match(/^https?:/i);
+    return !!this.url().match(/^https?:/i);
   }
 
   /**
@@ -986,127 +1012,10 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
   }
 
   /**
-   * @return {?string}
-   */
-  asDataURL() {
-    var content = this._content;
-    var charset = null;
-    if (!this._contentEncoded) {
-      content = content.toBase64();
-      charset = 'utf-8';
-    }
-    return Common.ContentProvider.contentAsDataURL(content, this.mimeType, true, charset);
-  }
-
-  _innerRequestContent() {
-    if (this._contentRequested)
-      return;
-    this._contentRequested = true;
-
-    /**
-     * @param {?Protocol.Error} error
-     * @param {string} content
-     * @param {boolean} contentEncoded
-     * @this {SDK.NetworkRequest}
-     */
-    function onResourceContent(error, content, contentEncoded) {
-      this._content = error ? null : content;
-      this._contentError = error;
-      this._contentEncoded = contentEncoded;
-      var callbacks = this._pendingContentCallbacks.slice();
-      for (var i = 0; i < callbacks.length; ++i)
-        callbacks[i](this._content);
-      this._pendingContentCallbacks.length = 0;
-      delete this._contentRequested;
-    }
-    this.target().networkAgent().getResponseBody(this._requestId, onResourceContent.bind(this));
-  }
-
-  /**
    * @return {?Protocol.Network.Initiator}
    */
   initiator() {
     return this._initiator;
-  }
-
-  /**
-   * @return {!{type: !SDK.NetworkRequest.InitiatorType, url: string, lineNumber: number, columnNumber: number, scriptId: ?string}}
-   */
-  initiatorInfo() {
-    if (this._initiatorInfo)
-      return this._initiatorInfo;
-
-    var type = SDK.NetworkRequest.InitiatorType.Other;
-    var url = '';
-    var lineNumber = -Infinity;
-    var columnNumber = -Infinity;
-    var scriptId = null;
-    var initiator = this._initiator;
-
-    if (this.redirectSource) {
-      type = SDK.NetworkRequest.InitiatorType.Redirect;
-      url = this.redirectSource.url;
-    } else if (initiator) {
-      if (initiator.type === Protocol.Network.InitiatorType.Parser) {
-        type = SDK.NetworkRequest.InitiatorType.Parser;
-        url = initiator.url ? initiator.url : url;
-        lineNumber = initiator.lineNumber ? initiator.lineNumber : lineNumber;
-      } else if (initiator.type === Protocol.Network.InitiatorType.Script) {
-        for (var stack = initiator.stack; stack; stack = stack.parent) {
-          var topFrame = stack.callFrames.length ? stack.callFrames[0] : null;
-          if (!topFrame)
-            continue;
-          type = SDK.NetworkRequest.InitiatorType.Script;
-          url = topFrame.url || Common.UIString('<anonymous>');
-          lineNumber = topFrame.lineNumber;
-          columnNumber = topFrame.columnNumber;
-          scriptId = topFrame.scriptId;
-          break;
-        }
-      }
-    }
-
-    this._initiatorInfo =
-        {type: type, url: url, lineNumber: lineNumber, columnNumber: columnNumber, scriptId: scriptId};
-    return this._initiatorInfo;
-  }
-
-  /**
-   * @return {?SDK.NetworkRequest}
-   */
-  initiatorRequest() {
-    if (this._initiatorRequest === undefined)
-      this._initiatorRequest = this._networkLog.requestForURL(this.initiatorInfo().url);
-    return this._initiatorRequest;
-  }
-
-  /**
-   * @return {!SDK.NetworkRequest.InitiatorGraph}
-   */
-  initiatorGraph() {
-    var initiated = new Set();
-    var requests = this._networkLog.requests();
-    for (var request of requests) {
-      var localInitiators = request._initiatorChain();
-      if (localInitiators.has(this))
-        initiated.add(request);
-    }
-    return {initiators: this._initiatorChain(), initiated: initiated};
-  }
-
-  /**
-   * @return {!Set<!SDK.NetworkRequest>}
-   */
-  _initiatorChain() {
-    if (this._initiatorChainCache)
-      return this._initiatorChainCache;
-    this._initiatorChainCache = new Set();
-    var request = this;
-    while (request) {
-      this._initiatorChainCache.add(request);
-      request = request.initiatorRequest();
-    }
-    return this._initiatorChainCache;
   }
 
   /**
@@ -1172,24 +1081,6 @@ SDK.NetworkRequest = class extends SDK.SDKObject {
     this._eventSourceMessages.push(message);
     this.dispatchEventToListeners(SDK.NetworkRequest.Events.EventSourceMessageAdded, message);
   }
-
-  replayXHR() {
-    this.target().networkAgent().replayXHR(this.requestId);
-  }
-
-  /**
-   * @return {!SDK.NetworkLog}
-   */
-  networkLog() {
-    return this._networkLog;
-  }
-
-  /**
-   * @return {!SDK.NetworkManager}
-   */
-  networkManager() {
-    return this._networkManager;
-  }
 };
 
 /** @enum {symbol} */
@@ -1208,7 +1099,8 @@ SDK.NetworkRequest.InitiatorType = {
   Other: 'other',
   Parser: 'parser',
   Redirect: 'redirect',
-  Script: 'script'
+  Script: 'script',
+  Preload: 'preload'
 };
 
 /** @typedef {!{name: string, value: string}} */
@@ -1227,5 +1119,5 @@ SDK.NetworkRequest.WebSocketFrame;
 /** @typedef {!{time: number, eventName: string, eventId: string, data: string}} */
 SDK.NetworkRequest.EventSourceMessage;
 
-/** @typedef {!{initiators: !Set<!SDK.NetworkRequest>, initiated: !Set<!SDK.NetworkRequest>}} */
-SDK.NetworkRequest.InitiatorGraph;
+/** @typedef {!{error: ?string, content: ?string, encoded: boolean}} */
+SDK.NetworkRequest.ContentData;

@@ -68,6 +68,9 @@ class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickScrollBar : public QQuickControl
     Q_PROPERTY(SnapMode snapMode READ snapMode WRITE setSnapMode NOTIFY snapModeChanged FINAL REVISION 2)
     Q_PROPERTY(bool interactive READ isInteractive WRITE setInteractive RESET resetInteractive NOTIFY interactiveChanged FINAL REVISION 2)
     Q_PROPERTY(Policy policy READ policy WRITE setPolicy NOTIFY policyChanged FINAL REVISION 2)
+    // 2.3 (Qt 5.10)
+    Q_PROPERTY(bool horizontal READ isHorizontal NOTIFY orientationChanged FINAL REVISION 3)
+    Q_PROPERTY(bool vertical READ isVertical NOTIFY orientationChanged FINAL REVISION 3)
 
 public:
     explicit QQuickScrollBar(QQuickItem *parent = nullptr);
@@ -113,6 +116,10 @@ public:
 
     Policy policy() const;
     void setPolicy(Policy policy);
+
+    // 2.3 (Qt 5.10)
+    bool isHorizontal() const;
+    bool isVertical() const;
 
 public Q_SLOTS:
     void increase();

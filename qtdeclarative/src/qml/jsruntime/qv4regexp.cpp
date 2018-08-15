@@ -127,9 +127,3 @@ void Heap::RegExp::destroy()
     delete pattern;
     Base::destroy();
 }
-
-void RegExp::markObjects(Heap::Base *that, ExecutionEngine *e)
-{
-    Q_UNUSED(that);
-    Q_UNUSED(e);
-}

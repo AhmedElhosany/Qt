@@ -49,10 +49,10 @@ class MutatorHost {
   virtual void PushPropertiesTo(MutatorHost* host_impl) = 0;
 
   virtual void SetSupportsScrollAnimations(bool supports_scroll_animations) = 0;
-  virtual bool NeedsAnimateLayers() const = 0;
+  virtual bool NeedsTickAnimations() const = 0;
 
   virtual bool ActivateAnimations() = 0;
-  virtual bool AnimateLayers(base::TimeTicks monotonic_time) = 0;
+  virtual bool TickAnimations(base::TimeTicks monotonic_time) = 0;
   virtual bool UpdateAnimationState(bool start_ready_animations,
                                     MutatorEvents* events) = 0;
 
@@ -110,13 +110,14 @@ class MutatorHost {
                                    float* start_scale) const = 0;
 
   virtual bool HasAnyAnimation(ElementId element_id) const = 0;
-  virtual bool HasActiveAnimationForTesting(ElementId element_id) const = 0;
+  virtual bool HasTickingAnimationForTesting(ElementId element_id) const = 0;
 
   virtual void ImplOnlyScrollAnimationCreate(
       ElementId element_id,
       const gfx::ScrollOffset& target_offset,
       const gfx::ScrollOffset& current_offset,
-      base::TimeDelta delayed_by) = 0;
+      base::TimeDelta delayed_by,
+      base::TimeDelta animation_start_offset) = 0;
   virtual bool ImplOnlyScrollAnimationUpdateTarget(
       ElementId element_id,
       const gfx::Vector2dF& scroll_delta,
@@ -124,7 +125,7 @@ class MutatorHost {
       base::TimeTicks frame_monotonic_time,
       base::TimeDelta delayed_by) = 0;
 
-  virtual void ScrollAnimationAbort(bool needs_completion) = 0;
+  virtual void ScrollAnimationAbort() = 0;
 };
 
 class MutatorEvents {

@@ -122,8 +122,8 @@ void QFactoryLoader::update()
         //
         // ### FIXME find a proper solution
         //
-        const bool isLoadingDebugAndReleaseCocoa = plugins.contains(QStringLiteral("libqcocoa_debug.dylib"))
-                && plugins.contains(QStringLiteral("libqcocoa.dylib"));
+        const bool isLoadingDebugAndReleaseCocoa = plugins.contains(QLatin1String("libqcocoa_debug.dylib"))
+                && plugins.contains(QLatin1String("libqcocoa.dylib"));
 #endif
         for (int j = 0; j < plugins.count(); ++j) {
             QString fileName = QDir::cleanPath(path + QLatin1Char('/') + plugins.at(j));
@@ -131,10 +131,10 @@ void QFactoryLoader::update()
 #ifdef Q_OS_MAC
             if (isLoadingDebugAndReleaseCocoa) {
 #ifdef QT_DEBUG
-               if (fileName.contains(QStringLiteral("libqcocoa.dylib")))
+               if (fileName.contains(QLatin1String("libqcocoa.dylib")))
                    continue;    // Skip release plugin in debug mode
 #else
-               if (fileName.contains(QStringLiteral("libqcocoa_debug.dylib")))
+               if (fileName.contains(QLatin1String("libqcocoa_debug.dylib")))
                    continue;    // Skip debug plugin in release mode
 #endif
             }

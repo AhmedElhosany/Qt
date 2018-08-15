@@ -66,21 +66,6 @@ class USER_MANAGER_EXPORT User : public UserInfo {
     USER_IMAGE_EXTERNAL = -1,
   } UserImageType;
 
-  // This enum is used to define the buckets for an enumerated UMA histogram.
-  // Hence,
-  //   (a) existing enumerated constants should never be deleted or reordered,
-  //   (b) new constants should only be appended at the end of the enumeration.
-  enum WallpaperType {
-    DAILY = 0,         // Surprise wallpaper. Changes once a day if enabled.
-    CUSTOMIZED = 1,    // Selected by user.
-    DEFAULT = 2,       // Default.
-    /* UNKNOWN = 3 */  // Removed.
-    ONLINE = 4,        // WallpaperInfo.location denotes an URL.
-    POLICY = 5,        // Controlled by policy, can't be changed by the user.
-    THIRDPARTY = 6,    // Current wallpaper is set by a third party app.
-    WALLPAPER_TYPE_COUNT = 7
-  };
-
   // Returns true if user type has gaia account.
   static bool TypeHasGaiaAccount(UserType user_type);
 
@@ -103,6 +88,9 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   // Returns true if user has gaia account. True for users of types
   // USER_TYPE_REGULAR and USER_TYPE_CHILD.
   virtual bool HasGaiaAccount() const;
+
+  // Returns true if it's Active Directory user.
+  virtual bool IsActiveDirectoryUser() const;
 
   // Returns true if user is supervised.
   virtual bool IsSupervised() const;
@@ -135,8 +123,13 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   int image_index() const { return image_index_; }
   bool has_image_bytes() const { return user_image_->has_image_bytes(); }
   // Returns bytes representation of static user image for WebUI.
-  const UserImage::Bytes& image_bytes() const {
+  scoped_refptr<base::RefCountedBytes> image_bytes() const {
     return user_image_->image_bytes();
+  }
+  // Returns image format of the bytes representation of static user image
+  // for WebUI.
+  UserImage::ImageFormat image_format() const {
+    return user_image_->image_format();
   }
 
   // Whether |user_image_| contains data in format that is considered safe to
@@ -160,6 +153,9 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   // user's next sign-in.
   bool force_online_signin() const { return force_online_signin_; }
 
+  // Whether the user's session has completed initialization yet.
+  bool profile_ever_initialized() const { return profile_ever_initialized_; }
+
   // True if the user's session can be locked (i.e. the user has a password with
   // which to unlock the session).
   bool can_lock() const;
@@ -176,6 +172,10 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   // True if the user Profile is created.
   bool is_profile_created() const { return profile_is_created_; }
 
+  static User* CreatePublicAccountUserForTesting(const AccountId& account_id) {
+    return CreatePublicAccountUser(account_id);
+  }
+
  protected:
   friend class UserManagerBase;
   friend class chromeos::ChromeUserManagerImpl;
@@ -189,6 +189,7 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   friend class chromeos::MockUserManager;
   friend class chromeos::UserAddingScreenTest;
   FRIEND_TEST_ALL_PREFIXES(UserTest, DeviceLocalAccountAffiliation);
+  FRIEND_TEST_ALL_PREFIXES(UserTest, UserSessionInitialized);
 
   // Do not allow anyone else to create new User instances.
   static User* CreateRegularUser(const AccountId& account_id);
@@ -238,6 +239,10 @@ class USER_MANAGER_EXPORT User : public UserInfo {
     force_online_signin_ = force_online_signin;
   }
 
+  void set_profile_ever_initialized(bool profile_ever_initialized) {
+    profile_ever_initialized_ = profile_ever_initialized;
+  }
+
   void set_username_hash(const std::string& username_hash) {
     username_hash_ = username_hash;
   }
@@ -265,6 +270,7 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   std::unique_ptr<UserImage> user_image_;
   OAuthTokenStatus oauth_token_status_ = OAUTH_TOKEN_STATUS_UNKNOWN;
   bool force_online_signin_ = false;
+  bool profile_ever_initialized_ = false;
 
   // This is set to chromeos locale if account data has been downloaded.
   // (Or failed to download, but at least one download attempt finished).

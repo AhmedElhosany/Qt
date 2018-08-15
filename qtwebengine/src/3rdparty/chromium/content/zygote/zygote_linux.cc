@@ -32,9 +32,7 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "content/common/child_process_sandbox_support_impl_linux.h"
 #include "content/common/sandbox_linux/sandbox_linux.h"
-#include "content/common/set_process_title.h"
 #include "content/common/zygote_commands_linux.h"
 #include "content/public/common/content_descriptors.h"
 #include "content/public/common/mojo_channel_switches.h"
@@ -45,6 +43,7 @@
 #include "ipc/ipc_channel.h"
 #include "sandbox/linux/services/credentials.h"
 #include "sandbox/linux/services/namespace_sandbox.h"
+#include "services/service_manager/embedder/set_process_title.h"
 
 // See https://chromium.googlesource.com/chromium/src/+/master/docs/linux_zygote.md
 
@@ -91,7 +90,7 @@ void KillAndReap(pid_t pid, ZygoteForkDelegate* helper) {
 }  // namespace
 
 Zygote::Zygote(int sandbox_flags,
-               ScopedVector<ZygoteForkDelegate> helpers,
+               std::vector<std::unique_ptr<ZygoteForkDelegate>> helpers,
                const std::vector<base::ProcessHandle>& extra_children,
                const std::vector<int>& extra_fds)
     : sandbox_flags_(sandbox_flags),
@@ -126,7 +125,8 @@ bool Zygote::ProcessRequests() {
 
   if (UsingSUIDSandbox() || UsingNSSandbox()) {
     // Let the ZygoteHost know we are ready to go.
-    // The receiving code is in content/browser/zygote_host_linux.cc.
+    // The receiving code is in
+    // content/browser/zygote_host/zygote_host_impl_linux.cc.
     bool r = base::UnixDomainSocket::SendMsg(kZygoteSocketPairFd,
                                              kZygoteHelloMessage,
                                              sizeof(kZygoteHelloMessage),
@@ -418,11 +418,9 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
                             int* uma_sample,
                             int* uma_boundary_value) {
   ZygoteForkDelegate* helper = NULL;
-  for (ScopedVector<ZygoteForkDelegate>::iterator i = helpers_.begin();
-       i != helpers_.end();
-       ++i) {
+  for (auto i = helpers_.begin(); i != helpers_.end(); ++i) {
     if ((*i)->CanHelp(process_type, uma_name, uma_sample, uma_boundary_value)) {
-      helper = *i;
+      helper = i->get();
       break;
     }
   }
@@ -500,20 +498,12 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
 
   // Always receive a real PID from the zygote host, though it might
   // be invalid (see below).
-  base::ProcessId real_pid = -1;
-  do {
+  base::ProcessId real_pid;
+  {
     std::vector<base::ScopedFD> recv_fds;
     char buf[kZygoteMaxMessageLength];
-    ssize_t len = 0;
-    len = base::UnixDomainSocket::RecvMsg(
+    const ssize_t len = base::UnixDomainSocket::RecvMsg(
         kZygoteSocketPairFd, buf, sizeof(buf), &recv_fds);
-    if (len == 0) {
-      LOG(WARNING) << "Empty message received";
-      len = base::UnixDomainSocket::RecvMsg(
-          kZygoteSocketPairFd, buf, sizeof(buf), &recv_fds);
-    }
-    if (len == 0)
-      break;
     CHECK_GT(len, 0);
     CHECK(recv_fds.empty());
 
@@ -524,7 +514,7 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
     CHECK(iter.ReadInt(&kind));
     CHECK(kind == kZygoteCommandForkRealPID);
     CHECK(iter.ReadInt(&real_pid));
-  } while (false);
+  }
 
   // Fork failed.
   if (pid < 0) {
@@ -570,8 +560,9 @@ base::ProcessId Zygote::ReadArgsAndFork(base::PickleIterator iter,
   base::GlobalDescriptors::Mapping mapping;
   std::string process_type;
   std::string channel_id;
-  const std::string channel_id_prefix = std::string("--")
-      + switches::kMojoChannelToken + std::string("=");
+  const std::string channel_id_prefix = std::string("--") +
+                                        switches::kServiceRequestChannelToken +
+                                        std::string("=");
 
   if (!iter.ReadString(&process_type))
     return -1;
@@ -631,7 +622,7 @@ base::ProcessId Zygote::ReadArgsAndFork(base::PickleIterator iter,
     // Update the process title. The argv was already cached by the call to
     // SetProcessTitleFromCommandLine in ChromeMain, so we can pass NULL here
     // (we don't have the original argv at this point).
-    SetProcessTitleFromCommandLine(NULL);
+    service_manager::SetProcessTitleFromCommandLine(nullptr);
   } else if (child_pid < 0) {
     LOG(ERROR) << "Zygote could not fork: process_type " << process_type
         << " numfds " << numfds << " child_pid " << child_pid;

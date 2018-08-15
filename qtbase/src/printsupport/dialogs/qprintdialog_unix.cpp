@@ -124,7 +124,7 @@ class QPrintPropertiesDialog : public QDialog
 {
     Q_OBJECT
 public:
-    QPrintPropertiesDialog(QAbstractPrintDialog *parent = 0);
+    QPrintPropertiesDialog(QAbstractPrintDialog *parent = nullptr);
     ~QPrintPropertiesDialog();
 
     void selectPrinter(QPrinter::OutputFormat outputFormat, const QString &printerName);
@@ -149,7 +149,7 @@ class QUnixPrintWidget : public QWidget
     Q_OBJECT
 
 public:
-    explicit QUnixPrintWidget(QPrinter *printer, QWidget *parent = 0);
+    explicit QUnixPrintWidget(QPrinter *printer, QWidget *parent = nullptr);
     ~QUnixPrintWidget();
     void updatePrinter();
 
@@ -245,15 +245,14 @@ QPrintPropertiesDialog::QPrintPropertiesDialog(QAbstractPrintDialog *parent)
 {
     setWindowTitle(tr("Printer Properties"));
     QVBoxLayout *lay = new QVBoxLayout(this);
-    this->setLayout(lay);
     QWidget *content = new QWidget(this);
     widget.setupUi(content);
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, this);
     lay->addWidget(content);
     lay->addWidget(m_buttons);
 
-    connect(m_buttons->button(QDialogButtonBox::Ok), SIGNAL(clicked()), this, SLOT(accept()));
-    connect(m_buttons->button(QDialogButtonBox::Cancel), SIGNAL(clicked()), this, SLOT(reject()));
+    connect(m_buttons->button(QDialogButtonBox::Ok), &QPushButton::clicked, this, &QPrintPropertiesDialog::accept);
+    connect(m_buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked, this, &QPrintPropertiesDialog::reject);
 
 #if QT_CONFIG(cupsjobwidget)
     m_jobOptions = new QCupsJobWidget();
@@ -298,7 +297,7 @@ void QPrintPropertiesDialog::selectPrinter(QPrinter::OutputFormat outputFormat, 
 
 */
 QPrintDialogPrivate::QPrintDialogPrivate()
-    : top(0), bottom(0), buttons(0), collapseButton(0)
+    : top(nullptr), bottom(nullptr), buttons(nullptr), collapseButton(nullptr)
 {
     initResources();
 }
@@ -338,7 +337,6 @@ void QPrintDialogPrivate::init()
     printButton->setDefault(true);
 
     QVBoxLayout *lay = new QVBoxLayout(q);
-    q->setLayout(lay);
     lay->addWidget(top);
     lay->addWidget(bottom);
     lay->addWidget(buttons);
@@ -610,7 +608,7 @@ QPrintDialog::QPrintDialog(QPrinter *printer, QWidget *parent)
     Constructs a print dialog with the given \a parent.
 */
 QPrintDialog::QPrintDialog(QWidget *parent)
-    : QAbstractPrintDialog(*(new QPrintDialogPrivate), 0, parent)
+    : QAbstractPrintDialog(*(new QPrintDialogPrivate), nullptr, parent)
 {
     Q_D(QPrintDialog);
     d->init();
@@ -658,7 +656,7 @@ void QPrintDialog::accept()
 /*! \internal
 */
 QUnixPrintWidgetPrivate::QUnixPrintWidgetPrivate(QUnixPrintWidget *p, QPrinter *prn)
-    : parent(p), propertiesDialog(0), printer(prn), optionsPane(0),
+    : parent(p), propertiesDialog(nullptr), printer(prn), optionsPane(0),
       filePrintersAdded(false), propertiesDialogShown(false)
 {
     q = 0;
@@ -746,7 +744,7 @@ void QUnixPrintWidgetPrivate::_q_printerChanged(int index)
     // Reset properties dialog when printer is changed
     if (propertiesDialog){
         delete propertiesDialog;
-        propertiesDialog = 0;
+        propertiesDialog = nullptr;
         propertiesDialogShown = false;
     }
 
@@ -792,7 +790,7 @@ void QUnixPrintWidgetPrivate::_q_btnBrowseClicked()
     QString filename = widget.filename->text();
 #if QT_CONFIG(filedialog)
     filename = QFileDialog::getSaveFileName(parent, QPrintDialog::tr("Print To File ..."), filename,
-                                            QString(), 0, QFileDialog::DontConfirmOverwrite);
+                                            QString(), nullptr, QFileDialog::DontConfirmOverwrite);
 #else
     filename.clear();
 #endif
@@ -804,7 +802,7 @@ void QUnixPrintWidgetPrivate::_q_btnBrowseClicked()
 
 void QUnixPrintWidgetPrivate::applyPrinterProperties()
 {
-    if (printer == 0)
+    if (printer == nullptr)
         return;
     if (printer->outputFileName().isEmpty()) {
         QString home = QDir::homePath();
@@ -899,8 +897,7 @@ bool QUnixPrintWidgetPrivate::checkFields()
 
 void QUnixPrintWidgetPrivate::setupPrinterProperties()
 {
-    if (propertiesDialog)
-        delete propertiesDialog;
+    delete propertiesDialog;
 
     propertiesDialog = new QPrintPropertiesDialog(q);
     propertiesDialog->setResult(QDialog::Rejected);
@@ -925,7 +922,7 @@ void QUnixPrintWidgetPrivate::_q_btnPropertiesClicked()
         // If properties dialog was rejected the dialog is deleted and
         // the properties are set to defaults when printer is setup
         delete propertiesDialog;
-        propertiesDialog = 0;
+        propertiesDialog = nullptr;
         propertiesDialogShown = false;
     } else
         // properties dialog was shown and accepted

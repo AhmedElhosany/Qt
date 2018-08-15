@@ -18,8 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "webrtc/base/checks.h"
 #include "webrtc/modules/audio_processing/aec/aec_core.h"
+#include "webrtc/rtc_base/checks.h"
 
 namespace webrtc {
 
@@ -74,7 +74,7 @@ void WebRtcAec_ResampleLinear(void* resampInst,
   float be, tnew;
   size_t tn, mm;
 
-  RTC_DCHECK_LE(size, 2u * FRAME_LEN);
+  RTC_DCHECK_LE(size, 2 * FRAME_LEN);
   RTC_DCHECK(resampInst);
   RTC_DCHECK(inspeech);
   RTC_DCHECK(outspeech);

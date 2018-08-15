@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.TabButton {
     id: control
@@ -49,21 +49,26 @@ T.TabButton {
     baselineOffset: contentItem.y + contentItem.baselineOffset
 
     padding: 6
+    spacing: 6
 
-    contentItem: Text {
+    icon.width: 24
+    icon.height: 24
+    icon.color: checked ? control.palette.windowText : control.palette.brightText
+
+    contentItem: IconLabel {
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+
+        icon: control.icon
         text: control.text
         font: control.font
-        elide: Text.ElideRight
-        opacity: enabled ? 1 : 0.3
-        color: !control.checked ? Default.textLightColor : control.down ? Default.textDarkColor : Default.textColor
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
+        color: checked ? control.palette.windowText : control.palette.brightText
     }
 
     background: Rectangle {
         implicitHeight: 40
-        color: control.down
-            ? (control.checked ? Default.tabButtonCheckedPressedColor : Default.tabButtonPressedColor)
-            : (control.checked ? "transparent" : Default.tabButtonColor)
+        color: Color.blend(control.checked ? control.palette.window : control.palette.dark,
+                                             control.palette.mid, control.down ? 0.5 : 0.0)
     }
 }

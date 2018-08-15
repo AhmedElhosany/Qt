@@ -124,7 +124,6 @@ private slots:
     void modify_through_delegate();
     void bindingsOnGetResult();
     void stringifyModelEntry();
-    void qobjectTrackerForDynamicModelObjects();
 };
 
 bool tst_qqmllistmodel::compareVariantList(const QVariantList &testList, QVariant object)
@@ -449,7 +448,6 @@ void tst_qqmllistmodel::dynamic_data()
         QTest::newRow("get2") << "{get(-1) === undefined}" << 1 << "" << dr;
         QTest::newRow("get3") << "{append({'foo':123});get(0) != undefined}" << 1 << "" << dr;
         QTest::newRow("get4") << "{append({'foo':123});get(0).foo}" << 123 << "" << dr;
-        QTest::newRow("get5") << "{append({'foo':123});get(0) == get(0)}" << 1 << "" << dr;
         QTest::newRow("get-modify1") << "{append({'foo':123,'bar':456});get(0).foo = 333;get(0).foo}" << 333 << "" << dr;
         QTest::newRow("get-modify2") << "{append({'z':1});append({'foo':123,'bar':456});get(1).bar = 999;get(1).bar}" << 999 << "" << dr;
 
@@ -1207,8 +1205,8 @@ void tst_qqmllistmodel::role_mode_data()
     QTest::newRow("default1") << "{append({'a':1});dynamicRoles}" << 0 << "";
 
     QTest::newRow("enableDynamic0") << "{dynamicRoles=true;dynamicRoles}" << 1 << "";
-    QTest::newRow("enableDynamic1") << "{append({'a':1});dynamicRoles=true;dynamicRoles}" << 0 << "<Unknown File>: QML ListModel: unable to enable dynamic roles as this model is not empty!";
-    QTest::newRow("enableDynamic2") << "{dynamicRoles=true;append({'a':1});dynamicRoles=false;dynamicRoles}" << 1 << "<Unknown File>: QML ListModel: unable to enable static roles as this model is not empty!";
+    QTest::newRow("enableDynamic1") << "{append({'a':1});dynamicRoles=true;dynamicRoles}" << 0 << "<Unknown File>: QML ListModel: unable to enable dynamic roles as this model is not empty";
+    QTest::newRow("enableDynamic2") << "{dynamicRoles=true;append({'a':1});dynamicRoles=false;dynamicRoles}" << 1 << "<Unknown File>: QML ListModel: unable to enable static roles as this model is not empty";
 }
 
 void tst_qqmllistmodel::role_mode()
@@ -1505,33 +1503,6 @@ void tst_qqmllistmodel::stringifyModelEntry()
     QVERIFY2(!expr.hasError(), QTest::toString(expr.error().toString()));
     const QString expectedString = QStringLiteral("{\"age\":22,\"name\":\"Joe\"}");
     QCOMPARE(v.toString(), expectedString);
-}
-
-void tst_qqmllistmodel::qobjectTrackerForDynamicModelObjects()
-{
-    QQmlEngine engine;
-    QQmlComponent component(&engine);
-    component.setData(
-                      "import QtQuick 2.0\n"
-                      "Item {\n"
-                      "   ListModel {\n"
-                      "       id: testModel\n"
-                      "       objectName: \"testModel\"\n"
-                      "       ListElement { name: \"Joe\"; age: 22 }\n"
-                      "   }\n"
-                      "}\n", QUrl());
-    QScopedPointer<QObject> scene(component.create());
-    QQmlListModel *model = scene->findChild<QQmlListModel*>("testModel");
-    QQmlExpression expr(engine.rootContext(), model, "get(0);");
-    QVariant v = expr.evaluate();
-    QVERIFY2(!expr.hasError(), QTest::toString(expr.error().toString()));
-
-    QObject *obj = v.value<QObject*>();
-    QVERIFY(obj);
-
-    QQmlData *ddata = QQmlData::get(obj, /*create*/false);
-    QVERIFY(ddata);
-    QVERIFY(!ddata->jsWrapper.isNullOrUndefined());
 }
 
 QTEST_MAIN(tst_qqmllistmodel)

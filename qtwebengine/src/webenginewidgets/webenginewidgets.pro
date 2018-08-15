@@ -1,3 +1,5 @@
+QT_FOR_CONFIG += webengine-private
+
 TARGET = QtWebEngineWidgets
 
 # For our export macros
@@ -42,23 +44,20 @@ HEADERS = \
         api/qwebengineview_p.h \
         render_widget_host_view_qt_delegate_widget.h
 
-!contains(WEBENGINE_CONFIG, no_ui_delegates) {
+qtConfig(webengine-ui-delegates) {
     SOURCES += ui/messagebubblewidget.cpp
     HEADERS += ui/messagebubblewidget_p.h
     DEFINES += QT_UI_DELEGATES
 }
 
-contains(WEBENGINE_CONFIG, use_spellchecker) {
+qtConfig(webengine-spellchecker) {
     DEFINES += ENABLE_SPELLCHECK
 }
 
-use?(printing) {
+qtConfig(webengine-printing-and-pdf) {
     DEFINES += ENABLE_PRINTING
-    QT += printsupport
-}
-
-use?(pdf) {
     DEFINES += ENABLE_PDF
+    QT += printsupport
 }
 
 load(qt_module)

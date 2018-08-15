@@ -77,15 +77,15 @@ void Heap::StringObject::init()
 {
     Object::init();
     Q_ASSERT(vtable() == QV4::StringObject::staticVTable());
-    string = internalClass->engine->id_empty()->d();
-    *propertyData(LengthPropertyIndex) = Primitive::fromInt32(0);
+    string.set(internalClass->engine, internalClass->engine->id_empty()->d());
+    setProperty(internalClass->engine, LengthPropertyIndex, Primitive::fromInt32(0));
 }
 
 void Heap::StringObject::init(const QV4::String *str)
 {
     Object::init();
-    string = str->d();
-    *propertyData(LengthPropertyIndex) = Primitive::fromInt32(length());
+    string.set(internalClass->engine, str->d());
+    setProperty(internalClass->engine, LengthPropertyIndex, Primitive::fromInt32(length()));
 }
 
 Heap::String *Heap::StringObject::getIndex(uint index) const
@@ -145,13 +145,6 @@ void StringObject::advanceIterator(Managed *m, ObjectIterator *it, Value *name, 
     return Object::advanceIterator(m, it, name, index, p, attrs);
 }
 
-void StringObject::markObjects(Heap::Base *that, ExecutionEngine *e)
-{
-    StringObject::Data *o = static_cast<StringObject::Data *>(that);
-    o->string->mark(e);
-    Object::markObjects(that, e);
-}
-
 DEFINE_OBJECT_VTABLE(StringCtor);
 
 void Heap::StringCtor::init(QV4::ExecutionContext *scope)
@@ -200,6 +193,7 @@ void StringPrototype::init(ExecutionEngine *engine, Object *ctor)
     defineDefaultProperty(QStringLiteral("lastIndexOf"), method_lastIndexOf, 1);
     defineDefaultProperty(QStringLiteral("localeCompare"), method_localeCompare, 1);
     defineDefaultProperty(QStringLiteral("match"), method_match, 1);
+    defineDefaultProperty(QStringLiteral("repeat"), method_repeat, 1);
     defineDefaultProperty(QStringLiteral("replace"), method_replace, 2);
     defineDefaultProperty(QStringLiteral("search"), method_search, 1);
     defineDefaultProperty(QStringLiteral("slice"), method_slice, 2);
@@ -458,6 +452,21 @@ void StringPrototype::method_match(const BuiltinFunction *, Scope &scope, CallDa
         scope.result = a;
 }
 
+void StringPrototype::method_repeat(const BuiltinFunction *, Scope &scope, CallData *callData)
+{
+    QString value = getThisString(scope, callData);
+    CHECK_EXCEPTION();
+
+    double repeats = callData->args[0].toInteger();
+
+    if (repeats < 0 || qIsInf(repeats)) {
+        scope.result = scope.engine->throwRangeError(QLatin1String("Invalid count value"));
+        return;
+    }
+
+    scope.result = scope.engine->newString(value.repeated(int(repeats)));
+}
+
 static void appendReplacementString(QString *result, const QString &input, const QString& replaceValue, uint* matchOffsets, int captureCount)
 {
     result->reserve(result->length() + replaceValue.length());
@@ -547,7 +556,7 @@ void StringPrototype::method_replace(const BuiltinFunction *, Scope &scope, Call
             offset = qMax(offset + 1, matchOffsets[oldSize + 1]);
         }
         if (regExp->global())
-            *regExp->lastIndexProperty() = Primitive::fromUInt32(0);
+            regExp->setLastIndex(0);
         numStringMatches = nMatchOffsets / (regExp->value()->captureCount() * 2);
         numCaptures = regExp->value()->captureCount();
     } else {

@@ -41,6 +41,10 @@ namespace {
 // Max number of languages to detect.
 const int kCldNumLangs = 3;
 
+// CLD3 minimum reliable byte threshold. Predictions for inputs below this size
+// in bytes will be considered unreliable.
+const int kCld3MinimumByteThreshold = 50;
+
 struct DetectedLanguage {
   DetectedLanguage(const std::string& language, int percentage)
       : language(language), percentage(percentage) {}
@@ -100,9 +104,8 @@ v8::Local<v8::Value> LanguageDetectionResult::ToValue(ScriptContext* context) {
   v8::Isolate* isolate = v8_context->GetIsolate();
   v8::EscapableHandleScope handle_scope(isolate);
 
-  std::unique_ptr<content::V8ValueConverter> converter(
-      content::V8ValueConverter::create());
-  v8::Local<v8::Value> result = converter->ToV8Value(&dict_value, v8_context);
+  v8::Local<v8::Value> result =
+      content::V8ValueConverter::Create()->ToV8Value(&dict_value, v8_context);
   return handle_scope.Escape(result);
 }
 
@@ -310,8 +313,17 @@ void I18NCustomBindings::DetectTextLanguage(
 #elif BUILDFLAG(CLD_VERSION) == 3
   chrome_lang_id::NNetLanguageIdentifier nnet_lang_id(/*min_num_bytes=*/0,
                                                       /*max_num_bytes=*/512);
-  const std::vector<chrome_lang_id::NNetLanguageIdentifier::Result>
-      lang_results = nnet_lang_id.FindTopNMostFreqLangs(text, kCldNumLangs);
+  std::vector<chrome_lang_id::NNetLanguageIdentifier::Result> lang_results =
+      nnet_lang_id.FindTopNMostFreqLangs(text, kCldNumLangs);
+
+  // is_reliable is set to false if we believe the input is too short to be
+  // accurately identified by the current model.
+  if (text.size() < kCld3MinimumByteThreshold) {
+    for (auto& result : lang_results) {
+      result.is_reliable = false;
+    }
+  }
+
   LanguageDetectionResult result;
 
   // Populate LanguageDetectionResult with prediction reliability, languages,

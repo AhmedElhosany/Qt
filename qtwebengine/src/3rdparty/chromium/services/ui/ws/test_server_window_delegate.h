@@ -9,10 +9,7 @@
 #include "services/ui/ws/server_window_delegate.h"
 
 namespace ui {
-
 namespace ws {
-
-struct WindowId;
 
 class TestServerWindowDelegate : public ServerWindowDelegate {
  public:
@@ -23,17 +20,15 @@ class TestServerWindowDelegate : public ServerWindowDelegate {
 
  private:
   // ServerWindowDelegate:
-  ui::DisplayCompositor* GetDisplayCompositor() override;
+  cc::mojom::FrameSinkManager* GetFrameSinkManager() override;
   ServerWindow* GetRootWindow(const ServerWindow* window) override;
 
-  ServerWindow* root_window_;
-  scoped_refptr<ui::DisplayCompositor> display_compositor_;
+  ServerWindow* root_window_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(TestServerWindowDelegate);
 };
 
 }  // namespace ws
-
 }  // namespace ui
 
 #endif  // SERVICES_UI_WS_TEST_SERVER_WINDOW_DELEGATE_H_

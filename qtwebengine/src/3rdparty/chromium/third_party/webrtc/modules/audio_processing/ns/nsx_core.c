@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "webrtc/base/checks.h"
+#include "webrtc/rtc_base/checks.h"
 #include "webrtc/common_audio/signal_processing/include/real_fft.h"
 #include "webrtc/modules/audio_processing/ns/nsx_core.h"
 #include "webrtc/system_wrappers/include/cpu_features_wrapper.h"
@@ -1545,7 +1545,7 @@ void WebRtcNsx_ProcessCore(NoiseSuppressionFixedC* inst,
 #ifdef NS_FILEDEBUG
   if (fwrite(spframe, sizeof(short),
              inst->blockLen10ms, inst->infile) != inst->blockLen10ms) {
-    RTC_DCHECK(false);
+    RTC_NOTREACHED();
   }
 #endif
 
@@ -2025,7 +2025,7 @@ void WebRtcNsx_ProcessCore(NoiseSuppressionFixedC* inst,
 #ifdef NS_FILEDEBUG
   if (fwrite(outframe, sizeof(short),
              inst->blockLen10ms, inst->outfile) != inst->blockLen10ms) {
-    RTC_DCHECK(false);
+    RTC_NOTREACHED();
   }
 #endif
 

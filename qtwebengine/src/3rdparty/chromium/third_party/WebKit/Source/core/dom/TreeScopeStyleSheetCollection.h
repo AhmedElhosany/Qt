@@ -31,76 +31,46 @@
 #define TreeScopeStyleSheetCollection_h
 
 #include "core/CoreExport.h"
-#include "core/dom/Document.h"
-#include "core/dom/DocumentOrderedList.h"
 #include "core/dom/StyleSheetCollection.h"
+#include "core/dom/TreeOrderedList.h"
 #include "core/dom/TreeScope.h"
-#include "wtf/HashMap.h"
-#include "wtf/ListHashSet.h"
-#include "wtf/Vector.h"
-#include "wtf/text/WTFString.h"
 
 namespace blink {
 
+class Document;
 class Node;
-class StyleSheetContents;
-class StyleRuleFontFace;
 
 class CORE_EXPORT TreeScopeStyleSheetCollection : public StyleSheetCollection {
  public:
-  void addStyleSheetCandidateNode(Node&);
-  void removeStyleSheetCandidateNode(Node& node) {
-    m_styleSheetCandidateNodes.remove(&node);
+  void AddStyleSheetCandidateNode(Node&);
+  void RemoveStyleSheetCandidateNode(Node& node) {
+    style_sheet_candidate_nodes_.Remove(&node);
   }
-  bool hasStyleSheetCandidateNodes() const {
-    return !m_styleSheetCandidateNodes.isEmpty();
+  bool HasStyleSheetCandidateNodes() const {
+    return !style_sheet_candidate_nodes_.IsEmpty();
   }
+  bool HasStyleSheets() const;
 
-  void clearMediaQueryRuleSetStyleSheets();
+  bool MediaQueryAffectingValueChanged();
 
-  virtual bool isShadowTreeStyleSheetCollection() const { return false; }
+  virtual bool IsShadowTreeStyleSheetCollection() const { return false; }
+  void UpdateStyleSheetList();
 
   DECLARE_VIRTUAL_TRACE();
 
  protected:
   explicit TreeScopeStyleSheetCollection(TreeScope&);
 
-  Document& document() const { return treeScope().document(); }
-  TreeScope& treeScope() const { return *m_treeScope; }
+  Document& GetDocument() const { return GetTreeScope().GetDocument(); }
+  TreeScope& GetTreeScope() const { return *tree_scope_; }
 
-  enum StyleResolverUpdateType { Reconstruct, Reset, Additive };
+  void ApplyActiveStyleSheetChanges(StyleSheetCollection&);
 
-  class StyleSheetChange {
-    STACK_ALLOCATED();
-
-   public:
-    StyleResolverUpdateType styleResolverUpdateType;
-    bool requiresFullStyleRecalc;
-    HeapVector<Member<const StyleRuleFontFace>> fontFaceRulesToRemove;
-
-    StyleSheetChange()
-        : styleResolverUpdateType(Reconstruct), requiresFullStyleRecalc(true) {}
-  };
-
-  void analyzeStyleSheetChange(StyleResolverUpdateMode,
-                               const HeapVector<Member<CSSStyleSheet>>&,
-                               StyleSheetChange&);
+  Member<TreeScope> tree_scope_;
+  TreeOrderedList style_sheet_candidate_nodes_;
 
  private:
-  static StyleResolverUpdateType compareStyleSheets(
-      const HeapVector<Member<CSSStyleSheet>>& oldStyleSheets,
-      const HeapVector<Member<CSSStyleSheet>>& newStylesheets,
-      HeapVector<Member<StyleSheetContents>>& addedSheets);
-  bool activeLoadingStyleSheetLoaded(
-      const HeapVector<Member<CSSStyleSheet>>& newStyleSheets);
-
   friend class TreeScopeStyleSheetCollectionTest;
-
- protected:
-  Member<TreeScope> m_treeScope;
-  bool m_hadActiveLoadingStylesheet;
-
-  DocumentOrderedList m_styleSheetCandidateNodes;
 };
 
 }  // namespace blink

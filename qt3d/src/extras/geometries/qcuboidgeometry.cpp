@@ -497,8 +497,8 @@ void QCuboidGeometryPrivate::init()
     m_texCoordAttribute = new Qt3DRender::QAttribute(q);
     m_tangentAttribute = new Qt3DRender::QAttribute(q);
     m_indexAttribute = new Qt3DRender::QAttribute(q);
-    m_vertexBuffer = new Qt3DRender::QBuffer(Qt3DRender::QBuffer::VertexBuffer, q);
-    m_indexBuffer = new Qt3DRender::QBuffer(Qt3DRender::QBuffer::IndexBuffer, q);
+    m_vertexBuffer = new Qt3DRender::QBuffer(q);
+    m_indexBuffer = new Qt3DRender::QBuffer(q);
 
     // vec3 pos vec2 tex vec3 normal vec4 tangent
     const quint32 stride = (3 + 2 + 3 + 4) * sizeof(float);
@@ -648,6 +648,7 @@ void QCuboidGeometryPrivate::init()
 
 /*!
  * \class Qt3DExtras::QCuboidGeometry
+   \ingroup qt3d-extras-geometries
  * \inheaderfile Qt3DExtras/QCuboidGeometry
  * \inmodule Qt3DExtras
  * \brief The QCuboidGeometry class allows creation of a cuboid in 3D space.

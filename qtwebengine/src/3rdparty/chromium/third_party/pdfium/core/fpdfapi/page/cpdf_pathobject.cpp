@@ -10,17 +10,6 @@ CPDF_PathObject::CPDF_PathObject() {}
 
 CPDF_PathObject::~CPDF_PathObject() {}
 
-CPDF_PathObject* CPDF_PathObject::Clone() const {
-  CPDF_PathObject* obj = new CPDF_PathObject;
-  obj->CopyData(this);
-
-  obj->m_Path = m_Path;
-  obj->m_FillType = m_FillType;
-  obj->m_bStroke = m_bStroke;
-  obj->m_Matrix = m_Matrix;
-  return obj;
-}
-
 CPDF_PageObject::Type CPDF_PathObject::GetType() const {
   return PATH;
 }
@@ -28,6 +17,7 @@ CPDF_PageObject::Type CPDF_PathObject::GetType() const {
 void CPDF_PathObject::Transform(const CFX_Matrix& matrix) {
   m_Matrix.Concat(matrix);
   CalcBoundingBox();
+  SetDirty(true);
 }
 
 bool CPDF_PathObject::IsPath() const {
@@ -43,16 +33,17 @@ const CPDF_PathObject* CPDF_PathObject::AsPath() const {
 }
 
 void CPDF_PathObject::CalcBoundingBox() {
-  if (!m_Path)
+  if (!m_Path.HasRef())
     return;
   CFX_FloatRect rect;
-  FX_FLOAT width = m_GraphState.GetLineWidth();
+  float width = m_GraphState.GetLineWidth();
   if (m_bStroke && width != 0) {
     rect = m_Path.GetBoundingBox(width, m_GraphState.GetMiterLimit());
   } else {
     rect = m_Path.GetBoundingBox();
   }
-  rect.Transform(&m_Matrix);
+  m_Matrix.TransformRect(rect);
+
   if (width == 0 && m_bStroke) {
     rect.left += -0.5f;
     rect.right += 0.5f;

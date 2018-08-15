@@ -15,9 +15,9 @@
 #include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "net/base/net_export.h"
+#include "third_party/boringssl/src/include/openssl/pool.h"
 
 namespace crypto {
-class ECPrivateKey;
 class RSAPrivateKey;
 }
 
@@ -86,27 +86,22 @@ NET_EXPORT bool ParseCertificateSandboxed(
     std::vector<std::string>* dns_names,
     std::vector<std::string>* ip_addresses);
 
-// Comparator for use in STL algorithms that will sort client certificates by
-// order of preference.
-// Returns true if |a| is more preferable than |b|, allowing it to be used
-// with any algorithm that compares according to strict weak ordering.
-//
-// Criteria include:
-// - Prefer certificates that have a longer validity period (later
-//   expiration dates)
-// - If equal, prefer certificates that were issued more recently
-// - If equal, prefer shorter chains (if available)
-class NET_EXPORT_PRIVATE ClientCertSorter {
- public:
-  ClientCertSorter();
+// Returns a CRYPTO_BUFFER_POOL for deduplicating certificates.
+NET_EXPORT CRYPTO_BUFFER_POOL* GetBufferPool();
 
-  bool operator()(
-      const scoped_refptr<X509Certificate>& a,
-      const scoped_refptr<X509Certificate>& b) const;
+// Creates a CRYPTO_BUFFER in the same pool returned by GetBufferPool.
+NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
+    const uint8_t* data,
+    size_t length);
 
- private:
-  base::Time now_;
-};
+// Creates a CRYPTO_BUFFER in the same pool returned by GetBufferPool.
+NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
+    const base::StringPiece& data);
+
+// Overload with no definition, to disallow creating a CRYPTO_BUFFER from a
+// char* due to StringPiece implicit ctor.
+NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
+    const char* invalid_data);
 
 } // namespace x509_util
 

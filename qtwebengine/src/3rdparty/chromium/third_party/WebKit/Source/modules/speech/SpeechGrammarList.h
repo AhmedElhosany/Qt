@@ -26,14 +26,14 @@
 #ifndef SpeechGrammarList_h
 #define SpeechGrammarList_h
 
-#include "bindings/core/v8/ScriptWrappable.h"
 #include "modules/ModulesExport.h"
 #include "modules/speech/SpeechGrammar.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Handle.h"
 
 namespace blink {
 
-class ExecutionContext;
+class ScriptState;
 
 class MODULES_EXPORT SpeechGrammarList final
     : public GarbageCollected<SpeechGrammarList>,
@@ -41,12 +41,12 @@ class MODULES_EXPORT SpeechGrammarList final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static SpeechGrammarList* create();
+  static SpeechGrammarList* Create();
 
-  unsigned length() const { return m_grammars.size(); }
+  unsigned length() const { return grammars_.size(); }
   SpeechGrammar* item(unsigned) const;
 
-  void addFromUri(ExecutionContext*, const String& src, double weight = 1.0);
+  void addFromUri(ScriptState*, const String& src, double weight = 1.0);
   void addFromString(const String&, double weight = 1.0);
 
   DECLARE_TRACE();
@@ -54,7 +54,7 @@ class MODULES_EXPORT SpeechGrammarList final
  private:
   SpeechGrammarList();
 
-  HeapVector<Member<SpeechGrammar>> m_grammars;
+  HeapVector<Member<SpeechGrammar>> grammars_;
 };
 
 }  // namespace blink

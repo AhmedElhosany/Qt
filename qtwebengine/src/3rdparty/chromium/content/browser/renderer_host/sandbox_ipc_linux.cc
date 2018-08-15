@@ -24,9 +24,7 @@
 #include "content/browser/renderer_host/font_utils_linux.h"
 #include "content/common/font_config_ipc_linux.h"
 #include "content/common/sandbox_linux/sandbox_linux.h"
-#include "content/common/set_process_title.h"
 #include "content/public/common/content_switches.h"
-#include "ppapi/c/trusted/ppb_browser_font_trusted.h"
 #include "skia/ext/skia_utils_base.h"
 #include "third_party/skia/include/ports/SkFontConfigInterface.h"
 #include "ui/gfx/font.h"
@@ -54,6 +52,8 @@ void WriteTimeStruct(base::Pickle* pickle, const struct tm* time) {
 namespace content {
 
 namespace {
+
+SandboxIPCHandler::TestObserver* g_test_observer = nullptr;
 
 // Converts gfx::FontRenderParams::Hinting to WebFontRenderStyle::hintStyle.
 // Returns an int for serialization, but the underlying Blink type is a char.
@@ -85,6 +85,12 @@ int ConvertSubpixelRendering(
 }
 
 }  // namespace
+
+// static
+void SandboxIPCHandler::SetObserverForTests(
+    SandboxIPCHandler::TestObserver* observer) {
+  g_test_observer = observer;
+}
 
 SandboxIPCHandler::SandboxIPCHandler(int lifeline_fd, int browser_socket)
     : lifeline_fd_(lifeline_fd),
@@ -236,6 +242,9 @@ void SandboxIPCHandler::HandleFontOpenRequest(
     return;
   if (index >= static_cast<uint32_t>(paths_.size()))
     return;
+  if (g_test_observer) {
+    g_test_observer->OnFontOpen(index);
+  }
   const int result_fd = open(paths_[index].c_str(), O_RDONLY);
 
   base::Pickle reply;
@@ -270,6 +279,10 @@ void SandboxIPCHandler::HandleGetFallbackFontForChar(
   int fontconfig_interface_id =
       FindOrAddPath(SkString(fallback_font.filename.data()));
 
+  if (g_test_observer) {
+    g_test_observer->OnGetFallbackFontForChar(c, fallback_font.name,
+                                              fontconfig_interface_id);
+  }
   base::Pickle reply;
   reply.WriteString(fallback_font.name);
   reply.WriteString(fallback_font.filename);
@@ -360,7 +373,7 @@ void SandboxIPCHandler::HandleMakeSharedMemorySegment(
   int shm_fd = -1;
   base::SharedMemory shm;
   if (shm.Create(options))
-    shm_fd = shm.handle().fd;
+    shm_fd = shm.handle().GetHandle();
   base::Pickle reply;
   SendRendererReply(fds, reply, shm_fd);
 }

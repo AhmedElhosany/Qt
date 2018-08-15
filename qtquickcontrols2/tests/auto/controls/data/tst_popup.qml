@@ -50,8 +50,8 @@
 
 import QtQuick 2.4
 import QtTest 1.0
-import QtQuick.Controls 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick.Controls 2.3
+import QtQuick.Templates 2.3 as T
 
 TestCase {
     id: testCase
@@ -361,7 +361,7 @@ TestCase {
     }
 
     function test_margins() {
-        var control = createTemporaryObject(popupControl, testCase, {width: 100, height: 100})
+        var control = createTemporaryObject(popupTemplate, testCase, {width: 100, height: 100})
         verify(control)
 
         control.open()
@@ -944,6 +944,10 @@ TestCase {
         compare(openedSpy.count, 1)
         verify(control.visible)
 
+        // remove the background so that it won't affect the implicit size of the popup,
+        // so the implicit sizes tested below are entirely based on the content size
+        control.background = null
+
         // implicit size of the content
         control.contentItem.implicitWidth = 10
         compare(control.implicitWidth, 10 + control.leftPadding + control.rightPadding)
@@ -1069,6 +1073,7 @@ TestCase {
         tryCompare(window, "active", true)
 
         compare(window.overlay.children.length, 0)
+        compare(window.overlay, window.Overlay.overlay)
 
         var firstOverlay = findOverlay(window, window.firstDrawer)
         verify(!firstOverlay)
@@ -1178,16 +1183,6 @@ TestCase {
         compare(child.ApplicationWindow.window, null)
     }
 
-    SignalSpy {
-        id: openedSpy
-        signalName: "opened"
-    }
-
-    SignalSpy {
-        id: closedSpy
-        signalName: "closed"
-    }
-
     Component {
         id: pausePopup
         Popup {
@@ -1200,19 +1195,32 @@ TestCase {
         var control = createTemporaryObject(pausePopup, testCase)
         verify(control)
 
-        openedSpy.target = control
-        closedSpy.target = control
+        var openedSpy = createTemporaryObject(signalSpy, testCase, {target: control, signalName: "opened"})
+        verify(openedSpy.valid)
+        var closedSpy = createTemporaryObject(signalSpy, testCase, {target: control, signalName: "closed"})
+        verify(closedSpy.valid)
+        var openedChangeSpy = createTemporaryObject(signalSpy, testCase, {target: control, signalName: "openedChanged"})
+        verify(openedChangeSpy.valid)
 
         control.open()
         compare(control.visible, true)
+        compare(control.opened, false)
+        compare(openedChangeSpy.count, 0)
         compare(openedSpy.count, 0)
         tryCompare(openedSpy, "count", 1)
+        compare(control.opened, true)
+        compare(openedChangeSpy.count, 1)
         compare(closedSpy.count, 0)
 
         control.close()
+        compare(control.visible, true)
+        compare(control.opened, false)
+        compare(openedChangeSpy.count, 2)
         compare(openedSpy.count, 1)
         compare(closedSpy.count, 0)
         tryCompare(closedSpy, "count", 1)
+        compare(control.opened, false)
+        compare(openedChangeSpy.count, 2)
         compare(control.visible, false)
     }
 
@@ -1258,7 +1266,7 @@ TestCase {
         var control = createTemporaryObject(popupControl, testCase, {width: 200, height: 100})
         verify(control)
 
-        compare(control.background.width, 200)
-        compare(control.background.height, 100)
+        compare(control.background.width, 200 + (control.background.leftInset || 0) + (control.background.rightInset || 0))
+        compare(control.background.height, 100 + (control.background.topInset || 0) + (control.background.bottomInset || 0))
     }
 }

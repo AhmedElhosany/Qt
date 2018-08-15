@@ -10,9 +10,9 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
@@ -41,7 +41,7 @@ std::vector<std::string> ListValueToStringVector(const base::ListValue* value) {
   std::string s;
   for (base::ListValue::const_iterator it = value->begin(); it != value->end();
        ++it) {
-    if (!(*it)->GetAsString(&s))
+    if (!it->GetAsString(&s))
       continue;
     results.push_back(s);
   }
@@ -84,6 +84,8 @@ uint16_t SSLProtocolVersionFromString(const std::string& version_str) {
   }
   return version;
 }
+
+const char kTLS13VariantExperimentName[] = "TLS13Variant";
 
 }  // namespace
 
@@ -169,9 +171,10 @@ class SSLConfigServiceManagerPref : public ssl_config::SSLConfigServiceManager {
   BooleanPrefMember rev_checking_enabled_;
   BooleanPrefMember rev_checking_required_local_anchors_;
   BooleanPrefMember sha1_local_anchors_enabled_;
+  BooleanPrefMember common_name_fallback_local_anchors_enabled_;
   StringPrefMember ssl_version_min_;
   StringPrefMember ssl_version_max_;
-  BooleanPrefMember dhe_enabled_;
+  StringPrefMember tls13_variant_;
 
   // The cached list of disabled SSL cipher suites.
   std::vector<uint16_t> disabled_cipher_suites_;
@@ -190,6 +193,42 @@ SSLConfigServiceManagerPref::SSLConfigServiceManagerPref(
       io_task_runner_(io_task_runner) {
   DCHECK(local_state);
 
+  const std::string tls13_variant =
+      base::GetFieldTrialParamValue(kTLS13VariantExperimentName, "variant");
+  if (tls13_variant == "disabled") {
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kTLS13Variant,
+        new base::Value(switches::kTLS13VariantDisabled));
+  } else if (tls13_variant == "draft") {
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kTLS13Variant,
+        new base::Value(switches::kTLS13VariantDraft));
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kSSLVersionMax,
+        new base::Value(switches::kSSLVersionTLSv13));
+  } else if (tls13_variant == "experiment") {
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kTLS13Variant,
+        new base::Value(switches::kTLS13VariantExperiment));
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kSSLVersionMax,
+        new base::Value(switches::kSSLVersionTLSv13));
+  } else if (tls13_variant == "record-type") {
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kTLS13Variant,
+        new base::Value(switches::kTLS13VariantRecordTypeExperiment));
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kSSLVersionMax,
+        new base::Value(switches::kSSLVersionTLSv13));
+  } else if (tls13_variant == "no-session-id") {
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kTLS13Variant,
+        new base::Value(switches::kTLS13VariantNoSessionIDExperiment));
+    local_state->SetDefaultPrefValue(
+        ssl_config::prefs::kSSLVersionMax,
+        new base::Value(switches::kSSLVersionTLSv13));
+  }
+
   PrefChangeRegistrar::NamedChangeCallback local_state_callback =
       base::Bind(&SSLConfigServiceManagerPref::OnPreferenceChanged,
                  base::Unretained(this), local_state);
@@ -202,12 +241,15 @@ SSLConfigServiceManagerPref::SSLConfigServiceManagerPref(
   sha1_local_anchors_enabled_.Init(
       ssl_config::prefs::kCertEnableSha1LocalAnchors, local_state,
       local_state_callback);
+  common_name_fallback_local_anchors_enabled_.Init(
+      ssl_config::prefs::kCertEnableCommonNameFallbackLocalAnchors, local_state,
+      local_state_callback);
   ssl_version_min_.Init(ssl_config::prefs::kSSLVersionMin, local_state,
                         local_state_callback);
   ssl_version_max_.Init(ssl_config::prefs::kSSLVersionMax, local_state,
                         local_state_callback);
-  dhe_enabled_.Init(ssl_config::prefs::kDHEEnabled, local_state,
-                    local_state_callback);
+  tls13_variant_.Init(ssl_config::prefs::kTLS13Variant, local_state,
+                      local_state_callback);
 
   local_state_change_registrar_.Init(local_state);
   local_state_change_registrar_.Add(ssl_config::prefs::kCipherSuiteBlacklist,
@@ -230,14 +272,15 @@ void SSLConfigServiceManagerPref::RegisterPrefs(PrefRegistrySimple* registry) {
       ssl_config::prefs::kCertRevocationCheckingRequiredLocalAnchors,
       default_config.rev_checking_required_local_anchors);
   registry->RegisterBooleanPref(ssl_config::prefs::kCertEnableSha1LocalAnchors,
-                                default_config.sha1_local_anchors_enabled);
+                                false);
+  registry->RegisterBooleanPref(
+      ssl_config::prefs::kCertEnableCommonNameFallbackLocalAnchors, false);
   registry->RegisterStringPref(ssl_config::prefs::kSSLVersionMin,
                                std::string());
   registry->RegisterStringPref(ssl_config::prefs::kSSLVersionMax,
                                std::string());
+  registry->RegisterStringPref(ssl_config::prefs::kTLS13Variant, std::string());
   registry->RegisterListPref(ssl_config::prefs::kCipherSuiteBlacklist);
-  registry->RegisterBooleanPref(ssl_config::prefs::kDHEEnabled,
-                                default_config.dhe_enabled);
 }
 
 net::SSLConfigService* SSLConfigServiceManagerPref::Get() {
@@ -272,8 +315,11 @@ void SSLConfigServiceManagerPref::GetSSLConfigFromPrefs(
   config->rev_checking_required_local_anchors =
       rev_checking_required_local_anchors_.GetValue();
   config->sha1_local_anchors_enabled = sha1_local_anchors_enabled_.GetValue();
+  config->common_name_fallback_local_anchors_enabled =
+      common_name_fallback_local_anchors_enabled_.GetValue();
   std::string version_min_str = ssl_version_min_.GetValue();
   std::string version_max_str = ssl_version_max_.GetValue();
+  std::string tls13_variant_str = tls13_variant_.GetValue();
   config->version_min = net::kDefaultSSLVersionMin;
   config->version_max = net::kDefaultSSLVersionMax;
   uint16_t version_min = SSLProtocolVersionFromString(version_min_str);
@@ -281,11 +327,25 @@ void SSLConfigServiceManagerPref::GetSSLConfigFromPrefs(
   if (version_min) {
     config->version_min = version_min;
   }
-  if (version_max) {
+  if (version_max && version_max >= net::SSL_PROTOCOL_VERSION_TLS1_2) {
     config->version_max = version_max;
   }
+
+  if (tls13_variant_str == switches::kTLS13VariantDisabled) {
+    if (config->version_max > net::SSL_PROTOCOL_VERSION_TLS1_2)
+      config->version_max = net::SSL_PROTOCOL_VERSION_TLS1_2;
+  } else if (tls13_variant_str == switches::kTLS13VariantDraft) {
+    config->tls13_variant = net::kTLS13VariantDraft;
+  } else if (tls13_variant_str == switches::kTLS13VariantExperiment) {
+    config->tls13_variant = net::kTLS13VariantExperiment;
+  } else if (tls13_variant_str == switches::kTLS13VariantRecordTypeExperiment) {
+    config->tls13_variant = net::kTLS13VariantRecordTypeExperiment;
+  } else if (tls13_variant_str ==
+             switches::kTLS13VariantNoSessionIDExperiment) {
+    config->tls13_variant = net::kTLS13VariantNoSessionIDExperiment;
+  }
+
   config->disabled_cipher_suites = disabled_cipher_suites_;
-  config->dhe_enabled = dhe_enabled_.GetValue();
 }
 
 void SSLConfigServiceManagerPref::OnDisabledCipherSuitesChange(

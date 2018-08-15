@@ -8,6 +8,7 @@ import("//build/config/ui.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
 import("//tools/json_schema_compiler/json_schema_api.gni")
+import("//ui/base/ui_features.gni")
 
 if (is_android) {
   import("//build/config/android/rules.gni")
@@ -17,6 +18,9 @@ component("accessibility") {
   sources = [
     "ax_action_data.cc",
     "ax_action_data.h",
+    "ax_export.h",
+    "ax_host_delegate.cc",
+    "ax_host_delegate.h",
     "ax_node.cc",
     "ax_node.h",
     "ax_node_data.cc",
@@ -24,8 +28,11 @@ component("accessibility") {
     "ax_node_position.cc",
     "ax_node_position.h",
     "ax_position.h",
+    "ax_range.h",
     "ax_relative_bounds.cc",
     "ax_relative_bounds.h",
+    "ax_role_properties.cc",
+    "ax_role_properties.h",
     "ax_serializable_tree.cc",
     "ax_serializable_tree.h",
     "ax_text_utils.cc",
@@ -36,18 +43,31 @@ component("accessibility") {
     "ax_tree_combiner.h",
     "ax_tree_data.cc",
     "ax_tree_data.h",
+    "ax_tree_id_registry.cc",
+    "ax_tree_id_registry.h",
     "ax_tree_serializer.cc",
     "ax_tree_serializer.h",
     "ax_tree_source.h",
     "ax_tree_update.h",
-    "platform/ax_platform_node.cc",
-    "platform/ax_platform_node.h",
-    "platform/ax_platform_node_base.cc",
-    "platform/ax_platform_node_base.h",
-    "platform/ax_platform_node_delegate.h",
-    "platform/ax_platform_node_mac.h",
-    "platform/ax_platform_node_mac.mm",
+    "platform/ax_android_constants.cc",
+    "platform/ax_android_constants.h",
+    "platform/ax_platform_unique_id.cc",
+    "platform/ax_platform_unique_id.h",
+    "platform/ax_snapshot_node_android_platform.cc",
+    "platform/ax_snapshot_node_android_platform.h",
   ]
+
+  if (has_native_accessibility) {
+    sources += [
+      "platform/ax_platform_node.cc",
+      "platform/ax_platform_node.h",
+      "platform/ax_platform_node_base.cc",
+      "platform/ax_platform_node_base.h",
+      "platform/ax_platform_node_delegate.h",
+      "platform/ax_platform_node_mac.h",
+      "platform/ax_platform_node_mac.mm",
+    ]
+  }
 
   defines = [ "ACCESSIBILITY_IMPLEMENTATION" ]
 
@@ -58,10 +78,12 @@ component("accessibility") {
     "//ui/base",
     "//ui/gfx",
     "//ui/gfx/geometry",
+    "//ui/strings",
   ]
 
   if (is_win && !use_qt) {
     public_deps += [ "//third_party/iaccessible2" ]
+    libs = [ "oleacc.lib" ]
     sources += [
       "platform/ax_platform_node_win.cc",
       "platform/ax_platform_node_win.h",
@@ -85,13 +107,18 @@ component("accessibility") {
 
     configs += [ "//build/config/linux/atk" ]
 
-    if (use_gconf) {
-      configs += [ "//build/config/linux/gconf" ]
-    }
-
     if (use_glib) {
       configs += [ "//build/config/linux:glib" ]
     }
+  }
+
+  if (use_aura) {
+    sources += [
+      "platform/aura_window_properties.cc",
+      "platform/aura_window_properties.h",
+    ]
+
+    public_deps += [ "//ui/aura" ]
   }
 }
 
@@ -111,12 +138,18 @@ if (is_android) {
 }
 
 static_library("test_support") {
+  testonly = true
   sources = [
-    "platform/test_ax_node_wrapper.cc",
-    "platform/test_ax_node_wrapper.h",
     "tree_generator.cc",
     "tree_generator.h",
   ]
+
+  if (is_win) {
+    sources += [
+      "platform/test_ax_node_wrapper.cc",
+      "platform/test_ax_node_wrapper.h",
+    ]
+  }
 
   deps = [
     ":accessibility",
@@ -124,6 +157,7 @@ static_library("test_support") {
 }
 
 test("accessibility_unittests") {
+  testonly = true
   sources = [
     "ax_generated_tree_unittest.cc",
     "ax_node_position_unittest.cc",
@@ -136,6 +170,7 @@ test("accessibility_unittests") {
 
   deps = [
     ":accessibility",
+    ":ax_gen",
     ":test_support",
     "//base",
     "//base/test:run_all_unittests",
@@ -148,6 +183,7 @@ test("accessibility_unittests") {
 
   if (is_win) {
     deps += [ "//third_party/iaccessible2" ]
+    libs = [ "oleacc.lib" ]
   }
 }
 

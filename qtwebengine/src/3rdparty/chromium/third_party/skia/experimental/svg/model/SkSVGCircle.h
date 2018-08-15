@@ -11,9 +11,11 @@
 #include "SkSVGShape.h"
 #include "SkSVGTypes.h"
 
+struct SkPoint;
+
 class SkSVGCircle final : public SkSVGShape {
 public:
-    virtual ~SkSVGCircle() = default;
+    ~SkSVGCircle() override = default;
     static sk_sp<SkSVGCircle> Make() { return sk_sp<SkSVGCircle>(new SkSVGCircle()); }
 
     void setCx(const SkSVGLength&);
@@ -23,10 +25,16 @@ public:
 protected:
     void onSetAttribute(SkSVGAttribute, const SkSVGValue&) override;
 
-    void onDraw(SkCanvas*, const SkSVGLengthContext&, const SkPaint&) const override;
+    void onDraw(SkCanvas*, const SkSVGLengthContext&, const SkPaint&,
+                SkPath::FillType) const override;
+
+    SkPath onAsPath(const SkSVGRenderContext&) const override;
 
 private:
     SkSVGCircle();
+
+    // resolve and return the center and radius values
+    std::tuple<SkPoint, SkScalar> resolve(const SkSVGLengthContext&) const;
 
     SkSVGLength fCx = SkSVGLength(0);
     SkSVGLength fCy = SkSVGLength(0);

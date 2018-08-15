@@ -88,14 +88,13 @@ struct WriteInitialization : public TreeWalker
     typedef QList<DomProperty*> DomPropertyList;
     typedef QHash<QString, DomProperty*> DomPropertyMap;
 
-    WriteInitialization(Uic *uic, bool activateScripts);
+    WriteInitialization(Uic *uic);
 
 //
 // widgets
 //
     void acceptUI(DomUI *node) Q_DECL_OVERRIDE;
     void acceptWidget(DomWidget *node) Q_DECL_OVERRIDE;
-    void acceptWidgetScripts(const DomScripts &, DomWidget *node, const  DomWidgets &childWidgets) Q_DECL_OVERRIDE;
 
     void acceptLayout(DomLayout *node) Q_DECL_OVERRIDE;
     void acceptSpacer(DomSpacer *node) Q_DECL_OVERRIDE;
@@ -130,11 +129,6 @@ struct WriteInitialization : public TreeWalker
 //
     void acceptConnection(DomConnection *connection) Q_DECL_OVERRIDE;
 
-//
-// images
-//
-    void acceptImage(DomImage *image) Q_DECL_OVERRIDE;
-
     enum {
         Use43UiFile = 0,
         TopLevelMargin,
@@ -144,6 +138,8 @@ struct WriteInitialization : public TreeWalker
 
 private:
     static QString domColor2QString(const DomColor *c);
+
+    QString writeString(const QString &s, const QString &indent) const;
 
     QString iconCall(const DomProperty *prop);
     QString pixCall(const DomProperty *prop) const;
@@ -221,7 +217,7 @@ private:
     void initializeComboBox(DomWidget *w);
     void initializeListWidget(DomWidget *w);
     void initializeTreeWidget(DomWidget *w);
-    QList<Item *> initializeTreeWidgetItems(const QList<DomItem *> &domItems);
+    QList<Item *> initializeTreeWidgetItems(const QVector<DomItem *> &domItems);
     void initializeTableWidget(DomWidget *w);
 
     QString disableSorting(DomWidget *w, const QString &varName);
@@ -229,12 +225,12 @@ private:
 
     QString findDeclaration(const QString &name);
     DomWidget *findWidget(QLatin1String widgetClass);
-    DomImage *findImage(const QString &name) const;
 
     bool isValidObject(const QString &name) const;
 
 private:
     QString writeFontProperties(const DomFont *f);
+    void writeResourceIcon(QTextStream &output, const QString &iconName, const QString &indent, const DomResourceIcon *i) const;
     QString writeIconProperties(const DomResourceIcon *i);
     QString writeSizePolicy(const DomSizePolicy *sp);
     QString writeBrushInitialization(const DomBrush *brush);
@@ -263,7 +259,6 @@ private:
 
     QSet<QString> m_buttonGroups;
     QHash<QString, DomWidget*> m_registeredWidgets;
-    QHash<QString, DomImage*> m_registeredImages;
     QHash<QString, DomAction*> m_registeredActions;
     typedef QHash<uint, QString> ColorBrushHash;
     ColorBrushHash m_colorBrushHash;
@@ -314,7 +309,6 @@ private:
 
     QString m_delayedActionInitialization;
     QTextStream m_actionOut;
-    const bool m_activateScripts;
 
     bool m_layoutWidget;
     bool m_firstThemeIcon;

@@ -27,6 +27,8 @@
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/test/mock_google_streaming_server.h"
+#include "media/audio/audio_system_impl.h"
+#include "media/audio/audio_thread_impl.h"
 #include "media/audio/mock_audio_manager.h"
 #include "media/audio/test_audio_input_controller_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -110,28 +112,31 @@ class SpeechRecognitionBrowserTest :
 
  protected:
   // ContentBrowserTest methods.
-  void SetUpInProcessBrowserTestFixture() override {
+  void SetUpOnMainThread() override {
     test_audio_input_controller_factory_.set_delegate(this);
     media::AudioInputController::set_factory_for_testing(
         &test_audio_input_controller_factory_);
     mock_streaming_server_.reset(new MockGoogleStreamingServer(this));
     streaming_server_state_ = kIdle;
-  }
 
-  void SetUpOnMainThread() override {
     ASSERT_TRUE(SpeechRecognitionManagerImpl::GetInstance());
     media::AudioManager::StartHangMonitorIfNeeded(
         BrowserThread::GetTaskRunnerForThread(BrowserThread::IO));
-    SpeechRecognizerImpl::SetAudioManagerForTesting(new media::MockAudioManager(
-        BrowserThread::GetTaskRunnerForThread(BrowserThread::IO)));
+    audio_manager_.reset(new media::MockAudioManager(
+        base::MakeUnique<media::AudioThreadImpl>()));
+    audio_manager_->SetInputStreamParameters(
+        media::AudioParameters::UnavailableDeviceParams());
+    audio_system_ = media::AudioSystemImpl::Create(audio_manager_.get());
+    SpeechRecognizerImpl::SetAudioEnvironmentForTesting(audio_system_.get(),
+                                                        audio_manager_.get());
   }
 
   void TearDownOnMainThread() override {
-    SpeechRecognizerImpl::SetAudioManagerForTesting(NULL);
-  }
+    SpeechRecognizerImpl::SetAudioEnvironmentForTesting(nullptr, nullptr);
 
-  void TearDownInProcessBrowserTestFixture() override {
-    test_audio_input_controller_factory_.set_delegate(NULL);
+    audio_manager_->Shutdown();
+
+    test_audio_input_controller_factory_.set_delegate(nullptr);
     mock_streaming_server_.reset();
   }
 
@@ -156,7 +161,7 @@ class SpeechRecognitionBrowserTest :
     audio_bus->FromInterleaved(&audio_buffer.get()[0],
                                audio_bus->frames(),
                                audio_params.bits_per_sample() / 8);
-    controller->event_handler()->OnData(controller.get(), audio_bus.get());
+    controller->sync_writer()->Write(audio_bus.get(), 0.0, false, 0);
   }
 
   void FeedAudioController(int duration_ms, bool feed_with_noise) {
@@ -189,6 +194,8 @@ class SpeechRecognitionBrowserTest :
     return result;
   }
 
+  std::unique_ptr<media::MockAudioManager> audio_manager_;
+  std::unique_ptr<media::AudioSystem> audio_system_;
   StreamingServerState streaming_server_state_;
   std::unique_ptr<MockGoogleStreamingServer> mock_streaming_server_;
   media::TestAudioInputControllerFactory test_audio_input_controller_factory_;

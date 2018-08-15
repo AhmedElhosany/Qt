@@ -20,8 +20,6 @@ service("views_examples") {
     "//mash/public/interfaces",
     "//mojo/public/cpp/bindings",
     "//services/service_manager/public/cpp",
-    "//services/service_manager/public/cpp:sources",
-    "//services/tracing/public/cpp",
     "//services/ui/public/interfaces",
     "//skia",
     "//ui/gfx",
@@ -33,11 +31,6 @@ service("views_examples") {
   ]
 
   resources = [ "$root_out_dir/views_mus_resources.pak" ]
-
-  data_deps = [
-    ":manifest",
-    "//services/ui",
-  ]
 }
 
 service_manifest("manifest") {

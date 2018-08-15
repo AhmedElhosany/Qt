@@ -70,17 +70,18 @@ int DesktopScreenQt::GetNumDisplays() const
     return 0;
 }
 
-std::vector<display::Display> DesktopScreenQt::GetAllDisplays() const
+std::vector<display::Display>& DesktopScreenQt::GetAllDisplays() const
 {
     Q_UNREACHABLE();
-    return std::vector<display::Display>();
+    static std::vector<display::Display> empty;
+    return empty;
 }
 
-display::Display DesktopScreenQt::GetDisplayNearestWindow(gfx::NativeView window) const
+display::Display DesktopScreenQt::GetDisplayNearestWindow(gfx::NativeWindow window) const
 {
     // RenderViewHostImpl::OnStartDragging uses this to determine
     // the scale factor for the view.
-    return display::Display();
+    return display::Display(0);
 }
 
 display::Display DesktopScreenQt::GetDisplayNearestPoint(const gfx::Point& point) const
@@ -97,7 +98,7 @@ display::Display DesktopScreenQt::GetDisplayMatching(const gfx::Rect& match_rect
 
 display::Display DesktopScreenQt::GetPrimaryDisplay() const
 {
-    return display::Display();
+    return display::Display(0);
 }
 
 void DesktopScreenQt::AddObserver(display::DisplayObserver* observer)

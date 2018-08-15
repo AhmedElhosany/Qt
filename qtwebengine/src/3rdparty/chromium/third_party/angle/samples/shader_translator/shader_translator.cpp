@@ -93,7 +93,6 @@ int main(int argc, char *argv[])
               case 'i': compileOptions |= SH_INTERMEDIATE_TREE; break;
               case 'o': compileOptions |= SH_OBJECT_CODE; break;
               case 'u': compileOptions |= SH_VARIABLES; break;
-              case 'l': compileOptions |= SH_UNROLL_FOR_LOOP_WITH_INTEGER_INDEX; break;
               case 'p': resources.WEBGL_debug_shader_precision = 1; break;
               case 's':
                 if (argv[0][2] == '=')
@@ -126,9 +125,14 @@ int main(int argc, char *argv[])
                             {
                                 spec = SH_WEBGL2_SPEC;
                             }
+                            else if (argv[0][4] == 'n')
+                            {
+                                spec = SH_WEBGL_SPEC;
+                            }
                             else
                             {
                                 spec = SH_WEBGL_SPEC;
+                                resources.FragmentPrecisionHigh = 1;
                             }
                             break;
                         default:
@@ -145,24 +149,29 @@ int main(int argc, char *argv[])
                 {
                     switch (argv[0][3])
                     {
-                      case 'e': output = SH_ESSL_OUTPUT; break;
-                      case 'g':
-                          if (!ParseGLSLOutputVersion(&argv[0][sizeof("-b=g") - 1], &output))
-                          {
-                              failCode = EFailUsage;
-                          }
-                          break;
-                      case 'h':
-                        if (argv[0][4] == '1' && argv[0][5] == '1')
-                        {
-                            output = SH_HLSL_4_1_OUTPUT;
-                        }
-                        else
-                        {
-                            output = SH_HLSL_3_0_OUTPUT;
-                        }
-                        break;
-                      default: failCode = EFailUsage;
+                        case 'e':
+                            output = SH_ESSL_OUTPUT;
+                            compileOptions |= SH_INITIALIZE_UNINITIALIZED_LOCALS;
+                            break;
+                        case 'g':
+                            if (!ParseGLSLOutputVersion(&argv[0][sizeof("-b=g") - 1], &output))
+                            {
+                                failCode = EFailUsage;
+                            }
+                            compileOptions |= SH_INITIALIZE_UNINITIALIZED_LOCALS;
+                            break;
+                        case 'h':
+                            if (argv[0][4] == '1' && argv[0][5] == '1')
+                            {
+                                output = SH_HLSL_4_1_OUTPUT;
+                            }
+                            else
+                            {
+                                output = SH_HLSL_3_0_OUTPUT;
+                            }
+                            break;
+                        default:
+                            failCode = EFailUsage;
                     }
                 }
                 else
@@ -206,6 +215,12 @@ int main(int argc, char *argv[])
                       case 'f': resources.EXT_shader_framebuffer_fetch = 1; break;
                       case 'n': resources.NV_shader_framebuffer_fetch = 1; break;
                       case 'a': resources.ARM_shader_framebuffer_fetch = 1; break;
+                      case 'm':
+                          resources.OVR_multiview = 1;
+                          compileOptions |= SH_INITIALIZE_BUILTINS_FOR_INSTANCED_MULTIVIEW;
+                          compileOptions |= SH_SELECT_VIEW_IN_NV_GLSL_VERTEX_SHADER;
+                          break;
+                      case 'y': resources.EXT_YUV_target = 1; break;
                       default: failCode = EFailUsage;
                     }
                     // clang-format on
@@ -223,6 +238,8 @@ int main(int argc, char *argv[])
             if (spec != SH_GLES2_SPEC && spec != SH_WEBGL_SPEC)
             {
                 resources.MaxDrawBuffers = 8;
+                resources.MaxVertexTextureImageUnits = 16;
+                resources.MaxTextureImageUnits       = 16;
             }
             ShHandle compiler = 0;
             switch (FindShaderType(argv[0]))
@@ -319,13 +336,13 @@ void usage()
         "       -i       : print intermediate tree\n"
         "       -o       : print translated code\n"
         "       -u       : print active attribs, uniforms, varyings and program outputs\n"
-        "       -l       : unroll for-loops with integer indices\n"
         "       -p       : use precision emulation\n"
         "       -s=e2    : use GLES2 spec (this is by default)\n"
-        "       -s=e3    : use GLES3 spec (in development)\n"
+        "       -s=e3    : use GLES3 spec\n"
         "       -s=e31   : use GLES31 spec (in development)\n"
-        "       -s=w     : use WebGL spec\n"
-        "       -s=w2    : use WebGL 2 spec (in development)\n"
+        "       -s=w     : use WebGL 1.0 spec\n"
+        "       -s=wn    : use WebGL 1.0 spec with no highp support in fragment shaders\n"
+        "       -s=w2    : use WebGL 2.0 spec\n"
         "       -b=e     : output GLSL ES code (this is by default)\n"
         "       -b=g     : output GLSL code (compatibility profile)\n"
         "       -b=g[NUM]: output GLSL code (NUM can be 130, 140, 150, 330, 400, 410, 420, 430, "
@@ -341,7 +358,9 @@ void usage()
         "       -x=l     : enable EXT_shader_texture_lod\n"
         "       -x=f     : enable EXT_shader_framebuffer_fetch\n"
         "       -x=n     : enable NV_shader_framebuffer_fetch\n"
-        "       -x=a     : enable ARM_shader_framebuffer_fetch\n");
+        "       -x=a     : enable ARM_shader_framebuffer_fetch\n"
+        "       -x=m     : enable OVR_multiview\n"
+        "       -x=y     : enable YUV_target\n");
     // clang-format on
 }
 
@@ -425,14 +444,111 @@ void PrintVariable(const std::string &prefix, size_t index, const sh::ShaderVari
       case GL_FLOAT_MAT2x4: typeName = "GL_FLOAT_MAT2x4"; break;
       case GL_FLOAT_MAT3x4: typeName = "GL_FLOAT_MAT3x4"; break;
       case GL_FLOAT_MAT4x3: typeName = "GL_FLOAT_MAT4x3"; break;
+
       case GL_SAMPLER_2D: typeName = "GL_SAMPLER_2D"; break;
-      case GL_SAMPLER_CUBE: typeName = "GL_SAMPLER_CUBE"; break;
+      case GL_SAMPLER_3D:
+          typeName = "GL_SAMPLER_3D";
+          break;
+      case GL_SAMPLER_CUBE:
+          typeName = "GL_SAMPLER_CUBE";
+          break;
+      case GL_SAMPLER_CUBE_SHADOW:
+          typeName = "GL_SAMPLER_CUBE_SHADOW";
+          break;
+      case GL_SAMPLER_2D_SHADOW:
+          typeName = "GL_SAMPLER_2D_ARRAY_SHADOW";
+          break;
+      case GL_SAMPLER_2D_ARRAY:
+          typeName = "GL_SAMPLER_2D_ARRAY";
+          break;
+      case GL_SAMPLER_2D_ARRAY_SHADOW:
+          typeName = "GL_SAMPLER_2D_ARRAY_SHADOW";
+          break;
+      case GL_SAMPLER_2D_MULTISAMPLE:
+          typeName = "GL_SAMPLER_2D_MULTISAMPLE";
+          break;
+      case GL_IMAGE_2D:
+          typeName = "GL_IMAGE_2D";
+          break;
+      case GL_IMAGE_3D:
+          typeName = "GL_IMAGE_3D";
+          break;
+      case GL_IMAGE_CUBE:
+          typeName = "GL_IMAGE_CUBE";
+          break;
+      case GL_IMAGE_2D_ARRAY:
+          typeName = "GL_IMAGE_2D_ARRAY";
+          break;
+
+      case GL_INT_SAMPLER_2D:
+          typeName = "GL_INT_SAMPLER_2D";
+          break;
+      case GL_INT_SAMPLER_3D:
+          typeName = "GL_INT_SAMPLER_3D";
+          break;
+      case GL_INT_SAMPLER_CUBE:
+          typeName = "GL_INT_SAMPLER_CUBE";
+          break;
+      case GL_INT_SAMPLER_2D_ARRAY:
+          typeName = "GL_INT_SAMPLER_2D_ARRAY";
+          break;
+      case GL_INT_SAMPLER_2D_MULTISAMPLE:
+          typeName = "GL_INT_SAMPLER_2D_MULTISAMPLE";
+          break;
+      case GL_INT_IMAGE_2D:
+          typeName = "GL_INT_IMAGE_2D";
+          break;
+      case GL_INT_IMAGE_3D:
+          typeName = "GL_INT_IMAGE_3D";
+          break;
+      case GL_INT_IMAGE_CUBE:
+          typeName = "GL_INT_IMAGE_CUBE";
+          break;
+      case GL_INT_IMAGE_2D_ARRAY:
+          typeName = "GL_INT_IMAGE_2D_ARRAY";
+          break;
+
+      case GL_UNSIGNED_INT_SAMPLER_2D:
+          typeName = "GL_UNSIGNED_INT_SAMPLER_2D";
+          break;
+      case GL_UNSIGNED_INT_SAMPLER_3D:
+          typeName = "GL_UNSIGNED_INT_SAMPLER_3D";
+          break;
+      case GL_UNSIGNED_INT_SAMPLER_CUBE:
+          typeName = "GL_UNSIGNED_INT_SAMPLER_CUBE";
+          break;
+      case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
+          typeName = "GL_UNSIGNED_INT_SAMPLER_2D_ARRAY";
+          break;
+      case GL_UNSIGNED_INT_ATOMIC_COUNTER:
+          typeName = "GL_UNSIGNED_INT_ATOMIC_COUNTER";
+          break;
+      case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
+          typeName = "GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE";
+          break;
+      case GL_UNSIGNED_INT_IMAGE_2D:
+          typeName = "GL_UNSIGNED_INT_IMAGE_2D";
+          break;
+      case GL_UNSIGNED_INT_IMAGE_3D:
+          typeName = "GL_UNSIGNED_INT_IMAGE_3D";
+          break;
+      case GL_UNSIGNED_INT_IMAGE_CUBE:
+          typeName = "GL_UNSIGNED_INT_IMAGE_CUBE";
+          break;
+      case GL_UNSIGNED_INT_IMAGE_2D_ARRAY:
+          typeName = "GL_UNSIGNED_INT_IMAGE_2D_ARRAY";
+          break;
+
       case GL_SAMPLER_EXTERNAL_OES: typeName = "GL_SAMPLER_EXTERNAL_OES"; break;
+      case GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT:
+          typeName = "GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT";
+          break;
       default: typeName = "UNKNOWN"; break;
     }
 
-    printf("%s %u : name=%s, type=%s, arraySize=%u\n", prefix.c_str(),
-           static_cast<unsigned int>(index), var.name.c_str(), typeName.c_str(), var.arraySize);
+    printf("%s %u : name=%s, mappedName=%s, type=%s, arraySize=%u\n", prefix.c_str(),
+           static_cast<unsigned int>(index), var.name.c_str(), var.mappedName.c_str(),
+           typeName.c_str(), var.arraySize);
     if (var.fields.size())
     {
         std::string structPrefix;

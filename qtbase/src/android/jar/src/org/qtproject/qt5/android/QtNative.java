@@ -49,12 +49,14 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ActivityInfo;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.content.ClipboardManager;
 import android.content.ClipboardManager.OnPrimaryClipChangedListener;
-import android.os.Build;
 import android.util.Log;
 import android.view.ContextMenu;
 import android.view.KeyEvent;
@@ -188,7 +190,21 @@ public class QtNative
 
         for (String libName : libraries) {
             try {
-                File f = new File(nativeLibraryDir+"lib"+libName+".so");
+                String libNameTemplate = "lib" + libName + ".so";
+                File f = new File(nativeLibraryDir + libNameTemplate);
+                if (!f.exists()) {
+                    Log.i(QtTAG, "Can't find '" + f.getAbsolutePath());
+                    try {
+                        ActivityInfo info = m_activity.getPackageManager().getActivityInfo(m_activity.getComponentName(),
+                                                                                   PackageManager.GET_META_DATA);
+                        String systemLibraryDir = QtNativeLibrariesDir.systemLibrariesDir;
+                        if (info.metaData.containsKey("android.app.system_libs_prefix"))
+                            systemLibraryDir = info.metaData.getString("android.app.system_libs_prefix");
+                        f = new File(systemLibraryDir + libNameTemplate);
+                    } catch (Exception e) {
+
+                    }
+                }
                 if (f.exists())
                     System.load(f.getAbsolutePath());
                 else
@@ -281,7 +297,20 @@ public class QtNative
                                            String mainLibrary,
                                            String nativeLibraryDir) throws Exception
     {
-        File f = new File(nativeLibraryDir + "lib" + mainLibrary + ".so");
+        String mainLibNameTemplate = "lib" + mainLibrary + ".so";
+        File f = new File(nativeLibraryDir + mainLibNameTemplate);
+        if (!f.exists()) {
+            try {
+                ActivityInfo info = m_activity.getPackageManager().getActivityInfo(m_activity.getComponentName(),
+                                                                                   PackageManager.GET_META_DATA);
+                String systemLibraryDir = QtNativeLibrariesDir.systemLibrariesDir;
+                if (info.metaData.containsKey("android.app.system_libs_prefix"))
+                    systemLibraryDir = info.metaData.getString("android.app.system_libs_prefix");
+                f = new File(systemLibraryDir + mainLibNameTemplate);
+            } catch (Exception e) {
+
+            }
+        }
         if (!f.exists())
             throw new Exception("Can't find main library '" + mainLibrary + "'");
 
@@ -787,13 +816,13 @@ public class QtNative
         });
     }
 
-    private static void hideSplashScreen()
+    private static void hideSplashScreen(final int duration)
     {
         runAction(new Runnable() {
             @Override
             public void run() {
                 if (m_activityDelegate != null)
-                    m_activityDelegate.hideSplashScreen();
+                    m_activityDelegate.hideSplashScreen(duration);
             }
         });
     }
@@ -881,4 +910,9 @@ public class QtNative
 
     private static native void setNativeActivity(Activity activity);
     private static native void setNativeService(Service service);
+    // activity methods
+
+    // service methods
+    public static native IBinder onBind(Intent intent);
+    // service methods
 }

@@ -34,12 +34,11 @@ class WebGLCompressedTexturePVRTC final : public WebGLExtension {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static WebGLCompressedTexturePVRTC* create(WebGLRenderingContextBase*);
-  static bool supported(WebGLRenderingContextBase*);
-  static const char* extensionName();
+  static WebGLCompressedTexturePVRTC* Create(WebGLRenderingContextBase*);
+  static bool Supported(WebGLRenderingContextBase*);
+  static const char* ExtensionName();
 
-  ~WebGLCompressedTexturePVRTC() override;
-  WebGLExtensionName name() const override;
+  WebGLExtensionName GetName() const override;
 
  private:
   explicit WebGLCompressedTexturePVRTC(WebGLRenderingContextBase*);

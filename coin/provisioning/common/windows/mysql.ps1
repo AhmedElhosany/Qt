@@ -48,16 +48,16 @@ function DownloadAndInstall
         [string]$installPath
     )
 
-    Write-Host "Fetching from URL ..."
+    echo "Fetching from URL ..."
     Copy-Item $internalUrl $package
 
     $zipDir = [io.path]::GetFileNameWithoutExtension($package)
     Extract-Dev-Folders-From-Zip $package $zipDir $installPath
 
-    Remove-Item -Path $package
+    Remove-Item $package
 }
 
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     # Install x64 bit version
     $architecture = "x64"
     $installFolder = "C:\Utils\my_sql\my_sql"
@@ -65,23 +65,26 @@ if (Is64BitWinHost) {
 
     DownloadAndInstall $internalUrl $packagex64 $installFolder
 
-    Set-EnvironmentVariable "MYSQL_INCLUDE_x64" "$installFolder\include"
-    Set-EnvironmentVariable "MYSQL_LIB_x64" "$installFolder\lib"
+    echo "Set environment variables ..."
+    [Environment]::SetEnvironmentVariable("MYSQL_INCLUDE_x64", "$installFolder\include", "Machine")
+    [Environment]::SetEnvironmentVariable("MYSQL_LIB_x64", "$installFolder\lib", "Machine")
 }
 
 # Install x86 bit version
 $architecture = "x86"
 $internalUrl = "\\ci-files01-hki.intra.qt.io\provisioning\windows\mysql-$version-win32.zip"
-if (Is64BitWinHost) {
+if( (is64bitWinHost) -eq 1 ) {
     $installFolder = "C:\Utils\my_sql\my_sql$architecture"
-} else {
+}
+else {
     $installFolder = "C:\Utils\my_sql\my_sql"
 }
 
 DownloadAndInstall $internalUrl $packagex86 $installFolder
 
-Set-EnvironmentVariable "MYSQL_INCLUDE_x86" "$installFolder\include"
-Set-EnvironmentVariable "MYSQL_LIB_x86" "$installFolder\lib"
+echo "Set environment variables ..."
+[Environment]::SetEnvironmentVariable("MYSQL_INCLUDE_x86", "$installFolder\include", "Machine")
+[Environment]::SetEnvironmentVariable("MYSQL_LIB_x86", "$installFolder\lib", "Machine")
 
 # Store version information to ~/versions.txt, which is used to print version information to provision log.
-Write-Output "MySQL = $version" >> ~/versions.txt
+echo "MySQL = $version" >> ~/versions.txt

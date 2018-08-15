@@ -27,15 +27,20 @@
  */
 
 // https://html.spec.whatwg.org/#dom-imagedata
+// https://github.com/junov/CanvasColorSpace/blob/master/CanvasColorSpaceProposal.md#imagedata
+
+typedef (Uint8ClampedArray or Uint16Array or Float32Array) ImageDataArray;
 
 [
     Constructor(unsigned long sw, unsigned long sh),
     Constructor(Uint8ClampedArray data, unsigned long sw, optional unsigned long sh),
     Exposed=(Window,Worker),
-    RaisesException=Constructor,
+    RaisesException=Constructor
 ] interface ImageData {
+    [RuntimeEnabled=ExperimentalCanvasFeatures] ImageDataColorSettings getColorSettings();
+
     readonly attribute unsigned long width;
     readonly attribute unsigned long height;
-    // TODO(foolip): Expose data.
-    // readonly attribute Uint8ClampedArray data;
+    readonly attribute Uint8ClampedArray data;
+    [RuntimeEnabled=ExperimentalCanvasFeatures] readonly attribute ImageDataArray dataUnion;
 };

@@ -74,6 +74,10 @@ public:
     QPickingSettings::PickMethod pickMethod() const { return m_pickMethod; }
     QPickingSettings::PickResultMode pickResultMode() const { return m_pickResultMode; }
     QPickingSettings::FaceOrientationPickingMode faceOrientationPickingMode() const { return m_faceOrientationPickingMode; }
+    float pickWorldSpaceTolerance() const { return m_pickWorldSpaceTolerance; }
+
+    // For unit test purposes
+    void setActiveFrameGraphId(Qt3DCore::QNodeId frameGraphNodeId) { m_activeFrameGraph = frameGraphNodeId; }
 
 private:
     void initializeFromPeer(const Qt3DCore::QNodeCreatedChangeBasePtr &change) Q_DECL_FINAL;
@@ -82,6 +86,7 @@ private:
     QPickingSettings::PickMethod m_pickMethod;
     QPickingSettings::PickResultMode m_pickResultMode;
     QPickingSettings::FaceOrientationPickingMode m_faceOrientationPickingMode;
+    float m_pickWorldSpaceTolerance;
     Qt3DCore::QNodeId m_activeFrameGraph;
 };
 

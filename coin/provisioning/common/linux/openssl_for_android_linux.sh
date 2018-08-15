@@ -36,6 +36,7 @@
 # This script install OpenSSL from sources.
 # Requires GCC and Perl to be in PATH.
 
+source "${BASH_SOURCE%/*}/../unix/try_catch.sh"
 source "${BASH_SOURCE%/*}/../unix/DownloadURL.sh"
 source "${BASH_SOURCE%/*}/../unix/SetEnvVar.sh"
 
@@ -50,16 +51,37 @@ sha="36af23887402a5ea4ebef91df8e61654906f58f2"
 # QTQAINFRA-1436
 opensslHome="${installFolder}openssl-1.0.2"
 
-DownloadURL "$cachedUrl" "$officialUrl" "$sha" "$targetFile"
+ExceptionDownload=99
+ExceptionTar=100
+ExceptionConfig=101
 
-tar -xzf "$targetFile" -C "$installFolder"
-# This rename should be removed once hard coded path from Coin is fixed. (QTQAINFRA-1436)
-mv "${opensslHome}g" "${opensslHome}"
-pushd "$opensslHome"
+try
+(
+    (DownloadURL "$cachedUrl" "$officialUrl" "$sha" "$targetFile") || throw $ExceptionDownload
 
-echo "Running configure"
-perl Configure shared android
+    tar -xzf "$targetFile" -C "$installFolder" || throw $ExceptionTar
+    # This rename should be removed once hard coded path from Coin is fixed. (QTQAINFRA-1436)
+    mv "${opensslHome}g" "${opensslHome}"
+    pushd "$opensslHome"
+    perl Configure shared android || throw $ExceptionConfig
 
-SetEnvVar "OPENSSL_ANDROID_HOME" "$opensslHome"
+    SetEnvVar "OPENSSL_ANDROID_HOME" "$opensslHome"
 
-echo "OpenSSL for Android = $version" >> ~/versions.txt
+    echo "OpenSSL for Android = $version" >> ~/versions.txt
+)
+catch || {
+    case $ex_code in
+        $ExceptionDownload)
+            exit 1;
+        ;;
+        $ExceptionTar)
+            echo "Failed to extract $targetFile"
+            exit 1;
+        ;;
+        $ExceptionConfig)
+            echo "Failed to run 'config'."
+            exit 1;
+        ;;
+    esac
+
+}

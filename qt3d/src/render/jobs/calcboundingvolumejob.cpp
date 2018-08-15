@@ -81,10 +81,10 @@ public:
 
     const Sphere& result() { return m_volume; }
 
-    bool apply(Qt3DRender::Render::Attribute *positionAttribute, Qt3DRender::Render::Attribute *indexAttribute, int drawVertexCount)
+    bool apply(Qt3DRender::Render::Attribute *positionAttribute)
     {
         FindExtremePoints findExtremePoints(m_manager);
-        if (!findExtremePoints.apply(positionAttribute, indexAttribute, drawVertexCount))
+        if (!findExtremePoints.apply(positionAttribute))
             return false;
 
         // Calculate squared distance for the pairs of points
@@ -109,7 +109,7 @@ public:
         m_volume.setRadius((q - c).length());
 
         ExpandSphere expandSphere(m_manager, m_volume);
-        if (!expandSphere.apply(positionAttribute, indexAttribute, drawVertexCount))
+        if (!expandSphere.apply(positionAttribute))
             return false;
 
         return true;
@@ -191,12 +191,10 @@ void calculateLocalBoundingVolume(NodeManagers *manager, Entity *node)
         return;
 
     GeometryRenderer *gRenderer = node->renderComponent<GeometryRenderer>();
-    if (gRenderer && gRenderer->primitiveType() != QGeometryRenderer::Patches) {
+    if (gRenderer) {
         Geometry *geom = manager->lookupResource<Geometry, GeometryManager>(gRenderer->geometryId());
 
         if (geom) {
-            int drawVertexCount = gRenderer->vertexCount(); // may be 0, gets changed below if so
-
             Qt3DRender::Render::Attribute *positionAttribute = manager->lookupResource<Attribute, AttributeManager>(geom->boundingPositionAttribute());
 
             // Use the default position attribute if attribute is null
@@ -214,46 +212,16 @@ void calculateLocalBoundingVolume(NodeManagers *manager, Entity *node)
                     || positionAttribute->attributeType() != QAttribute::VertexAttribute
                     || positionAttribute->vertexBaseType() != QAttribute::Float
                     || positionAttribute->vertexSize() < 3) {
-                qWarning("calculateLocalBoundingVolume: Position attribute not suited for bounding volume computation");
+                qWarning() << "QGeometry::boundingVolumePositionAttribute position Attribute not suited for bounding volume computation";
                 return;
             }
 
             Buffer *buf = manager->lookupResource<Buffer, BufferManager>(positionAttribute->bufferId());
             // No point in continuing if the positionAttribute doesn't have a suitable buffer
             if (!buf) {
-                qWarning("calculateLocalBoundingVolume: Position attribute not referencing a valid buffer");
+                qWarning() << "ObjectPicker position Attribute not referencing a valid buffer";
                 return;
             }
-
-            // Check if there is an index attribute.
-            Qt3DRender::Render::Attribute *indexAttribute = nullptr;
-            Buffer *indexBuf = nullptr;
-            const QVector<Qt3DCore::QNodeId> attributes = geom->attributes();
-
-            for (Qt3DCore::QNodeId attrNodeId : attributes) {
-                Qt3DRender::Render::Attribute *attr = manager->lookupResource<Attribute, AttributeManager>(attrNodeId);
-                if (attr && attr->attributeType() == Qt3DRender::QAttribute::IndexAttribute) {
-                    indexBuf = manager->lookupResource<Buffer, BufferManager>(attr->bufferId());
-                    if (indexBuf) {
-                        indexAttribute = attr;
-
-                        if (!drawVertexCount)
-                            drawVertexCount = indexAttribute->count();
-
-                        if (indexAttribute->vertexBaseType() != QAttribute::UnsignedShort
-                                && indexAttribute->vertexBaseType() != QAttribute::UnsignedInt)
-                        {
-                            qWarning("calculateLocalBoundingVolume: Unsupported index attribute type");
-                            return;
-                        }
-
-                        break;
-                    }
-                }
-            }
-
-            if (!indexAttribute && !drawVertexCount)
-                drawVertexCount = positionAttribute->count();
 
             // Buf will be set to not dirty once it's loaded
             // in a job executed after this one
@@ -263,12 +231,10 @@ void calculateLocalBoundingVolume(NodeManagers *manager, Entity *node)
                     node->isBoundingVolumeDirty() ||
                     positionAttribute->isDirty() ||
                     geom->isDirty() ||
-                    gRenderer->isDirty() ||
-                    (indexAttribute && indexAttribute->isDirty()) ||
-                    (indexBuf && indexBuf->isDirty()))
-            {
+                    gRenderer->isDirty()) {
+
                 BoundingVolumeCalculator reader(manager);
-                if (reader.apply(positionAttribute, indexAttribute, drawVertexCount)) {
+                if (reader.apply(positionAttribute)) {
                     node->localBoundingVolume()->setCenter(reader.result().center());
                     node->localBoundingVolume()->setRadius(reader.result().radius());
                     node->unsetBoundingVolumeDirty();

@@ -9,6 +9,7 @@ HEADERS +=  \
         global/qprocessordetection.h \
 	global/qnamespace.h \
         global/qendian.h \
+        global/qendian_p.h \
         global/qnumeric_p.h \
         global/qnumeric.h \
         global/qfloat16_p.h \
@@ -21,6 +22,8 @@ HEADERS +=  \
         global/qisenum.h \
         global/qtypetraits.h \
         global/qflags.h \
+        global/qrandom.h \
+        global/qrandom_p.h \
         global/qhooks_p.h \
         global/qversiontagging.h
 
@@ -33,6 +36,7 @@ SOURCES += \
         global/qfloat16.cpp \
         global/qoperatingsystemversion.cpp \
         global/qlogging.cpp \
+        global/qrandom.cpp \
         global/qhooks.cpp
 
 VERSIONTAGGING_SOURCES = global/qversiontagging.cpp
@@ -56,6 +60,23 @@ if(linux*|hurd*):!cross_compile:!static:!*-armcc* {
    QMAKE_LFLAGS += -Wl,-e,qt_core_boilerplate
    prog=$$quote(if (/program interpreter: (.*)]/) { print $1; })
    DEFINES += ELF_INTERPRETER=\\\"$$system(LC_ALL=C readelf -l /bin/ls | perl -n -e \'$$prog\')\\\"
+}
+
+linux:!static {
+    precompile_header {
+        # we'll get an error if we just use SOURCES +=
+        no_pch_assembler.commands = $$QMAKE_CC -c $(CFLAGS) $(INCPATH) ${QMAKE_FILE_IN} -o ${QMAKE_FILE_OUT}
+        no_pch_assembler.dependency_type = TYPE_C
+        no_pch_assembler.output = ${QMAKE_VAR_OBJECTS_DIR}${QMAKE_FILE_BASE}$${first(QMAKE_EXT_OBJ)}
+        no_pch_assembler.input = NO_PCH_ASM
+        no_pch_assembler.name = compiling[no_pch] ${QMAKE_FILE_IN}
+        silent: no_pch_assembler.commands = @echo compiling[no_pch] ${QMAKE_FILE_IN} && $$no_pch_assembler.commands
+        QMAKE_EXTRA_COMPILERS += no_pch_assembler
+        NO_PCH_ASM += global/minimum-linux.S
+    } else {
+        SOURCES += global/minimum-linux.S
+    }
+    HEADERS += global/minimum-linux_p.h
 }
 
 qtConfig(slog2): \

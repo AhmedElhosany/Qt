@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Templates 2.2 as T
-import QtQuick.Controls.Material 2.2
-import QtQuick.Controls.Material.impl 2.2
+import QtQuick 2.10
+import QtQuick.Templates 2.3 as T
+import QtQuick.Controls.Material 2.3
+import QtQuick.Controls.Material.impl 2.3
 
 T.Popup {
     id: control
@@ -74,5 +74,15 @@ T.Popup {
         layer.effect: ElevationEffect {
             elevation: control.Material.elevation
         }
+    }
+
+    T.Overlay.modal: Rectangle {
+        color: control.Material.backgroundDimColor
+        Behavior on opacity { NumberAnimation { duration: 150 } }
+    }
+
+    T.Overlay.modeless: Rectangle {
+        color: control.Material.backgroundDimColor
+        Behavior on opacity { NumberAnimation { duration: 150 } }
     }
 }

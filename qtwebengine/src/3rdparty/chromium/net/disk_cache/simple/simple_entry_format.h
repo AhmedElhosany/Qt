@@ -9,10 +9,6 @@
 
 #include "net/base/net_export.h"
 
-namespace base {
-class Time;
-}
-
 namespace disk_cache {
 
 const uint64_t kSimpleInitialMagicNumber = UINT64_C(0xfcfb6d1ba7725c30);
@@ -43,6 +39,9 @@ const uint64_t kSimpleSparseRangeMagicNumber = UINT64_C(0xeb97bf016553676b);
 static const int kSimpleEntryFileCount = 2;
 static const int kSimpleEntryStreamCount = 3;
 
+// Note that stream 0/stream 1 files rely on the footer to verify the entry,
+// so if the format changes, it's insufficient to change the version here;
+// likely the EOF magic should be updated as well.
 struct NET_EXPORT_PRIVATE SimpleFileHeader {
   SimpleFileHeader();
 

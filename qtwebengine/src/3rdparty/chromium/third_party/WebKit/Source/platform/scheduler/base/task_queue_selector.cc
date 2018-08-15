@@ -17,7 +17,8 @@ TaskQueueSelector::TaskQueueSelector()
     : enabled_selector_(this, "enabled"),
       blocked_selector_(this, "blocked"),
       immediate_starvation_count_(0),
-      high_priority_starvation_count_(0),
+      normal_priority_starvation_score_(0),
+      low_priority_starvation_score_(0),
       num_blocked_queues_to_report_(0),
       task_queue_selector_observer_(nullptr) {}
 
@@ -163,12 +164,14 @@ bool TaskQueueSelector::PrioritizingSelector::
         WorkQueue** out_work_queue) const {
   WorkQueue* immediate_queue;
   DCHECK_EQ(*out_chose_delayed_over_immediate, false);
-  if (immediate_work_queue_sets_.GetOldestQueueInSet(priority,
-                                                     &immediate_queue)) {
+  EnqueueOrder immediate_enqueue_order;
+  if (immediate_work_queue_sets_.GetOldestQueueAndEnqueueOrderInSet(
+          priority, &immediate_queue, &immediate_enqueue_order)) {
     WorkQueue* delayed_queue;
-    if (delayed_work_queue_sets_.GetOldestQueueInSet(priority,
-                                                     &delayed_queue)) {
-      if (immediate_queue->ShouldRunBefore(delayed_queue)) {
+    EnqueueOrder delayed_enqueue_order;
+    if (delayed_work_queue_sets_.GetOldestQueueAndEnqueueOrderInSet(
+            priority, &delayed_queue, &delayed_enqueue_order)) {
+      if (immediate_enqueue_order < delayed_enqueue_order) {
         *out_work_queue = immediate_queue;
       } else {
         *out_chose_delayed_over_immediate = true;
@@ -189,13 +192,9 @@ bool TaskQueueSelector::PrioritizingSelector::ChooseOldestWithPriority(
   // Select an immediate work queue if we are starving immediate tasks.
   if (task_queue_selector_->immediate_starvation_count_ >=
       kMaxDelayedStarvationTasks) {
-    if (ChooseOldestImmediateTaskWithPriority(priority, out_work_queue)) {
+    if (ChooseOldestImmediateTaskWithPriority(priority, out_work_queue))
       return true;
-    }
-    if (ChooseOldestDelayedTaskWithPriority(priority, out_work_queue)) {
-      return true;
-    }
-    return false;
+    return ChooseOldestDelayedTaskWithPriority(priority, out_work_queue);
   }
   return ChooseOldestImmediateOrDelayedTaskWithPriority(
       priority, out_chose_delayed_over_immediate, out_work_queue);
@@ -216,10 +215,19 @@ bool TaskQueueSelector::PrioritizingSelector::SelectWorkQueueToService(
     return true;
   }
 
+  // Select from the low priority queue if we are starving it.
+  if (max_priority > TaskQueue::LOW_PRIORITY &&
+      task_queue_selector_->low_priority_starvation_score_ >=
+          kMaxLowPriorityStarvationScore &&
+      ChooseOldestWithPriority(TaskQueue::LOW_PRIORITY,
+                               out_chose_delayed_over_immediate,
+                               out_work_queue)) {
+    return true;
+  }
   // Select from the normal priority queue if we are starving it.
   if (max_priority > TaskQueue::NORMAL_PRIORITY &&
-      task_queue_selector_->high_priority_starvation_count_ >=
-          kMaxHighPriorityStarvationTasks &&
+      task_queue_selector_->normal_priority_starvation_score_ >=
+          kMaxNormalPriorityStarvationScore &&
       ChooseOldestWithPriority(TaskQueue::NORMAL_PRIORITY,
                                out_chose_delayed_over_immediate,
                                out_work_queue)) {
@@ -328,11 +336,20 @@ void TaskQueueSelector::DidSelectQueueWithPriority(
     case TaskQueue::CONTROL_PRIORITY:
       break;
     case TaskQueue::HIGH_PRIORITY:
-      high_priority_starvation_count_++;
+      low_priority_starvation_score_ +=
+          kSmallScoreIncrementForLowPriorityStarvation;
+      normal_priority_starvation_score_ +=
+          kSmallScoreIncrementForNormalPriorityStarvation;
       break;
     case TaskQueue::NORMAL_PRIORITY:
+      low_priority_starvation_score_ +=
+          kLargeScoreIncrementForLowPriorityStarvation;
+      normal_priority_starvation_score_ = 0;
+      break;
+    case TaskQueue::LOW_PRIORITY:
     case TaskQueue::BEST_EFFORT_PRIORITY:
-      high_priority_starvation_count_ = 0;
+      low_priority_starvation_score_ = 0;
+      normal_priority_starvation_score_ = 0;
       break;
     default:
       NOTREACHED();
@@ -347,8 +364,10 @@ void TaskQueueSelector::DidSelectQueueWithPriority(
 void TaskQueueSelector::AsValueInto(
     base::trace_event::TracedValue* state) const {
   DCHECK(main_thread_checker_.CalledOnValidThread());
-  state->SetInteger("high_priority_starvation_count",
-                    high_priority_starvation_count_);
+  state->SetInteger("normal_priority_starvation_score",
+                    normal_priority_starvation_score_);
+  state->SetInteger("low_priority_starvation_score",
+                    low_priority_starvation_score_);
   state->SetInteger("immediate_starvation_count", immediate_starvation_count_);
   state->SetInteger("num_blocked_queues_to_report",
                     num_blocked_queues_to_report_);

@@ -6,6 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/memory/ptr_util.h"
 #include "base/process/process.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/bad_message.h"
@@ -13,10 +14,9 @@
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/common/media/midi_messages.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/user_metrics.h"
 #include "media/midi/message_util.h"
-#include "media/midi/midi_manager.h"
 #include "media/midi/midi_message_queue.h"
+#include "media/midi/midi_service.h"
 
 namespace content {
 namespace {
@@ -42,30 +42,29 @@ using midi::kEndOfSysExByte;
 using midi::mojom::PortState;
 using midi::mojom::Result;
 
-MidiHost::MidiHost(int renderer_process_id,
-                   midi::MidiManager* midi_manager)
+MidiHost::MidiHost(int renderer_process_id, midi::MidiService* midi_service)
     : BrowserMessageFilter(MidiMsgStart),
       renderer_process_id_(renderer_process_id),
       has_sys_ex_permission_(false),
       is_session_requested_(false),
-      midi_manager_(midi_manager),
+      midi_service_(midi_service),
       sent_bytes_in_flight_(0),
       bytes_sent_since_last_acknowledgement_(0),
       output_port_count_(0) {
-  DCHECK(midi_manager_);
+  DCHECK(midi_service_);
 }
 
 MidiHost::~MidiHost() = default;
 
 void MidiHost::OnChannelClosing() {
-  // If we get here the MidiHost is going to be destroyed soon. Prevent any
-  // subsequent calls from MidiManager by closing our session.
+  // If we get here the MidiHost is going to be destroyed soon.  Prevent any
+  // subsequent calls from MidiService by closing our session.
   // If Send() is called from a different thread (e.g. a separate thread owned
-  // by the MidiManager implementation), it will get posted to the IO thread.
+  // by the MidiService implementation), it will get posted to the IO thread.
   // There is a race condition here if our refcount is 0 and we're about to or
   // have already entered OnDestruct().
-  if (is_session_requested_ && midi_manager_) {
-    midi_manager_->EndSession(this);
+  if (is_session_requested_ && midi_service_) {
+    midi_service_->EndSession(this);
     is_session_requested_ = false;
   }
 }
@@ -89,8 +88,8 @@ bool MidiHost::OnMessageReceived(const IPC::Message& message) {
 
 void MidiHost::OnStartSession() {
   is_session_requested_ = true;
-  if (midi_manager_)
-    midi_manager_->StartSession(this);
+  if (midi_service_)
+    midi_service_->StartSession(this);
 }
 
 void MidiHost::OnSendData(uint32_t port,
@@ -128,14 +127,14 @@ void MidiHost::OnSendData(uint32_t port,
       return;
     sent_bytes_in_flight_ += data.size();
   }
-  if (midi_manager_)
-    midi_manager_->DispatchSendMidiData(this, port, data, timestamp);
+  if (midi_service_)
+    midi_service_->DispatchSendMidiData(this, port, data, timestamp);
 }
 
 void MidiHost::OnEndSession() {
   is_session_requested_ = false;
-  if (midi_manager_)
-    midi_manager_->EndSession(this);
+  if (midi_service_)
+    midi_service_->EndSession(this);
 }
 
 void MidiHost::CompleteStartSession(Result result) {
@@ -182,7 +181,8 @@ void MidiHost::ReceiveMidiData(uint32_t port,
 
   // Lazy initialization
   if (received_messages_queues_[port] == nullptr)
-    received_messages_queues_[port] = new midi::MidiMessageQueue(true);
+    received_messages_queues_[port] =
+        base::MakeUnique<midi::MidiMessageQueue>(true);
 
   received_messages_queues_[port]->Add(data, length);
   std::vector<uint8_t> message;
@@ -222,7 +222,7 @@ void MidiHost::AccumulateMidiBytesSent(size_t n) {
 }
 
 void MidiHost::Detach() {
-  midi_manager_ = nullptr;
+  midi_service_ = nullptr;
 }
 
 }  // namespace content

@@ -97,6 +97,10 @@ static WebEngineSettings::Attribute toWebEngineAttribute(QWebEngineSettings::Web
         return WebEngineSettings::AllowRunningInsecureContent;
     case QWebEngineSettings::AllowGeolocationOnInsecureOrigins:
         return WebEngineSettings::AllowGeolocationOnInsecureOrigins;
+    case QWebEngineSettings::AllowWindowActivationFromJavaScript:
+        return WebEngineSettings::AllowWindowActivationFromJavaScript;
+    case QWebEngineSettings::ShowScrollBars:
+        return WebEngineSettings::ShowScrollBars;
 
     default:
         return WebEngineSettings::UnsupportedInCoreSettings;

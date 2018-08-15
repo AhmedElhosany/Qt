@@ -79,7 +79,7 @@ class QPrintPreviewMainWindow : public QMainWindow
 {
 public:
     QPrintPreviewMainWindow(QWidget *parent) : QMainWindow(parent) {}
-    QMenu *createPopupMenu() Q_DECL_OVERRIDE { return 0; }
+    QMenu *createPopupMenu() Q_DECL_OVERRIDE { return nullptr; }
 };
 
 class ZoomFactorValidator : public QDoubleValidator
@@ -115,11 +115,11 @@ class LineEdit : public QLineEdit
 {
     Q_OBJECT
 public:
-    LineEdit(QWidget* parent = 0)
+    LineEdit(QWidget* parent = nullptr)
         : QLineEdit(parent)
     {
         setContextMenuPolicy(Qt::NoContextMenu);
-        connect(this, SIGNAL(returnPressed()), SLOT(handleReturnPressed()));
+        connect(this, &LineEdit::returnPressed, this, &LineEdit::handleReturnPressed);
     }
 
 protected:
@@ -152,7 +152,7 @@ class QPrintPreviewDialogPrivate : public QDialogPrivate
     Q_DECLARE_PUBLIC(QPrintPreviewDialog)
 public:
     QPrintPreviewDialogPrivate()
-        : printDialog(0), ownPrinter(false),
+        : printDialog(nullptr), ownPrinter(false),
           initialized(false) {}
 
     // private slots
@@ -167,7 +167,7 @@ public:
     void _q_previewChanged();
     void _q_zoomFactorChanged();
 
-    void init(QPrinter *printer = 0);
+    void init(QPrinter *printer = nullptr);
     void populateScene();
     void layoutPages();
     void setupActions();
@@ -736,7 +736,7 @@ void QPrintPreviewDialog::done(int result)
     if (d->receiverToDisconnectOnClose) {
         disconnect(this, SIGNAL(finished(int)),
                    d->receiverToDisconnectOnClose, d->memberToDisconnectOnClose);
-        d->receiverToDisconnectOnClose = 0;
+        d->receiverToDisconnectOnClose = nullptr;
     }
     d->memberToDisconnectOnClose.clear();
 }

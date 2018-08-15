@@ -5,19 +5,20 @@
 #ifndef CSSParserImpl_h
 #define CSSParserImpl_h
 
+#include <memory>
 #include "core/CSSPropertyNames.h"
 #include "core/css/CSSProperty.h"
 #include "core/css/CSSPropertySourceData.h"
-#include "core/css/parser/CSSParserMode.h"
+#include "core/css/StylePropertySet.h"
 #include "core/css/parser/CSSParserTokenRange.h"
 #include "platform/heap/Handle.h"
-#include "wtf/Vector.h"
-#include "wtf/text/WTFString.h"
-#include <memory>
+#include "platform/wtf/Vector.h"
+#include "platform/wtf/text/WTFString.h"
 
 namespace blink {
 
 class CSSLazyParsingState;
+class CSSParserContext;
 class CSSParserObserver;
 class CSSParserObserverWrapper;
 class StyleRule;
@@ -33,16 +34,14 @@ class StyleRulePage;
 class StyleRuleSupports;
 class StyleRuleViewport;
 class StyleSheetContents;
-class ImmutableStylePropertySet;
 class Element;
-class MutableStylePropertySet;
 
 class CSSParserImpl {
   STACK_ALLOCATED();
   WTF_MAKE_NONCOPYABLE(CSSParserImpl);
 
  public:
-  CSSParserImpl(const CSSParserContext&, StyleSheetContents* = nullptr);
+  CSSParserImpl(const CSSParserContext*, StyleSheetContents* = nullptr);
 
   enum AllowedRulesType {
     // As per css-syntax, css-cascade and css-namespaces, @charset rules
@@ -50,120 +49,122 @@ class CSSParserImpl {
     // AllowImportRules actually means we allow @import and any rules thay
     // may follow it, i.e. @namespace rules and regular rules.
     // AllowCharsetRules and AllowNamespaceRules behave similarly.
-    AllowCharsetRules,
-    AllowImportRules,
-    AllowNamespaceRules,
-    RegularRules,
-    KeyframeRules,
-    ApplyRules,  // For @apply inside style rules
-    NoRules,     // For parsing at-rules inside declaration lists
+    kAllowCharsetRules,
+    kAllowImportRules,
+    kAllowNamespaceRules,
+    kRegularRules,
+    kKeyframeRules,
+    kApplyRules,  // For @apply inside style rules
+    kNoRules,     // For parsing at-rules inside declaration lists
   };
 
-  static bool parseValue(MutableStylePropertySet*,
-                         CSSPropertyID,
-                         const String&,
-                         bool important,
-                         const CSSParserContext&);
-  static bool parseVariableValue(MutableStylePropertySet*,
-                                 const AtomicString& propertyName,
-                                 const String&,
-                                 bool important,
-                                 const CSSParserContext&,
-                                 bool isAnimationTainted);
-  static ImmutableStylePropertySet* parseInlineStyleDeclaration(const String&,
+  static MutableStylePropertySet::SetResult ParseValue(MutableStylePropertySet*,
+                                                       CSSPropertyID,
+                                                       const String&,
+                                                       bool important,
+                                                       const CSSParserContext*);
+  static MutableStylePropertySet::SetResult ParseVariableValue(
+      MutableStylePropertySet*,
+      const AtomicString& property_name,
+      const PropertyRegistry*,
+      const String&,
+      bool important,
+      const CSSParserContext*,
+      bool is_animation_tainted);
+  static ImmutableStylePropertySet* ParseInlineStyleDeclaration(const String&,
                                                                 Element*);
-  static bool parseDeclarationList(MutableStylePropertySet*,
+  static bool ParseDeclarationList(MutableStylePropertySet*,
                                    const String&,
-                                   const CSSParserContext&);
-  static StyleRuleBase* parseRule(const String&,
-                                  const CSSParserContext&,
+                                   const CSSParserContext*);
+  static StyleRuleBase* ParseRule(const String&,
+                                  const CSSParserContext*,
                                   StyleSheetContents*,
                                   AllowedRulesType);
-  static void parseStyleSheet(const String&,
-                              const CSSParserContext&,
+  static void ParseStyleSheet(const String&,
+                              const CSSParserContext*,
                               StyleSheetContents*,
-                              bool deferPropertyParsing = false);
-  static CSSSelectorList parsePageSelector(CSSParserTokenRange,
+                              bool defer_property_parsing = false);
+  static CSSSelectorList ParsePageSelector(CSSParserTokenRange,
                                            StyleSheetContents*);
 
-  static ImmutableStylePropertySet* parseCustomPropertySet(CSSParserTokenRange);
+  static ImmutableStylePropertySet* ParseCustomPropertySet(CSSParserTokenRange);
 
-  static std::unique_ptr<Vector<double>> parseKeyframeKeyList(const String&);
+  static std::unique_ptr<Vector<double>> ParseKeyframeKeyList(const String&);
 
-  bool supportsDeclaration(CSSParserTokenRange&);
+  bool SupportsDeclaration(CSSParserTokenRange&);
 
-  static void parseDeclarationListForInspector(const String&,
-                                               const CSSParserContext&,
+  static void ParseDeclarationListForInspector(const String&,
+                                               const CSSParserContext*,
                                                CSSParserObserver&);
-  static void parseStyleSheetForInspector(const String&,
-                                          const CSSParserContext&,
+  static void ParseStyleSheetForInspector(const String&,
+                                          const CSSParserContext*,
                                           StyleSheetContents*,
                                           CSSParserObserver&);
 
-  static StylePropertySet* parseDeclarationListForLazyStyle(
+  static StylePropertySet* ParseDeclarationListForLazyStyle(
       CSSParserTokenRange block,
-      const CSSParserContext&);
+      const CSSParserContext*);
 
  private:
-  enum RuleListType { TopLevelRuleList, RegularRuleList, KeyframesRuleList };
+  enum RuleListType { kTopLevelRuleList, kRegularRuleList, kKeyframesRuleList };
 
   // Returns whether the first encountered rule was valid
   template <typename T>
-  bool consumeRuleList(CSSParserTokenRange, RuleListType, T callback);
+  bool ConsumeRuleList(CSSParserTokenRange, RuleListType, T callback);
 
   // These two functions update the range they're given
-  StyleRuleBase* consumeAtRule(CSSParserTokenRange&, AllowedRulesType);
-  StyleRuleBase* consumeQualifiedRule(CSSParserTokenRange&, AllowedRulesType);
+  StyleRuleBase* ConsumeAtRule(CSSParserTokenRange&, AllowedRulesType);
+  StyleRuleBase* ConsumeQualifiedRule(CSSParserTokenRange&, AllowedRulesType);
 
-  static StyleRuleCharset* consumeCharsetRule(CSSParserTokenRange prelude);
-  StyleRuleImport* consumeImportRule(CSSParserTokenRange prelude);
-  StyleRuleNamespace* consumeNamespaceRule(CSSParserTokenRange prelude);
-  StyleRuleMedia* consumeMediaRule(CSSParserTokenRange prelude,
+  static StyleRuleCharset* ConsumeCharsetRule(CSSParserTokenRange prelude);
+  StyleRuleImport* ConsumeImportRule(CSSParserTokenRange prelude);
+  StyleRuleNamespace* ConsumeNamespaceRule(CSSParserTokenRange prelude);
+  StyleRuleMedia* ConsumeMediaRule(CSSParserTokenRange prelude,
                                    CSSParserTokenRange block);
-  StyleRuleSupports* consumeSupportsRule(CSSParserTokenRange prelude,
+  StyleRuleSupports* ConsumeSupportsRule(CSSParserTokenRange prelude,
                                          CSSParserTokenRange block);
-  StyleRuleViewport* consumeViewportRule(CSSParserTokenRange prelude,
+  StyleRuleViewport* ConsumeViewportRule(CSSParserTokenRange prelude,
                                          CSSParserTokenRange block);
-  StyleRuleFontFace* consumeFontFaceRule(CSSParserTokenRange prelude,
+  StyleRuleFontFace* ConsumeFontFaceRule(CSSParserTokenRange prelude,
                                          CSSParserTokenRange block);
-  StyleRuleKeyframes* consumeKeyframesRule(bool webkitPrefixed,
+  StyleRuleKeyframes* ConsumeKeyframesRule(bool webkit_prefixed,
                                            CSSParserTokenRange prelude,
                                            CSSParserTokenRange block);
-  StyleRulePage* consumePageRule(CSSParserTokenRange prelude,
+  StyleRulePage* ConsumePageRule(CSSParserTokenRange prelude,
                                  CSSParserTokenRange block);
-  // Updates m_parsedProperties
-  void consumeApplyRule(CSSParserTokenRange prelude);
+  // Updates parsed_properties_
+  void ConsumeApplyRule(CSSParserTokenRange prelude);
 
-  StyleRuleKeyframe* consumeKeyframeStyleRule(CSSParserTokenRange prelude,
+  StyleRuleKeyframe* ConsumeKeyframeStyleRule(CSSParserTokenRange prelude,
                                               CSSParserTokenRange block);
-  StyleRule* consumeStyleRule(CSSParserTokenRange prelude,
+  StyleRule* ConsumeStyleRule(CSSParserTokenRange prelude,
                               CSSParserTokenRange block);
 
-  void consumeDeclarationList(CSSParserTokenRange, StyleRule::RuleType);
-  void consumeDeclaration(CSSParserTokenRange, StyleRule::RuleType);
-  void consumeDeclarationValue(CSSParserTokenRange,
+  void ConsumeDeclarationList(CSSParserTokenRange, StyleRule::RuleType);
+  void ConsumeDeclaration(CSSParserTokenRange, StyleRule::RuleType);
+  void ConsumeDeclarationValue(CSSParserTokenRange,
                                CSSPropertyID,
                                bool important,
                                StyleRule::RuleType);
-  void consumeVariableValue(CSSParserTokenRange,
-                            const AtomicString& propertyName,
+  void ConsumeVariableValue(CSSParserTokenRange,
+                            const AtomicString& property_name,
                             bool important,
-                            bool isAnimationTainted);
+                            bool is_animation_tainted);
 
-  static std::unique_ptr<Vector<double>> consumeKeyframeKeyList(
+  static std::unique_ptr<Vector<double>> ConsumeKeyframeKeyList(
       CSSParserTokenRange);
 
   // FIXME: Can we build StylePropertySets directly?
   // FIXME: Investigate using a smaller inline buffer
-  HeapVector<CSSProperty, 256> m_parsedProperties;
-  const CSSParserContext& m_context;
+  HeapVector<CSSProperty, 256> parsed_properties_;
 
-  Member<StyleSheetContents> m_styleSheet;
+  Member<const CSSParserContext> context_;
+  Member<StyleSheetContents> style_sheet_;
 
   // For the inspector
-  CSSParserObserverWrapper* m_observerWrapper;
+  CSSParserObserverWrapper* observer_wrapper_;
 
-  Member<CSSLazyParsingState> m_lazyState;
+  Member<CSSLazyParsingState> lazy_state_;
 };
 
 }  // namespace blink

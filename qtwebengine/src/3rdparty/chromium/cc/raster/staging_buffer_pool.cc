@@ -17,7 +17,6 @@
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
-#include "ui/gfx/gpu_memory_buffer_tracing.h"
 
 using base::trace_event::MemoryAllocatorDump;
 using base::trace_event::MemoryAllocatorDumpGuid;
@@ -64,7 +63,7 @@ void WaitForQueryResult(gpu::gles2::GLES2Interface* gl, unsigned query_id) {
 
 }  // namespace
 
-StagingBuffer::StagingBuffer(const gfx::Size& size, ResourceFormat format)
+StagingBuffer::StagingBuffer(const gfx::Size& size, viz::ResourceFormat format)
     : size(size),
       format(format),
       texture_id(0),
@@ -94,7 +93,7 @@ void StagingBuffer::DestroyGLResources(gpu::gles2::GLES2Interface* gl) {
 }
 
 void StagingBuffer::OnMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
-                                 ResourceFormat format,
+                                 viz::ResourceFormat format,
                                  bool in_free_list) const {
   if (!gpu_memory_buffer)
     return;
@@ -116,21 +115,27 @@ void StagingBuffer::OnMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
   const uint64_t tracing_process_id =
       base::trace_event::MemoryDumpManager::GetInstance()
           ->GetTracingProcessId();
-  MemoryAllocatorDumpGuid shared_buffer_guid =
-      gfx::GetGpuMemoryBufferGUIDForTracing(tracing_process_id, buffer_id);
-  pmd->CreateSharedGlobalAllocatorDump(shared_buffer_guid);
+  auto shared_buffer_guid =
+      gpu_memory_buffer->GetGUIDForTracing(tracing_process_id);
 
-  // By creating an edge with a higher |importance| (w.r.t. browser-side dumps)
-  // the tracing UI will account the effective size of the buffer to the child.
+  auto shared_memory_guid = gpu_memory_buffer->GetHandle().handle.GetGUID();
   const int kImportance = 2;
-  pmd->AddOwnershipEdge(buffer_dump->guid(), shared_buffer_guid, kImportance);
+  if (!shared_memory_guid.is_empty()) {
+    pmd->CreateSharedMemoryOwnershipEdge(buffer_dump->guid(),
+                                         shared_buffer_guid, shared_memory_guid,
+                                         kImportance);
+  } else {
+    pmd->CreateSharedGlobalAllocatorDump(shared_buffer_guid);
+    pmd->AddOwnershipEdge(buffer_dump->guid(), shared_buffer_guid, kImportance);
+  }
 }
 
-StagingBufferPool::StagingBufferPool(base::SequencedTaskRunner* task_runner,
-                                     ContextProvider* worker_context_provider,
-                                     ResourceProvider* resource_provider,
-                                     bool use_partial_raster,
-                                     int max_staging_buffer_usage_in_bytes)
+StagingBufferPool::StagingBufferPool(
+    base::SequencedTaskRunner* task_runner,
+    viz::ContextProvider* worker_context_provider,
+    ResourceProvider* resource_provider,
+    bool use_partial_raster,
+    int max_staging_buffer_usage_in_bytes)
     : task_runner_(task_runner),
       worker_context_provider_(worker_context_provider),
       resource_provider_(resource_provider),
@@ -149,8 +154,9 @@ StagingBufferPool::StagingBufferPool(base::SequencedTaskRunner* task_runner,
       &StagingBufferPool::ReduceMemoryUsage, weak_ptr_factory_.GetWeakPtr());
 
   task_runner_->PostTask(
-      FROM_HERE, base::Bind(&StagingBufferPool::RegisterMemoryCoordinatorClient,
-                            weak_ptr_factory_.GetWeakPtr()));
+      FROM_HERE,
+      base::BindOnce(&StagingBufferPool::RegisterMemoryCoordinatorClient,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 StagingBufferPool::~StagingBufferPool() {
@@ -212,7 +218,7 @@ bool StagingBufferPool::OnMemoryDump(
 }
 
 void StagingBufferPool::AddStagingBuffer(const StagingBuffer* staging_buffer,
-                                         ResourceFormat format) {
+                                         viz::ResourceFormat format) {
   lock_.AssertAcquired();
 
   DCHECK(buffers_.find(staging_buffer) == buffers_.end());
@@ -260,7 +266,8 @@ std::unique_ptr<StagingBuffer> StagingBufferPool::AcquireStagingBuffer(
 
   std::unique_ptr<StagingBuffer> staging_buffer;
 
-  ContextProvider::ScopedContextLock scoped_context(worker_context_provider_);
+  viz::ContextProvider::ScopedContextLock scoped_context(
+      worker_context_provider_);
 
   gpu::gles2::GLES2Interface* gl = scoped_context.ContextGL();
   DCHECK(gl);
@@ -406,7 +413,8 @@ void StagingBufferPool::ReleaseBuffersNotUsedSince(base::TimeTicks time) {
   lock_.AssertAcquired();
 
   {
-    ContextProvider::ScopedContextLock scoped_context(worker_context_provider_);
+    viz::ContextProvider::ScopedContextLock scoped_context(
+        worker_context_provider_);
 
     gpu::gles2::GLES2Interface* gl = scoped_context.ContextGL();
     DCHECK(gl);
@@ -434,24 +442,10 @@ void StagingBufferPool::ReleaseBuffersNotUsedSince(base::TimeTicks time) {
   }
 }
 
-void StagingBufferPool::OnMemoryStateChange(base::MemoryState state) {
-  switch (state) {
-    case base::MemoryState::NORMAL:
-      // TODO(tasak): go back to normal state.
-      break;
-    case base::MemoryState::THROTTLED:
-      // TODO(tasak): make the limits of this component's caches smaller to
-      // save memory usage.
-      break;
-    case base::MemoryState::SUSPENDED: {
-      base::AutoLock lock(lock_);
-      // Release all buffers, regardless of how recently they were used.
-      ReleaseBuffersNotUsedSince(base::TimeTicks() + base::TimeDelta::Max());
-    } break;
-    case base::MemoryState::UNKNOWN:
-      // NOT_REACHED.
-      break;
-  }
+void StagingBufferPool::OnPurgeMemory() {
+  base::AutoLock lock(lock_);
+  // Release all buffers, regardless of how recently they were used.
+  ReleaseBuffersNotUsedSince(base::TimeTicks() + base::TimeDelta::Max());
 }
 
 }  // namespace cc

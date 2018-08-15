@@ -10,6 +10,7 @@
 
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "content/browser/indexed_db/indexed_db_factory.h"
 #include "content/browser/indexed_db/indexed_db_transaction.h"
 #include "content/browser/indexed_db/leveldb/leveldb_iterator_impl.h"
 #include "content/browser/indexed_db/leveldb/leveldb_transaction.h"
@@ -48,8 +49,8 @@ namespace content {
 class IndexedDBTestDatabase : public IndexedDBDatabase {
  public:
   IndexedDBTestDatabase(const base::string16& name,
-                        IndexedDBBackingStore* backing_store,
-                        IndexedDBFactory* factory,
+                        scoped_refptr<IndexedDBBackingStore> backing_store,
+                        scoped_refptr<IndexedDBFactory> factory,
                         const IndexedDBDatabase::Identifier& unique_identifier)
       : IndexedDBDatabase(name, backing_store, factory, unique_identifier) {}
 
@@ -65,12 +66,12 @@ class IndexedDBTestTransaction : public IndexedDBTransaction {
  public:
   IndexedDBTestTransaction(
       int64_t id,
-      base::WeakPtr<IndexedDBConnection> connection,
+      IndexedDBConnection* connection,
       const std::set<int64_t>& scope,
       blink::WebIDBTransactionMode mode,
       IndexedDBBackingStore::Transaction* backing_store_transaction)
       : IndexedDBTransaction(id,
-                             std::move(connection),
+                             connection,
                              scope,
                              mode,
                              backing_store_transaction) {}
@@ -166,8 +167,10 @@ const std::string LevelDBTraceTransaction::s_class_name = "LevelDBTransaction";
 class LevelDBTraceIteratorImpl : public LevelDBIteratorImpl {
  public:
   LevelDBTraceIteratorImpl(std::unique_ptr<leveldb::Iterator> iterator,
+                           LevelDBDatabase* db,
+                           const leveldb::Snapshot* snapshot,
                            int inst_num)
-      : LevelDBIteratorImpl(std::move(iterator)),
+      : LevelDBIteratorImpl(std::move(iterator), db, snapshot),
         is_valid_tracer_(s_class_name, "IsValid", inst_num),
         seek_to_last_tracer_(s_class_name, "SeekToLast", inst_num),
         seek_tracer_(s_class_name, "Seek", inst_num),
@@ -223,9 +226,11 @@ const std::string LevelDBTraceIteratorImpl::s_class_name = "LevelDBIterator";
 class LevelDBTestIteratorImpl : public content::LevelDBIteratorImpl {
  public:
   LevelDBTestIteratorImpl(std::unique_ptr<leveldb::Iterator> iterator,
+                          LevelDBDatabase* db,
+                          const leveldb::Snapshot* snapshot,
                           FailMethod fail_method,
                           int fail_on_call_num)
-      : LevelDBIteratorImpl(std::move(iterator)),
+      : LevelDBIteratorImpl(std::move(iterator), db, snapshot),
         fail_method_(fail_method),
         fail_on_call_num_(fail_on_call_num),
         current_call_num_(0) {}
@@ -256,22 +261,22 @@ MockBrowserTestIndexedDBClassFactory::~MockBrowserTestIndexedDBClassFactory() {
 scoped_refptr<IndexedDBDatabase>
 MockBrowserTestIndexedDBClassFactory::CreateIndexedDBDatabase(
     const base::string16& name,
-    IndexedDBBackingStore* backing_store,
-    IndexedDBFactory* factory,
+    scoped_refptr<IndexedDBBackingStore> backing_store,
+    scoped_refptr<IndexedDBFactory> factory,
     const IndexedDBDatabase::Identifier& unique_identifier) {
   return new IndexedDBTestDatabase(name, backing_store, factory,
                                    unique_identifier);
 }
 
-IndexedDBTransaction*
+std::unique_ptr<IndexedDBTransaction>
 MockBrowserTestIndexedDBClassFactory::CreateIndexedDBTransaction(
     int64_t id,
-    base::WeakPtr<IndexedDBConnection> connection,
+    IndexedDBConnection* connection,
     const std::set<int64_t>& scope,
     blink::WebIDBTransactionMode mode,
     IndexedDBBackingStore::Transaction* backing_store_transaction) {
-  return new IndexedDBTestTransaction(id, std::move(connection), scope, mode,
-                                      backing_store_transaction);
+  return std::unique_ptr<IndexedDBTransaction>(new IndexedDBTestTransaction(
+      id, connection, scope, mode, backing_store_transaction));
 }
 
 scoped_refptr<LevelDBTransaction>
@@ -298,21 +303,25 @@ MockBrowserTestIndexedDBClassFactory::CreateLevelDBTransaction(
 
 std::unique_ptr<LevelDBIteratorImpl>
 MockBrowserTestIndexedDBClassFactory::CreateIteratorImpl(
-    std::unique_ptr<leveldb::Iterator> iterator) {
+    std::unique_ptr<leveldb::Iterator> iterator,
+    LevelDBDatabase* db,
+    const leveldb::Snapshot* snapshot) {
   instance_count_[FAIL_CLASS_LEVELDB_ITERATOR] =
       instance_count_[FAIL_CLASS_LEVELDB_ITERATOR] + 1;
   if (only_trace_calls_) {
     return base::MakeUnique<LevelDBTraceIteratorImpl>(
-        std::move(iterator), instance_count_[FAIL_CLASS_LEVELDB_ITERATOR]);
+        std::move(iterator), db, snapshot,
+        instance_count_[FAIL_CLASS_LEVELDB_ITERATOR]);
   } else {
     if (failure_class_ == FAIL_CLASS_LEVELDB_ITERATOR &&
         instance_count_[FAIL_CLASS_LEVELDB_ITERATOR] ==
             fail_on_instance_num_[FAIL_CLASS_LEVELDB_ITERATOR]) {
       return base::MakeUnique<LevelDBTestIteratorImpl>(
-          std::move(iterator), failure_method_,
+          std::move(iterator), db, snapshot, failure_method_,
           fail_on_call_num_[FAIL_CLASS_LEVELDB_ITERATOR]);
     } else {
-      return base::WrapUnique(new LevelDBIteratorImpl(std::move(iterator)));
+      return base::WrapUnique(
+          new LevelDBIteratorImpl(std::move(iterator), db, snapshot));
     }
   }
 }

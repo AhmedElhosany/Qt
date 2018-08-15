@@ -56,11 +56,6 @@
 
 #include "qdockwidget_p.h"
 #include "qmainwindowlayout_p.h"
-#if 0 // Used to be included in Qt4 for Q_WS_MAC
-#include <private/qapplication_p.h>
-#include <private/qt_mac_p.h>
-#include <private/qmacstyle_mac_p.h>
-#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -217,10 +212,9 @@ QDockWidgetLayout::~QDockWidgetLayout()
 bool QDockWidgetLayout::nativeWindowDeco() const
 {
     bool floating = parentWidget()->isWindow();
-    if (!floating) {
-        if (auto groupWindow = qobject_cast<const QDockWidgetGroupWindow*>(parentWidget()->parentWidget()))
-            return groupWindow->hasNativeDecos();
-    }
+    if (auto groupWindow =
+            qobject_cast<const QDockWidgetGroupWindow *>(parentWidget()->parentWidget()))
+        floating = floating || groupWindow->tabLayoutInfo();
     return nativeWindowDeco(floating);
 }
 
@@ -1442,7 +1436,7 @@ void QDockWidget::paintEvent(QPaintEvent *event)
         }
 
         // Title must be painted after the frame, since the areas overlap, and
-        // the title may wish to extend out to all sides (eg. XP style)
+        // the title may wish to extend out to all sides (eg. Vista style)
         QStyleOptionDockWidget titleOpt;
         initStyleOption(&titleOpt);
         p.drawControl(QStyle::CE_DockWidgetTitle, titleOpt);

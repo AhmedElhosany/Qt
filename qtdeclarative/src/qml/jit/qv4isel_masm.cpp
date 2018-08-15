@@ -133,7 +133,7 @@ void InstructionSelection<JITAssembler>::run(int functionIndex)
             if (s->location.isValid()) {
                 if (int(s->location.startLine) != lastLine) {
                     _as->loadPtr(Address(JITTargetPlatform::EngineRegister, JITAssembler::targetStructureOffset(offsetof(QV4::EngineBase, current))), JITTargetPlatform::ScratchRegister);
-                    Address lineAddr(JITTargetPlatform::ScratchRegister, JITAssembler::targetStructureOffset(Heap::ExecutionContext::baseOffset + offsetof(Heap::ExecutionContextData, lineNumber)));
+                    Address lineAddr(JITTargetPlatform::ScratchRegister, JITAssembler::targetStructureOffset(Heap::ExecutionContextData::baseOffset + offsetof(Heap::ExecutionContextData, lineNumber)));
                     _as->store32(TrustedImm32(s->location.startLine), lineAddr);
                     lastLine = s->location.startLine;
                 }
@@ -350,11 +350,11 @@ void InstructionSelection<JITAssembler>::callBuiltinDefineObjectLiteral(IR::Expr
         bool isData = it->expr->asConst()->value;
         it = it->next;
 
-        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr);
+        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr, WriteBarrier::NoBarrier);
 
         if (!isData) {
             it = it->next;
-            _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr);
+            _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr, WriteBarrier::NoBarrier);
         }
     }
 
@@ -376,10 +376,10 @@ void InstructionSelection<JITAssembler>::callBuiltinDefineObjectLiteral(IR::Expr
         ++arrayValueCount;
 
         // Index
-        _as->storeValue(JITAssembler::TargetPrimitive::fromUInt32(index), _as->stackLayout().argumentAddressForCall(argc++));
+        _as->storeValue(JITAssembler::TargetPrimitive::fromUInt32(index), _as->stackLayout().argumentAddressForCall(argc++), WriteBarrier::NoBarrier);
 
         // Value
-        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr);
+        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr, WriteBarrier::NoBarrier);
         it = it->next;
     }
 
@@ -400,14 +400,14 @@ void InstructionSelection<JITAssembler>::callBuiltinDefineObjectLiteral(IR::Expr
         ++arrayGetterSetterCount;
 
         // Index
-        _as->storeValue(JITAssembler::TargetPrimitive::fromUInt32(index), _as->stackLayout().argumentAddressForCall(argc++));
+        _as->storeValue(JITAssembler::TargetPrimitive::fromUInt32(index), _as->stackLayout().argumentAddressForCall(argc++), WriteBarrier::NoBarrier);
 
         // Getter
-        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr);
+        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr, WriteBarrier::NoBarrier);
         it = it->next;
 
         // Setter
-        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr);
+        _as->copyValue(_as->stackLayout().argumentAddressForCall(argc++), it->expr, WriteBarrier::NoBarrier);
         it = it->next;
     }
 
@@ -447,9 +447,11 @@ void InstructionSelection<JITAssembler>::callValue(IR::Expr *value, IR::ExprList
 template <typename JITAssembler>
 void InstructionSelection<JITAssembler>::loadThisObject(IR::Expr *temp)
 {
-    _as->loadPtr(Address(JITTargetPlatform::EngineRegister, JITAssembler::targetStructureOffset(offsetof(QV4::EngineBase, current))), JITTargetPlatform::ScratchRegister);
-    _as->loadPtr(Address(JITTargetPlatform::ScratchRegister, JITAssembler::targetStructureOffset(Heap::ExecutionContext::baseOffset + offsetof(Heap::ExecutionContextData, callData))), JITTargetPlatform::ScratchRegister);
-    _as->copyValue(temp, Address(JITTargetPlatform::ScratchRegister, offsetof(CallData, thisObject)));
+    WriteBarrier::Type barrier;
+    Pointer addr = _as->loadAddressForWriting(JITTargetPlatform::ScratchRegister, temp, &barrier);
+    _as->loadPtr(Address(JITTargetPlatform::EngineRegister, JITAssembler::targetStructureOffset(offsetof(QV4::EngineBase, current))), JITTargetPlatform::ReturnValueRegister);
+    _as->loadPtr(Address(JITTargetPlatform::ReturnValueRegister,JITAssembler::targetStructureOffset(Heap::ExecutionContextData::baseOffset + offsetof(Heap::ExecutionContextData, callData))), JITTargetPlatform::ReturnValueRegister);
+    _as->copyValue(addr, Address(JITTargetPlatform::ReturnValueRegister, offsetof(CallData, thisObject)), barrier);
 }
 
 template <typename JITAssembler>
@@ -503,8 +505,9 @@ void InstructionSelection<JITAssembler>::loadString(const QString &str, IR::Expr
 {
     Pointer srcAddr = _as->loadStringAddress(JITTargetPlatform::ReturnValueRegister, str);
     _as->loadPtr(srcAddr, JITTargetPlatform::ReturnValueRegister);
-    Pointer destAddr = _as->loadAddress(JITTargetPlatform::ScratchRegister, target);
-    JITAssembler::RegisterSizeDependentOps::loadManagedPointer(_as, JITTargetPlatform::ReturnValueRegister, destAddr);
+    WriteBarrier::Type barrier;
+    Pointer destAddr = _as->loadAddressForWriting(JITTargetPlatform::ScratchRegister, target, &barrier);
+    JITAssembler::RegisterSizeDependentOps::loadManagedPointer(_as, JITTargetPlatform::ReturnValueRegister, destAddr, barrier);
 }
 
 template <typename JITAssembler>
@@ -621,6 +624,7 @@ void InstructionSelection<JITAssembler>::getElement(IR::Expr *base, IR::Expr *in
     if (0 && useFastLookups) {
         uint lookup = registerIndexedGetterLookup();
         generateLookupCall(target, lookup, offsetof(QV4::Lookup, indexedGetter),
+                           JITTargetPlatform::EngineRegister,
                            PointerToValue(base),
                            PointerToValue(index));
         return;
@@ -636,6 +640,7 @@ void InstructionSelection<JITAssembler>::setElement(IR::Expr *source, IR::Expr *
     if (0 && useFastLookups) {
         uint lookup = registerIndexedSetterLookup();
         generateLookupCall(JITAssembler::Void, lookup, offsetof(QV4::Lookup, indexedSetter),
+                           JITTargetPlatform::EngineRegister,
                            PointerToValue(targetBase), PointerToValue(targetIndex),
                            PointerToValue(source));
         return;
@@ -711,8 +716,10 @@ void InstructionSelection<JITAssembler>::copyValue(IR::Expr *source, IR::Expr *t
         }
     }
 
+    WriteBarrier::Type barrier;
+    Pointer addr = _as->loadAddressForWriting(JITTargetPlatform::ReturnValueRegister, target, &barrier);
     // The target is not a physical register, nor is the source. So we can do a memory-to-memory copy:
-    _as->memcopyValue(_as->loadAddress(JITTargetPlatform::ReturnValueRegister, target), source, JITTargetPlatform::ScratchRegister);
+    _as->memcopyValue(addr, source, JITTargetPlatform::ScratchRegister, barrier);
 }
 
 template <typename JITAssembler>
@@ -739,14 +746,13 @@ void InstructionSelection<JITAssembler>::swapValues(IR::Expr *source, IR::Expr *
     } else if (!sourceTemp || sourceTemp->kind == IR::Temp::StackSlot) {
         if (!targetTemp || targetTemp->kind == IR::Temp::StackSlot) {
             // Note: a swap for two stack-slots can involve different types.
-            Pointer sAddr = _as->loadAddress(JITTargetPlatform::ScratchRegister, source);
-            Pointer tAddr = _as->loadAddress(JITTargetPlatform::ReturnValueRegister, target);
-            // use the implementation in JSC::MacroAssembler, as it doesn't do bit swizzling
-            auto platformAs = static_cast<typename JITAssembler::MacroAssembler*>(_as);
-            platformAs->loadDouble(sAddr, JITTargetPlatform::FPGpr0);
-            platformAs->loadDouble(tAddr, JITTargetPlatform::FPGpr1);
-            platformAs->storeDouble(JITTargetPlatform::FPGpr1, sAddr);
-            platformAs->storeDouble(JITTargetPlatform::FPGpr0, tAddr);
+            WriteBarrier::Type barrierForSource, barrierForTarget;
+            Pointer sAddr = _as->loadAddressForWriting(JITTargetPlatform::ScratchRegister, source, &barrierForSource);
+            Pointer tAddr = _as->loadAddressForWriting(JITTargetPlatform::ReturnValueRegister, target, &barrierForTarget);
+            _as->loadRawValue(sAddr, JITTargetPlatform::FPGpr0);
+            _as->loadRawValue(tAddr, JITTargetPlatform::FPGpr1);
+            _as->storeRawValue(JITTargetPlatform::FPGpr1, sAddr, barrierForSource);
+            _as->storeRawValue(JITTargetPlatform::FPGpr0, tAddr, barrierForTarget);
             return;
         }
     }
@@ -757,14 +763,15 @@ void InstructionSelection<JITAssembler>::swapValues(IR::Expr *source, IR::Expr *
     Q_ASSERT(memExpr);
     Q_ASSERT(regTemp);
 
-    Pointer addr = _as->loadAddress(JITTargetPlatform::ReturnValueRegister, memExpr);
+    WriteBarrier::Type barrier;
+    Pointer addr = _as->loadAddressForWriting(JITTargetPlatform::ReturnValueRegister, memExpr, &barrier);
     if (regTemp->type == IR::DoubleType) {
         _as->loadDouble(addr, JITTargetPlatform::FPGpr0);
-        _as->storeDouble((FPRegisterID) regTemp->index, addr);
+        _as->storeDouble((FPRegisterID) regTemp->index, addr, barrier);
         _as->moveDouble(JITTargetPlatform::FPGpr0, (FPRegisterID) regTemp->index);
     } else if (regTemp->type == IR::UInt32Type) {
         _as->toUInt32Register(addr, JITTargetPlatform::ScratchRegister);
-        _as->storeUInt32((RegisterID) regTemp->index, addr);
+        _as->storeUInt32((RegisterID) regTemp->index, addr, barrier);
         _as->move(JITTargetPlatform::ScratchRegister, (RegisterID) regTemp->index);
     } else {
         _as->load32(addr, JITTargetPlatform::ScratchRegister);
@@ -784,6 +791,7 @@ void InstructionSelection<JITAssembler>::swapValues(IR::Expr *source, IR::Expr *
                 Q_UNREACHABLE();
             }
             _as->store32(TrustedImm32(tag), addr);
+            _as->emitWriteBarrier(addr, barrier);
         }
         _as->move(JITTargetPlatform::ScratchRegister, (RegisterID) regTemp->index);
     }
@@ -913,13 +921,13 @@ void InstructionSelection<JITAssembler>::convertTypeToDouble(IR::Expr *source, I
         convertUIntToDouble(source, target);
         break;
     case IR::UndefinedType:
-        _as->loadDouble(_as->loadAddress(JITTargetPlatform::ScratchRegister, source), JITTargetPlatform::FPGpr0);
+        _as->loadDouble(_as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source), JITTargetPlatform::FPGpr0);
         _as->storeDouble(JITTargetPlatform::FPGpr0, target);
         break;
     case IR::StringType:
     case IR::VarType: {
         // load the tag:
-        Pointer tagAddr = _as->loadAddress(JITTargetPlatform::ScratchRegister, source);
+        Pointer tagAddr = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source);
         tagAddr.offset += 4;
         _as->load32(tagAddr, JITTargetPlatform::ScratchRegister);
 
@@ -938,7 +946,7 @@ void InstructionSelection<JITAssembler>::convertTypeToDouble(IR::Expr *source, I
 
         // it is a double:
         isDbl.link(_as);
-        Pointer addr2 = _as->loadAddress(JITTargetPlatform::ScratchRegister, source);
+        Pointer addr2 = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source);
         IR::Temp *targetTemp = target->asTemp();
         if (!targetTemp || targetTemp->kind == IR::Temp::StackSlot) {
             _as->memcopyValue(target, addr2, JITTargetPlatform::FPGpr0, JITTargetPlatform::ReturnValueRegister);
@@ -997,7 +1005,7 @@ void InstructionSelection<JITAssembler>::convertTypeToBool(IR::Expr *source, IR:
         Q_FALLTHROUGH();
     case IR::VarType:
     default:
-        Pointer addr = _as->loadAddress(JITTargetPlatform::ScratchRegister, source);
+        Pointer addr = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source);
         Pointer tagAddr = addr;
         tagAddr.offset += 4;
         _as->load32(tagAddr, JITTargetPlatform::ReturnValueRegister);
@@ -1062,7 +1070,7 @@ void InstructionSelection<JITAssembler>::convertTypeToSInt32(IR::Expr *source, I
     case IR::StringType:
     default:
         generateRuntimeCall(_as, JITTargetPlatform::ReturnValueRegister, toInt,
-                             _as->loadAddress(JITTargetPlatform::ScratchRegister, source));
+                             _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source));
         _as->storeInt32(JITTargetPlatform::ReturnValueRegister, target);
         break;
     } // switch (source->type)
@@ -1074,21 +1082,21 @@ void InstructionSelection<JITAssembler>::convertTypeToUInt32(IR::Expr *source, I
     switch (source->type) {
     case IR::VarType: {
         // load the tag:
-        Pointer tagAddr = _as->loadAddress(JITTargetPlatform::ScratchRegister, source);
+        Pointer tagAddr = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source);
         tagAddr.offset += 4;
         _as->load32(tagAddr, JITTargetPlatform::ScratchRegister);
 
         // check if it's an int32:
         Jump isNoInt = _as->branch32(RelationalCondition::NotEqual, JITTargetPlatform::ScratchRegister,
                                      TrustedImm32(quint32(JITAssembler::ValueTypeInternal::Integer)));
-        Pointer addr = _as->loadAddress(JITTargetPlatform::ScratchRegister, source);
+        Pointer addr = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source);
         _as->storeUInt32(_as->toInt32Register(addr, JITTargetPlatform::ScratchRegister), target);
         Jump intDone = _as->jump();
 
         // not an int:
         isNoInt.link(_as);
         generateRuntimeCall(_as, JITTargetPlatform::ReturnValueRegister, toUInt,
-                             _as->loadAddress(JITTargetPlatform::ScratchRegister, source));
+                             _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, source));
         _as->storeInt32(JITTargetPlatform::ReturnValueRegister, target);
 
         intDone.link(_as);
@@ -1193,7 +1201,7 @@ void InstructionSelection<JITAssembler>::visitCJump(IR::CJump *s)
             reg = JITTargetPlatform::ReturnValueRegister;
             _as->toInt32Register(t, reg);
         } else {
-            Address temp = _as->loadAddress(JITTargetPlatform::ScratchRegister, s->cond);
+            Address temp = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, s->cond);
             Address tag = temp;
             tag.offset += QV4::Value::tagOffset();
             Jump booleanConversion = _as->branch32(RelationalCondition::NotEqual, tag,
@@ -1299,9 +1307,9 @@ int InstructionSelection<JITAssembler>::prepareVariableArguments(IR::ExprList* a
         Q_ASSERT(arg != 0);
         Pointer dst(_as->stackLayout().argumentAddressForCall(i));
         if (arg->asTemp() && arg->asTemp()->kind != IR::Temp::PhysicalRegister)
-            _as->memcopyValue(dst, arg->asTemp(), JITTargetPlatform::ScratchRegister);
+            _as->memcopyValue(dst, arg->asTemp(), JITTargetPlatform::ScratchRegister, WriteBarrier::NoBarrier);
         else
-            _as->copyValue(dst, arg);
+            _as->copyValue(dst, arg, WriteBarrier::NoBarrier);
     }
 
     return argc;
@@ -1321,9 +1329,9 @@ int InstructionSelection<JITAssembler>::prepareCallData(IR::ExprList* args, IR::
     _as->store32(TrustedImm32(argc), p);
     p = _as->stackLayout().callDataAddress(offsetof(CallData, thisObject));
     if (!thisObject)
-        _as->storeValue(JITAssembler::TargetPrimitive::undefinedValue(), p);
+        _as->storeValue(JITAssembler::TargetPrimitive::undefinedValue(), p, WriteBarrier::NoBarrier);
     else
-        _as->copyValue(p, thisObject);
+        _as->copyValue(p, thisObject, WriteBarrier::NoBarrier);
 
     int i = 0;
     for (IR::ExprList *it = args; it; it = it->next, ++i) {
@@ -1331,9 +1339,9 @@ int InstructionSelection<JITAssembler>::prepareCallData(IR::ExprList* args, IR::
         Q_ASSERT(arg != 0);
         Pointer dst(_as->stackLayout().argumentAddressForCall(i));
         if (arg->asTemp() && arg->asTemp()->kind != IR::Temp::PhysicalRegister)
-            _as->memcopyValue(dst, arg->asTemp(), JITTargetPlatform::ScratchRegister);
+            _as->memcopyValue(dst, arg->asTemp(), JITTargetPlatform::ScratchRegister, WriteBarrier::NoBarrier);
         else
-            _as->copyValue(dst, arg);
+            _as->copyValue(dst, arg, WriteBarrier::NoBarrier);
     }
     return argc;
 }
@@ -1451,7 +1459,7 @@ bool InstructionSelection<JITAssembler>::visitCJumpStrictNull(IR::Binop *binop,
         return true;
     }
 
-    Pointer tagAddr = _as->loadAddress(JITTargetPlatform::ScratchRegister, varSrc);
+    Pointer tagAddr = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, varSrc);
     tagAddr.offset += 4;
     const RegisterID tagReg = JITTargetPlatform::ScratchRegister;
     _as->load32(tagAddr, tagReg);
@@ -1534,7 +1542,7 @@ bool InstructionSelection<JITAssembler>::visitCJumpStrictBool(IR::Binop *binop, 
         return true;
     }
 
-    Pointer otherAddr = _as->loadAddress(JITTargetPlatform::ReturnValueRegister, otherSrc);
+    Pointer otherAddr = _as->loadAddressForReading(JITTargetPlatform::ReturnValueRegister, otherSrc);
     otherAddr.offset += 4; // tag address
 
     // check if the tag of the var operand is indicates 'boolean'
@@ -1583,7 +1591,7 @@ bool InstructionSelection<JITAssembler>::visitCJumpNullUndefined(IR::Type nullOr
         return true;
     }
 
-    Pointer tagAddr = _as->loadAddress(JITTargetPlatform::ScratchRegister, varSrc);
+    Pointer tagAddr = _as->loadAddressForReading(JITTargetPlatform::ScratchRegister, varSrc);
     tagAddr.offset += 4;
     const RegisterID tagReg = JITTargetPlatform::ReturnValueRegister;
     _as->load32(tagAddr, tagReg);

@@ -48,7 +48,7 @@
 // We mean it.
 //
 
-#include "qquickcontrol_p.h"
+#include <QtQuickTemplates2/private/qquickcontrol_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -91,10 +91,13 @@ protected:
     void fontChange(const QFont &newFont, const QFont &oldFont) override;
     void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) override;
     void localeChange(const QLocale &newLocale, const QLocale &oldLocale) override;
+    void mirrorChange() override;
     void itemChange(ItemChange change, const ItemChangeData &data) override;
     void paddingChange(const QMarginsF &newPadding, const QMarginsF &oldPadding) override;
+    void paletteChange(const QPalette &newPalette, const QPalette &oldPalette) override;
 
     QFont defaultFont() const override;
+    QPalette defaultPalette() const override;
 
 #if QT_CONFIG(accessibility)
     QAccessible::Role accessibleRole() const override;

@@ -15,7 +15,6 @@
 #include "base/atomic_sequence_num.h"
 #include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -24,10 +23,17 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
 #include "gpu/command_buffer/client/gpu_control.h"
+#include "gpu/command_buffer/common/activity_flags.h"
 #include "gpu/command_buffer/common/command_buffer.h"
+#include "gpu/command_buffer/service/command_buffer_service.h"
+#include "gpu/command_buffer/service/context_group.h"
+#include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/gpu_preferences.h"
+#include "gpu/command_buffer/service/image_manager.h"
+#include "gpu/command_buffer/service/service_discardable_manager.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "gpu/gpu_export.h"
+#include "gpu/ipc/service/image_transport_surface_delegate.h"
 #include "ui/gfx/gpu_memory_buffer.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gl/gl_surface.h"
@@ -48,33 +54,39 @@ class Size;
 }
 
 namespace gpu {
-class SyncPointClient;
+
+class ServiceDiscardableManager;
+class SyncPointClientState;
 class SyncPointOrderData;
 class SyncPointManager;
+struct GpuProcessHostedCALayerTreeParamsMac;
 
 namespace gles2 {
 struct ContextCreationAttribHelper;
 class FramebufferCompletenessCache;
-class GLES2Decoder;
 class MailboxManager;
 class ProgramCache;
 class ShaderTranslatorCache;
 }
 
-class CommandBufferServiceBase;
 class GpuMemoryBufferManager;
-class CommandExecutor;
 class ImageFactory;
-class TransferBufferManagerInterface;
+class TransferBufferManager;
 
 // This class provides a thread-safe interface to the global GPU service (for
 // example GPU thread) when being run in single process mode.
 // However, the behavior for accessing one context (i.e. one instance of this
 // class) from different client threads is undefined.
 class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
-                                          public GpuControl {
+                                          public GpuControl,
+                                          public CommandBufferServiceClient,
+                                          public gles2::GLES2DecoderClient,
+                                          public ImageTransportSurfaceDelegate {
  public:
   class Service;
+  typedef base::Callback<void(const std::vector<ui::LatencyInfo>&)>
+      LatencyInfoCallback;
+
   explicit InProcessCommandBuffer(const scoped_refptr<Service>& service);
   ~InProcessCommandBuffer() override;
 
@@ -83,7 +95,7 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
   // a new GLSurface.
   bool Initialize(scoped_refptr<gl::GLSurface> surface,
                   bool is_offscreen,
-                  gfx::AcceleratedWidget window,
+                  SurfaceHandle window,
                   const gles2::ContextCreationAttribHelper& attribs,
                   InProcessCommandBuffer* share_group,
                   GpuMemoryBufferManager* gpu_memory_buffer_manager,
@@ -92,16 +104,16 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
 
   // CommandBuffer implementation:
   State GetLastState() override;
-  int32_t GetLastToken() override;
   void Flush(int32_t put_offset) override;
   void OrderingBarrier(int32_t put_offset) override;
-  void WaitForTokenInRange(int32_t start, int32_t end) override;
-  void WaitForGetOffsetInRange(int32_t start, int32_t end) override;
+  State WaitForTokenInRange(int32_t start, int32_t end) override;
+  State WaitForGetOffsetInRange(uint32_t set_get_buffer_count,
+                                int32_t start,
+                                int32_t end) override;
   void SetGetBuffer(int32_t shm_id) override;
   scoped_refptr<gpu::Buffer> CreateTransferBuffer(size_t size,
                                                   int32_t* id) override;
   void DestroyTransferBuffer(int32_t id) override;
-  gpu::error::Error GetLastError() override;
 
   // GpuControl implementation:
   // NOTE: The GpuControlClient will be called on the client thread.
@@ -112,29 +124,75 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
                       size_t height,
                       unsigned internalformat) override;
   void DestroyImage(int32_t id) override;
-  int32_t CreateGpuMemoryBufferImage(size_t width,
-                                     size_t height,
-                                     unsigned internalformat,
-                                     unsigned usage) override;
   void SignalQuery(uint32_t query_id, const base::Closure& callback) override;
   void SetLock(base::Lock*) override;
   void EnsureWorkVisible() override;
   CommandBufferNamespace GetNamespaceID() const override;
   CommandBufferId GetCommandBufferID() const override;
-  int32_t GetExtraCommandBufferData() const override;
+  int32_t GetStreamId() const override;
+  void FlushOrderingBarrierOnStream(int32_t stream_id) override;
   uint64_t GenerateFenceSyncRelease() override;
   bool IsFenceSyncRelease(uint64_t release) override;
   bool IsFenceSyncFlushed(uint64_t release) override;
   bool IsFenceSyncFlushReceived(uint64_t release) override;
+  bool IsFenceSyncReleased(uint64_t release) override;
   void SignalSyncToken(const SyncToken& sync_token,
                        const base::Closure& callback) override;
-  bool CanWaitUnverifiedSyncToken(const SyncToken* sync_token) override;
+  void WaitSyncTokenHint(const SyncToken& sync_token) override;
+  bool CanWaitUnverifiedSyncToken(const SyncToken& sync_token) override;
+  void AddLatencyInfo(
+      const std::vector<ui::LatencyInfo>& latency_info) override;
+
+  // CommandBufferServiceClient implementation:
+  CommandBatchProcessedResult OnCommandBatchProcessed() override;
+  void OnParseError() override;
+
+  // GLES2DecoderClient implementation:
+  void OnConsoleMessage(int32_t id, const std::string& message) override;
+  void CacheShader(const std::string& key, const std::string& shader) override;
+  void OnFenceSyncRelease(uint64_t release) override;
+  bool OnWaitSyncToken(const SyncToken& sync_token) override;
+  void OnDescheduleUntilFinished() override;
+  void OnRescheduleAfterFinished() override;
+
+// ImageTransportSurfaceDelegate implementation:
+#if defined(OS_WIN)
+  void DidCreateAcceleratedSurfaceChildWindow(
+      SurfaceHandle parent_window,
+      SurfaceHandle child_window) override;
+#endif
+  void DidSwapBuffersComplete(SwapBuffersCompleteParams params) override;
+  const gles2::FeatureInfo* GetFeatureInfo() const override;
+  void SetLatencyInfoCallback(const LatencyInfoCallback& callback) override;
+  void UpdateVSyncParameters(base::TimeTicks timebase,
+                             base::TimeDelta interval) override;
+
+  void AddFilter(IPC::MessageFilter* message_filter) override;
+  int32_t GetRouteID() const override;
+
+  using SwapBuffersCompletionCallback = base::Callback<void(
+      const std::vector<ui::LatencyInfo>& latency_info,
+      gfx::SwapResult result,
+      const gpu::GpuProcessHostedCALayerTreeParamsMac* params_mac)>;
+  void SetSwapBuffersCompletionCallback(
+      const SwapBuffersCompletionCallback& callback);
+
+  using UpdateVSyncParametersCallback =
+      base::Callback<void(base::TimeTicks timebase, base::TimeDelta interval)>;
+  void SetUpdateVSyncParametersCallback(
+      const UpdateVSyncParametersCallback& callback);
+
+  void DidSwapBuffersCompleteOnOriginThread(SwapBuffersCompleteParams params);
+  void UpdateVSyncParametersOnOriginThread(base::TimeTicks timebase,
+                                           base::TimeDelta interval);
 
   // The serializer interface to the GPU service (i.e. thread).
   class Service {
    public:
-    Service();
-    Service(const gpu::GpuPreferences& gpu_preferences);
+    explicit Service(const gpu::GpuPreferences& gpu_preferences);
+    Service(gles2::MailboxManager* mailbox_manager,
+            scoped_refptr<gl::GLShareGroup> share_group);
+
     virtual ~Service();
 
     virtual void AddRef() const = 0;
@@ -148,29 +206,48 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
     virtual void ScheduleDelayedWork(const base::Closure& task) = 0;
 
     virtual bool UseVirtualizedGLContexts() = 0;
-    virtual scoped_refptr<gles2::ShaderTranslatorCache>
-    shader_translator_cache() = 0;
-    virtual scoped_refptr<gles2::FramebufferCompletenessCache>
-    framebuffer_completeness_cache() = 0;
     virtual SyncPointManager* sync_point_manager() = 0;
+    virtual bool BlockThreadOnWaitSyncToken() const = 0;
+
     const GpuPreferences& gpu_preferences();
     const GpuDriverBugWorkarounds& gpu_driver_bug_workarounds();
     scoped_refptr<gl::GLShareGroup> share_group();
-    scoped_refptr<gles2::MailboxManager> mailbox_manager();
-    gpu::gles2::ProgramCache* program_cache();
+    gles2::MailboxManager* mailbox_manager() { return mailbox_manager_; }
+    gles2::ProgramCache* program_cache();
+    gles2::ImageManager* image_manager() { return &image_manager_; }
+    ServiceDiscardableManager* discardable_manager() {
+      return &discardable_manager_;
+    }
+    gles2::ShaderTranslatorCache* shader_translator_cache() {
+      return &shader_translator_cache_;
+    }
+    gles2::FramebufferCompletenessCache* framebuffer_completeness_cache() {
+      return &framebuffer_completeness_cache_;
+    }
 
-   private:
+   protected:
+    Service(const gpu::GpuPreferences& gpu_preferences,
+            gles2::MailboxManager* mailbox_manager,
+            scoped_refptr<gl::GLShareGroup> share_group);
+
     const GpuPreferences gpu_preferences_;
     const GpuDriverBugWorkarounds gpu_driver_bug_workarounds_;
+    std::unique_ptr<gles2::MailboxManager> owned_mailbox_manager_;
+    gles2::MailboxManager* mailbox_manager_ = nullptr;
     scoped_refptr<gl::GLShareGroup> share_group_;
-    scoped_refptr<gles2::MailboxManager> mailbox_manager_;
-    std::unique_ptr<gpu::gles2::ProgramCache> program_cache_;
+    std::unique_ptr<gles2::ProgramCache> program_cache_;
+    // No-op default initialization is used in in-process mode.
+    GpuProcessActivityFlags activity_flags_;
+    gles2::ImageManager image_manager_;
+    ServiceDiscardableManager discardable_manager_;
+    gles2::ShaderTranslatorCache shader_translator_cache_;
+    gles2::FramebufferCompletenessCache framebuffer_completeness_cache_;
   };
 
  private:
   struct InitializeOnGpuThreadParams {
     bool is_offscreen;
-    gfx::AcceleratedWidget window;
+    SurfaceHandle window;
     const gles2::ContextCreationAttribHelper& attribs;
     gpu::Capabilities* capabilities;  // Ouptut.
     InProcessCommandBuffer* context_group;
@@ -178,7 +255,7 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
 
     InitializeOnGpuThreadParams(
         bool is_offscreen,
-        gfx::AcceleratedWidget window,
+        SurfaceHandle window,
         const gles2::ContextCreationAttribHelper& attribs,
         gpu::Capabilities* capabilities,
         InProcessCommandBuffer* share_group,
@@ -194,19 +271,16 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
   bool InitializeOnGpuThread(const InitializeOnGpuThreadParams& params);
   void Destroy();
   bool DestroyOnGpuThread();
-  void FlushOnGpuThread(int32_t put_offset, uint32_t order_num);
+  void FlushOnGpuThread(int32_t put_offset,
+                        std::vector<ui::LatencyInfo>* latency_info);
+  void UpdateLastStateOnGpuThread();
   void ScheduleDelayedWorkOnGpuThread();
   bool MakeCurrent();
   base::Closure WrapCallback(const base::Closure& callback);
-  State GetStateFast();
-  void QueueTask(const base::Closure& task) { service_->ScheduleTask(task); }
+  void QueueTask(bool out_of_order, const base::Closure& task);
+  void ProcessTasksOnGpuThread();
   void CheckSequencedThread();
-  void FenceSyncReleaseOnGpuThread(uint64_t release);
-  bool WaitFenceSyncOnGpuThread(gpu::CommandBufferNamespace namespace_id,
-                                gpu::CommandBufferId command_buffer_id,
-                                uint64_t release);
-  void DescheduleUntilFinishedOnGpuThread();
-  void RescheduleAfterFinishedOnGpuThread();
+  void OnWaitSyncTokenCompleted(const SyncToken& sync_token);
   void SignalSyncTokenOnGpuThread(const SyncToken& sync_token,
                                   const base::Closure& callback);
   void SignalQueryOnGpuThread(unsigned query_id, const base::Closure& callback);
@@ -216,14 +290,12 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
                               const gfx::Size& size,
                               gfx::BufferFormat format,
                               uint32_t internalformat,
-                              uint32_t order_num,
+                              // uint32_t order_num,
                               uint64_t fence_sync);
   void DestroyImageOnGpuThread(int32_t id);
   void SetGetBufferOnGpuThread(int32_t shm_id, base::WaitableEvent* completion);
 
   // Callbacks on the gpu thread.
-  void OnContextLostOnGpuThread();
-  void PumpCommandsOnGpuThread();
   void PerformDelayedWorkOnGpuThread();
   // Callback implementations on the client thread.
   void OnContextLost();
@@ -232,18 +304,25 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
 
   // Members accessed on the gpu thread (possibly with the exception of
   // creation):
+  bool waiting_for_sync_point_ = false;
+  bool use_virtualized_gl_context_ = false;
+
   scoped_refptr<base::SingleThreadTaskRunner> origin_task_runner_;
-  scoped_refptr<TransferBufferManagerInterface> transfer_buffer_manager_;
-  std::unique_ptr<CommandExecutor> executor_;
+  std::unique_ptr<TransferBufferManager> transfer_buffer_manager_;
   std::unique_ptr<gles2::GLES2Decoder> decoder_;
   scoped_refptr<gl::GLContext> context_;
   scoped_refptr<gl::GLSurface> surface_;
   scoped_refptr<SyncPointOrderData> sync_point_order_data_;
-  std::unique_ptr<SyncPointClient> sync_point_client_;
+  scoped_refptr<SyncPointClientState> sync_point_client_state_;
   base::Closure context_lost_callback_;
   // Used to throttle PerformDelayedWorkOnGpuThread.
   bool delayed_work_pending_;
   ImageFactory* image_factory_;
+
+  LatencyInfoCallback latency_info_callback_;
+
+  // Should only be accessed on the client thread.
+  std::unique_ptr<std::vector<ui::LatencyInfo>> latency_info_;
 
   // Members accessed on the client thread:
   GpuControlClient* gpu_control_client_;
@@ -251,6 +330,7 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
   bool context_lost_;
 #endif
   State last_state_;
+  base::Lock last_state_lock_;
   int32_t last_put_offset_;
   gpu::Capabilities capabilities_;
   GpuMemoryBufferManager* gpu_memory_buffer_manager_;
@@ -259,12 +339,14 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
   uint64_t flushed_fence_sync_release_;
 
   // Accessed on both threads:
-  std::unique_ptr<CommandBufferServiceBase> command_buffer_;
+  std::unique_ptr<CommandBufferService> command_buffer_;
   base::Lock command_buffer_lock_;
   base::WaitableEvent flush_event_;
   scoped_refptr<Service> service_;
-  State state_after_last_flush_;
-  base::Lock state_after_last_flush_lock_;
+
+  // The group of contexts that share namespaces with this context.
+  scoped_refptr<gles2::ContextGroup> context_group_;
+
   scoped_refptr<gl::GLShareGroup> gl_share_group_;
   base::WaitableEvent fence_sync_wait_event_;
 
@@ -272,42 +354,24 @@ class GPU_EXPORT InProcessCommandBuffer : public CommandBuffer,
   // the client thread.
   std::unique_ptr<base::SequenceChecker> sequence_checker_;
 
+  base::Lock task_queue_lock_;
+  struct GpuTask {
+    GpuTask(const base::Closure& callback, uint32_t order_number);
+    ~GpuTask();
+    base::Closure callback;
+    uint32_t order_number;
+  };
+  std::queue<std::unique_ptr<GpuTask>> task_queue_;
+
+  SwapBuffersCompletionCallback swap_buffers_completion_callback_;
+  UpdateVSyncParametersCallback update_vsync_parameters_completion_callback_;
+
   base::WeakPtr<InProcessCommandBuffer> client_thread_weak_ptr_;
   base::WeakPtr<InProcessCommandBuffer> gpu_thread_weak_ptr_;
   base::WeakPtrFactory<InProcessCommandBuffer> client_thread_weak_ptr_factory_;
   base::WeakPtrFactory<InProcessCommandBuffer> gpu_thread_weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(InProcessCommandBuffer);
-};
-
-// Default Service class when a null service is used.
-class GPU_EXPORT GpuInProcessThread
-    : public base::Thread,
-      public NON_EXPORTED_BASE(InProcessCommandBuffer::Service),
-      public base::RefCountedThreadSafe<GpuInProcessThread> {
- public:
-  explicit GpuInProcessThread(SyncPointManager* sync_point_manager);
-
-  void AddRef() const override;
-  void Release() const override;
-  void ScheduleTask(const base::Closure& task) override;
-  void ScheduleDelayedWork(const base::Closure& callback) override;
-  bool UseVirtualizedGLContexts() override;
-  scoped_refptr<gles2::ShaderTranslatorCache> shader_translator_cache()
-      override;
-  scoped_refptr<gles2::FramebufferCompletenessCache>
-  framebuffer_completeness_cache() override;
-  SyncPointManager* sync_point_manager() override;
-
- private:
-  ~GpuInProcessThread() override;
-  friend class base::RefCountedThreadSafe<GpuInProcessThread>;
-
-  SyncPointManager* sync_point_manager_;  // Non-owning.
-  scoped_refptr<gpu::gles2::ShaderTranslatorCache> shader_translator_cache_;
-  scoped_refptr<gpu::gles2::FramebufferCompletenessCache>
-      framebuffer_completeness_cache_;
-  DISALLOW_COPY_AND_ASSIGN(GpuInProcessThread);
 };
 
 }  // namespace gpu

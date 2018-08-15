@@ -8,19 +8,18 @@
 #ifndef CONTENT_BROWSER_PLUGIN_SERVICE_IMPL_H_
 #define CONTENT_BROWSER_PLUGIN_SERVICE_IMPL_H_
 
-#if !defined(ENABLE_PLUGINS)
+#include "ppapi/features/features.h"
+
+#if !BUILDFLAG(ENABLE_PLUGINS)
 #error "Plugins should be enabled"
 #endif
 
 #include <map>
-#include <memory>
-#include <set>
 #include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "base/memory/singleton.h"
 #include "base/sequence_checker.h"
 #include "base/sequenced_task_runner.h"
@@ -41,10 +40,6 @@
 #if defined(OS_POSIX) && !defined(OS_OPENBSD) && !defined(OS_ANDROID)
 #include "base/files/file_path_watcher.h"
 #endif
-
-namespace base {
-class SingleThreadTaskRunner;
-}
 
 namespace content {
 class BrowserContext;
@@ -79,7 +74,7 @@ class CONTENT_EXPORT PluginServiceImpl
                            WebPluginInfo* info) override;
   base::string16 GetPluginDisplayNameByPath(
       const base::FilePath& path) override;
-  void GetPlugins(const GetPluginsCallback& callback) override;
+  void GetPlugins(GetPluginsCallback callback) override;
   PepperPluginInfo* GetRegisteredPpapiPluginInfo(
       const base::FilePath& plugin_path) override;
   void SetFilter(PluginServiceFilter* filter) override;
@@ -141,9 +136,8 @@ class CONTENT_EXPORT PluginServiceImpl
 
   void RegisterPepperPlugins();
 
-  // Run on the blocking pool to load the plugins synchronously.
-  void GetPluginsInternal(base::SingleThreadTaskRunner* target_task_runner,
-                          const GetPluginsCallback& callback);
+  // Loads the plugins synchronously in a thread pool.
+  std::vector<WebPluginInfo> GetPluginsInternal();
 
   std::vector<PepperPluginInfo> ppapi_plugins_;
 

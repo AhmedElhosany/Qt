@@ -9,86 +9,106 @@
 
 #include "base/callback.h"
 #include "base/memory/ptr_util.h"
-#include "cc/base/cc_export.h"
+#include "base/optional.h"
+#include "base/task_runner.h"
+#include "base/unguessable_token.h"
+#include "cc/cc_export.h"
 #include "cc/resources/single_release_callback.h"
-#include "cc/resources/texture_mailbox.h"
+#include "components/viz/common/quads/texture_mailbox.h"
+#include "mojo/public/cpp/bindings/struct_traits.h"
 #include "ui/gfx/geometry/rect.h"
 
 class SkBitmap;
 
 namespace cc {
+
+namespace mojom {
+class CopyOutputRequestDataView;
+}
+
 class CopyOutputResult;
 
 class CC_EXPORT CopyOutputRequest {
  public:
-  typedef base::Callback<void(std::unique_ptr<CopyOutputResult> result)>
-      CopyOutputRequestCallback;
+  using CopyOutputRequestCallback =
+      base::OnceCallback<void(std::unique_ptr<CopyOutputResult> result)>;
 
   static std::unique_ptr<CopyOutputRequest> CreateEmptyRequest() {
     return base::WrapUnique(new CopyOutputRequest);
   }
   static std::unique_ptr<CopyOutputRequest> CreateRequest(
-      const CopyOutputRequestCallback& result_callback) {
-    return base::WrapUnique(new CopyOutputRequest(false, result_callback));
+      CopyOutputRequestCallback result_callback) {
+    return base::WrapUnique(
+        new CopyOutputRequest(false, std::move(result_callback)));
   }
   static std::unique_ptr<CopyOutputRequest> CreateBitmapRequest(
-      const CopyOutputRequestCallback& result_callback) {
-    return base::WrapUnique(new CopyOutputRequest(true, result_callback));
+      CopyOutputRequestCallback result_callback) {
+    return base::WrapUnique(
+        new CopyOutputRequest(true, std::move(result_callback)));
   }
-  static std::unique_ptr<CopyOutputRequest> CreateRelayRequest(
-      const CopyOutputRequest& original_request,
-      const CopyOutputRequestCallback& result_callback);
 
   ~CopyOutputRequest();
 
   bool IsEmpty() const { return result_callback_.is_null(); }
 
-  // Optionally specify the source of this copy request.  If set when this copy
+  // Requests that the result callback be run as a task posted to the given
+  // |task_runner|. If this is not set, the result callback could be run from
+  // any context.
+  void set_result_task_runner(scoped_refptr<base::TaskRunner> task_runner) {
+    result_task_runner_ = std::move(task_runner);
+  }
+  bool has_result_task_runner() const { return !!result_task_runner_; }
+
+  // Optionally specify the source of this copy request. If set when this copy
   // request is submitted to a layer, a prior uncommitted copy request from the
-  // same |source| will be aborted.
-  void set_source(void* source) { source_ = source; }
-  void* source() const { return source_; }
+  // same source will be aborted.
+  void set_source(const base::UnguessableToken& source) { source_ = source; }
+  bool has_source() const { return source_.has_value(); }
+  const base::UnguessableToken& source() const { return *source_; }
 
   bool force_bitmap_result() const { return force_bitmap_result_; }
 
   // By default copy requests copy the entire layer's subtree output. If an
   // area is given, then the intersection of this rect (in layer space) with
   // the layer's subtree output will be returned.
-  void set_area(const gfx::Rect& area) {
-    has_area_ = true;
-    area_ = area;
-  }
-  bool has_area() const { return has_area_; }
-  gfx::Rect area() const { return area_; }
+  void set_area(const gfx::Rect& area) { area_ = area; }
+  bool has_area() const { return area_.has_value(); }
+  const gfx::Rect& area() const { return *area_; }
 
   // By default copy requests create a new TextureMailbox to return contents
   // in. This allows a client to provide a TextureMailbox, and the compositor
-  // will place the result inside the TextureMailbox.
-  void SetTextureMailbox(const TextureMailbox& texture_mailbox);
-  bool has_texture_mailbox() const { return has_texture_mailbox_; }
-  const TextureMailbox& texture_mailbox() const { return texture_mailbox_; }
+  // will place the result inside the viz::TextureMailbox.
+  void SetTextureMailbox(const viz::TextureMailbox& texture_mailbox);
+  bool has_texture_mailbox() const { return texture_mailbox_.has_value(); }
+  const viz::TextureMailbox& texture_mailbox() const {
+    return *texture_mailbox_;
+  }
 
   void SendEmptyResult();
   void SendBitmapResult(std::unique_ptr<SkBitmap> bitmap);
   void SendTextureResult(
       const gfx::Size& size,
-      const TextureMailbox& texture_mailbox,
+      const viz::TextureMailbox& texture_mailbox,
       std::unique_ptr<SingleReleaseCallback> release_callback);
 
   void SendResult(std::unique_ptr<CopyOutputResult> result);
 
  private:
+  friend struct mojo::StructTraits<mojom::CopyOutputRequestDataView,
+                                   std::unique_ptr<CopyOutputRequest>>;
+
   CopyOutputRequest();
   CopyOutputRequest(bool force_bitmap_result,
-                    const CopyOutputRequestCallback& result_callback);
+                    CopyOutputRequestCallback result_callback);
 
-  void* source_;
+  scoped_refptr<base::TaskRunner> result_task_runner_;
+  base::Optional<base::UnguessableToken> source_;
   bool force_bitmap_result_;
-  bool has_area_;
-  bool has_texture_mailbox_;
-  gfx::Rect area_;
-  TextureMailbox texture_mailbox_;
+  base::Optional<gfx::Rect> area_;
+  base::Optional<viz::TextureMailbox> texture_mailbox_;
   CopyOutputRequestCallback result_callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(CopyOutputRequest);
 };
 
 }  // namespace cc

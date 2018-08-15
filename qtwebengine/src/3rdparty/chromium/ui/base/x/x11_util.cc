@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <X11/cursorfont.h>
 #include <X11/extensions/shape.h>
 #include <X11/extensions/XInput2.h>
 #include <X11/Xcursor/Xcursor.h>
@@ -27,7 +28,7 @@
 #include "base/macros.h"
 #include "base/memory/singleton.h"
 #include "base/message_loop/message_loop.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -56,6 +57,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/skia_util.h"
+#include "ui/gfx/x/x11_atom_cache.h"
 #include "ui/gfx/x/x11_error_tracker.h"
 
 #if defined(OS_FREEBSD)
@@ -92,7 +94,7 @@ int DefaultX11IOErrorHandler(XDisplay* d) {
 bool GetProperty(XID window, const std::string& property_name, long max_length,
                  XAtom* type, int* format, unsigned long* num_items,
                  unsigned char** property) {
-  XAtom property_atom = GetAtom(property_name.c_str());
+  XAtom property_atom = gfx::GetAtom(property_name.c_str());
   unsigned long remaining_bytes = 0;
   return XGetWindowProperty(gfx::GetXDisplay(),
                             window,
@@ -145,6 +147,9 @@ bool SupportsEWMH() {
 
 bool GetWindowManagerName(std::string* wm_name) {
   DCHECK(wm_name);
+  if (!gfx::GetXDisplay())
+    return false;
+
   if (!SupportsEWMH())
     return false;
 
@@ -173,44 +178,6 @@ void ReleaseXImage(void* address, void* context) {
   if (context)
     XDestroyImage(static_cast<XImage*>(context));
 }
-
-// A process wide singleton that manages the usage of X cursors.
-class XCursorCache {
- public:
-  XCursorCache() {}
-  ~XCursorCache() {
-    Clear();
-  }
-
-  ::Cursor GetCursor(int cursor_shape) {
-    // Lookup cursor by attempting to insert a null value, which avoids
-    // a second pass through the map after a cache miss.
-    std::pair<std::map<int, ::Cursor>::iterator, bool> it = cache_.insert(
-        std::make_pair(cursor_shape, 0));
-    if (it.second) {
-      XDisplay* display = gfx::GetXDisplay();
-      it.first->second = XCreateFontCursor(display, cursor_shape);
-    }
-    return it.first->second;
-  }
-
-  void Clear() {
-    XDisplay* display = gfx::GetXDisplay();
-    for (std::map<int, ::Cursor>::iterator it =
-        cache_.begin(); it != cache_.end(); ++it) {
-      XFreeCursor(display, it->second);
-    }
-    cache_.clear();
-  }
-
- private:
-  // Maps X11 font cursor shapes to Cursor IDs.
-  std::map<int, ::Cursor> cache_;
-
-  DISALLOW_COPY_AND_ASSIGN(XCursorCache);
-};
-
-XCursorCache* cursor_cache = NULL;
 
 // A process wide singleton cache for custom X cursors.
 class XCustomCursorCache {
@@ -311,12 +278,6 @@ bool QueryRenderSupport(Display* dpy) {
   return render_supported;
 }
 
-::Cursor GetXCursor(int cursor_shape) {
-  if (!cursor_cache)
-    cursor_cache = new XCursorCache;
-  return cursor_cache->GetCursor(cursor_shape);
-}
-
 ::Cursor CreateReffedCustomXCursor(XcursorImage* image) {
   return XCustomCursorCache::GetInstance()->InstallCustomCursor(image);
 }
@@ -331,7 +292,9 @@ void UnrefCustomXCursor(::Cursor cursor) {
 
 XcursorImage* SkBitmapToXcursorImage(const SkBitmap* cursor_image,
                                      const gfx::Point& hotspot) {
-  DCHECK(cursor_image->colorType() == kN32_SkColorType);
+  // TODO(crbug.com/596782): It is possible for cursor_image to be zeroed out
+  // at this point, which leads to benign debug errors. Once this is fixed, we
+  // should  DCHECK_EQ(cursor_image->colorType(), kN32_SkColorType).
   gfx::Point hotspot_point = hotspot;
   SkBitmap scaled;
 
@@ -360,12 +323,10 @@ XcursorImage* SkBitmapToXcursorImage(const SkBitmap* cursor_image,
   image->yhot = std::min(bitmap->height() - 1, hotspot_point.y());
 
   if (bitmap->width() && bitmap->height()) {
-    bitmap->lockPixels();
     // The |bitmap| contains ARGB image, so just copy it.
     memcpy(image->pixels,
            bitmap->getPixels(),
            bitmap->width() * bitmap->height() * 4);
-    bitmap->unlockPixels();
   }
 
   return image;
@@ -484,7 +445,7 @@ void SetUseOSWindowFrame(XID window, bool use_os_window_frame) {
   motif_hints.flags = (1L << 1);
   motif_hints.decorations = use_os_window_frame ? 1 : 0;
 
-  XAtom hint_atom = GetAtom("_MOTIF_WM_HINTS");
+  XAtom hint_atom = gfx::GetAtom("_MOTIF_WM_HINTS");
   XChangeProperty(gfx::GetXDisplay(),
                   window,
                   hint_atom,
@@ -514,14 +475,11 @@ void SetHideTitlebarWhenMaximizedProperty(XID window,
                                           HideTitlebarWhenMaximized property) {
   // XChangeProperty() expects "hide" to be long.
   unsigned long hide = property;
-  XChangeProperty(gfx::GetXDisplay(),
-      window,
-      GetAtom("_GTK_HIDE_TITLEBAR_WHEN_MAXIMIZED"),
-      XA_CARDINAL,
-      32,  // size in bits
-      PropModeReplace,
-      reinterpret_cast<unsigned char*>(&hide),
-      1);
+  XChangeProperty(gfx::GetXDisplay(), window,
+                  gfx::GetAtom("_GTK_HIDE_TITLEBAR_WHEN_MAXIMIZED"),
+                  XA_CARDINAL,
+                  32,  // size in bits
+                  PropModeReplace, reinterpret_cast<unsigned char*>(&hide), 1);
 }
 
 void ClearX11DefaultRootWindow() {
@@ -556,7 +514,7 @@ bool IsWindowVisible(XID window) {
   // Minimized windows are not visible.
   std::vector<XAtom> wm_states;
   if (GetAtomArrayProperty(window, "_NET_WM_STATE", &wm_states)) {
-    XAtom hidden_atom = GetAtom("_NET_WM_STATE_HIDDEN");
+    XAtom hidden_atom = gfx::GetAtom("_NET_WM_STATE_HIDDEN");
     if (base::ContainsValue(wm_states, hidden_atom))
       return false;
   }
@@ -867,8 +825,8 @@ bool SetIntArrayProperty(XID window,
                          const std::string& type,
                          const std::vector<int>& value) {
   DCHECK(!value.empty());
-  XAtom name_atom = GetAtom(name.c_str());
-  XAtom type_atom = GetAtom(type.c_str());
+  XAtom name_atom = gfx::GetAtom(name.c_str());
+  XAtom type_atom = gfx::GetAtom(type.c_str());
 
   // XChangeProperty() expects values of type 32 to be longs.
   std::unique_ptr<long[]> data(new long[value.size()]);
@@ -900,8 +858,8 @@ bool SetAtomArrayProperty(XID window,
                           const std::string& type,
                           const std::vector<XAtom>& value) {
   DCHECK(!value.empty());
-  XAtom name_atom = GetAtom(name.c_str());
-  XAtom type_atom = GetAtom(type.c_str());
+  XAtom name_atom = gfx::GetAtom(name.c_str());
+  XAtom type_atom = gfx::GetAtom(type.c_str());
 
   // XChangeProperty() expects values of type 32 to be longs.
   std::unique_ptr<XAtom[]> data(new XAtom[value.size()]);
@@ -936,11 +894,6 @@ bool SetStringProperty(XID window,
   return !err_tracker.FoundNewError();
 }
 
-XAtom GetAtom(const char* name) {
-  // TODO(derat): Cache atoms to avoid round-trips to the server.
-  return XInternAtom(gfx::GetXDisplay(), name, false);
-}
-
 void SetWindowClassHint(XDisplay* display,
                         XID window,
                         const std::string& res_name,
@@ -956,13 +909,12 @@ void SetWindowClassHint(XDisplay* display,
 
 void SetWindowRole(XDisplay* display, XID window, const std::string& role) {
   if (role.empty()) {
-    XDeleteProperty(display, window, GetAtom("WM_WINDOW_ROLE"));
+    XDeleteProperty(display, window, gfx::GetAtom("WM_WINDOW_ROLE"));
   } else {
     char* role_c = const_cast<char*>(role.c_str());
-    XChangeProperty(display, window, GetAtom("WM_WINDOW_ROLE"), XA_STRING, 8,
-                    PropModeReplace,
-                    reinterpret_cast<unsigned char*>(role_c),
-                    role.size());
+    XChangeProperty(display, window, gfx::GetAtom("WM_WINDOW_ROLE"), XA_STRING,
+                    8, PropModeReplace,
+                    reinterpret_cast<unsigned char*>(role_c), role.size());
   }
 }
 
@@ -1154,7 +1106,7 @@ bool CopyAreaToCanvas(XID drawable,
     SkBitmap bitmap;
     bitmap.installPixels(
         SkImageInfo::MakeN32Premul(image->width, image->height), image->data,
-        image->bytes_per_line, nullptr, &ReleaseXImage, image.release());
+        image->bytes_per_line, &ReleaseXImage, image.release());
     gfx::ImageSkia image_skia;
     gfx::ImageSkiaRep image_rep(bitmap, canvas->image_scale());
     image_skia.AddRepresentation(image_rep);
@@ -1226,6 +1178,13 @@ std::string GuessWindowManagerName() {
   return "Unknown";
 }
 
+bool IsCompositingManagerPresent() {
+  static bool is_compositing_manager_present =
+      XGetSelectionOwner(gfx::GetXDisplay(), gfx::GetAtom("_NET_WM_CM_S0")) !=
+      None;
+  return is_compositing_manager_present;
+}
+
 void SetDefaultX11ErrorHandlers() {
   SetX11ErrorHandlers(NULL, NULL);
 }
@@ -1234,16 +1193,13 @@ bool IsX11WindowFullScreen(XID window) {
   // If _NET_WM_STATE_FULLSCREEN is in _NET_SUPPORTED, use the presence or
   // absence of _NET_WM_STATE_FULLSCREEN in _NET_WM_STATE to determine
   // whether we're fullscreen.
-  XAtom fullscreen_atom = GetAtom("_NET_WM_STATE_FULLSCREEN");
+  XAtom fullscreen_atom = gfx::GetAtom("_NET_WM_STATE_FULLSCREEN");
   if (WmSupportsHint(fullscreen_atom)) {
     std::vector<XAtom> atom_properties;
     if (GetAtomArrayProperty(window,
                              "_NET_WM_STATE",
                              &atom_properties)) {
-      return std::find(atom_properties.begin(),
-                       atom_properties.end(),
-                       fullscreen_atom) !=
-          atom_properties.end();
+      return base::ContainsValue(atom_properties, fullscreen_atom);
     }
   }
 
@@ -1274,8 +1230,7 @@ bool WmSupportsHint(XAtom atom) {
     return false;
   }
 
-  return std::find(supported_atoms.begin(), supported_atoms.end(), atom) !=
-      supported_atoms.end();
+  return base::ContainsValue(supported_atoms, atom);
 }
 
 XRefcountedMemory::XRefcountedMemory(unsigned char* x11_data, size_t length)
@@ -1313,11 +1268,6 @@ void XScopedCursor::reset(::Cursor cursor) {
 }
 
 namespace test {
-
-void ResetXCursorCache() {
-  delete cursor_cache;
-  cursor_cache = NULL;
-}
 
 const XcursorImage* GetCachedXcursorImage(::Cursor cursor) {
   return XCustomCursorCache::GetInstance()->GetXcursorImage(cursor);
@@ -1413,8 +1363,6 @@ void LogErrorEventDescription(XDisplay* dpy,
       << " (" << request_str << ")";
 }
 
-#if !defined(OS_CHROMEOS)
-
 // static
 XVisualManager* XVisualManager::GetInstance() {
   return base::Singleton<XVisualManager>::get();
@@ -1427,7 +1375,7 @@ XVisualManager::XVisualManager()
       transparent_visual_id_(0),
       using_software_rendering_(false),
       have_gpu_argb_visual_(false) {
-  int visuals_len;
+  int visuals_len = 0;
   XVisualInfo visual_template;
   visual_template.screen = DefaultScreen(display_);
   gfx::XScopedPtr<XVisualInfo[]> visual_list(XGetVisualInfo(
@@ -1435,7 +1383,7 @@ XVisualManager::XVisualManager()
   for (int i = 0; i < visuals_len; ++i)
     visuals_[visual_list[i].visualid].reset(new XVisualData(visual_list[i]));
 
-  XAtom NET_WM_CM_S0 = XInternAtom(display_, "_NET_WM_CM_S0", False);
+  XAtom NET_WM_CM_S0 = gfx::GetAtom("_NET_WM_CM_S0");
   using_compositing_wm_ = XGetSelectionOwner(display_, NET_WM_CM_S0) != None;
 
   // Choose the opaque visual.
@@ -1469,8 +1417,7 @@ void XVisualManager::ChooseVisualForWindow(bool want_argb_visual,
                                            int* depth,
                                            Colormap* colormap,
                                            bool* using_argb_visual) {
-  bool use_argb = want_argb_visual && using_compositing_wm_ &&
-                  (using_software_rendering_ || have_gpu_argb_visual_);
+  bool use_argb = want_argb_visual && ArgbVisualAvailable();
   VisualID visual_id = use_argb && transparent_visual_id_
                            ? transparent_visual_id_
                            : system_visual_id_;
@@ -1506,6 +1453,11 @@ bool XVisualManager::OnGPUInfoChanged(bool software_rendering,
   return true;
 }
 
+bool XVisualManager::ArgbVisualAvailable() const {
+  return using_compositing_wm_ &&
+         (using_software_rendering_ || have_gpu_argb_visual_);
+}
+
 XVisualManager::XVisualData::XVisualData(XVisualInfo visual_info)
     : visual_info(visual_info), colormap_(CopyFromParent) {}
 
@@ -1522,8 +1474,6 @@ Colormap XVisualManager::XVisualData::GetColormap() {
   }
   return colormap_;
 }
-
-#endif
 
 // ----------------------------------------------------------------------------
 // End of x11_util_internal.h

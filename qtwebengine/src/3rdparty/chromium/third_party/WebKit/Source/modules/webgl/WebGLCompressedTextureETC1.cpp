@@ -11,31 +11,25 @@ namespace blink {
 WebGLCompressedTextureETC1::WebGLCompressedTextureETC1(
     WebGLRenderingContextBase* context)
     : WebGLExtension(context) {
-  context->addCompressedTextureFormat(GL_ETC1_RGB8_OES);
+  context->AddCompressedTextureFormat(GL_ETC1_RGB8_OES);
 }
 
-WebGLCompressedTextureETC1::~WebGLCompressedTextureETC1() {}
-
-WebGLExtensionName WebGLCompressedTextureETC1::name() const {
-  return WebGLCompressedTextureETC1Name;
+WebGLExtensionName WebGLCompressedTextureETC1::GetName() const {
+  return kWebGLCompressedTextureETC1Name;
 }
 
-WebGLCompressedTextureETC1* WebGLCompressedTextureETC1::create(
+WebGLCompressedTextureETC1* WebGLCompressedTextureETC1::Create(
     WebGLRenderingContextBase* context) {
   return new WebGLCompressedTextureETC1(context);
 }
 
-bool WebGLCompressedTextureETC1::supported(WebGLRenderingContextBase* context) {
-  Extensions3DUtil* extensionsUtil = context->extensionsUtil();
-  bool webgl1 = !context->isWebGL2OrHigher();
-  bool etc1 =
-      extensionsUtil->supportsExtension("GL_OES_compressed_ETC1_RGB8_texture");
-  bool etc =
-      extensionsUtil->supportsExtension("GL_CHROMIUM_compressed_texture_etc");
-  return (webgl1 || etc) && etc1;
+bool WebGLCompressedTextureETC1::Supported(WebGLRenderingContextBase* context) {
+  Extensions3DUtil* extensions_util = context->ExtensionsUtil();
+  return extensions_util->SupportsExtension(
+      "GL_OES_compressed_ETC1_RGB8_texture");
 }
 
-const char* WebGLCompressedTextureETC1::extensionName() {
+const char* WebGLCompressedTextureETC1::ExtensionName() {
   return "WEBGL_compressed_texture_etc1";
 }
 

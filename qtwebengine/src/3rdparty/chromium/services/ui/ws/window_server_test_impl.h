@@ -12,8 +12,6 @@ namespace ws {
 
 class ServerWindow;
 class WindowServer;
-class WindowTree;
-struct WindowId;
 
 class WindowServerTestImpl : public mojom::WindowServerTest {
  public:
@@ -29,6 +27,9 @@ class WindowServerTestImpl : public mojom::WindowServerTest {
   void EnsureClientHasDrawnWindow(
       const std::string& client_name,
       const EnsureClientHasDrawnWindowCallback& callback) override;
+  void DispatchEvent(int64_t display_id,
+                     std::unique_ptr<ui::Event> event,
+                     const DispatchEventCallback& cb) override;
 
   WindowServer* window_server_;
 

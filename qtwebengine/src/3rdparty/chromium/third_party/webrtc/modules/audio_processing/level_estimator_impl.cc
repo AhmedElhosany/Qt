@@ -12,12 +12,12 @@
 
 #include "webrtc/modules/audio_processing/audio_buffer.h"
 #include "webrtc/modules/audio_processing/rms_level.h"
-#include "webrtc/system_wrappers/include/critical_section_wrapper.h"
+#include "webrtc/rtc_base/array_view.h"
 
 namespace webrtc {
 
 LevelEstimatorImpl::LevelEstimatorImpl(rtc::CriticalSection* crit)
-    : crit_(crit), rms_(new RMSLevel()) {
+    : crit_(crit), rms_(new RmsLevel()) {
   RTC_DCHECK(crit);
 }
 
@@ -36,7 +36,8 @@ void LevelEstimatorImpl::ProcessStream(AudioBuffer* audio) {
   }
 
   for (size_t i = 0; i < audio->num_channels(); i++) {
-    rms_->Process(audio->channels_const()[i], audio->num_frames());
+    rms_->Analyze(rtc::ArrayView<const int16_t>(audio->channels_const()[i],
+                                                audio->num_frames()));
   }
 }
 
@@ -60,6 +61,6 @@ int LevelEstimatorImpl::RMS() {
     return AudioProcessing::kNotEnabledError;
   }
 
-  return rms_->RMS();
+  return rms_->Average();
 }
 }  // namespace webrtc

@@ -10,10 +10,11 @@ Sources.AddSourceMapURLDialog = class extends UI.HBox {
    */
   constructor(callback) {
     super(true);
-    this.registerRequiredCSS('ui_lazy/dialog.css');
+    this.registerRequiredCSS('sources/dialog.css');
     this.contentElement.createChild('label').textContent = Common.UIString('Source map URL: ');
 
-    this._input = this.contentElement.createChild('input');
+    this._input = UI.createInput();
+    this.contentElement.appendChild(this._input);
     this._input.setAttribute('type', 'text');
     this._input.addEventListener('keydown', this._onKeyDown.bind(this), false);
 
@@ -32,15 +33,15 @@ Sources.AddSourceMapURLDialog = class extends UI.HBox {
   static show(callback) {
     var dialog = new UI.Dialog();
     var addSourceMapURLDialog = new Sources.AddSourceMapURLDialog(done);
-    addSourceMapURLDialog.show(dialog.element);
-    dialog.setWrapsContent(true);
+    addSourceMapURLDialog.show(dialog.contentElement);
+    dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.MeasureContent);
     dialog.show();
 
     /**
      * @param {string} value
      */
     function done(value) {
-      dialog.detach();
+      dialog.hide();
       callback(value);
     }
   }

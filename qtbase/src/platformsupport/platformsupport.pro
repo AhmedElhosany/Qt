@@ -2,6 +2,7 @@ TEMPLATE = subdirs
 QT_FOR_CONFIG += gui-private
 
 SUBDIRS = \
+    edid \
     eventdispatchers \
     devicediscovery \
     fbconvenience \
@@ -39,6 +40,7 @@ darwin {
     SUBDIRS += \
         clipboard \
         graphics
-    macos: \
-        SUBDIRS += cglconvenience
 }
+
+qtConfig(vulkan): \
+    SUBDIRS += vkconvenience

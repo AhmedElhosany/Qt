@@ -16,7 +16,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/threading/non_thread_safe.h"
+#include "base/threading/thread_checker.h"
 #include "net/base/completion_callback.h"
 #include "net/base/load_states.h"
 #include "net/base/net_export.h"
@@ -29,21 +29,19 @@
 class GURL;
 
 namespace base {
-class SingleThreadTaskRunner;
+class SequencedTaskRunner;
 class TimeDelta;
 }  // namespace base
 
 namespace net {
 
 class DhcpProxyScriptFetcher;
-class HostResolver;
 class NetLog;
 class NetLogWithSource;
 class ProxyDelegate;
 class ProxyResolver;
 class ProxyResolverFactory;
 class ProxyResolverScriptData;
-class ProxyScriptDecider;
 class ProxyScriptFetcher;
 
 // This class can be used to resolve the proxy server to use when loading a
@@ -51,8 +49,7 @@ class ProxyScriptFetcher;
 // resolution.  See ProxyResolverV8 for example.
 class NET_EXPORT ProxyService : public NetworkChangeNotifier::IPAddressObserver,
                                 public NetworkChangeNotifier::DNSObserver,
-                                public ProxyConfigService::Observer,
-                                NON_EXPORTED_BASE(public base::NonThreadSafe) {
+                                public ProxyConfigService::Observer {
  public:
   // Enumerates the policy to use when sanitizing URLs for proxy resolution
   // (before passing them off to PAC scripts).
@@ -72,8 +69,6 @@ class NET_EXPORT ProxyService : public NetworkChangeNotifier::IPAddressObserver,
     // In other words, it strips the path and query portion of https:// URLs.
     SAFE,
   };
-
-  static const size_t kDefaultNumPacThreads = 4;
 
   // This interface defines the set of policies for when to poll the PAC
   // script for changes.
@@ -227,6 +222,11 @@ class NET_EXPORT ProxyService : public NetworkChangeNotifier::IPAddressObserver,
       std::unique_ptr<DhcpProxyScriptFetcher> dhcp_proxy_script_fetcher);
   ProxyScriptFetcher* GetProxyScriptFetcher() const;
 
+  // Cancels all network requests, and prevents the service from creating new
+  // ones.  Must be called before the URLRequestContext the ProxyService was
+  // created with is torn down, if it's torn down before th ProxyService itself.
+  void OnShutdown();
+
   // Tells this ProxyService to start using a new ProxyConfigService to
   // retrieve its ProxyConfig from. The new ProxyConfigService will immediately
   // be queried for new config info which will be used for all subsequent
@@ -264,7 +264,6 @@ class NET_EXPORT ProxyService : public NetworkChangeNotifier::IPAddressObserver,
   // proxy autoconfig.
   static std::unique_ptr<ProxyService> CreateUsingSystemProxyResolver(
       std::unique_ptr<ProxyConfigService> proxy_config_service,
-      size_t num_pac_threads,
       NetLog* net_log);
 
   // Creates a ProxyService without support for proxy autoconfig.
@@ -293,8 +292,7 @@ class NET_EXPORT ProxyService : public NetworkChangeNotifier::IPAddressObserver,
   // Creates a config service appropriate for this platform that fetches the
   // system proxy settings.
   static std::unique_ptr<ProxyConfigService> CreateSystemProxyConfigService(
-      const scoped_refptr<base::SingleThreadTaskRunner>& io_task_runner,
-      const scoped_refptr<base::SingleThreadTaskRunner>& file_task_runner);
+      const scoped_refptr<base::SequencedTaskRunner>& io_task_runner);
 
   // This method should only be used by unit tests.
   void set_stall_proxy_auto_config_delay(base::TimeDelta delay) {
@@ -390,9 +388,7 @@ class NET_EXPORT ProxyService : public NetworkChangeNotifier::IPAddressObserver,
                               ProxyDelegate* proxy_delegate,
                               ProxyInfo* result,
                               int result_code,
-                              const NetLogWithSource& net_log,
-                              base::TimeTicks start_time,
-                              bool script_executed);
+                              const NetLogWithSource& net_log);
 
   // Start initialization using |fetched_config_|.
   void InitializeUsingLastFetchedConfig();
@@ -481,6 +477,8 @@ class NET_EXPORT ProxyService : public NetworkChangeNotifier::IPAddressObserver,
 
   // The method to use for sanitizing URLs seen by the proxy resolver.
   SanitizeUrlPolicy sanitize_url_policy_;
+
+  THREAD_CHECKER(thread_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(ProxyService);
 };

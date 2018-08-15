@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/android/media_codec_loop.h"
+
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
+#include "base/test/test_mock_time_task_runner.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "media/base/android/media_codec_bridge.h"
-#include "media/base/android/media_codec_loop.h"
 #include "media/base/android/mock_media_codec_bridge.h"
-#include "media/base/fake_single_thread_task_runner.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -46,8 +48,8 @@ class MockMediaCodecLoopClient : public StrictMock<MediaCodecLoop::Client> {
 class MediaCodecLoopTest : public testing::Test {
  public:
   MediaCodecLoopTest()
-      : client_(new StrictMock<MockMediaCodecLoopClient>()),
-        task_runner_(new FakeSingleThreadTaskRunner(&clock_)) {}
+      : task_runner_handle_(mock_task_runner_),
+        client_(new StrictMock<MockMediaCodecLoopClient>()) {}
 
   ~MediaCodecLoopTest() override {}
 
@@ -73,7 +75,7 @@ class MediaCodecLoopTest : public testing::Test {
             .WillRepeatedly(Return(false));
         EXPECT_CALL(Codec(), DequeueOutputBuffer(_, _, _, _, _, _, _))
             .Times(AtLeast(1))
-            .WillRepeatedly(Return(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER));
+            .WillRepeatedly(Return(MEDIA_CODEC_TRY_AGAIN_LATER));
         break;
     }
 
@@ -84,7 +86,7 @@ class MediaCodecLoopTest : public testing::Test {
 
     // TODO(liberato): assume that MCL doesn't retry for 30 seconds.  Note
     // that this doesn't actually wall-clock wait.
-    task_runner_->Sleep(base::TimeDelta::FromSeconds(30));
+    mock_task_runner_->FastForwardBy(base::TimeDelta::FromSeconds(30));
   }
 
   void ConstructCodecLoop(int sdk_int = kLollipop) {
@@ -92,8 +94,8 @@ class MediaCodecLoopTest : public testing::Test {
     // Since we're providing a codec, we do not expect an error.
     EXPECT_CALL(*client_, OnCodecLoopError()).Times(0);
     codec_loop_.reset(new MediaCodecLoop(sdk_int, client_.get(),
-                                         std::move(codec), task_runner_));
-    codec_loop_->SetTestTickClock(&clock_);
+                                         std::move(codec), mock_task_runner_));
+    codec_loop_->SetTestTickClock(clock_.get());
     Mock::VerifyAndClearExpectations(client_.get());
   }
 
@@ -103,7 +105,7 @@ class MediaCodecLoopTest : public testing::Test {
     ExpectIsAnyInputPending(false);
     EXPECT_CALL(Codec(), DequeueOutputBuffer(_, _, _, _, _, _, _))
         .Times(1)
-        .WillOnce(Return(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER));
+        .WillOnce(Return(MEDIA_CODEC_TRY_AGAIN_LATER));
   }
 
   void ExpectIsAnyInputPending(bool pending) {
@@ -182,12 +184,18 @@ class MediaCodecLoopTest : public testing::Test {
   }
 
  public:
+  // Mocks the current thread's task runner which will also be used as the
+  // MediaCodecLoop's task runner.
+  scoped_refptr<base::TestMockTimeTaskRunner> mock_task_runner_ =
+      new base::TestMockTimeTaskRunner;
+  base::ThreadTaskRunnerHandle task_runner_handle_;
+
+  // A reference to |mock_task_runner_|'s TickClock handed to |codec_loop_|.
+  std::unique_ptr<base::TickClock> clock_ =
+      mock_task_runner_->GetMockTickClock();
+
   std::unique_ptr<MediaCodecLoop> codec_loop_;
   std::unique_ptr<MockMediaCodecLoopClient> client_;
-  // TODO: how is the lifecycle of |clock_| handled?  |task_runner_| can outlive
-  // us, since it's a refptr.
-  base::SimpleTestTickClock clock_;
-  scoped_refptr<FakeSingleThreadTaskRunner> task_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(MediaCodecLoopTest);
 };
@@ -197,7 +205,8 @@ TEST_F(MediaCodecLoopTest, TestConstructionWithNullCodec) {
   EXPECT_CALL(*client_, OnCodecLoopError()).Times(1);
   const int sdk_int = kLollipop;
   codec_loop_.reset(
-      new MediaCodecLoop(sdk_int, client_.get(), std::move(codec)));
+      new MediaCodecLoop(sdk_int, client_.get(), std::move(codec),
+                         scoped_refptr<base::SingleThreadTaskRunner>()));
   // Do not WaitUntilIdle() here, since that assumes that we have a codec.
 
   ASSERT_FALSE(codec_loop_->GetCodec());
@@ -215,7 +224,7 @@ TEST_F(MediaCodecLoopTest, TestPendingWorkWithoutInput) {
   ExpectIsAnyInputPending(false);
   EXPECT_CALL(Codec(), DequeueOutputBuffer(_, _, _, _, _, _, _))
       .Times(1)
-      .WillOnce(Return(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER));
+      .WillOnce(Return(MEDIA_CODEC_TRY_AGAIN_LATER));
   codec_loop_->DoPendingWork();
   WaitUntilIdle(ShouldNotBeIdle);
 }
@@ -275,7 +284,7 @@ TEST_F(MediaCodecLoopTest, TestQueueEos) {
     // See TestUnqueuedEos.
     EXPECT_CALL(Codec(), DequeueOutputBuffer(_, _, _, _, _, _, _))
         .Times(1)
-        .WillOnce(Return(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER));
+        .WillOnce(Return(MEDIA_CODEC_TRY_AGAIN_LATER));
   }
   codec_loop_->DoPendingWork();
   // Don't WaitUntilIdle() here.  See TestUnqueuedEos.
@@ -302,7 +311,7 @@ TEST_F(MediaCodecLoopTest, TestQueueInputData) {
     // MCL will try to dequeue an output buffer too.
     EXPECT_CALL(Codec(), DequeueOutputBuffer(_, _, _, _, _, _, _))
         .Times(1)
-        .WillOnce(Return(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER));
+        .WillOnce(Return(MEDIA_CODEC_TRY_AGAIN_LATER));
 
     // DoPendingWork will try again.
     ExpectEmptyIOLoop();
@@ -341,9 +350,9 @@ TEST_F(MediaCodecLoopTest, TestQueueInputDataTryAgain) {
     InSequence _s;
 
     ExpectIsAnyInputPending(true);
-    ExpectDequeueInputBuffer(-1, MEDIA_CODEC_DEQUEUE_INPUT_AGAIN_LATER);
+    ExpectDequeueInputBuffer(-1, MEDIA_CODEC_TRY_AGAIN_LATER);
     // MCL will try for output too.
-    ExpectDequeueOutputBuffer(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER);
+    ExpectDequeueOutputBuffer(MEDIA_CODEC_TRY_AGAIN_LATER);
   }
   codec_loop_->DoPendingWork();
   // Note that the client might not be allowed to change from "input pending"
@@ -424,13 +433,13 @@ TEST_F(MediaCodecLoopTest, TestOnKeyAdded) {
     ExpectQueueInputBuffer(input_buffer_index, data, MEDIA_CODEC_NO_KEY);
 
     // MCL should now try for output buffers.
-    ExpectDequeueOutputBuffer(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER);
+    ExpectDequeueOutputBuffer(MEDIA_CODEC_TRY_AGAIN_LATER);
 
     // MCL will try again, since trying to queue the input buffer is considered
     // doing work, for some reason.  It would be nice to make this optional.
     // Note that it should not ask us for more input, since it has not yet sent
     // the buffer we just provided.
-    ExpectDequeueOutputBuffer(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER);
+    ExpectDequeueOutputBuffer(MEDIA_CODEC_TRY_AGAIN_LATER);
   }
   codec_loop_->DoPendingWork();
 
@@ -441,7 +450,7 @@ TEST_F(MediaCodecLoopTest, TestOnKeyAdded) {
     InSequence _s;
     // MCL should only try for output buffers, since it's still waiting for a
     // key to be added.
-    ExpectDequeueOutputBuffer(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER);
+    ExpectDequeueOutputBuffer(MEDIA_CODEC_TRY_AGAIN_LATER);
   }
   codec_loop_->DoPendingWork();
 
@@ -453,7 +462,7 @@ TEST_F(MediaCodecLoopTest, TestOnKeyAdded) {
     data.memory = nullptr;
     ExpectQueueInputBuffer(input_buffer_index, data);
     ExpectInputDataQueued(true);
-    ExpectDequeueOutputBuffer(MEDIA_CODEC_DEQUEUE_OUTPUT_AGAIN_LATER);
+    ExpectDequeueOutputBuffer(MEDIA_CODEC_TRY_AGAIN_LATER);
 
     // MCL did work, so it will try again.
     ExpectEmptyIOLoop();

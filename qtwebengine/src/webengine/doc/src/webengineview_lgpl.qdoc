@@ -86,7 +86,7 @@
     focus on press. This can be useful in a hybrid UI.
 
     The \l {WebEngineSettings::focusOnNavigationEnabled} {focusOnNavigationEnabled} setting can be
-    used to stop the view from automatically receiving focus when a navigation operation occurs
+    used to make the view automatically receive focus when a navigation operation occurs
     (like loading or reloading a page or navigating through history).
 
     The \l linkHovered() signal is emitted when a mouse pointer passes over a link and thus
@@ -112,7 +112,7 @@
 
     A web page can request through the JavaScript API to be loaded in fullscreen mode. The
     \l fullScreenRequested() signal is emitted when the web page issues the request. The
-    WebEngineFullScreenRequest utility type can be used to toggle fullscreen requests. The
+    FullScreenRequest utility type can be used to toggle fullscreen requests. The
     \l fullScreenCancelled method can be used to notify the browser engine when the windowing
     system forces the application to leave fullscreen mode.
 
@@ -576,7 +576,7 @@
 */
 
 /*!
-    \qmlsignal WebEngineView::fullScreenRequested(WebEngineFullScreenRequest request)
+    \qmlsignal WebEngineView::fullScreenRequested(FullScreenRequest request)
     \since QtWebEngine 1.1
 
     This signal is emitted when the web page requests fullscreen mode through the
@@ -793,6 +793,46 @@
     \value  WebEngineView.ViewSource
             Show the source of the current page in a new tab. (Added in Qt 5.8)
 
+    \value  WebEngineView.ToggleBold
+            Toggles boldness for the selection or at the cursor position.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.ToggleItalic
+            Toggles italics for the selection or at the cursor position.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.ToggleUnderline
+            Toggles underlining of the selection or at the cursor position.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.ToggleStrikethrough
+            Toggles striking through the selection or at the cursor position.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+
+    \value  WebEngineView.AlignLeft
+            Aligns the lines containing the selection or the cursor to the left.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.AlignCenter
+            Aligns the lines containing the selection or the cursor at the center.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.AlignRight
+            Aligns the lines containing the selection or the cursor to the right.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.AlignJustified
+            Stretches the lines containing the selection or the cursor so that each
+            line has equal width.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.Indent
+            Indents the lines containing the selection or the cursor.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.Outdent
+            Outdents the lines containing the selection or the cursor.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+
+    \value  WebEngineView.InsertOrderedList
+            Inserts an ordered list at the current cursor position, deleting the current selection.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
+    \value  WebEngineView.InsertUnorderedList
+            Inserts an unordered list at the current cursor position,
+            deleting the current selection.
+            Requires \c contenteditable="true". (Added in Qt 5.10)
     \omitvalue WebActionCount
 */
 
@@ -810,6 +850,11 @@
             Video devices, such as cameras.
     \value  WebEngineView.MediaAudioVideoCapture
             Both audio and video capture devices.
+    \value  DesktopVideoCapture
+            Video output capture, that is, the capture of the user's display.
+            (Added in Qt 5.10)
+    \value  DesktopAudioVideoCapture
+            Both audio and video output capture. (Added in Qt 5.10)
 
     \sa featurePermissionRequested(), grantFeaturePermission()
 */
@@ -994,7 +1039,7 @@
 */
 
 /*!
-    \qmltype WebEngineFullScreenRequest
+    \qmltype FullScreenRequest
     \instantiates QQuickWebEngineFullScreenRequest
     \inqmlmodule QtWebEngine
     \since QtWebEngine 1.1
@@ -1005,13 +1050,13 @@
 */
 
 /*!
-    \qmlproperty url WebEngineFullScreenRequest::origin
+    \qmlproperty url FullScreenRequest::origin
     \readonly
     The URL of the web page that issued the fullscreen request.
 */
 
 /*!
-    \qmlproperty bool WebEngineFullScreenRequest::toggleOn
+    \qmlproperty bool FullScreenRequest::toggleOn
     \readonly
 
     Returns \c{true} if the application should toggle fullscreen mode on, \c{false} otherwise.
@@ -1020,7 +1065,7 @@
 */
 
 /*!
-    \qmlmethod void WebEngineFullScreenRequest::accept()
+    \qmlmethod void FullScreenRequest::accept()
 
     Call this method to accept the fullscreen request. It sets the WebEngineView::isFullScreen
     property to be equal to toggleOn.
@@ -1044,7 +1089,7 @@
 */
 
 /*!
-    \qmlmethod void WebEngineFullScreenRequest::reject()
+    \qmlmethod void FullScreenRequest::reject()
     Rejects a fullscreen request.
 */
 

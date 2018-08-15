@@ -16,11 +16,6 @@
 #include <string>
 #include <vector>
 
-#include "webrtc/base/arraysize.h"
-#include "webrtc/base/criticalsection.h"
-#include "webrtc/base/format_macros.h"
-#include "webrtc/base/scoped_ref_ptr.h"
-#include "webrtc/base/timeutils.h"
 #include "webrtc/modules/audio_device/android/audio_common.h"
 #include "webrtc/modules/audio_device/android/audio_manager.h"
 #include "webrtc/modules/audio_device/android/build_info.h"
@@ -28,8 +23,12 @@
 #include "webrtc/modules/audio_device/audio_device_impl.h"
 #include "webrtc/modules/audio_device/include/audio_device.h"
 #include "webrtc/modules/audio_device/include/mock_audio_transport.h"
+#include "webrtc/rtc_base/arraysize.h"
+#include "webrtc/rtc_base/criticalsection.h"
+#include "webrtc/rtc_base/format_macros.h"
+#include "webrtc/rtc_base/scoped_ref_ptr.h"
+#include "webrtc/rtc_base/timeutils.h"
 #include "webrtc/system_wrappers/include/event_wrapper.h"
-#include "webrtc/system_wrappers/include/sleep.h"
 #include "webrtc/test/gmock.h"
 #include "webrtc/test/gtest.h"
 #include "webrtc/test/testsupport/fileutils.h"
@@ -816,9 +815,7 @@ TEST_F(AudioDeviceTest, SetSpeakerVolumeActuallySetsVolume) {
 
 // Tests that playout can be initiated, started and stopped. No audio callback
 // is registered in this test.
-// Flaky on our trybots makes this test unusable.
-// https://code.google.com/p/webrtc/issues/detail?id=5046
-TEST_F(AudioDeviceTest, DISABLED_StartStopPlayout) {
+TEST_F(AudioDeviceTest, StartStopPlayout) {
   StartPlayout();
   StopPlayout();
   StartPlayout();
@@ -984,8 +981,8 @@ TEST_F(AudioDeviceTest, RunPlayoutAndRecordingInFullDuplex) {
   // These thresholds are set rather high to accomodate differences in hardware
   // in several devices, so this test can be used in swarming.
   // See http://bugs.webrtc.org/6464
-  EXPECT_LE(fifo_audio_stream->average_size(), 30u);
-  EXPECT_LE(fifo_audio_stream->largest_size(), 40u);
+  EXPECT_LE(fifo_audio_stream->average_size(), 60u);
+  EXPECT_LE(fifo_audio_stream->largest_size(), 70u);
 }
 
 // Measures loopback latency and reports the min, max and average values for

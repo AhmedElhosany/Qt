@@ -147,8 +147,8 @@ public:
     void remove(int i, int n);
     inline void removeFirst() { Q_ASSERT(!isEmpty()); erase(d->begin()); }
     inline void removeLast();
-    inline T takeFirst() { Q_ASSERT(!isEmpty()); T r = first(); removeFirst(); return r; }
-    inline T takeLast()  { Q_ASSERT(!isEmpty()); T r = last(); removeLast(); return r; }
+    T takeFirst() { Q_ASSERT(!isEmpty()); T r = std::move(first()); removeFirst(); return r; }
+    T takeLast()  { Q_ASSERT(!isEmpty()); T r = std::move(last()); removeLast(); return r; }
 
     QVector<T> &fill(const T &t, int size = -1);
 
@@ -181,7 +181,7 @@ public:
         return true;
     }
     int length() const { return size(); }
-    T takeAt(int i) { T t = at(i); remove(i); return t; }
+    T takeAt(int i) { T t = std::move((*this)[i]); remove(i); return t; }
     void move(int from, int to)
     {
         Q_ASSERT_X(from >= 0 && from < size(), "QVector::move(int,int)", "'from' is out-of-range");
@@ -269,6 +269,7 @@ public:
     inline const_reference front() const { return first(); }
     inline reference back() { return last(); }
     inline const_reference back() const { return last(); }
+    void shrink_to_fit() { squeeze(); }
 
     // comfort
     QVector<T> &operator+=(const QVector<T> &l);
@@ -724,7 +725,7 @@ typename QVector<T>::iterator QVector<T>::insert(iterator before, size_type n, c
         } else {
             T *b = d->begin() + offset;
             T *i = b + n;
-            memmove(static_cast<void *>(i), static_cast<const void *>(b), (d->size - offset) * sizeof(T));
+            memmove(i, b, (d->size - offset) * sizeof(T));
             while (i != b)
                 new (--i) T(copy);
         }
@@ -1003,6 +1004,8 @@ QT_END_INCLUDE_NAMESPACE
 Q_TEMPLATE_EXTERN template class Q_CORE_EXPORT QVector<QPointF>;
 Q_TEMPLATE_EXTERN template class Q_CORE_EXPORT QVector<QPoint>;
 #endif
+
+QVector<uint> QStringView::toUcs4() const { return QtPrivate::convertToUcs4(*this); }
 
 QT_END_NAMESPACE
 

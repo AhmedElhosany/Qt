@@ -37,7 +37,7 @@
 **
 ****************************************************************************/
 #include "qquicklineextruder_p.h"
-#include <stdlib.h>
+#include <QRandomGenerator>
 #include <cmath>
 
 /*!
@@ -69,10 +69,10 @@ QPointF QQuickLineExtruder::extrude(const QRectF &r)
 {
     qreal x,y;
     if (!r.height()){
-        x = r.width() * ((qreal)rand())/RAND_MAX;
+        x = r.width() * QRandomGenerator::global()->generateDouble();
         y = 0;
     }else{
-        y = r.height() * ((qreal)rand())/RAND_MAX;
+        y = r.height() * QRandomGenerator::global()->generateDouble();
         if (!r.width()){
             x = 0;
         }else{

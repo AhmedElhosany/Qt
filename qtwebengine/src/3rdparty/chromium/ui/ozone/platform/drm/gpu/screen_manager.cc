@@ -45,6 +45,19 @@ void FillModesetBuffer(const scoped_refptr<DrmDevice>& drm,
     return;
   }
 
+  uint32_t fourcc_format = buffer->GetFramebufferPixelFormat();
+  const auto& modifiers = controller->GetFormatModifiers(fourcc_format);
+  for (const uint64_t modifier : modifiers) {
+    // A value of 0 means DRM_FORMAT_MOD_NONE. If the CRTC has any other
+    // modifier (tiling, compression, etc.) we can't read the fb and assume it's
+    // a linear buffer.
+    if (modifier) {
+      VLOG(2) << "Crtc has a modifier and we might not know how to interpret "
+                 "the fb.";
+      return;
+    }
+  }
+
   // If the display controller is in mirror mode, the CRTCs should be sharing
   // the same framebuffer.
   DrmConsoleBuffer saved_buffer(drm, saved_crtc->buffer_id);
@@ -95,8 +108,8 @@ void ScreenManager::AddDisplayController(const scoped_refptr<DrmDevice>& drm,
   HardwareDisplayControllers::iterator it = FindDisplayController(drm, crtc);
   // TODO(dnicoara): Turn this into a DCHECK when async display configuration is
   // properly supported. (When there can't be a race between forcing initial
-  // display configuration in ScreenManager and NativeDisplayDelegate creating
-  // the display controllers.)
+  // display configuration in ScreenManager and display::NativeDisplayDelegate
+  // creating the display controllers.)
   if (it != controllers_.end()) {
     LOG(WARNING) << "Display controller (crtc=" << crtc << ") already present.";
     return;
@@ -219,14 +232,15 @@ HardwareDisplayController* ScreenManager::GetDisplayController(
 void ScreenManager::AddWindow(gfx::AcceleratedWidget widget,
                               std::unique_ptr<DrmWindow> window) {
   std::pair<WidgetToWindowMap::iterator, bool> result =
-      window_map_.add(widget, std::move(window));
+      window_map_.insert(std::make_pair(widget, std::move(window)));
   DCHECK(result.second) << "Window already added.";
   UpdateControllerToWindowMapping();
 }
 
 std::unique_ptr<DrmWindow> ScreenManager::RemoveWindow(
     gfx::AcceleratedWidget widget) {
-  std::unique_ptr<DrmWindow> window = window_map_.take_and_erase(widget);
+  std::unique_ptr<DrmWindow> window = std::move(window_map_[widget]);
+  window_map_.erase(widget);
   DCHECK(window) << "Attempting to remove non-existing window for " << widget;
   UpdateControllerToWindowMapping();
   return window;
@@ -235,7 +249,7 @@ std::unique_ptr<DrmWindow> ScreenManager::RemoveWindow(
 DrmWindow* ScreenManager::GetWindow(gfx::AcceleratedWidget widget) {
   WidgetToWindowMap::iterator it = window_map_.find(widget);
   if (it != window_map_.end())
-    return it->second;
+    return it->second.get();
 
   return nullptr;
 }
@@ -311,8 +325,8 @@ void ScreenManager::UpdateControllerToWindowMapping() {
   }
 
   // Apply the new mapping to all windows.
-  for (auto pair : window_map_) {
-    auto it = window_to_controller_map.find(pair.second);
+  for (auto& pair : window_map_) {
+    auto it = window_to_controller_map.find(pair.second.get());
     HardwareDisplayController* controller = nullptr;
     if (it != window_to_controller_map.end())
       controller = it->second;
@@ -334,17 +348,30 @@ OverlayPlane ScreenManager::GetModesetBuffer(
     HardwareDisplayController* controller,
     const gfx::Rect& bounds) {
   DrmWindow* window = FindWindowAt(bounds);
+
+  gfx::BufferFormat format = display::DisplaySnapshot::PrimaryFormat();
+  uint32_t fourcc_format = ui::GetFourCCFormatForOpaqueFramebuffer(format);
+
   if (window) {
     const OverlayPlane* primary = window->GetLastModesetBuffer();
     const DrmDevice* drm = controller->GetAllocationDrmDevice().get();
     if (primary && primary->buffer->GetSize() == bounds.size() &&
-        primary->buffer->GetDrmDevice() == drm)
-      return *primary;
+        primary->buffer->GetDrmDevice() == drm) {
+      // If the controller doesn't advertise modifiers, wont have a
+      // modifier either and we can reuse the buffer. Otherwise, check
+      // to see if the controller supports the buffers format
+      // modifier.
+      const auto& modifiers = controller->GetFormatModifiers(fourcc_format);
+      if (modifiers.empty())
+        return *primary;
+      for (const uint64_t modifier : modifiers) {
+        if (modifier == primary->buffer->GetFormatModifier())
+          return *primary;
+      }
+    }
   }
 
-  gfx::BufferFormat format = ui::DisplaySnapshot::PrimaryFormat();
   scoped_refptr<DrmDevice> drm = controller->GetAllocationDrmDevice();
-  uint32_t fourcc_format = ui::GetFourCCFormatForFramebuffer(format);
   scoped_refptr<ScanoutBuffer> buffer =
       buffer_generator_->Create(drm, fourcc_format, bounds.size());
   if (!buffer) {
@@ -386,9 +413,9 @@ bool ScreenManager::ModesetController(HardwareDisplayController* controller,
 }
 
 DrmWindow* ScreenManager::FindWindowAt(const gfx::Rect& bounds) const {
-  for (auto pair : window_map_) {
+  for (auto& pair : window_map_) {
     if (pair.second->bounds() == bounds)
-      return pair.second;
+      return pair.second.get();
   }
 
   return nullptr;

@@ -27,11 +27,13 @@
 #include "net/base/net_errors.h"
 #include "net/base/network_activity_monitor.h"
 #include "net/base/sockaddr_storage.h"
+#include "net/base/trace_constants.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_source_type.h"
 #include "net/socket/socket_descriptor.h"
+#include "net/socket/socket_options.h"
 #include "net/socket/udp_net_log_parameters.h"
 
 #if defined(OS_ANDROID)
@@ -161,6 +163,8 @@ UDPSocketPosix::UDPSocketPosix(DatagramSocket::BindType bind_type,
       multicast_time_to_live_(1),
       bind_type_(bind_type),
       rand_int_cb_(rand_int_cb),
+      read_socket_watcher_(FROM_HERE),
+      write_socket_watcher_(FROM_HERE),
       read_watcher_(this),
       write_watcher_(this),
       read_buf_len_(0),
@@ -175,12 +179,13 @@ UDPSocketPosix::UDPSocketPosix(DatagramSocket::BindType bind_type,
 }
 
 UDPSocketPosix::~UDPSocketPosix() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   Close();
   net_log_.EndEvent(NetLogEventType::SOCKET_ALIVE);
 }
 
 int UDPSocketPosix::Open(AddressFamily address_family) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK_EQ(socket_, kInvalidSocket);
 
   addr_family_ = ConvertAddressFamily(address_family);
@@ -200,7 +205,7 @@ int UDPSocketPosix::Open(AddressFamily address_family) {
 }
 
 void UDPSocketPosix::Close() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   if (socket_ == kInvalidSocket)
     return;
@@ -232,7 +237,7 @@ void UDPSocketPosix::Close() {
 }
 
 int UDPSocketPosix::GetPeerAddress(IPEndPoint* address) const {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(address);
   if (!is_connected())
     return ERR_SOCKET_NOT_CONNECTED;
@@ -244,7 +249,7 @@ int UDPSocketPosix::GetPeerAddress(IPEndPoint* address) const {
     std::unique_ptr<IPEndPoint> address(new IPEndPoint());
     if (!address->FromSockAddr(storage.addr, storage.addr_len))
       return ERR_ADDRESS_INVALID;
-    remote_address_.reset(address.release());
+    remote_address_ = std::move(address);
   }
 
   *address = *remote_address_;
@@ -252,7 +257,7 @@ int UDPSocketPosix::GetPeerAddress(IPEndPoint* address) const {
 }
 
 int UDPSocketPosix::GetLocalAddress(IPEndPoint* address) const {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(address);
   if (!is_connected())
     return ERR_SOCKET_NOT_CONNECTED;
@@ -264,7 +269,7 @@ int UDPSocketPosix::GetLocalAddress(IPEndPoint* address) const {
     std::unique_ptr<IPEndPoint> address(new IPEndPoint());
     if (!address->FromSockAddr(storage.addr, storage.addr_len))
       return ERR_ADDRESS_INVALID;
-    local_address_.reset(address.release());
+    local_address_ = std::move(address);
     net_log_.AddEvent(
         NetLogEventType::UDP_LOCAL_ADDRESS,
         CreateNetLogUDPConnectCallback(local_address_.get(), bound_network_));
@@ -284,7 +289,7 @@ int UDPSocketPosix::RecvFrom(IOBuffer* buf,
                              int buf_len,
                              IPEndPoint* address,
                              const CompletionCallback& callback) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK_NE(kInvalidSocket, socket_);
   CHECK(read_callback_.is_null());
   DCHECK(!recv_from_address_);
@@ -328,7 +333,7 @@ int UDPSocketPosix::SendToOrWrite(IOBuffer* buf,
                                   int buf_len,
                                   const IPEndPoint* address,
                                   const CompletionCallback& callback) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK_NE(kInvalidSocket, socket_);
   CHECK(write_callback_.is_null());
   DCHECK(!callback.is_null());  // Synchronous operation not supported
@@ -368,7 +373,7 @@ int UDPSocketPosix::Connect(const IPEndPoint& address) {
 }
 
 int UDPSocketPosix::InternalConnect(const IPEndPoint& address) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!is_connected());
   DCHECK(!remote_address_.get());
 
@@ -402,7 +407,7 @@ int UDPSocketPosix::InternalConnect(const IPEndPoint& address) {
 
 int UDPSocketPosix::Bind(const IPEndPoint& address) {
   DCHECK_NE(socket_, kInvalidSocket);
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!is_connected());
 
   int rv = SetMulticastOptions();
@@ -421,7 +426,7 @@ int UDPSocketPosix::Bind(const IPEndPoint& address) {
 int UDPSocketPosix::BindToNetwork(
     NetworkChangeNotifier::NetworkHandle network) {
   DCHECK_NE(socket_, kInvalidSocket);
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!is_connected());
   if (network == NetworkChangeNotifier::kInvalidNetworkHandle)
     return ERR_INVALID_ARGUMENT;
@@ -497,23 +502,19 @@ int UDPSocketPosix::BindToNetwork(
 
 int UDPSocketPosix::SetReceiveBufferSize(int32_t size) {
   DCHECK_NE(socket_, kInvalidSocket);
-  DCHECK(CalledOnValidThread());
-  int rv = setsockopt(socket_, SOL_SOCKET, SO_RCVBUF,
-                      reinterpret_cast<const char*>(&size), sizeof(size));
-  return rv == 0 ? OK : MapSystemError(errno);
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return SetSocketReceiveBufferSize(socket_, size);
 }
 
 int UDPSocketPosix::SetSendBufferSize(int32_t size) {
   DCHECK_NE(socket_, kInvalidSocket);
-  DCHECK(CalledOnValidThread());
-  int rv = setsockopt(socket_, SOL_SOCKET, SO_SNDBUF,
-                      reinterpret_cast<const char*>(&size), sizeof(size));
-  return rv == 0 ? OK : MapSystemError(errno);
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return SetSocketSendBufferSize(socket_, size);
 }
 
 int UDPSocketPosix::SetDoNotFragment() {
   DCHECK_NE(socket_, kInvalidSocket);
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
 #if !defined(IP_PMTUDISC_DO)
   return ERR_NOT_IMPLEMENTED;
@@ -544,17 +545,14 @@ int UDPSocketPosix::SetDoNotFragment() {
 
 int UDPSocketPosix::AllowAddressReuse() {
   DCHECK_NE(socket_, kInvalidSocket);
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!is_connected());
-  int true_value = 1;
-  int rv = setsockopt(
-      socket_, SOL_SOCKET, SO_REUSEADDR, &true_value, sizeof(true_value));
-  return rv == 0 ? OK : MapSystemError(errno);
+  return SetReuseAddr(socket_, true);
 }
 
 int UDPSocketPosix::SetBroadcast(bool broadcast) {
   DCHECK_NE(socket_, kInvalidSocket);
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   int value = broadcast ? 1 : 0;
   int rv;
 #if defined(OS_MACOSX)
@@ -574,7 +572,7 @@ int UDPSocketPosix::SetBroadcast(bool broadcast) {
 }
 
 void UDPSocketPosix::ReadWatcher::OnFileCanReadWithoutBlocking(int) {
-  TRACE_EVENT0("net",
+  TRACE_EVENT0(kNetTracingCategory,
                "UDPSocketPosix::ReadWatcher::OnFileCanReadWithoutBlocking");
   if (!socket_->read_callback_.is_null())
     socket_->DidCompleteRead();
@@ -828,7 +826,7 @@ int UDPSocketPosix::RandomBind(const IPAddress& address) {
 }
 
 int UDPSocketPosix::JoinGroup(const IPAddress& group_address) const {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (!is_connected())
     return ERR_SOCKET_NOT_CONNECTED;
 
@@ -876,7 +874,7 @@ int UDPSocketPosix::JoinGroup(const IPAddress& group_address) const {
 }
 
 int UDPSocketPosix::LeaveGroup(const IPAddress& group_address) const {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   if (!is_connected())
     return ERR_SOCKET_NOT_CONNECTED;
@@ -915,7 +913,7 @@ int UDPSocketPosix::LeaveGroup(const IPAddress& group_address) const {
 }
 
 int UDPSocketPosix::SetMulticastInterface(uint32_t interface_index) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (is_connected())
     return ERR_SOCKET_IS_CONNECTED;
   multicast_interface_ = interface_index;
@@ -923,7 +921,7 @@ int UDPSocketPosix::SetMulticastInterface(uint32_t interface_index) {
 }
 
 int UDPSocketPosix::SetMulticastTimeToLive(int time_to_live) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (is_connected())
     return ERR_SOCKET_IS_CONNECTED;
 
@@ -934,7 +932,7 @@ int UDPSocketPosix::SetMulticastTimeToLive(int time_to_live) {
 }
 
 int UDPSocketPosix::SetMulticastLoopbackMode(bool loopback) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (is_connected())
     return ERR_SOCKET_IS_CONNECTED;
 
@@ -965,7 +963,7 @@ int UDPSocketPosix::SetDiffServCodePoint(DiffServCodePoint dscp) {
 }
 
 void UDPSocketPosix::DetachFromThread() {
-  base::NonThreadSafe::DetachFromThread();
+  DETACH_FROM_THREAD(thread_checker_);
 }
 
 }  // namespace net

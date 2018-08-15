@@ -102,8 +102,7 @@ HostResolver::RequestInfo::RequestInfo(const RequestInfo& request_info)
       host_resolver_flags_(request_info.host_resolver_flags_),
       allow_cached_response_(request_info.allow_cached_response_),
       is_speculative_(request_info.is_speculative_),
-      is_my_ip_address_(request_info.is_my_ip_address_),
-      cache_hit_callback_(request_info.cache_hit_callback_) {}
+      is_my_ip_address_(request_info.is_my_ip_address_) {}
 
 HostResolver::RequestInfo::~RequestInfo() {}
 
@@ -131,6 +130,14 @@ std::unique_ptr<base::Value> HostResolver::GetDnsConfigAsValue() const {
 void HostResolver::InitializePersistence(
     const PersistCallback& persist_callback,
     std::unique_ptr<const base::Value> old_data) {}
+
+void HostResolver::SetNoIPv6OnWifi(bool no_ipv6_on_wifi) {
+  NOTREACHED();
+}
+
+bool HostResolver::GetNoIPv6OnWifi() {
+  return false;
+}
 
 // static
 std::unique_ptr<HostResolver> HostResolver::CreateSystemResolver(

@@ -6,9 +6,10 @@
  */
 Elements.ElementStatePaneWidget = class extends UI.Widget {
   constructor() {
-    super();
-    this.element.className = 'styles-element-state-pane';
-    this.element.createChild('div').createTextChild(Common.UIString('Force element state'));
+    super(true);
+    this.registerRequiredCSS('elements/elementStatePaneWidget.css');
+    this.contentElement.className = 'styles-element-state-pane';
+    this.contentElement.createChild('div').createTextChild(Common.UIString('Force element state'));
     var table = createElementWithClass('table', 'source-code');
 
     var inputs = [];
@@ -21,7 +22,7 @@ Elements.ElementStatePaneWidget = class extends UI.Widget {
       var node = UI.context.flavor(SDK.DOMNode);
       if (!node)
         return;
-      SDK.CSSModel.fromNode(node).forcePseudoState(node, event.target.state, event.target.checked);
+      node.domModel().cssModel().forcePseudoState(node, event.target.state, event.target.checked);
     }
 
     /**
@@ -30,7 +31,7 @@ Elements.ElementStatePaneWidget = class extends UI.Widget {
      */
     function createCheckbox(state) {
       var td = createElement('td');
-      var label = createCheckboxLabel(':' + state);
+      var label = UI.CheckboxLabel.create(':' + state);
       var input = label.checkboxElement;
       input.state = state;
       input.addEventListener('click', clickListener, false);
@@ -47,26 +48,21 @@ Elements.ElementStatePaneWidget = class extends UI.Widget {
     tr.appendChild(createCheckbox.call(null, 'focus'));
     tr.appendChild(createCheckbox.call(null, 'visited'));
 
-    this.element.appendChild(table);
+    this.contentElement.appendChild(table);
     UI.context.addFlavorChangeListener(SDK.DOMNode, this._update, this);
   }
 
   /**
-   * @param {?SDK.Target} target
+   * @param {?SDK.CSSModel} cssModel
    */
-  _updateTarget(target) {
-    if (this._target === target)
+  _updateModel(cssModel) {
+    if (this._cssModel === cssModel)
       return;
-
-    if (this._target) {
-      var cssModel = SDK.CSSModel.fromTarget(this._target);
-      cssModel.removeEventListener(SDK.CSSModel.Events.PseudoStateForced, this._update, this);
-    }
-    this._target = target;
-    if (target) {
-      var cssModel = SDK.CSSModel.fromTarget(target);
-      cssModel.addEventListener(SDK.CSSModel.Events.PseudoStateForced, this._update, this);
-    }
+    if (this._cssModel)
+      this._cssModel.removeEventListener(SDK.CSSModel.Events.PseudoStateForced, this._update, this);
+    this._cssModel = cssModel;
+    if (this._cssModel)
+      this._cssModel.addEventListener(SDK.CSSModel.Events.PseudoStateForced, this._update, this);
   }
 
   /**
@@ -84,9 +80,9 @@ Elements.ElementStatePaneWidget = class extends UI.Widget {
     if (node)
       node = node.enclosingElementOrSelf();
 
-    this._updateTarget(node ? node.target() : null);
+    this._updateModel(node ? node.domModel().cssModel() : null);
     if (node) {
-      var nodePseudoState = SDK.CSSModel.fromNode(node).pseudoState(node);
+      var nodePseudoState = node.domModel().cssModel().pseudoState(node);
       for (var input of this._inputs) {
         input.disabled = !!node.pseudoType();
         input.checked = nodePseudoState.indexOf(input.state) >= 0;
@@ -108,7 +104,7 @@ Elements.ElementStatePaneWidget.ButtonProvider = class {
   constructor() {
     this._button = new UI.ToolbarToggle(Common.UIString('Toggle Element State'), '');
     this._button.setText(Common.UIString(':hov'));
-    this._button.addEventListener('click', this._clicked, this);
+    this._button.addEventListener(UI.ToolbarButton.Events.Click, this._clicked, this);
     this._button.element.classList.add('monospace');
     this._view = new Elements.ElementStatePaneWidget();
   }

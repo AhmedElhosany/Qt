@@ -21,7 +21,6 @@ struct ViewHostMsg_SelectionBounds_Params;
 namespace content {
 
 class RenderWidgetHostImpl;
-class RenderWidgetHostView;
 class RenderWidgetHostViewBase;
 
 // A class which receives updates of TextInputState from multiple sources and
@@ -37,7 +36,12 @@ class CONTENT_EXPORT TextInputManager {
     // Called when a view has called UpdateTextInputState on TextInputManager.
     // If the call has led to a change in TextInputState, |did_update_state| is
     // true. In some plaforms, we need this update even when the state has not
-    // changed (e.g., Aura for updating IME).
+    // changed (e.g., Aura for updating IME). Also note that |updated_view| is
+    // the view which has most recently received an update in TextInputState.
+    // |updated_view| should not be used to obtain any IME state since this
+    // observer method might have been called in the process of unregistering
+    // |active_view_| from TextInputManager (which in turn is a result of either
+    // destroying |active_view_| or TextInputManager).
     virtual void OnUpdateTextInputStateCalled(
         TextInputManager* text_input_manager,
         RenderWidgetHostViewBase* updated_view,
@@ -88,25 +92,48 @@ class CONTENT_EXPORT TextInputManager {
     gfx::Range range;
   };
 
-  // This struct is used to store text selection related information for views.
-  struct TextSelection {
+  // This class is used to store text selection information for views. The text
+  // selection information includes a range around the selected (highlighted)
+  // text which is defined by an offset from the beginning of the page/frame,
+  // a range for the selection, and the text including the selection which
+  // might include several characters before and after it.
+  class TextSelection {
+   public:
     TextSelection();
     TextSelection(const TextSelection& other);
     ~TextSelection();
 
-    // If text selection is valid, |text| will be populated with the selected
-    // text and the method will return true. Otherwise, it will return false.
-    bool GetSelectedText(base::string16* text) const;
+    void SetSelection(const base::string16& text,
+                      size_t offset,
+                      const gfx::Range& range,
+                      bool user_initiated);
 
+    const base::string16& selected_text() const { return selected_text_; }
+    size_t offset() const { return offset_; }
+    const gfx::Range& range() const { return range_; }
+    const base::string16& text() const { return text_; }
+    bool user_initiated() const { return user_initiated_; }
+
+   private:
     // The offset of the text stored in |text| relative to the start of the web
     // page.
-    size_t offset;
+    size_t offset_;
 
-    // The current selection range relative to the start of the web page.
-    gfx::Range range;
+    // The range of the selection in the page (highlighted text).
+    gfx::Range range_;
 
-    // The text inside and around the current selection range.
-    base::string16 text;
+    // The highlighted text which is the portion of |text_| marked by |offset_|
+    // and |range_|. It will be an empty string if either |text_| or |range_|
+    // are empty of this selection information is invalid (i.e., |range_| does
+    // not cover any of |text_|.
+    base::string16 selected_text_;
+
+    // Part of the text on the page which includes the highlighted text plus
+    // possibly several characters before and after it.
+    base::string16 text_;
+
+    // True if text selection is triggered by user input.
+    bool user_initiated_ = false;
   };
 
   TextInputManager();
@@ -123,8 +150,9 @@ class CONTENT_EXPORT TextInputManager {
   // Users of these methods should not hold on to the pointers as they become
   // dangling if the TextInputManager or |active_view_| are destroyed.
 
-  // Returns the currently stored TextInputState. An state of nullptr can be
-  // interpreted as a ui::TextInputType of ui::TEXT_INPUT_TYPE_NONE.
+  // Returns the currently stored TextInputState for |active_view_|. A state of
+  // nullptr can be interpreted as a ui::TextInputType of
+  // ui::TEXT_INPUT_TYPE_NONE.
   const TextInputState* GetTextInputState() const;
 
   // Returns the selection bounds information for |view|. If |view| == nullptr,
@@ -134,10 +162,8 @@ class CONTENT_EXPORT TextInputManager {
       RenderWidgetHostViewBase* view = nullptr) const;
 
   // Returns the composition range and character bounds information for the
-  // |view|. If |view| == nullptr, it will assume |active_view_| and return its
-  // state. If |active_view_| == nullptr, this method will return nullptr.
-  const TextInputManager::CompositionRangeInfo* GetCompositionRangeInfo(
-      RenderWidgetHostViewBase* view = nullptr) const;
+  // |active_view_|. Returns nullptr If |active_view_| == nullptr.
+  const TextInputManager::CompositionRangeInfo* GetCompositionRangeInfo() const;
 
   // The following method returns the text selection state for the given |view|.
   // If |view| == nullptr, it will assume |active_view_| and return its state.
@@ -173,7 +199,8 @@ class CONTENT_EXPORT TextInputManager {
   void SelectionChanged(RenderWidgetHostViewBase* view,
                         const base::string16& text,
                         size_t offset,
-                        const gfx::Range& range);
+                        const gfx::Range& range,
+                        bool user_initiated);
 
   // Registers the given |view| for tracking its TextInputState. This is called
   // by any view which has updates in its TextInputState (whether tab's RWHV or
@@ -203,6 +230,7 @@ class CONTENT_EXPORT TextInputManager {
   size_t GetRegisteredViewsCountForTesting();
   ui::TextInputType GetTextInputTypeForViewForTesting(
       RenderWidgetHostViewBase* view);
+  const gfx::Range* GetCompositionRangeForTesting() const;
 
  private:
   // This class is used to create maps which hold specific IME state for a

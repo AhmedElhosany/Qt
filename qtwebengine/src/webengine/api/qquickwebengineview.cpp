@@ -94,27 +94,6 @@
 QT_BEGIN_NAMESPACE
 using namespace QtWebEngineCore;
 
-QQuickWebEngineView::WebAction editorActionForKeyEvent(QKeyEvent* event)
-{
-    static struct {
-        QKeySequence::StandardKey standardKey;
-        QQuickWebEngineView::WebAction action;
-    } editorActions[] = {
-        { QKeySequence::Cut, QQuickWebEngineView::Cut },
-        { QKeySequence::Copy, QQuickWebEngineView::Copy },
-        { QKeySequence::Paste, QQuickWebEngineView::Paste },
-        { QKeySequence::Undo, QQuickWebEngineView::Undo },
-        { QKeySequence::Redo, QQuickWebEngineView::Redo },
-        { QKeySequence::SelectAll, QQuickWebEngineView::SelectAll },
-        { QKeySequence::UnknownKey, QQuickWebEngineView::NoWebAction }
-    };
-    for (int i = 0; editorActions[i].standardKey != QKeySequence::UnknownKey; ++i)
-        if (event == editorActions[i].standardKey)
-            return editorActions[i].action;
-
-    return QQuickWebEngineView::NoWebAction;
-}
-
 #ifndef QT_NO_ACCESSIBILITY
 static QAccessibleInterface *webAccessibleFactory(const QString &, QObject *object)
 {
@@ -138,6 +117,7 @@ QQuickWebEngineViewPrivate::QQuickWebEngineViewPrivate()
     , m_fullscreenMode(false)
     , isLoading(false)
     , m_activeFocusOnPress(true)
+    , m_validationShowing(false)
     , devicePixelRatio(QGuiApplication::primaryScreen()->devicePixelRatio())
     , m_webChannel(0)
     , m_webChannelWorld(0)
@@ -202,7 +182,7 @@ RenderWidgetHostViewQtDelegate *QQuickWebEngineViewPrivate::CreateRenderWidgetHo
     return quickDelegate;
 }
 
-bool QQuickWebEngineViewPrivate::contextMenuRequested(const WebEngineContextMenuData &data)
+void QQuickWebEngineViewPrivate::contextMenuRequested(const WebEngineContextMenuData &data)
 {
     Q_Q(QQuickWebEngineView);
 
@@ -214,13 +194,13 @@ bool QQuickWebEngineViewPrivate::contextMenuRequested(const WebEngineContextMenu
     Q_EMIT q->contextMenuRequested(request);
 
     if (request->isAccepted())
-        return true;
+        return;
 
     // Assign the WebEngineView as the parent of the menu, so mouse events are properly propagated
     // on OSX.
     QObject *menu = ui()->addMenu(q, QString(), data.position());
     if (!menu)
-        return false;
+        return;
 
     // Populate our menu
     MenuItemHandler *item = 0;
@@ -265,10 +245,12 @@ bool QQuickWebEngineViewPrivate::contextMenuRequested(const WebEngineContextMenu
         ui()->addMenuItem(item, QQuickWebEngineView::tr("Unselect"));
     }
 
-    if (!data.linkText().isEmpty() && data.linkUrl().isValid()) {
+    if (!data.linkText().isEmpty() && !data.unfilteredLinkUrl().isEmpty()) {
         item = new MenuItemHandler(menu);
         QObject::connect(item, &MenuItemHandler::triggered, [q] { q->triggerWebAction(QQuickWebEngineView::CopyLinkToClipboard); });
         ui()->addMenuItem(item, QQuickWebEngineView::tr("Copy Link URL"));
+    }
+    if (!data.linkText().isEmpty() && data.linkUrl().isValid()) {
         item = new MenuItemHandler(menu);
         QObject::connect(item, &MenuItemHandler::triggered, [q] { q->triggerWebAction(QQuickWebEngineView::DownloadLinkToDisk); });
         ui()->addMenuItem(item, QQuickWebEngineView::tr("Save Link"));
@@ -346,7 +328,6 @@ bool QQuickWebEngineViewPrivate::contextMenuRequested(const WebEngineContextMenu
 
     // Now fire the popup() method on the top level menu
     ui()->showMenu(menu);
-    return true;
 }
 
 void QQuickWebEngineViewPrivate::navigationRequested(int navigationType, const QUrl &url, int &navigationRequestAction, bool isMainFrame)
@@ -453,14 +434,14 @@ void QQuickWebEngineViewPrivate::iconChanged(const QUrl &url)
 
     iconUrl = faviconProvider->attach(q, url);
     m_history->reset();
-    Q_EMIT q->iconChanged();
+    QTimer::singleShot(0, q, &QQuickWebEngineView::iconChanged);
 }
 
 void QQuickWebEngineViewPrivate::loadProgressChanged(int progress)
 {
     Q_Q(QQuickWebEngineView);
     loadProgress = progress;
-    Q_EMIT q->loadProgressChanged();
+    QTimer::singleShot(0, q, &QQuickWebEngineView::loadProgressChanged);
 }
 
 void QQuickWebEngineViewPrivate::didUpdateTargetURL(const QUrl &hoveredUrl)
@@ -505,8 +486,11 @@ void QQuickWebEngineViewPrivate::loadStarted(const QUrl &provisionalUrl, bool is
     isLoading = true;
     m_history->reset();
     m_certificateErrorControllers.clear();
-    QQuickWebEngineLoadRequest loadRequest(provisionalUrl, QQuickWebEngineView::LoadStartedStatus);
-    Q_EMIT q->loadingChanged(&loadRequest);
+
+    QTimer::singleShot(0, q, [q, provisionalUrl]() {
+        QQuickWebEngineLoadRequest loadRequest(provisionalUrl, QQuickWebEngineView::LoadStartedStatus);
+        emit q->loadingChanged(&loadRequest);
+    });
 }
 
 void QQuickWebEngineViewPrivate::loadCommitted()
@@ -541,51 +525,44 @@ void QQuickWebEngineViewPrivate::loadFinished(bool success, const QUrl &url, boo
     isLoading = false;
     m_history->reset();
     if (errorCode == WebEngineError::UserAbortedError) {
-        QQuickWebEngineLoadRequest loadRequest(url, QQuickWebEngineView::LoadStoppedStatus);
-        Q_EMIT q->loadingChanged(&loadRequest);
+        QTimer::singleShot(0, q, [q, url]() {
+            QQuickWebEngineLoadRequest loadRequest(url, QQuickWebEngineView::LoadStoppedStatus);
+            emit q->loadingChanged(&loadRequest);
+        });
         return;
     }
     if (success) {
         explicitUrl = QUrl();
-        QQuickWebEngineLoadRequest loadRequest(url, QQuickWebEngineView::LoadSucceededStatus);
-        Q_EMIT q->loadingChanged(&loadRequest);
+        QTimer::singleShot(0, q, [q, url]() {
+            QQuickWebEngineLoadRequest loadRequest(url, QQuickWebEngineView::LoadSucceededStatus);
+            emit q->loadingChanged(&loadRequest);
+        });
         return;
     }
 
     Q_ASSERT(errorCode);
-    QQuickWebEngineLoadRequest loadRequest(
-        url,
-        QQuickWebEngineView::LoadFailedStatus,
-        errorDescription,
-        errorCode,
-        static_cast<QQuickWebEngineView::ErrorDomain>(WebEngineError::toQtErrorDomain(errorCode)));
-    Q_EMIT q->loadingChanged(&loadRequest);
+    QQuickWebEngineView::ErrorDomain errorDomain = static_cast<QQuickWebEngineView::ErrorDomain>(WebEngineError::toQtErrorDomain(errorCode));
+    QTimer::singleShot(0, q, [q, url, errorDescription, errorCode, errorDomain]() {
+        QQuickWebEngineLoadRequest loadRequest(url, QQuickWebEngineView::LoadFailedStatus,errorDescription, errorCode, errorDomain);
+        emit q->loadingChanged(&loadRequest);
+    });
     return;
 }
 
 void QQuickWebEngineViewPrivate::focusContainer()
 {
     Q_Q(QQuickWebEngineView);
+    QQuickWindow *window = q->window();
+    if (window)
+        window->requestActivate();
     q->forceActiveFocus();
 }
 
 void QQuickWebEngineViewPrivate::unhandledKeyEvent(QKeyEvent *event)
 {
     Q_Q(QQuickWebEngineView);
-#ifdef Q_OS_OSX
-    if (event->type() == QEvent::KeyPress) {
-        QQuickWebEngineView::WebAction action = editorActionForKeyEvent(event);
-        if (action != QQuickWebEngineView::NoWebAction) {
-            // Try triggering a registered short-cut
-            if (QGuiApplicationPrivate::instance()->shortcutMap.tryShortcut(event))
-                return;
-            q->triggerWebAction(action);
-            return;
-        }
-    }
-#endif
     if (q->parentItem())
-        q->window()->sendEvent(q->parentItem(), event);
+        QCoreApplication::sendEvent(q->parentItem(), event);
 }
 
 void QQuickWebEngineViewPrivate::adoptNewWindow(QSharedPointer<WebContentsAdapter> newWebContents, WindowOpenDisposition disposition, bool userGesture, const QRect &, const QUrl &targetUrl)
@@ -698,8 +675,13 @@ void QQuickWebEngineViewPrivate::runMediaAccessPermissionRequest(const QUrl &sec
         feature = QQuickWebEngineView::MediaAudioVideoCapture;
     else if (requestFlags.testFlag(WebContentsAdapterClient::MediaAudioCapture))
         feature = QQuickWebEngineView::MediaAudioCapture;
-    else // WebContentsAdapterClient::MediaVideoCapture
+    else if (requestFlags.testFlag(WebContentsAdapterClient::MediaVideoCapture))
         feature = QQuickWebEngineView::MediaVideoCapture;
+    else if (requestFlags.testFlag(WebContentsAdapterClient::MediaDesktopAudioCapture) &&
+             requestFlags.testFlag(WebContentsAdapterClient::MediaDesktopVideoCapture))
+        feature = QQuickWebEngineView::DesktopAudioVideoCapture;
+    else // if (requestFlags.testFlag(WebContentsAdapterClient::MediaDesktopVideoCapture))
+        feature = QQuickWebEngineView::DesktopVideoCapture;
     Q_EMIT q->featurePermissionRequested(securityOrigin, feature);
 }
 
@@ -867,8 +849,7 @@ QQuickWebEngineView::QQuickWebEngineView(QQuickItem *parent)
     Q_D(QQuickWebEngineView);
     d->q_ptr = this;
     this->setActiveFocusOnTab(true);
-    this->setFlags(QQuickItem::ItemIsFocusScope | QQuickItem::ItemAcceptsInputMethod
-                   | QQuickItem::ItemAcceptsDrops);
+    this->setFlags(QQuickItem::ItemIsFocusScope | QQuickItem::ItemAcceptsDrops);
 
 #ifndef QT_NO_ACCESSIBILITY
     QQuickAccessibleAttached *accessible = QQuickAccessibleAttached::qmlAttachedProperties(this);
@@ -1115,7 +1096,8 @@ void QQuickWebEngineViewPrivate::showValidationMessage(const QRect &anchor, cons
     Q_Q(QQuickWebEngineView);
     QQuickWebEngineFormValidationMessageRequest *request;
     request = new QQuickWebEngineFormValidationMessageRequest(QQuickWebEngineFormValidationMessageRequest::Show,
-                                                          anchor,mainText,subText);
+                                                              anchor,mainText,subText);
+    m_validationShowing = true;
     // mark the object for gc by creating temporary jsvalue
     qmlEngine(q)->newQObject(request);
     Q_EMIT q->formValidationMessageRequested(request);
@@ -1126,8 +1108,12 @@ void QQuickWebEngineViewPrivate::showValidationMessage(const QRect &anchor, cons
 void QQuickWebEngineViewPrivate::hideValidationMessage()
 {
     Q_Q(QQuickWebEngineView);
+    // Suppress the initial hide message before any show messages (Since 61-based)
+    if (!m_validationShowing)
+        return;
     QQuickWebEngineFormValidationMessageRequest *request;
     request = new QQuickWebEngineFormValidationMessageRequest(QQuickWebEngineFormValidationMessageRequest::Hide);
+    m_validationShowing = false;
     // mark the object for gc by creating temporary jsvalue
     qmlEngine(q)->newQObject(request);
     Q_EMIT q->formValidationMessageRequested(request);
@@ -1427,7 +1413,8 @@ void QQuickWebEngineView::grantFeaturePermission(const QUrl &securityOrigin, QQu
 {
     if (!d_ptr->adapter)
         return;
-    if (!granted && feature >= MediaAudioCapture && feature <= MediaAudioVideoCapture) {
+    if (!granted && ((feature >= MediaAudioCapture && feature <= MediaAudioVideoCapture) ||
+                     (feature >= DesktopVideoCapture && feature <= DesktopAudioVideoCapture))) {
          d_ptr->adapter->grantMediaAccessPermission(securityOrigin, WebContentsAdapterClient::MediaNone);
          return;
     }
@@ -1444,6 +1431,16 @@ void QQuickWebEngineView::grantFeaturePermission(const QUrl &securityOrigin, QQu
         break;
     case Geolocation:
         d_ptr->adapter->runGeolocationRequestCallback(securityOrigin, granted);
+        break;
+    case DesktopVideoCapture:
+        d_ptr->adapter->grantMediaAccessPermission(securityOrigin, WebContentsAdapterClient::MediaDesktopVideoCapture);
+        break;
+    case DesktopAudioVideoCapture:
+        d_ptr->adapter->grantMediaAccessPermission(
+            securityOrigin,
+            WebContentsAdapterClient::MediaRequestFlags(
+                WebContentsAdapterClient::MediaDesktopAudioCapture |
+                WebContentsAdapterClient::MediaDesktopVideoCapture));
         break;
     default:
         Q_UNREACHABLE();
@@ -1606,14 +1603,14 @@ void QQuickWebEngineView::triggerWebAction(WebAction action)
         }
         break;
     case CopyLinkToClipboard:
-        if (d->m_contextMenuData.linkUrl().isValid()) {
-            QString urlString = d->m_contextMenuData.linkUrl().toString(QUrl::FullyEncoded);
+        if (!d->m_contextMenuData.unfilteredLinkUrl().isEmpty()) {
+            QString urlString = d->m_contextMenuData.unfilteredLinkUrl().toString(QUrl::FullyEncoded);
             QString title = d->m_contextMenuData.linkText().toHtmlEscaped();
             QMimeData *data = new QMimeData();
             data->setText(urlString);
             QString html = QStringLiteral("<a href=\"") + urlString + QStringLiteral("\">") + title + QStringLiteral("</a>");
             data->setHtml(html);
-            data->setUrls(QList<QUrl>() << d->m_contextMenuData.linkUrl());
+            data->setUrls(QList<QUrl>() << d->m_contextMenuData.unfilteredLinkUrl());
             qApp->clipboard()->setMimeData(data);
         }
         break;
@@ -1711,6 +1708,42 @@ void QQuickWebEngineView::triggerWebAction(WebAction action)
     case ViewSource:
         d->adapter->viewSource();
         break;
+    case ToggleBold:
+        runJavaScript(QStringLiteral("document.execCommand('bold');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case ToggleItalic:
+        runJavaScript(QStringLiteral("document.execCommand('italic');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case ToggleUnderline:
+        runJavaScript(QStringLiteral("document.execCommand('underline');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case ToggleStrikethrough:
+        runJavaScript(QStringLiteral("document.execCommand('strikethrough');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case AlignLeft:
+        runJavaScript(QStringLiteral("document.execCommand('justifyLeft');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case AlignCenter:
+        runJavaScript(QStringLiteral("document.execCommand('justifyCenter');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case AlignRight:
+        runJavaScript(QStringLiteral("document.execCommand('justifyRight');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case AlignJustified:
+        runJavaScript(QStringLiteral("document.execCommand('justifyFull');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case Indent:
+        runJavaScript(QStringLiteral("document.execCommand('indent');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case Outdent:
+        runJavaScript(QStringLiteral("document.execCommand('outdent');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case InsertOrderedList:
+        runJavaScript(QStringLiteral("document.execCommand('insertOrderedList');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
+    case InsertUnorderedList:
+        runJavaScript(QStringLiteral("document.execCommand('insertUnorderedList');"), QQuickWebEngineScript::ApplicationWorld);
+        break;
     default:
         Q_UNREACHABLE();
     }
@@ -1719,16 +1752,12 @@ void QQuickWebEngineView::triggerWebAction(WebAction action)
 QSizeF QQuickWebEngineView::contentsSize() const
 {
     Q_D(const QQuickWebEngineView);
-    if (!d->adapter)
-        return QSizeF();
     return d->adapter->lastContentsSize();
 }
 
 QPointF QQuickWebEngineView::scrollPosition() const
 {
     Q_D(const QQuickWebEngineView);
-    if (!d->adapter)
-        return QPointF();
     return d->adapter->lastScrollOffset();
 }
 

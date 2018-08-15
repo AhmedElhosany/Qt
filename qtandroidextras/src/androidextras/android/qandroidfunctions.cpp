@@ -1,5 +1,6 @@
 /****************************************************************************
 **
+** Copyright (C) 2017 BogDan Vatra <bogdan@kde.org>
 ** Copyright (C) 2016 The Qt Company Ltd.
 ** Contact: https://www.qt.io/licensing/
 **
@@ -40,9 +41,13 @@
 #include "qandroidfunctions.h"
 #include "qandroidactivityresultreceiver.h"
 #include "qandroidactivityresultreceiver_p.h"
+#include "qandroidintent.h"
+#include "qandroidserviceconnection.h"
 
 #include <QtCore/private/qjni_p.h>
 #include <QtCore/private/qjnihelpers_p.h>
+
+#include <jni/qandroidjnienvironment.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -52,6 +57,43 @@ QT_BEGIN_NAMESPACE
     \since 5.3
     \brief The QtAndroid namespace provides miscellaneous functions to aid Android development.
     \inheaderfile QtAndroid
+*/
+
+/*!
+    \since 5.10
+    \enum QtAndroid::BindFlag
+
+    This enum is used with QtAndroid::bindService to describe the mode in which the
+    binding is performed.
+
+    \value None                 No options.
+    \value AutoCreate           Automatically creates the service as long as the binding exist.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_AUTO_CREATE}
+                                {BIND_AUTO_CREATE} documentation for more details.
+    \value DebugUnbind          Include debugging help for mismatched calls to unbind.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_DEBUG_UNBIND}
+                                {BIND_DEBUG_UNBIND} documentation for more details.
+    \value NotForeground        Don't allow this binding to raise the target service's process to the foreground scheduling priority.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_NOT_FOREGROUND}
+                                {BIND_NOT_FOREGROUND} documentation for more details.
+    \value AboveClient          Indicates that the client application binding to this service considers the service to be more important than the app itself.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_ABOVE_CLIENT}
+                                {BIND_ABOVE_CLIENT} documentation for more details.
+    \value AllowOomManagement   Allow the process hosting the bound service to go through its normal memory management.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_ALLOW_OOM_MANAGEMENT}
+                                {BIND_ALLOW_OOM_MANAGEMENT} documentation for more details.
+    \value WaivePriority        Don't impact the scheduling or memory management priority of the target service's hosting process.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_WAIVE_PRIORITY}
+                                {BIND_WAIVE_PRIORITY} documentation for more details.
+    \value Important            This service is assigned a higher priority so that it is available to the client when needed.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_IMPORTANT}
+                                {BIND_IMPORTANT} documentation for more details.
+    \value AdjustWithActivity   If binding from an activity, allow the target service's process importance to be raised based on whether the activity is visible to the user.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_ADJUST_WITH_ACTIVITY}
+                                {BIND_ADJUST_WITH_ACTIVITY} documentation for more details.
+    \value ExternalService      The service being bound is an isolated, external service.
+                                See \l {https://developer.android.com/reference/android/content/Context.html#BIND_EXTERNAL_SERVICE}
+                                {BIND_EXTERNAL_SERVICE} documentation for more details.
 */
 
 /*!
@@ -181,6 +223,12 @@ void QtAndroid::startIntentSender(const QAndroidJniObject &intentSender,
 }
 
 /*!
+    \typedef QtAndroid::Runnable
+
+    Synonym for std::function<void()>.
+*/
+
+/*!
   \since 5.7
   \fn void QtAndroid::runOnAndroidThread(const Runnable &runnable)
 
@@ -231,11 +279,123 @@ void QtAndroid::runOnAndroidThreadSync(const QtAndroid::Runnable &runnable, int 
   \since 5.7
   \fn void QtAndroid::hideSplashScreen()
 
-  Hides the splash screen.
+  Hides the splash screen immediately.
 */
 void QtAndroid::hideSplashScreen()
 {
-    QtAndroidPrivate::hideSplashScreen(QJNIEnvironmentPrivate());
+    hideSplashScreen(0);
 }
 
+/*!
+  \since 5.10
+  \fn void QtAndroid::hideSplashScreen(int duration)
+
+  Hides the splash screen, fading it for \a duration milliseconds.
+*/
+void QtAndroid::hideSplashScreen(int duration)
+{
+    QtAndroidPrivate::hideSplashScreen(QJNIEnvironmentPrivate(), duration);
+}
+
+
+/*!
+    \since 5.10
+    \fn bool QtAndroid::bindService(const QAndroidIntent &serviceIntent, const QAndroidServiceConnection &serviceConnection, BindFlags flags = BindFlag::None)
+
+    Binds the service given by \a serviceIntent, \a serviceConnection and \a flags.
+    The \a serviceIntent object identifies the service to connect to.
+    The \a serviceConnection is a listener that receives the information as the service is started and stopped.
+
+    \return true on success
+
+    See \l {https://developer.android.com/reference/android/content/Context.html#bindService%28android.content.Intent,%20android.content.ServiceConnection,%20int%29}
+    {Android documentation} documentation for more details.
+
+    \sa QAndroidIntent, QAndroidServiceConnection, BindFlag
+*/
+bool QtAndroid::bindService(const QAndroidIntent &serviceIntent,
+                            const QAndroidServiceConnection &serviceConnection, BindFlags flags)
+{
+    QAndroidJniExceptionCleaner cleaner;
+    return androidContext().callMethod<jboolean>("bindService", "(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z",
+                                                 serviceIntent.handle().object(), serviceConnection.handle().object(), jint(flags));
+}
+
+static QtAndroid::PermissionResultMap privateToPublicPermissionsHash(const QtAndroidPrivate::PermissionsHash &privateHash)
+{
+    QtAndroid::PermissionResultMap hash;
+    for (auto it = privateHash.constBegin(); it != privateHash.constEnd(); ++it)
+        hash[it.key()] = QtAndroid::PermissionResult(it.value());
+    return hash;
+}
+
+/*!
+  \since 5.10
+  \enum QtAndroid::PermissionResult
+
+  This enum is used to describe the permission status.
+
+  \value Granted    The permission was granted.
+  \value Denied     The permission was denied.
+*/
+
+/*!
+    \typedef QtAndroid::PermissionResultMap
+
+    Synonym for QHash<QString, PermissionResult>.
+*/
+
+/*!
+    \typedef QtAndroid::PermissionResultCallback
+
+    Synonym for std::function<void(const PermissionResultMap &)>.
+*/
+
+/*!
+  \since 5.10
+  \fn void QtAndroid::requestPermissions(const QStringList &permissions, const PermissionResultCallback &callbackFunc)
+
+  Asynchronously requests \a permissions to be granted to this application, \a callbackFunc will be called with the results.
+*/
+void QtAndroid::requestPermissions(const QStringList &permissions, const QtAndroid::PermissionResultCallback &callbackFunc)
+{
+    QtAndroidPrivate::requestPermissions(QJNIEnvironmentPrivate(), permissions,
+                                         [callbackFunc](const QtAndroidPrivate::PermissionsHash &privatePerms){
+                                            callbackFunc(privateToPublicPermissionsHash(privatePerms));
+                                         }, false);
+}
+
+/*!
+  \since 5.10
+  \fn QtAndroid::PermissionResultMap QtAndroid::requestPermissionsSync(const QStringList &permissions, int timeoutMs)
+
+  Synchronously requests \a permissions to be granted to this application, waits \a timeoutMs to complete.
+ */
+QtAndroid::PermissionResultMap QtAndroid::requestPermissionsSync(const QStringList &permissions, int timeoutMs)
+{
+    return privateToPublicPermissionsHash(QtAndroidPrivate::requestPermissionsSync(QJNIEnvironmentPrivate(), permissions, timeoutMs));
+}
+
+/*!
+  \since 5.10
+  \fn QtAndroid::PermissionResult QtAndroid::checkPermission(const QString &permission)
+
+  Checks if the \a permission was granted or not. This function should be called every time when
+  the application starts for needed permissions, as the users might disable them from Android Settings.
+ */
+QtAndroid::PermissionResult QtAndroid::checkPermission(const QString &permission)
+{
+    return QtAndroid::PermissionResult(QtAndroidPrivate::checkPermission(permission));
+}
+
+/*!
+  \since 5.10
+  \fn bool QtAndroid::shouldShowRequestPermissionRationale(const QString &permission)
+
+  Returns \c true if you should show UI with a rationale for requesting a \a permission.
+*/
+bool QtAndroid::shouldShowRequestPermissionRationale(const QString &permission)
+{
+    return QtAndroidPrivate::shouldShowRequestPermissionRationale(permission);
+}
 QT_END_NAMESPACE

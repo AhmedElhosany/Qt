@@ -15,13 +15,15 @@
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/browser/devtools/devtools_session.h"
 #include "content/browser/devtools/forwarding_agent_host.h"
-#include "content/browser/devtools/protocol/devtools_protocol_dispatcher.h"
+#include "content/browser/devtools/protocol/page.h"
 #include "content/browser/devtools/render_frame_devtools_agent_host.h"
 #include "content/browser/devtools/service_worker_devtools_agent_host.h"
 #include "content/browser/devtools/service_worker_devtools_manager.h"
 #include "content/browser/devtools/shared_worker_devtools_agent_host.h"
 #include "content/browser/devtools/shared_worker_devtools_manager.h"
+#include "content/browser/frame_host/frame_tree_node.h"
 #include "content/browser/loader/netlog_observer.h"
+#include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 
@@ -39,20 +41,40 @@ char DevToolsAgentHost::kTypePage[] = "page";
 char DevToolsAgentHost::kTypeFrame[] = "iframe";
 char DevToolsAgentHost::kTypeSharedWorker[] = "shared_worker";
 char DevToolsAgentHost::kTypeServiceWorker[] = "service_worker";
-char DevToolsAgentHost::kTypeExternal[] = "external";
 char DevToolsAgentHost::kTypeBrowser[] = "browser";
+char DevToolsAgentHost::kTypeGuest[] = "webview";
 char DevToolsAgentHost::kTypeOther[] = "other";
 int DevToolsAgentHostImpl::s_attached_count_ = 0;
 int DevToolsAgentHostImpl::s_force_creation_count_ = 0;
 
 // static
 std::string DevToolsAgentHost::GetProtocolVersion() {
-  return std::string(devtools::kProtocolVersion);
+  // TODO(dgozman): generate this.
+  return "1.2";
 }
 
 // static
 bool DevToolsAgentHost::IsSupportedProtocolVersion(const std::string& version) {
-  return devtools::IsSupportedProtocolVersion(version);
+  // TODO(dgozman): generate this.
+  return version == "1.0" || version == "1.1" || version == "1.2";
+}
+
+// static
+std::string DevToolsAgentHost::GetUntrustedDevToolsFrameIdForFrameTreeNodeId(
+    int process_id,
+    int frame_tree_node_id) {
+  FrameTreeNode* frame_tree_node =
+      FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (!frame_tree_node)
+    return "";
+  // Make sure |process_id| hasn't changed.
+  RenderFrameHostImpl* render_frame_host_impl =
+      frame_tree_node->current_frame_host();
+  if (!render_frame_host_impl ||
+      render_frame_host_impl->GetProcess()->GetID() != process_id) {
+    return "";
+  }
+  return render_frame_host_impl->untrusted_devtools_frame_id();
 }
 
 // static
@@ -80,13 +102,6 @@ DevToolsAgentHost::List DevToolsAgentHost::GetOrCreateAll() {
   return result;
 }
 
-// static
-void DevToolsAgentHost::DiscoverAllHosts(const DiscoveryCallback& callback) {
-  DevToolsManager* manager = DevToolsManager::GetInstance();
-  if (!manager->delegate() || !manager->delegate()->DiscoverTargets(callback))
-    callback.Run(DevToolsAgentHost::GetOrCreateAll());
-}
-
 // Called on the UI thread.
 // static
 scoped_refptr<DevToolsAgentHost> DevToolsAgentHost::GetForWorker(
@@ -103,9 +118,7 @@ scoped_refptr<DevToolsAgentHost> DevToolsAgentHost::GetForWorker(
 }
 
 DevToolsAgentHostImpl::DevToolsAgentHostImpl(const std::string& id)
-    : id_(id),
-      last_session_id_(0),
-      client_(NULL) {
+    : id_(id), last_session_id_(0) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 }
 
@@ -135,67 +148,96 @@ scoped_refptr<DevToolsAgentHost> DevToolsAgentHost::Forward(
   return new ForwardingAgentHost(id, std::move(delegate));
 }
 
-bool DevToolsAgentHostImpl::InnerAttach(DevToolsAgentHostClient* client,
-                                        bool force) {
-  if (client_ && !force)
-    return false;
+DevToolsSession* DevToolsAgentHostImpl::SessionById(int session_id) {
+  auto it = session_by_id_.find(session_id);
+  return it == session_by_id_.end() ? nullptr : it->second;
+}
 
+DevToolsSession* DevToolsAgentHostImpl::SessionByClient(
+    DevToolsAgentHostClient* client) {
+  auto it = session_by_client_.find(client);
+  return it == session_by_client_.end() ? nullptr : it->second.get();
+}
+
+void DevToolsAgentHostImpl::InnerAttachClient(DevToolsAgentHostClient* client) {
   scoped_refptr<DevToolsAgentHostImpl> protect(this);
-  if (client_) {
-    client_->AgentHostClosed(this, true);
-    InnerDetach();
-  }
-  client_ = client;
-  session_.reset(new DevToolsSession(this, ++last_session_id_));
-  Attach();
-  NotifyAttached();
-  return true;
+  DevToolsSession* session =
+      new DevToolsSession(this, client, ++last_session_id_);
+  sessions_.insert(session);
+  session_by_id_[session->session_id()] = session;
+  session_by_client_[client].reset(session);
+  AttachSession(session);
+  if (sessions_.size() == 1)
+    NotifyAttached();
 }
 
 bool DevToolsAgentHostImpl::AttachClient(DevToolsAgentHostClient* client) {
-  return InnerAttach(client, false);
+  if (!sessions_.empty())
+    return false;
+  InnerAttachClient(client);
+  return true;
 }
 
 void DevToolsAgentHostImpl::ForceAttachClient(DevToolsAgentHostClient* client) {
-  InnerAttach(client, true);
+  scoped_refptr<DevToolsAgentHostImpl> protect(this);
+  if (!sessions_.empty())
+    ForceDetachAllClients(true);
+  DCHECK(sessions_.empty());
+  InnerAttachClient(client);
+}
+
+void DevToolsAgentHostImpl::AttachMultiClient(DevToolsAgentHostClient* client) {
+  InnerAttachClient(client);
 }
 
 bool DevToolsAgentHostImpl::DetachClient(DevToolsAgentHostClient* client) {
-  if (!client_ || client_ != client)
+  if (!SessionByClient(client))
     return false;
 
   scoped_refptr<DevToolsAgentHostImpl> protect(this);
-  client_ = NULL;
-  InnerDetach();
+  InnerDetachClient(client);
   return true;
 }
 
 bool DevToolsAgentHostImpl::DispatchProtocolMessage(
     DevToolsAgentHostClient* client,
     const std::string& message) {
-  if (!client_ || client_ != client)
+  DevToolsSession* session = SessionByClient(client);
+  if (!session)
     return false;
-  return DispatchProtocolMessage(message);
+  return DispatchProtocolMessage(session, message);
 }
 
-void DevToolsAgentHostImpl::InnerDetach() {
-  Detach();
-  io_context_.DiscardAllStreams();
-  session_.reset();
-  NotifyDetached();
+void DevToolsAgentHostImpl::InnerDetachClient(DevToolsAgentHostClient* client) {
+  DevToolsSession* session = SessionByClient(client);
+  int session_id = session->session_id();
+  sessions_.erase(session);
+  session_by_id_.erase(session_id);
+  session_by_client_.erase(client);
+  DetachSession(session_id);
+  if (sessions_.empty()) {
+    io_context_.DiscardAllStreams();
+    NotifyDetached();
+  }
 }
 
 bool DevToolsAgentHostImpl::IsAttached() {
-  return !!client_;
+  return !sessions_.empty();
 }
 
 void DevToolsAgentHostImpl::InspectElement(
     DevToolsAgentHostClient* client,
     int x,
     int y) {
- if (!client_ || (client && client_ != client))
-   return;
- InspectElement(x, y);
+  DevToolsSession* session = nullptr;
+  if (client)
+    session = SessionByClient(client);
+  else if (sessions_.size() == 1)
+    session = *sessions_.begin();
+  if (session)
+    InspectElement(session, x, y);
+  else
+    LOG(WARNING) << "InspectElement called with unknown or ambigious client";
 }
 
 std::string DevToolsAgentHostImpl::GetId() {
@@ -245,39 +287,19 @@ bool DevToolsAgentHostImpl::Inspect() {
   return false;
 }
 
-void DevToolsAgentHostImpl::SendProtocolResponse(int session_id,
-                                                 const std::string& message) {
-  SendMessageToClient(session_id, message);
-}
-
-void DevToolsAgentHostImpl::SendProtocolNotification(
-    const std::string& message) {
-  SendMessageToClient(session_ ? session_->session_id() : 0, message);
-}
-
-void DevToolsAgentHostImpl::HostClosed() {
-  if (!client_)
-    return;
-
+void DevToolsAgentHostImpl::ForceDetachAllClients(bool replaced) {
   scoped_refptr<DevToolsAgentHostImpl> protect(this);
-  // Clear |client_| before notifying it.
-  DevToolsAgentHostClient* client = client_;
-  client_ = NULL;
-  client->AgentHostClosed(this, false);
-  NotifyDetached();
+  while (!session_by_client_.empty()) {
+    DevToolsAgentHostClient* client = session_by_client_.begin()->first;
+    InnerDetachClient(client);
+    client->AgentHostClosed(this, replaced);
+  }
 }
 
-void DevToolsAgentHostImpl::InspectElement(int x, int y) {
-}
-
-void DevToolsAgentHostImpl::SendMessageToClient(int session_id,
-                                                const std::string& message) {
-  if (!client_)
-    return;
-  // Filter any messages from previous sessions.
-  if (!session_ || session_id != session_->session_id())
-    return;
-  client_->DispatchProtocolMessage(this, message);
+void DevToolsAgentHostImpl::InspectElement(
+    DevToolsSession* session,
+    int x,
+    int y) {
 }
 
 // static
@@ -290,14 +312,7 @@ void DevToolsAgentHost::DetachAllClients() {
   Instances copy = g_instances.Get();
   for (Instances::iterator it(copy.begin()); it != copy.end(); ++it) {
     DevToolsAgentHostImpl* agent_host = it->second;
-    if (agent_host->client_) {
-      scoped_refptr<DevToolsAgentHostImpl> protect(agent_host);
-      // Clear |client_| before notifying it.
-      DevToolsAgentHostClient* client = agent_host->client_;
-      agent_host->client_ = NULL;
-      client->AgentHostClosed(agent_host, true);
-      agent_host->InnerDetach();
-    }
+    agent_host->ForceDetachAllClients(true);
   }
 }
 
@@ -413,6 +428,13 @@ bool DevToolsMessageChunkProcessor::ProcessChunkedMessageFromAgent(
     message_buffer_size_ = 0;
   }
   return true;
+}
+
+void DevToolsMessageChunkProcessor::Reset() {
+  message_buffer_ = std::string();
+  message_buffer_size_ = 0;
+  state_cookie_ = std::string();
+  last_call_id_ = 0;
 }
 
 }  // namespace content

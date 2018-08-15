@@ -16,6 +16,7 @@ SUBDIRS += \
     cylinder-qml \
     deferred-renderer-cpp \
     deferred-renderer-qml \
+    downloading \
     dragging \
     dynamicscene-cpp \
     enabled-qml \
@@ -28,11 +29,13 @@ SUBDIRS += \
     multiplewindows-qml \
     picking-qml \
     plasma \
+    pointlinesize \
     scene3d-loader \
     simple-shaders-qml \
     skybox \
     tessellation-modes \
     transforms-qml \
+    spritegrid \
     transparency-qml \
     transparency-qml-scene3d \
     rendercapture-qml \
@@ -48,7 +51,11 @@ SUBDIRS += \
     mesh-morphing \
     anim-viewer \
     animation-keyframe-programmatic \
-    rendercapture-qml-fbo
+    layerfilter-qml \
+    skinned-mesh \
+    proximityfilter \
+    rendercapture-qml-fbo \
+    blitframebuffer-qml
 
 qtHaveModule(widgets): {
     SUBDIRS += \

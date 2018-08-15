@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 
+#include "base/memory/ptr_util.h"
 #include "cc/base/math_util.h"
 #include "cc/layers/layer.h"
 #include "cc/layers/layer_impl.h"
@@ -29,48 +30,34 @@ namespace cc {
 
 namespace {
 
-static const int kInvalidPropertyTreeNodeId = -1;
-static const int kRootPropertyTreeNodeId = 0;
-static const int kViewportClipTreeNodeId = 1;
-
 template <typename LayerType>
 struct DataForRecursion {
   PropertyTrees* property_trees;
   LayerType* transform_tree_parent;
   LayerType* transform_fixed_parent;
-  int render_target;
-  int clip_tree_parent;
-  int effect_tree_parent;
-  int scroll_tree_parent;
   const LayerType* page_scale_layer;
   const LayerType* inner_viewport_scroll_layer;
   const LayerType* outer_viewport_scroll_layer;
   const LayerType* overscroll_elasticity_layer;
-  gfx::Vector2dF elastic_overscroll;
+  const gfx::Transform* device_transform;
   float page_scale_factor;
+  int clip_tree_parent;
+  int effect_tree_parent;
+  int scroll_tree_parent;
+  int closest_ancestor_with_cached_render_surface;
+  int closest_ancestor_with_copy_request;
+  uint32_t main_thread_scrolling_reasons;
+  SkColor safe_opaque_background_color;
   bool in_subtree_of_page_scale_layer;
   bool affected_by_inner_viewport_bounds_delta;
   bool affected_by_outer_viewport_bounds_delta;
   bool should_flatten;
-  bool target_is_clipped;
   bool is_hidden;
-  uint32_t main_thread_scrolling_reasons;
   bool scroll_tree_parent_created_by_uninheritable_criteria;
-  const gfx::Transform* device_transform;
+  bool animation_axis_aligned_since_render_target;
+  bool not_axis_aligned_since_last_clip;
   gfx::Transform compound_transform_since_render_target;
-  bool axis_align_since_render_target;
-  SkColor safe_opaque_background_color;
-};
-
-template <typename LayerType>
-struct DataForRecursionFromChild {
-  int num_copy_requests_in_subtree;
-
-  DataForRecursionFromChild() : num_copy_requests_in_subtree(0) {}
-
-  void Merge(const DataForRecursionFromChild& data) {
-    num_copy_requests_in_subtree += data.num_copy_requests_in_subtree;
-  }
+  gfx::Vector2dF elastic_overscroll;
 };
 
 static LayerPositionConstraint PositionConstraint(Layer* layer) {
@@ -88,93 +75,6 @@ static LayerStickyPositionConstraint StickyPositionConstraint(Layer* layer) {
 static LayerStickyPositionConstraint StickyPositionConstraint(
     LayerImpl* layer) {
   return layer->test_properties()->sticky_position_constraint;
-}
-
-struct PreCalculateMetaInformationRecursiveData {
-  size_t num_unclipped_descendants;
-  int num_descendants_that_draw_content;
-
-  PreCalculateMetaInformationRecursiveData()
-      : num_unclipped_descendants(0),
-        num_descendants_that_draw_content(0) {}
-
-  void Merge(const PreCalculateMetaInformationRecursiveData& data) {
-    num_unclipped_descendants += data.num_unclipped_descendants;
-    num_descendants_that_draw_content += data.num_descendants_that_draw_content;
-  }
-};
-
-static inline bool IsRootLayer(const Layer* layer) {
-  return !layer->parent();
-}
-
-static bool IsMetaInformationRecomputationNeeded(Layer* layer) {
-  return layer->GetLayerTree()->needs_meta_info_recomputation();
-}
-
-// Recursively walks the layer tree(if needed) to compute any information
-// that is needed before doing the main recursion.
-static void PreCalculateMetaInformationInternal(
-    Layer* layer,
-    PreCalculateMetaInformationRecursiveData* recursive_data) {
-  if (!IsMetaInformationRecomputationNeeded(layer)) {
-    DCHECK(IsRootLayer(layer));
-    return;
-  }
-
-  if (layer->clip_parent())
-    recursive_data->num_unclipped_descendants++;
-
-  for (size_t i = 0; i < layer->children().size(); ++i) {
-    Layer* child_layer = layer->child_at(i);
-
-    PreCalculateMetaInformationRecursiveData data_for_child;
-    PreCalculateMetaInformationInternal(child_layer, &data_for_child);
-    recursive_data->Merge(data_for_child);
-  }
-
-  if (layer->clip_children()) {
-    size_t num_clip_children = layer->clip_children()->size();
-    DCHECK_GE(recursive_data->num_unclipped_descendants, num_clip_children);
-    recursive_data->num_unclipped_descendants -= num_clip_children;
-  }
-
-  layer->set_num_unclipped_descendants(
-      recursive_data->num_unclipped_descendants);
-
-  if (IsRootLayer(layer))
-    layer->GetLayerTree()->SetNeedsMetaInfoRecomputation(false);
-}
-
-static void PreCalculateMetaInformationInternalForTesting(
-    LayerImpl* layer,
-    PreCalculateMetaInformationRecursiveData* recursive_data) {
-  if (layer->test_properties()->clip_parent)
-    recursive_data->num_unclipped_descendants++;
-
-  for (size_t i = 0; i < layer->test_properties()->children.size(); ++i) {
-    LayerImpl* child_layer = layer->test_properties()->children[i];
-
-    PreCalculateMetaInformationRecursiveData data_for_child;
-    PreCalculateMetaInformationInternalForTesting(child_layer, &data_for_child);
-    recursive_data->Merge(data_for_child);
-  }
-
-  if (layer->test_properties()->clip_children) {
-    size_t num_clip_children = layer->test_properties()->clip_children->size();
-    DCHECK_GE(recursive_data->num_unclipped_descendants, num_clip_children);
-    recursive_data->num_unclipped_descendants -= num_clip_children;
-  }
-
-  layer->test_properties()->num_unclipped_descendants =
-      recursive_data->num_unclipped_descendants;
-  // TODO(enne): this should be synced from the main thread, so is only
-  // for tests constructing layers on the compositor thread.
-  layer->test_properties()->num_descendants_that_draw_content =
-      recursive_data->num_descendants_that_draw_content;
-
-  if (layer->DrawsContent())
-    recursive_data->num_descendants_that_draw_content++;
 }
 
 static LayerImplList& Children(LayerImpl* layer) {
@@ -217,12 +117,12 @@ static LayerImpl* ClipParent(LayerImpl* layer) {
   return layer->test_properties()->clip_parent;
 }
 
-static size_t NumUnclippedDescendants(Layer* layer) {
-  return layer->num_unclipped_descendants();
+static inline const FilterOperations& Filters(Layer* layer) {
+  return layer->filters();
 }
 
-static size_t NumUnclippedDescendants(LayerImpl* layer) {
-  return layer->test_properties()->num_unclipped_descendants;
+static inline const FilterOperations& Filters(LayerImpl* layer) {
+  return layer->test_properties()->filters;
 }
 
 static Layer* MaskLayer(Layer* layer) {
@@ -308,15 +208,6 @@ static LayerType* GetTransformParent(const DataForRecursion<LayerType>& data,
 }
 
 template <typename LayerType>
-static ClipNode* GetClipParent(const DataForRecursion<LayerType>& data,
-                               LayerType* layer) {
-  const bool inherits_clip = !ClipParent(layer);
-  const int id = inherits_clip ? data.clip_tree_parent
-                               : ClipParent(layer)->clip_tree_index();
-  return data.property_trees->clip_tree.Node(id);
-}
-
-template <typename LayerType>
 static bool LayerClipsSubtree(LayerType* layer) {
   return layer->masks_to_bounds() || MaskLayer(layer);
 }
@@ -338,69 +229,36 @@ static LayerImpl* Parent(LayerImpl* layer) {
   return layer->test_properties()->parent;
 }
 
+static inline int SortingContextId(Layer* layer) {
+  return layer->sorting_context_id();
+}
+
+static inline int SortingContextId(LayerImpl* layer) {
+  return layer->test_properties()->sorting_context_id;
+}
+
+static inline bool Is3dSorted(Layer* layer) {
+  return layer->Is3dSorted();
+}
+
+static inline bool Is3dSorted(LayerImpl* layer) {
+  return layer->test_properties()->sorting_context_id != 0;
+}
+
 template <typename LayerType>
 void AddClipNodeIfNeeded(const DataForRecursion<LayerType>& data_from_ancestor,
                          LayerType* layer,
-                         bool created_render_surface,
                          bool created_transform_node,
                          DataForRecursion<LayerType>* data_for_children) {
-  ClipNode* parent = GetClipParent(data_from_ancestor, layer);
-  int parent_id = parent->id;
-
-  bool is_root = !Parent(layer);
-
-  // Whether we have an ancestor clip that we might need to apply.
-  bool ancestor_clips_subtree = is_root || parent->layers_are_clipped;
-
-  bool layers_are_clipped = false;
-  bool has_unclipped_surface = false;
-
-  if (created_render_surface) {
-    // Clips can usually be applied to a surface's descendants simply by
-    // clipping the surface (or applied implicitly by the surface's bounds).
-    // However, if the surface has unclipped descendants (layers that aren't
-    // affected by the ancestor clip), we cannot clip the surface itself, and
-    // must instead apply clips to the clipped descendants.
-    if (ancestor_clips_subtree && NumUnclippedDescendants(layer) > 0) {
-      layers_are_clipped = true;
-    } else if (!ancestor_clips_subtree) {
-      // When there are no ancestor clips that need to be applied to a render
-      // surface, we reset clipping state. The surface might contribute a clip
-      // of its own, but clips from ancestor nodes don't need to be considered
-      // when computing clip rects or visibility.
-      has_unclipped_surface = true;
-      DCHECK_NE(parent->clip_type, ClipNode::ClipType::APPLIES_LOCAL_CLIP);
-    }
-    // A surface with unclipped descendants cannot be clipped by its ancestor
-    // clip at draw time since the unclipped descendants aren't affected by the
-    // ancestor clip.
-    data_for_children->target_is_clipped =
-        ancestor_clips_subtree && !NumUnclippedDescendants(layer);
-  } else {
-    // Without a new render surface, layer clipping state from ancestors needs
-    // to continue to propagate.
-    data_for_children->target_is_clipped = data_from_ancestor.target_is_clipped;
-    layers_are_clipped = ancestor_clips_subtree;
-  }
+  const bool inherits_clip = !ClipParent(layer);
+  const int parent_id = inherits_clip ? data_from_ancestor.clip_tree_parent
+                                      : ClipParent(layer)->clip_tree_index();
 
   bool layer_clips_subtree = LayerClipsSubtree(layer);
-  if (layer_clips_subtree)
-    layers_are_clipped = true;
-
-  // Without surfaces, all non-viewport clips have to be applied using layer
-  // clipping.
-  bool layers_are_clipped_when_surfaces_disabled =
-      layer_clips_subtree || parent->layers_are_clipped_when_surfaces_disabled;
-
-  // Render surface's clip is needed during hit testing. So, we need to create
-  // a clip node for every render surface.
-  bool requires_node = layer_clips_subtree || created_render_surface;
-
+  bool requires_node =
+      layer_clips_subtree || Filters(layer).HasFilterThatMovesPixels();
   if (!requires_node) {
     data_for_children->clip_tree_parent = parent_id;
-    DCHECK_EQ(layers_are_clipped, parent->layers_are_clipped);
-    DCHECK_EQ(layers_are_clipped_when_surfaces_disabled,
-              parent->layers_are_clipped_when_surfaces_disabled);
   } else {
     LayerType* transform_parent = data_for_children->transform_tree_parent;
     if (PositionConstraint(layer).is_fixed_position() &&
@@ -411,49 +269,34 @@ void AddClipNodeIfNeeded(const DataForRecursion<LayerType>& data_from_ancestor,
     node.clip = gfx::RectF(gfx::PointF() + layer->offset_to_transform_parent(),
                            gfx::SizeF(layer->bounds()));
     node.transform_id = transform_parent->transform_tree_index();
-    node.target_effect_id = data_for_children->render_target;
-    node.target_transform_id = data_for_children->property_trees->effect_tree
-                                   .Node(data_for_children->render_target)
-                                   ->transform_id;
-    node.owner_id = layer->id();
-
-    if (ancestor_clips_subtree || layer_clips_subtree) {
-      // Surfaces reset the rect used for layer clipping. At other nodes, layer
-      // clipping state from ancestors must continue to get propagated.
-      node.layer_clipping_uses_only_local_clip =
-          (created_render_surface && NumUnclippedDescendants(layer) == 0) ||
-          !ancestor_clips_subtree;
-    } else {
-      // Otherwise, we're either unclipped, or exist only in order to apply our
-      // parent's clips in our space.
-      node.layer_clipping_uses_only_local_clip = false;
-    }
-
-    if (layer_clips_subtree)
+    if (layer_clips_subtree) {
       node.clip_type = ClipNode::ClipType::APPLIES_LOCAL_CLIP;
-    else
-      node.clip_type = ClipNode::ClipType::NONE;
-    node.resets_clip = has_unclipped_surface;
-    node.target_is_clipped = data_for_children->target_is_clipped;
-    node.layers_are_clipped = layers_are_clipped;
-    node.layers_are_clipped_when_surfaces_disabled =
-        layers_are_clipped_when_surfaces_disabled;
-
+    } else {
+      DCHECK(Filters(layer).HasFilterThatMovesPixels());
+      node.clip_type = ClipNode::ClipType::EXPANDS_CLIP;
+      node.clip_expander =
+          base::MakeUnique<ClipExpander>(layer->effect_tree_index());
+    }
     data_for_children->clip_tree_parent =
         data_for_children->property_trees->clip_tree.Insert(node, parent_id);
-    data_for_children->property_trees->clip_id_to_index_map[layer->id()] =
-        data_for_children->clip_tree_parent;
   }
 
   layer->SetClipTreeIndex(data_for_children->clip_tree_parent);
 }
 
+static Layer* LayerById(Layer* layer, int id) {
+  return layer->layer_tree_host()->LayerById(id);
+}
+
+static LayerImpl* LayerById(LayerImpl* layer, int id) {
+  return layer->layer_tree_impl()->LayerById(id);
+}
+
 template <typename LayerType>
 static inline bool IsAtBoundaryOf3dRenderingContext(LayerType* layer) {
   return Parent(layer)
-             ? Parent(layer)->sorting_context_id() !=
-                   layer->sorting_context_id()
-             : layer->Is3dSorted();
+             ? SortingContextId(Parent(layer)) != SortingContextId(layer)
+             : Is3dSorted(layer);
 }
 
 static inline gfx::Point3F TransformOrigin(Layer* layer) {
@@ -513,14 +356,6 @@ bool AddTransformNodeIfNeeded(
 
   const bool has_surface = created_render_surface;
 
-  // A transform node is needed to change the render target for subtree when
-  // a scroll child's render target is different from the scroll parent's render
-  // target.
-  const bool scroll_child_has_different_target =
-      ScrollParent(layer) &&
-      Parent(layer)->effect_tree_index() !=
-          ScrollParent(layer)->effect_tree_index();
-
   const bool is_at_boundary_of_3d_rendering_context =
       IsAtBoundaryOf3dRenderingContext(layer);
 
@@ -528,33 +363,24 @@ bool AddTransformNodeIfNeeded(
   bool requires_node = is_root || is_snapped || has_significant_transform ||
                        has_any_transform_animation || has_surface || is_fixed ||
                        is_page_scale_layer || is_overscroll_elasticity_layer ||
-                       has_proxied_transform_related_property ||
-                       scroll_child_has_different_target || is_sticky ||
+                       has_proxied_transform_related_property || is_sticky ||
                        is_at_boundary_of_3d_rendering_context;
 
-  LayerType* transform_parent = GetTransformParent(data_from_ancestor, layer);
-  DCHECK(is_root || transform_parent);
-
-  int parent_index = kRootPropertyTreeNodeId;
-  if (transform_parent)
-    parent_index = transform_parent->transform_tree_index();
-
-  int source_index = parent_index;
-
+  int parent_index = TransformTree::kRootNodeId;
+  int source_index = TransformTree::kRootNodeId;
   gfx::Vector2dF source_offset;
+
+  LayerType* transform_parent = GetTransformParent(data_from_ancestor, layer);
+  DCHECK_EQ(is_root, !transform_parent);
+
   if (transform_parent) {
-    if (ScrollParent(layer)) {
-      LayerType* source = Parent(layer);
-      source_offset += source->offset_to_transform_parent();
-      source_index = source->transform_tree_index();
-    } else if (!is_fixed) {
-      source_offset = transform_parent->offset_to_transform_parent();
-    } else {
-      source_offset = data_from_ancestor.transform_tree_parent
-                          ->offset_to_transform_parent();
-      source_index =
-          data_from_ancestor.transform_tree_parent->transform_tree_index();
-    }
+    parent_index = transform_parent->transform_tree_index();
+    // Because Blink still provides positions with respect to the parent layer,
+    // we track both a parent TransformNode (which is the parent in the
+    // TransformTree) and a 'source' TransformNode (which is the TransformNode
+    // for the parent in the Layer tree).
+    source_index = Parent(layer)->transform_tree_index();
+    source_offset = Parent(layer)->offset_to_transform_parent();
   }
 
   if (IsContainerForFixedPositionLayers(layer) || is_root) {
@@ -563,7 +389,6 @@ bool AddTransformNodeIfNeeded(
     data_for_children->affected_by_outer_viewport_bounds_delta =
         layer == data_from_ancestor.outer_viewport_scroll_layer;
     if (is_scrollable) {
-      DCHECK(!is_root);
       DCHECK(Transform(layer).IsIdentity());
       data_for_children->transform_fixed_parent = Parent(layer);
     } else {
@@ -597,14 +422,20 @@ bool AddTransformNodeIfNeeded(
   TransformNode* node =
       data_for_children->property_trees->transform_tree.back();
   layer->SetTransformTreeIndex(node->id);
-  data_for_children->property_trees->transform_id_to_index_map[layer->id()] =
-      node->id;
+
+  // For animation subsystem purposes, if this layer has a compositor element
+  // id, we build a map from that id to this transform node.
+  if (layer->element_id()) {
+    data_for_children->property_trees
+        ->element_id_to_transform_node_index[layer->element_id()] = node->id;
+    node->element_id = layer->element_id();
+  }
 
   node->scrolls = is_scrollable;
   node->should_be_snapped = is_snapped;
   node->flattens_inherited_transform = data_for_children->should_flatten;
 
-  node->sorting_context_id = layer->sorting_context_id();
+  node->sorting_context_id = SortingContextId(layer);
 
   if (layer == data_from_ancestor.page_scale_layer)
     data_for_children->in_subtree_of_page_scale_layer = true;
@@ -615,18 +446,6 @@ bool AddTransformNodeIfNeeded(
   data_for_children->should_flatten =
       ShouldFlattenTransform(layer) || has_surface;
   DCHECK_GT(data_from_ancestor.property_trees->effect_tree.size(), 0u);
-
-  data_for_children->property_trees->transform_tree.SetTargetId(
-      node->id, data_for_children->property_trees->effect_tree
-                    .Node(data_from_ancestor.render_target)
-                    ->transform_id);
-  data_for_children->property_trees->transform_tree.SetContentTargetId(
-      node->id, data_for_children->property_trees->effect_tree
-                    .Node(data_for_children->render_target)
-                    ->transform_id);
-  DCHECK_NE(
-      data_for_children->property_trees->transform_tree.TargetId(node->id),
-      kInvalidPropertyTreeNodeId);
 
   node->has_potential_animation = has_potentially_animated_transform;
   node->is_currently_animating = TransformIsAnimating(layer);
@@ -711,18 +530,35 @@ bool AddTransformNodeIfNeeded(
       // need to have their local transform updated when the inner / outer
       // viewport bounds change, but do not unconditionally move by that delta
       // like fixed position nodes.
-      if (scroll_ancestor->is_inner_viewport_scroll_layer) {
+      if (scroll_ancestor->scrolls_inner_viewport) {
         data_for_children->property_trees->transform_tree
             .AddNodeAffectedByInnerViewportBoundsDelta(node->id);
-      } else if (scroll_ancestor->is_outer_viewport_scroll_layer) {
+      } else if (scroll_ancestor->scrolls_outer_viewport) {
         data_for_children->property_trees->transform_tree
             .AddNodeAffectedByOuterViewportBoundsDelta(node->id);
       }
     }
-    sticky_data->main_thread_offset =
-        layer->position().OffsetFromOrigin() -
-        sticky_data->constraints.parent_relative_sticky_box_offset
-            .OffsetFromOrigin();
+    // Copy the ancestor nodes for later use. These layers are guaranteed to
+    // have transform nodes at this point because they are our ancestors (so
+    // have already been processed) and are sticky (so have transform nodes).
+    int shifting_sticky_box_layer_id =
+        sticky_data->constraints.nearest_layer_shifting_sticky_box;
+    if (shifting_sticky_box_layer_id != Layer::INVALID_ID) {
+      sticky_data->nearest_node_shifting_sticky_box =
+          LayerById(layer, shifting_sticky_box_layer_id)
+              ->transform_tree_index();
+      DCHECK(sticky_data->nearest_node_shifting_sticky_box !=
+             TransformTree::kInvalidNodeId);
+    }
+    int shifting_containing_block_layer_id =
+        sticky_data->constraints.nearest_layer_shifting_containing_block;
+    if (shifting_containing_block_layer_id != Layer::INVALID_ID) {
+      sticky_data->nearest_node_shifting_containing_block =
+          LayerById(layer, shifting_containing_block_layer_id)
+              ->transform_tree_index();
+      DCHECK(sticky_data->nearest_node_shifting_containing_block !=
+             TransformTree::kInvalidNodeId);
+    }
   }
 
   node->needs_local_transform_update = true;
@@ -732,8 +568,6 @@ bool AddTransformNodeIfNeeded(
 
   // Flattening (if needed) will be handled by |node|.
   layer->set_should_flatten_transform_from_property_tree(false);
-
-  node->owner_id = layer->id();
 
   return true;
 }
@@ -756,6 +590,14 @@ static inline bool DoubleSided(LayerImpl* layer) {
   return layer->test_properties()->double_sided;
 }
 
+static inline bool CacheRenderSurface(Layer* layer) {
+  return layer->cache_render_surface();
+}
+
+static inline bool CacheRenderSurface(LayerImpl* layer) {
+  return layer->test_properties()->cache_render_surface;
+}
+
 static inline bool ForceRenderSurface(Layer* layer) {
   return layer->force_render_surface_for_testing();
 }
@@ -766,8 +608,8 @@ static inline bool ForceRenderSurface(LayerImpl* layer) {
 
 template <typename LayerType>
 static inline bool LayerIsInExisting3DRenderingContext(LayerType* layer) {
-  return layer->Is3dSorted() && Parent(layer) && Parent(layer)->Is3dSorted() &&
-         (Parent(layer)->sorting_context_id() == layer->sorting_context_id());
+  return Is3dSorted(layer) && Parent(layer) && Is3dSorted(Parent(layer)) &&
+         (SortingContextId(Parent(layer)) == SortingContextId(layer));
 }
 
 static inline bool IsRootForIsolatedGroup(Layer* layer) {
@@ -782,8 +624,24 @@ static inline int NumDescendantsThatDrawContent(Layer* layer) {
   return layer->NumDescendantsThatDrawContent();
 }
 
+static inline int NumLayerOrDescendantsThatDrawContentRecursive(
+    LayerImpl* layer) {
+  int num = layer->DrawsContent() ? 1 : 0;
+  for (size_t i = 0; i < layer->test_properties()->children.size(); ++i) {
+    LayerImpl* child_layer = layer->test_properties()->children[i];
+    num += NumLayerOrDescendantsThatDrawContentRecursive(child_layer);
+  }
+  return num;
+}
+
 static inline int NumDescendantsThatDrawContent(LayerImpl* layer) {
-  return layer->test_properties()->num_descendants_that_draw_content;
+  int num_descendants_that_draw_content = 0;
+  for (size_t i = 0; i < layer->test_properties()->children.size(); ++i) {
+    LayerImpl* child_layer = layer->test_properties()->children[i];
+    num_descendants_that_draw_content +=
+        NumLayerOrDescendantsThatDrawContentRecursive(child_layer);
+  }
+  return num_descendants_that_draw_content;
 }
 
 static inline float EffectiveOpacity(Layer* layer) {
@@ -804,16 +662,12 @@ static inline float Opacity(LayerImpl* layer) {
   return layer->test_properties()->opacity;
 }
 
-static inline SkXfermode::Mode BlendMode(Layer* layer) {
+static inline SkBlendMode BlendMode(Layer* layer) {
   return layer->blend_mode();
 }
 
-static inline SkXfermode::Mode BlendMode(LayerImpl* layer) {
+static inline SkBlendMode BlendMode(LayerImpl* layer) {
   return layer->test_properties()->blend_mode;
-}
-
-static inline const FilterOperations& Filters(Layer* layer) {
-  return layer->filters();
 }
 
 static inline const gfx::PointF FiltersOrigin(Layer* layer) {
@@ -822,10 +676,6 @@ static inline const gfx::PointF FiltersOrigin(Layer* layer) {
 
 static inline const gfx::PointF FiltersOrigin(LayerImpl* layer) {
   return layer->test_properties()->filters_origin;
-}
-
-static inline const FilterOperations& Filters(LayerImpl* layer) {
-  return layer->test_properties()->filters;
 }
 
 static inline const FilterOperations& BackgroundFilters(Layer* layer) {
@@ -842,14 +692,6 @@ static inline bool HideLayerAndSubtree(Layer* layer) {
 
 static inline bool HideLayerAndSubtree(LayerImpl* layer) {
   return layer->test_properties()->hide_layer_and_subtree;
-}
-
-static inline bool AlwaysUseActiveTreeOpacity(Layer* layer) {
-  return layer->AlwaysUseActiveTreeOpacity();
-}
-
-static inline bool AlwaysUseActiveTreeOpacity(LayerImpl* layer) {
-  return false;
 }
 
 static inline bool HasCopyRequest(Layer* layer) {
@@ -871,10 +713,9 @@ static inline bool PropertyChanged(LayerImpl* layer) {
 template <typename LayerType>
 bool ShouldCreateRenderSurface(LayerType* layer,
                                gfx::Transform current_transform,
-                               bool axis_aligned) {
+                               bool animation_axis_aligned) {
   const bool preserves_2d_axis_alignment =
-      (current_transform * Transform(layer)).Preserves2dAxisAlignment() &&
-      axis_aligned && AnimationsPreserveAxisAlignment(layer);
+      current_transform.Preserves2dAxisAlignment() && animation_axis_aligned;
   const bool is_root = !Parent(layer);
   if (is_root)
     return true;
@@ -911,7 +752,7 @@ bool ShouldCreateRenderSurface(LayerType* layer,
   // TODO(rosca): this is temporary, until blending is implemented for other
   // types of quads than RenderPassDrawQuad. Layers having descendants that draw
   // content will still create a separate rendering surface.
-  if (BlendMode(layer) != SkXfermode::kSrcOver_Mode) {
+  if (BlendMode(layer) != SkBlendMode::kSrcOver) {
     TRACE_EVENT_INSTANT0(
         "cc", "PropertyTreeBuilder::ShouldCreateRenderSurface blending",
         TRACE_EVENT_SCOPE_THREAD);
@@ -963,6 +804,10 @@ bool ShouldCreateRenderSurface(LayerType* layer,
   if (ForceRenderSurface(layer))
     return true;
 
+  // If we cache it.
+  if (CacheRenderSurface(layer))
+    return true;
+
   // If we'll make a copy of the layer's contents.
   if (HasCopyRequest(layer))
     return true;
@@ -984,6 +829,38 @@ static void TakeCopyRequests(
   layer->test_properties()->copy_requests.clear();
 }
 
+static void SetSubtreeHasCopyRequest(Layer* layer,
+                                     bool subtree_has_copy_request) {
+  layer->SetSubtreeHasCopyRequest(subtree_has_copy_request);
+}
+
+static void SetSubtreeHasCopyRequest(LayerImpl* layer,
+                                     bool subtree_has_copy_request) {
+  layer->test_properties()->subtree_has_copy_request = subtree_has_copy_request;
+}
+
+static bool SubtreeHasCopyRequest(Layer* layer) {
+  return layer->SubtreeHasCopyRequest();
+}
+
+static bool SubtreeHasCopyRequest(LayerImpl* layer) {
+  return layer->test_properties()->subtree_has_copy_request;
+}
+
+template <typename LayerType>
+bool UpdateSubtreeHasCopyRequestRecursive(LayerType* layer) {
+  bool subtree_has_copy_request = false;
+  if (HasCopyRequest(layer))
+    subtree_has_copy_request = true;
+  for (size_t i = 0; i < Children(layer).size(); ++i) {
+    LayerType* current_child = ChildAt(layer, i);
+    subtree_has_copy_request |=
+        UpdateSubtreeHasCopyRequestRecursive(current_child);
+  }
+  SetSubtreeHasCopyRequest(layer, subtree_has_copy_request);
+  return subtree_has_copy_request;
+}
+
 template <typename LayerType>
 bool AddEffectNodeIfNeeded(
     const DataForRecursion<LayerType>& data_from_ancestor,
@@ -997,14 +874,27 @@ bool AddEffectNodeIfNeeded(
       HasPotentiallyRunningFilterAnimation(layer);
   const bool has_proxied_opacity =
       !!(layer->mutable_properties() & MutableProperty::kOpacity);
-  const bool should_create_render_surface = ShouldCreateRenderSurface(
-      layer, data_from_ancestor.compound_transform_since_render_target,
-      data_from_ancestor.axis_align_since_render_target);
-  data_for_children->axis_align_since_render_target &=
+
+  data_for_children->animation_axis_aligned_since_render_target &=
       AnimationsPreserveAxisAlignment(layer);
+  data_for_children->compound_transform_since_render_target *= Transform(layer);
+  const bool should_create_render_surface = ShouldCreateRenderSurface(
+      layer, data_for_children->compound_transform_since_render_target,
+      data_for_children->animation_axis_aligned_since_render_target);
+
+  bool not_axis_aligned_since_last_clip =
+      data_from_ancestor.not_axis_aligned_since_last_clip
+          ? true
+          : !AnimationsPreserveAxisAlignment(layer) ||
+                !Transform(layer).Preserves2dAxisAlignment();
+  // A non-axis aligned clip may need a render surface. So, we create an effect
+  // node.
+  bool has_non_axis_aligned_clip =
+      not_axis_aligned_since_last_clip && LayerClipsSubtree(layer);
 
   bool requires_node = is_root || has_transparency ||
                        has_potential_opacity_animation || has_proxied_opacity ||
+                       has_non_axis_aligned_clip ||
                        should_create_render_surface;
 
   int parent_id = data_from_ancestor.effect_tree_parent;
@@ -1012,38 +902,43 @@ bool AddEffectNodeIfNeeded(
   if (!requires_node) {
     layer->SetEffectTreeIndex(parent_id);
     data_for_children->effect_tree_parent = parent_id;
-    data_for_children->compound_transform_since_render_target *=
-        Transform(layer);
     return false;
   }
 
-  EffectNode node;
-  node.owner_id = layer->id();
-  if (AlwaysUseActiveTreeOpacity(layer)) {
-    data_for_children->property_trees->always_use_active_tree_opacity_effect_ids
-        .push_back(node.owner_id);
-  }
-
-  node.opacity = Opacity(layer);
-  node.blend_mode = BlendMode(layer);
-  node.unscaled_mask_target_size = layer->bounds();
-  node.has_render_surface = should_create_render_surface;
-  node.has_copy_request = HasCopyRequest(layer);
-  node.filters = Filters(layer);
-  node.background_filters = BackgroundFilters(layer);
-  node.filters_origin = FiltersOrigin(layer);
-  node.has_potential_opacity_animation = has_potential_opacity_animation;
-  node.has_potential_filter_animation = has_potential_filter_animation;
-  node.double_sided = DoubleSided(layer);
-  node.subtree_hidden = HideLayerAndSubtree(layer);
-  node.is_currently_animating_opacity = OpacityIsAnimating(layer);
-  node.is_currently_animating_filter = FilterIsAnimating(layer);
-  node.effect_changed = PropertyChanged(layer);
-
   EffectTree& effect_tree = data_for_children->property_trees->effect_tree;
+  int node_id = effect_tree.Insert(EffectNode(), parent_id);
+  EffectNode* node = effect_tree.back();
+
+  node->stable_id = layer->id();
+  node->opacity = Opacity(layer);
+  node->blend_mode = BlendMode(layer);
+  node->unscaled_mask_target_size = layer->bounds();
+  node->has_render_surface = should_create_render_surface;
+  node->cache_render_surface = CacheRenderSurface(layer);
+  node->has_copy_request = HasCopyRequest(layer);
+  node->filters = Filters(layer);
+  node->background_filters = BackgroundFilters(layer);
+  node->filters_origin = FiltersOrigin(layer);
+  node->has_potential_opacity_animation = has_potential_opacity_animation;
+  node->has_potential_filter_animation = has_potential_filter_animation;
+  node->double_sided = DoubleSided(layer);
+  node->subtree_hidden = HideLayerAndSubtree(layer);
+  node->is_currently_animating_opacity = OpacityIsAnimating(layer);
+  node->is_currently_animating_filter = FilterIsAnimating(layer);
+  node->effect_changed = PropertyChanged(layer);
+  node->subtree_has_copy_request = SubtreeHasCopyRequest(layer);
+  node->closest_ancestor_with_cached_render_surface_id =
+      CacheRenderSurface(layer)
+          ? node_id
+          : data_from_ancestor.closest_ancestor_with_cached_render_surface;
+  node->closest_ancestor_with_copy_request_id =
+      HasCopyRequest(layer)
+          ? node_id
+          : data_from_ancestor.closest_ancestor_with_copy_request;
+
   if (MaskLayer(layer)) {
-    node.mask_layer_id = MaskLayer(layer)->id();
-    effect_tree.AddMaskLayerId(node.mask_layer_id);
+    node->mask_layer_id = MaskLayer(layer)->id();
+    effect_tree.AddMaskLayerId(node->mask_layer_id);
   }
 
   if (!is_root) {
@@ -1054,24 +949,34 @@ bool AddEffectNodeIfNeeded(
       // In this case, we will create a transform node, so it's safe to use the
       // next available id from the transform tree as this effect node's
       // transform id.
-      node.transform_id =
+      node->transform_id =
           data_from_ancestor.property_trees->transform_tree.next_available_id();
-      node.has_unclipped_descendants = (NumUnclippedDescendants(layer) != 0);
     }
-    node.clip_id = data_from_ancestor.clip_tree_parent;
+    node->clip_id = data_from_ancestor.clip_tree_parent;
   } else {
-    // Root render surface acts the unbounded and untransformed to draw content
-    // into. Transform node created from root layer (includes device scale
-    // factor) and clip node created from root layer (include viewports) applies
-    // to root render surface's content, but not root render surface itself.
-    node.transform_id = kRootPropertyTreeNodeId;
-    node.clip_id = kViewportClipTreeNodeId;
+    // The root render surface acts as the unbounded and untransformed
+    // surface into which content is drawn. The transform node created
+    // from the root layer (which includes device scale factor) and
+    // the clip node created from the root layer (which includes
+    // viewports) apply to the root render surface's content, but not
+    // to the root render surface itself.
+    node->transform_id = TransformTree::kRootNodeId;
+    node->clip_id = ClipTree::kViewportNodeId;
   }
-  data_for_children->effect_tree_parent = effect_tree.Insert(node, parent_id);
-  int node_id = data_for_children->effect_tree_parent;
+
+  data_for_children->closest_ancestor_with_cached_render_surface =
+      node->closest_ancestor_with_cached_render_surface_id;
+  data_for_children->closest_ancestor_with_copy_request =
+      node->closest_ancestor_with_copy_request_id;
+  data_for_children->effect_tree_parent = node_id;
   layer->SetEffectTreeIndex(node_id);
-  data_for_children->property_trees->effect_id_to_index_map[layer->id()] =
-      data_for_children->effect_tree_parent;
+
+  // For animation subsystem purposes, if this layer has a compositor element
+  // id, we build a map from that id to this effect node.
+  if (layer->element_id()) {
+    data_for_children->property_trees
+        ->element_id_to_effect_node_index[layer->element_id()] = node_id;
+  }
 
   std::vector<std::unique_ptr<CopyOutputRequest>> layer_copy_requests;
   TakeCopyRequests(layer, &layer_copy_requests);
@@ -1083,9 +988,39 @@ bool AddEffectNodeIfNeeded(
   if (should_create_render_surface) {
     data_for_children->compound_transform_since_render_target =
         gfx::Transform();
-    data_for_children->axis_align_since_render_target = true;
+    data_for_children->animation_axis_aligned_since_render_target = true;
   }
   return should_create_render_surface;
+}
+
+static inline bool UserScrollableHorizontal(Layer* layer) {
+  return layer->user_scrollable_horizontal();
+}
+
+static inline bool UserScrollableHorizontal(LayerImpl* layer) {
+  return layer->test_properties()->user_scrollable_horizontal;
+}
+
+static inline bool UserScrollableVertical(Layer* layer) {
+  return layer->user_scrollable_vertical();
+}
+
+static inline bool UserScrollableVertical(LayerImpl* layer) {
+  return layer->test_properties()->user_scrollable_vertical;
+}
+
+static inline ScrollBoundaryBehavior GetScrollBoundaryBehavior(Layer* layer) {
+  return layer->scroll_boundary_behavior();
+}
+
+static inline ScrollBoundaryBehavior GetScrollBoundaryBehavior(
+    LayerImpl* layer) {
+  return layer->test_properties()->scroll_boundary_behavior;
+}
+
+template <typename LayerType>
+void SetHasTransformNode(LayerType* layer, bool val) {
+  layer->SetHasTransformNode(val);
 }
 
 template <typename LayerType>
@@ -1115,94 +1050,75 @@ void AddScrollNodeIfNeeded(
         data_from_ancestor
             .scroll_tree_parent_created_by_uninheritable_criteria));
 
+  int node_id;
   if (!requires_node) {
-    data_for_children->scroll_tree_parent = parent_id;
+    node_id = parent_id;
+    data_for_children->scroll_tree_parent = node_id;
   } else {
     ScrollNode node;
-    node.owner_id = layer->id();
     node.scrollable = scrollable;
     node.main_thread_scrolling_reasons = main_thread_scrolling_reasons;
-    node.contains_non_fast_scrollable_region =
-        contains_non_fast_scrollable_region;
-    gfx::Size clip_bounds;
-    if (layer->scroll_clip_layer()) {
-      clip_bounds = layer->scroll_clip_layer()->bounds();
-      DCHECK(layer->scroll_clip_layer()->transform_tree_index() !=
-             kInvalidPropertyTreeNodeId);
-      node.max_scroll_offset_affected_by_page_scale =
-          !data_from_ancestor.property_trees->transform_tree
-               .Node(layer->scroll_clip_layer()->transform_tree_index())
-               ->in_subtree_of_page_scale_layer &&
-          data_from_ancestor.in_subtree_of_page_scale_layer;
-    }
-
-    node.scroll_clip_layer_bounds = clip_bounds;
-    node.is_inner_viewport_scroll_layer =
+    node.non_fast_scrollable_region = layer->non_fast_scrollable_region();
+    node.scrolls_inner_viewport =
         layer == data_from_ancestor.inner_viewport_scroll_layer;
-    node.is_outer_viewport_scroll_layer =
+    node.scrolls_outer_viewport =
         layer == data_from_ancestor.outer_viewport_scroll_layer;
 
+    if (node.scrolls_inner_viewport &&
+        data_from_ancestor.in_subtree_of_page_scale_layer) {
+      node.max_scroll_offset_affected_by_page_scale = true;
+    }
+
     node.bounds = layer->bounds();
+    node.container_bounds = layer->scroll_container_bounds();
     node.offset_to_transform_parent = layer->offset_to_transform_parent();
     node.should_flatten = layer->should_flatten_transform_from_property_tree();
-    node.user_scrollable_horizontal = layer->user_scrollable_horizontal();
-    node.user_scrollable_vertical = layer->user_scrollable_vertical();
+    node.user_scrollable_horizontal = UserScrollableHorizontal(layer);
+    node.user_scrollable_vertical = UserScrollableVertical(layer);
     node.element_id = layer->element_id();
     node.transform_id =
         data_for_children->transform_tree_parent->transform_tree_index();
+    node.scroll_boundary_behavior = GetScrollBoundaryBehavior(layer);
 
-    data_for_children->scroll_tree_parent =
+    node_id =
         data_for_children->property_trees->scroll_tree.Insert(node, parent_id);
+    data_for_children->scroll_tree_parent = node_id;
     data_for_children->main_thread_scrolling_reasons =
         node.main_thread_scrolling_reasons;
     data_for_children->scroll_tree_parent_created_by_uninheritable_criteria =
         scroll_node_uninheritable_criteria;
-    data_for_children->property_trees->scroll_id_to_index_map[layer->id()] =
-        data_for_children->scroll_tree_parent;
+    // For animation subsystem purposes, if this layer has a compositor element
+    // id, we build a map from that id to this scroll node.
+    if (layer->element_id()) {
+      data_for_children->property_trees
+          ->element_id_to_scroll_node_index[layer->element_id()] = node_id;
+    }
 
     if (node.scrollable) {
       data_for_children->property_trees->scroll_tree.SetBaseScrollOffset(
-          layer->id(), layer->CurrentScrollOffset());
+          layer->element_id(), layer->CurrentScrollOffset());
     }
   }
 
-  layer->SetScrollTreeIndex(data_for_children->scroll_tree_parent);
+  layer->SetScrollTreeIndex(node_id);
 }
 
 template <typename LayerType>
 void SetBackfaceVisibilityTransform(LayerType* layer,
                                     bool created_transform_node) {
-  const bool is_at_boundary_of_3d_rendering_context =
-      IsAtBoundaryOf3dRenderingContext(layer);
   if (layer->use_parent_backface_visibility()) {
-    DCHECK(!is_at_boundary_of_3d_rendering_context);
     DCHECK(Parent(layer));
     DCHECK(!Parent(layer)->use_parent_backface_visibility());
-    layer->SetUseLocalTransformForBackfaceVisibility(
-        Parent(layer)->use_local_transform_for_backface_visibility());
     layer->SetShouldCheckBackfaceVisibility(
         Parent(layer)->should_check_backface_visibility());
   } else {
-    // The current W3C spec on CSS transforms says that backface visibility
-    // should be determined differently depending on whether the layer is in a
-    // "3d rendering context" or not. For Chromium code, we can determine
-    // whether we are in a 3d rendering context by checking if the parent
-    // preserves 3d.
-    const bool use_local_transform =
-        !layer->Is3dSorted() ||
-        (layer->Is3dSorted() && is_at_boundary_of_3d_rendering_context);
-    layer->SetUseLocalTransformForBackfaceVisibility(use_local_transform);
-
-    // A double-sided layer's backface can been shown when its visibile.
-    if (DoubleSided(layer))
-      layer->SetShouldCheckBackfaceVisibility(false);
-    // The backface of a layer that uses local transform for backface visibility
-    // is not visible when it does not create a transform node as its local
-    // transform is identity or 2d translation and is not animating.
-    else if (use_local_transform && !created_transform_node)
-      layer->SetShouldCheckBackfaceVisibility(false);
-    else
-      layer->SetShouldCheckBackfaceVisibility(true);
+    // A double-sided layer's backface can been shown when its visible.
+    // In addition, we need to check if (1) there might be a local 3D transform
+    // on the layer that might turn it to the backface, or (2) it is not drawn
+    // into a flattened space.
+    layer->SetShouldCheckBackfaceVisibility(
+        !DoubleSided(layer) &&
+        (created_transform_node || !ShouldFlattenTransform(Parent(layer))));
   }
 }
 
@@ -1231,8 +1147,7 @@ static void SetLayerPropertyChangedForChild(LayerImpl* parent,
 template <typename LayerType>
 void BuildPropertyTreesInternal(
     LayerType* layer,
-    const DataForRecursion<LayerType>& data_from_parent,
-    DataForRecursionFromChild<LayerType>* data_to_parent) {
+    const DataForRecursion<LayerType>& data_from_parent) {
   layer->set_property_tree_sequence_number(
       data_from_parent.property_trees->sequence_number);
 
@@ -1241,31 +1156,33 @@ void BuildPropertyTreesInternal(
   bool created_render_surface =
       AddEffectNodeIfNeeded(data_from_parent, layer, &data_for_children);
 
-  if (created_render_surface) {
-    data_for_children.render_target = data_for_children.effect_tree_parent;
-    layer->set_draw_blend_mode(SkXfermode::kSrcOver_Mode);
-  } else {
-    layer->set_draw_blend_mode(BlendMode(layer));
-  }
 
   bool created_transform_node = AddTransformNodeIfNeeded(
       data_from_parent, layer, created_render_surface, &data_for_children);
-  AddClipNodeIfNeeded(data_from_parent, layer, created_render_surface,
-                      created_transform_node, &data_for_children);
+  SetHasTransformNode(layer, created_transform_node);
+  AddClipNodeIfNeeded(data_from_parent, layer, created_transform_node,
+                      &data_for_children);
 
   AddScrollNodeIfNeeded(data_from_parent, layer, &data_for_children);
 
   SetBackfaceVisibilityTransform(layer, created_transform_node);
   SetSafeOpaqueBackgroundColor(data_from_parent, layer, &data_for_children);
 
+  bool not_axis_aligned_since_last_clip =
+      data_from_parent.not_axis_aligned_since_last_clip
+          ? true
+          : !AnimationsPreserveAxisAlignment(layer) ||
+                !Transform(layer).Preserves2dAxisAlignment();
+  bool has_non_axis_aligned_clip =
+      not_axis_aligned_since_last_clip && LayerClipsSubtree(layer);
+  data_for_children.not_axis_aligned_since_last_clip =
+      !has_non_axis_aligned_clip;
+
   for (size_t i = 0; i < Children(layer).size(); ++i) {
     LayerType* current_child = ChildAt(layer, i);
     SetLayerPropertyChangedForChild(layer, current_child);
     if (!ScrollParent(current_child)) {
-      DataForRecursionFromChild<LayerType> data_from_child;
-      BuildPropertyTreesInternal(current_child, data_for_children,
-                                 &data_from_child);
-      data_to_parent->Merge(data_from_child);
+      BuildPropertyTreesInternal(current_child, data_for_children);
     } else {
       // The child should be included in its scroll parent's list of scroll
       // children.
@@ -1276,15 +1193,10 @@ void BuildPropertyTreesInternal(
   if (ScrollChildren(layer)) {
     for (LayerType* scroll_child : *ScrollChildren(layer)) {
       DCHECK_EQ(ScrollParent(scroll_child), layer);
-      DataForRecursionFromChild<LayerType> data_from_child;
       DCHECK(Parent(scroll_child));
       data_for_children.effect_tree_parent =
           Parent(scroll_child)->effect_tree_index();
-      data_for_children.render_target =
-          Parent(scroll_child)->effect_tree_index();
-      BuildPropertyTreesInternal(scroll_child, data_for_children,
-                                 &data_from_child);
-      data_to_parent->Merge(data_from_child);
+      BuildPropertyTreesInternal(scroll_child, data_for_children);
     }
   }
 
@@ -1298,31 +1210,9 @@ void BuildPropertyTreesInternal(
     MaskLayer(layer)->SetEffectTreeIndex(layer->effect_tree_index());
     MaskLayer(layer)->SetScrollTreeIndex(layer->scroll_tree_index());
   }
-
-  EffectNode* effect_node = data_for_children.property_trees->effect_tree.Node(
-      data_for_children.effect_tree_parent);
-
-  if (effect_node->owner_id == layer->id()) {
-    if (effect_node->has_copy_request)
-      data_to_parent->num_copy_requests_in_subtree++;
-    effect_node->num_copy_requests_in_subtree =
-        data_to_parent->num_copy_requests_in_subtree;
-  }
 }
 
 }  // namespace
-
-void CC_EXPORT
-PropertyTreeBuilder::PreCalculateMetaInformation(Layer* root_layer) {
-  PreCalculateMetaInformationRecursiveData recursive_data;
-  PreCalculateMetaInformationInternal(root_layer, &recursive_data);
-}
-
-void CC_EXPORT PropertyTreeBuilder::PreCalculateMetaInformationForTesting(
-    LayerImpl* root_layer) {
-  PreCalculateMetaInformationRecursiveData recursive_data;
-  PreCalculateMetaInformationInternalForTesting(root_layer, &recursive_data);
-}
 
 Layer* PropertyTreeBuilder::FindFirstScrollableLayer(Layer* layer) {
   if (!layer)
@@ -1369,16 +1259,17 @@ void BuildPropertyTreesTopLevelInternal(
     return;
   }
 
-  property_trees->sequence_number++;
-
   DataForRecursion<LayerType> data_for_recursion;
   data_for_recursion.property_trees = property_trees;
   data_for_recursion.transform_tree_parent = nullptr;
   data_for_recursion.transform_fixed_parent = nullptr;
-  data_for_recursion.render_target = kRootPropertyTreeNodeId;
-  data_for_recursion.clip_tree_parent = kRootPropertyTreeNodeId;
-  data_for_recursion.effect_tree_parent = kInvalidPropertyTreeNodeId;
-  data_for_recursion.scroll_tree_parent = kRootPropertyTreeNodeId;
+  data_for_recursion.clip_tree_parent = ClipTree::kRootNodeId;
+  data_for_recursion.effect_tree_parent = EffectTree::kInvalidNodeId;
+  data_for_recursion.scroll_tree_parent = ScrollTree::kRootNodeId;
+  data_for_recursion.closest_ancestor_with_cached_render_surface =
+      EffectTree::kInvalidNodeId;
+  data_for_recursion.closest_ancestor_with_copy_request =
+      EffectTree::kInvalidNodeId;
   data_for_recursion.page_scale_layer = page_scale_layer;
   data_for_recursion.inner_viewport_scroll_layer = inner_viewport_scroll_layer;
   data_for_recursion.outer_viewport_scroll_layer = outer_viewport_scroll_layer;
@@ -1389,7 +1280,6 @@ void BuildPropertyTreesTopLevelInternal(
   data_for_recursion.affected_by_inner_viewport_bounds_delta = false;
   data_for_recursion.affected_by_outer_viewport_bounds_delta = false;
   data_for_recursion.should_flatten = false;
-  data_for_recursion.target_is_clipped = false;
   data_for_recursion.is_hidden = false;
   data_for_recursion.main_thread_scrolling_reasons =
       MainThreadScrollingReason::kNotScrollingOnMain;
@@ -1399,23 +1289,21 @@ void BuildPropertyTreesTopLevelInternal(
 
   data_for_recursion.property_trees->clear();
   data_for_recursion.compound_transform_since_render_target = gfx::Transform();
-  data_for_recursion.axis_align_since_render_target = true;
+  data_for_recursion.animation_axis_aligned_since_render_target = true;
+  data_for_recursion.not_axis_aligned_since_last_clip = false;
   data_for_recursion.property_trees->transform_tree.set_device_scale_factor(
       device_scale_factor);
   data_for_recursion.safe_opaque_background_color = color;
 
   ClipNode root_clip;
-  root_clip.resets_clip = true;
   root_clip.clip_type = ClipNode::ClipType::APPLIES_LOCAL_CLIP;
   root_clip.clip = gfx::RectF(viewport);
-  root_clip.transform_id = kRootPropertyTreeNodeId;
-  root_clip.target_transform_id = kRootPropertyTreeNodeId;
+  root_clip.transform_id = TransformTree::kRootNodeId;
   data_for_recursion.clip_tree_parent =
       data_for_recursion.property_trees->clip_tree.Insert(
-          root_clip, kRootPropertyTreeNodeId);
+          root_clip, ClipTree::kRootNodeId);
 
-  DataForRecursionFromChild<LayerType> data_from_child;
-  BuildPropertyTreesInternal(root_layer, data_for_recursion, &data_from_child);
+  BuildPropertyTreesInternal(root_layer, data_for_recursion);
   property_trees->needs_rebuild = false;
 
   // The transform tree is kept up to date as it is built, but the
@@ -1462,19 +1350,26 @@ void PropertyTreeBuilder::BuildPropertyTrees(
     PropertyTrees* property_trees) {
   property_trees->is_main_thread = true;
   property_trees->is_active = false;
-  SkColor color = root_layer->GetLayerTree()->background_color();
+  SkColor color = root_layer->layer_tree_host()->background_color();
   if (SkColorGetA(color) != 255)
     color = SkColorSetA(color, 255);
+  if (root_layer->layer_tree_host()->has_copy_request())
+    UpdateSubtreeHasCopyRequestRecursive(root_layer);
   BuildPropertyTreesTopLevelInternal(
       root_layer, page_scale_layer, inner_viewport_scroll_layer,
       outer_viewport_scroll_layer, overscroll_elasticity_layer,
       elastic_overscroll, page_scale_factor, device_scale_factor, viewport,
       device_transform, property_trees, color);
 #if DCHECK_IS_ON()
-  for (auto* layer : *root_layer->GetLayerTree())
+  for (auto* layer : *root_layer->layer_tree_host())
     CheckScrollAndClipPointersForLayer(layer);
 #endif
   property_trees->ResetCachedData();
+  // During building property trees, all copy requests are moved from layers to
+  // effect tree, which are then pushed at commit to compositor thread and
+  // handled there. LayerTreeHost::has_copy_request is only required to
+  // decide if we want to create a effect node. So, it can be reset now.
+  root_layer->layer_tree_host()->SetHasCopyRequest(false);
 }
 
 void PropertyTreeBuilder::BuildPropertyTrees(
@@ -1489,16 +1384,22 @@ void PropertyTreeBuilder::BuildPropertyTrees(
     const gfx::Rect& viewport,
     const gfx::Transform& device_transform,
     PropertyTrees* property_trees) {
+  // Preserve render surfaces when rebuilding.
+  std::vector<std::unique_ptr<RenderSurfaceImpl>> render_surfaces;
+  property_trees->effect_tree.TakeRenderSurfaces(&render_surfaces);
   property_trees->is_main_thread = false;
   property_trees->is_active = root_layer->IsActive();
   SkColor color = root_layer->layer_tree_impl()->background_color();
   if (SkColorGetA(color) != 255)
     color = SkColorSetA(color, 255);
+  UpdateSubtreeHasCopyRequestRecursive(root_layer);
   BuildPropertyTreesTopLevelInternal(
       root_layer, page_scale_layer, inner_viewport_scroll_layer,
       outer_viewport_scroll_layer, overscroll_elasticity_layer,
       elastic_overscroll, page_scale_factor, device_scale_factor, viewport,
       device_transform, property_trees, color);
+  property_trees->effect_tree.CreateOrReuseRenderSurfaces(
+      &render_surfaces, root_layer->layer_tree_impl());
   property_trees->ResetCachedData();
 }
 

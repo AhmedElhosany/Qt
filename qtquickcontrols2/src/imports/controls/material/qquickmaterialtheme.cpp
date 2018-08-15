@@ -42,8 +42,8 @@
 
 QT_BEGIN_NAMESPACE
 
-QQuickMaterialTheme::QQuickMaterialTheme(QPlatformTheme *theme)
-    : QQuickProxyTheme(theme)
+QQuickMaterialTheme::QQuickMaterialTheme()
+    : QQuickTheme(QStringLiteral("Material"))
 {
     QFont font;
     font.setFamily(QLatin1String("Roboto"));
@@ -65,22 +65,29 @@ QQuickMaterialTheme::QQuickMaterialTheme(QPlatformTheme *theme)
     }
 
     systemFont.setPixelSize(14);
+    systemFont = resolveFont(systemFont);
 
     buttonFont.setPixelSize(14);
     buttonFont.setCapitalization(QFont::AllUppercase);
     buttonFont.setWeight(QFont::Medium);
+    buttonFont = resolveFont(buttonFont);
 
     toolTipFont.setPixelSize(14);
     toolTipFont.setWeight(QFont::Medium);
+    toolTipFont = resolveFont(toolTipFont);
 
     itemViewFont.setPixelSize(14);
     itemViewFont.setWeight(QFont::Medium);
+    itemViewFont = resolveFont(itemViewFont);
 
     listViewFont.setPixelSize(16);
+    listViewFont = resolveFont(listViewFont);
 
     menuItemFont.setPixelSize(16);
+    menuItemFont = resolveFont(menuItemFont);
 
     editorFont.setPixelSize(16);
+    editorFont = resolveFont(editorFont);
 }
 
 const QFont *QQuickMaterialTheme::font(QPlatformTheme::Font type) const
@@ -96,6 +103,7 @@ const QFont *QQuickMaterialTheme::font(QPlatformTheme::Font type) const
         return &itemViewFont;
     case QPlatformTheme::ListViewFont:
         return &listViewFont;
+    case QPlatformTheme::MenuBarFont:
     case QPlatformTheme::MenuItemFont:
     case QPlatformTheme::ComboMenuItemFont:
         return &menuItemFont;
@@ -110,14 +118,7 @@ QVariant QQuickMaterialTheme::themeHint(ThemeHint hint) const
 {
     switch (hint) {
     case QPlatformTheme::DialogButtonBoxLayout:
-        // https://material.io/guidelines/components/dialogs.html#dialogs-specs
-        // As per spec, affirmative actions are placed to the right, dismissive
-        // actions are placed directly to the left of affirmative actions.
-        // In the Android sources, there are additional type of actions -
-        // neutral, which are placed to the left.
-        // Rules for macOS seems to be the most suitable here and are also used
-        // in the Android QPA plugin.
-        return QVariant(QPlatformDialogHelper::MacLayout);
+        return QVariant(QPlatformDialogHelper::AndroidLayout);
     default:
         return QQuickProxyTheme::themeHint(hint);
     }

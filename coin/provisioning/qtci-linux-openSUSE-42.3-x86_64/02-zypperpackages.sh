@@ -3,9 +3,12 @@
 set -ex
 
 sudo zypper -nq install git
-# default compiler, gcc 4.8.5
-sudo zypper -nq install gcc
-sudo zypper -nq install gcc-c++
+sudo zypper -nq install gcc7
+sudo zypper -nq install gcc7-c++
+sudo /usr/sbin/update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 1 \
+                                     --slave /usr/bin/g++ g++ /usr/bin/g++-7 \
+                                     --slave /usr/bin/cc cc /usr/bin/gcc-7 \
+                                     --slave /usr/bin/c++ c++ /usr/bin/g++-7
 
 sudo zypper -nq install bison
 sudo zypper -nq install flex
@@ -17,6 +20,7 @@ sudo zypper -nq install glib2-devel
 sudo zypper -nq install libopenssl-devel
 sudo zypper -nq install freetype2-devel
 sudo zypper -nq install fontconfig-devel
+sudo zypper -nq install sqlite3-devel
 
 # EGL support
 sudo zypper -nq install Mesa-libEGL-devel
@@ -47,6 +51,14 @@ sudo zypper -nq install libXrandr-devel
 sudo zypper -nq install libXtst-devel
 sudo zypper -nq install mozilla-nspr-devel
 sudo zypper -nq install mozilla-nss-devel
+
+# qtwebkit
+sudo zypper -nq install libxml2-devel
+sudo zypper -nq install libxslt-devel
+
+# GStreamer (qtwebkit and qtmultimedia)
+sudo zypper -nq install gstreamer-devel
+sudo zypper -nq install gstreamer-plugins-base-devel
 
 # cups
 sudo zypper -nq install cups-devel

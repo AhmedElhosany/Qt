@@ -31,14 +31,18 @@
 #ifndef TestingPlatformSupport_h
 #define TestingPlatformSupport_h
 
+#include <memory>
+#include <utility>
 #include "platform/PlatformExport.h"
 #include "platform/WebTaskRunner.h"
+#include "platform/scheduler/child/web_scheduler.h"
+#include "platform/wtf/Allocator.h"
+#include "platform/wtf/Assertions.h"
+#include "platform/wtf/PtrUtil.h"
+#include "platform/wtf/Vector.h"
 #include "public/platform/Platform.h"
 #include "public/platform/WebCompositorSupport.h"
-#include "public/platform/WebScheduler.h"
 #include "public/platform/WebThread.h"
-#include "wtf/Vector.h"
-#include <memory>
 
 namespace base {
 class SimpleTestTickClock;
@@ -55,73 +59,43 @@ class WebCompositorSupportImpl;
 
 namespace blink {
 namespace scheduler {
-class RendererScheduler;
 class RendererSchedulerImpl;
 }
-class TestingPlatformMockWebTaskRunner;
 class WebCompositorSupport;
 class WebThread;
 
 class TestingCompositorSupport : public WebCompositorSupport {
-  std::unique_ptr<WebLayer> createLayer() override;
-  std::unique_ptr<WebLayer> createLayerFromCCLayer(cc::Layer*) override;
-  std::unique_ptr<WebContentLayer> createContentLayer(
+  std::unique_ptr<WebLayer> CreateLayer() override;
+  std::unique_ptr<WebLayer> CreateLayerFromCCLayer(cc::Layer*) override;
+  std::unique_ptr<WebContentLayer> CreateContentLayer(
       WebContentLayerClient*) override;
-  std::unique_ptr<WebExternalTextureLayer> createExternalTextureLayer(
+  std::unique_ptr<WebExternalTextureLayer> CreateExternalTextureLayer(
       cc::TextureLayerClient*) override;
-  std::unique_ptr<WebImageLayer> createImageLayer() override;
-  std::unique_ptr<WebScrollbarLayer> createScrollbarLayer(
+  std::unique_ptr<WebImageLayer> CreateImageLayer() override;
+  std::unique_ptr<WebScrollbarLayer> CreateScrollbarLayer(
       std::unique_ptr<WebScrollbar>,
       WebScrollbarThemePainter,
       std::unique_ptr<WebScrollbarThemeGeometry>) override;
-  std::unique_ptr<WebScrollbarLayer> createSolidColorScrollbarLayer(
+  std::unique_ptr<WebScrollbarLayer> CreateOverlayScrollbarLayer(
+      std::unique_ptr<WebScrollbar>,
+      WebScrollbarThemePainter,
+      std::unique_ptr<WebScrollbarThemeGeometry>) override;
+  std::unique_ptr<WebScrollbarLayer> CreateSolidColorScrollbarLayer(
       WebScrollbar::Orientation,
-      int thumbThickness,
-      int trackStart,
-      bool isLeftSideVerticalScrollbar) override;
+      int thumb_thickness,
+      int track_start,
+      bool is_left_side_vertical_scrollbar) override;
 };
 
-class TestingPlatformMockScheduler : public WebScheduler {
-  WTF_MAKE_NONCOPYABLE(TestingPlatformMockScheduler);
-
- public:
-  TestingPlatformMockScheduler();
-  ~TestingPlatformMockScheduler() override;
-
-  void runSingleTask();
-  void runAllTasks();
-
-  // WebScheduler implementation:
-  WebTaskRunner* loadingTaskRunner() override;
-  WebTaskRunner* timerTaskRunner() override;
-  void shutdown() override {}
-  bool shouldYieldForHighPriorityWork() override { return false; }
-  bool canExceedIdleDeadlineIfRequired() override { return false; }
-  void postIdleTask(const WebTraceLocation&, WebThread::IdleTask*) override {}
-  void postNonNestableIdleTask(const WebTraceLocation&,
-                               WebThread::IdleTask*) override {}
-  std::unique_ptr<WebViewScheduler> createWebViewScheduler(
-      InterventionReporter*,
-      WebViewScheduler::WebViewSchedulerSettings*) override {
-    return nullptr;
-  }
-  void suspendTimerQueue() override {}
-  void resumeTimerQueue() override {}
-  void addPendingNavigation(WebScheduler::NavigatingFrameType) override {}
-  void removePendingNavigation(WebScheduler::NavigatingFrameType) override {}
-  void onNavigationStarted() override {}
-
- private:
-  WTF::Deque<std::unique_ptr<WebTaskRunner::Task>> m_tasks;
-  std::unique_ptr<TestingPlatformMockWebTaskRunner> m_mockWebTaskRunner;
-};
-
+// A base class to override Platform methods for testing.  You can override the
+// behavior by subclassing TestingPlatformSupport or using
+// ScopedTestingPlatformSupport (see below).
 class TestingPlatformSupport : public Platform {
   WTF_MAKE_NONCOPYABLE(TestingPlatformSupport);
 
  public:
   struct Config {
-    WebCompositorSupport* compositorSupport = nullptr;
+    WebCompositorSupport* compositor_support = nullptr;
   };
 
   TestingPlatformSupport();
@@ -130,27 +104,32 @@ class TestingPlatformSupport : public Platform {
   ~TestingPlatformSupport() override;
 
   // Platform:
-  WebString defaultLocale() override;
-  WebCompositorSupport* compositorSupport() override;
-  WebThread* currentThread() override;
-  WebBlobRegistry* getBlobRegistry() override;
-  WebClipboard* clipboard() override;
-  WebFileUtilities* fileUtilities() override;
-  WebIDBFactory* idbFactory() override;
-  WebURLLoaderMockFactory* getURLLoaderMockFactory() override;
-  blink::WebURLLoader* createURLLoader() override;
-  WebData loadResource(const char* name) override;
-  WebURLError cancelledError(const WebURL&) const override;
-  InterfaceProvider* interfaceProvider() override;
+  WebString DefaultLocale() override;
+  WebCompositorSupport* CompositorSupport() override;
+  WebThread* CurrentThread() override;
+  WebBlobRegistry* GetBlobRegistry() override;
+  WebClipboard* Clipboard() override;
+  WebFileUtilities* GetFileUtilities() override;
+  WebIDBFactory* IdbFactory() override;
+  WebURLLoaderMockFactory* GetURLLoaderMockFactory() override;
+  std::unique_ptr<blink::WebURLLoader> CreateURLLoader(
+      const WebURLRequest&,
+      base::SingleThreadTaskRunner*) override;
+  WebData GetDataResource(const char* name) override;
+  InterfaceProvider* GetInterfaceProvider() override;
+
+  virtual void RunUntilIdle();
 
  protected:
   class TestingInterfaceProvider;
 
-  const Config m_config;
-  Platform* const m_oldPlatform;
-  std::unique_ptr<TestingInterfaceProvider> m_interfaceProvider;
+  const Config config_;
+  Platform* const old_platform_;
+  std::unique_ptr<TestingInterfaceProvider> interface_provider_;
 };
 
+// This class adds mocked scheduler support to TestingPlatformSupport.  See also
+// ScopedTestingPlatformSupport to use this class correctly.
 class TestingPlatformSupportWithMockScheduler : public TestingPlatformSupport {
   WTF_MAKE_NONCOPYABLE(TestingPlatformSupportWithMockScheduler);
 
@@ -160,10 +139,10 @@ class TestingPlatformSupportWithMockScheduler : public TestingPlatformSupport {
   ~TestingPlatformSupportWithMockScheduler() override;
 
   // Platform:
-  WebThread* currentThread() override;
+  WebThread* CurrentThread() override;
 
   // Runs a single task.
-  void runSingleTask();
+  void RunSingleTask();
 
   // Runs all currently queued immediate tasks and delayed tasks whose delay has
   // expired plus any immediate tasks that are posted as a result of running
@@ -172,32 +151,79 @@ class TestingPlatformSupportWithMockScheduler : public TestingPlatformSupport {
   // This function ignores future delayed tasks when deciding if the system is
   // idle.  If you need to ensure delayed tasks run, try runForPeriodSeconds()
   // instead.
-  void runUntilIdle();
+  void RunUntilIdle() override;
 
   // Runs for |seconds| the testing clock is advanced by |seconds|.  Note real
   // time elapsed will typically much less than |seconds| because delays between
   // timers are fast forwarded.
-  void runForPeriodSeconds(double seconds);
+  void RunForPeriodSeconds(double seconds);
 
   // Advances |m_clock| by |seconds|.
-  void advanceClockSeconds(double seconds);
+  void AdvanceClockSeconds(double seconds);
 
-  scheduler::RendererScheduler* rendererScheduler() const;
+  scheduler::RendererSchedulerImpl* GetRendererScheduler() const;
 
   // Controls the behavior of |m_mockTaskRunner| if true, then |m_clock| will
   // be advanced to the next timer when there's no more immediate work to do.
-  void setAutoAdvanceNowToPendingTasks(bool);
+  void SetAutoAdvanceNowToPendingTasks(bool);
 
  protected:
-  static double getTestTime();
+  static double GetTestTime();
 
-  std::unique_ptr<base::SimpleTestTickClock> m_clock;
-  scoped_refptr<cc::OrderedSimpleTaskRunner> m_mockTaskRunner;
-  std::unique_ptr<scheduler::RendererSchedulerImpl> m_scheduler;
-  std::unique_ptr<WebThread> m_thread;
+  std::unique_ptr<base::SimpleTestTickClock> clock_;
+  scoped_refptr<cc::OrderedSimpleTaskRunner> mock_task_runner_;
+  std::unique_ptr<scheduler::RendererSchedulerImpl> scheduler_;
+  std::unique_ptr<WebThread> thread_;
 };
 
-class ScopedUnittestsEnvironmentSetup {
+// ScopedTestingPlatformSupport<MyTestingPlatformSupport> can be used to
+// override Platform::current() with MyTestingPlatformSupport, like this:
+//
+// #include "platform/testing/TestingPlatformSupport.h"
+//
+// TEST_F(SampleTest, sampleTest) {
+//   ScopedTestingPlatformSupport<MyTestingPlatformSupport> platform;
+//   ...
+//   // You can call methods of MyTestingPlatformSupport.
+//   EXPECT_TRUE(platform->myMethodIsCalled());
+//
+//   // Another instance can be nested.
+//   {
+//     // Constructor's arguments can be passed like this.
+//     Arg arg;
+//     ScopedTestingPlatformSupport<MyAnotherTestingPlatformSupport, const Arg&>
+//         another_platform(args);
+//     ...
+//   }
+//
+//   // Here the original MyTestingPlatformSupport should be restored.
+// }
+template <class T, typename... Args>
+class ScopedTestingPlatformSupport final {
+  WTF_MAKE_NONCOPYABLE(ScopedTestingPlatformSupport);
+
+ public:
+  explicit ScopedTestingPlatformSupport(Args&&... args) {
+    testing_platform_support_ = WTF::MakeUnique<T>(std::forward<Args>(args)...);
+    original_platform_ = Platform::Current();
+    DCHECK(original_platform_);
+    Platform::SetCurrentPlatformForTesting(testing_platform_support_.get());
+  }
+  ~ScopedTestingPlatformSupport() {
+    DCHECK_EQ(testing_platform_support_.get(), Platform::Current());
+    testing_platform_support_.reset();
+    Platform::SetCurrentPlatformForTesting(original_platform_);
+  }
+
+  const T* operator->() const { return testing_platform_support_.get(); }
+  T* operator->() { return testing_platform_support_.get(); }
+
+ private:
+  std::unique_ptr<T> testing_platform_support_;
+  Platform* original_platform_;
+};
+
+class ScopedUnittestsEnvironmentSetup final {
   WTF_MAKE_NONCOPYABLE(ScopedUnittestsEnvironmentSetup);
 
  public:
@@ -207,11 +233,11 @@ class ScopedUnittestsEnvironmentSetup {
  private:
   class DummyPlatform;
   std::unique_ptr<base::TestDiscardableMemoryAllocator>
-      m_discardableMemoryAllocator;
-  std::unique_ptr<DummyPlatform> m_platform;
-  std::unique_ptr<cc_blink::WebCompositorSupportImpl> m_compositorSupport;
-  TestingPlatformSupport::Config m_testingPlatformConfig;
-  std::unique_ptr<TestingPlatformSupport> m_testingPlatformSupport;
+      discardable_memory_allocator_;
+  std::unique_ptr<DummyPlatform> dummy_platform_;
+  std::unique_ptr<cc_blink::WebCompositorSupportImpl> compositor_support_;
+  TestingPlatformSupport::Config testing_platform_config_;
+  std::unique_ptr<TestingPlatformSupport> testing_platform_support_;
 };
 
 }  // namespace blink

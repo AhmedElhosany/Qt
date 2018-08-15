@@ -198,6 +198,7 @@ protected:
     void localeChange(const QLocale &newLocale, const QLocale &oldLocale) override;
 
     QFont defaultFont() const override;
+    QPalette defaultPalette() const override;
 
 #if QT_CONFIG(accessibility)
     QAccessible::Role accessibleRole() const override;

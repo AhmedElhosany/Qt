@@ -4,10 +4,16 @@
 
 #include "components/metrics/metrics_service_client.h"
 
+#include "components/metrics/url_constants.h"
+
 namespace metrics {
 
-base::string16 MetricsServiceClient::GetRegistryBackupKey() {
-  return base::string16();
+MetricsServiceClient::MetricsServiceClient() : update_running_services_() {}
+
+MetricsServiceClient::~MetricsServiceClient() {}
+
+ukm::UkmService* MetricsServiceClient::GetUkmService() {
+  return nullptr;
 }
 
 bool MetricsServiceClient::IsReportingPolicyManaged() {
@@ -20,6 +26,24 @@ EnableMetricsDefault MetricsServiceClient::GetMetricsReportingDefaultState() {
 
 bool MetricsServiceClient::IsUMACellularUploadLogicEnabled() {
   return false;
+}
+
+std::string MetricsServiceClient::GetMetricsServerUrl() {
+  return kNewMetricsServerUrl;
+}
+
+bool MetricsServiceClient::IsHistorySyncEnabledOnAllProfiles() {
+  return false;
+}
+
+void MetricsServiceClient::SetUpdateRunningServicesCallback(
+    const base::Closure& callback) {
+  update_running_services_ = callback;
+}
+
+void MetricsServiceClient::UpdateRunningServices() {
+  if (update_running_services_)
+    update_running_services_.Run();
 }
 
 }  // namespace metrics

@@ -68,6 +68,7 @@ const char kJs[] = "js";
 const char kKey[] = "key";
 const char kKeycode[] = "keyCode";
 const char kKiosk[] = "kiosk";
+const char kKioskAlwaysUpdate[] = "kiosk.always_update";
 const char kKioskEnabled[] = "kiosk_enabled";
 const char kKioskOnly[] = "kiosk_only";
 const char kKioskMode[] = "kiosk_mode";
@@ -186,6 +187,9 @@ const char kWebviewName[] = "name";
 const char kWebviewPartitions[] = "partitions";
 const char kWhitelist[] = "whitelist";
 #if defined(OS_CHROMEOS)
+const char kActionHandlers[] = "action_handlers";
+const char kActionHandlerActionKey[] = "action";
+const char kActionHandlerEnabledOnLockScreenKey[] = "enabled_on_lock_screen";
 const char kFileSystemProviderCapabilities[] =
     "file_system_provider_capabilities";
 #endif
@@ -287,6 +291,7 @@ const char kCannotClaimAllURLsInExtent[] =
     "Cannot claim all URLs in an extent.";
 const char kCannotScriptGallery[] =
     "The extensions gallery cannot be scripted.";
+const char kCannotScriptNtp[] = "The New Tab Page cannot be scripted.";
 const char kCannotScriptSigninPage[] =
     "The sign-in page cannot be scripted.";
 const char kChromeVersionTooLow[] =
@@ -472,6 +477,8 @@ const char kInvalidKeyBindingTooMany[] =
 const char kInvalidKeyBindingUnknownPlatform[] =
     "Unknown platform for 'command[*]': *. Valid values are: 'windows', 'mac'"
     " 'chromeos', 'linux' and 'default'.";
+const char kInvalidKioskAlwaysUpdate[] =
+    "Invalid value for 'kiosk.always_update'.";
 const char kInvalidKioskEnabled[] =
     "Invalid value for 'kiosk_enabled'.";
 const char kInvalidKioskOnly[] =
@@ -711,8 +718,6 @@ const char kMissingFile[] =
     "At least one js or css file is required for 'content_scripts[*]'.";
 const char kMultipleOverrides[] =
     "An extension cannot override more than one page.";
-const char kNoPermissionForMIMETypes[] =
-    "The extension is not allowed to use mime_types key.";
 const char kNoWildCardsInPaths[] =
   "Wildcards are not allowed in extent URL pattern paths.";
 const char kOneUISurfaceOnly[] =
@@ -733,8 +738,18 @@ const char kUnrecognizedManifestProperty[] =
 const char kWebRequestConflictsWithLazyBackground[] =
     "The 'webRequest' API cannot be used with event pages.";
 #if defined(OS_CHROMEOS)
+const char kDuplicateActionHandlerFound[] =
+    "'action_handlers' list contains duplicate entries for the action: \"*\".";
 const char kIllegalPlugins[] =
     "Extensions cannot install plugins on Chrome OS.";
+const char kInvalidActionHandlerDictionary[] =
+    "Invalid action handler dictionary in 'action_handlers': 'action' key "
+    "missing.";
+const char kInvalidActionHandlersActionType[] =
+    "Invalid entry in 'action_handlers': \"*\".";
+const char kInvalidActionHandlersType[] =
+    "Invalid value for 'action_handlers'. Value must be a list of strings or a "
+    "dictionary with 'action' key.";
 const char kInvalidFileSystemProviderMissingCapabilities[] =
     "The 'fileSystemProvider' permission requires the "
     "'file_system_provider_capabilities' section to be specified in the "

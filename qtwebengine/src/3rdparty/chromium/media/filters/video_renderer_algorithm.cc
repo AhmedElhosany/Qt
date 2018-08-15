@@ -7,11 +7,11 @@
 #include <algorithm>
 #include <limits>
 
+#include "media/base/media_log.h"
+
 namespace media {
 
-// The number of frames to store for moving average calculations.  Value picked
-// after experimenting with playback of various local media and YouTube clips.
-const int kMovingAverageSamples = 32;
+const int kMaxOutOfOrderFrameLogs = 10;
 
 VideoRendererAlgorithm::ReadyFrame::ReadyFrame(
     const scoped_refptr<VideoFrame>& ready_frame)
@@ -34,8 +34,10 @@ bool VideoRendererAlgorithm::ReadyFrame::operator<(
 }
 
 VideoRendererAlgorithm::VideoRendererAlgorithm(
-    const TimeSource::WallClockTimeCB& wall_clock_time_cb)
-    : cadence_estimator_(base::TimeDelta::FromSeconds(
+    const TimeSource::WallClockTimeCB& wall_clock_time_cb,
+    MediaLog* media_log)
+    : media_log_(media_log),
+      cadence_estimator_(base::TimeDelta::FromSeconds(
           kMinimumAcceptableTimeBetweenGlitchesSecs)),
       wall_clock_time_cb_(wall_clock_time_cb),
       frame_duration_calculator_(kMovingAverageSamples),
@@ -308,6 +310,7 @@ void VideoRendererAlgorithm::OnLastFrameDropped() {
 }
 
 void VideoRendererAlgorithm::Reset(ResetFlag reset_flag) {
+  out_of_order_frame_logs_ = 0;
   frames_dropped_during_enqueue_ = 0;
   have_rendered_frames_ = last_render_had_glitch_ = false;
   render_interval_ = base::TimeDelta();
@@ -352,7 +355,11 @@ void VideoRendererAlgorithm::EnqueueFrame(
   // already rendered any frames.
   const size_t new_frame_index = it - frame_queue_.begin();
   if (new_frame_index <= 0 && have_rendered_frames_) {
-    DVLOG(2) << "Dropping frame inserted before the last rendered frame.";
+    LIMITED_MEDIA_LOG(INFO, media_log_, out_of_order_frame_logs_,
+                      kMaxOutOfOrderFrameLogs)
+        << "Dropping frame with timestamp " << frame->timestamp()
+        << ", which is earlier than the last rendered frame ("
+        << frame_queue_.front().frame->timestamp() << ").";
     ++frames_dropped_during_enqueue_;
     return;
   }
@@ -388,6 +395,12 @@ void VideoRendererAlgorithm::EnqueueFrame(
 
   // The vast majority of cases should always append to the back, but in rare
   // circumstance we get out of order timestamps, http://crbug.com/386551.
+  if (it != frame_queue_.end()) {
+    LIMITED_MEDIA_LOG(INFO, media_log_, out_of_order_frame_logs_,
+                      kMaxOutOfOrderFrameLogs)
+        << "Decoded frame with timestamp " << frame->timestamp()
+        << " is out of order.";
+  }
   frame_queue_.insert(it, ready_frame);
 
   // Project the current cadence calculations to include the new frame.  These
@@ -685,6 +698,24 @@ void VideoRendererAlgorithm::UpdateEffectiveFramesQueued() {
     return;
   }
 
+  // Determine the lower bound of the number of effective queues first.
+  // Normally, this is 0.
+  size_t min_frames_queued = 0;
+
+  // If frame dropping is disabled, the lower bound is the number of frames
+  // that were not rendered yet.
+  if (frame_dropping_disabled_) {
+    min_frames_queued = std::count_if(
+        frame_queue_.cbegin(), frame_queue_.cend(),
+        [](const ReadyFrame& frame) { return frame.render_count == 0; });
+  }
+
+  // Next, see if can report more frames as queued.
+  effective_frames_queued_ =
+      std::max(min_frames_queued, CountEffectiveFramesQueued());
+}
+
+size_t VideoRendererAlgorithm::CountEffectiveFramesQueued() const {
   // If we don't have cadence, subtract off any frames which are before
   // the last rendered frame or are past their expected rendering time.
   if (!cadence_estimator_.has_cadence()) {
@@ -694,16 +725,13 @@ void VideoRendererAlgorithm::UpdateEffectiveFramesQueued() {
       if (frame.end_time.is_null() || frame.end_time > last_deadline_max_)
         break;
     }
-    effective_frames_queued_ = frame_queue_.size() - expired_frames;
-    return;
+    return frame_queue_.size() - expired_frames;
   }
 
   // Find the first usable frame to start counting from.
   const int start_index = FindBestFrameByCadence(nullptr);
-  if (start_index < 0) {
-    effective_frames_queued_ = 0;
-    return;
-  }
+  if (start_index < 0)
+    return 0;
 
   const base::TimeTicks minimum_start_time =
       last_deadline_max_ - max_acceptable_drift_;
@@ -715,8 +743,7 @@ void VideoRendererAlgorithm::UpdateEffectiveFramesQueued() {
       ++renderable_frame_count;
     }
   }
-
-  effective_frames_queued_ = renderable_frame_count;
+  return renderable_frame_count;
 }
 
 }  // namespace media

@@ -12,11 +12,11 @@
 
 #include <assert.h>
 
-#include "webrtc/base/logging.h"
-#include "webrtc/modules/audio_coding/codecs/audio_decoder.h"
+#include "webrtc/api/audio_codecs/audio_decoder.h"
 #include "webrtc/modules/audio_coding/neteq/decoder_database.h"
 #include "webrtc/modules/audio_coding/neteq/dsp_helper.h"
 #include "webrtc/modules/audio_coding/neteq/sync_buffer.h"
+#include "webrtc/rtc_base/logging.h"
 
 namespace webrtc {
 

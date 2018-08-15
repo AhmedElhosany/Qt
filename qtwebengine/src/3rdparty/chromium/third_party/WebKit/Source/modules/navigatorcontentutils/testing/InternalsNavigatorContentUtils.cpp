@@ -5,6 +5,7 @@
 #include "InternalsNavigatorContentUtils.h"
 
 #include "core/dom/Document.h"
+#include "core/frame/LocalDOMWindow.h"
 #include "core/testing/Internals.h"
 #include "modules/navigatorcontentutils/NavigatorContentUtils.h"
 #include "modules/navigatorcontentutils/testing/NavigatorContentUtilsClientMock.h"
@@ -14,11 +15,12 @@ namespace blink {
 void InternalsNavigatorContentUtils::setNavigatorContentUtilsClientMock(
     Internals&,
     Document* document) {
-  ASSERT(document && document->page());
-  NavigatorContentUtils* navigatorContentUtils =
-      NavigatorContentUtils::from(*document->frame());
-  navigatorContentUtils->setClientForTest(
-      NavigatorContentUtilsClientMock::create());
+  DCHECK(document);
+  DCHECK(document->GetPage());
+  NavigatorContentUtils* navigator_content_utils =
+      NavigatorContentUtils::From(*document->domWindow()->navigator());
+  navigator_content_utils->SetClientForTest(
+      NavigatorContentUtilsClientMock::Create());
 }
 
 }  // namespace blink

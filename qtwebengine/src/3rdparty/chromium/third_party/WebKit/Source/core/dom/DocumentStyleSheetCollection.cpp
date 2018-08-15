@@ -39,112 +39,97 @@
 
 namespace blink {
 
-DocumentStyleSheetCollection::DocumentStyleSheetCollection(TreeScope& treeScope)
-    : TreeScopeStyleSheetCollection(treeScope) {
-  DCHECK_EQ(treeScope.rootNode(), treeScope.rootNode().document());
+DocumentStyleSheetCollection::DocumentStyleSheetCollection(
+    TreeScope& tree_scope)
+    : TreeScopeStyleSheetCollection(tree_scope) {
+  DCHECK_EQ(tree_scope.RootNode(), tree_scope.RootNode().GetDocument());
 }
 
-void DocumentStyleSheetCollection::collectStyleSheetsFromCandidates(
-    StyleEngine& engine,
+void DocumentStyleSheetCollection::CollectStyleSheetsFromCandidates(
+    StyleEngine& master_engine,
     DocumentStyleSheetCollector& collector) {
-  for (Node* n : m_styleSheetCandidateNodes) {
+  // TODO(keishi) Check added for crbug.com/699269 diagnosis. Remove once done.
+  CHECK(HeapObjectHeader::FromPayload(this)->IsValid());
+  CHECK(ThreadState::Current()->IsOnThreadHeap(this));
+  for (Node* n : style_sheet_candidate_nodes_) {
+    CHECK(HeapObjectHeader::FromPayload(n)->IsValid());
+    CHECK(ThreadState::Current()->IsOnThreadHeap(n));
     StyleSheetCandidate candidate(*n);
 
-    DCHECK(!candidate.isXSL());
-    if (candidate.isImport()) {
-      Document* document = candidate.importedDocument();
+    DCHECK(!candidate.IsXSL());
+    if (candidate.IsImport()) {
+      Document* document = candidate.ImportedDocument();
       if (!document)
         continue;
-      if (collector.hasVisited(document))
+      if (collector.HasVisited(document))
         continue;
-      collector.willVisit(document);
-      document->styleEngine().updateStyleSheetsInImport(collector);
+      collector.WillVisit(document);
+
+      document->GetStyleEngine().UpdateActiveStyleSheetsInImport(master_engine,
+                                                                 collector);
       continue;
     }
 
-    if (candidate.isEnabledAndLoading())
+    if (candidate.IsEnabledAndLoading())
       continue;
 
-    StyleSheet* sheet = candidate.sheet();
+    StyleSheet* sheet = candidate.Sheet();
     if (!sheet)
       continue;
 
-    collector.appendSheetForList(sheet);
-    if (candidate.canBeActivated(engine.preferredStylesheetSetName()))
-      collector.appendActiveStyleSheet(toCSSStyleSheet(sheet));
+    collector.AppendSheetForList(sheet);
+    if (!candidate.CanBeActivated(
+            GetDocument().GetStyleEngine().PreferredStylesheetSetName()))
+      continue;
+
+    CSSStyleSheet* css_sheet = ToCSSStyleSheet(sheet);
+    collector.AppendActiveStyleSheet(
+        std::make_pair(css_sheet, master_engine.RuleSetForSheet(*css_sheet)));
   }
 }
 
-void DocumentStyleSheetCollection::collectStyleSheets(
-    StyleEngine& engine,
+void DocumentStyleSheetCollection::CollectStyleSheets(
+    StyleEngine& master_engine,
     DocumentStyleSheetCollector& collector) {
-  DCHECK_EQ(&document().styleEngine(), &engine);
-  collector.appendActiveStyleSheets(engine.injectedAuthorStyleSheets());
-  collectStyleSheetsFromCandidates(engine, collector);
-  if (engine.inspectorStyleSheet())
-    collector.appendActiveStyleSheet(engine.inspectorStyleSheet());
-}
-
-void DocumentStyleSheetCollection::updateActiveStyleSheets(
-    StyleEngine& engine,
-    StyleResolverUpdateMode updateMode) {
-  // StyleSheetCollection is GarbageCollected<>, allocate it on the heap.
-  StyleSheetCollection* collection = StyleSheetCollection::create();
-  ActiveDocumentStyleSheetCollector collector(*collection);
-  collectStyleSheets(engine, collector);
-
-  StyleSheetChange change;
-  analyzeStyleSheetChange(updateMode, collection->activeAuthorStyleSheets(),
-                          change);
-
-  if (change.styleResolverUpdateType == Reconstruct) {
-    engine.clearMasterResolver();
-    // TODO(rune@opera.com): The following depends on whether StyleRuleFontFace
-    // was modified or not.  We should only remove modified/removed @font-face
-    // rules, or @font-face rules from removed stylesheets. We currently avoid
-    // clearing the font cache when we have had an analyzed update and no
-    // @font-face rules were removed, in which case requiresFullStyleRecalc will
-    // be false.
-    if (change.requiresFullStyleRecalc)
-      engine.clearFontCache();
-  } else if (StyleResolver* styleResolver = engine.resolver()) {
-    if (change.styleResolverUpdateType != Additive) {
-      DCHECK_EQ(change.styleResolverUpdateType, Reset);
-      engine.resetAuthorStyle(treeScope());
-      engine.removeFontFaceRules(change.fontFaceRulesToRemove);
-      styleResolver->removePendingAuthorStyleSheets(m_activeAuthorStyleSheets);
-      styleResolver->lazyAppendAuthorStyleSheets(
-          0, collection->activeAuthorStyleSheets());
-    } else {
-      styleResolver->lazyAppendAuthorStyleSheets(
-          m_activeAuthorStyleSheets.size(),
-          collection->activeAuthorStyleSheets());
-    }
+  for (auto& sheet :
+       GetDocument().GetStyleEngine().InjectedAuthorStyleSheets()) {
+    collector.AppendActiveStyleSheet(std::make_pair(
+        sheet.second,
+        GetDocument().GetStyleEngine().RuleSetForSheet(*sheet.second)));
   }
-  if (change.requiresFullStyleRecalc)
-    document().setNeedsStyleRecalc(
-        SubtreeStyleChange, StyleChangeReasonForTracing::create(
-                                StyleChangeReason::ActiveStylesheetsUpdate));
-
-  collection->swap(*this);
-  collection->dispose();
+  CollectStyleSheetsFromCandidates(master_engine, collector);
+  if (CSSStyleSheet* inspector_sheet =
+          GetDocument().GetStyleEngine().InspectorStyleSheet()) {
+    collector.AppendActiveStyleSheet(std::make_pair(
+        inspector_sheet,
+        GetDocument().GetStyleEngine().RuleSetForSheet(*inspector_sheet)));
+  }
 }
 
-void DocumentStyleSheetCollection::collectViewportRules(
-    ViewportStyleResolver& viewportResolver) {
-  for (Node* node : m_styleSheetCandidateNodes) {
+void DocumentStyleSheetCollection::UpdateActiveStyleSheets(
+    StyleEngine& master_engine) {
+  // StyleSheetCollection is GarbageCollected<>, allocate it on the heap.
+  StyleSheetCollection* collection = StyleSheetCollection::Create();
+  ActiveDocumentStyleSheetCollector collector(*collection);
+  CollectStyleSheets(master_engine, collector);
+  ApplyActiveStyleSheetChanges(*collection);
+}
+
+void DocumentStyleSheetCollection::CollectViewportRules(
+    ViewportStyleResolver& viewport_resolver) {
+  for (Node* node : style_sheet_candidate_nodes_) {
     StyleSheetCandidate candidate(*node);
 
-    if (candidate.isImport())
+    if (candidate.IsImport())
       continue;
-    StyleSheet* sheet = candidate.sheet();
+    StyleSheet* sheet = candidate.Sheet();
     if (!sheet)
       continue;
-    if (!candidate.canBeActivated(
-            document().styleEngine().preferredStylesheetSetName()))
+    if (!candidate.CanBeActivated(
+            GetDocument().GetStyleEngine().PreferredStylesheetSetName()))
       continue;
-    viewportResolver.collectViewportRulesFromAuthorSheet(
-        *toCSSStyleSheet(sheet));
+    viewport_resolver.CollectViewportRulesFromAuthorSheet(
+        *ToCSSStyleSheet(sheet));
   }
 }
 

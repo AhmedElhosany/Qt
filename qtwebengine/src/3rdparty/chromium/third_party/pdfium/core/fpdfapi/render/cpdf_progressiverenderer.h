@@ -26,7 +26,7 @@ class CPDF_ProgressiveRenderer {
   // static_asserts to make sure the two sets of values match.
   enum Status {
     Ready,          // FPDF_RENDER_READER
-    ToBeContinued,  // FPDF_RENDER_TOBECOUNTINUED
+    ToBeContinued,  // FPDF_RENDER_TOBECONTINUED
     Done,           // FPDF_RENDER_DONE
     Failed          // FPDF_RENDER_FAILED
   };
@@ -43,14 +43,12 @@ class CPDF_ProgressiveRenderer {
   void Continue(IFX_Pause* pPause);
 
  private:
-  void RenderStep();
-
   // Maximum page objects to render before checking for pause.
   static const int kStepLimit = 100;
 
   Status m_Status;
-  CPDF_RenderContext* const m_pContext;
-  CFX_RenderDevice* const m_pDevice;
+  CFX_UnownedPtr<CPDF_RenderContext> const m_pContext;
+  CFX_UnownedPtr<CFX_RenderDevice> const m_pDevice;
   const CPDF_RenderOptions* const m_pOptions;
   std::unique_ptr<CPDF_RenderStatus> m_pRenderStatus;
   CFX_FloatRect m_ClipRect;

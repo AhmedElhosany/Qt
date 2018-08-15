@@ -47,6 +47,7 @@
 #include <QtPositioning/QGeoRectangle>
 #include <QtPositioning/QGeoCircle>
 #include <QtPositioning/QGeoPath>
+#include <QtPositioning/QGeoPolygon>
 #include <QtQml/QJSValue>
 #include <QVariant>
 
@@ -76,9 +77,13 @@ public:
     Q_INVOKABLE QGeoPath path() const;
     Q_INVOKABLE QGeoPath path(const QJSValue &value, qreal width = 0.0) const;
 
+    Q_INVOKABLE QGeoPath polygon() const;
+    Q_INVOKABLE QGeoPath polygon(const QVariantList &value) const;
+
     Q_INVOKABLE QGeoCircle shapeToCircle(const QGeoShape &shape) const;
     Q_INVOKABLE QGeoRectangle shapeToRectangle(const QGeoShape &shape) const;
     Q_INVOKABLE QGeoPath shapeToPath(const QGeoShape &shape) const;
+    Q_INVOKABLE QGeoPolygon shapeToPolygon(const QGeoShape &shape) const;
 };
 
 #endif // LOCATIONSINGLETON_H

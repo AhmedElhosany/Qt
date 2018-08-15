@@ -1,13 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_SERVICE_MANAGER_PUBLIC_CPP_CONNECTOR_H_
 #define SERVICES_SERVICE_MANAGER_PUBLIC_CPP_CONNECTOR_H_
 
+#include <map>
 #include <memory>
 
-#include "services/service_manager/public/cpp/connection.h"
+#include "base/callback.h"
+#include "base/sequence_checker.h"
+#include "services/service_manager/public/cpp/export.h"
 #include "services/service_manager/public/cpp/identity.h"
 #include "services/service_manager/public/interfaces/connector.mojom.h"
 #include "services/service_manager/public/interfaces/service.mojom.h"
@@ -17,101 +20,143 @@ namespace service_manager {
 
 // An interface that encapsulates the Service Manager's brokering interface, by
 // which
-// connections between services are established. Once Connect() is called,
-// this class is bound to the thread the call was made on and it cannot be
-// passed to another thread without calling Clone().
+// connections between services are established. Once either StartService() or
+// BindInterface() is called, this class is bound to the thread the call was
+// made on and it cannot be passed to another thread without calling Clone().
 //
 // An instance of this class is created internally by ServiceContext for use
 // on the thread ServiceContext is instantiated on.
 //
 // To use this interface on another thread, call Clone() and pass the new
-// instance to the desired thread before calling Connect().
+// instance to the desired thread before calling StartService() or
+// BindInterface().
 //
 // While instances of this object are owned by the caller, the underlying
 // connection with the service manager is bound to the lifetime of the instance
-// that
-// created it, i.e. when the application is terminated the Connector pipe is
-// closed.
-class Connector {
+// that created it, i.e. when the application is terminated the Connector pipe
+// is closed.
+class SERVICE_MANAGER_PUBLIC_CPP_EXPORT Connector {
  public:
-  virtual ~Connector() {}
+  using StartServiceCallback =
+      base::Callback<void(mojom::ConnectResult, const Identity& identity)>;
 
-  class ConnectParams {
+  class TestApi {
    public:
-    explicit ConnectParams(const Identity& target);
-    explicit ConnectParams(const std::string& name);
-    ~ConnectParams();
+    using Binder = base::Callback<void(mojo::ScopedMessagePipeHandle)>;
+    explicit TestApi(Connector* connector) : connector_(connector) {}
+    ~TestApi() { connector_->ResetStartServiceCallback(); }
 
-    const Identity& target() { return target_; }
-    void set_target(const Identity& target) { target_ = target; }
-    void set_client_process_connection(
-        mojom::ServicePtr service,
-        mojom::PIDReceiverRequest pid_receiver_request) {
-      service_ = std::move(service);
-      pid_receiver_request_ = std::move(pid_receiver_request);
+    // Allows caller to specify a callback to bind requests for |interface_name|
+    // from |service_name| locally, rather than passing the request through the
+    // Service Manager.
+    void OverrideBinderForTesting(const std::string& service_name,
+                                  const std::string& interface_name,
+                                  const Binder& binder) {
+      connector_->OverrideBinderForTesting(service_name, interface_name,
+                                           binder);
     }
-    void TakeClientProcessConnection(
-        mojom::ServicePtr* service,
-        mojom::PIDReceiverRequest* pid_receiver_request) {
-      *service = std::move(service_);
-      *pid_receiver_request = std::move(pid_receiver_request_);
-    }
-    InterfaceProvider* remote_interfaces() { return remote_interfaces_; }
-    void set_remote_interfaces(InterfaceProvider* remote_interfaces) {
-      remote_interfaces_ = remote_interfaces;
+    void ClearBinderOverrides() { connector_->ClearBinderOverrides(); }
+
+    // Register a callback to be run with the result of an attempt to start a
+    // service. This will be run in response to calls to StartService() or
+    // BindInterface().
+    void SetStartServiceCallback(const StartServiceCallback& callback) {
+      connector_->SetStartServiceCallback(callback);
     }
 
    private:
-    Identity target_;
-    mojom::ServicePtr service_;
-    mojom::PIDReceiverRequest pid_receiver_request_;
-    InterfaceProvider* remote_interfaces_ = nullptr;
-
-    DISALLOW_COPY_AND_ASSIGN(ConnectParams);
+    Connector* connector_;
   };
+
+  explicit Connector(mojom::ConnectorPtrInfo unbound_state);
+  explicit Connector(mojom::ConnectorPtr connector);
+  ~Connector();
 
   // Creates a new Connector instance and fills in |*request| with a request
   // for the other end the Connector's interface.
   static std::unique_ptr<Connector> Create(mojom::ConnectorRequest* request);
 
-  // Requests a new connection to an application. Returns a pointer to the
-  // connection if the connection is permitted by this application's delegate,
-  // or nullptr otherwise. Caller takes ownership.
-  // Once this method is called, this object is bound to the thread on which the
-  // call took place. To pass to another thread, call Clone() and pass the
-  // result.
-  virtual std::unique_ptr<Connection> Connect(const std::string& name) = 0;
-  virtual std::unique_ptr<Connection> Connect(ConnectParams* params) = 0;
+  // Creates an instance of a service for |identity|.
+  void StartService(const Identity& identity);
 
-  // Connect to application identified by |request->name| and connect to the
-  // service implementation of the interface identified by |Interface|.
+  // Creates an instance of the service |name| inheriting the caller's identity.
+  void StartService(const std::string& name);
+
+  // Creates an instance of a service for |identity| in a process started by the
+  // client (or someone else). Must be called before BindInterface() may be
+  // called to |identity|.
+  void StartService(const Identity& identity,
+                    mojom::ServicePtr service,
+                    mojom::PIDReceiverRequest pid_receiver_request);
+
+  // Connect to |target| & request to bind |Interface|.
   template <typename Interface>
-  void ConnectToInterface(ConnectParams* params,
-                          mojo::InterfacePtr<Interface>* ptr) {
-    std::unique_ptr<Connection> connection = Connect(params);
-    if (connection)
-      connection->GetInterface(ptr);
+  void BindInterface(const Identity& target,
+                     mojo::InterfacePtr<Interface>* ptr) {
+    mojo::MessagePipe pipe;
+    ptr->Bind(mojo::InterfacePtrInfo<Interface>(std::move(pipe.handle0), 0u));
+    BindInterface(target, Interface::Name_, std::move(pipe.handle1));
   }
   template <typename Interface>
-  void ConnectToInterface(const Identity& target,
-                          mojo::InterfacePtr<Interface>* ptr) {
-    ConnectParams params(target);
-    return ConnectToInterface(&params, ptr);
+  void BindInterface(const std::string& name,
+                     mojo::InterfacePtr<Interface>* ptr) {
+    return BindInterface(Identity(name, mojom::kInheritUserID), ptr);
   }
   template <typename Interface>
-  void ConnectToInterface(const std::string& name,
-                          mojo::InterfacePtr<Interface>* ptr) {
-    ConnectParams params(name);
-    return ConnectToInterface(&params, ptr);
+  void BindInterface(const std::string& name,
+                     mojo::InterfaceRequest<Interface> request) {
+    return BindInterface(Identity(name, mojom::kInheritUserID),
+                         Interface::Name_, request.PassMessagePipe());
   }
+  void BindInterface(const Identity& target,
+                     const std::string& interface_name,
+                     mojo::ScopedMessagePipeHandle interface_pipe);
 
   // Creates a new instance of this class which may be passed to another thread.
-  // The returned object may be passed multiple times until Connect() is called,
-  // at which point this method must be called again to pass again.
-  virtual std::unique_ptr<Connector> Clone() = 0;
+  // The returned object may be passed multiple times until StartService() or
+  // BindInterface() is called, at which point this method must be called again
+  // to pass again.
+  std::unique_ptr<Connector> Clone();
+
+  void FilterInterfaces(const std::string& spec,
+                        const Identity& source_identity,
+                        mojom::InterfaceProviderRequest request,
+                        mojom::InterfaceProviderPtr target);
 
   // Binds a Connector request to the other end of this Connector.
-  virtual void BindRequest(mojom::ConnectorRequest request) = 0;
+  void BindConnectorRequest(mojom::ConnectorRequest request);
+
+  base::WeakPtr<Connector> GetWeakPtr();
+
+ private:
+  using BinderOverrideMap = std::map<std::string, TestApi::Binder>;
+
+  void OnConnectionError();
+
+  void OverrideBinderForTesting(const std::string& service_name,
+                                const std::string& interface_name,
+                                const TestApi::Binder& binder);
+  void ClearBinderOverrides();
+  void SetStartServiceCallback(const StartServiceCallback& callback);
+  void ResetStartServiceCallback();
+
+  bool BindConnectorIfNecessary();
+
+  // Callback passed to mojom methods StartService()/BindInterface().
+  void RunStartServiceCallback(mojom::ConnectResult result,
+                               const Identity& user_id);
+
+  mojom::ConnectorPtrInfo unbound_state_;
+  mojom::ConnectorPtr connector_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
+
+  std::map<std::string, BinderOverrideMap> local_binder_overrides_;
+  StartServiceCallback start_service_callback_;
+
+  base::WeakPtrFactory<Connector> weak_factory_;
+
+  DISALLOW_COPY_AND_ASSIGN(Connector);
 };
 
 }  // namespace service_manager

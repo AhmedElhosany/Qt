@@ -38,7 +38,6 @@
 #include <QFont>
 #include <QQmlFileSelector>
 #include <QFileSelector>
-#include <QEasingCurve>
 
 #include <private/qqmlproperty_p.h>
 #include <private/qqmlmetatype_p.h>
@@ -180,6 +179,8 @@ private slots:
     void importIncorrectCase();
     void importJs_data();
     void importJs();
+    void explicitSelfImport();
+    void importInternalType();
 
     void qmlAttachedPropertiesObjectMethod();
     void customOnProperty();
@@ -210,6 +211,8 @@ private slots:
     void lowercaseEnumRuntime();
     void lowercaseEnumCompileTime_data();
     void lowercaseEnumCompileTime();
+    void scopedEnum();
+    void qmlEnums();
     void literals_data();
     void literals();
 
@@ -238,6 +241,7 @@ private slots:
     void compositeSingletonJavaScriptPragma();
     void compositeSingletonSelectors();
     void compositeSingletonRegistered();
+    void compositeSingletonCircular();
 
     void customParserBindingScopes();
     void customParserEvaluateEnum();
@@ -268,15 +272,14 @@ private slots:
     void qmlTypeCanBeResolvedByName_data();
     void qmlTypeCanBeResolvedByName();
 
+    void instanceof_data();
+    void instanceof();
+
     void concurrentLoadQmlDir();
 
     void accessDeletedObject();
 
     void lowercaseTypeNames();
-
-    void thisInQmlScope();
-
-    void valueTypeGroupPropertiesInBehavior();
 
 private:
     QQmlEngine engine;
@@ -324,7 +327,7 @@ private:
     if (!errorfile) { \
         if (qgetenv("DEBUG") != "" && !component.errors().isEmpty()) \
             qWarning() << "Unexpected Errors:" << component.errors(); \
-        QVERIFY(!component.isError()); \
+        QVERIFY2(!component.isError(), qPrintable(component.errorString())); \
         QVERIFY(component.errors().isEmpty()); \
     } else { \
         DETERMINE_ERRORS(errorfile,expected,actual);\
@@ -554,6 +557,14 @@ void tst_qqmllanguage::errors_data()
     QTest::newRow("notAvailable") << "notAvailable.qml" << "notAvailable.errors.txt" << false;
     QTest::newRow("singularProperty") << "singularProperty.qml" << "singularProperty.errors.txt" << false;
     QTest::newRow("singularProperty.2") << "singularProperty.2.qml" << "singularProperty.2.errors.txt" << false;
+
+    QTest::newRow("scopedEnumList") << "scopedEnumList.qml" << "scopedEnumList.errors.txt" << false;
+    QTest::newRow("lowercase enum value") << "lowercaseQmlEnum.1.qml" << "lowercaseQmlEnum.1.errors.txt" << false;
+    QTest::newRow("lowercase enum type") << "lowercaseQmlEnum.2.qml" << "lowercaseQmlEnum.2.errors.txt" << false;
+    QTest::newRow("string enum value") << "invalidQmlEnumValue.1.qml" << "invalidQmlEnumValue.1.errors.txt" << false;
+    QTest::newRow("identifier enum type") << "invalidQmlEnumValue.2.qml" << "invalidQmlEnumValue.2.errors.txt" << false;
+    QTest::newRow("enum value too large") << "invalidQmlEnumValue.3.qml" << "invalidQmlEnumValue.3.errors.txt" << false;
+    QTest::newRow("non-integer enum value") << "invalidQmlEnumValue.4.qml" << "invalidQmlEnumValue.4.errors.txt" << false;
 
     const QString expectedError = isCaseSensitiveFileSystem(dataDirectory()) ?
         QStringLiteral("incorrectCase.errors.sensitive.txt") :
@@ -1615,6 +1626,9 @@ void tst_qqmllanguage::cppnamespace()
         VERIFY_ERRORS(0);
         QObject *object = component.create();
         QVERIFY(object != 0);
+
+        QCOMPARE(object->property("intProperty").toInt(), (int)MyNamespace::MyOtherNSEnum::OtherKey2);
+
         delete object;
     }
 
@@ -1871,16 +1885,6 @@ void tst_qqmllanguage::aliasProperties()
         QVERIFY(!subObject.isNull());
 
         QVERIFY(subObject->property("success").toBool());
-    }
-
-    // Alias to sub-object with binding (QTBUG-57041)
-    {
-        // This is shold *not* crash.
-        QQmlComponent component(&engine, testFileUrl("alias.16.qml"));
-        VERIFY_ERRORS(0);
-
-        QScopedPointer<QObject> object(component.create());
-        QVERIFY(!object.isNull());
     }
 }
 
@@ -3083,12 +3087,45 @@ void tst_qqmllanguage::importJs()
     engine.setImportPathList(defaultImportPathList);
 }
 
+void tst_qqmllanguage::explicitSelfImport()
+{
+    engine.setImportPathList(QStringList(defaultImportPathList) << testFile("lib"));
+
+    QQmlComponent component(&engine, testFileUrl("mixedModuleWithSelfImport.qml"));
+    QVERIFY(component.errors().count() == 0);
+
+    engine.setImportPathList(defaultImportPathList);
+}
+
+void tst_qqmllanguage::importInternalType()
+{
+    QQmlEngine engine;
+    engine.addImportPath(dataDirectory());
+
+    {
+        QQmlComponent component(&engine);
+        component.setData("import modulewithinternaltypes 1.0\nPublicType{}", QUrl());
+        VERIFY_ERRORS(0);
+        QScopedPointer<QObject> obj(component.create());
+        QVERIFY(!obj.isNull());
+        QVERIFY(obj->property("myInternalType").value<QObject*>() != 0);
+    }
+    {
+        QQmlComponent component(&engine);
+        component.setData("import modulewithinternaltypes 1.0\nPublicTypeWithExplicitImport{}", QUrl());
+        VERIFY_ERRORS(0);
+        QScopedPointer<QObject> obj(component.create());
+        QVERIFY(!obj.isNull());
+        QVERIFY(obj->property("myInternalType").value<QObject*>() != 0);
+    }
+}
+
 void tst_qqmllanguage::qmlAttachedPropertiesObjectMethod()
 {
     QObject object;
 
     QCOMPARE(qmlAttachedPropertiesObject<MyQmlObject>(&object, false), (QObject *)0);
-    QCOMPARE(qmlAttachedPropertiesObject<MyQmlObject>(&object, true), (QObject *)0);
+    QVERIFY(qmlAttachedPropertiesObject<MyQmlObject>(&object, true));
 
     {
         QQmlComponent component(&engine, testFileUrl("qmlAttachedPropertiesObjectMethod.1.qml"));
@@ -3525,6 +3562,7 @@ void tst_qqmllanguage::registeredCompositeTypeWithEnum()
 
     QCOMPARE(o->property("enumValue0").toInt(), static_cast<int>(MyCompositeBaseType::EnumValue0));
     QCOMPARE(o->property("enumValue42").toInt(), static_cast<int>(MyCompositeBaseType::EnumValue42));
+    QCOMPARE(o->property("enumValue15").toInt(), static_cast<int>(MyCompositeBaseType::ScopedCompositeEnum::EnumValue15));
 
     delete o;
 }
@@ -3703,6 +3741,50 @@ void tst_qqmllanguage::lowercaseEnumCompileTime()
 
     QQmlComponent component(&engine, testFileUrl(file));
     VERIFY_ERRORS(qPrintable(errorFile));
+}
+
+void tst_qqmllanguage::scopedEnum()
+{
+    QQmlComponent component(&engine, testFileUrl("scopedEnum.qml"));
+
+    MyTypeObject *o = qobject_cast<MyTypeObject *>(component.create());
+    QVERIFY(o != 0);
+
+    QCOMPARE(o->scopedEnum(), MyTypeObject::MyScopedEnum::ScopedVal1);
+    QCOMPARE(o->intProperty(), (int)MyTypeObject::MyScopedEnum::ScopedVal2);
+    QCOMPARE(o->property("listValue").toInt(), (int)MyTypeObject::MyScopedEnum::ScopedVal3);
+    QCOMPARE(o->property("noScope").toInt(), (int)MyTypeObject::MyScopedEnum::ScopedVal1);
+
+    QMetaObject::invokeMethod(o, "assignNewValue");
+    QCOMPARE(o->scopedEnum(), MyTypeObject::MyScopedEnum::ScopedVal2);
+    QCOMPARE(o->property("noScope").toInt(), (int)MyTypeObject::MyScopedEnum::ScopedVal2);
+}
+
+void tst_qqmllanguage::qmlEnums()
+{
+    {
+        QQmlComponent component(&engine, testFileUrl("TypeWithEnum.qml"));
+        QObject *o = component.create();
+        QVERIFY(o);
+        QCOMPARE(o->property("enumValue").toInt(), 1);
+        QCOMPARE(o->property("enumValue2").toInt(), 2);
+        QCOMPARE(o->property("scopedEnumValue").toInt(), 1);
+
+        QCOMPARE(o->property("otherEnumValue1").toInt(), 24);
+        QCOMPARE(o->property("otherEnumValue2").toInt(), 25);
+        QCOMPARE(o->property("otherEnumValue3").toInt(), 24);
+        QCOMPARE(o->property("otherEnumValue4").toInt(), 25);
+        QCOMPARE(o->property("otherEnumValue5").toInt(), 1);
+    }
+
+    {
+        QQmlComponent component(&engine, testFileUrl("usingTypeWithEnum.qml"));
+        QObject *o = component.create();
+        QVERIFY(o);
+        QCOMPARE(o->property("enumValue").toInt(), 1);
+        QCOMPARE(o->property("enumValue2").toInt(), 0);
+        QCOMPARE(o->property("scopedEnumValue").toInt(), 2);
+    }
 }
 
 void tst_qqmllanguage::literals_data()
@@ -4136,6 +4218,22 @@ void tst_qqmllanguage::compositeSingletonRegistered()
     QVERIFY(o != 0);
 
     verifyCompositeSingletonPropertyValues(o, "value1", 925, "value2", 755);
+}
+
+void tst_qqmllanguage::compositeSingletonCircular()
+{
+    QQmlComponent component(&engine, testFile("circularSingleton.qml"));
+    VERIFY_ERRORS(0);
+
+    QQmlTestMessageHandler messageHandler;
+
+    QObject *o = component.create();
+    QVERIFY(o != 0);
+
+    // ensure we aren't hitting the recursion warning
+    QVERIFY2(messageHandler.messages().isEmpty(), qPrintable(messageHandler.messageString()));
+
+    QCOMPARE(o->property("value").toInt(), 2);
 }
 
 void tst_qqmllanguage::customParserBindingScopes()
@@ -4577,6 +4675,200 @@ void tst_qqmllanguage::qmlTypeCanBeResolvedByName()
     QVERIFY(!o.isNull());
 }
 
+// Tests for the QML-only extensions of instanceof. Tests for the regular JS
+// instanceof belong in tst_qqmlecmascript!
+void tst_qqmllanguage::instanceof_data()
+{
+    QTest::addColumn<QUrl>("documentToTestIn");
+    QTest::addColumn<QVariant>("expectedValue");
+
+    // so the way this works is that the name of the test tag defines the test
+    // to run.
+    //
+    // the expectedValue is either a boolean true or false for whether the two
+    // operands are indeed an instanceof each other, or a string for the
+    // expected error message.
+
+    // assert that basic types don't convert to QObject
+    QTest::newRow("1 instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant("TypeError: Type error");
+    QTest::newRow("true instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant("TypeError: Type error");
+    QTest::newRow("\"foobar\" instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant("TypeError: Type error");
+
+    // assert that Managed don't either
+    QTest::newRow("new String(\"foobar\") instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant("TypeError: Type error");
+    QTest::newRow("new Object() instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant("TypeError: Type error");
+    QTest::newRow("new Date() instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant("TypeError: Type error");
+
+    // test that simple QtQml comparisons work
+    QTest::newRow("qtobjectInstance instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant(true);
+    QTest::newRow("qtobjectInstance instanceof Timer")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant(false);
+    QTest::newRow("timerInstance instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant(true);
+    QTest::newRow("timerInstance instanceof Timer")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant(true);
+    QTest::newRow("connectionsInstance instanceof QtObject")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant(true);
+    QTest::newRow("connectionsInstance instanceof Timer")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant(false);
+    QTest::newRow("connectionsInstance instanceof Connections")
+        << testFileUrl("instanceof_qtqml.qml")
+        << QVariant(true);
+
+    // make sure they still work when imported with a qualifier
+    QTest::newRow("qtobjectInstance instanceof QmlImport.QtObject")
+        << testFileUrl("instanceof_qtqml_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("qtobjectInstance instanceof QmlImport.Timer")
+        << testFileUrl("instanceof_qtqml_qualified.qml")
+        << QVariant(false);
+    QTest::newRow("timerInstance instanceof QmlImport.QtObject")
+        << testFileUrl("instanceof_qtqml_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("timerInstance instanceof QmlImport.Timer")
+        << testFileUrl("instanceof_qtqml_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("connectionsInstance instanceof QmlImport.QtObject")
+        << testFileUrl("instanceof_qtqml_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("connectionsInstance instanceof QmlImport.Timer")
+        << testFileUrl("instanceof_qtqml_qualified.qml")
+        << QVariant(false);
+    QTest::newRow("connectionsInstance instanceof QmlImport.Connections")
+        << testFileUrl("instanceof_qtqml_qualified.qml")
+        << QVariant(true);
+
+    // test that Quick C++ types work ok
+    QTest::newRow("itemInstance instanceof QtObject")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(true);
+    QTest::newRow("itemInstance instanceof Timer")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(false);
+    QTest::newRow("itemInstance instanceof Rectangle")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(false);
+    QTest::newRow("rectangleInstance instanceof Item")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(true);
+    QTest::newRow("rectangleInstance instanceof Rectangle")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(true);
+    QTest::newRow("rectangleInstance instanceof MouseArea")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(false);
+    QTest::newRow("mouseAreaInstance instanceof Item")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(true);
+    QTest::newRow("mouseAreaInstance instanceof Rectangle")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(false);
+    QTest::newRow("mouseAreaInstance instanceof MouseArea")
+        << testFileUrl("instanceof_qtquick.qml")
+        << QVariant(true);
+
+    // test that unqualified quick composite types work ok
+    QTest::newRow("rectangleInstance instanceof CustomRectangle")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(false);
+    QTest::newRow("customRectangleInstance instanceof Rectangle")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleInstance instanceof Item")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleWithPropInstance instanceof CustomRectangleWithProp")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleWithPropInstance instanceof CustomRectangle")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(false); // ### XXX: QTBUG-58477
+    QTest::newRow("customRectangleWithPropInstance instanceof Rectangle")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleInstance instanceof MouseArea")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(false);
+    QTest::newRow("customMouseAreaInstance instanceof MouseArea")
+        << testFileUrl("instanceof_qtquick_composite.qml")
+        << QVariant(true);
+
+    // test that they still work when qualified
+    QTest::newRow("rectangleInstance instanceof CustomImport.CustomRectangle")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(false);
+    QTest::newRow("customRectangleInstance instanceof QuickImport.Rectangle")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleInstance instanceof QuickImport.Item")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleWithPropInstance instanceof CustomImport.CustomRectangleWithProp")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleWithPropInstance instanceof CustomImport.CustomRectangle")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(false); // ### XXX: QTBUG-58477
+    QTest::newRow("customRectangleWithPropInstance instanceof QuickImport.Rectangle")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(true);
+    QTest::newRow("customRectangleInstance instanceof QuickImport.MouseArea")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(false);
+    QTest::newRow("customMouseAreaInstance instanceof QuickImport.MouseArea")
+        << testFileUrl("instanceof_qtquick_composite_qualified.qml")
+        << QVariant(true);
+}
+
+void tst_qqmllanguage::instanceof()
+{
+    QFETCH(QUrl, documentToTestIn);
+    QFETCH(QVariant, expectedValue);
+
+    QQmlEngine engine;
+    QQmlComponent component(&engine, documentToTestIn);
+    VERIFY_ERRORS(0);
+
+    QScopedPointer<QObject> o(component.create());
+    QVERIFY(o != 0);
+
+    QQmlExpression expr(engine.contextForObject(o.data()), 0, QString::fromLatin1(QTest::currentDataTag()));
+    QVariant ret = expr.evaluate();
+
+    if (expectedValue.type() == QVariant::Bool) {
+        // no error expected
+        QVERIFY2(!expr.hasError(), qPrintable(expr.error().description()));
+        bool returnValue = ret.toBool();
+
+        if (QTest::currentDataTag() == QLatin1String("customRectangleWithPropInstance instanceof CustomRectangle") ||
+            QTest::currentDataTag() == QLatin1String("customRectangleWithPropInstance instanceof CustomImport.CustomRectangle"))
+            QEXPECT_FAIL("", "QTBUG-58477: QML type rules are a little lax", Continue);
+        QCOMPARE(returnValue, expectedValue.toBool());
+    } else {
+        QVERIFY(expr.hasError());
+        QCOMPARE(expr.error().description(), expectedValue.toString());
+    }
+}
+
 void tst_qqmllanguage::concurrentLoadQmlDir()
 {
     ThreadedTestHTTPServer server(dataDirectory());
@@ -4617,33 +4909,6 @@ void tst_qqmllanguage::lowercaseTypeNames()
 {
     QCOMPARE(qmlRegisterType<QObject>("Test", 1, 0, "lowerCaseTypeName"), -1);
     QCOMPARE(qmlRegisterSingletonType<QObject>("Test", 1, 0, "lowerCaseTypeName", nullptr), -1);
-}
-
-void tst_qqmllanguage::thisInQmlScope()
-{
-    QQmlEngine engine;
-
-    QQmlComponent component(&engine, testFileUrl("thisInQmlScope.qml"));
-    QTRY_VERIFY(component.isReady());
-    VERIFY_ERRORS(0);
-    QScopedPointer<QObject> o(component.create());
-    QVERIFY(!o.isNull());
-    QCOMPARE(o->property("x"), QVariant(42));
-    QCOMPARE(o->property("y"), QVariant(42));
-}
-
-void tst_qqmllanguage::valueTypeGroupPropertiesInBehavior()
-{
-    QQmlEngine engine;
-    QQmlComponent component(&engine, testFileUrl("groupPropertyInPropertyValueSource.qml"));
-    VERIFY_ERRORS(0);
-    QScopedPointer<QObject> o(component.create());
-    QVERIFY(!o.isNull());
-
-    QObject *animation = qmlContext(o.data())->contextProperty("animation").value<QObject*>();
-    QVERIFY(animation);
-
-    QCOMPARE(animation->property("easing").value<QEasingCurve>().type(), QEasingCurve::InOutQuad);
 }
 
 QTEST_MAIN(tst_qqmllanguage)

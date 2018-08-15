@@ -76,10 +76,8 @@ UI.Widget = class extends Common.Object {
   }
 
   static __assert(condition, message) {
-    if (!condition) {
-      console.trace();
+    if (!condition)
       throw new Error(message);
-    }
   }
 
   /**
@@ -190,13 +188,6 @@ UI.Widget = class extends Common.Object {
     this._callOnVisibleChildren(this._processWasShown);
   }
 
-  _processWasDetachedFromHierarchy() {
-    this._notify(this.wasDetachedFromHierarchy);
-    var copy = this._children.slice();
-    for (var widget of copy)
-      widget._processWasDetachedFromHierarchy();
-  }
-
   _processWillHide() {
     if (this._inNotification())
       return;
@@ -238,18 +229,18 @@ UI.Widget = class extends Common.Object {
   willHide() {
   }
 
-  wasDetachedFromHierarchy() {
-  }
-
   onResize() {
   }
 
   onLayout() {
   }
 
+  ownerViewDisposed() {
+  }
+
   /**
    * @param {!Element} parentElement
-   * @param {?Element=} insertBefore
+   * @param {?Node=} insertBefore
    */
   show(parentElement, insertBefore) {
     UI.Widget.__assert(parentElement, 'Attempt to attach widget with no parent element');
@@ -260,16 +251,16 @@ UI.Widget = class extends Common.Object {
       while (currentParent && !currentParent.__widget)
         currentParent = currentParent.parentElementOrShadowHost();
       UI.Widget.__assert(currentParent, 'Attempt to attach widget to orphan node');
-      this.attach(currentParent.__widget);
+      this._attach(currentParent.__widget);
     }
 
-    this.showWidget(parentElement, insertBefore);
+    this._showWidget(parentElement, insertBefore);
   }
 
   /**
    * @param {!UI.Widget} parentWidget
    */
-  attach(parentWidget) {
+  _attach(parentWidget) {
     if (parentWidget === this._parentWidget)
       return;
     if (this._parentWidget)
@@ -279,11 +270,18 @@ UI.Widget = class extends Common.Object {
     this._isRoot = false;
   }
 
+  showWidget() {
+    if (this._visible)
+      return;
+    UI.Widget.__assert(this.element.parentElement, 'Attempt to show widget that is not hidden using hideWidget().');
+    this._showWidget(/** @type {!Element} */ (this.element.parentElement), this.element.nextSibling);
+  }
+
   /**
    * @param {!Element} parentElement
-   * @param {?Element=} insertBefore
+   * @param {?Node=} insertBefore
    */
-  showWidget(parentElement, insertBefore) {
+  _showWidget(parentElement, insertBefore) {
     var currentParent = parentElement;
     while (currentParent && !currentParent.__widget)
       currentParent = currentParent.parentElementOrShadowHost();
@@ -326,29 +324,27 @@ UI.Widget = class extends Common.Object {
   }
 
   hideWidget() {
-    if (!this._parentWidget)
+    if (!this._visible)
       return;
-    this._hideWidget();
+    this._hideWidget(false);
   }
 
   /**
-   * @param {boolean=} overrideHideOnDetach
+   * @param {boolean} removeFromDOM
    */
-  _hideWidget(overrideHideOnDetach) {
-    if (!this._visible)
-      return;
+  _hideWidget(removeFromDOM) {
     this._visible = false;
     var parentElement = this.element.parentElement;
 
     if (this._parentIsShowing())
       this._processWillHide();
 
-    if (!overrideHideOnDetach && this.shouldHideOnDetach()) {
-      this.element.classList.add('hidden');
-    } else {
+    if (removeFromDOM) {
       // Force legal removal
       UI.Widget._decrementWidgetCounter(parentElement, this.element);
       UI.Widget._originalRemoveChild.call(parentElement, this.element);
+    } else {
+      this.element.classList.add('hidden');
     }
 
     if (this._parentIsShowing())
@@ -357,12 +353,15 @@ UI.Widget = class extends Common.Object {
       this._parentWidget.invalidateConstraints();
   }
 
-  detach() {
+  /**
+   * @param {boolean=} overrideHideOnDetach
+   */
+  detach(overrideHideOnDetach) {
     if (!this._parentWidget && !this._isRoot)
       return;
 
     if (this._visible)
-      this._hideWidget(true);
+      this._hideWidget(overrideHideOnDetach || !this.shouldHideOnDetach());
 
     // Update widget hierarchy.
     if (this._parentWidget) {
@@ -372,9 +371,7 @@ UI.Widget = class extends Common.Object {
       if (this._parentWidget._defaultFocusedChild === this)
         this._parentWidget._defaultFocusedChild = null;
       this._parentWidget.childWasDetached(this);
-      var parent = this._parentWidget;
       this._parentWidget = null;
-      this._processWasDetachedFromHierarchy();
     } else {
       UI.Widget.__assert(this._isRoot, 'Removing non-root widget from DOM');
     }
@@ -438,7 +435,7 @@ UI.Widget = class extends Common.Object {
   printWidgetHierarchy() {
     var lines = [];
     this._collectWidgetHierarchy('', lines);
-    console.log(lines.join('\n'));
+    console.log(lines.join('\n'));  // eslint-disable-line no-console
   }
 
   _collectWidgetHierarchy(prefix, lines) {
@@ -497,34 +494,14 @@ UI.Widget = class extends Common.Object {
   }
 
   /**
-   * @return {!Size}
-   */
-  measurePreferredSize() {
-    var document = this.element.ownerDocument;
-    var oldParent = this.element.parentElement;
-    var oldNextSibling = this.element.nextSibling;
-
-    UI.Widget._originalAppendChild.call(document.body, this.element);
-    this.element.positionAt(0, 0);
-    var result = new Size(this.element.offsetWidth, this.element.offsetHeight);
-
-    this.element.positionAt(undefined, undefined);
-    if (oldParent)
-      UI.Widget._originalInsertBefore.call(oldParent, this.element, oldNextSibling);
-    else
-      UI.Widget._originalRemoveChild.call(document.body, this.element);
-    return result;
-  }
-
-  /**
-   * @return {!Constraints}
+   * @return {!UI.Constraints}
    */
   calculateConstraints() {
-    return new Constraints();
+    return new UI.Constraints();
   }
 
   /**
-   * @return {!Constraints}
+   * @return {!UI.Constraints}
    */
   constraints() {
     if (typeof this._constraints !== 'undefined')
@@ -541,7 +518,7 @@ UI.Widget = class extends Common.Object {
    * @param {number} preferredHeight
    */
   setMinimumAndPreferredSizes(width, height, preferredWidth, preferredHeight) {
-    this._constraints = new Constraints(new Size(width, height), new Size(preferredWidth, preferredHeight));
+    this._constraints = new UI.Constraints(new UI.Size(width, height), new UI.Size(preferredWidth, preferredHeight));
     this.invalidateConstraints();
   }
 
@@ -550,7 +527,7 @@ UI.Widget = class extends Common.Object {
    * @param {number} height
    */
   setMinimumSize(width, height) {
-    this._constraints = new Constraints(new Size(width, height));
+    this._constraints = new UI.Constraints(new UI.Size(width, height));
     this.invalidateConstraints();
   }
 
@@ -588,11 +565,6 @@ UI.Widget = class extends Common.Object {
     else
       this.doLayout();
   }
-
-  invalidateSize() {
-    if (this._parentWidget)
-      this._parentWidget.doLayout();
-  }
 };
 
 UI.Widget._originalAppendChild = Element.prototype.appendChild;
@@ -615,10 +587,10 @@ UI.VBox = class extends UI.Widget {
 
   /**
    * @override
-   * @return {!Constraints}
+   * @return {!UI.Constraints}
    */
   calculateConstraints() {
-    var constraints = new Constraints();
+    var constraints = new UI.Constraints();
 
     /**
      * @this {!UI.Widget}
@@ -649,10 +621,10 @@ UI.HBox = class extends UI.Widget {
 
   /**
    * @override
-   * @return {!Constraints}
+   * @return {!UI.Constraints}
    */
   calculateConstraints() {
-    var constraints = new Constraints();
+    var constraints = new UI.Constraints();
 
     /**
      * @this {!UI.Widget}

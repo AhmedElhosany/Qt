@@ -207,6 +207,9 @@ WebView *TabWidget::createBackgroundTab()
     setupView(webView);
     int index = addTab(webView, tr("(Untitled)"));
     setTabIcon(index, webView->favIcon());
+    // Workaround for QTBUG-61770
+    webView->resize(currentWidget()->size());
+    webView->show();
     return webView;
 }
 

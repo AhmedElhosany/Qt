@@ -12,7 +12,6 @@
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/scoped_vector.h"
 #include "base/pickle.h"
 #include "base/strings/string16.h"
 #include "build/build_config.h"
@@ -92,20 +91,34 @@ class LoginDatabase {
                  std::vector<std::unique_ptr<autofill::PasswordForm>>* forms)
       const WARN_UNUSED_RESULT;
 
+  // Retrieves all stored credentials with SCHEME_HTTP that have a realm whose
+  // organization-identifying name -- that is, the first domain name label below
+  // the effective TLD -- matches that of |signon_realm|. Return value indicates
+  // a successful query (but potentially no results).
+  //
+  // For example, the organization-identifying name of "https://foo.example.org"
+  // is `example`, and logins will be returned for "http://bar.example.co.uk",
+  // but not for "http://notexample.com" or "https://example.foo.com".
+  bool GetLoginsForSameOrganizationName(
+      const std::string& signon_realm,
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const;
+
   // Gets all logins created from |begin| onwards (inclusive) and before |end|.
   // You may use a null Time value to do an unbounded search in either
   // direction.
   bool GetLoginsCreatedBetween(
       base::Time begin,
       base::Time end,
-      ScopedVector<autofill::PasswordForm>* forms) const WARN_UNUSED_RESULT;
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const
+      WARN_UNUSED_RESULT;
 
   // Gets all logins synced from |begin| onwards (inclusive) and before |end|.
   // You may use a null Time value to do an unbounded search in either
   // direction.
-  bool GetLoginsSyncedBetween(base::Time begin,
-                              base::Time end,
-                              ScopedVector<autofill::PasswordForm>* forms) const
+  bool GetLoginsSyncedBetween(
+      base::Time begin,
+      base::Time end,
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const
       WARN_UNUSED_RESULT;
 
   // Gets the complete list of not blacklisted credentials.
@@ -118,8 +131,8 @@ class LoginDatabase {
                               forms) const WARN_UNUSED_RESULT;
 
   // Gets the list of auto-sign-inable credentials.
-  bool GetAutoSignInLogins(ScopedVector<autofill::PasswordForm>* forms) const
-      WARN_UNUSED_RESULT;
+  bool GetAutoSignInLogins(std::vector<std::unique_ptr<autofill::PasswordForm>>*
+                               forms) const WARN_UNUSED_RESULT;
 
   // Deletes the login database file on disk, and creates a new, empty database.
   // This can be used after migrating passwords to some other store, to ensure
@@ -133,8 +146,6 @@ class LoginDatabase {
   std::string GetEncryptedPassword(const autofill::PasswordForm& form) const;
 
   StatisticsTable& stats_table() { return stats_table_; }
-
-  void set_clear_password_values(bool val) { clear_password_values_ = val; }
 
  private:
 #if defined(OS_IOS)
@@ -192,9 +203,10 @@ class LoginDatabase {
   // Overwrites |forms| with credentials retrieved from |statement|. If
   // |matched_form| is not null, filters out all results but those PSL-matching
   // |*matched_form| or federated credentials for it. On success returns true.
-  static bool StatementToForms(sql::Statement* statement,
-                               const PasswordStore::FormDigest* matched_form,
-                               ScopedVector<autofill::PasswordForm>* forms);
+  static bool StatementToForms(
+      sql::Statement* statement,
+      const PasswordStore::FormDigest* matched_form,
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms);
 
   // Initializes all the *_statement_ data members with appropriate SQL
   // fragments based on |builder|.
@@ -204,13 +216,6 @@ class LoginDatabase {
   mutable sql::Connection db_;
   sql::MetaTable meta_table_;
   StatisticsTable stats_table_;
-
-  // If set to 'true', then the password values are cleared before encrypting
-  // and storing in the database. At the same time AddLogin/UpdateLogin return
-  // PasswordStoreChangeList containing the real password.
-  // This is a temporary measure for migration the Keychain on Mac.
-  // crbug.com/466638
-  bool clear_password_values_;
 
   // These cached strings are used to build SQL statements.
   std::string add_statement_;
@@ -222,6 +227,7 @@ class LoginDatabase {
   std::string get_statement_psl_;
   std::string get_statement_federated_;
   std::string get_statement_psl_federated_;
+  std::string get_same_organization_name_logins_statement_;
   std::string created_statement_;
   std::string synced_statement_;
   std::string blacklisted_statement_;

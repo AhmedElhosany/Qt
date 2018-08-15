@@ -31,56 +31,11 @@
 
 #include "platform/network/ParsedContentType.h"
 
-#include "wtf/text/CString.h"
-#include "wtf/text/StringBuilder.h"
+#include "platform/network/HeaderFieldTokenizer.h"
+#include "platform/wtf/text/StringBuilder.h"
+#include "platform/wtf/text/StringView.h"
 
 namespace blink {
-
-class DummyParsedContentType final {
-  STACK_ALLOCATED();
-
- public:
-  void setContentType(const SubstringRange&) const {}
-  void setContentTypeParameter(const SubstringRange&,
-                               const SubstringRange&) const {}
-};
-
-static void skipSpaces(const String& input, unsigned& startIndex) {
-  while (startIndex < input.length() && input[startIndex] == ' ')
-    ++startIndex;
-}
-
-static SubstringRange parseParameterPart(const String& input,
-                                         unsigned& startIndex) {
-  unsigned inputLength = input.length();
-  unsigned tokenStart = startIndex;
-  unsigned& tokenEnd = startIndex;
-
-  if (tokenEnd >= inputLength)
-    return SubstringRange();
-
-  bool quoted = input[tokenStart] == '\"';
-  bool escape = false;
-
-  while (tokenEnd < inputLength) {
-    UChar c = input[tokenEnd];
-    if (quoted && tokenStart != tokenEnd && c == '\"' && !escape)
-      return SubstringRange(tokenStart + 1, tokenEnd++ - tokenStart - 1);
-    if (!quoted && (c == ';' || c == '='))
-      return SubstringRange(tokenStart, tokenEnd - tokenStart);
-    escape = !escape && c == '\\';
-    ++tokenEnd;
-  }
-
-  if (quoted)
-    return SubstringRange();
-  return SubstringRange(tokenStart, tokenEnd - tokenStart);
-}
-
-static String substringForRange(const String& string,
-                                const SubstringRange& range) {
-  return string.substring(range.first, range.second);
-}
 
 // From http://tools.ietf.org/html/rfc2045#section-5.1:
 //
@@ -127,103 +82,34 @@ static String substringForRange(const String& string,
 //               "/" / "[" / "]" / "?" / "="
 //               ; Must be in quoted-string,
 //               ; to use within parameter values
+ParsedContentType::ParsedContentType(const String& content_type, Mode mode) {
+  HeaderFieldTokenizer tokenizer(content_type);
 
-template <class ReceiverType>
-bool parseContentType(const String& contentType, ReceiverType& receiver) {
-  unsigned index = 0;
-  unsigned contentTypeLength = contentType.length();
-  skipSpaces(contentType, index);
-  if (index >= contentTypeLength) {
-    DVLOG(1) << "Invalid Content-Type string '" << contentType << "'";
-    return false;
+  StringView type, subtype;
+  if (!tokenizer.ConsumeToken(Mode::kNormal, type)) {
+    DVLOG(1) << "Failed to find `type' in '" << content_type << "'";
+    return;
+  }
+  if (!tokenizer.Consume('/')) {
+    DVLOG(1) << "Failed to find '/' in '" << content_type << "'";
+    return;
+  }
+  if (!tokenizer.ConsumeToken(Mode::kNormal, subtype)) {
+    DVLOG(1) << "Failed to find `subtype' in '" << content_type << "'";
+    return;
   }
 
-  // There should not be any quoted strings until we reach the parameters.
-  size_t semiColonIndex = contentType.find(';', index);
-  if (semiColonIndex == kNotFound) {
-    receiver.setContentType(SubstringRange(index, contentTypeLength - index));
-    return true;
-  }
+  StringBuilder builder;
+  builder.Append(type);
+  builder.Append('/');
+  builder.Append(subtype);
+  mime_type_ = builder.ToString();
 
-  receiver.setContentType(SubstringRange(index, semiColonIndex - index));
-  index = semiColonIndex + 1;
-  while (true) {
-    skipSpaces(contentType, index);
-    SubstringRange keyRange = parseParameterPart(contentType, index);
-    if (!keyRange.second || index >= contentTypeLength) {
-      DVLOG(1) << "Invalid Content-Type parameter name. (at " << index << ")";
-      return false;
-    }
-
-    // Should we tolerate spaces here?
-    if (contentType[index++] != '=' || index >= contentTypeLength) {
-      DVLOG(1) << "Invalid Content-Type malformed parameter (at " << index
-               << ").";
-      return false;
-    }
-
-    // Should we tolerate spaces here?
-    SubstringRange valueRange = parseParameterPart(contentType, index);
-
-    if (!valueRange.second) {
-      DVLOG(1) << "Invalid Content-Type, invalid parameter value (at " << index
-               << ", for '"
-               << substringForRange(contentType, keyRange).stripWhiteSpace()
-               << "').";
-      return false;
-    }
-
-    // Should we tolerate spaces here?
-    if (index < contentTypeLength && contentType[index++] != ';') {
-      DVLOG(1) << "Invalid Content-Type, invalid character at the end of "
-                  "key/value parameter (at "
-               << index << ").";
-      return false;
-    }
-
-    receiver.setContentTypeParameter(keyRange, valueRange);
-
-    if (index >= contentTypeLength)
-      return true;
-  }
-
-  return true;
+  parameters_.ParseParameters(std::move(tokenizer), mode);
 }
 
-bool isValidContentType(const String& contentType) {
-  if (contentType.contains('\r') || contentType.contains('\n'))
-    return false;
-
-  DummyParsedContentType parsedContentType = DummyParsedContentType();
-  return parseContentType<DummyParsedContentType>(contentType,
-                                                  parsedContentType);
-}
-
-ParsedContentType::ParsedContentType(const String& contentType)
-    : m_contentType(contentType.stripWhiteSpace()) {
-  parseContentType<ParsedContentType>(m_contentType, *this);
-}
-
-String ParsedContentType::charset() const {
-  return parameterValueForName("charset");
-}
-
-String ParsedContentType::parameterValueForName(const String& name) const {
-  return m_parameters.get(name);
-}
-
-size_t ParsedContentType::parameterCount() const {
-  return m_parameters.size();
-}
-
-void ParsedContentType::setContentType(const SubstringRange& contentRange) {
-  m_mimeType = substringForRange(m_contentType, contentRange).stripWhiteSpace();
-}
-
-void ParsedContentType::setContentTypeParameter(const SubstringRange& key,
-                                                const SubstringRange& value) {
-  m_parameters.set(substringForRange(m_contentType, key),
-                   substringForRange(m_contentType, value));
+String ParsedContentType::Charset() const {
+  return ParameterValueForName("charset");
 }
 
 }  // namespace blink

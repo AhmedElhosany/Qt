@@ -15,6 +15,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
+#include "build/build_config.h"
 #include "cc/base/container_util.h"
 #include "cc/resources/resource_provider.h"
 #include "cc/resources/resource_util.h"
@@ -24,8 +25,39 @@ using base::trace_event::MemoryAllocatorDump;
 using base::trace_event::MemoryDumpLevelOfDetail;
 
 namespace cc {
+namespace {
+bool ResourceMeetsSizeRequirements(const gfx::Size& requested_size,
+                                   const gfx::Size& actual_size,
+                                   bool disallow_non_exact_reuse) {
+  const float kReuseThreshold = 2.0f;
+
+  if (disallow_non_exact_reuse)
+    return requested_size == actual_size;
+
+  // Allocating new resources is expensive, and we'd like to re-use our
+  // existing ones within reason. Allow a larger resource to be used for a
+  // smaller request.
+  if (actual_size.width() < requested_size.width() ||
+      actual_size.height() < requested_size.height())
+    return false;
+
+  // GetArea will crash on overflow, however all sizes in use are tile sizes.
+  // These are capped at ResourceProvider::max_texture_size(), and will not
+  // overflow.
+  float actual_area = actual_size.GetArea();
+  float requested_area = requested_size.GetArea();
+  // Don't use a resource that is more than |kReuseThreshold| times the
+  // requested pixel area, as we want to free unnecessarily large resources.
+  if (actual_area / requested_area > kReuseThreshold)
+    return false;
+
+  return true;
+}
+
+}  // namespace
+
 base::TimeDelta ResourcePool::kDefaultExpirationDelay =
-    base::TimeDelta::FromSeconds(1);
+    base::TimeDelta::FromSeconds(5);
 
 void ResourcePool::PoolResource::OnMemoryDump(
     base::trace_event::ProcessMemoryDump* pmd,
@@ -55,21 +87,49 @@ void ResourcePool::PoolResource::OnMemoryDump(
 
 ResourcePool::ResourcePool(ResourceProvider* resource_provider,
                            base::SingleThreadTaskRunner* task_runner,
-                           bool use_gpu_memory_buffers,
-                           const base::TimeDelta& expiration_delay)
+                           gfx::BufferUsage usage,
+                           const base::TimeDelta& expiration_delay,
+                           bool disallow_non_exact_reuse)
     : resource_provider_(resource_provider),
-      use_gpu_memory_buffers_(use_gpu_memory_buffers),
-      max_memory_usage_bytes_(0),
-      max_resource_count_(0),
-      in_use_memory_usage_bytes_(0),
-      total_memory_usage_bytes_(0),
-      total_resource_count_(0),
+      use_gpu_memory_buffers_(true),
+      usage_(usage),
       task_runner_(task_runner),
-      evict_expired_resources_pending_(false),
       resource_expiration_delay_(expiration_delay),
+      disallow_non_exact_reuse_(disallow_non_exact_reuse),
       weak_ptr_factory_(this) {
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       this, "cc::ResourcePool", task_runner_.get());
+
+#if defined(OS_ANDROID)
+  // TODO(ericrk): This feature appears to be causing visual corruption on
+  // certain android devices. Will investigate and re-enable. crbug.com/746931
+  disallow_non_exact_reuse_ = true;
+#endif
+
+  // Register this component with base::MemoryCoordinatorClientRegistry.
+  base::MemoryCoordinatorClientRegistry::GetInstance()->Register(this);
+}
+
+ResourcePool::ResourcePool(ResourceProvider* resource_provider,
+                           base::SingleThreadTaskRunner* task_runner,
+                           ResourceProvider::TextureHint hint,
+                           const base::TimeDelta& expiration_delay,
+                           bool disallow_non_exact_reuse)
+    : resource_provider_(resource_provider),
+      use_gpu_memory_buffers_(false),
+      hint_(hint),
+      task_runner_(task_runner),
+      resource_expiration_delay_(expiration_delay),
+      disallow_non_exact_reuse_(disallow_non_exact_reuse),
+      weak_ptr_factory_(this) {
+  base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
+      this, "cc::ResourcePool", task_runner_.get());
+
+#if defined(OS_ANDROID)
+  // TODO(ericrk): This feature appears to be causing visual corruption on
+  // certain android devices. Will investigate and re-enable. crbug.com/746931
+  disallow_non_exact_reuse_ = true;
+#endif
 
   // Register this component with base::MemoryCoordinatorClientRegistry.
   base::MemoryCoordinatorClientRegistry::GetInstance()->Register(this);
@@ -95,7 +155,7 @@ ResourcePool::~ResourcePool() {
 }
 
 Resource* ResourcePool::ReuseResource(const gfx::Size& size,
-                                      ResourceFormat format,
+                                      viz::ResourceFormat format,
                                       const gfx::ColorSpace& color_space) {
   // Finding resources in |unused_resources_| from MRU to LRU direction, touches
   // LRU resources only if needed, which increases possibility of expiring more
@@ -107,7 +167,8 @@ Resource* ResourcePool::ReuseResource(const gfx::Size& size,
 
     if (resource->format() != format)
       continue;
-    if (resource->size() != size)
+    if (!ResourceMeetsSizeRequirements(size, resource->size(),
+                                       disallow_non_exact_reuse_))
       continue;
     if (resource->color_space() != color_space)
       continue;
@@ -123,7 +184,7 @@ Resource* ResourcePool::ReuseResource(const gfx::Size& size,
 }
 
 Resource* ResourcePool::CreateResource(const gfx::Size& size,
-                                       ResourceFormat format,
+                                       viz::ResourceFormat format,
                                        const gfx::ColorSpace& color_space) {
   std::unique_ptr<PoolResource> pool_resource =
       PoolResource::Create(resource_provider_);
@@ -132,8 +193,7 @@ Resource* ResourcePool::CreateResource(const gfx::Size& size,
     pool_resource->AllocateWithGpuMemoryBuffer(size, format, usage_,
                                                color_space);
   } else {
-    pool_resource->Allocate(size, ResourceProvider::TEXTURE_HINT_IMMUTABLE,
-                            format, color_space);
+    pool_resource->Allocate(size, hint_, format, color_space);
   }
 
   DCHECK(ResourceUtil::VerifySizeInBytes<size_t>(pool_resource->size(),
@@ -156,7 +216,7 @@ Resource* ResourcePool::CreateResource(const gfx::Size& size,
 }
 
 Resource* ResourcePool::AcquireResource(const gfx::Size& size,
-                                        ResourceFormat format,
+                                        viz::ResourceFormat format,
                                         const gfx::ColorSpace& color_space) {
   Resource* reused_resource = ReuseResource(size, format, color_space);
   if (reused_resource)
@@ -386,10 +446,11 @@ void ResourcePool::ScheduleEvictExpiredResourcesIn(
 
   evict_expired_resources_pending_ = true;
 
-  task_runner_->PostDelayedTask(FROM_HERE,
-                                base::Bind(&ResourcePool::EvictExpiredResources,
-                                           weak_ptr_factory_.GetWeakPtr()),
-                                time_from_now);
+  task_runner_->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&ResourcePool::EvictExpiredResources,
+                     weak_ptr_factory_.GetWeakPtr()),
+      time_from_now);
 }
 
 void ResourcePool::EvictExpiredResources() {
@@ -399,7 +460,10 @@ void ResourcePool::EvictExpiredResources() {
   EvictResourcesNotUsedSince(current_time - resource_expiration_delay_);
 
   if (unused_resources_.empty() && busy_resources_.empty()) {
-    // Nothing is evictable.
+    // If nothing is evictable, we have deleted one (and possibly more)
+    // resources without any new activity. Flush to ensure these deletions are
+    // processed.
+    resource_provider_->FlushPendingDeletions();
     return;
   }
 
@@ -466,23 +530,9 @@ bool ResourcePool::OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
   return true;
 }
 
-void ResourcePool::OnMemoryStateChange(base::MemoryState state) {
-  switch (state) {
-    case base::MemoryState::NORMAL:
-      // TODO(tasak): go back to normal state.
-      break;
-    case base::MemoryState::THROTTLED:
-      // TODO(tasak): make the limits of this component's caches smaller to
-      // save memory usage.
-      break;
-    case base::MemoryState::SUSPENDED:
-      // Release all resources, regardless of how recently they were used.
-      EvictResourcesNotUsedSince(base::TimeTicks() + base::TimeDelta::Max());
-      break;
-    case base::MemoryState::UNKNOWN:
-      // NOT_REACHED.
-      break;
-  }
+void ResourcePool::OnPurgeMemory() {
+  // Release all resources, regardless of how recently they were used.
+  EvictResourcesNotUsedSince(base::TimeTicks() + base::TimeDelta::Max());
 }
 
 }  // namespace cc

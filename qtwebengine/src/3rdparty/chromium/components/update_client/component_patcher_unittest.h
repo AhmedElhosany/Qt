@@ -10,13 +10,13 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/message_loop/message_loop.h"
+#include "base/sequenced_task_runner.h"
 #include "courgette/courgette.h"
 #include "courgette/third_party/bsdiff/bsdiff.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace update_client {
 
-class MockComponentPatcher;
 class ReadOnlyTestInstaller;
 
 const char binary_output_hash[] =

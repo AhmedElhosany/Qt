@@ -63,6 +63,8 @@ class QQmlError;
 class QQmlEngine;
 class Q_QML_PRIVATE_EXPORT QQmlDirParser
 {
+    Q_DISABLE_COPY(QQmlDirParser)
+
 public:
     QQmlDirParser();
     ~QQmlDirParser();

@@ -10,10 +10,6 @@
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "extensions/browser/api/management/management_api_delegate.h"
 
-namespace favicon_base {
-struct FaviconImageResult;
-}  // namespace favicon_base
-
 class ChromeManagementAPIDelegate : public extensions::ManagementAPIDelegate {
  public:
   ChromeManagementAPIDelegate();
@@ -35,8 +31,6 @@ class ChromeManagementAPIDelegate : public extensions::ManagementAPIDelegate {
       content::BrowserContext* browser_context,
       const extensions::Extension* extension,
       const base::Callback<void(bool)>& callback) const override;
-  std::unique_ptr<extensions::RequirementsChecker> CreateRequirementsChecker()
-      const override;
   std::unique_ptr<extensions::UninstallDialogDelegate>
   UninstallFunctionDelegate(
       extensions::ManagementUninstallFunctionBase* function,
@@ -71,8 +65,7 @@ class ChromeManagementAPIDelegate : public extensions::ManagementAPIDelegate {
   GURL GetIconURL(const extensions::Extension* extension,
                   int icon_size,
                   ExtensionIconSet::MatchType match,
-                  bool grayscale,
-                  bool* exists) const override;
+                  bool grayscale) const override;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_API_MANAGEMENT_CHROME_MANAGEMENT_API_DELEGATE_H_

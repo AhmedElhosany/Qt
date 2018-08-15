@@ -119,7 +119,7 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>$(ProjectDir)/..;$(ProjectDir)/../..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;EGLAPI=;EGL_EGLEXT_PROTOTYPES;_DEBUG;_WINDOWS;_USRDLL;LIBEGL_EXPORTS;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;EGLAPI=;EGL_EGLEXT_PROTOTYPES;_DEBUG;_WINDOWS;_USRDLL;LIBEGL_EXPORTS;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;DEBUGGER_WAIT_DIALOG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -129,6 +129,8 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <BrowseInformation>true</BrowseInformation>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DisableSpecificWarnings>5030</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
@@ -149,7 +151,7 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>$(ProjectDir)/..;$(ProjectDir)/../..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;EGLAPI=;EGL_EGLEXT_PROTOTYPES;_DEBUG;_WINDOWS;_USRDLL;LIBEGL_EXPORTS;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;EGLAPI=;EGL_EGLEXT_PROTOTYPES;_DEBUG;_WINDOWS;_USRDLL;LIBEGL_EXPORTS;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;DEBUGGER_WAIT_DIALOG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PrecompiledHeader>
@@ -158,6 +160,8 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <BrowseInformation>true</BrowseInformation>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DisableSpecificWarnings>5030</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
@@ -188,6 +192,8 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DisableSpecificWarnings>5030</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
@@ -218,6 +224,8 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DisableSpecificWarnings>5030</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
@@ -251,6 +259,7 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <OmitFramePointers>false</OmitFramePointers>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <DisableSpecificWarnings>5030</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
@@ -282,6 +291,7 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <OmitFramePointers>false</OmitFramePointers>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <DisableSpecificWarnings>5030</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
@@ -316,6 +326,7 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
     <ClInclude Include="..\common\Image.hpp" />
     <ClInclude Include="..\common\NameSpace.hpp" />
     <ClInclude Include="..\common\Object.hpp" />
+    <ClInclude Include="..\common\Surface.hpp" />
     <ClInclude Include="..\include\EGL\egl.h" />
     <ClInclude Include="..\include\EGL\eglext.h" />
     <ClInclude Include="..\include\EGL\eglplatform.h" />
@@ -325,7 +336,7 @@ copy "$(OutDir)libEGL.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\trans
     <ClInclude Include="libEGL.hpp" />
     <ClInclude Include="main.h" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="Surface.h" />
+    <ClInclude Include="Surface.hpp" />
     <ClInclude Include="Sync.hpp" />
     <ClInclude Include="Texture.hpp" />
   </ItemGroup>

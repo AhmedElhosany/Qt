@@ -167,12 +167,12 @@ TEST_F(AnimationPlayerTest, PropertiesMutate) {
 
   base::TimeTicks time;
   time += base::TimeDelta::FromSecondsD(0.1);
-  AnimateLayersTransferEvents(time, 3u);
+  TickAnimationsTransferEvents(time, 3u);
   EXPECT_TRUE(CheckPlayerTimelineNeedsPushProperties(false));
 
   time += base::TimeDelta::FromSecondsD(duration);
-  AnimateLayersTransferEvents(time, 3u);
-  EXPECT_TRUE(CheckPlayerTimelineNeedsPushProperties(false));
+  TickAnimationsTransferEvents(time, 3u);
+  EXPECT_TRUE(CheckPlayerTimelineNeedsPushProperties(true));
 
   client_.ExpectOpacityPropertyMutated(element_id_, ElementListType::ACTIVE,
                                        end_opacity);
@@ -248,7 +248,7 @@ TEST_F(AnimationPlayerTest, AttachTwoPlayersToOneLayer) {
 
   base::TimeTicks time;
   time += base::TimeDelta::FromSecondsD(0.1);
-  AnimateLayersTransferEvents(time, 2u);
+  TickAnimationsTransferEvents(time, 2u);
 
   EXPECT_TRUE(delegate1.started());
   EXPECT_FALSE(delegate1.finished());
@@ -260,13 +260,13 @@ TEST_F(AnimationPlayerTest, AttachTwoPlayersToOneLayer) {
   EXPECT_FALSE(player2->needs_push_properties());
 
   time += base::TimeDelta::FromSecondsD(duration);
-  AnimateLayersTransferEvents(time, 2u);
+  TickAnimationsTransferEvents(time, 2u);
 
   EXPECT_TRUE(delegate1.finished());
   EXPECT_TRUE(delegate2.finished());
 
-  EXPECT_FALSE(player1->needs_push_properties());
-  EXPECT_FALSE(player2->needs_push_properties());
+  EXPECT_TRUE(player1->needs_push_properties());
+  EXPECT_TRUE(player2->needs_push_properties());
 
   client_.ExpectOpacityPropertyMutated(element_id_, ElementListType::ACTIVE,
                                        end_opacity);
@@ -333,10 +333,10 @@ TEST_F(AnimationPlayerTest, AddRemoveAnimationToNonAttachedPlayer) {
 
   base::TimeTicks time;
   time += base::TimeDelta::FromSecondsD(0.1);
-  AnimateLayersTransferEvents(time, 1u);
+  TickAnimationsTransferEvents(time, 1u);
 
   time += base::TimeDelta::FromSecondsD(duration);
-  AnimateLayersTransferEvents(time, 1u);
+  TickAnimationsTransferEvents(time, 1u);
 
   client_.ExpectOpacityPropertyMutated(element_id_, ElementListType::ACTIVE,
                                        end_opacity);
@@ -394,7 +394,7 @@ TEST_F(AnimationPlayerTest, SwitchToLayer) {
   EXPECT_EQ(player_impl_->element_id(), element_id_);
   EXPECT_TRUE(CheckPlayerTimelineNeedsPushProperties(false));
 
-  const ElementId new_element_id(NextTestLayerId(), 0);
+  const ElementId new_element_id(NextTestLayerId());
   player_->DetachElement();
   player_->AttachElement(new_element_id);
 

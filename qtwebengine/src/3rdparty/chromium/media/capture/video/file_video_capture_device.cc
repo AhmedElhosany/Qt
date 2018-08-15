@@ -91,7 +91,8 @@ void ParseY4MTags(const std::string& file_header,
         // Pixel aspect ratio ignored.
         break;
       case 'C':
-        CHECK(token == "420" || token == "420jpeg" || token == "420paldv")
+        CHECK(token == "420" || token == "420jpeg" || token == "420mpeg2" ||
+              token == "420paldv")
             << token;  // Only I420 is supported, and we fudge the variants.
         break;
       default:
@@ -346,6 +347,7 @@ void FileVideoCaptureDevice::OnAllocateAndStart(
 
   DVLOG(1) << "Opened video file " << capture_format_.frame_size.ToString()
            << ", fps: " << capture_format_.frame_rate;
+  client_->OnStarted();
 
   capture_thread_.task_runner()->PostTask(
       FROM_HERE, base::Bind(&FileVideoCaptureDevice::OnCaptureTask,

@@ -17,14 +17,13 @@
 namespace ui {
 
 namespace mojom {
-class WindowManagerFactory;
 class WindowTree;
 }
 
 namespace ws {
 
 class Display;
-class ServerWindow;
+class ThreadedImageCursorsFactory;
 class WindowServer;
 class WindowTree;
 class WindowTreeBinding;
@@ -46,10 +45,6 @@ class WindowServerDelegate {
 
   virtual bool IsTestConfig() const = 0;
 
-  // Called when touchscreen coordinate transforms should be updated. For
-  // example when displays or touch input devices are added/removed.
-  virtual void UpdateTouchTransforms() = 0;
-
   // Creates a WindowTreeBinding. Default implementation returns null, which
   // creates DefaultBinding.
   virtual std::unique_ptr<WindowTreeBinding> CreateWindowTreeBinding(
@@ -58,6 +53,14 @@ class WindowServerDelegate {
       ws::WindowTree* tree,
       mojom::WindowTreeRequest* tree_request,
       mojom::WindowTreeClientPtr* client);
+
+  // Called prior to a new WindowTree being created for a
+  // WindowManagerWindowTreeFactory. |automatically_create_display_roots|
+  // mirrors that of CreateWindowTree(). See it for details.
+  virtual void OnWillCreateTreeForWindowManager(
+      bool automatically_create_display_roots) = 0;
+
+  virtual ThreadedImageCursorsFactory* GetThreadedImageCursorsFactory() = 0;
 
  protected:
   virtual ~WindowServerDelegate() {}

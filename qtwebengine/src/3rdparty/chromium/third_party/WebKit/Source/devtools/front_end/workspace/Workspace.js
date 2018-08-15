@@ -36,28 +36,28 @@ Workspace.ProjectSearchConfig.prototype = {
   /**
    * @return {string}
    */
-  query: function() {},
+  query() {},
 
   /**
    * @return {boolean}
    */
-  ignoreCase: function() {},
+  ignoreCase() {},
 
   /**
    * @return {boolean}
    */
-  isRegex: function() {},
+  isRegex() {},
 
   /**
    * @return {!Array.<string>}
    */
-  queries: function() {},
+  queries() {},
 
   /**
    * @param {string} filePath
    * @return {boolean}
    */
-  filePathMatchesFileQuery: function(filePath) {}
+  filePathMatchesFileQuery(filePath) {}
 };
 
 /**
@@ -65,76 +65,84 @@ Workspace.ProjectSearchConfig.prototype = {
  */
 Workspace.Project = function() {};
 
-/**
- * @param {!Workspace.Project} project
- * @return {boolean}
- */
-Workspace.Project.isServiceProject = function(project) {
-  return project.type() === Workspace.projectTypes.Debugger || project.type() === Workspace.projectTypes.Formatter ||
-      project.type() === Workspace.projectTypes.Service;
-};
-
 Workspace.Project.prototype = {
   /**
    * @return {!Workspace.Workspace}
    */
-  workspace: function() {},
+  workspace() {},
 
   /**
    * @return {string}
    */
-  id: function() {},
+  id() {},
 
   /**
    * @return {string}
    */
-  type: function() {},
+  type() {},
+
+  /**
+   * @return {boolean}
+   */
+  isServiceProject() {},
 
   /**
    * @return {string}
    */
-  displayName: function() {},
+  displayName() {},
 
   /**
    * @param {!Workspace.UISourceCode} uiSourceCode
    * @return {!Promise<?Workspace.UISourceCodeMetadata>}
    */
-  requestMetadata: function(uiSourceCode) {},
+  requestMetadata(uiSourceCode) {},
 
   /**
    * @param {!Workspace.UISourceCode} uiSourceCode
    * @param {function(?string)} callback
    */
-  requestFileContent: function(uiSourceCode, callback) {},
+  requestFileContent(uiSourceCode, callback) {},
 
   /**
    * @return {boolean}
    */
-  canSetFileContent: function() {},
+  canSetFileContent() {},
 
   /**
    * @param {!Workspace.UISourceCode} uiSourceCode
    * @param {string} newContent
    * @param {function(?string)} callback
    */
-  setFileContent: function(uiSourceCode, newContent, callback) {},
+  setFileContent(uiSourceCode, newContent, callback) {},
+
+  /**
+   * @param {!Workspace.UISourceCode} uiSourceCode
+   * @return {string}
+   */
+  fullDisplayName(uiSourceCode) {},
+
+  /**
+   * @param {!Workspace.UISourceCode} uiSourceCode
+   * @return {string}
+   */
+  mimeType(uiSourceCode) {},
 
   /**
    * @return {boolean}
    */
-  canRename: function() {},
+  canRename() {},
 
   /**
    * @param {!Workspace.UISourceCode} uiSourceCode
    * @param {string} newName
    * @param {function(boolean, string=, string=, !Common.ResourceType=)} callback
    */
-  rename: function(uiSourceCode, newName, callback) {},
+  rename(uiSourceCode, newName, callback) {},
 
   /**
    * @param {string} path
    */
-  excludeFolder: function(path) {},
+  excludeFolder(path) {},
 
   /**
    * @param {string} path
@@ -142,47 +150,47 @@ Workspace.Project.prototype = {
    * @param {string} content
    * @param {function(?Workspace.UISourceCode)} callback
    */
-  createFile: function(path, name, content, callback) {},
+  createFile(path, name, content, callback) {},
 
   /**
-   * @param {string} path
+   * @param {!Workspace.UISourceCode} uiSourceCode
    */
-  deleteFile: function(path) {},
+  deleteFile(uiSourceCode) {},
 
-  remove: function() {},
+  remove() {},
 
   /**
    * @param {!Workspace.UISourceCode} uiSourceCode
    * @param {string} query
    * @param {boolean} caseSensitive
    * @param {boolean} isRegex
-   * @param {function(!Array.<!Common.ContentProvider.SearchMatch>)} callback
+   * @return {!Promise<!Array<!Common.ContentProvider.SearchMatch>>}
    */
-  searchInFileContent: function(uiSourceCode, query, caseSensitive, isRegex, callback) {},
+  searchInFileContent(uiSourceCode, query, caseSensitive, isRegex) {},
 
   /**
    * @param {!Workspace.ProjectSearchConfig} searchConfig
    * @param {!Array.<string>} filesMathingFileQuery
    * @param {!Common.Progress} progress
-   * @param {function(!Array.<string>)} callback
+   * @return {!Promise<!Array<string>>}
    */
-  findFilesMatchingSearchRequest: function(searchConfig, filesMathingFileQuery, progress, callback) {},
+  findFilesMatchingSearchRequest(searchConfig, filesMathingFileQuery, progress) {},
 
   /**
    * @param {!Common.Progress} progress
    */
-  indexContent: function(progress) {},
+  indexContent(progress) {},
 
   /**
    * @param {string} url
    * @return {?Workspace.UISourceCode}
    */
-  uiSourceCodeForURL: function(url) {},
+  uiSourceCodeForURL(url) {},
 
   /**
    * @return {!Array.<!Workspace.UISourceCode>}
    */
-  uiSourceCodes: function() {}
+  uiSourceCodes() {}
 };
 
 /**
@@ -451,6 +459,7 @@ Workspace.Workspace = class extends Common.Object {
 Workspace.Workspace.Events = {
   UISourceCodeAdded: Symbol('UISourceCodeAdded'),
   UISourceCodeRemoved: Symbol('UISourceCodeRemoved'),
+  UISourceCodeRenamed: Symbol('UISourceCodeRenamed'),
   WorkingCopyChanged: Symbol('WorkingCopyChanged'),
   WorkingCopyCommitted: Symbol('WorkingCopyCommitted'),
   WorkingCopyCommittedByUser: Symbol('WorkingCopyCommittedByUser'),

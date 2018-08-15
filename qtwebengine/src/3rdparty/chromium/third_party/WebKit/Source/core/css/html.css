@@ -85,6 +85,7 @@ article, aside, footer, header, hgroup, main, nav, section {
 
 marquee {
     display: inline-block;
+    width: -webkit-fill-available;
 }
 
 address {
@@ -131,6 +132,8 @@ center {
 
 hr {
     display: block;
+    overflow: hidden;
+    unicode-bidi: isolate;
     -webkit-margin-before: 0.5em;
     -webkit-margin-after: 0.5em;
     -webkit-margin-start: auto;
@@ -391,11 +394,11 @@ button {
 }
 
 /* Form controls don't go vertical. */
-input, textarea, keygen, select, button, meter, progress {
+input, textarea, select, button, meter, progress {
     -webkit-writing-mode: horizontal-tb !important;
 }
 
-input, textarea, keygen, select, button {
+input, textarea, select, button {
     margin: 0__qem;
     font: -webkit-small-control;
     text-rendering: auto; /* FIXME: Remove when tabs work with optimizeLegibility. */
@@ -483,12 +486,8 @@ input:enabled:read-write:-webkit-any(:focus,:hover)::-webkit-inner-spin-button {
     pointer-events: auto;
 }
 
-keygen, select {
+select {
     border-radius: 5px;
-}
-
-keygen::-webkit-keygen-select {
-    margin: 0px;
 }
 
 textarea {
@@ -507,7 +506,7 @@ textarea {
 
 ::-webkit-input-placeholder {
     -webkit-text-security: none;
-    color: darkGray;
+    color: #757575;
     pointer-events: none !important;
 }
 
@@ -523,7 +522,7 @@ input[type="password" i] {
     -webkit-text-security: disc !important;
 }
 
-input[type="password" i]::-internal-input-suggested {
+input[type="password" i]::-webkit-input-suggested {
     -webkit-text-security: disc !important;
 }
 
@@ -613,7 +612,7 @@ input[type="range" i]::-webkit-slider-thumb, input[type="range" i]::-webkit-medi
 
 input[type="button" i]:disabled, input[type="submit" i]:disabled, input[type="reset" i]:disabled,
 input[type="file" i]:disabled::-webkit-file-upload-button, button:disabled,
-select:disabled, keygen:disabled, optgroup:disabled, option:disabled,
+select:disabled, optgroup:disabled, option:disabled,
 select[disabled]>option {
     color: GrayText
 }
@@ -812,6 +811,8 @@ select:-internal-list-box option:checked:disabled {
 
 select:-internal-list-box hr {
     border-style: none;
+    -webkit-margin-before: 0.5em;
+    -webkit-margin-after: 0;
 }
 
 output {
@@ -916,6 +917,10 @@ u, ins {
     text-decoration: underline
 }
 
+abbr[title], acronym[title] {
+    text-decoration: dotted underline;
+}
+
 strong, b {
     font-weight: bold
 }
@@ -981,7 +986,7 @@ embed:focus, iframe:focus, object:focus {
     outline: none
 }
 
-input:focus, textarea:focus, keygen:focus, select:focus {
+input:focus, textarea:focus, select:focus {
     outline-offset: -2px
 }
 
@@ -1082,6 +1087,7 @@ dialog:not([open]) {
 }
 
 dialog {
+    display: block;
     position: absolute;
     left: 0;
     right: 0;

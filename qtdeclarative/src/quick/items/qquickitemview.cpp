@@ -1750,7 +1750,6 @@ void QQuickItemViewPrivate::updateCurrent(int modelIndex)
 
 void QQuickItemViewPrivate::clear()
 {
-    Q_Q(QQuickItemView);
     currentChanges.reset();
     bufferedChanges.reset();
     timeline.clear();
@@ -1764,11 +1763,8 @@ void QQuickItemViewPrivate::clear()
     }
     releasePendingTransition.clear();
 
-    auto oldCurrentItem = currentItem;
     releaseItem(currentItem);
     currentItem = 0;
-    if (oldCurrentItem)
-        emit q->currentItemChanged();
     createHighlight();
     trackedItem = 0;
 
@@ -2124,11 +2120,8 @@ bool QQuickItemViewPrivate::applyModelChanges(ChangeResult *totalInsertionResult
         if (currentChanges.currentRemoved && currentItem) {
             if (currentItem->item && currentItem->attached)
                 currentItem->attached->setIsCurrentItem(false);
-            auto oldCurrentItem = currentItem;
             releaseItem(currentItem);
             currentItem = 0;
-            if (oldCurrentItem)
-                emit q->currentItemChanged();
         }
         if (!currentIndexCleared)
             updateCurrent(currentChanges.newCurrentIndex);

@@ -42,8 +42,8 @@ cr.define('cr.ui', function() {
    */
   function getZoomFactor(doc) {
     var dummyElement = doc.createElement('div');
-    dummyElement.style.cssText =
-    'position:absolute;width:100px;height:100px;top:-1000px;overflow:hidden';
+    dummyElement.style.cssText = 'position:absolute;width:100px;height:100px;' +
+        'top:-1000px;overflow:hidden';
     doc.body.appendChild(dummyElement);
     var cs = doc.defaultView.getComputedStyle(dummyElement);
     var rect = dummyElement.getBoundingClientRect();
@@ -67,10 +67,10 @@ cr.define('cr.ui', function() {
      * Initializes the element.
      */
     decorate: function() {
-      this.addEventListener('mousedown', this.handleMouseDown_.bind(this),
-                            true);
-      this.addEventListener('touchstart', this.handleTouchStart_.bind(this),
-                            true);
+      this.addEventListener(
+          'mousedown', this.handleMouseDown_.bind(this), true);
+      this.addEventListener(
+          'touchstart', this.handleTouchStart_.bind(this), true);
       this.resizeNextElement_ = false;
     },
 
@@ -162,7 +162,7 @@ cr.define('cr.ui', function() {
      * @private
      */
     handleMouseDown_: function(e) {
-      e = /** @type {!MouseEvent} */(e);
+      e = /** @type {!MouseEvent} */ (e);
       if (e.button)
         return;
       this.startDrag(e.clientX, false);
@@ -176,7 +176,7 @@ cr.define('cr.ui', function() {
      * @private
      */
     handleTouchStart_: function(e) {
-      e = /** @type {!TouchEvent} */(e);
+      e = /** @type {!TouchEvent} */ (e);
       if (e.touches.length == 1) {
         this.startDrag(e.touches[0].clientX, true);
         e.preventDefault();
@@ -209,8 +209,9 @@ cr.define('cr.ui', function() {
      * @private
      */
     handleMove_: function(clientX) {
-      var rtl = this.ownerDocument.defaultView.getComputedStyle(this).
-          direction == 'rtl';
+      var rtl =
+          this.ownerDocument.defaultView.getComputedStyle(this).direction ==
+          'rtl';
       var dirMultiplier = rtl ? -1 : 1;
       var deltaX = dirMultiplier * (clientX - this.startX_);
       this.handleSplitterDragMove(deltaX);
@@ -232,11 +233,15 @@ cr.define('cr.ui', function() {
      */
     handleSplitterDragStart: function() {
       // Use the computed width style as the base so that we can ignore what
-      // box sizing the element has.
+      // box sizing the element has. Add the difference between offset and
+      // client widths to account for any scrollbars.
       var targetElement = this.getResizeTarget_();
       var doc = targetElement.ownerDocument;
-      this.startWidth_ = parseFloat(
-          doc.defaultView.getComputedStyle(targetElement).width);
+      this.startWidth_ =
+          parseFloat(doc.defaultView.getComputedStyle(targetElement).width) +
+          targetElement.offsetWidth - targetElement.clientWidth;
+
+      this.classList.add('splitter-active');
     },
 
     /**
@@ -248,6 +253,7 @@ cr.define('cr.ui', function() {
       var targetElement = this.getResizeTarget_();
       var newWidth = this.startWidth_ + this.calcDeltaX_(deltaX);
       targetElement.style.width = newWidth + 'px';
+      cr.dispatchSimpleEvent(this, 'dragmove');
     },
 
     /**
@@ -259,14 +265,14 @@ cr.define('cr.ui', function() {
       // Check if the size changed.
       var targetElement = this.getResizeTarget_();
       var doc = targetElement.ownerDocument;
-      var computedWidth = parseFloat(
-          doc.defaultView.getComputedStyle(targetElement).width);
+      var computedWidth =
+          parseFloat(doc.defaultView.getComputedStyle(targetElement).width);
       if (this.startWidth_ != computedWidth)
         cr.dispatchSimpleEvent(this, 'resize');
+
+      this.classList.remove('splitter-active');
     },
   };
 
-  return {
-    Splitter: Splitter
-  };
+  return {Splitter: Splitter};
 });

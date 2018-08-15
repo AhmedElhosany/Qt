@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "base/message_loop/message_loop.h"
+
 namespace browser_sync {
 
 syncer::TestIdFactory* TestProfileSyncService::id_factory() {
@@ -30,7 +32,7 @@ void TestProfileSyncService::OnConfigureDone(
 }
 
 syncer::UserShare* TestProfileSyncService::GetUserShare() const {
-  return backend_->GetUserShare();
+  return engine_->GetUserShare();
 }
 
 }  // namespace browser_sync

@@ -5,7 +5,7 @@
 source_set("dialogs") {
   deps = [
     "//base",
-    "//ios/web:web",
+    "//ios/web",
   ]
 
   sources = [
@@ -25,10 +25,86 @@ source_set("unit_tests") {
 
   deps = [
     ":dialogs",
-    "//ios/web:test_support",
-    "//ios/web:web",
+    "//ios/web",
+    "//ios/web/public/test/fakes",
     "//testing/gtest",
   ]
 
   configs += [ "//build/config/compiler:enable_arc" ]
+}
+
+source_set("dialogs_internal") {
+  configs += [ "//build/config/compiler:enable_arc" ]
+  sources = [
+    "dialog_presenter.h",
+    "dialog_presenter.mm",
+    "java_script_dialog_presenter_impl.h",
+    "java_script_dialog_presenter_impl.mm",
+  ]
+  deps = [
+    ":dialogs",
+    "//base",
+    "//components/strings",
+    "//components/url_formatter",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/ui",
+    "//ios/chrome/browser/ui/alert_coordinator",
+    "//ios/shared/chrome/browser/ui/dialogs",
+    "//ios/web",
+    "//ui/base",
+    "//url",
+  ]
+  libs = [ "UIKit.framework" ]
+}
+
+source_set("unit_tests_internal") {
+  configs += [ "//build/config/compiler:enable_arc" ]
+  testonly = true
+  sources = [
+    "dialog_presenter_unittest.mm",
+  ]
+  deps = [
+    ":dialogs_internal",
+    "//base",
+    "//components/strings",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/ui/alert_coordinator",
+    "//ios/shared/chrome/browser/ui/dialogs:unit_tests",
+    "//ios/web",
+    "//ios/web/public/test/fakes",
+    "//testing/gtest",
+    "//ui/base",
+    "//url",
+  ]
+}
+
+source_set("eg_tests") {
+  configs += [ "//build/config/compiler:enable_arc" ]
+  testonly = true
+  sources = [
+    "javascript_dialog_egtest.mm",
+  ]
+  deps = [
+    ":dialogs_internal",
+    "//base",
+    "//components/strings",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/ui",
+    "//ios/chrome/browser/ui/tools_menu",
+    "//ios/chrome/test/app:test_support",
+    "//ios/chrome/test/earl_grey:test_support",
+    "//ios/testing:ios_test_support",
+    "//ios/testing/earl_grey:earl_grey_support",
+    "//ios/third_party/earl_grey",
+    "//ios/web",
+    "//ios/web:earl_grey_test_support",
+    "//ios/web/public/test",
+    "//ios/web/public/test/http_server",
+    "//ui/base",
+    "//url",
+  ]
+  libs = [
+    "UIKit.framework",
+    "XCTest.framework",
+  ]
 }

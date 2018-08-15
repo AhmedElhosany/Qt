@@ -9,8 +9,8 @@
 #define SkRecorder_DEFINED
 
 #include "SkBigPicture.h"
-#include "SkCanvas.h"
 #include "SkMiniRecorder.h"
+#include "SkNoDrawCanvas.h"
 #include "SkRecord.h"
 #include "SkRecords.h"
 #include "SkTDArray.h"
@@ -36,7 +36,7 @@ private:
 
 // SkRecorder provides an SkCanvas interface for recording into an SkRecord.
 
-class SkRecorder : public SkCanvas {
+class SkRecorder final : public SkNoDrawCanvas {
 public:
     // Does not take ownership of the SkRecord.
     SkRecorder(SkRecord*, int width, int height, SkMiniRecorder* = nullptr);   // legacy version
@@ -61,12 +61,6 @@ public:
     void didConcat(const SkMatrix&) override;
     void didSetMatrix(const SkMatrix&) override;
     void didTranslate(SkScalar, SkScalar) override;
-
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    void didTranslateZ(SkScalar) override;
-#else
-    void didTranslateZ(SkScalar);
-#endif
 
     void onDrawDRRect(const SkRRect&, const SkRRect&, const SkPaint&) override;
     void onDrawDrawable(SkDrawable*, const SkMatrix*) override;
@@ -124,32 +118,17 @@ public:
                             const SkPaint*) override;
     void onDrawBitmapLattice(const SkBitmap&, const Lattice& lattice, const SkRect& dst,
                              const SkPaint*) override;
-    void onDrawVertices(VertexMode vmode, int vertexCount,
-                        const SkPoint vertices[], const SkPoint texs[],
-                        const SkColor colors[], SkBlendMode,
-                        const uint16_t indices[], int indexCount,
-                        const SkPaint&) override;
+    void onDrawVerticesObject(const SkVertices*, SkBlendMode, const SkPaint&) override;
     void onDrawAtlas(const SkImage*, const SkRSXform[], const SkRect[], const SkColor[],
                      int count, SkBlendMode, const SkRect* cull, const SkPaint*) override;
+    void onDrawShadowRec(const SkPath&, const SkDrawShadowRec&) override;
 
-    void onClipRect(const SkRect& rect, ClipOp, ClipEdgeStyle) override;
-    void onClipRRect(const SkRRect& rrect, ClipOp, ClipEdgeStyle) override;
-    void onClipPath(const SkPath& path, ClipOp, ClipEdgeStyle) override;
-    void onClipRegion(const SkRegion& deviceRgn, ClipOp) override;
+    void onClipRect(const SkRect& rect, SkClipOp, ClipEdgeStyle) override;
+    void onClipRRect(const SkRRect& rrect, SkClipOp, ClipEdgeStyle) override;
+    void onClipPath(const SkPath& path, SkClipOp, ClipEdgeStyle) override;
+    void onClipRegion(const SkRegion& deviceRgn, SkClipOp) override;
 
     void onDrawPicture(const SkPicture*, const SkMatrix*, const SkPaint*) override;
-
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    void onDrawShadowedPicture(const SkPicture*,
-                               const SkMatrix*,
-                               const SkPaint*,
-                               const SkShadowParams& params) override;
-#else
-    void onDrawShadowedPicture(const SkPicture*,
-                               const SkMatrix*,
-                               const SkPaint*,
-                               const SkShadowParams& params);
-#endif
 
     void onDrawAnnotation(const SkRect&, const char[], SkData*) override;
 
@@ -163,12 +142,6 @@ private:
 
     template <typename T>
     T* copy(const T[], size_t count);
-
-    SkIRect devBounds() const {
-        SkIRect devBounds;
-        this->getClipDeviceBounds(&devBounds);
-        return devBounds;
-    }
 
     DrawPictureMode fDrawPictureMode;
     size_t fApproxBytesUsedBySubPictures;

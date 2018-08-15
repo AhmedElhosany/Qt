@@ -15,18 +15,30 @@
 #include "base/observer_list.h"
 #include "base/optional.h"
 #include "base/scoped_observer.h"
+#include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_service_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/ntp_snippets/callbacks.h"
-#include "components/ntp_snippets/category_factory.h"
+#include "components/ntp_snippets/category.h"
+#include "components/ntp_snippets/category_rankers/category_ranker.h"
 #include "components/ntp_snippets/category_status.h"
 #include "components/ntp_snippets/content_suggestions_provider.h"
+#include "components/ntp_snippets/remote/remote_suggestions_scheduler.h"
 #include "components/ntp_snippets/user_classifier.h"
+#include "components/signin/core/browser/signin_manager.h"
 
 class PrefService;
 class PrefRegistrySimple;
+
+namespace favicon {
+class LargeIconService;
+}  // namespace favicon
+
+namespace favicon_base {
+struct LargeIconImageResult;
+}  // namespace favicon_base
 
 namespace ntp_snippets {
 
@@ -36,6 +48,7 @@ class RemoteSuggestionsProvider;
 // them grouped into categories. There can be at most one provider per category.
 class ContentSuggestionsService : public KeyedService,
                                   public ContentSuggestionsProvider::Observer,
+                                  public SigninManagerBase::Observer,
                                   public history::HistoryServiceObserver {
  public:
   class Observer {
@@ -46,11 +59,10 @@ class ContentSuggestionsService : public KeyedService,
     // data is then available through |GetSuggestionsForCategory(category)|.
     virtual void OnNewSuggestions(Category category) = 0;
 
-    // Fired when the status of a suggestions category changed. When the status
-    // changes to an unavailable status, the suggestions of the respective
-    // category have been invalidated, which means that they must no longer be
-    // displayed to the user. The UI must immediately clear any suggestions of
-    // that category.
+    // Fired when the status of a suggestions category changed. Note that for
+    // some status changes, the UI must update immediately (e.g. to remove
+    // invalidated suggestions). See comments on the individual CategoryStatus
+    // values for details.
     virtual void OnCategoryStatusChanged(Category category,
                                          CategoryStatus new_status) = 0;
 
@@ -63,6 +75,11 @@ class ContentSuggestionsService : public KeyedService,
     // |suggestion_id|s that never existed and should be ignored in that case.
     virtual void OnSuggestionInvalidated(
         const ContentSuggestion::ID& suggestion_id) = 0;
+
+    // Fired when the previously sent data is not valid anymore and a refresh
+    // of all the suggestions is required. Called for example when the sign in
+    // state changes and personalised suggestions have to be shown or discarded.
+    virtual void OnFullRefreshRequired() = 0;
 
     // Sent when the service is shutting down. After the service has shut down,
     // it will not provide any data anymore, though calling the getters is still
@@ -78,9 +95,18 @@ class ContentSuggestionsService : public KeyedService,
     DISABLED,
   };
 
-  ContentSuggestionsService(State state,
-                            history::HistoryService* history_service,
-                            PrefService* pref_service);
+  ContentSuggestionsService(
+      State state,
+      SigninManagerBase* signin_manager,         // Can be nullptr in unittests.
+      history::HistoryService* history_service,  // Can be nullptr in unittests.
+      // Can be nullptr in unittests.
+      favicon::LargeIconService* large_icon_service,
+      PrefService* pref_service,
+      std::unique_ptr<CategoryRanker> category_ranker,
+      std::unique_ptr<UserClassifier> user_classifier,
+      std::unique_ptr<RemoteSuggestionsScheduler>
+          remote_suggestions_scheduler  // Can be nullptr in unittests.
+      );
   ~ContentSuggestionsService() override;
 
   // Inherited from KeyedService.
@@ -90,9 +116,10 @@ class ContentSuggestionsService : public KeyedService,
 
   State state() { return state_; }
 
-  // Gets all categories for which a provider is registered. The categories
-  // may or may not be available, see |GetCategoryStatus()|.
-  const std::vector<Category>& GetCategories() const { return categories_; }
+  // Gets all categories for which a provider is registered. The categories may
+  // or may not be available, see |GetCategoryStatus()|. The order in which the
+  // categories are returned is the order in which they should be displayed.
+  std::vector<Category> GetCategories() const;
 
   // Gets the status of a category.
   CategoryStatus GetCategoryStatus(Category category) const;
@@ -113,8 +140,19 @@ class ContentSuggestionsService : public KeyedService,
   void FetchSuggestionImage(const ContentSuggestion::ID& suggestion_id,
                             const ImageFetchedCallback& callback);
 
+  // Fetches the favicon from local cache (if larger than or equal to
+  // |minimum_size_in_pixel|) or from Google server (if there is no icon in the
+  // cache) and returns the results in the callback. If that suggestion doesn't
+  // exist or the fetch fails, the callback gets an empty image. The callback
+  // will not be called synchronously.
+  void FetchSuggestionFavicon(const ContentSuggestion::ID& suggestion_id,
+                              int minimum_size_in_pixel,
+                              int desired_size_in_pixel,
+                              const ImageFetchedCallback& callback);
+
   // Dismisses the suggestion with the given |suggestion_id|, if it exists.
-  // This will not trigger an update through the observers.
+  // This will not trigger an update through the observers (i.e. providers must
+  // not call |Observer::OnNewSuggestions|).
   void DismissSuggestion(const ContentSuggestion::ID& suggestion_id);
 
   // Dismisses the given |category|, if it exists.
@@ -131,9 +169,20 @@ class ContentSuggestionsService : public KeyedService,
   // Fetches additional contents for the given |category|. If the fetch was
   // completed, the given |callback| is called with the updated content.
   // This includes new and old data.
+  // TODO(jkrcal): Consider either renaming this to FetchMore or unify the ways
+  // to get suggestions to just this async Fetch() API.
   void Fetch(const Category& category,
              const std::set<std::string>& known_suggestion_ids,
              const FetchDoneCallback& callback);
+
+  // Reloads suggestions from all categories, from all providers. If a provider
+  // naturally has some ability to generate fresh suggestions, it may provide a
+  // completely new set of suggestions. If the provider has no ability to
+  // generate fresh suggestions on demand, it may only fill in any vacant space
+  // by suggestions that were previously not included due to space limits (there
+  // may be vacant space because of the user dismissing suggestions in the
+  // meantime).
+  void ReloadSuggestions();
 
   // Observer accessors.
   void AddObserver(Observer* observer);
@@ -182,20 +231,47 @@ class ContentSuggestionsService : public KeyedService,
   // supports it).
   void ClearDismissedSuggestionsForDebugging(Category category);
 
-  CategoryFactory* category_factory() { return &category_factory_; }
+  // Enables or disables the remote suggestions provider.
+  void SetRemoteSuggestionsEnabled(bool enabled);
 
-  // The reference to the RemoteSuggestionsProvider provider should only be set
-  // by the factory and only be used for scheduling, periodic fetching and
-  // debugging.
-  RemoteSuggestionsProvider* ntp_snippets_service() {
-    return ntp_snippets_service_;
+  // Returns true if the remote suggestions provider is enabled.
+  bool AreRemoteSuggestionsEnabled() const;
+
+  // Returns true if the remote provider is managed by an adminstrator's policy.
+  bool AreRemoteSuggestionsManaged() const;
+
+  // Returns true if the remote provider is managed by the guardian/parent of a
+  // child account.
+  bool AreRemoteSuggestionsManagedByCustodian() const;
+
+  // The reference to the RemoteSuggestionsProvider provider should
+  // only be set by the factory and only used for debugging.
+  // TODO(jkrcal) The way we deal with the circular dependency feels wrong.
+  // Consider swapping the dependencies: first constructing all providers, then
+  // constructing the service (passing the remote provider as arg), finally
+  // registering the service as an observer of all providers?
+  // TODO(jkrcal) Move the getter into the scheduler interface (the setter is
+  // then not needed any more). crbug.com/695447
+  void set_remote_suggestions_provider(
+      RemoteSuggestionsProvider* remote_suggestions_provider) {
+    remote_suggestions_provider_ = remote_suggestions_provider;
   }
-  void set_ntp_snippets_service(
-      RemoteSuggestionsProvider* ntp_snippets_service) {
-    ntp_snippets_service_ = ntp_snippets_service;
+  RemoteSuggestionsProvider* remote_suggestions_provider_for_debugging() {
+    return remote_suggestions_provider_;
   }
 
-  UserClassifier* user_classifier() { return &user_classifier_; }
+  // The interface is suited for informing about external events that have
+  // influence on scheduling remote fetches. Can be nullptr in tests.
+  RemoteSuggestionsScheduler* remote_suggestions_scheduler() {
+    return remote_suggestions_scheduler_.get();
+  }
+
+  // Can be nullptr in tests.
+  // TODO(jkrcal): The getter is only used from the bridge and from
+  // snippets-internals. Can we get rid of it with the metrics refactoring?
+  UserClassifier* user_classifier() { return user_classifier_.get(); }
+
+  CategoryRanker* category_ranker() { return category_ranker_.get(); }
 
  private:
   friend class ContentSuggestionsServiceTest;
@@ -210,6 +286,12 @@ class ContentSuggestionsService : public KeyedService,
   void OnSuggestionInvalidated(
       ContentSuggestionsProvider* provider,
       const ContentSuggestion::ID& suggestion_id) override;
+
+  // SigninManagerBase::Observer implementation
+  void GoogleSigninSucceeded(const std::string& account_id,
+                             const std::string& username) override;
+  void GoogleSignedOut(const std::string& account_id,
+                       const std::string& username) override;
 
   // history::HistoryServiceObserver implementation.
   void OnURLsDeleted(history::HistoryService* history_service,
@@ -237,7 +319,7 @@ class ContentSuggestionsService : public KeyedService,
   // Fires the OnCategoryStatusChanged event for the given |category|.
   void NotifyCategoryStatusChanged(Category category);
 
-  void SortCategories();
+  void OnSignInStateChanged();
 
   // Re-enables a dismissed category, making querying its provider possible.
   void RestoreDismissedCategory(Category category);
@@ -245,11 +327,33 @@ class ContentSuggestionsService : public KeyedService,
   void RestoreDismissedCategoriesFromPrefs();
   void StoreDismissedCategoriesToPrefs();
 
+  // Get the domain of the suggestion suitable for fetching the favicon.
+  GURL GetFaviconDomain(const ContentSuggestion::ID& suggestion_id);
+
+  // Initiate the fetch of a favicon from the local cache.
+  void GetFaviconFromCache(const GURL& publisher_url,
+                           int minimum_size_in_pixel,
+                           int desired_size_in_pixel,
+                           const ImageFetchedCallback& callback,
+                           bool continue_to_google_server);
+
+  // Callbacks for fetching favicons.
+  void OnGetFaviconFromCacheFinished(
+      const GURL& publisher_url,
+      int minimum_size_in_pixel,
+      int desired_size_in_pixel,
+      const ImageFetchedCallback& callback,
+      bool continue_to_google_server,
+      const favicon_base::LargeIconImageResult& result);
+  void OnGetFaviconFromGoogleServerFinished(
+      const GURL& publisher_url,
+      int minimum_size_in_pixel,
+      int desired_size_in_pixel,
+      const ImageFetchedCallback& callback,
+      favicon_base::GoogleFaviconServerRequestStatus status);
+
   // Whether the content suggestions feature is enabled.
   State state_;
-
-  // Provides new and existing categories and an order for them.
-  CategoryFactory category_factory_;
 
   // All registered providers, owned by the service.
   std::vector<std::unique_ptr<ContentSuggestionsProvider>> providers_;
@@ -268,9 +372,8 @@ class ContentSuggestionsService : public KeyedService,
   std::map<Category, ContentSuggestionsProvider*, Category::CompareByID>
       dismissed_providers_by_category_;
 
-  // All current suggestion categories, in an order determined by the
-  // |category_factory_|. This vector contains exactly the same categories as
-  // |providers_by_category_|.
+  // All current suggestion categories in arbitrary order. This vector contains
+  // exactly the same categories as |providers_by_category_|.
   std::vector<Category> categories_;
 
   // All current suggestions grouped by category. This contains an entry for
@@ -279,6 +382,11 @@ class ContentSuggestionsService : public KeyedService,
   // loading).
   std::map<Category, std::vector<ContentSuggestion>, Category::CompareByID>
       suggestions_by_category_;
+
+  // Observer for the SigninManager. All observers are notified when the signin
+  // state changes so that they can refresh their list of suggestions.
+  ScopedObserver<SigninManagerBase, SigninManagerBase::Observer>
+      signin_observer_;
 
   // Observer for the HistoryService. All providers are notified when history is
   // deleted.
@@ -289,15 +397,26 @@ class ContentSuggestionsService : public KeyedService,
 
   const std::vector<ContentSuggestion> no_suggestions_;
 
-  // Keep a direct reference to this special provider to redirect scheduling,
-  // background fetching and debugging calls to it. If the
-  // RemoteSuggestionsProvider is loaded, it is also present in |providers_|,
-  // otherwise this is a nullptr.
-  RemoteSuggestionsProvider* ntp_snippets_service_;
+  base::CancelableTaskTracker favicons_task_tracker_;
+
+  // Keep a direct reference to this special provider to redirect debugging
+  // calls to it. If the RemoteSuggestionsProvider is loaded, it is also present
+  // in |providers_|, otherwise this is a nullptr.
+  RemoteSuggestionsProvider* remote_suggestions_provider_;
+
+  favicon::LargeIconService* large_icon_service_;
 
   PrefService* pref_service_;
 
-  UserClassifier user_classifier_;
+  // Interface for informing about external events that have influence on
+  // scheduling remote fetches.
+  std::unique_ptr<RemoteSuggestionsScheduler> remote_suggestions_scheduler_;
+
+  // Classifies the user on the basis of long-term user interactions.
+  std::unique_ptr<UserClassifier> user_classifier_;
+
+  // Provides order for categories.
+  std::unique_ptr<CategoryRanker> category_ranker_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentSuggestionsService);
 };

@@ -26,23 +26,23 @@ namespace screenlock = api::screenlock_private;
 namespace {
 
 screenlock::AuthType FromLockHandlerAuthType(
-    proximity_auth::ScreenlockBridge::LockHandler::AuthType auth_type) {
+    proximity_auth::mojom::AuthType auth_type) {
   switch (auth_type) {
-    case proximity_auth::ScreenlockBridge::LockHandler::OFFLINE_PASSWORD:
+    case proximity_auth::mojom::AuthType::OFFLINE_PASSWORD:
       return screenlock::AUTH_TYPE_OFFLINEPASSWORD;
-    case proximity_auth::ScreenlockBridge::LockHandler::NUMERIC_PIN:
+    case proximity_auth::mojom::AuthType::NUMERIC_PIN:
       return screenlock::AUTH_TYPE_NUMERICPIN;
-    case proximity_auth::ScreenlockBridge::LockHandler::USER_CLICK:
+    case proximity_auth::mojom::AuthType::USER_CLICK:
       return screenlock::AUTH_TYPE_USERCLICK;
-    case proximity_auth::ScreenlockBridge::LockHandler::ONLINE_SIGN_IN:
+    case proximity_auth::mojom::AuthType::ONLINE_SIGN_IN:
       // Apps should treat forced online sign in same as system password.
       return screenlock::AUTH_TYPE_OFFLINEPASSWORD;
-    case proximity_auth::ScreenlockBridge::LockHandler::EXPAND_THEN_USER_CLICK:
+    case proximity_auth::mojom::AuthType::EXPAND_THEN_USER_CLICK:
       // This type is used for public sessions, which do not support screen
       // locking.
       NOTREACHED();
       return screenlock::AUTH_TYPE_NONE;
-    case proximity_auth::ScreenlockBridge::LockHandler::FORCE_OFFLINE_PASSWORD:
+    case proximity_auth::mojom::AuthType::FORCE_OFFLINE_PASSWORD:
       return screenlock::AUTH_TYPE_OFFLINEPASSWORD;
   }
   NOTREACHED();
@@ -56,7 +56,7 @@ ScreenlockPrivateGetLockedFunction::ScreenlockPrivateGetLockedFunction() {}
 ScreenlockPrivateGetLockedFunction::~ScreenlockPrivateGetLockedFunction() {}
 
 bool ScreenlockPrivateGetLockedFunction::RunAsync() {
-  SetResult(base::MakeUnique<base::FundamentalValue>(
+  SetResult(base::MakeUnique<base::Value>(
       proximity_auth::ScreenlockBridge::Get()->IsLocked()));
   SendResponse(error_.empty());
   return true;
@@ -121,14 +121,14 @@ void ScreenlockPrivateEventRouter::OnScreenDidLock(
     proximity_auth::ScreenlockBridge::LockHandler::ScreenType screen_type) {
   DispatchEvent(events::SCREENLOCK_PRIVATE_ON_CHANGED,
                 screenlock::OnChanged::kEventName,
-                base::MakeUnique<base::FundamentalValue>(true));
+                base::MakeUnique<base::Value>(true));
 }
 
 void ScreenlockPrivateEventRouter::OnScreenDidUnlock(
     proximity_auth::ScreenlockBridge::LockHandler::ScreenType screen_type) {
   DispatchEvent(events::SCREENLOCK_PRIVATE_ON_CHANGED,
                 screenlock::OnChanged::kEventName,
-                base::MakeUnique<base::FundamentalValue>(false));
+                base::MakeUnique<base::Value>(false));
 }
 
 void ScreenlockPrivateEventRouter::OnFocusedUserChanged(
@@ -146,8 +146,8 @@ void ScreenlockPrivateEventRouter::DispatchEvent(
   EventRouter::Get(browser_context_)->BroadcastEvent(std::move(event));
 }
 
-static base::LazyInstance<
-    BrowserContextKeyedAPIFactory<ScreenlockPrivateEventRouter>> g_factory =
+static base::LazyInstance<BrowserContextKeyedAPIFactory<
+    ScreenlockPrivateEventRouter>>::DestructorAtExit g_factory =
     LAZY_INSTANCE_INITIALIZER;
 
 // static
@@ -161,7 +161,7 @@ void ScreenlockPrivateEventRouter::Shutdown() {
 }
 
 bool ScreenlockPrivateEventRouter::OnAuthAttempted(
-    proximity_auth::ScreenlockBridge::LockHandler::AuthType auth_type,
+    proximity_auth::mojom::AuthType auth_type,
     const std::string& value) {
   EventRouter* router = EventRouter::Get(browser_context_);
   if (!router->HasEventListener(screenlock::OnAuthAttempted::kEventName))

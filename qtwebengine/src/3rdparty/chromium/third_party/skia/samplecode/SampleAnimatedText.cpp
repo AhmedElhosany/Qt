@@ -11,16 +11,15 @@
 #include "SkUtils.h"
 #include "SkColorPriv.h"
 #include "SkColorFilter.h"
+#include "SkImage.h"
 #include "SkRandom.h"
 #include "SkSystemEventTypes.h"
 #include "SkTime.h"
 #include "SkTypeface.h"
-#include "SkXfermode.h"
 #include "Timer.h"
 
 #if SK_SUPPORT_GPU
 #include "GrContext.h"
-#include "SkGpuDevice.h"
 #endif
 
 SkRandom gRand;
@@ -103,12 +102,12 @@ protected:
         canvas->save();
 
 #if SK_SUPPORT_GPU
-        SkBaseDevice* device = canvas->getDevice_just_for_deprecated_compatibility_testing();
         GrContext* grContext = canvas->getGrContext();
         if (grContext) {
-            GrTexture* tex = grContext->getFontAtlasTexture(GrMaskFormat::kA8_GrMaskFormat);
-            reinterpret_cast<SkGpuDevice*>(device)->drawTexture(tex,
-                                                       SkRect::MakeXYWH(512, 10, 512, 512), paint);
+            sk_sp<SkImage> image =
+                        grContext->getFontAtlasImage_ForTesting(GrMaskFormat::kA8_GrMaskFormat);
+            canvas->drawImageRect(image,
+                                  SkRect::MakeXYWH(512.0f, 10.0f, 512.0f, 512.0f), &paint);
         }
 #endif
         canvas->translate(180, 180);
@@ -128,8 +127,8 @@ protected:
         canvas->restore();
 
         paint.setTextSize(16);
-//        canvas->drawText(outString.c_str(), outString.size(), 512.f, 540.f, paint);
-        canvas->drawText(modeString.c_str(), modeString.size(), 768.f, 540.f, paint);
+//        canvas->drawString(outString, 512.f, 540.f, paint);
+        canvas->drawString(modeString, 768.f, 540.f, paint);
     }
 
     bool onAnimate(const SkAnimTimer& timer) override {

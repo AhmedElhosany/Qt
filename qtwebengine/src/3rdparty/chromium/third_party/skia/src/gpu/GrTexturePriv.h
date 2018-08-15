@@ -17,18 +17,6 @@
     implemented privately in GrTexture with a inline public method here). */
 class GrTexturePriv {
 public:
-    void setFlag(GrSurfaceFlags flags) {
-        fTexture->fDesc.fFlags = fTexture->fDesc.fFlags | flags;
-    }
-
-    void resetFlag(GrSurfaceFlags flags) {
-        fTexture->fDesc.fFlags = fTexture->fDesc.fFlags & ~flags;
-    }
-
-    bool isSetFlag(GrSurfaceFlags flags) const {
-        return 0 != (fTexture->fDesc.fFlags & flags);
-    }
-
     void dirtyMipMaps(bool mipMapsDirty) {
         fTexture->dirtyMipMaps(mipMapsDirty);
     }
@@ -49,10 +37,18 @@ public:
         return fTexture->fMaxMipMapLevel;
     }
 
+    GrSLType imageStorageType() const {
+        if (GrPixelConfigIsSint(fTexture->config())) {
+            return kIImageStorage2D_GrSLType;
+        } else {
+            return kImageStorage2D_GrSLType;
+        }
+    }
+
     GrSLType samplerType() const { return fTexture->fSamplerType; }
 
-    /** The filter used is clamped to this value in GrTextureAccess. */
-    GrTextureParams::FilterMode highestFilterMode() const { return fTexture->fHighestFilterMode; }
+    /** The filter used is clamped to this value in GrProcessor::TextureSampler. */
+    GrSamplerParams::FilterMode highestFilterMode() const { return fTexture->fHighestFilterMode; }
 
     void setMipColorMode(SkDestinationSurfaceColorMode colorMode) const {
         fTexture->fMipColorMode = colorMode;
@@ -60,6 +56,10 @@ public:
     SkDestinationSurfaceColorMode mipColorMode() const { return fTexture->fMipColorMode; }
 
     static void ComputeScratchKey(const GrSurfaceDesc&, GrScratchKey*);
+    static void ComputeScratchKey(GrPixelConfig config, int width, int height,
+                                  GrSurfaceOrigin origin, bool isRenderTarget, int sampleCnt,
+                                  bool isMipMapped, GrScratchKey* key);
+
 
 private:
     GrTexturePriv(GrTexture* texture) : fTexture(texture) { }

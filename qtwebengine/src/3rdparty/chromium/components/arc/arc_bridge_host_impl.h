@@ -17,6 +17,8 @@
 
 namespace arc {
 
+class ArcBridgeService;
+
 // Implementation of the ArcBridgeHost.
 // The lifetime of ArcBridgeHost and ArcBridgeInstance mojo channels are tied
 // to this instance. Also, any ARC related Mojo channel will be closed if
@@ -31,10 +33,13 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
   // Interface to keep the Mojo channel InterfacePtr.
   class MojoChannel;
 
-  explicit ArcBridgeHostImpl(mojom::ArcBridgeInstancePtr instance);
+  ArcBridgeHostImpl(ArcBridgeService* arc_bridge_service,
+                    mojom::ArcBridgeInstancePtr instance);
   ~ArcBridgeHostImpl() override;
 
   // ArcBridgeHost overrides.
+  void OnAccessibilityHelperInstanceReady(
+      mojom::AccessibilityHelperInstancePtr accessibility_helper_ptr) override;
   void OnAppInstanceReady(mojom::AppInstancePtr app_ptr) override;
   void OnAudioInstanceReady(mojom::AudioInstancePtr audio_ptr) override;
   void OnAuthInstanceReady(mojom::AuthInstancePtr auth_ptr) override;
@@ -54,6 +59,8 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
   void OnIntentHelperInstanceReady(
       mojom::IntentHelperInstancePtr intent_helper_ptr) override;
   void OnKioskInstanceReady(mojom::KioskInstancePtr kiosk_ptr) override;
+  void OnLockScreenInstanceReady(
+      mojom::LockScreenInstancePtr lock_screen_ptr) override;
   void OnMetricsInstanceReady(mojom::MetricsInstancePtr metrics_ptr) override;
   void OnNetInstanceReady(mojom::NetInstancePtr net_ptr) override;
   void OnNotificationsInstanceReady(
@@ -66,8 +73,15 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
   void OnProcessInstanceReady(mojom::ProcessInstancePtr process_ptr) override;
   void OnStorageManagerInstanceReady(
       mojom::StorageManagerInstancePtr storage_manager_ptr) override;
+  void OnTracingInstanceReady(mojom::TracingInstancePtr trace_ptr) override;
   void OnTtsInstanceReady(mojom::TtsInstancePtr tts_ptr) override;
   void OnVideoInstanceReady(mojom::VideoInstancePtr video_ptr) override;
+  void OnVoiceInteractionArcHomeInstanceReady(
+      mojom::VoiceInteractionArcHomeInstancePtr home_ptr) override;
+  void OnVoiceInteractionFrameworkInstanceReady(
+      mojom::VoiceInteractionFrameworkInstancePtr framework_ptr) override;
+  void OnVolumeMounterInstanceReady(
+      mojom::VolumeMounterInstancePtr volume_mounter_ptr) override;
   void OnWallpaperInstanceReady(
       mojom::WallpaperInstancePtr wallpaper_ptr) override;
 
@@ -84,7 +98,10 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
   // Called if one of the established channels is closed.
   void OnChannelClosed(MojoChannel* channel);
 
-  base::ThreadChecker thread_checker_;
+  THREAD_CHECKER(thread_checker_);
+
+  // Owned by ArcServiceManager.
+  ArcBridgeService* const arc_bridge_service_;
 
   mojo::Binding<mojom::ArcBridgeHost> binding_;
   mojom::ArcBridgeInstancePtr instance_;

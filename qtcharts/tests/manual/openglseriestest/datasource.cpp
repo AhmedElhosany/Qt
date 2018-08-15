@@ -29,6 +29,7 @@
 
 #include "datasource.h"
 #include <QtCore/QtMath>
+#include <QtCore/QRandomGenerator>
 
 QT_CHARTS_USE_NAMESPACE
 
@@ -117,8 +118,8 @@ void DataSource::generateData(int seriesIndex, int rowCount, int colCount)
             qreal x(0);
             qreal y(0);
             // data with sin + random component
-            y = height + (yMultiplier * qSin(3.14159265358979 / 50 * j)
-                          + (yMultiplier * (qreal) rand() / (qreal) RAND_MAX));
+            y = height + (yMultiplier * qSin(M_PI / 50 * j)
+                          + (yMultiplier * QRandomGenerator::global()->generateDouble()));
             // 0.000001 added to make values logaxis compatible
             x = 0.000001 + 20.0 * (qreal(j) / qreal(colCount)) + (xAdjustment * qreal(i));
             points.append(QPointF(x, y));

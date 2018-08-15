@@ -7,29 +7,40 @@
 
 #include "bindings/core/v8/ScriptPromise.h"
 #include "bindings/core/v8/ScriptPromiseResolver.h"
-#include "bindings/core/v8/ScriptWrappable.h"
 #include "modules/ModulesExport.h"
 #include "modules/canvas2d/CanvasRenderingContext2D.h"
 #include "modules/shapedetection/ShapeDetector.h"
-#include "public/platform/modules/shapedetection/shapedetection.mojom-blink.h"
+#include "platform/bindings/ScriptWrappable.h"
+#include "services/shape_detection/public/interfaces/facedetection.mojom-blink.h"
 
 namespace blink {
 
-class LocalFrame;
+class ExecutionContext;
+class FaceDetectorOptions;
 
 class MODULES_EXPORT FaceDetector final : public ShapeDetector,
                                           public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static FaceDetector* create(ScriptState*);
+  static FaceDetector* Create(ExecutionContext*, const FaceDetectorOptions&);
 
-  ScriptPromise detect(ScriptState*, const CanvasImageSourceUnion&);
   DECLARE_VIRTUAL_TRACE();
 
  private:
-  explicit FaceDetector(LocalFrame&);
+  FaceDetector(ExecutionContext*, const FaceDetectorOptions&);
   ~FaceDetector() override = default;
+
+  ScriptPromise DoDetect(ScriptPromiseResolver*,
+                         skia::mojom::blink::BitmapPtr) override;
+  void OnDetectFaces(
+      ScriptPromiseResolver*,
+      Vector<shape_detection::mojom::blink::FaceDetectionResultPtr>);
+  void OnFaceServiceConnectionError();
+
+  shape_detection::mojom::blink::FaceDetectionPtr face_service_;
+
+  HeapHashSet<Member<ScriptPromiseResolver>> face_service_requests_;
 };
 
 }  // namespace blink

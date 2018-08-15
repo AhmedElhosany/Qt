@@ -7,33 +7,31 @@
 #include <string>
 #include <vector>
 
+#include "base/barrier_closure.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/location.h"
 #include "base/memory/memory_coordinator_client_registry.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequenced_task_runner.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task_scheduler/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "components/filesystem/public/interfaces/directory.mojom.h"
-#include "components/leveldb/public/interfaces/leveldb.mojom.h"
 #include "content/browser/dom_storage/dom_storage_area.h"
 #include "content/browser/dom_storage/dom_storage_context_impl.h"
 #include "content/browser/dom_storage/dom_storage_task_runner.h"
+#include "content/browser/dom_storage/local_storage_context_mojo.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
-#include "content/browser/leveldb_wrapper_impl.h"
-#include "content/browser/memory/memory_coordinator.h"
-#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/local_storage_usage_info.h"
 #include "content/public/browser/session_storage_usage_info.h"
+#include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
-#include "mojo/common/common_type_converters.h"
-#include "services/file/public/interfaces/constants.mojom.h"
-#include "services/file/public/interfaces/file_system.mojom.h"
-#include "services/service_manager/public/cpp/connection.h"
-#include "services/service_manager/public/cpp/connector.h"
+#include "content/public/common/content_switches.h"
 
 namespace content {
 namespace {
@@ -42,8 +40,8 @@ const char kLocalStorageDirectory[] = "Local Storage";
 const char kSessionStorageDirectory[] = "Session Storage";
 
 void InvokeLocalStorageUsageCallbackHelper(
-      const DOMStorageContext::GetLocalStorageUsageCallback& callback,
-      const std::vector<LocalStorageUsageInfo>* infos) {
+    const DOMStorageContext::GetLocalStorageUsageCallback& callback,
+    std::unique_ptr<std::vector<LocalStorageUsageInfo>> infos) {
   callback.Run(*infos);
 }
 
@@ -51,12 +49,27 @@ void GetLocalStorageUsageHelper(
     base::SingleThreadTaskRunner* reply_task_runner,
     DOMStorageContextImpl* context,
     const DOMStorageContext::GetLocalStorageUsageCallback& callback) {
-  std::vector<LocalStorageUsageInfo>* infos =
-      new std::vector<LocalStorageUsageInfo>;
-  context->GetLocalStorageUsage(infos, true);
+  auto infos = base::MakeUnique<std::vector<LocalStorageUsageInfo>>();
+  context->GetLocalStorageUsage(infos.get(), true);
   reply_task_runner->PostTask(
-      FROM_HERE, base::Bind(&InvokeLocalStorageUsageCallbackHelper, callback,
-                            base::Owned(infos)));
+      FROM_HERE, base::BindOnce(&InvokeLocalStorageUsageCallbackHelper,
+                                callback, std::move(infos)));
+}
+
+void CollectLocalStorageUsage(
+    std::vector<LocalStorageUsageInfo>* out_info,
+    base::Closure done_callback,
+    const std::vector<LocalStorageUsageInfo>& in_info) {
+  out_info->insert(out_info->end(), in_info.begin(), in_info.end());
+  done_callback.Run();
+}
+
+void GotMojoLocalStorageUsage(
+    scoped_refptr<base::SingleThreadTaskRunner> reply_task_runner,
+    const DOMStorageContext::GetLocalStorageUsageCallback& callback,
+    std::vector<LocalStorageUsageInfo> usage) {
+  reply_task_runner->PostTask(FROM_HERE,
+                              base::BindOnce(callback, std::move(usage)));
 }
 
 void InvokeSessionStorageUsageCallbackHelper(
@@ -79,213 +92,48 @@ void GetSessionStorageUsageHelper(
 
 }  // namespace
 
-// Used for mojo-based LocalStorage implementation (behind --mojo-local-storage
-// for now).
-class DOMStorageContextWrapper::MojoState {
- public:
-  MojoState(service_manager::Connector* connector,
-            const base::FilePath& subdirectory)
-      : connector_(connector),
-        // TODO(michaeln): Enable writing to disk when db is versioned,
-        // for now using an empty subdirectory to use an in-memory db.
-        // subdirectory_(subdirectory),
-        connection_state_(NO_CONNECTION),
-        weak_ptr_factory_(this) {}
-
-  void OpenLocalStorage(const url::Origin& origin,
-                        mojom::LevelDBObserverPtr observer,
-                        mojom::LevelDBWrapperRequest request);
-
- private:
-  void OnLevelDDWrapperHasNoBindings(const url::Origin& origin) {
-    DCHECK(level_db_wrappers_.find(origin) != level_db_wrappers_.end());
-    level_db_wrappers_.erase(origin);
-  }
-
-  void OnUserServiceConnectionComplete() {
-    CHECK_EQ(service_manager::mojom::ConnectResult::SUCCEEDED,
-             file_service_connection_->GetResult());
-  }
-
-  void OnUserServiceConnectionError() {
-    CHECK(false);
-  }
-
-  // Part of our asynchronous directory opening called from OpenLocalStorage().
-  void OnDirectoryOpened(filesystem::mojom::FileError err);
-  void OnDatabaseOpened(leveldb::mojom::DatabaseError status);
-
-  // The (possibly delayed) implementation of OpenLocalStorage(). Can be called
-  // directly from that function, or through |on_database_open_callbacks_|.
-  void BindLocalStorage(const url::Origin& origin,
-                        mojom::LevelDBObserverPtr observer,
-                        mojom::LevelDBWrapperRequest request);
-
-  // Maps between an origin and its prefixed LevelDB view.
-  std::map<url::Origin, std::unique_ptr<LevelDBWrapperImpl>> level_db_wrappers_;
-
-  service_manager::Connector* const connector_;
-  const base::FilePath subdirectory_;
-
-  enum ConnectionState {
-    NO_CONNECTION,
-    CONNECTION_IN_PROGRESS,
-    CONNECTION_FINISHED
-  } connection_state_;
-
-  std::unique_ptr<service_manager::Connection> file_service_connection_;
-
-  file::mojom::FileSystemPtr file_system_;
-  filesystem::mojom::DirectoryPtr directory_;
-
-  leveldb::mojom::LevelDBServicePtr leveldb_service_;
-  leveldb::mojom::LevelDBDatabasePtr database_;
-
-  std::vector<base::Closure> on_database_opened_callbacks_;
-
-  base::WeakPtrFactory<MojoState> weak_ptr_factory_;
-};
-
-void DOMStorageContextWrapper::MojoState::OpenLocalStorage(
-    const url::Origin& origin,
-    mojom::LevelDBObserverPtr observer,
-    mojom::LevelDBWrapperRequest request) {
-  // If we don't have a filesystem_connection_, we'll need to establish one.
-  if (connection_state_ == NO_CONNECTION) {
-    CHECK(connector_);
-    file_service_connection_ =
-        connector_->Connect(file::mojom::kServiceName);
-    connection_state_ = CONNECTION_IN_PROGRESS;
-    file_service_connection_->AddConnectionCompletedClosure(
-        base::Bind(&MojoState::OnUserServiceConnectionComplete,
-                   weak_ptr_factory_.GetWeakPtr()));
-    file_service_connection_->SetConnectionLostClosure(
-        base::Bind(&MojoState::OnUserServiceConnectionError,
-                   weak_ptr_factory_.GetWeakPtr()));
-
-    if (!subdirectory_.empty()) {
-      // We were given a subdirectory to write to. Get it and use a disk backed
-      // database.
-      file_service_connection_->GetInterface(&file_system_);
-      file_system_->GetSubDirectory(subdirectory_.AsUTF8Unsafe(),
-                                    GetProxy(&directory_),
-                                    base::Bind(&MojoState::OnDirectoryOpened,
-                                               weak_ptr_factory_.GetWeakPtr()));
-    } else {
-      // We were not given a subdirectory. Use a memory backed database.
-      file_service_connection_->GetInterface(&leveldb_service_);
-      leveldb_service_->OpenInMemory(
-          GetProxy(&database_),
-          base::Bind(&MojoState::OnDatabaseOpened,
-                     weak_ptr_factory_.GetWeakPtr()));
-    }
-  }
-
-  if (connection_state_ == CONNECTION_IN_PROGRESS) {
-    // Queue this OpenLocalStorage call for when we have a level db pointer.
-    on_database_opened_callbacks_.push_back(
-        base::Bind(&MojoState::BindLocalStorage, weak_ptr_factory_.GetWeakPtr(),
-                   origin, base::Passed(&observer), base::Passed(&request)));
-    return;
-  }
-
-  BindLocalStorage(origin, std::move(observer), std::move(request));
-}
-
-void DOMStorageContextWrapper::MojoState::OnDirectoryOpened(
-    filesystem::mojom::FileError err) {
-  if (err != filesystem::mojom::FileError::OK) {
-    // We failed to open the directory; continue with startup so that we create
-    // the |level_db_wrappers_|.
-    OnDatabaseOpened(leveldb::mojom::DatabaseError::IO_ERROR);
-    return;
-  }
-
-  // Now that we have a directory, connect to the LevelDB service and get our
-  // database.
-  file_service_connection_->GetInterface(&leveldb_service_);
-
-  leveldb_service_->Open(
-      std::move(directory_), "leveldb", GetProxy(&database_),
-      base::Bind(&MojoState::OnDatabaseOpened, weak_ptr_factory_.GetWeakPtr()));
-}
-
-void DOMStorageContextWrapper::MojoState::OnDatabaseOpened(
-    leveldb::mojom::DatabaseError status) {
-  if (status != leveldb::mojom::DatabaseError::OK) {
-    // If we failed to open the database, reset the service object so we pass
-    // null pointers to our wrappers.
-    database_.reset();
-    leveldb_service_.reset();
-  }
-
-  // We no longer need the file service; we've either transferred |directory_|
-  // to the leveldb service, or we got a file error and no more is possible.
-  directory_.reset();
-  file_system_.reset();
-
-  // |leveldb_| should be known to either be valid or invalid by now. Run our
-  // delayed bindings.
-  connection_state_ = CONNECTION_FINISHED;
-  for (size_t i = 0; i < on_database_opened_callbacks_.size(); ++i)
-    on_database_opened_callbacks_[i].Run();
-  on_database_opened_callbacks_.clear();
-}
-
-void DOMStorageContextWrapper::MojoState::BindLocalStorage(
-    const url::Origin& origin,
-    mojom::LevelDBObserverPtr observer,
-    mojom::LevelDBWrapperRequest request) {
-  // Delay for a moment after a value is set in anticipation
-  // of other values being set, so changes are batched.
-  const int kCommitDefaultDelaySecs = 5;
-
-  // To avoid excessive IO we apply limits to the amount of data being written
-  // and the frequency of writes.
-  const int kMaxBytesPerHour = kPerStorageAreaQuota;
-  const int kMaxCommitsPerHour = 60;
-
-  auto found = level_db_wrappers_.find(origin);
-  if (found == level_db_wrappers_.end()) {
-    level_db_wrappers_[origin] = base::MakeUnique<LevelDBWrapperImpl>(
-        database_.get(), origin.Serialize(),
-        kPerStorageAreaQuota + kPerStorageAreaOverQuotaAllowance,
-        base::TimeDelta::FromSeconds(kCommitDefaultDelaySecs), kMaxBytesPerHour,
-        kMaxCommitsPerHour,
-        base::Bind(&MojoState::OnLevelDDWrapperHasNoBindings,
-                   base::Unretained(this), origin));
-    found = level_db_wrappers_.find(origin);
-  }
-
-  found->second->Bind(std::move(request));
-  found->second->AddObserver(std::move(observer));
-}
-
 DOMStorageContextWrapper::DOMStorageContextWrapper(
     service_manager::Connector* connector,
     const base::FilePath& profile_path,
     const base::FilePath& local_partition_path,
     storage::SpecialStoragePolicy* special_storage_policy) {
-  base::FilePath storage_dir;
-  if (!profile_path.empty())
-    storage_dir = local_partition_path.AppendASCII(kLocalStorageDirectory);
-  mojo_state_.reset(new MojoState(connector, storage_dir));
-
   base::FilePath data_path;
   if (!profile_path.empty())
     data_path = profile_path.Append(local_partition_path);
-  base::SequencedWorkerPool* worker_pool = BrowserThread::GetBlockingPool();
+
+  scoped_refptr<base::SequencedTaskRunner> primary_sequence =
+      base::CreateSequencedTaskRunnerWithTraits(
+          {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+           base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+  scoped_refptr<base::SequencedTaskRunner> commit_sequence =
+      base::CreateSequencedTaskRunnerWithTraits(
+          {base::MayBlock(), base::TaskPriority::BACKGROUND,
+           base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+
   context_ = new DOMStorageContextImpl(
       data_path.empty() ? data_path
                         : data_path.AppendASCII(kLocalStorageDirectory),
       data_path.empty() ? data_path
                         : data_path.AppendASCII(kSessionStorageDirectory),
       special_storage_policy,
-      new DOMStorageWorkerPoolTaskRunner(
-          worker_pool,
-          worker_pool->GetNamedSequenceToken("dom_storage_primary"),
-          worker_pool->GetNamedSequenceToken("dom_storage_commit"),
-          BrowserThread::GetTaskRunnerForThread(BrowserThread::IO).get()));
+      new DOMStorageWorkerPoolTaskRunner(std::move(primary_sequence),
+                                         std::move(commit_sequence)));
+
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableMojoLocalStorage)) {
+    base::FilePath storage_dir;
+    if (!profile_path.empty())
+      storage_dir = local_partition_path.AppendASCII(kLocalStorageDirectory);
+    // TODO(mek): Use a SequencedTaskRunner once mojo no longer requires a
+    // SingleThreadTaskRunner (http://crbug.com/678155).
+    mojo_task_runner_ =
+        BrowserThread::GetTaskRunnerForThread(BrowserThread::IO);
+    mojo_state_ = new LocalStorageContextMojo(
+        mojo_task_runner_, connector, context_->task_runner(),
+        data_path.empty() ? data_path
+                          : data_path.AppendASCII(kLocalStorageDirectory),
+        storage_dir, special_storage_policy);
+  }
 
   if (base::FeatureList::IsEnabled(features::kMemoryCoordinator)) {
     base::MemoryCoordinatorClientRegistry::GetInstance()->Register(this);
@@ -295,11 +143,42 @@ DOMStorageContextWrapper::DOMStorageContextWrapper(
   }
 }
 
-DOMStorageContextWrapper::~DOMStorageContextWrapper() {}
+DOMStorageContextWrapper::~DOMStorageContextWrapper() {
+  DCHECK(!mojo_state_) << "Shutdown should be called before destruction";
+}
 
 void DOMStorageContextWrapper::GetLocalStorageUsage(
     const GetLocalStorageUsageCallback& callback) {
   DCHECK(context_.get());
+  if (mojo_state_) {
+    auto infos = base::MakeUnique<std::vector<LocalStorageUsageInfo>>();
+    auto* infos_ptr = infos.get();
+    base::RepeatingClosure got_local_storage_usage = base::BarrierClosure(
+        2, base::BindOnce(&InvokeLocalStorageUsageCallbackHelper, callback,
+                          std::move(infos)));
+
+    // base::Unretained is safe here, because the mojo_state_ won't be deleted
+    // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+    // as soon as that task is posted, mojo_state_ is set to null, preventing
+    // further tasks from being queued.
+    mojo_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &LocalStorageContextMojo::GetStorageUsage,
+            base::Unretained(mojo_state_),
+            base::BindOnce(&GotMojoLocalStorageUsage,
+                           base::ThreadTaskRunnerHandle::Get(),
+                           base::Bind(CollectLocalStorageUsage, infos_ptr,
+                                      got_local_storage_usage))));
+    context_->task_runner()->PostShutdownBlockingTask(
+        FROM_HERE, DOMStorageTaskRunner::PRIMARY_SEQUENCE,
+        base::Bind(&GetLocalStorageUsageHelper,
+                   base::RetainedRef(base::ThreadTaskRunnerHandle::Get()),
+                   base::RetainedRef(context_),
+                   base::Bind(&CollectLocalStorageUsage, infos_ptr,
+                              got_local_storage_usage)));
+    return;
+  }
   context_->task_runner()->PostShutdownBlockingTask(
       FROM_HERE, DOMStorageTaskRunner::PRIMARY_SEQUENCE,
       base::Bind(&GetLocalStorageUsageHelper,
@@ -324,6 +203,16 @@ void DOMStorageContextWrapper::DeleteLocalStorageForPhysicalOrigin(
       FROM_HERE, DOMStorageTaskRunner::PRIMARY_SEQUENCE,
       base::Bind(&DOMStorageContextImpl::DeleteLocalStorageForPhysicalOrigin,
                  context_, origin));
+  if (mojo_state_) {
+    // base::Unretained is safe here, because the mojo_state_ won't be deleted
+    // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+    // as soon as that task is posted, mojo_state_ is set to null, preventing
+    // further tasks from being queued.
+    mojo_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&LocalStorageContextMojo::DeleteStorageForPhysicalOrigin,
+                       base::Unretained(mojo_state_), url::Origin(origin)));
+  }
 }
 
 void DOMStorageContextWrapper::DeleteLocalStorage(const GURL& origin) {
@@ -332,6 +221,16 @@ void DOMStorageContextWrapper::DeleteLocalStorage(const GURL& origin) {
       FROM_HERE,
       DOMStorageTaskRunner::PRIMARY_SEQUENCE,
       base::Bind(&DOMStorageContextImpl::DeleteLocalStorage, context_, origin));
+  if (mojo_state_) {
+    // base::Unretained is safe here, because the mojo_state_ won't be deleted
+    // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+    // as soon as that task is posted, mojo_state_ is set to null, preventing
+    // further tasks from being queued.
+    mojo_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&LocalStorageContextMojo::DeleteStorage,
+                       base::Unretained(mojo_state_), url::Origin(origin)));
+  }
 }
 
 void DOMStorageContextWrapper::DeleteSessionStorage(
@@ -371,11 +270,26 @@ void DOMStorageContextWrapper::SetForceKeepSessionState() {
       FROM_HERE,
       DOMStorageTaskRunner::PRIMARY_SEQUENCE,
       base::Bind(&DOMStorageContextImpl::SetForceKeepSessionState, context_));
+  if (mojo_state_) {
+    // base::Unretained is safe here, because the mojo_state_ won't be deleted
+    // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+    // as soon as that task is posted, mojo_state_ is set to null, preventing
+    // further tasks from being queued.
+    mojo_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&LocalStorageContextMojo::SetForceKeepSessionState,
+                       base::Unretained(mojo_state_)));
+  }
 }
 
 void DOMStorageContextWrapper::Shutdown() {
   DCHECK(context_.get());
-  mojo_state_.reset();
+  if (mojo_state_) {
+    mojo_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&LocalStorageContextMojo::ShutdownAndDelete,
+                                  base::Unretained(mojo_state_)));
+    mojo_state_ = nullptr;
+  }
   memory_pressure_listener_.reset();
   context_->task_runner()->PostShutdownBlockingTask(
       FROM_HERE,
@@ -384,22 +298,52 @@ void DOMStorageContextWrapper::Shutdown() {
   if (base::FeatureList::IsEnabled(features::kMemoryCoordinator)) {
     base::MemoryCoordinatorClientRegistry::GetInstance()->Unregister(this);
   }
-
 }
 
 void DOMStorageContextWrapper::Flush() {
   DCHECK(context_.get());
+
   context_->task_runner()->PostShutdownBlockingTask(
       FROM_HERE, DOMStorageTaskRunner::PRIMARY_SEQUENCE,
       base::Bind(&DOMStorageContextImpl::Flush, context_));
+  if (mojo_state_) {
+    // base::Unretained is safe here, because the mojo_state_ won't be deleted
+    // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+    // as soon as that task is posted, mojo_state_ is set to null, preventing
+    // further tasks from being queued.
+    mojo_task_runner_->PostTask(FROM_HERE,
+                                base::BindOnce(&LocalStorageContextMojo::Flush,
+                                               base::Unretained(mojo_state_)));
+  }
 }
 
 void DOMStorageContextWrapper::OpenLocalStorage(
     const url::Origin& origin,
-    mojom::LevelDBObserverPtr observer,
     mojom::LevelDBWrapperRequest request) {
-  mojo_state_->OpenLocalStorage(
-      origin, std::move(observer), std::move(request));
+  if (!mojo_state_)
+    return;
+  // base::Unretained is safe here, because the mojo_state_ won't be deleted
+  // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+  // as soon as that task is posted, mojo_state_ is set to null, preventing
+  // further tasks from being queued.
+  mojo_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&LocalStorageContextMojo::OpenLocalStorage,
+                                base::Unretained(mojo_state_), origin,
+                                std::move(request)));
+}
+
+void DOMStorageContextWrapper::SetLocalStorageDatabaseForTesting(
+    leveldb::mojom::LevelDBDatabaseAssociatedPtr database) {
+  if (!mojo_state_)
+    return;
+  // base::Unretained is safe here, because the mojo_state_ won't be deleted
+  // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+  // as soon as that task is posted, mojo_state_ is set to null, preventing
+  // further tasks from being queued.
+  mojo_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&LocalStorageContextMojo::SetDatabaseForTesting,
+                     base::Unretained(mojo_state_), std::move(database)));
 }
 
 void DOMStorageContextWrapper::OnMemoryPressure(
@@ -413,26 +357,8 @@ void DOMStorageContextWrapper::OnMemoryPressure(
   PurgeMemory(purge_option);
 }
 
-void DOMStorageContextWrapper::OnMemoryStateChange(base::MemoryState state) {
-  // TODO(hajimehoshi): As OnMemoryStateChange changes the state, we should
-  // adjust the limitation to the amount of cache, DomStroageContextImpl doesn't
-  // have such limitation so far though.
-  switch (state) {
-    case base::MemoryState::NORMAL:
-      // Don't have to purge memory here.
-      break;
-    case base::MemoryState::THROTTLED:
-      // TOOD(hajimehoshi): We don't have throttling 'level' so far. When we
-      // have such value, let's change the argument accroding to the value.
-      PurgeMemory(DOMStorageContextImpl::PURGE_AGGRESSIVE);
-      break;
-    case base::MemoryState::SUSPENDED:
-      // Note that SUSPENDED never occurs in the main browser process so far.
-      // Fall through.
-    case base::MemoryState::UNKNOWN:
-      NOTREACHED();
-      break;
-  }
+void DOMStorageContextWrapper::OnPurgeMemory() {
+  PurgeMemory(DOMStorageContextImpl::PURGE_AGGRESSIVE);
 }
 
 void DOMStorageContextWrapper::PurgeMemory(DOMStorageContextImpl::PurgeOption
@@ -440,6 +366,15 @@ void DOMStorageContextWrapper::PurgeMemory(DOMStorageContextImpl::PurgeOption
   context_->task_runner()->PostTask(
       FROM_HERE,
       base::Bind(&DOMStorageContextImpl::PurgeMemory, context_, purge_option));
+  if (mojo_state_ && purge_option == DOMStorageContextImpl::PURGE_AGGRESSIVE) {
+    // base::Unretained is safe here, because the mojo_state_ won't be deleted
+    // until a ShutdownAndDelete task has been ran on the mojo_task_runner_, and
+    // as soon as that task is posted, mojo_state_ is set to null, preventing
+    // further tasks from being queued.
+    mojo_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&LocalStorageContextMojo::PurgeMemory,
+                                  base::Unretained(mojo_state_)));
+  }
 }
 
 }  // namespace content

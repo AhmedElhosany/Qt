@@ -13,6 +13,7 @@
 
 #include "base/bind.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -43,7 +44,6 @@
 // top of this file.
 
 using base::Time;
-using content::ResourceType;
 using net::cookie_util::ParsedRequestCookie;
 using net::cookie_util::ParsedRequestCookies;
 
@@ -53,52 +53,7 @@ namespace extension_web_request_api_helpers {
 
 namespace {
 
-// Multiple ResourceTypes may map to the same string, but the converse is not
-// possible.
-static const char* kResourceTypeStrings[] = {
-  "main_frame",
-  "sub_frame",
-  "stylesheet",
-  "script",
-  "image",
-  "font",
-  "object",
-  "script",
-  "script",
-  "image",
-  "xmlhttprequest",
-  "ping",
-  "script",
-  "object",
-  "other",
-};
-
-const size_t kResourceTypeStringsLength = arraysize(kResourceTypeStrings);
-
-static ResourceType kResourceTypeValues[] = {
-  content::RESOURCE_TYPE_MAIN_FRAME,
-  content::RESOURCE_TYPE_SUB_FRAME,
-  content::RESOURCE_TYPE_STYLESHEET,
-  content::RESOURCE_TYPE_SCRIPT,
-  content::RESOURCE_TYPE_IMAGE,
-  content::RESOURCE_TYPE_FONT_RESOURCE,
-  content::RESOURCE_TYPE_OBJECT,
-  content::RESOURCE_TYPE_WORKER,
-  content::RESOURCE_TYPE_SHARED_WORKER,
-  content::RESOURCE_TYPE_FAVICON,
-  content::RESOURCE_TYPE_XHR,
-  content::RESOURCE_TYPE_PING,
-  content::RESOURCE_TYPE_SERVICE_WORKER,
-  content::RESOURCE_TYPE_PLUGIN_RESOURCE,
-  content::RESOURCE_TYPE_LAST_TYPE,  // represents "other"
-};
-
-const size_t kResourceTypeValuesLength = arraysize(kResourceTypeValues);
-
-static_assert(kResourceTypeStringsLength == kResourceTypeValuesLength,
-              "Sizes of string lists and ResourceType lists should be equal");
-
-typedef std::vector<linked_ptr<net::ParsedCookie> > ParsedResponseCookies;
+using ParsedResponseCookies = std::vector<linked_ptr<net::ParsedCookie>>;
 
 void ClearCacheOnNavigationOnUI() {
   web_cache::WebCacheManager::GetInstance()->ClearCacheOnNavigation();
@@ -269,26 +224,26 @@ net::NetLogParametersCallback CreateNetLogExtensionIdCallback(
 std::unique_ptr<base::Value> NetLogModificationCallback(
     const EventResponseDelta* delta,
     net::NetLogCaptureMode capture_mode) {
-  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
+  auto dict = base::MakeUnique<base::DictionaryValue>();
   dict->SetString("extension_id", delta->extension_id);
 
-  base::ListValue* modified_headers = new base::ListValue();
+  auto modified_headers = base::MakeUnique<base::ListValue>();
   net::HttpRequestHeaders::Iterator modification(
       delta->modified_request_headers);
   while (modification.GetNext()) {
     std::string line = modification.name() + ": " + modification.value();
     modified_headers->AppendString(line);
   }
-  dict->Set("modified_headers", modified_headers);
+  dict->Set("modified_headers", std::move(modified_headers));
 
-  base::ListValue* deleted_headers = new base::ListValue();
+  auto deleted_headers = base::MakeUnique<base::ListValue>();
   for (std::vector<std::string>::const_iterator key =
            delta->deleted_request_headers.begin();
        key != delta->deleted_request_headers.end();
        ++key) {
     deleted_headers->AppendString(*key);
   }
-  dict->Set("deleted_headers", deleted_headers);
+  dict->Set("deleted_headers", std::move(deleted_headers));
   return std::move(dict);
 }
 
@@ -298,8 +253,8 @@ bool InDecreasingExtensionInstallationTimeOrder(
   return a->extension_install_time > b->extension_install_time;
 }
 
-base::ListValue* StringToCharList(const std::string& s) {
-  base::ListValue* result = new base::ListValue;
+std::unique_ptr<base::ListValue> StringToCharList(const std::string& s) {
+  auto result = base::MakeUnique<base::ListValue>();
   for (size_t i = 0, n = s.size(); i < n; ++i) {
     result->AppendInteger(*reinterpret_cast<const unsigned char*>(&s[i]));
   }
@@ -463,11 +418,16 @@ void MergeCancelOfResponses(const EventResponseDeltas& deltas,
 // a higher precedence operation that redirects.
 // Returns whether a redirect occurred.
 static bool MergeRedirectUrlOfResponsesHelper(
+    const GURL& url,
     const EventResponseDeltas& deltas,
     GURL* new_url,
     extensions::WarningSet* conflicting_extensions,
     const net::NetLogWithSource* net_log,
     bool consider_only_cancel_scheme_urls) {
+  // Redirecting WebSocket handshake request is prohibited.
+  if (url.SchemeIsWSOrWSS())
+    return false;
+
   bool redirected = false;
 
   // Extension that determines the |new_url|.
@@ -504,30 +464,33 @@ static bool MergeRedirectUrlOfResponsesHelper(
   return redirected;
 }
 
-void MergeRedirectUrlOfResponses(const EventResponseDeltas& deltas,
+void MergeRedirectUrlOfResponses(const GURL& url,
+                                 const EventResponseDeltas& deltas,
                                  GURL* new_url,
                                  extensions::WarningSet* conflicting_extensions,
                                  const net::NetLogWithSource* net_log) {
   // First handle only redirects to data:// URLs and about:blank. These are a
   // special case as they represent a way of cancelling a request.
   if (MergeRedirectUrlOfResponsesHelper(
-          deltas, new_url, conflicting_extensions, net_log, true)) {
+          url, deltas, new_url, conflicting_extensions, net_log, true)) {
     // If any extension cancelled a request by redirecting to a data:// URL or
     // about:blank, we don't consider the other redirects.
     return;
   }
 
   // Handle all other redirects.
-  MergeRedirectUrlOfResponsesHelper(
-      deltas, new_url, conflicting_extensions, net_log, false);
+  MergeRedirectUrlOfResponsesHelper(url, deltas, new_url,
+                                    conflicting_extensions, net_log, false);
 }
 
 void MergeOnBeforeRequestResponses(
+    const GURL& url,
     const EventResponseDeltas& deltas,
     GURL* new_url,
     extensions::WarningSet* conflicting_extensions,
     const net::NetLogWithSource* net_log) {
-  MergeRedirectUrlOfResponses(deltas, new_url, conflicting_extensions, net_log);
+  MergeRedirectUrlOfResponses(url, deltas, new_url, conflicting_extensions,
+                              net_log);
 }
 
 static bool DoesRequestCookieMatchFilter(
@@ -725,7 +688,11 @@ void MergeOnBeforeSendHeadersResponses(
     const EventResponseDeltas& deltas,
     net::HttpRequestHeaders* request_headers,
     extensions::WarningSet* conflicting_extensions,
-    const net::NetLogWithSource* net_log) {
+    const net::NetLogWithSource* net_log,
+    bool* request_headers_modified) {
+  DCHECK(request_headers_modified);
+  *request_headers_modified = false;
+
   EventResponseDeltas::const_iterator delta;
 
   // Here we collect which headers we have removed or set to new values
@@ -822,6 +789,7 @@ void MergeOnBeforeSendHeadersResponses(
       }
       net_log->AddEvent(net::NetLogEventType::CHROME_EXTENSION_MODIFIED_HEADERS,
                         base::Bind(&NetLogModificationCallback, delta->get()));
+      *request_headers_modified = true;
     } else {
       conflicting_extensions->insert(
           extensions::Warning::CreateRequestHeaderConflictWarning(
@@ -1083,12 +1051,17 @@ static std::string FindRemoveResponseHeader(
 }
 
 void MergeOnHeadersReceivedResponses(
+    const GURL& url,
     const EventResponseDeltas& deltas,
     const net::HttpResponseHeaders* original_response_headers,
     scoped_refptr<net::HttpResponseHeaders>* override_response_headers,
     GURL* allowed_unsafe_redirect_url,
     extensions::WarningSet* conflicting_extensions,
-    const net::NetLogWithSource* net_log) {
+    const net::NetLogWithSource* net_log,
+    bool* response_headers_modified) {
+  DCHECK(response_headers_modified);
+  *response_headers_modified = false;
+
   EventResponseDeltas::const_iterator delta;
 
   // Here we collect which headers we have removed or added so far due to
@@ -1154,6 +1127,7 @@ void MergeOnHeadersReceivedResponses(
       }
       net_log->AddEvent(net::NetLogEventType::CHROME_EXTENSION_MODIFIED_HEADERS,
                         CreateNetLogExtensionIdCallback(delta->get()));
+      *response_headers_modified = true;
     } else {
       conflicting_extensions->insert(
           extensions::Warning::CreateResponseHeaderConflictWarning(
@@ -1169,8 +1143,8 @@ void MergeOnHeadersReceivedResponses(
       override_response_headers, conflicting_extensions, net_log);
 
   GURL new_url;
-  MergeRedirectUrlOfResponses(
-      deltas, &new_url, conflicting_extensions, net_log);
+  MergeRedirectUrlOfResponses(url, deltas, &new_url, conflicting_extensions,
+                              net_log);
   if (new_url.is_valid()) {
     // Only create a copy if we really want to modify the response headers.
     if (override_response_headers->get() == NULL) {
@@ -1237,7 +1211,7 @@ void ClearCacheOnNavigation() {
 std::unique_ptr<base::DictionaryValue> CreateHeaderDictionary(
     const std::string& name,
     const std::string& value) {
-  std::unique_ptr<base::DictionaryValue> header(new base::DictionaryValue());
+  auto header = base::MakeUnique<base::DictionaryValue>();
   header->SetString(keys::kHeaderNameKey, name);
   if (base::IsStringUTF8(value)) {
     header->SetString(keys::kHeaderValueKey, value);
@@ -1246,37 +1220,6 @@ std::unique_ptr<base::DictionaryValue> CreateHeaderDictionary(
                 StringToCharList(value));
   }
   return header;
-}
-
-bool IsRelevantResourceType(ResourceType type) {
-  ResourceType* iter =
-      std::find(kResourceTypeValues,
-                kResourceTypeValues + kResourceTypeValuesLength,
-                type);
-  return iter != (kResourceTypeValues + kResourceTypeValuesLength);
-}
-
-const char* ResourceTypeToString(ResourceType type) {
-  ResourceType* iter =
-      std::find(kResourceTypeValues,
-                kResourceTypeValues + kResourceTypeValuesLength,
-                type);
-  if (iter == (kResourceTypeValues + kResourceTypeValuesLength))
-    return "other";
-
-  return kResourceTypeStrings[iter - kResourceTypeValues];
-}
-
-bool ParseResourceType(const std::string& type_str,
-                       std::vector<ResourceType>* types) {
-  bool found = false;
-  for (size_t i = 0; i < kResourceTypeStringsLength; ++i) {
-    if (type_str == kResourceTypeStrings[i]) {
-      found = true;
-      types->push_back(kResourceTypeValues[i]);
-    }
-  }
-  return found;
 }
 
 }  // namespace extension_web_request_api_helpers

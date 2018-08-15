@@ -25,8 +25,8 @@ struct StructTraits<cc::mojom::SharedQuadStateDataView, OptSharedQuadState> {
     return input.sqs->quad_to_target_transform;
   }
 
-  static const gfx::Size& quad_layer_bounds(const OptSharedQuadState& input) {
-    return input.sqs->quad_layer_bounds;
+  static const gfx::Rect& quad_layer_rect(const OptSharedQuadState& input) {
+    return input.sqs->quad_layer_rect;
   }
 
   static const gfx::Rect& visible_quad_layer_rect(
@@ -47,7 +47,7 @@ struct StructTraits<cc::mojom::SharedQuadStateDataView, OptSharedQuadState> {
   }
 
   static uint32_t blend_mode(const OptSharedQuadState& input) {
-    return input.sqs->blend_mode;
+    return static_cast<uint32_t>(input.sqs->blend_mode);
   }
 
   static int32_t sorting_context_id(const OptSharedQuadState& input) {
@@ -62,8 +62,8 @@ struct StructTraits<cc::mojom::SharedQuadStateDataView, cc::SharedQuadState> {
     return sqs.quad_to_target_transform;
   }
 
-  static const gfx::Size& quad_layer_bounds(const cc::SharedQuadState& sqs) {
-    return sqs.quad_layer_bounds;
+  static const gfx::Rect& quad_layer_rect(const cc::SharedQuadState& sqs) {
+    return sqs.quad_layer_rect;
   }
 
   static const gfx::Rect& visible_quad_layer_rect(
@@ -82,7 +82,7 @@ struct StructTraits<cc::mojom::SharedQuadStateDataView, cc::SharedQuadState> {
   static float opacity(const cc::SharedQuadState& sqs) { return sqs.opacity; }
 
   static uint32_t blend_mode(const cc::SharedQuadState& sqs) {
-    return sqs.blend_mode;
+    return static_cast<uint32_t>(sqs.blend_mode);
   }
 
   static int32_t sorting_context_id(const cc::SharedQuadState& sqs) {
@@ -92,7 +92,7 @@ struct StructTraits<cc::mojom::SharedQuadStateDataView, cc::SharedQuadState> {
   static bool Read(cc::mojom::SharedQuadStateDataView data,
                    cc::SharedQuadState* out) {
     if (!data.ReadQuadToTargetTransform(&out->quad_to_target_transform) ||
-        !data.ReadQuadLayerBounds(&out->quad_layer_bounds) ||
+        !data.ReadQuadLayerRect(&out->quad_layer_rect) ||
         !data.ReadVisibleQuadLayerRect(&out->visible_quad_layer_rect) ||
         !data.ReadClipRect(&out->clip_rect)) {
       return false;
@@ -100,9 +100,9 @@ struct StructTraits<cc::mojom::SharedQuadStateDataView, cc::SharedQuadState> {
 
     out->is_clipped = data.is_clipped();
     out->opacity = data.opacity();
-    if (data.blend_mode() > SkXfermode::kLastMode)
+    if (data.blend_mode() > static_cast<int>(SkBlendMode::kLastMode))
       return false;
-    out->blend_mode = static_cast<SkXfermode::Mode>(data.blend_mode());
+    out->blend_mode = static_cast<SkBlendMode>(data.blend_mode());
     out->sorting_context_id = data.sorting_context_id();
     return true;
   }

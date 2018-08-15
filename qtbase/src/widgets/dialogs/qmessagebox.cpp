@@ -64,6 +64,7 @@
 #include <QtGui/qfont.h>
 #include <QtGui/qfontmetrics.h>
 #include <QtGui/qclipboard.h>
+#include <private/qdesktopwidget_p.h>
 
 #ifdef Q_OS_WIN
 #    include <QtCore/qt_windows.h>
@@ -361,7 +362,7 @@ void QMessageBoxPrivate::updateSize()
     if (!q->isVisible())
         return;
 
-    QSize screenSize = QApplication::desktop()->availableGeometry(QCursor::pos()).size();
+    QSize screenSize = QDesktopWidgetPrivate::availableGeometry(QCursor::pos()).size();
     int hardLimit = qMin(screenSize.width() - 480, 1000); // can never get bigger than this
     // on small screens allows the messagebox be the same size as the screen
     if (screenSize.width() <= 1024)
@@ -1835,7 +1836,7 @@ void QMessageBox::aboutQt(QWidget *parent, const QString &title)
         "<p>Qt and the Qt logo are trademarks of The Qt Company Ltd.</p>"
         "<p>Qt is The Qt Company Ltd product developed as an open source "
         "project. See <a href=\"http://%3/\">%3</a> for more information.</p>"
-        ).arg(QStringLiteral("2018"),
+        ).arg(QStringLiteral("2017"),
               QStringLiteral("qt.io/licensing"),
               QStringLiteral("qt.io"));
     QMessageBox *msgBox = new QMessageBox(parent);

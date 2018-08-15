@@ -26,10 +26,10 @@
 #include "src/string-search.h"
 #include "src/unicode-decoder.h"
 
-#ifdef V8_I18N_SUPPORT
-#include "third_party/icu/source/common/unicode/uset.h"
-#include "third_party/icu/source/common/unicode/utypes.h"
-#endif  // V8_I18N_SUPPORT
+#ifdef V8_INTL_SUPPORT
+#include "unicode/uniset.h"
+#include "unicode/utypes.h"
+#endif  // V8_INTL_SUPPORT
 
 #ifndef V8_INTERPRETED_REGEXP
 #if V8_TARGET_ARCH_IA32
@@ -48,8 +48,6 @@
 #include "src/regexp/mips/regexp-macro-assembler-mips.h"
 #elif V8_TARGET_ARCH_MIPS64
 #include "src/regexp/mips64/regexp-macro-assembler-mips64.h"
-#elif V8_TARGET_ARCH_X87
-#include "src/regexp/x87/regexp-macro-assembler-x87.h"
 #else
 #error Unsupported target architecture.
 #endif
@@ -135,6 +133,8 @@ static bool HasFewDifferentCharacters(Handle<String> pattern) {
 MaybeHandle<Object> RegExpImpl::Compile(Handle<JSRegExp> re,
                                         Handle<String> pattern,
                                         JSRegExp::Flags flags) {
+  DCHECK(pattern->IsFlat());
+
   Isolate* isolate = re->GetIsolate();
   Zone zone(isolate->allocator(), ZONE_NAME);
   CompilationCache* compilation_cache = isolate->compilation_cache();
@@ -145,7 +145,7 @@ MaybeHandle<Object> RegExpImpl::Compile(Handle<JSRegExp> re,
     re->set_data(*cached);
     return re;
   }
-  pattern = String::Flatten(pattern);
+
   PostponeInterruptsScope postpone(isolate);
   RegExpCompileData parse_result;
   FlatStringReader reader(isolate, pattern);
@@ -199,7 +199,6 @@ MaybeHandle<Object> RegExpImpl::Exec(Handle<JSRegExp> regexp,
     }
     default:
       UNREACHABLE();
-      return MaybeHandle<Object>();
   }
 }
 
@@ -318,15 +317,6 @@ bool RegExpImpl::EnsureCompiledIrregexp(Handle<JSRegExp> re,
 #else  // V8_INTERPRETED_REGEXP (RegExp native code)
   if (compiled_code->IsCode()) return true;
 #endif
-  // We could potentially have marked this as flushable, but have kept
-  // a saved version if we did not flush it yet.
-  Object* saved_code = re->DataAt(JSRegExp::saved_code_index(is_one_byte));
-  if (saved_code->IsCode()) {
-    // Reinstate the code in the original place.
-    re->SetDataAt(JSRegExp::code_index(is_one_byte), saved_code);
-    DCHECK(compiled_code->IsSmi());
-    return true;
-  }
   return CompileIrregexp(re, sample_subject, is_one_byte);
 }
 
@@ -338,28 +328,14 @@ bool RegExpImpl::CompileIrregexp(Handle<JSRegExp> re,
   Isolate* isolate = re->GetIsolate();
   Zone zone(isolate->allocator(), ZONE_NAME);
   PostponeInterruptsScope postpone(isolate);
-  // If we had a compilation error the last time this is saved at the
-  // saved code index.
+#ifdef DEBUG
   Object* entry = re->DataAt(JSRegExp::code_index(is_one_byte));
-  // When arriving here entry can only be a smi, either representing an
-  // uncompiled regexp, a previous compilation error, or code that has
-  // been flushed.
+  // When arriving here entry can only be a smi representing an uncompiled
+  // regexp.
   DCHECK(entry->IsSmi());
-  int entry_value = Smi::cast(entry)->value();
-  DCHECK(entry_value == JSRegExp::kUninitializedValue ||
-         entry_value == JSRegExp::kCompilationErrorValue ||
-         (entry_value < JSRegExp::kCodeAgeMask && entry_value >= 0));
-
-  if (entry_value == JSRegExp::kCompilationErrorValue) {
-    // A previous compilation failed and threw an error which we store in
-    // the saved code index (we store the error message, not the actual
-    // error). Recreate the error object and throw it.
-    Object* error_string = re->DataAt(JSRegExp::saved_code_index(is_one_byte));
-    DCHECK(error_string->IsString());
-    Handle<String> error_message(String::cast(error_string));
-    ThrowRegExpException(re, error_message);
-    return false;
-  }
+  int entry_value = Smi::ToInt(entry);
+  DCHECK_EQ(JSRegExp::kUninitializedValue, entry_value);
+#endif
 
   JSRegExp::Flags flags = re->GetFlags();
 
@@ -417,12 +393,12 @@ void RegExpImpl::SetIrregexpCaptureNameMap(FixedArray* re,
 }
 
 int RegExpImpl::IrregexpNumberOfCaptures(FixedArray* re) {
-  return Smi::cast(re->get(JSRegExp::kIrregexpCaptureCountIndex))->value();
+  return Smi::ToInt(re->get(JSRegExp::kIrregexpCaptureCountIndex));
 }
 
 
 int RegExpImpl::IrregexpNumberOfRegisters(FixedArray* re) {
-  return Smi::cast(re->get(JSRegExp::kIrregexpMaxRegisterCountIndex))->value();
+  return Smi::ToInt(re->get(JSRegExp::kIrregexpMaxRegisterCountIndex));
 }
 
 
@@ -451,7 +427,7 @@ void RegExpImpl::IrregexpInitialize(Handle<JSRegExp> re,
 
 int RegExpImpl::IrregexpPrepare(Handle<JSRegExp> regexp,
                                 Handle<String> subject) {
-  subject = String::Flatten(subject);
+  DCHECK(subject->IsFlat());
 
   // Check representation of the underlying storage.
   bool is_one_byte = subject->IsOneByteRepresentationUnderneath();
@@ -524,7 +500,6 @@ int RegExpImpl::IrregexpExecRaw(Handle<JSRegExp> regexp,
     is_one_byte = subject->IsOneByteRepresentationUnderneath();
   } while (true);
   UNREACHABLE();
-  return RE_EXCEPTION;
 #else  // V8_INTERPRETED_REGEXP
 
   DCHECK(output_size >= IrregexpNumberOfRegisters(*irregexp));
@@ -564,6 +539,8 @@ MaybeHandle<Object> RegExpImpl::IrregexpExec(
     Handle<RegExpMatchInfo> last_match_info) {
   Isolate* isolate = regexp->GetIsolate();
   DCHECK_EQ(regexp->TypeTag(), JSRegExp::IRREGEXP);
+
+  subject = String::Flatten(subject);
 
   // Prepare space for the return values.
 #if defined(V8_INTERPRETED_REGEXP) && defined(DEBUG)
@@ -899,7 +876,6 @@ int TextElement::length() const {
       return 1;
   }
   UNREACHABLE();
-  return 0;
 }
 
 
@@ -1017,6 +993,11 @@ class RegExpCompiler {
 
   inline bool ignore_case() { return (flags_ & JSRegExp::kIgnoreCase) != 0; }
   inline bool unicode() { return (flags_ & JSRegExp::kUnicode) != 0; }
+  // Both unicode and ignore_case flags are set. We need to use ICU to find
+  // the closure over case equivalents.
+  inline bool needs_unicode_case_equivalents() {
+    return unicode() && ignore_case();
+  }
   inline bool one_byte() { return one_byte_; }
   inline bool optimize() { return optimize_; }
   inline void set_optimize(bool value) { optimize_ = value; }
@@ -1104,12 +1085,11 @@ RegExpEngine::CompilationResult RegExpCompiler::Assemble(
     RegExpNode* start,
     int capture_count,
     Handle<String> pattern) {
-  Heap* heap = pattern->GetHeap();
+  Isolate* isolate = pattern->GetHeap()->isolate();
 
 #ifdef DEBUG
   if (FLAG_trace_regexp_assembler)
-    macro_assembler_ =
-        new RegExpMacroAssemblerTracer(isolate(), macro_assembler);
+    macro_assembler_ = new RegExpMacroAssemblerTracer(isolate, macro_assembler);
   else
 #endif
     macro_assembler_ = macro_assembler;
@@ -1133,11 +1113,11 @@ RegExpEngine::CompilationResult RegExpCompiler::Assemble(
   }
 
   Handle<HeapObject> code = macro_assembler_->GetCode(pattern);
-  heap->IncreaseTotalRegexpCodeGenerated(code->Size());
+  isolate->IncreaseTotalRegexpCodeGenerated(code->Size());
   work_list_ = NULL;
 #ifdef ENABLE_DISASSEMBLER
   if (FLAG_print_code) {
-    CodeTracer::Scope trace_scope(heap->isolate()->GetCodeTracer());
+    CodeTracer::Scope trace_scope(isolate->GetCodeTracer());
     OFStream os(trace_scope.file());
     Handle<Code>::cast(code)->Disassemble(pattern->ToCString().get(), os);
   }
@@ -2294,9 +2274,7 @@ int ActionNode::EatsAtLeast(int still_to_find,
 
 void ActionNode::FillInBMInfo(Isolate* isolate, int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start) {
-  if (action_type_ == BEGIN_SUBMATCH) {
-    bm->SetRest(offset);
-  } else if (action_type_ != POSITIVE_SUBMATCH_SUCCESS) {
+  if (action_type_ != POSITIVE_SUBMATCH_SUCCESS) {
     on_success()->FillInBMInfo(isolate, offset, budget - 1, bm, not_at_start);
   }
   SaveBMInfo(bm, not_at_start, offset);
@@ -3321,9 +3299,8 @@ TextNode* TextNode::CreateForCharacterRanges(Zone* zone,
                                              RegExpNode* on_success) {
   DCHECK_NOT_NULL(ranges);
   ZoneList<TextElement>* elms = new (zone) ZoneList<TextElement>(1, zone);
-  elms->Add(
-      TextElement::CharClass(new (zone) RegExpCharacterClass(ranges, false)),
-      zone);
+  elms->Add(TextElement::CharClass(new (zone) RegExpCharacterClass(ranges)),
+            zone);
   return new (zone) TextNode(elms, read_backward, on_success);
 }
 
@@ -3335,12 +3312,12 @@ TextNode* TextNode::CreateForSurrogatePair(Zone* zone, CharacterRange lead,
   ZoneList<CharacterRange>* lead_ranges = CharacterRange::List(zone, lead);
   ZoneList<CharacterRange>* trail_ranges = CharacterRange::List(zone, trail);
   ZoneList<TextElement>* elms = new (zone) ZoneList<TextElement>(2, zone);
-  elms->Add(TextElement::CharClass(
-                new (zone) RegExpCharacterClass(lead_ranges, false)),
-            zone);
-  elms->Add(TextElement::CharClass(
-                new (zone) RegExpCharacterClass(trail_ranges, false)),
-            zone);
+  elms->Add(
+      TextElement::CharClass(new (zone) RegExpCharacterClass(lead_ranges)),
+      zone);
+  elms->Add(
+      TextElement::CharClass(new (zone) RegExpCharacterClass(trail_ranges)),
+      zone);
   return new (zone) TextNode(elms, read_backward, on_success);
 }
 
@@ -3611,8 +3588,8 @@ static const uc32 kRangeEndMarker = 0x110000;
 // This covers \s as defined in ECMA-262 5.1, 15.10.2.12,
 // which include WhiteSpace (7.2) or LineTerminator (7.3) values.
 static const int kSpaceRanges[] = {
-    '\t',   '\r' + 1, ' ',    ' ' + 1, 0x00A0, 0x00A1, 0x1680,         0x1681,
-    0x180E, 0x180F,   0x2000, 0x200B,  0x2028, 0x202A, 0x202F,         0x2030,
+    '\t',   '\r' + 1, ' ',    ' ' + 1, 0x00A0, 0x00A1, 0x1680,
+    0x1681, 0x2000,   0x200B, 0x2028,  0x202A, 0x202F, 0x2030,
     0x205F, 0x2060,   0x3000, 0x3001,  0xFEFF, 0xFF00, kRangeEndMarker};
 static const int kSpaceRangeCount = arraysize(kSpaceRanges);
 
@@ -4845,7 +4822,7 @@ static bool CompareRanges(ZoneList<CharacterRange>* ranges,
 bool RegExpCharacterClass::is_standard(Zone* zone) {
   // TODO(lrn): Remove need for this function, by not throwing away information
   // along the way.
-  if (is_negated_) {
+  if (is_negated()) {
     return false;
   }
   if (set_.is_standard()) {
@@ -5107,43 +5084,26 @@ RegExpNode* UnanchoredAdvance(RegExpCompiler* compiler,
   return TextNode::CreateForCharacterRanges(zone, range, false, on_success);
 }
 
-
-void AddUnicodeCaseEquivalents(RegExpCompiler* compiler,
-                               ZoneList<CharacterRange>* ranges) {
-#ifdef V8_I18N_SUPPORT
+void AddUnicodeCaseEquivalents(ZoneList<CharacterRange>* ranges, Zone* zone) {
+#ifdef V8_INTL_SUPPORT
   // Use ICU to compute the case fold closure over the ranges.
-  DCHECK(compiler->unicode());
-  DCHECK(compiler->ignore_case());
-  USet* set = uset_openEmpty();
+  icu::UnicodeSet set;
   for (int i = 0; i < ranges->length(); i++) {
-    uset_addRange(set, ranges->at(i).from(), ranges->at(i).to());
+    set.add(ranges->at(i).from(), ranges->at(i).to());
   }
   ranges->Clear();
-  uset_closeOver(set, USET_CASE_INSENSITIVE);
+  set.closeOver(USET_CASE_INSENSITIVE);
   // Full case mapping map single characters to multiple characters.
   // Those are represented as strings in the set. Remove them so that
   // we end up with only simple and common case mappings.
-  uset_removeAllStrings(set);
-  int item_count = uset_getItemCount(set);
-  int item_result = 0;
-  UErrorCode ec = U_ZERO_ERROR;
-  Zone* zone = compiler->zone();
-  for (int i = 0; i < item_count; i++) {
-    uc32 start = 0;
-    uc32 end = 0;
-    item_result += uset_getItem(set, i, &start, &end, nullptr, 0, &ec);
-    ranges->Add(CharacterRange::Range(start, end), zone);
+  set.removeAllStrings();
+  for (int i = 0; i < set.getRangeCount(); i++) {
+    ranges->Add(CharacterRange::Range(set.getRangeStart(i), set.getRangeEnd(i)),
+                zone);
   }
   // No errors and everything we collected have been ranges.
-  DCHECK_EQ(U_ZERO_ERROR, ec);
-  DCHECK_EQ(0, item_result);
-  uset_close(set);
-#else
-  // Fallback if ICU is not included.
-  CharacterRange::AddCaseEquivalents(compiler->isolate(), compiler->zone(),
-                                     ranges, compiler->one_byte());
-#endif  // V8_I18N_SUPPORT
   CharacterRange::Canonicalize(ranges);
+#endif  // V8_INTL_SUPPORT
 }
 
 
@@ -5152,10 +5112,11 @@ RegExpNode* RegExpCharacterClass::ToNode(RegExpCompiler* compiler,
   set_.Canonicalize();
   Zone* zone = compiler->zone();
   ZoneList<CharacterRange>* ranges = this->ranges(zone);
-  if (compiler->unicode() && compiler->ignore_case()) {
-    AddUnicodeCaseEquivalents(compiler, ranges);
+  if (compiler->needs_unicode_case_equivalents()) {
+    AddUnicodeCaseEquivalents(ranges, zone);
   }
-  if (compiler->unicode() && !compiler->one_byte()) {
+  if (compiler->unicode() && !compiler->one_byte() &&
+      !contains_split_surrogate()) {
     if (is_negated()) {
       ZoneList<CharacterRange>* negated =
           new (zone) ZoneList<CharacterRange>(2, zone);
@@ -5165,7 +5126,7 @@ RegExpNode* RegExpCharacterClass::ToNode(RegExpCompiler* compiler,
     if (ranges->length() == 0) {
       ranges->Add(CharacterRange::Everything(), zone);
       RegExpCharacterClass* fail =
-          new (zone) RegExpCharacterClass(ranges, true);
+          new (zone) RegExpCharacterClass(ranges, NEGATED);
       return new (zone) TextNode(fail, compiler->read_backward(), on_success);
     }
     if (standard_type() == '*') {
@@ -5363,6 +5324,7 @@ void RegExpDisjunction::FixSingleCharacterDisjunctions(
   Zone* zone = compiler->zone();
   ZoneList<RegExpTree*>* alternatives = this->alternatives();
   int length = alternatives->length();
+  const bool unicode = compiler->unicode();
 
   int write_posn = 0;
   int i = 0;
@@ -5379,6 +5341,10 @@ void RegExpDisjunction::FixSingleCharacterDisjunctions(
       i++;
       continue;
     }
+    DCHECK_IMPLIES(unicode,
+                   !unibrow::Utf16::IsLeadSurrogate(atom->data().at(0)));
+    bool contains_trail_surrogate =
+        unibrow::Utf16::IsTrailSurrogate(atom->data().at(0));
     int first_in_run = i;
     i++;
     while (i < length) {
@@ -5386,6 +5352,10 @@ void RegExpDisjunction::FixSingleCharacterDisjunctions(
       if (!alternative->IsAtom()) break;
       atom = alternative->AsAtom();
       if (atom->length() != 1) break;
+      DCHECK_IMPLIES(unicode,
+                     !unibrow::Utf16::IsLeadSurrogate(atom->data().at(0)));
+      contains_trail_surrogate |=
+          unibrow::Utf16::IsTrailSurrogate(atom->data().at(0));
       i++;
     }
     if (i > first_in_run + 1) {
@@ -5398,8 +5368,12 @@ void RegExpDisjunction::FixSingleCharacterDisjunctions(
         DCHECK_EQ(old_atom->length(), 1);
         ranges->Add(CharacterRange::Singleton(old_atom->data().at(0)), zone);
       }
+      RegExpCharacterClass::Flags flags;
+      if (unicode && contains_trail_surrogate) {
+        flags = RegExpCharacterClass::CONTAINS_SPLIT_SURROGATE;
+      }
       alternatives->at(write_posn++) =
-          new (zone) RegExpCharacterClass(ranges, false);
+          new (zone) RegExpCharacterClass(ranges, flags);
     } else {
       // Just copy any trivial alternatives.
       for (int j = first_in_run; j < i; j++) {
@@ -5626,6 +5600,42 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
   }
 }
 
+namespace {
+// Desugar \b to (?<=\w)(?=\W)|(?<=\W)(?=\w) and
+//         \B to (?<=\w)(?=\w)|(?<=\W)(?=\W)
+RegExpNode* BoundaryAssertionAsLookaround(RegExpCompiler* compiler,
+                                          RegExpNode* on_success,
+                                          RegExpAssertion::AssertionType type) {
+  DCHECK(compiler->needs_unicode_case_equivalents());
+  Zone* zone = compiler->zone();
+  ZoneList<CharacterRange>* word_range =
+      new (zone) ZoneList<CharacterRange>(2, zone);
+  CharacterRange::AddClassEscape('w', word_range, true, zone);
+  int stack_register = compiler->UnicodeLookaroundStackRegister();
+  int position_register = compiler->UnicodeLookaroundPositionRegister();
+  ChoiceNode* result = new (zone) ChoiceNode(2, zone);
+  // Add two choices. The (non-)boundary could start with a word or
+  // a non-word-character.
+  for (int i = 0; i < 2; i++) {
+    bool lookbehind_for_word = i == 0;
+    bool lookahead_for_word =
+        (type == RegExpAssertion::BOUNDARY) ^ lookbehind_for_word;
+    // Look to the left.
+    RegExpLookaround::Builder lookbehind(lookbehind_for_word, on_success,
+                                         stack_register, position_register);
+    RegExpNode* backward = TextNode::CreateForCharacterRanges(
+        zone, word_range, true, lookbehind.on_match_success());
+    // Look to the right.
+    RegExpLookaround::Builder lookahead(lookahead_for_word,
+                                        lookbehind.ForMatch(backward),
+                                        stack_register, position_register);
+    RegExpNode* forward = TextNode::CreateForCharacterRanges(
+        zone, word_range, false, lookahead.on_match_success());
+    result->AddAlternative(GuardedAlternative(lookahead.ForMatch(forward)));
+  }
+  return result;
+}
+}  // anonymous namespace
 
 RegExpNode* RegExpAssertion::ToNode(RegExpCompiler* compiler,
                                     RegExpNode* on_success) {
@@ -5638,9 +5648,14 @@ RegExpNode* RegExpAssertion::ToNode(RegExpCompiler* compiler,
     case START_OF_INPUT:
       return AssertionNode::AtStart(on_success);
     case BOUNDARY:
-      return AssertionNode::AtBoundary(on_success);
+      return compiler->needs_unicode_case_equivalents()
+                 ? BoundaryAssertionAsLookaround(compiler, on_success, BOUNDARY)
+                 : AssertionNode::AtBoundary(on_success);
     case NON_BOUNDARY:
-      return AssertionNode::AtNonBoundary(on_success);
+      return compiler->needs_unicode_case_equivalents()
+                 ? BoundaryAssertionAsLookaround(compiler, on_success,
+                                                 NON_BOUNDARY)
+                 : AssertionNode::AtNonBoundary(on_success);
     case END_OF_INPUT:
       return AssertionNode::AtEnd(on_success);
     case END_OF_LINE: {
@@ -5654,7 +5669,7 @@ RegExpNode* RegExpAssertion::ToNode(RegExpCompiler* compiler,
       // Create a newline atom.
       ZoneList<CharacterRange>* newline_ranges =
           new(zone) ZoneList<CharacterRange>(3, zone);
-      CharacterRange::AddClassEscape('n', newline_ranges, zone);
+      CharacterRange::AddClassEscape('n', newline_ranges, false, zone);
       RegExpCharacterClass* newline_atom = new (zone) RegExpCharacterClass('n');
       TextNode* newline_matcher = new (zone) TextNode(
           newline_atom, false, ActionNode::PositiveSubmatchSuccess(
@@ -5828,9 +5843,30 @@ static void AddClassNegated(const int *elmv,
   ranges->Add(CharacterRange::Range(last, String::kMaxCodePoint), zone);
 }
 
+void CharacterRange::AddClassEscape(uc16 type, ZoneList<CharacterRange>* ranges,
+                                    bool add_unicode_case_equivalents,
+                                    Zone* zone) {
+  if (add_unicode_case_equivalents && (type == 'w' || type == 'W')) {
+    // See #sec-runtime-semantics-wordcharacters-abstract-operation
+    // In case of unicode and ignore_case, we need to create the closure over
+    // case equivalent characters before negating.
+    ZoneList<CharacterRange>* new_ranges =
+        new (zone) ZoneList<CharacterRange>(2, zone);
+    AddClass(kWordRanges, kWordRangeCount, new_ranges, zone);
+    AddUnicodeCaseEquivalents(new_ranges, zone);
+    if (type == 'W') {
+      ZoneList<CharacterRange>* negated =
+          new (zone) ZoneList<CharacterRange>(2, zone);
+      CharacterRange::Negate(new_ranges, negated, zone);
+      new_ranges = negated;
+    }
+    ranges->AddAll(*new_ranges, zone);
+    return;
+  }
+  AddClassEscape(type, ranges, zone);
+}
 
-void CharacterRange::AddClassEscape(uc16 type,
-                                    ZoneList<CharacterRange>* ranges,
+void CharacterRange::AddClassEscape(uc16 type, ZoneList<CharacterRange>* ranges,
                                     Zone* zone) {
   switch (type) {
     case 's':
@@ -5972,7 +6008,7 @@ bool CharacterRange::IsCanonical(ZoneList<CharacterRange>* ranges) {
 ZoneList<CharacterRange>* CharacterSet::ranges(Zone* zone) {
   if (ranges_ == NULL) {
     ranges_ = new(zone) ZoneList<CharacterRange>(2, zone);
-    CharacterRange::AddClassEscape(standard_set_type_, ranges_, zone);
+    CharacterRange::AddClassEscape(standard_set_type_, ranges_, false, zone);
   }
   return ranges_;
 }
@@ -6724,9 +6760,6 @@ RegExpEngine::CompilationResult RegExpEngine::Compile(
 #elif V8_TARGET_ARCH_MIPS64
   RegExpMacroAssemblerMIPS macro_assembler(isolate, zone, mode,
                                            (data->capture_count + 1) * 2);
-#elif V8_TARGET_ARCH_X87
-  RegExpMacroAssemblerX87 macro_assembler(isolate, zone, mode,
-                                          (data->capture_count + 1) * 2);
 #else
 #error "Unsupported architecture"
 #endif
@@ -6742,8 +6775,7 @@ RegExpEngine::CompilationResult RegExpEngine::Compile(
   // Inserted here, instead of in Assembler, because it depends on information
   // in the AST that isn't replicated in the Node structure.
   static const int kMaxBacksearchLimit = 1024;
-  if (is_end_anchored &&
-      !is_start_anchored &&
+  if (is_end_anchored && !is_start_anchored && !is_sticky &&
       max_length < kMaxBacksearchLimit) {
     macro_assembler.SetCurrentPositionFromEnd(max_length);
   }
@@ -6768,8 +6800,9 @@ RegExpEngine::CompilationResult RegExpEngine::Compile(
 bool RegExpEngine::TooMuchRegExpCode(Handle<String> pattern) {
   Heap* heap = pattern->GetHeap();
   bool too_much = pattern->length() > RegExpImpl::kRegExpTooLargeToOptimize;
-  if (heap->total_regexp_code_generated() > RegExpImpl::kRegExpCompiledLimit &&
-      heap->memory_allocator()->SizeExecutable() >
+  if (heap->isolate()->total_regexp_code_generated() >
+          RegExpImpl::kRegExpCompiledLimit &&
+      heap->CommittedMemoryExecutable() >
           RegExpImpl::kRegExpExecutableMemoryLimit) {
     too_much = true;
   }

@@ -1,29 +1,32 @@
 import("//build/config/features.gni")
+import("//build/config/ui.gni")
 import("//components/spellcheck/spellcheck_build_features.gni")
+import("//pdf/features.gni")
+import("//ppapi/features/features.gni")
 import("//printing/features/features.gni")
 
 source_set("qtwebengine_spellcheck_sources") {
   sources = [
+    "//chrome/browser/spellchecker/spell_check_host_impl.cc",
+    "//chrome/browser/spellchecker/spell_check_host_impl.h",
     "//chrome/browser/spellchecker/spellcheck_custom_dictionary.cc",
     "//chrome/browser/spellchecker/spellcheck_custom_dictionary.h",
     "//chrome/browser/spellchecker/spellcheck_factory.cc",
     "//chrome/browser/spellchecker/spellcheck_factory.h",
     "//chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc",
     "//chrome/browser/spellchecker/spellcheck_hunspell_dictionary.h",
-    "//chrome/browser/spellchecker/spellcheck_message_filter.cc",
-    "//chrome/browser/spellchecker/spellcheck_message_filter.h",
     "//chrome/browser/spellchecker/spellcheck_service.cc",
     "//chrome/browser/spellchecker/spellcheck_service.h",
   ]
   deps = [
     "//components/spellcheck/browser",
     "//components/spellcheck/renderer",
+    "//third_party/boringssl",
     "//third_party/WebKit/public:blink",
     "//third_party/hunspell",
   ]
   if (is_mac && use_browser_spellchecker) {
     sources += [
-        "//chrome/browser/spellchecker/spellcheck_message_filter_platform.h",
         "//chrome/browser/spellchecker/spellcheck_message_filter_platform_mac.cc",
     ]
   }
@@ -43,8 +46,8 @@ source_set("qtwebengine_sources") {
     "//chrome/browser/media/webrtc/desktop_streams_registry.h",
     "//chrome/common/chrome_switches.cc",
     "//chrome/common/chrome_switches.h",
-    "//components/prefs/testing_pref_store.cc",
-    "//components/prefs/testing_pref_store.h",
+    "//components/prefs/in_memory_pref_store.cc",
+    "//components/prefs/in_memory_pref_store.h",
     "//extensions/common/constants.cc",
     "//extensions/common/constants.h",
     "//extensions/common/url_pattern.cc",
@@ -99,10 +102,10 @@ source_set("qtwebengine_sources") {
   if (enable_pdf) {
       deps += [
          "//pdf",
+         "//pdf:features",
          "//components/printing/browser",
          "//components/printing/renderer",
       ]
   }
-
 }
 

@@ -18,10 +18,10 @@
 #include "media/base/bind_to_current_loop.h"
 #include "media/renderers/gpu_video_accelerator_factories.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "third_party/webrtc/base/bind.h"
-#include "third_party/webrtc/base/refcount.h"
+#include "third_party/webrtc/api/video/video_frame.h"
 #include "third_party/webrtc/modules/video_coding/codecs/h264/include/h264.h"
-#include "third_party/webrtc/video_frame.h"
+#include "third_party/webrtc/rtc_base/bind.h"
+#include "third_party/webrtc/rtc_base/refcount.h"
 
 #if defined(OS_WIN)
 #include "base/command_line.h"
@@ -68,8 +68,6 @@ RTCVideoDecoder::RTCVideoDecoder(webrtc::VideoCodecType type,
     : vda_error_counter_(0),
       video_codec_type_(type),
       factories_(factories),
-      decoder_texture_target_(0),
-      pixel_format_(media::PIXEL_FORMAT_UNKNOWN),
       next_picture_buffer_id_(0),
       state_(UNINITIALIZED),
       decode_complete_callback_(nullptr),
@@ -110,6 +108,9 @@ std::unique_ptr<RTCVideoDecoder> RTCVideoDecoder::Create(
     case webrtc::kVideoCodecVP8:
       profile = media::VP8PROFILE_ANY;
       break;
+    case webrtc::kVideoCodecVP9:
+      profile = media::VP9PROFILE_MIN;
+      break;
     case webrtc::kVideoCodecH264:
       profile = media::H264PROFILE_MAIN;
       break;
@@ -146,11 +147,6 @@ int32_t RTCVideoDecoder::InitDecode(const webrtc::VideoCodec* codecSettings,
                                     int32_t /*numberOfCores*/) {
   DVLOG(2) << "InitDecode";
   DCHECK_EQ(video_codec_type_, codecSettings->codecType);
-  if (codecSettings->codecType == webrtc::kVideoCodecVP8 &&
-      codecSettings->VP8().feedbackModeOn) {
-    LOG(ERROR) << "Feedback mode not supported";
-    return RecordInitDecodeUMA(WEBRTC_VIDEO_CODEC_ERROR);
-  }
 
   base::AutoLock auto_lock(lock_);
   if (state_ == UNINITIALIZED || state_ == DECODE_ERROR) {
@@ -210,10 +206,10 @@ int32_t RTCVideoDecoder::Decode(
 #endif
 
   bool need_to_reset_for_midstream_resize = false;
-  if (inputImage._frameType == webrtc::kVideoFrameKey) {
-    const gfx::Size new_frame_size(inputImage._encodedWidth,
-                                   inputImage._encodedHeight);
-    DVLOG(2) << "Got key frame. size=" << new_frame_size.ToString();
+  const gfx::Size new_frame_size(inputImage._encodedWidth,
+                                 inputImage._encodedHeight);
+  if (!new_frame_size.IsEmpty() && new_frame_size != frame_size_) {
+    DVLOG(2) << "Got new size=" << new_frame_size.ToString();
 
     if (new_frame_size.width() > max_resolution_.width() ||
         new_frame_size.width() < min_resolution_.width() ||
@@ -237,7 +233,7 @@ int32_t RTCVideoDecoder::Decode(
     // If we're are in an error condition, increase the counter.
     vda_error_counter_ += vda_error_counter_ ? 1 : 0;
 
-    DVLOG(1) << "The first frame should be a key frame. Drop this.";
+    DVLOG(1) << "The first frame should have resolution. Drop this.";
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
 
@@ -267,8 +263,7 @@ int32_t RTCVideoDecoder::Decode(
     }
 
     if (need_to_reset_for_midstream_resize) {
-      base::AutoUnlock auto_unlock(lock_);
-      Release();
+      Reset_Locked();
     }
     return WEBRTC_VIDEO_CODEC_OK;
   }
@@ -303,65 +298,57 @@ int32_t RTCVideoDecoder::Release() {
     reset_bitstream_buffer_id_ = next_bitstream_buffer_id_ - 1;
   else
     reset_bitstream_buffer_id_ = ID_LAST;
-  // If VDA is already resetting, no need to request the reset again.
-  if (state_ != RESETTING) {
-    state_ = RESETTING;
-    factories_->GetTaskRunner()->PostTask(
-        FROM_HERE,
-        base::Bind(&RTCVideoDecoder::ResetInternal,
-                   weak_factory_.GetWeakPtr()));
-  }
+  frame_size_.SetSize(0, 0);
+  Reset_Locked();
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-void RTCVideoDecoder::ProvidePictureBuffers(uint32_t count,
+void RTCVideoDecoder::ProvidePictureBuffers(uint32_t buffer_count,
                                             media::VideoPixelFormat format,
                                             uint32_t textures_per_buffer,
                                             const gfx::Size& size,
                                             uint32_t texture_target) {
   DCheckGpuVideoAcceleratorFactoriesTaskRunnerIsCurrent();
   DVLOG(3) << "ProvidePictureBuffers. texture_target=" << texture_target;
-  DCHECK_EQ(1u, textures_per_buffer);
 
   if (!vda_)
     return;
 
   std::vector<uint32_t> texture_ids;
   std::vector<gpu::Mailbox> texture_mailboxes;
-  decoder_texture_target_ = texture_target;
 
   if (format == media::PIXEL_FORMAT_UNKNOWN)
     format = media::PIXEL_FORMAT_ARGB;
 
-  if ((pixel_format_ != media::PIXEL_FORMAT_UNKNOWN) &&
-      (format != pixel_format_)) {
+  const uint32_t texture_count = buffer_count * textures_per_buffer;
+  if (!factories_->CreateTextures(texture_count, size, &texture_ids,
+                                  &texture_mailboxes, texture_target)) {
     NotifyError(media::VideoDecodeAccelerator::PLATFORM_FAILURE);
     return;
   }
-
-  pixel_format_ = format;
-  if (!factories_->CreateTextures(count,
-                                  size,
-                                  &texture_ids,
-                                  &texture_mailboxes,
-                                  decoder_texture_target_)) {
-    NotifyError(media::VideoDecodeAccelerator::PLATFORM_FAILURE);
-    return;
-  }
-  DCHECK_EQ(count, texture_ids.size());
-  DCHECK_EQ(count, texture_mailboxes.size());
+  DCHECK_EQ(texture_count, texture_ids.size());
+  DCHECK_EQ(texture_count, texture_mailboxes.size());
 
   std::vector<media::PictureBuffer> picture_buffers;
-  for (size_t i = 0; i < texture_ids.size(); ++i) {
+  for (size_t buffer_index = 0; buffer_index < buffer_count; ++buffer_index) {
     media::PictureBuffer::TextureIds ids;
-    ids.push_back(texture_ids[i]);
     std::vector<gpu::Mailbox> mailboxes;
-    mailboxes.push_back(texture_mailboxes[i]);
+    for (size_t texture_index = 0; texture_index < textures_per_buffer;
+         ++texture_index) {
+      const size_t texture_id =
+          texture_index + textures_per_buffer * buffer_index;
+      ids.push_back(texture_ids[texture_id]);
+      mailboxes.push_back(texture_mailboxes[texture_id]);
+    }
 
-    picture_buffers.push_back(
-        media::PictureBuffer(next_picture_buffer_id_++, size, ids, mailboxes));
-    bool inserted = assigned_picture_buffers_.insert(std::make_pair(
-        picture_buffers.back().id(), picture_buffers.back())).second;
+    picture_buffers.push_back(media::PictureBuffer(next_picture_buffer_id_++,
+                                                   size, ids, mailboxes,
+                                                   texture_target, format));
+    const bool inserted =
+        assigned_picture_buffers_
+            .insert(std::make_pair(picture_buffers.back().id(),
+                                   picture_buffers.back()))
+            .second;
     DCHECK(inserted);
   }
   vda_->AssignPictureBuffers(picture_buffers);
@@ -383,7 +370,8 @@ void RTCVideoDecoder::DismissPictureBuffer(int32_t id) {
 
   if (!picture_buffers_at_display_.count(id)) {
     // We can delete the texture immediately as it's not being displayed.
-    factories_->DeleteTexture(buffer_to_dismiss.client_texture_ids()[0]);
+    for (const auto& id : buffer_to_dismiss.client_texture_ids())
+      factories_->DeleteTexture(id);
     return;
   }
   // Not destroying a texture in display in |picture_buffers_at_display_|.
@@ -417,14 +405,14 @@ void RTCVideoDecoder::PictureReady(const media::Picture& picture) {
   }
 
   scoped_refptr<media::VideoFrame> frame =
-      CreateVideoFrame(picture, pb, timestamp, visible_rect, pixel_format_);
+      CreateVideoFrame(picture, pb, timestamp, visible_rect, pb.pixel_format());
   if (!frame) {
     NotifyError(media::VideoDecodeAccelerator::PLATFORM_FAILURE);
     return;
   }
   bool inserted = picture_buffers_at_display_
                       .insert(std::make_pair(picture.picture_buffer_id(),
-                                             pb.client_texture_ids()[0]))
+                                             pb.client_texture_ids()))
                       .second;
   DCHECK(inserted);
 
@@ -453,7 +441,7 @@ scoped_refptr<media::VideoFrame> RTCVideoDecoder::CreateVideoFrame(
     uint32_t timestamp,
     const gfx::Rect& visible_rect,
     media::VideoPixelFormat pixel_format) {
-  DCHECK(decoder_texture_target_);
+  DCHECK(pb.texture_target());
   // Convert timestamp from 90KHz to ms.
   base::TimeDelta timestamp_ms = base::TimeDelta::FromInternalValue(
       base::checked_cast<uint64_t>(timestamp) * 1000 / 90);
@@ -463,16 +451,18 @@ scoped_refptr<media::VideoFrame> RTCVideoDecoder::CreateVideoFrame(
   // This prevents the compositor from messing with it, since the underlying
   // platform can handle the former format natively. Make sure the
   // correct format is used and everyone down the line understands it.
-  gpu::MailboxHolder holders[media::VideoFrame::kMaxPlanes] = {
-      gpu::MailboxHolder(pb.texture_mailbox(0), gpu::SyncToken(),
-                         decoder_texture_target_)};
+  gpu::MailboxHolder holders[media::VideoFrame::kMaxPlanes];
+  for (size_t i = 0; i < pb.client_texture_ids().size(); ++i) {
+    holders[i].mailbox = pb.texture_mailbox(i);
+    holders[i].texture_target = pb.texture_target();
+  }
   scoped_refptr<media::VideoFrame> frame =
       media::VideoFrame::WrapNativeTextures(
           pixel_format, holders,
-          media::BindToCurrentLoop(base::Bind(
-              &RTCVideoDecoder::ReleaseMailbox, weak_factory_.GetWeakPtr(),
-              factories_, picture.picture_buffer_id(),
-              pb.client_texture_ids()[0])),
+          media::BindToCurrentLoop(
+              base::Bind(&RTCVideoDecoder::ReleaseMailbox,
+                         weak_factory_.GetWeakPtr(), factories_,
+                         picture.picture_buffer_id(), pb.client_texture_ids())),
           pb.size(), visible_rect, visible_rect.size(), timestamp_ms);
   if (frame && picture.allow_overlay()) {
     frame->metadata()->SetBoolean(media::VideoFrameMetadata::ALLOW_OVERLAY,
@@ -662,6 +652,19 @@ void RTCVideoDecoder::MovePendingBuffersToDecodeBuffers() {
   }
 }
 
+void RTCVideoDecoder::Reset_Locked() {
+  DVLOG(2) << __func__;
+  lock_.AssertAcquired();
+  // If VDA is already resetting, no need to request the reset again.
+  if (state_ != RESETTING) {
+    state_ = RESETTING;
+    factories_->GetTaskRunner()->PostTask(
+        FROM_HERE,
+        base::Bind(&RTCVideoDecoder::ResetInternal,
+                   weak_factory_.GetWeakPtr()));
+  }
+}
+
 void RTCVideoDecoder::ResetInternal() {
   DVLOG(2) << __func__;
   DCheckGpuVideoAcceleratorFactoriesTaskRunnerIsCurrent();
@@ -682,7 +685,7 @@ void RTCVideoDecoder::ReleaseMailbox(
     base::WeakPtr<RTCVideoDecoder> decoder,
     media::GpuVideoAcceleratorFactories* factories,
     int64_t picture_buffer_id,
-    uint32_t texture_id,
+    const media::PictureBuffer::TextureIds& texture_ids,
     const gpu::SyncToken& release_sync_token) {
   DCHECK(factories->GetTaskRunner()->BelongsToCurrentThread());
   factories->WaitSyncToken(release_sync_token);
@@ -693,7 +696,8 @@ void RTCVideoDecoder::ReleaseMailbox(
   }
   // It's the last chance to delete the texture after display,
   // because RTCVideoDecoder was destructed.
-  factories->DeleteTexture(texture_id);
+  for (const auto& id : texture_ids)
+    factories->DeleteTexture(id);
 }
 
 void RTCVideoDecoder::ReusePictureBuffer(int64_t picture_buffer_id) {
@@ -703,13 +707,14 @@ void RTCVideoDecoder::ReusePictureBuffer(int64_t picture_buffer_id) {
   DCHECK(!picture_buffers_at_display_.empty());
   PictureBufferTextureMap::iterator display_iterator =
       picture_buffers_at_display_.find(picture_buffer_id);
-  uint32_t texture_id = display_iterator->second;
+  const auto texture_ids = display_iterator->second;
   DCHECK(display_iterator != picture_buffers_at_display_.end());
   picture_buffers_at_display_.erase(display_iterator);
 
   if (!assigned_picture_buffers_.count(picture_buffer_id)) {
     // This picture was dismissed while in display, so we postponed deletion.
-    factories_->DeleteTexture(texture_id);
+    for (const auto& id : texture_ids)
+      factories_->DeleteTexture(id);
     return;
   }
 
@@ -739,7 +744,7 @@ void RTCVideoDecoder::CreateVDA(media::VideoCodecProfile profile,
   DCheckGpuVideoAcceleratorFactoriesTaskRunnerIsCurrent();
 
   if (!IsProfileSupported(profile)) {
-    DVLOG(1) << "Unsupported profile " << profile;
+    DVLOG(1) << "Unsupported profile " << GetProfileName(profile);
   } else {
     vda_ = factories_->CreateVideoDecodeAccelerator();
 
@@ -761,9 +766,10 @@ void RTCVideoDecoder::DestroyTextures() {
   for (const auto& picture_buffer_at_display : picture_buffers_at_display_)
     assigned_picture_buffers_.erase(picture_buffer_at_display.first);
 
-  for (const auto& assigned_picture_buffer : assigned_picture_buffers_)
-    factories_->DeleteTexture(
-        assigned_picture_buffer.second.client_texture_ids()[0]);
+  for (const auto& assigned_picture_buffer : assigned_picture_buffers_) {
+    for (const auto& id : assigned_picture_buffer.second.client_texture_ids())
+      factories_->DeleteTexture(id);
+  }
 
   assigned_picture_buffers_.clear();
 }

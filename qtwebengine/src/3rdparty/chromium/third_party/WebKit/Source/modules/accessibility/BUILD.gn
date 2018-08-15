@@ -12,6 +12,8 @@ blink_modules_sources("accessibility") {
     "AXARIAGridCell.h",
     "AXARIAGridRow.cpp",
     "AXARIAGridRow.h",
+    "AXEnums.cpp",
+    "AXEnums.h",
     "AXImageMapLink.cpp",
     "AXImageMapLink.h",
     "AXInlineTextBox.cpp",
@@ -65,4 +67,8 @@ blink_modules_sources("accessibility") {
     "InspectorTypeBuilderHelper.cpp",
     "InspectorTypeBuilderHelper.h",
   ]
+
+  # The modules/accessibility/ depends closely on core/ --
+  # include the core pch for faster Windows compilation times.
+  configs += [ "//third_party/WebKit/Source/core:blink_core_pch" ]
 }

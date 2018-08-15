@@ -4,9 +4,11 @@
 
 #include "components/arc/bluetooth/bluetooth_struct_traits.h"
 
+#include <string>
+#include <utility>
+
 #include "base/macros.h"
 #include "device/bluetooth/bluetooth_uuid.h"
-#include "mojo/public/cpp/bindings/array.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -23,8 +25,8 @@ constexpr uint8_t kServiceData[] = {0x11, 0x22, 0x33, 0x44, 0x55};
 constexpr uint8_t kManufacturerData[] = {0x00, 0xe0};
 
 template <typename MojoType, typename UserType>
-mojo::StructPtr<MojoType> ConvertToMojo(UserType& input) {
-  mojo::Array<uint8_t> data = MojoType::Serialize(&input);
+mojo::StructPtr<MojoType> ConvertToMojo(UserType* input) {
+  std::vector<uint8_t> data = MojoType::Serialize(input);
   mojo::StructPtr<MojoType> output;
   MojoType::Deserialize(std::move(data), &output);
   return output;
@@ -32,7 +34,7 @@ mojo::StructPtr<MojoType> ConvertToMojo(UserType& input) {
 
 template <typename MojoType, typename UserType>
 bool ConvertFromMojo(mojo::StructPtr<MojoType> input, UserType* output) {
-  mojo::Array<uint8_t> data = MojoType::Serialize(&input);
+  std::vector<uint8_t> data = MojoType::Serialize(&input);
   return MojoType::Deserialize(std::move(data), output);
 }
 
@@ -43,7 +45,7 @@ namespace mojo {
 TEST(BluetoothStructTraitsTest, SerializeBluetoothUUID) {
   device::BluetoothUUID uuid_device(kUuidStr);
   arc::mojom::BluetoothUUIDPtr uuid_mojo =
-      ConvertToMojo<arc::mojom::BluetoothUUID>(uuid_device);
+      ConvertToMojo<arc::mojom::BluetoothUUID>(&uuid_device);
   EXPECT_EQ(kUuidSize, uuid_mojo->uuid.size());
   for (size_t i = 0; i < kUuidSize; i++) {
     EXPECT_EQ(kUuidArray[i], uuid_mojo->uuid[i]);
@@ -70,7 +72,7 @@ TEST(BluetoothStructTraitsTest, DeserializeBluetoothUUID) {
 TEST(BluetoothStructTraitsTest, DeserializeBluetoothAdvertisement) {
   arc::mojom::BluetoothAdvertisementPtr advertisement_mojo =
       arc::mojom::BluetoothAdvertisement::New();
-  mojo::Array<arc::mojom::BluetoothAdvertisingDataPtr> adv_data;
+  std::vector<arc::mojom::BluetoothAdvertisingDataPtr> adv_data;
 
   // Create service UUIDs.
   arc::mojom::BluetoothAdvertisingDataPtr data =
@@ -126,20 +128,19 @@ TEST(BluetoothStructTraitsTest, DeserializeBluetoothAdvertisement) {
   EXPECT_EQ(cic & 0xff, kManufacturerData[0]);
   EXPECT_EQ((cic >> 8) & 0xff, kManufacturerData[1]);
   EXPECT_EQ(converted_manufacturer->begin()->second.size(),
-            static_cast<unsigned long>(arraysize(kManufacturerData) -
-                                       sizeof(uint16_t)));
+            arraysize(kManufacturerData) - sizeof(uint16_t));
 }
 
 TEST(BluetoothStructTraitsTest, DeserializeBluetoothAdvertisementFailure) {
   arc::mojom::BluetoothAdvertisementPtr advertisement_mojo =
       arc::mojom::BluetoothAdvertisement::New();
-  mojo::Array<arc::mojom::BluetoothAdvertisingDataPtr> adv_data;
+  std::vector<arc::mojom::BluetoothAdvertisingDataPtr> adv_data;
 
   // Create empty manufacturer data. Manufacturer data must include the CIC
   // which is 2 bytes long.
   arc::mojom::BluetoothAdvertisingDataPtr data =
       arc::mojom::BluetoothAdvertisingData::New();
-  data->set_manufacturer_data((mojo::Array<uint8_t>()));
+  data->set_manufacturer_data(std::vector<uint8_t>());
   adv_data.push_back(std::move(data));
 
   advertisement_mojo->type =

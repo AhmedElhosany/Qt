@@ -16,30 +16,26 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/message_center/message_center_export.h"
 #include "ui/message_center/notification.h"
-#include "ui/views/controls/button/button.h"
-#include "ui/views/controls/slide_out_view.h"
+#include "ui/message_center/notification_delegate.h"
+#include "ui/message_center/views/slide_out_controller.h"
+#include "ui/views/view.h"
 
 namespace views {
-class ImageButton;
-class ImageView;
 class Painter;
 class ScrollView;
 }
 
 namespace message_center {
 
+class Notification;
+class NotificationControlButtonsView;
 class MessageCenterController;
-
-// Individual notifications constants.
-const int kPaddingBetweenItems = 10;
-const int kPaddingHorizontal = 18;
-const int kWebNotificationButtonWidth = 32;
-const int kWebNotificationIconSize = 40;
 
 // An base class for a notification entry. Contains background and other
 // elements shared by derived notification views.
-class MESSAGE_CENTER_EXPORT MessageView : public views::SlideOutView,
-                                          public views::ButtonListener {
+class MESSAGE_CENTER_EXPORT MessageView
+    : public views::View,
+      public views::SlideOutController::Delegate {
  public:
   MessageView(MessageCenterController* controller,
               const Notification& notification);
@@ -51,14 +47,18 @@ class MESSAGE_CENTER_EXPORT MessageView : public views::SlideOutView,
   // Returns the insets for the shadow it will have for rich notification.
   static gfx::Insets GetShadowInsets();
 
-  // Creates a shadow around the notification.
-  void CreateShadowBorder();
+  // Creates a shadow around the notification and changes slide-out behavior.
+  void SetIsNested();
 
-  bool IsCloseButtonFocused();
-  void RequestFocusOnCloseButton();
-  bool IsPinned();
+  virtual NotificationControlButtonsView* GetControlButtonsView() const = 0;
+  virtual bool IsCloseButtonFocused() const = 0;
+  virtual void RequestFocusOnCloseButton() = 0;
+  virtual void UpdateControlButtonsVisibility() = 0;
 
-  // Overridden from views::View:
+  void OnCloseButtonPressed();
+  void OnSettingsButtonPressed();
+
+  // views::View
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
@@ -67,26 +67,24 @@ class MESSAGE_CENTER_EXPORT MessageView : public views::SlideOutView,
   void OnFocus() override;
   void OnBlur() override;
   void Layout() override;
-
-  // Overridden from ui::EventHandler:
   void OnGestureEvent(ui::GestureEvent* event) override;
 
-  // Overridden from ButtonListener:
-  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
+  // views::SlideOutController::Delegate
+  ui::Layer* GetSlideOutLayer() override;
+  void OnSlideChanged() override;
+  void OnSlideOut() override;
 
   void set_scroller(views::ScrollView* scroller) { scroller_ = scroller; }
   std::string notification_id() { return notification_id_; }
   NotifierId notifier_id() { return notifier_id_; }
   const base::string16& display_source() const { return display_source_; }
+  bool pinned() const { return pinned_; }
 
   void set_controller(MessageCenterController* controller) {
     controller_ = controller;
   }
 
  protected:
-  // Overridden from views::SlideOutView:
-  void OnSlideOut() override;
-
   // Creates and add close button to view hierarchy when necessary. Derived
   // classes should call this after its view hierarchy is populated to ensure
   // it is on top of other views.
@@ -97,8 +95,6 @@ class MESSAGE_CENTER_EXPORT MessageView : public views::SlideOutView,
   virtual void SetDrawBackgroundAsActive(bool active);
 
   views::View* background_view() { return background_view_; }
-  views::ImageView* small_image() { return small_image_view_.get(); }
-  views::ImageButton* close_button() { return close_button_.get(); }
   views::ScrollView* scroller() { return scroller_; }
   MessageCenterController* controller() { return controller_; }
 
@@ -107,15 +103,20 @@ class MESSAGE_CENTER_EXPORT MessageView : public views::SlideOutView,
   std::string notification_id_;
   NotifierId notifier_id_;
   views::View* background_view_ = nullptr;  // Owned by views hierarchy.
-  std::unique_ptr<views::ImageView> small_image_view_;
-  std::unique_ptr<views::ImageButton> close_button_;
   views::ScrollView* scroller_ = nullptr;
 
   base::string16 accessible_name_;
 
   base::string16 display_source_;
+  bool pinned_ = false;
 
   std::unique_ptr<views::Painter> focus_painter_;
+
+  views::SlideOutController slide_out_controller_;
+
+  // True if |this| is embedded in another view. Equivalent to |!top_level| in
+  // MessageViewFactory parlance.
+  bool is_nested_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(MessageView);
 };

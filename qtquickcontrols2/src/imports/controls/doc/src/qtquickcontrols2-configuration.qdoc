@@ -53,10 +53,6 @@
     Primary=BlueGrey
     \endcode
 
-    It is possible to specify a custom location for the configuration file with
-    the \l {Supported Environment Variables in Qt Quick Controls 2}
-    {QT_QUICK_CONTROLS_CONF} environment variable.
-
     \section1 Controls Section
 
     The following values can be specified in a \c Controls section of the
@@ -78,19 +74,97 @@
                 By default, the \l {Default Style}{Default} style is used.
     \endtable
 
+    \section1 Imagine Section
+
+    The following table lists values that can be used to configure the
+    \l {Imagine style} in an \c Imagine section of the configuration file:
+
+    \include qquickimaginestyle.qdocinc conf
+
     \section1 Material Section
 
-    The following \l {Material style} specific values can be specified in a \c Material
-    section of the configuration file:
+    The following table lists values that can be used to configure the
+    \l {Material style} in a \c Material section of the configuration file:
 
     \include qquickmaterialstyle.qdocinc conf
 
     \section1 Universal Section
 
-    The following \l {Universal style} specific values can be specified in a \c Universal
-    section of the configuration file:
+    The following table lists values that can be used to configure the
+    \l {Universal style} in a \c Universal section of the configuration file:
 
     \include qquickuniversalstyle.qdocinc conf
+
+    \section1 Font Configuration
+
+    The default \l {Control::font}{font} can be specified in a \c Font sub-group
+    in each style's section in the configuration file. The \c Font sub-group can
+    be defined in two alternative ways:
+
+    \code
+    [Default]
+    Font\Family=Open Sans
+    Font\PixelSize=20
+
+    [Material\Font]
+    Family=Open Sans
+    PixelSize=20
+    \endcode
+
+    Supported font attributes:
+    \table
+        \header
+            \li Variable
+            \li Description
+        \row
+            \li \c Family
+            \li The \l {QFont::family}{font family}.
+        \row
+            \li \c PointSize
+            \li The \l {QFont::pointSizeF}{point size}.
+        \row
+            \li \c PixelSize
+            \li The \l {QFont::pixelSize}{pixel size}.
+        \row
+            \li \c StyleHint
+            \li The \l {QFont::styleHint}{style hint}.
+                Available values: \c SansSerif, \c Helvetica, \c Serif, \c Times, \c TypeWriter, \c Courier,
+                                  \c OldEnglish, \c Decorative, \c Monospace, \c Fantasy, \c Cursive.
+        \row
+            \li \c Weight
+            \li The \l {QFont::}{weight}. Qt uses a weighting scale from \c 0 to \c 99 similar to,
+                but not the same as, the scales used in Windows or CSS. A weight of \c 0 will be thin,
+                whilst \c 99 will be extremely black.
+                Available pre-defined weights: \c Thin (0), \c ExtraLight (12), \c Light (25), \c Normal (50),
+                                               \c Medium (57), \c DemiBold (63), \c Bold (75), \c ExtraBold (81),
+                                               \c Black (87).
+        \row
+            \li \c Style
+            \li The \l {QFont::}{style}.
+                Available values: \c StyleNormal, \c StyleItalic, \c StyleOblique.
+    \endtable
+
+    \section1 Palette Configuration
+
+    The default \l {Control::palette}{palette} can be specified in a \c Palette sub-group
+    in each style's section in the configuration file. The \c Palette sub-group can be
+    defined in two alternative ways:
+
+    \code
+    [Fusion]
+    Palette\Window=#dedede
+    Palette\WindowText=#212121
+    \endcode
+
+    or:
+    \code
+    [Fusion\Palette]
+    Window=#dedede
+    WindowText=#212121
+    \endcode
+
+    See \l {qtquickcontrols2-palette}{palette QML Basic Type} for a full list of supported
+    attributes.
 
     \section1 Using the Configuration File in a Project
 

@@ -52,6 +52,7 @@ typedef struct strm_dict strm_dict_t;
 
 QT_BEGIN_NAMESPACE
 
+class MmRendererAudioRoleControl;
 class MmRendererMetaDataReaderControl;
 class MmRendererPlayerVideoRendererControl;
 class MmRendererVideoWindowControl;
@@ -103,6 +104,7 @@ public:
     MmRendererVideoWindowControl *videoWindowControl() const;
     void setVideoWindowControl(MmRendererVideoWindowControl *videoControl);
     void setMetaDataReaderControl(MmRendererMetaDataReaderControl *metaDataReaderControl);
+    void setAudioRoleControl(MmRendererAudioRoleControl *audioRoleControl);
 
 protected:
     virtual void startMonitoring() = 0;
@@ -115,7 +117,6 @@ protected:
     void setMmBufferStatus(const QString &bufferStatus);
     void setMmBufferLevel(const QString &bufferLevel);
     void handleMmStopped();
-    void handleMmStatusUpdate(qint64 position);
     void updateMetaData(const strm_dict_t *dict);
 
     // must be called from subclass dtors (calls virtual function stopMonitoring())
@@ -156,12 +157,12 @@ private:
     QPointer<MmRendererPlayerVideoRendererControl> m_videoRendererControl;
     QPointer<MmRendererVideoWindowControl> m_videoWindowControl;
     QPointer<MmRendererMetaDataReaderControl> m_metaDataReaderControl;
+    QPointer<MmRendererAudioRoleControl> m_audioRoleControl;
     MmRendererMetaData m_metaData;
     qint64 m_position;
     QMediaPlayer::MediaStatus m_mediaStatus;
     bool m_playAfterMediaLoaded;
     bool m_inputAttached;
-    int m_stopEventsToIgnore;
     int m_bufferLevel;
     QTimer m_loadingTimer;
 };

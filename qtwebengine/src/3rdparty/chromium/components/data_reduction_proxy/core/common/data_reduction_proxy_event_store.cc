@@ -5,19 +5,17 @@
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_event_store.h"
 
 #include <stddef.h>
-#include <stdint.h>
+
 #include <utility>
-#include <vector>
 
 #include "base/json/json_writer.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "components/data_reduction_proxy/core/common/data_reduction_proxy_event_storage_delegate.h"
 
 namespace {
 
@@ -54,10 +52,10 @@ const StringToConstant kDataReductionProxyBypassActionTypeTable[] = {
 };
 
 std::string JoinListValueStrings(base::ListValue* list_value) {
-  std::vector<std::string> values;
+  std::vector<base::StringPiece> values;
   for (const auto& value : *list_value) {
-    std::string value_string;
-    if (!value->GetAsString(&value_string))
+    base::StringPiece value_string;
+    if (!value.GetAsString(&value_string))
       return std::string();
 
     values.push_back(value_string);
@@ -93,10 +91,10 @@ void DataReductionProxyEventStore::AddConstants(
 }
 
 DataReductionProxyEventStore::DataReductionProxyEventStore()
-    : enabled_(false),
+    : oldest_event_index_(0),
+      enabled_(false),
       secure_proxy_check_state_(CHECK_UNKNOWN),
-      expiration_ticks_(0) {
-}
+      expiration_ticks_(0) {}
 
 DataReductionProxyEventStore::~DataReductionProxyEventStore() {
 }
@@ -108,8 +106,8 @@ DataReductionProxyEventStore::GetSummaryValue() const {
   auto data_reduction_proxy_values = base::MakeUnique<base::DictionaryValue>();
   data_reduction_proxy_values->SetBoolean("enabled", enabled_);
   if (current_configuration_) {
-    data_reduction_proxy_values->Set("proxy_config",
-                                     current_configuration_->DeepCopy());
+    data_reduction_proxy_values->Set(
+        "proxy_config", base::MakeUnique<base::Value>(*current_configuration_));
   }
 
   switch (secure_proxy_check_state_) {
@@ -131,23 +129,35 @@ DataReductionProxyEventStore::GetSummaryValue() const {
     int current_time_ticks_ms =
         (base::TimeTicks::Now() - base::TimeTicks()).InMilliseconds();
     if (expiration_ticks_ > current_time_ticks_ms) {
-      data_reduction_proxy_values->Set("last_bypass",
-                                       last_bypass_event->DeepCopy());
+      data_reduction_proxy_values->Set(
+          "last_bypass", base::MakeUnique<base::Value>(*last_bypass_event));
     }
   }
 
   auto events_list = base::MakeUnique<base::ListValue>();
-  for (const auto& event : stored_events_)
-    events_list->Append(event->CreateDeepCopy());
+
+  DCHECK(oldest_event_index_ == 0 ||
+         stored_events_.size() == kMaxEventsToStore);
+  for (size_t i = oldest_event_index_; i < stored_events_.size(); ++i)
+    events_list->Append(stored_events_[i]->CreateDeepCopy());
+  for (size_t i = 0; i < oldest_event_index_; ++i)
+    events_list->Append(stored_events_[i]->CreateDeepCopy());
+
   data_reduction_proxy_values->Set("events", std::move(events_list));
   return data_reduction_proxy_values;
 }
 
 void DataReductionProxyEventStore::AddEvent(
     std::unique_ptr<base::Value> event) {
-  if (stored_events_.size() == kMaxEventsToStore)
-    stored_events_.pop_front();
-  stored_events_.push_back(std::move(event));
+  if (stored_events_.size() < kMaxEventsToStore) {
+    stored_events_.push_back(std::move(event));
+    return;
+  }
+  DCHECK_EQ(kMaxEventsToStore, stored_events_.size());
+
+  stored_events_[oldest_event_index_++] = std::move(event);
+  if (oldest_event_index_ >= stored_events_.size())
+    oldest_event_index_ = 0;
 }
 
 void DataReductionProxyEventStore::AddEnabledEvent(

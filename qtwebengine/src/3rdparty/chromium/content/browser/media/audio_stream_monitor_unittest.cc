@@ -30,6 +30,8 @@ const int kRenderProcessId = 1;
 const int kAnotherRenderProcessId = 2;
 const int kStreamId = 3;
 const int kAnotherStreamId = 6;
+const int kRenderFrameId = 4;
+const int kAnotherRenderFrameId = 8;
 
 // Used to confirm audio indicator state changes occur at the correct times.
 class MockWebContentsDelegate : public WebContentsDelegate {
@@ -76,13 +78,18 @@ class AudioStreamMonitorTest : public RenderViewHostTestHarness {
 
   void SimulateOffTimerFired() { monitor_->MaybeToggle(); }
 
-  void ExpectIsPolling(int render_process_id, int stream_id, bool is_polling) {
-    const AudioStreamMonitor::StreamID key(render_process_id, stream_id);
-    EXPECT_EQ(
-        is_polling,
-        monitor_->poll_callbacks_.find(key) != monitor_->poll_callbacks_.end());
+  void ExpectIsPolling(int render_process_id,
+                       int render_frame_id,
+                       int stream_id,
+                       bool is_polling) {
+    const AudioStreamMonitor::StreamID key = {render_process_id,
+                                              render_frame_id, stream_id};
+    EXPECT_EQ(is_polling, monitor_->poll_callbacks_.find(key) !=
+                              monitor_->poll_callbacks_.end());
     EXPECT_EQ(!monitor_->poll_callbacks_.empty(),
-              monitor_->poll_timer_.IsRunning());
+              power_level_monitoring_available()
+                  ? monitor_->poll_timer_.IsRunning()
+                  : monitor_->IsCurrentlyAudible());
   }
 
   void ExpectTabWasRecentlyAudible(bool was_audible,
@@ -139,14 +146,30 @@ class AudioStreamMonitorTest : public RenderViewHostTestHarness {
 
   void StartMonitoring(
       int render_process_id,
+      int render_frame_id,
       int stream_id,
       const AudioStreamMonitor::ReadPowerAndClipCallback& callback) {
+    if (!power_level_monitoring_available() &&
+        monitor_->poll_callbacks_.empty()) {
+      ExpectCurrentlyAudibleChangeNotification(true);
+    }
     monitor_->StartMonitoringStreamOnUIThread(
-        render_process_id, stream_id, callback);
+        render_process_id, render_frame_id, stream_id, callback);
   }
 
-  void StopMonitoring(int render_process_id, int stream_id) {
-    monitor_->StopMonitoringStreamOnUIThread(render_process_id, stream_id);
+  void StopMonitoring(int render_process_id,
+                      int render_frame_id,
+                      int stream_id) {
+    if (!power_level_monitoring_available() &&
+        monitor_->poll_callbacks_.size() == 1u) {
+      ExpectCurrentlyAudibleChangeNotification(false);
+    }
+    monitor_->StopMonitoringStreamOnUIThread(render_process_id, render_frame_id,
+                                             stream_id);
+  }
+
+  bool power_level_monitoring_available() {
+    return AudioStreamMonitor::power_level_monitoring_available();
   }
 
  protected:
@@ -175,19 +198,23 @@ class AudioStreamMonitorTest : public RenderViewHostTestHarness {
 // Tests that AudioStreamMonitor is polling while it has a
 // ReadPowerAndClipCallback, and is not polling at other times.
 TEST_F(AudioStreamMonitorTest, PollsWhenProvidedACallback) {
-  EXPECT_FALSE(monitor_->WasRecentlyAudible());
-  ExpectNotCurrentlyAudible();
-  ExpectIsPolling(kRenderProcessId, kStreamId, false);
+  if (!power_level_monitoring_available())
+    return;
 
-  StartMonitoring(kRenderProcessId, kStreamId, CreatePollCallback(kStreamId));
   EXPECT_FALSE(monitor_->WasRecentlyAudible());
   ExpectNotCurrentlyAudible();
-  ExpectIsPolling(kRenderProcessId, kStreamId, true);
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, false);
 
-  StopMonitoring(kRenderProcessId, kStreamId);
+  StartMonitoring(kRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
   EXPECT_FALSE(monitor_->WasRecentlyAudible());
   ExpectNotCurrentlyAudible();
-  ExpectIsPolling(kRenderProcessId, kStreamId, false);
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, true);
+
+  StopMonitoring(kRenderProcessId, kRenderFrameId, kStreamId);
+  EXPECT_FALSE(monitor_->WasRecentlyAudible());
+  ExpectNotCurrentlyAudible();
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, false);
 }
 
 // Tests that AudioStreamMonitor debounces the power level readings it's taking,
@@ -195,7 +222,11 @@ TEST_F(AudioStreamMonitorTest, PollsWhenProvidedACallback) {
 // threshold.  See comments in audio_stream_monitor.h for expected behavior.
 TEST_F(AudioStreamMonitorTest,
        ImpulsesKeepIndicatorOnUntilHoldingPeriodHasPassed) {
-  StartMonitoring(kRenderProcessId, kStreamId, CreatePollCallback(kStreamId));
+  if (!power_level_monitoring_available())
+    return;
+
+  StartMonitoring(kRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
 
   // Expect WebContents will get one call form AudioStreamMonitor to toggle the
   // indicator on upon the very first poll.
@@ -247,9 +278,13 @@ TEST_F(AudioStreamMonitorTest,
 // Tests that the AudioStreamMonitor correctly processes the blurts from two
 // different streams in the same tab.
 TEST_F(AudioStreamMonitorTest, HandlesMultipleStreamsBlurting) {
-  StartMonitoring(kRenderProcessId, kStreamId, CreatePollCallback(kStreamId));
-  StartMonitoring(
-      kRenderProcessId, kAnotherStreamId, CreatePollCallback(kAnotherStreamId));
+  if (!power_level_monitoring_available())
+    return;
+
+  StartMonitoring(kRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
+  StartMonitoring(kRenderProcessId, kAnotherRenderFrameId, kAnotherStreamId,
+                  CreatePollCallback(kAnotherStreamId));
 
   base::TimeTicks last_blurt_time;
   ExpectTabWasRecentlyAudible(false, last_blurt_time);
@@ -333,14 +368,51 @@ TEST_F(AudioStreamMonitorTest, HandlesMultipleStreamsBlurting) {
 }
 
 TEST_F(AudioStreamMonitorTest, MultipleRendererProcesses) {
-  StartMonitoring(kRenderProcessId, kStreamId, CreatePollCallback(kStreamId));
-  StartMonitoring(
-      kAnotherRenderProcessId, kStreamId, CreatePollCallback(kStreamId));
-  ExpectIsPolling(kRenderProcessId, kStreamId, true);
-  ExpectIsPolling(kAnotherRenderProcessId, kStreamId, true);
-  StopMonitoring(kAnotherRenderProcessId, kStreamId);
-  ExpectIsPolling(kRenderProcessId, kStreamId, true);
-  ExpectIsPolling(kAnotherRenderProcessId, kStreamId, false);
+  StartMonitoring(kRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
+  StartMonitoring(kAnotherRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, true);
+  ExpectIsPolling(kAnotherRenderProcessId, kRenderFrameId, kStreamId, true);
+  StopMonitoring(kAnotherRenderProcessId, kRenderFrameId, kStreamId);
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, true);
+  ExpectIsPolling(kAnotherRenderProcessId, kRenderFrameId, kStreamId, false);
+}
+
+TEST_F(AudioStreamMonitorTest, RenderProcessGone) {
+  StartMonitoring(kRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
+  StartMonitoring(kAnotherRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, true);
+  ExpectIsPolling(kAnotherRenderProcessId, kRenderFrameId, kStreamId, true);
+  monitor_->RenderProcessGone(kRenderProcessId);
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, false);
+  if (!power_level_monitoring_available())
+    ExpectCurrentlyAudibleChangeNotification(false);
+  monitor_->RenderProcessGone(kAnotherRenderProcessId);
+  ExpectIsPolling(kAnotherRenderProcessId, kRenderFrameId, kStreamId, false);
+}
+
+TEST_F(AudioStreamMonitorTest, NoPowerLevelMonitoring) {
+  if (power_level_monitoring_available())
+    return;
+
+  ExpectNotCurrentlyAudible();
+  StartMonitoring(kRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
+  ExpectIsCurrentlyAudible();
+  ExpectIsPolling(kRenderProcessId, kRenderFrameId, kStreamId, true);
+
+  StartMonitoring(kAnotherRenderProcessId, kRenderFrameId, kStreamId,
+                  CreatePollCallback(kStreamId));
+  ExpectIsCurrentlyAudible();
+  ExpectIsPolling(kAnotherRenderProcessId, kRenderFrameId, kStreamId, true);
+
+  StopMonitoring(kRenderProcessId, kRenderFrameId, kStreamId);
+  ExpectIsCurrentlyAudible();
+  StopMonitoring(kAnotherRenderProcessId, kRenderFrameId, kStreamId);
+  ExpectNotCurrentlyAudible();
 }
 
 }  // namespace content

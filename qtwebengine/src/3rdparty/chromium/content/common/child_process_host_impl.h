@@ -20,14 +20,9 @@
 #include "build/build_config.h"
 #include "content/public/common/child_process_host.h"
 #include "ipc/ipc_listener.h"
-#include "ui/gfx/gpu_memory_buffer.h"
 
 namespace IPC {
 class MessageFilter;
-}
-
-namespace gpu {
-struct SyncToken;
 }
 
 namespace content {
@@ -62,18 +57,18 @@ class CONTENT_EXPORT ChildProcessHostImpl : public ChildProcessHost,
   // process.
   //
   // Never returns MemoryDumpManager::kInvalidTracingProcessId.
-  // Returns only ChildProcessHost::kBrowserTracingProcessId in single-process
-  // mode.
+  // Returns only memory_instrumentation::mojom::kServiceTracingProcessId in
+  // single-process mode.
   static uint64_t ChildProcessUniqueIdToTracingProcessId(int child_process_id);
 
   // ChildProcessHost implementation
   bool Send(IPC::Message* message) override;
   void ForceShutdown() override;
-  std::string CreateChannelMojo(const std::string& child_token) override;
   void CreateChannelMojo() override;
   bool IsChannelOpening() override;
   void AddFilter(IPC::MessageFilter* filter) override;
-  service_manager::InterfaceProvider* GetRemoteInterfaces() override;
+  void BindInterface(const std::string& interface_name,
+                     mojo::ScopedMessagePipeHandle interface_pipe) override;
 
  private:
   friend class ChildProcessHost;
@@ -88,14 +83,6 @@ class CONTENT_EXPORT ChildProcessHostImpl : public ChildProcessHost,
 
   // Message handlers:
   void OnShutdownRequest();
-  void OnAllocateGpuMemoryBuffer(gfx::GpuMemoryBufferId id,
-                                 uint32_t width,
-                                 uint32_t height,
-                                 gfx::BufferFormat format,
-                                 gfx::BufferUsage usage,
-                                 gfx::GpuMemoryBufferHandle* handle);
-  void OnDeletedGpuMemoryBuffer(gfx::GpuMemoryBufferId id,
-                                const gpu::SyncToken& sync_token);
 
   // Initializes the IPC channel and returns true on success. |channel_| must be
   // non-null.
@@ -105,7 +92,6 @@ class CONTENT_EXPORT ChildProcessHostImpl : public ChildProcessHost,
   base::Process peer_process_;
   bool opening_channel_;  // True while we're waiting the channel to be opened.
   std::unique_ptr<IPC::Channel> channel_;
-  std::string channel_id_;
 
   // Holds all the IPC message filters.  Since this object lives on the IO
   // thread, we don't have a IPC::ChannelProxy and so we manage filters

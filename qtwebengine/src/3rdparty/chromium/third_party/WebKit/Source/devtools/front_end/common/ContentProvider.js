@@ -36,25 +36,25 @@ Common.ContentProvider.prototype = {
   /**
    * @return {string}
    */
-  contentURL: function() {},
+  contentURL() {},
 
   /**
    * @return {!Common.ResourceType}
    */
-  contentType: function() {},
+  contentType() {},
 
   /**
    * @return {!Promise<?string>}
    */
-  requestContent: function() {},
+  requestContent() {},
 
   /**
    * @param {string} query
    * @param {boolean} caseSensitive
    * @param {boolean} isRegex
-   * @param {function(!Array.<!Common.ContentProvider.SearchMatch>)} callback
+   * @return {!Promise<!Array<!Common.ContentProvider.SearchMatch>>}
    */
-  searchInContent: function(query, caseSensitive, isRegex, callback) {}
+  searchInContent(query, caseSensitive, isRegex) {}
 };
 
 /**
@@ -81,7 +81,7 @@ Common.ContentProvider.SearchMatch = class {
 Common.ContentProvider.performSearchInContent = function(content, query, caseSensitive, isRegex) {
   var regex = createSearchRegex(query, caseSensitive, isRegex);
 
-  var text = new Common.Text(content);
+  var text = new TextUtils.Text(content);
   var result = [];
   for (var i = 0; i < text.lineCount(); ++i) {
     var lineContent = text.lineAt(i);

@@ -8,15 +8,12 @@
 #include "base/callback.h"
 #include "base/callback_forward.h"
 #include "base/macros.h"
+#include "cc/input/touch_action.h"
 #include "content/common/content_export.h"
 #include "content/common/input/input_event_ack_state.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
-#include "ui/events/blink/scoped_web_input_event.h"
+#include "third_party/WebKit/public/platform/WebInputEventResult.h"
+#include "ui/events/blink/web_input_event_traits.h"
 #include "ui/gfx/geometry/vector2d_f.h"
-
-namespace cc {
-class InputHandler;
-}
 
 namespace ui {
 class LatencyInfo;
@@ -26,6 +23,7 @@ struct DidOverscrollParams;
 
 namespace content {
 class InputHandlerManager;
+class MainThreadEventQueue;
 
 class CONTENT_EXPORT InputHandlerManagerClient {
  public:
@@ -33,14 +31,18 @@ class CONTENT_EXPORT InputHandlerManagerClient {
 
   // Called from the main thread.
   virtual void SetInputHandlerManager(InputHandlerManager*) = 0;
-  virtual void NotifyInputEventHandled(int routing_id,
-                                       blink::WebInputEvent::Type type,
-                                       InputEventAckState ack_result) = 0;
-  virtual void ProcessRafAlignedInput(int routing_id) = 0;
 
   // Called from the compositor thread.
-  virtual void RegisterRoutingID(int routing_id) = 0;
+  virtual void RegisterRoutingID(
+      int routing_id,
+      const scoped_refptr<MainThreadEventQueue>& input_event_queue) = 0;
   virtual void UnregisterRoutingID(int routing_id) = 0;
+  virtual void RegisterAssociatedRenderFrameRoutingID(
+      int render_frame_routing_id,
+      int render_view_routing_id) = 0;
+  virtual void QueueClosureForMainThreadEventQueue(
+      int routing_id,
+      const base::Closure& closure) = 0;
 
   // |HandleInputEvent| will respond to overscroll by calling the passed in
   // callback.
@@ -50,8 +52,10 @@ class CONTENT_EXPORT InputHandlerManagerClient {
   virtual void DidStopFlinging(int routing_id) = 0;
   virtual void DispatchNonBlockingEventToMainThread(
       int routing_id,
-      ui::ScopedWebInputEvent event,
+      ui::WebScopedInputEvent event,
       const ui::LatencyInfo& latency_info) = 0;
+  virtual void SetWhiteListedTouchAction(int routing_id,
+                                         cc::TouchAction touch_action) = 0;
 
  protected:
   InputHandlerManagerClient() {}

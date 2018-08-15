@@ -195,6 +195,9 @@ void QFSFileEngine::setFileName(const QString &file)
 */
 bool QFSFileEngine::open(QIODevice::OpenMode openMode)
 {
+    Q_ASSERT_X(openMode & QIODevice::Unbuffered, "QFSFileEngine::open",
+               "QFSFileEngine no longer supports buffered mode; upper layer must buffer");
+
     Q_D(QFSFileEngine);
     if (d->fileEntry.isEmpty()) {
         qWarning("QFSFileEngine::open: No file name specified");
@@ -230,6 +233,9 @@ bool QFSFileEngine::open(QIODevice::OpenMode openMode, FILE *fh)
 
 bool QFSFileEngine::open(QIODevice::OpenMode openMode, FILE *fh, QFile::FileHandleFlags handleFlags)
 {
+    Q_ASSERT_X(openMode & QIODevice::Unbuffered, "QFSFileEngine::open",
+               "QFSFileEngine no longer supports buffered mode; upper layer must buffer");
+
     Q_D(QFSFileEngine);
 
     // Append implies WriteOnly.
@@ -255,6 +261,9 @@ bool QFSFileEngine::open(QIODevice::OpenMode openMode, FILE *fh, QFile::FileHand
 */
 bool QFSFileEnginePrivate::openFh(QIODevice::OpenMode openMode, FILE *fh)
 {
+    Q_ASSERT_X(openMode & QIODevice::Unbuffered, "QFSFileEngine::open",
+               "QFSFileEngine no longer supports buffered mode; upper layer must buffer");
+
     Q_Q(QFSFileEngine);
     this->fh = fh;
     fd = -1;
@@ -516,6 +525,25 @@ bool QFSFileEngine::seek(qint64 pos)
 }
 
 /*!
+    \reimp
+*/
+QDateTime QFSFileEngine::fileTime(FileTime time) const
+{
+    Q_D(const QFSFileEngine);
+
+    if (time == AccessTime) {
+        // always refresh for the access time
+        d->metaData.clearFlags(QFileSystemMetaData::AccessTime);
+    }
+
+    if (d->doStat(QFileSystemMetaData::Times))
+        return d->metaData.fileTime(time);
+
+    return QDateTime();
+}
+
+
+/*!
     \internal
 */
 bool QFSFileEnginePrivate::seekFdFh(qint64 pos)
@@ -699,6 +727,7 @@ qint64 QFSFileEnginePrivate::readLineFdFh(char *data, qint64 maxlen)
 qint64 QFSFileEngine::write(const char *data, qint64 len)
 {
     Q_D(QFSFileEngine);
+    d->metaData.clearFlags(QFileSystemMetaData::Times);
 
     // On Windows' stdlib implementation, the results of calling fread and
     // fwrite are undefined if not called either in sequence, or if preceded
@@ -860,9 +889,9 @@ bool QFSFileEngine::supportsExtension(Extension extension) const
 
 /*! \fn bool QFSFileEngine::copy(const QString &copyName)
 
-  For windows, copy the file to file \a copyName.
+  For Windows or Apple platforms, copy the file to file \a copyName.
 
-  Not implemented for Unix.
+  Not implemented for other Unix platforms.
 */
 
 /*! \fn QString QFSFileEngine::currentPath(const QString &fileName)
@@ -890,7 +919,7 @@ bool QFSFileEngine::supportsExtension(Extension extension) const
   \reimp
 */
 
-/*! \fn QDateTime QFSFileEngine::fileTime(FileTime time) const
+/*! \fn bool QFSFileEngine::setFileTime(const QDateTime &newDate, FileTime time)
   \reimp
 */
 

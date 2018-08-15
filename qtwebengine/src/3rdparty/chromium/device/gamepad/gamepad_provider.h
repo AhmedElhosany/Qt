@@ -18,8 +18,8 @@
 #include "device/gamepad/gamepad_export.h"
 #include "device/gamepad/gamepad_pad_state_provider.h"
 #include "device/gamepad/gamepad_shared_buffer.h"
-
-#include "third_party/WebKit/public/platform/WebGamepads.h"
+#include "device/gamepad/public/cpp/gamepads.h"
+#include "mojo/public/cpp/system/buffer.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -34,7 +34,7 @@ class DEVICE_GAMEPAD_EXPORT GamepadConnectionChangeClient {
  public:
   virtual void OnGamepadConnectionChange(bool connected,
                                          int index,
-                                         const blink::WebGamepad& pad) = 0;
+                                         const Gamepad& pad) = 0;
 };
 
 class DEVICE_GAMEPAD_EXPORT GamepadProvider
@@ -42,26 +42,25 @@ class DEVICE_GAMEPAD_EXPORT GamepadProvider
       public base::SystemMonitor::DevicesChangedObserver {
  public:
   explicit GamepadProvider(
-      std::unique_ptr<GamepadSharedBuffer> buffer,
       GamepadConnectionChangeClient* connection_change_client);
 
   // Manually specifies the data fetcher. Used for testing.
   explicit GamepadProvider(
-      std::unique_ptr<GamepadSharedBuffer> buffer,
       GamepadConnectionChangeClient* connection_change_client,
       std::unique_ptr<GamepadDataFetcher> fetcher);
 
   ~GamepadProvider() override;
 
-  // Returns the shared memory handle of the gamepad data duplicated into the
-  // given process.
-  base::SharedMemoryHandle GetSharedMemoryHandleForProcess(
-      base::ProcessHandle renderer_process);
+  // Returns a duplicate of the shared memory handle of the gamepad data.
+  base::SharedMemoryHandle DuplicateSharedMemoryHandle();
+
+  // Returns a new mojo::ScopedSharedBufferHandle of the gamepad data.
+  mojo::ScopedSharedBufferHandle GetSharedBufferHandle();
 
   void AddGamepadDataFetcher(GamepadDataFetcher* fetcher);
   void RemoveGamepadDataFetcher(GamepadDataFetcher* fetcher);
 
-  void GetCurrentGamepadData(blink::WebGamepads* data);
+  void GetCurrentGamepadData(Gamepads* data);
 
   // Pause and resume the background polling thread. Can be called from any
   // thread.
@@ -99,9 +98,7 @@ class DEVICE_GAMEPAD_EXPORT GamepadProvider
   void DoPoll();
   void ScheduleDoPoll();
 
-  void OnGamepadConnectionChange(bool connected,
-                                 int index,
-                                 const blink::WebGamepad& pad);
+  void OnGamepadConnectionChange(bool connected, int index, const Gamepad& pad);
 
   // Checks the gamepad state to see if the user has interacted with it.
   void CheckForUserGesture();

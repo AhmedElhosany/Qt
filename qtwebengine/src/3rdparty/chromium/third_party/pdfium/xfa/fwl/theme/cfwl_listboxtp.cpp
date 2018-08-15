@@ -6,19 +6,15 @@
 
 #include "xfa/fwl/theme/cfwl_listboxtp.h"
 
-#include "xfa/fwl/core/cfwl_themebackground.h"
-#include "xfa/fwl/core/ifwl_listbox.h"
-#include "xfa/fwl/core/ifwl_widget.h"
-#include "xfa/fxgraphics/cfx_color.h"
-#include "xfa/fxgraphics/cfx_path.h"
+#include "xfa/fwl/cfwl_listbox.h"
+#include "xfa/fwl/cfwl_themebackground.h"
+#include "xfa/fwl/cfwl_widget.h"
+#include "xfa/fxgraphics/cxfa_color.h"
+#include "xfa/fxgraphics/cxfa_path.h"
 
 CFWL_ListBoxTP::CFWL_ListBoxTP() {}
 
 CFWL_ListBoxTP::~CFWL_ListBoxTP() {}
-
-bool CFWL_ListBoxTP::IsValidWidget(IFWL_Widget* pWidget) {
-  return pWidget && pWidget->GetClassID() == FWL_Type::ListBox;
-}
 
 void CFWL_ListBoxTP::DrawBackground(CFWL_ThemeBackground* pParams) {
   if (!pParams)
@@ -27,11 +23,6 @@ void CFWL_ListBoxTP::DrawBackground(CFWL_ThemeBackground* pParams) {
   switch (pParams->m_iPart) {
     case CFWL_Part::Border: {
       DrawBorder(pParams->m_pGraphics, &pParams->m_rtPart, &pParams->m_matrix);
-      break;
-    }
-    case CFWL_Part::Edge: {
-      DrawEdge(pParams->m_pGraphics, pParams->m_pWidget->GetStyles(),
-               &pParams->m_rtPart, &pParams->m_matrix);
       break;
     }
     case CFWL_Part::Background: {
@@ -68,30 +59,17 @@ void CFWL_ListBoxTP::DrawBackground(CFWL_ThemeBackground* pParams) {
   }
 }
 
-void CFWL_ListBoxTP::Initialize() {
-  InitTTO();
-  CFWL_WidgetTP::Initialize();
-}
-
-void CFWL_ListBoxTP::Finalize() {
-  FinalizeTTO();
-  CFWL_WidgetTP::Finalize();
-}
-
-void CFWL_ListBoxTP::DrawListBoxItem(CFX_Graphics* pGraphics,
+void CFWL_ListBoxTP::DrawListBoxItem(CXFA_Graphics* pGraphics,
                                      uint32_t dwStates,
                                      const CFX_RectF* prtItem,
                                      void* pData,
                                      CFX_Matrix* pMatrix) {
   if (dwStates & CFWL_PartState_Selected) {
     pGraphics->SaveGraphState();
-    CFX_Color crFill(FWL_GetThemeColor(m_dwThemeID) == 0
-                         ? FWLTHEME_COLOR_BKSelected
-                         : FWLTHEME_COLOR_Green_BKSelected);
+    CXFA_Color crFill(FWLTHEME_COLOR_BKSelected);
     pGraphics->SetFillColor(&crFill);
     CFX_RectF rt(*prtItem);
-    CFX_Path path;
-    path.Create();
+    CXFA_Path path;
 #if (_FX_OS_ == _FX_MACOSX_)
     path.AddRectangle(rt.left, rt.top, rt.width - 1, rt.height - 1);
 #else

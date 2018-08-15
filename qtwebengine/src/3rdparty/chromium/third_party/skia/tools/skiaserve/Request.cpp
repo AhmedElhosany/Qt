@@ -11,6 +11,7 @@
 #include "SkPixelSerializer.h"
 #include "SkPM4fPriv.h"
 #include "picture_utils.h"
+#include "sk_tool_utils.h"
 
 using namespace sk_gpu_test;
 
@@ -45,9 +46,9 @@ Request::~Request() {
 
 SkBitmap* Request::getBitmapFromCanvas(SkCanvas* canvas) {
     SkBitmap* bmp = new SkBitmap();
-    bmp->setInfo(canvas->imageInfo());
-    if (!canvas->readPixels(bmp, 0, 0)) {
+    if (!bmp->tryAllocPixels(canvas->imageInfo()) || !canvas->readPixels(*bmp, 0, 0)) {
         fprintf(stderr, "Can't read pixels\n");
+        delete bmp;
         return nullptr;
     }
     return bmp;
@@ -72,11 +73,15 @@ sk_sp<SkData> Request::writeCanvasToPng(SkCanvas* canvas) {
 SkCanvas* Request::getCanvas() {
 #if SK_SUPPORT_GPU
     GrContextFactory* factory = fContextFactory;
-    GLTestContext* gl = factory->getContextInfo(GrContextFactory::kNativeGL_ContextType,
-                                               GrContextFactory::ContextOptions::kNone).glContext();
+    GLTestContext* gl = factory->getContextInfo(GrContextFactory::kGL_ContextType,
+            GrContextFactory::ContextOverrides::kNone).glContext();
+    if (!gl) {
+        gl = factory->getContextInfo(GrContextFactory::kGLES_ContextType,
+                                     GrContextFactory::ContextOverrides::kNone).glContext();
+    }
     if (!gl) {
         gl = factory->getContextInfo(GrContextFactory::kMESA_ContextType,
-                                     GrContextFactory::ContextOptions::kNone).glContext();
+                                     GrContextFactory::ContextOverrides::kNone).glContext();
     }
     if (gl) {
         gl->makeCurrent();
@@ -117,7 +122,7 @@ sk_sp<SkData> Request::writeOutSkp() {
 
     SkDynamicMemoryWStream outStream;
 
-    sk_sp<SkPixelSerializer> serializer(SkImageEncoder::CreatePixelSerializer());
+    sk_sp<SkPixelSerializer> serializer = sk_tool_utils::MakePixelSerializer();
     picture->serialize(&outStream, serializer.get());
 
     return outStream.detachAsData();
@@ -125,11 +130,15 @@ sk_sp<SkData> Request::writeOutSkp() {
 
 GrContext* Request::getContext() {
 #if SK_SUPPORT_GPU
-    GrContext* result = fContextFactory->get(GrContextFactory::kNativeGL_ContextType,
-                                             GrContextFactory::ContextOptions::kNone);
+    GrContext* result = fContextFactory->get(GrContextFactory::kGL_ContextType,
+                                             GrContextFactory::ContextOverrides::kNone);
+    if (!result) {
+        result = fContextFactory->get(GrContextFactory::kGLES_ContextType,
+                                      GrContextFactory::ContextOverrides::kNone);
+    }
     if (!result) {
         result = fContextFactory->get(GrContextFactory::kMESA_ContextType,
-                                      GrContextFactory::ContextOptions::kNone);
+                                      GrContextFactory::ContextOverrides::kNone);
     }
     return result;
 #else
@@ -178,8 +187,8 @@ SkSurface* Request::createCPUSurface() {
     SkIRect bounds = this->getBounds();
     ColorAndProfile cap = ColorModes[fColorMode];
     auto colorSpace = kRGBA_F16_SkColorType == cap.fColorType
-                    ? SkColorSpace::MakeNamed(SkColorSpace::kSRGBLinear_Named)
-                    : SkColorSpace::MakeNamed(SkColorSpace::kSRGB_Named);
+                    ? SkColorSpace::MakeSRGBLinear()
+                    : SkColorSpace::MakeSRGB();
     SkImageInfo info = SkImageInfo::Make(bounds.width(), bounds.height(), cap.fColorType,
                                          kPremul_SkAlphaType, cap.fSRGB ? colorSpace : nullptr);
     return SkSurface::MakeRaster(info).release();
@@ -190,8 +199,8 @@ SkSurface* Request::createGPUSurface() {
     SkIRect bounds = this->getBounds();
     ColorAndProfile cap = ColorModes[fColorMode];
     auto colorSpace = kRGBA_F16_SkColorType == cap.fColorType
-                    ? SkColorSpace::MakeNamed(SkColorSpace::kSRGBLinear_Named)
-                    : SkColorSpace::MakeNamed(SkColorSpace::kSRGB_Named);
+                    ? SkColorSpace::MakeSRGBLinear()
+                    : SkColorSpace::MakeSRGB();
     SkImageInfo info = SkImageInfo::Make(bounds.width(), bounds.height(), cap.fColorType,
                                          kPremul_SkAlphaType, cap.fSRGB ? colorSpace: nullptr);
     SkSurface* surface = SkSurface::MakeRenderTarget(context, SkBudgeted::kNo, info).release();
@@ -258,7 +267,7 @@ sk_sp<SkData> Request::getJsonOps(int n) {
     SkCanvas* canvas = this->getCanvas();
     Json::Value root = fDebugCanvas->toJSON(fUrlDataManager, n, canvas);
     root["mode"] = Json::Value(fGPUEnabled ? "gpu" : "cpu");
-    root["drawGpuBatchBounds"] = Json::Value(fDebugCanvas->getDrawGpuBatchBounds());
+    root["drawGpuOpBounds"] = Json::Value(fDebugCanvas->getDrawGpuOpBounds());
     root["colorMode"] = Json::Value(fColorMode);
     SkDynamicMemoryWStream stream;
     stream.writeText(Json::FastWriter().write(root).c_str());
@@ -266,11 +275,11 @@ sk_sp<SkData> Request::getJsonOps(int n) {
     return stream.detachAsData();
 }
 
-sk_sp<SkData> Request::getJsonBatchList(int n) {
+sk_sp<SkData> Request::getJsonOpList(int n) {
     SkCanvas* canvas = this->getCanvas();
     SkASSERT(fGPUEnabled);
 
-    Json::Value result = fDebugCanvas->toJSONBatchList(n, canvas);
+    Json::Value result = fDebugCanvas->toJSONOpList(n, canvas);
 
     SkDynamicMemoryWStream stream;
     stream.writeText(Json::FastWriter().write(result).c_str());

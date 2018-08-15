@@ -53,16 +53,12 @@
 
 #include <QGraphicsTextItem>
 #include <QTimer>
-#include <QDateTime>
 #include <QHostInfo>
+#include <QRandomGenerator>
 
 #include <QDebug>
 
-#include <math.h>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+#include <qmath.h>
 
 //! [0]
 BearerCloud::BearerCloud(QObject *parent)
@@ -70,9 +66,8 @@ BearerCloud::BearerCloud(QObject *parent)
 {
     setSceneRect(-300, -300, 600, 600);
 
-    qsrand(QDateTime::currentDateTime().toTime_t());
 
-    offset[QNetworkConfiguration::Active] = 2 * M_PI * qrand() / RAND_MAX;
+    offset[QNetworkConfiguration::Active] = QRandomGenerator::global()->bounded(2 * M_PI);
     offset[QNetworkConfiguration::Discovered] = offset[QNetworkConfiguration::Active] + M_PI / 6;
     offset[QNetworkConfiguration::Defined] = offset[QNetworkConfiguration::Discovered] - M_PI / 6;
     offset[QNetworkConfiguration::Undefined] = offset[QNetworkConfiguration::Undefined] + M_PI / 6;

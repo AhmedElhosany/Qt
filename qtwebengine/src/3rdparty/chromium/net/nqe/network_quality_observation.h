@@ -5,10 +5,13 @@
 #ifndef NET_NQE_NETWORK_QUALITY_OBSERVATION_H_
 #define NET_NQE_NETWORK_QUALITY_OBSERVATION_H_
 
+#include <stdint.h>
+
 #include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
+#include "base/optional.h"
 #include "base/time/time.h"
 #include "net/base/net_export.h"
 #include "net/nqe/network_quality_observation_source.h"
@@ -28,8 +31,12 @@ template <typename ValueType>
 struct NET_EXPORT_PRIVATE Observation {
   Observation(const ValueType& value,
               base::TimeTicks timestamp,
+              const base::Optional<int32_t>& signal_strength,
               NetworkQualityObservationSource source)
-      : value(value), timestamp(timestamp), source(source) {
+      : value(value),
+        timestamp(timestamp),
+        signal_strength(signal_strength),
+        source(source) {
     DCHECK(!timestamp.is_null());
   }
   ~Observation() {}
@@ -39,6 +46,9 @@ struct NET_EXPORT_PRIVATE Observation {
 
   // Time when the observation was taken.
   const base::TimeTicks timestamp;
+
+  // Signal strength when the observation was taken.
+  const base::Optional<int32_t> signal_strength;
 
   // The source of the observation.
   const NetworkQualityObservationSource source;

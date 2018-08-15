@@ -54,19 +54,26 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
  public:
   // Callback definition for a callback that is called when when Play(), Pause()
   // or SetVolume are called (whenever the internal |playing_state_| changes).
-  typedef base::Callback<void(const blink::WebMediaStream&,
-                              WebRtcAudioRenderer::PlayingState*)>
-      OnPlayStateChanged;
+  using OnPlayStateChanged =
+      base::Callback<void(const blink::WebMediaStream&,
+                          WebRtcAudioRenderer::PlayingState*)>;
+
+  // Signals that the PlayingState* is about to become invalid, see comment in
+  // OnPlayStateRemoved.
+  using OnPlayStateRemoved =
+      base::OnceCallback<void(WebRtcAudioRenderer::PlayingState*)>;
 
   SharedAudioRenderer(const scoped_refptr<MediaStreamAudioRenderer>& delegate,
                       const blink::WebMediaStream& media_stream,
-                      const OnPlayStateChanged& on_play_state_changed)
+                      const OnPlayStateChanged& on_play_state_changed,
+                      OnPlayStateRemoved on_play_state_removed)
       : delegate_(delegate),
         media_stream_(media_stream),
         started_(false),
-        on_play_state_changed_(on_play_state_changed) {
+        on_play_state_changed_(on_play_state_changed),
+        on_play_state_removed_(std::move(on_play_state_removed)) {
     DCHECK(!on_play_state_changed_.is_null());
-    DCHECK(!media_stream_.isNull());
+    DCHECK(!media_stream_.IsNull());
   }
 
  protected:
@@ -74,6 +81,7 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
     DCHECK(thread_checker_.CalledOnValidThread());
     DVLOG(1) << __func__;
     Stop();
+    std::move(on_play_state_removed_).Run(&playing_state_);
   }
 
   void Start() override {
@@ -148,6 +156,7 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
   bool started_;
   WebRtcAudioRenderer::PlayingState playing_state_;
   OnPlayStateChanged on_play_state_changed_;
+  OnPlayStateRemoved on_play_state_removed_;
 };
 
 }  // namespace
@@ -167,7 +176,6 @@ WebRtcAudioRenderer::WebRtcAudioRenderer(
       source_(NULL),
       play_ref_count_(0),
       start_ref_count_(0),
-      audio_delay_milliseconds_(0),
       sink_params_(kFormat, kChannelLayout, 0, kBitsPerSample, 0),
       output_device_id_(device_id),
       security_origin_(security_origin) {
@@ -221,9 +229,12 @@ bool WebRtcAudioRenderer::Initialize(WebRtcAudioRendererSource* source) {
 scoped_refptr<MediaStreamAudioRenderer>
 WebRtcAudioRenderer::CreateSharedAudioRendererProxy(
     const blink::WebMediaStream& media_stream) {
-  content::SharedAudioRenderer::OnPlayStateChanged on_play_state_changed =
+  SharedAudioRenderer::OnPlayStateChanged on_play_state_changed =
       base::Bind(&WebRtcAudioRenderer::OnPlayStateChanged, this);
-  return new SharedAudioRenderer(this, media_stream, on_play_state_changed);
+  SharedAudioRenderer::OnPlayStateRemoved on_play_state_removed =
+      base::BindOnce(&WebRtcAudioRenderer::OnPlayStateRemoved, this);
+  return new SharedAudioRenderer(this, media_stream, on_play_state_changed,
+                                 std::move(on_play_state_removed));
 }
 
 bool WebRtcAudioRenderer::IsStarted() const {
@@ -268,7 +279,7 @@ void WebRtcAudioRenderer::EnterPlayState() {
     state_ = PLAYING;
 
     if (audio_fifo_) {
-      audio_delay_milliseconds_ = 0;
+      audio_delay_ = base::TimeDelta();
       audio_fifo_->Clear();
     }
   }
@@ -401,35 +412,26 @@ void WebRtcAudioRenderer::SwitchOutputDevice(
   callback.Run(media::OUTPUT_DEVICE_STATUS_OK);
 }
 
-int WebRtcAudioRenderer::Render(media::AudioBus* audio_bus,
-                                uint32_t frames_delayed,
-                                uint32_t frames_skipped) {
+int WebRtcAudioRenderer::Render(base::TimeDelta delay,
+                                base::TimeTicks delay_timestamp,
+                                int prior_frames_skipped,
+                                media::AudioBus* audio_bus) {
   DCHECK(sink_->CurrentThreadIsRenderingThread());
   base::AutoLock auto_lock(lock_);
   if (!source_)
     return 0;
 
-  // TODO(grunell): Converting from frames to milliseconds will potentially lose
-  // hundreds of microseconds which may cause audio video drift. Update
-  // this class and all usage of render delay msec -> frames (possibly even
-  // using a double type for frames). See http://crbug.com/586540
-  uint32_t audio_delay_milliseconds = static_cast<double>(frames_delayed) *
-                                      base::Time::kMillisecondsPerSecond /
-                                      sink_params_.sample_rate();
-
   DVLOG(2) << "WebRtcAudioRenderer::Render()";
-  DVLOG(2) << "audio_delay_milliseconds: " << audio_delay_milliseconds;
+  DVLOG(2) << "audio_delay: " << delay;
 
-  DCHECK_LE(audio_delay_milliseconds, static_cast<uint32_t>(INT_MAX));
-  audio_delay_milliseconds_ = static_cast<int>(audio_delay_milliseconds);
+  audio_delay_ = delay;
 
   // If there are skipped frames, pull and throw away the same amount. We always
   // pull 10 ms of data from the source (see PrepareSink()), so the fifo is only
   // required if the number of frames to drop doesn't correspond to 10 ms.
-  if (frames_skipped > 0) {
-    const uint32_t source_frames_per_buffer =
-        static_cast<uint32_t>(sink_params_.sample_rate() / 100);
-    if (!audio_fifo_ && frames_skipped != source_frames_per_buffer) {
+  if (prior_frames_skipped > 0) {
+    const int source_frames_per_buffer = sink_params_.sample_rate() / 100;
+    if (!audio_fifo_ && prior_frames_skipped != source_frames_per_buffer) {
       audio_fifo_.reset(new media::AudioPullFifo(
           kChannels, source_frames_per_buffer,
           base::Bind(&WebRtcAudioRenderer::SourceCallback,
@@ -437,7 +439,7 @@ int WebRtcAudioRenderer::Render(media::AudioBus* audio_bus,
     }
 
     std::unique_ptr<media::AudioBus> drop_bus =
-        media::AudioBus::Create(audio_bus->channels(), frames_skipped);
+        media::AudioBus::Create(audio_bus->channels(), prior_frames_skipped);
     if (audio_fifo_)
       audio_fifo_->Consume(drop_bus.get(), drop_bus->frames());
     else
@@ -467,7 +469,7 @@ void WebRtcAudioRenderer::SourceCallback(
            << fifo_frame_delay << ", "
            << audio_bus->frames() << ")";
 
-  int output_delay_milliseconds = audio_delay_milliseconds_;
+  int output_delay_milliseconds = audio_delay_.InMilliseconds();
   // TODO(grunell): This integer division by sample_rate will cause loss of
   // partial milliseconds, and may cause avsync drift. http://crbug.com/586540
   output_delay_milliseconds += fifo_frame_delay *
@@ -579,7 +581,7 @@ void WebRtcAudioRenderer::OnPlayStateChanged(
     PlayingState* state) {
   DCHECK(thread_checker_.CalledOnValidThread());
   blink::WebVector<blink::WebMediaStreamTrack> web_tracks;
-  media_stream.audioTracks(web_tracks);
+  media_stream.AudioTracks(web_tracks);
 
   for (const blink::WebMediaStreamTrack& web_track : web_tracks) {
     // WebRtcAudioRenderer can only render audio tracks received from a remote
@@ -600,6 +602,27 @@ void WebRtcAudioRenderer::OnPlayStateChanged(
       EnterPlayState();
     }
     UpdateSourceVolume(source);
+  }
+}
+
+void WebRtcAudioRenderer::OnPlayStateRemoved(PlayingState* state) {
+  // It is possible we associated |state| to a source for a track that is no
+  // longer easily reachable. We iterate over |source_playing_states_| to
+  // ensure there are no dangling pointers to |state| there. See
+  // crbug.com/697256.
+  // TODO(maxmorin): Clean up cleanup code in this and related classes so that
+  // this hack isn't necessary.
+  DCHECK(thread_checker_.CalledOnValidThread());
+  for (auto it = source_playing_states_.begin();
+       it != source_playing_states_.end();) {
+    PlayingStates& states = it->second;
+    // We cannot use RemovePlayingState as it might invalidate |it|.
+    states.erase(std::remove(states.begin(), states.end(), state),
+                 states.end());
+    if (states.empty())
+      it = source_playing_states_.erase(it);
+    else
+      ++it;
   }
 }
 

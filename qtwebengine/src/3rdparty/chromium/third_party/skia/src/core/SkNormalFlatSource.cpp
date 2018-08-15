@@ -7,63 +7,59 @@
 
 #include "SkNormalFlatSource.h"
 
+#include "SkArenaAlloc.h"
 #include "SkNormalSource.h"
-#include "SkNormalSourcePriv.h"
 #include "SkPoint3.h"
 #include "SkReadBuffer.h"
 #include "SkWriteBuffer.h"
 
 #if SK_SUPPORT_GPU
-#include "GrInvariantOutput.h"
 #include "glsl/GrGLSLFragmentProcessor.h"
 #include "glsl/GrGLSLFragmentShaderBuilder.h"
 
 class NormalFlatFP : public GrFragmentProcessor {
 public:
-    NormalFlatFP() {
-        this->initClassID<NormalFlatFP>();
+    static sk_sp<GrFragmentProcessor> Make() {
+        return sk_sp<GrFragmentProcessor>(new NormalFlatFP());
     }
 
-    class GLSLNormalFlatFP : public GLSLNormalFP {
+    class GLSLNormalFlatFP : public GrGLSLFragmentProcessor {
     public:
         GLSLNormalFlatFP() {}
 
-        void onEmitCode(EmitArgs& args) override {
+        void emitCode(EmitArgs& args) override {
             GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
 
             fragBuilder->codeAppendf("%s = vec4(0, 0, 1, 0);", args.fOutputColor);
         }
 
-        static void GenKey(const GrProcessor& proc, const GrGLSLCaps&,
-                           GrProcessorKeyBuilder* b) {
-            b->add32(0x0);
-        }
-
-    protected:
-        void setNormalData(const GrGLSLProgramDataManager& pdman,
-                           const GrProcessor& proc) override {}
+    private:
+        void onSetData(const GrGLSLProgramDataManager&, const GrFragmentProcessor&) override {}
     };
-
-    void onGetGLSLProcessorKey(const GrGLSLCaps& caps, GrProcessorKeyBuilder* b) const override {
-        GLSLNormalFlatFP::GenKey(*this, caps, b);
-    }
 
     const char* name() const override { return "NormalFlatFP"; }
 
-    void onComputeInvariantOutput(GrInvariantOutput* inout) const override {
-        inout->setToUnknown(GrInvariantOutput::ReadInput::kWillNot_ReadInput);
+private:
+    NormalFlatFP() : INHERITED(kConstantOutputForConstantInput_OptimizationFlag) {
+        this->initClassID<NormalFlatFP>();
     }
 
-private:
+    void onGetGLSLProcessorKey(const GrShaderCaps& caps, GrProcessorKeyBuilder* b) const override {}
+
+    GrColor4f constantOutputForConstantInput(GrColor4f) const override {
+        return GrColor4f(0, 0, 1, 0);
+    }
     GrGLSLFragmentProcessor* onCreateGLSLInstance() const override { return new GLSLNormalFlatFP; }
 
     bool onIsEqual(const GrFragmentProcessor&) const override { return true; }
+
+    typedef GrFragmentProcessor INHERITED;
 };
 
 sk_sp<GrFragmentProcessor> SkNormalFlatSourceImpl::asFragmentProcessor(
-        const SkShader::AsFPArgs&) const {
+        const SkShaderBase::AsFPArgs&) const {
 
-    return sk_make_sp<NormalFlatFP>();
+    return NormalFlatFP::Make();
 }
 
 #endif // SK_SUPPORT_GPU
@@ -74,13 +70,9 @@ SkNormalFlatSourceImpl::Provider::Provider() {}
 
 SkNormalFlatSourceImpl::Provider::~Provider() {}
 
-SkNormalSource::Provider* SkNormalFlatSourceImpl::asProvider(const SkShader::ContextRec &rec,
-                                                             void *storage) const {
-    return new (storage) Provider();
-}
-
-size_t SkNormalFlatSourceImpl::providerSize(const SkShader::ContextRec&) const {
-    return sizeof(Provider);
+SkNormalSource::Provider* SkNormalFlatSourceImpl::asProvider(const SkShaderBase::ContextRec &rec,
+                                                             SkArenaAlloc *alloc) const {
+    return alloc->make<Provider>();
 }
 
 void SkNormalFlatSourceImpl::Provider::fillScanLine(int x, int y, SkPoint3 output[],

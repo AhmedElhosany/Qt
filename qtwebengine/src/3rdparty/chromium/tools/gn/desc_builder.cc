@@ -122,18 +122,18 @@ class BaseDescBuilder {
   }
 
   ValuePtr RenderValue(const std::string& s, bool optional = false) {
-    return (s.empty() && optional) ? base::Value::CreateNullValue()
-                                   : ValuePtr(new base::StringValue(s));
+    return (s.empty() && optional) ? base::MakeUnique<base::Value>()
+                                   : ValuePtr(new base::Value(s));
   }
 
   ValuePtr RenderValue(const SourceDir& d) {
-    return d.is_null() ? base::Value::CreateNullValue()
-                       : ValuePtr(new base::StringValue(FormatSourceDir(d)));
+    return d.is_null() ? base::MakeUnique<base::Value>()
+                       : ValuePtr(new base::Value(FormatSourceDir(d)));
   }
 
   ValuePtr RenderValue(const SourceFile& f) {
-    return f.is_null() ? base::Value::CreateNullValue()
-                       : ValuePtr(new base::StringValue(f.value()));
+    return f.is_null() ? base::MakeUnique<base::Value>()
+                       : ValuePtr(new base::Value(f.value()));
   }
 
   ValuePtr RenderValue(const LibFile& lib) {
@@ -616,8 +616,9 @@ class TargetDescBuilder : public BaseDescBuilder {
         res->SetWithoutPathExpansion("output_patterns", std::move(patterns));
       }
       std::vector<SourceFile> output_files;
-      SubstitutionWriter::ApplyListToSources(target_->settings(), outputs,
-                                             target_->sources(), &output_files);
+      SubstitutionWriter::ApplyListToSources(target_, target_->settings(),
+                                             outputs, target_->sources(),
+                                             &output_files);
       res->SetWithoutPathExpansion(variables::kOutputs,
                                    RenderValue(output_files));
     } else {
@@ -678,7 +679,7 @@ class TargetDescBuilder : public BaseDescBuilder {
         // Indent string values in blame mode
         if (blame_ && rendered->GetAsString(&str)) {
           str = "  " + str;
-          rendered = base::MakeUnique<base::StringValue>(str);
+          rendered = base::MakeUnique<base::Value>(str);
         }
         res->Append(std::move(rendered));
       }

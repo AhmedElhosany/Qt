@@ -5,6 +5,9 @@
 #ifndef COMPONENTS_ARC_BLUETOOTH_BLUETOOTH_STRUCT_TRAITS_H_
 #define COMPONENTS_ARC_BLUETOOTH_BLUETOOTH_STRUCT_TRAITS_H_
 
+#include <memory>
+#include <vector>
+
 #include "components/arc/common/bluetooth.mojom.h"
 #include "device/bluetooth/bluetooth_advertisement.h"
 #include "device/bluetooth/bluetooth_common.h"
@@ -111,21 +114,21 @@ struct StructTraits<arc::mojom::BluetoothAdvertisementDataView,
 
   // Dummy methods.
   static arc::mojom::BluetoothAdvertisementType type(
-      std::unique_ptr<device::BluetoothAdvertisement::Data>& input) {
+      const std::unique_ptr<device::BluetoothAdvertisement::Data>& input) {
     NOTREACHED();
     return arc::mojom::BluetoothAdvertisementType::ADV_TYPE_NON_CONNECTABLE;
   }
 
   static bool include_tx_power(
-      std::unique_ptr<device::BluetoothAdvertisement::Data>& input) {
+      const std::unique_ptr<device::BluetoothAdvertisement::Data>& input) {
     NOTREACHED();
     return false;
   }
 
-  static mojo::Array<arc::mojom::BluetoothAdvertisingDataPtr> data(
-      std::unique_ptr<device::BluetoothAdvertisement::Data>& input) {
+  static std::vector<arc::mojom::BluetoothAdvertisingDataPtr> data(
+      const std::unique_ptr<device::BluetoothAdvertisement::Data>& input) {
     NOTREACHED();
-    return mojo::Array<arc::mojom::BluetoothAdvertisingDataPtr>();
+    return std::vector<arc::mojom::BluetoothAdvertisingDataPtr>();
   }
 };
 

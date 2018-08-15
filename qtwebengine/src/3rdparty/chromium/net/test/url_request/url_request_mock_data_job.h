@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_URL_REQUEST_URL_REQUEST_MOCK_DATA_JOB_H_
-#define NET_URL_REQUEST_URL_REQUEST_MOCK_DATA_JOB_H_
+#ifndef NET_TEST_URL_REQUEST_URL_REQUEST_MOCK_DATA_JOB_H_
+#define NET_TEST_URL_REQUEST_URL_REQUEST_MOCK_DATA_JOB_H_
 
 #include <stddef.h>
 
@@ -29,10 +29,10 @@ class URLRequestMockDataJob : public URLRequestJob {
 
   void Start() override;
   int ReadRawData(IOBuffer* buf, int buf_size) override;
-  int GetResponseCode() const override;
   void GetResponseInfo(HttpResponseInfo* info) override;
-  void ContinueWithCertificate(X509Certificate* client_cert,
-                               SSLPrivateKey* client_private_key) override;
+  void ContinueWithCertificate(
+      scoped_refptr<X509Certificate> client_cert,
+      scoped_refptr<SSLPrivateKey> client_private_key) override;
 
   // Adds the testing URLs to the URLRequestFilter.
   static void AddUrlHandler();
@@ -71,4 +71,4 @@ class URLRequestMockDataJob : public URLRequestJob {
 
 }  // namespace net
 
-#endif  // NET_URL_REQUEST_URL_REQUEST_SIMPLE_JOB_H_
+#endif  // NET_TEST_URL_REQUEST_URL_REQUEST_MOCK_DATA_JOB_H_

@@ -40,12 +40,12 @@
 ****************************************************************************/
 
 #include "qserialport_p.h"
+#include "qwinoverlappedionotifier_p.h"
 
 #include <QtCore/qcoreevent.h>
 #include <QtCore/qelapsedtimer.h>
 #include <QtCore/qvector.h>
 #include <QtCore/qtimer.h>
-#include <private/qwinoverlappedionotifier_p.h>
 #include <algorithm>
 
 #ifndef CTL_CODE
@@ -176,12 +176,9 @@ static inline void qt_set_flowcontrol(DCB *dcb, QSerialPort::FlowControl flowcon
 bool QSerialPortPrivate::open(QIODevice::OpenMode mode)
 {
     DWORD desiredAccess = 0;
-    originalEventMask = 0;
 
-    if (mode & QIODevice::ReadOnly) {
+    if (mode & QIODevice::ReadOnly)
         desiredAccess |= GENERIC_READ;
-        originalEventMask |= EV_RXCHAR;
-    }
     if (mode & QIODevice::WriteOnly)
         desiredAccess |= GENERIC_WRITE;
 
@@ -193,7 +190,7 @@ bool QSerialPortPrivate::open(QIODevice::OpenMode mode)
         return false;
     }
 
-    if (initialize())
+    if (initialize(mode))
         return true;
 
     ::CloseHandle(handle);
@@ -347,18 +344,16 @@ bool QSerialPortPrivate::waitForReadyRead(int msecs)
     const qint64 initialReadBufferSize = buffer.size();
     qint64 currentReadBufferSize = initialReadBufferSize;
 
-    QElapsedTimer stopWatch;
-    stopWatch.start();
+    QDeadlineTimer deadline(msecs);
 
     do {
-        const OVERLAPPED *overlapped = waitForNotified(
-                    qt_subtract_from_timeout(msecs, stopWatch.elapsed()));
+        const OVERLAPPED *overlapped = waitForNotified(deadline);
         if (!overlapped)
             return false;
 
         if (overlapped == &readCompletionOverlapped) {
             const qint64 readBytesForOneReadOperation = qint64(buffer.size()) - currentReadBufferSize;
-            if (readBytesForOneReadOperation == ReadChunkSize) {
+            if (readBytesForOneReadOperation == QSERIALPORT_BUFFERSIZE) {
                 currentReadBufferSize = buffer.size();
             } else if (readBytesForOneReadOperation == 0) {
                 if (initialReadBufferSize != currentReadBufferSize)
@@ -368,7 +363,7 @@ bool QSerialPortPrivate::waitForReadyRead(int msecs)
             }
         }
 
-    } while (msecs == -1 || qt_subtract_from_timeout(msecs, stopWatch.elapsed()) > 0);
+    } while (!deadline.hasExpired());
 
     return false;
 }
@@ -381,12 +376,10 @@ bool QSerialPortPrivate::waitForBytesWritten(int msecs)
     if (!writeStarted && !_q_startAsyncWrite())
         return false;
 
-    QElapsedTimer stopWatch;
-    stopWatch.start();
+    QDeadlineTimer deadline(msecs);
 
     for (;;) {
-        const OVERLAPPED *overlapped = waitForNotified(
-                    qt_subtract_from_timeout(msecs, stopWatch.elapsed()));
+        const OVERLAPPED *overlapped = waitForNotified(deadline);
         if (!overlapped)
             return false;
 
@@ -484,11 +477,10 @@ bool QSerialPortPrivate::completeAsyncRead(qint64 bytesTransferred)
     readStarted = false;
 
     bool result = true;
-    if (bytesTransferred == ReadChunkSize
+    if (bytesTransferred == QSERIALPORT_BUFFERSIZE
             || queuedBytesCount(QSerialPort::Input) > 0) {
         result = startAsyncRead();
-    } else if (readBufferMaxSize == 0
-               || readBufferMaxSize > buffer.size()) {
+    } else {
         result = startAsyncCommunication();
     }
 
@@ -541,7 +533,7 @@ bool QSerialPortPrivate::startAsyncRead()
     if (readStarted)
         return true;
 
-    qint64 bytesToRead = ReadChunkSize;
+    qint64 bytesToRead = QSERIALPORT_BUFFERSIZE;
 
     if (readBufferMaxSize && bytesToRead > (readBufferMaxSize - buffer.size())) {
         bytesToRead = readBufferMaxSize - buffer.size();
@@ -551,6 +543,8 @@ bool QSerialPortPrivate::startAsyncRead()
             return false;
         }
     }
+
+    Q_ASSERT(int(bytesToRead) <= readChunkBuffer.size());
 
     ::ZeroMemory(&readCompletionOverlapped, sizeof(readCompletionOverlapped));
     if (::ReadFile(handle, readChunkBuffer.data(), bytesToRead, nullptr, &readCompletionOverlapped)) {
@@ -638,9 +632,9 @@ qint64 QSerialPortPrivate::writeData(const char *data, qint64 maxSize)
     return maxSize;
 }
 
-OVERLAPPED *QSerialPortPrivate::waitForNotified(int msecs)
+OVERLAPPED *QSerialPortPrivate::waitForNotified(QDeadlineTimer deadline)
 {
-    OVERLAPPED *overlapped = notifier->waitForAnyNotified(msecs);
+    OVERLAPPED *overlapped = notifier->waitForAnyNotified(deadline);
     if (!overlapped) {
         setError(getSystemError(WAIT_TIMEOUT));
         return nullptr;
@@ -658,7 +652,7 @@ qint64 QSerialPortPrivate::queuedBytesCount(QSerialPort::Direction direction) co
             : ((direction == QSerialPort::Output) ? comstat.cbOutQue : -1);
 }
 
-inline bool QSerialPortPrivate::initialize()
+inline bool QSerialPortPrivate::initialize(QIODevice::OpenMode mode)
 {
     Q_Q(QSerialPort);
 
@@ -691,19 +685,20 @@ inline bool QSerialPortPrivate::initialize()
         return false;
     }
 
-    if (!::SetCommMask(handle, originalEventMask)) {
+    const DWORD eventMask = (mode & QIODevice::ReadOnly) ? EV_RXCHAR : 0;
+    if (!::SetCommMask(handle, eventMask)) {
         setError(getSystemError());
         return false;
     }
+
+    if ((eventMask & EV_RXCHAR) && !startAsyncCommunication())
+        return false;
 
     notifier = new QWinOverlappedIoNotifier(q);
     QObjectPrivate::connect(notifier, &QWinOverlappedIoNotifier::notified,
                this, &QSerialPortPrivate::_q_notified);
     notifier->setHandle(handle);
     notifier->setEnabled(true);
-
-    if ((originalEventMask & EV_RXCHAR) && !startAsyncCommunication())
-        return false;
 
     return true;
 }
@@ -785,80 +780,16 @@ QSerialPortErrorInfo QSerialPortPrivate::getSystemError(int systemErrorCode) con
 }
 
 // This table contains standard values of baud rates that
-// are defined in MSDN and/or in Win SDK file winbase.h
-
-static const QList<qint32> standardBaudRatePairList()
-{
-
-    static const QList<qint32> standardBaudRatesTable = QList<qint32>()
-
-        #ifdef CBR_110
-            << CBR_110
-        #endif
-
-        #ifdef CBR_300
-            << CBR_300
-        #endif
-
-        #ifdef CBR_600
-            << CBR_600
-        #endif
-
-        #ifdef CBR_1200
-            << CBR_1200
-        #endif
-
-        #ifdef CBR_2400
-            << CBR_2400
-        #endif
-
-        #ifdef CBR_4800
-            << CBR_4800
-        #endif
-
-        #ifdef CBR_9600
-            << CBR_9600
-        #endif
-
-        #ifdef CBR_14400
-            << CBR_14400
-        #endif
-
-        #ifdef CBR_19200
-            << CBR_19200
-        #endif
-
-        #ifdef CBR_38400
-            << CBR_38400
-        #endif
-
-        #ifdef CBR_56000
-            << CBR_56000
-        #endif
-
-        #ifdef CBR_57600
-            << CBR_57600
-        #endif
-
-        #ifdef CBR_115200
-            << CBR_115200
-        #endif
-
-        #ifdef CBR_128000
-            << CBR_128000
-        #endif
-
-        #ifdef CBR_256000
-            << CBR_256000
-        #endif
-    ;
-
-    return standardBaudRatesTable;
-};
-
+// are defined in file winbase.h
 QList<qint32> QSerialPortPrivate::standardBaudRates()
 {
-    return standardBaudRatePairList();
+    static const QList<qint32> baudRates = {
+        CBR_110,   CBR_300,   CBR_600,    CBR_1200,   CBR_2400,
+        CBR_4800,  CBR_9600,  CBR_14400,  CBR_19200,  CBR_38400,
+        CBR_56000, CBR_57600, CBR_115200, CBR_128000, CBR_256000
+    };
+
+    return baudRates;
 }
 
 QSerialPort::Handle QSerialPort::handle() const

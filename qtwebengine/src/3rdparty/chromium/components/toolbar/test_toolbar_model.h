@@ -13,7 +13,7 @@
 #include "components/toolbar/toolbar_model.h"
 
 namespace gfx {
-enum class VectorIconId;
+struct VectorIcon;
 }
 
 // A ToolbarModel that is backed by instance variables, which are initialized
@@ -27,31 +27,34 @@ class TestToolbarModel : public ToolbarModel {
   GURL GetURL() const override;
   security_state::SecurityLevel GetSecurityLevel(
       bool ignore_editing) const override;
-  gfx::VectorIconId GetVectorIcon() const override;
+  const gfx::VectorIcon& GetVectorIcon() const override;
   base::string16 GetSecureVerboseText() const override;
   base::string16 GetEVCertName() const override;
   bool ShouldDisplayURL() const override;
+  bool IsOfflinePage() const override;
 
   void set_text(const base::string16& text) { text_ = text; }
   void set_url(const GURL& url) { url_ = url; }
   void set_security_level(security_state::SecurityLevel security_level) {
     security_level_ = security_level;
   }
-  void set_icon(gfx::VectorIconId icon) { icon_ = icon; }
+  void set_icon(const gfx::VectorIcon& icon) { icon_ = &icon; }
   void set_ev_cert_name(const base::string16& ev_cert_name) {
     ev_cert_name_ = ev_cert_name;
   }
   void set_should_display_url(bool should_display_url) {
     should_display_url_ = should_display_url;
   }
+  void set_offline_page(bool offline_page) { offline_page_ = offline_page; }
 
  private:
   base::string16 text_;
   GURL url_;
-  security_state::SecurityLevel security_level_;
-  gfx::VectorIconId icon_;
+  security_state::SecurityLevel security_level_ = security_state::NONE;
+  const gfx::VectorIcon* icon_ = nullptr;
   base::string16 ev_cert_name_;
-  bool should_display_url_;
+  bool should_display_url_ = false;
+  bool offline_page_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(TestToolbarModel);
 };

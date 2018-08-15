@@ -6,12 +6,13 @@ import json
 import optparse
 
 from webkitpy.common.net.buildbot import Build
-from webkitpy.common.net.rietveld import Rietveld
-from webkitpy.common.net.web_mock import MockWeb
 from webkitpy.common.net.git_cl import GitCL
-from webkitpy.common.system.executive_mock import MockExecutive2
-from webkitpy.common.system.logtesting import LoggingTestCase
+from webkitpy.common.net.git_cl import TryJobStatus
+from webkitpy.common.checkout.git_mock import MockGit
+from webkitpy.common.net.layout_test_results import LayoutTestResults
+from webkitpy.common.system.log_testing import LoggingTestCase
 from webkitpy.layout_tests.builder_list import BuilderList
+from webkitpy.tool.commands.rebaseline import TestBaselineSet
 from webkitpy.tool.commands.rebaseline_cl import RebaselineCL
 from webkitpy.tool.commands.rebaseline_unittest import BaseTestCase
 
@@ -22,63 +23,85 @@ class RebaselineCLTest(BaseTestCase, LoggingTestCase):
     def setUp(self):
         BaseTestCase.setUp(self)
         LoggingTestCase.setUp(self)
-        web = MockWeb(urls={
-            'https://codereview.chromium.org/api/11112222': json.dumps({
-                'patchsets': [1, 2],
-            }),
-            'https://codereview.chromium.org/api/11112222/2': json.dumps({
-                'try_job_results': [
-                    {
-                        'builder': 'MOCK Try Win',
-                        'buildnumber': 5000,
-                        'result': 0,
-                    },
-                    {
-                        'builder': 'MOCK Try Mac',
-                        'buildnumber': 4000,
-                        'result': 0,
-                    },
-                ],
-                'files': {
-                    'third_party/WebKit/LayoutTests/fast/dom/prototype-inheritance.html': {'status': 'M'},
-                    'third_party/WebKit/LayoutTests/fast/dom/prototype-taco.html': {'status': 'M'},
-                },
-            }),
-        })
-        self.tool.builders = BuilderList({
-            "MOCK Try Win": {
-                "port_name": "test-win-win7",
-                "specifiers": ["Win7", "Release"],
-                "is_try_builder": True,
-            },
-            "MOCK Try Linux": {
-                "port_name": "test-mac-mac10.10",
-                "specifiers": ["Mac10.10", "Release"],
-                "is_try_builder": True,
-            },
-        })
-        self.command.rietveld = Rietveld(web)
 
-        self.tool.buildbot.set_retry_sumary_json(Build('MOCK Try Win', 5000), json.dumps({
-            'failures': [
-                'fast/dom/prototype-newtest.html',
-                'fast/dom/prototype-taco.html',
-                'fast/dom/prototype-inheritance.html',
-                'svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html',
-            ],
-            'ignored': [],
-        }))
+        builds = {
+            Build('MOCK Try Win', 5000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Mac', 4000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Linux', 6000): TryJobStatus('COMPLETED', 'FAILURE'),
+        }
+
+        # TODO(qyearsley): Add a MockGitCL class to reduce repetition below.
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: builds
+        self.command.git_cl = lambda: git_cl
+
+        git = MockGit(filesystem=self.tool.filesystem, executive=self.tool.executive)
+        git.changed_files = lambda **_: [
+            'third_party/WebKit/LayoutTests/one/text-fail.html',
+            'third_party/WebKit/LayoutTests/one/flaky-fail.html',
+        ]
+        self.tool.git = lambda: git
+
+        self.tool.builders = BuilderList({
+            'MOCK Try Win': {
+                'port_name': 'test-win-win7',
+                'specifiers': ['Win7', 'Release'],
+                'is_try_builder': True,
+            },
+            'MOCK Try Linux': {
+                'port_name': 'test-linux-trusty',
+                'specifiers': ['Trusty', 'Release'],
+                'is_try_builder': True,
+            },
+            'MOCK Try Mac': {
+                'port_name': 'test-mac-mac10.11',
+                'specifiers': ['Mac10.11', 'Release'],
+                'is_try_builder': True,
+            },
+        })
+        layout_test_results = LayoutTestResults({
+            'tests': {
+                'one': {
+                    'crash.html': {'expected': 'PASS', 'actual': 'CRASH', 'is_unexpected': True},
+                    'expected-fail.html': {'expected': 'FAIL', 'actual': 'IMAGE+TEXT'},
+                    'flaky-fail.html': {'expected': 'PASS', 'actual': 'PASS TEXT', 'is_unexpected': True},
+                    'missing.html': {'expected': 'PASS', 'actual': 'MISSING', 'is_unexpected': True},
+                    'slow-fail.html': {'expected': 'SLOW', 'actual': 'TEXT', 'is_unexpected': True},
+                    'text-fail.html': {'expected': 'PASS', 'actual': 'TEXT', 'is_unexpected': True},
+                    'unexpected-pass.html': {'expected': 'FAIL', 'actual': 'PASS', 'is_unexpected': True},
+                },
+                'two': {'image-fail.html': {'expected': 'PASS', 'actual': 'IMAGE', 'is_unexpected': True}},
+            },
+        })
+
+        for build in builds:
+            self.tool.buildbot.set_results(build, layout_test_results)
+            self.tool.buildbot.set_retry_sumary_json(build, json.dumps({
+                'failures': [
+                    'one/flaky-fail.html',
+                    'one/missing.html',
+                    'one/slow-fail.html',
+                    'one/text-fail.html',
+                    'two/image-fail.html',
+                ],
+                'ignored': [],
+            }))
 
         # Write to the mock filesystem so that these tests are considered to exist.
-        port = self.mac_port
         tests = [
-            'fast/dom/prototype-taco.html',
-            'fast/dom/prototype-inheritance.html',
-            'fast/dom/prototype-newtest.html',
-            'svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html',
+            'one/flaky-fail.html',
+            'one/missing.html',
+            'one/slow-fail.html',
+            'one/text-fail.html',
+            'two/image-fail.html',
         ]
         for test in tests:
-            self._write(port.host.filesystem.join(port.layout_tests_dir(), test), 'contents')
+            path = self.mac_port.host.filesystem.join(
+                self.mac_port.layout_tests_dir(), test)
+            self._write(path, 'contents')
+
+        self.mac_port.host.filesystem.write_text_file('/test.checkout/LayoutTests/external/wpt/MANIFEST.json', '{}')
 
     def tearDown(self):
         BaseTestCase.tearDown(self)
@@ -87,154 +110,396 @@ class RebaselineCLTest(BaseTestCase, LoggingTestCase):
     @staticmethod
     def command_options(**kwargs):
         options = {
-            'only_changed_tests': False,
             'dry_run': False,
-            'issue': None,
+            'only_changed_tests': False,
+            'trigger_jobs': True,
+            'fill_missing': False,
             'optimize': True,
             'results_directory': None,
             'verbose': False,
-            'trigger_jobs': False,
         }
         options.update(kwargs)
         return optparse.Values(dict(**options))
 
-    def test_execute_with_issue_number_given(self):
-        self.command.execute(self.command_options(issue=11112222), [], self.tool)
+    def test_execute_basic(self):
+        # By default, with no arguments or options, rebaseline-cl rebaselines
+        # all of the tests that unexpectedly failed.
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 0)
         self.assertLog([
-            'INFO: Rebaselining fast/dom/prototype-inheritance.html\n',
-            'INFO: Rebaselining fast/dom/prototype-newtest.html\n',
-            'INFO: Rebaselining fast/dom/prototype-taco.html\n',
-            'INFO: Rebaselining svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html\n',
+            'INFO: Finished try jobs found for all try bots.\n',
+            'INFO: Rebaselining one/flaky-fail.html\n',
+            'INFO: Rebaselining one/missing.html\n',
+            'INFO: Rebaselining one/slow-fail.html\n',
+            'INFO: Rebaselining one/text-fail.html\n',
+            'INFO: Rebaselining two/image-fail.html\n',
         ])
 
-    def test_execute_with_no_issue_number(self):
-        self.command.execute(self.command_options(), [], self.tool)
-        self.assertLog(['ERROR: No issue number given and no issue for current branch. This tool requires a CL\n'
-                        'to operate on; please run `git cl upload` on this branch first, or use the --issue\n'
-                        'option to download baselines for another existing CL.\n'])
+    def test_execute_with_no_issue_number_aborts(self):
+        # If the user hasn't uploaded a CL, an error message is printed.
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: 'None'
+        self.command.git_cl = lambda: git_cl
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 1)
+        self.assertLog(['ERROR: No issue number for current branch.\n'])
 
-    def test_execute_with_issue_number_from_branch(self):
+    def test_execute_with_unstaged_baselines_aborts(self):
+        git = self.tool.git()
+        git.unstaged_changes = lambda: {
+            'third_party/WebKit/LayoutTests/my-test-expected.txt': '?'
+        }
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 1)
+        self.assertLog([
+            'ERROR: Aborting: there are unstaged baselines:\n',
+            'ERROR:   /mock-checkout/third_party/WebKit/LayoutTests/'
+            'my-test-expected.txt\n',
+        ])
+
+    def test_execute_no_try_jobs_started_triggers_jobs(self):
+        # If there are no try jobs started yet, by default the tool will
+        # trigger new try jobs.
         git_cl = GitCL(self.tool)
         git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: {}
         self.command.git_cl = lambda: git_cl
-        self.command.execute(self.command_options(), [], self.tool)
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 1)
         self.assertLog([
-            'INFO: Rebaselining fast/dom/prototype-inheritance.html\n',
-            'INFO: Rebaselining fast/dom/prototype-newtest.html\n',
-            'INFO: Rebaselining fast/dom/prototype-taco.html\n',
-            'INFO: Rebaselining svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html\n',
+            'INFO: No finished try jobs.\n',
+            'INFO: Triggering try jobs:\n',
+            'INFO:   MOCK Try Linux\n',
+            'INFO:   MOCK Try Mac\n',
+            'INFO:   MOCK Try Win\n',
+            'INFO: Once all pending try jobs have finished, please re-run\n'
+            'webkit-patch rebaseline-cl to fetch new baselines.\n'
+        ])
+
+    def test_execute_no_try_jobs_started_and_no_trigger_jobs(self):
+        # If there are no try jobs started yet and --no-trigger-jobs is passed,
+        # then we just abort immediately.
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: {}
+        self.command.git_cl = lambda: git_cl
+        exit_code = self.command.execute(
+            self.command_options(trigger_jobs=False), [], self.tool)
+        self.assertEqual(exit_code, 1)
+        self.assertLog([
+            'INFO: No finished try jobs.\n',
+            'INFO: Aborted: no try jobs and --no-trigger-jobs passed.\n',
+        ])
+
+    def test_execute_one_missing_build(self):
+        builds = {
+            Build('MOCK Try Win', 5000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Mac', 4000): TryJobStatus('COMPLETED', 'FAILURE'),
+        }
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: builds
+        self.command.git_cl = lambda: git_cl
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 1)
+        self.assertLog([
+            'INFO: Finished try jobs:\n',
+            'INFO:   MOCK Try Mac\n',
+            'INFO:   MOCK Try Win\n',
+            'INFO: Triggering try jobs:\n',
+            'INFO:   MOCK Try Linux\n',
+            'INFO: Once all pending try jobs have finished, please re-run\n'
+            'webkit-patch rebaseline-cl to fetch new baselines.\n',
+        ])
+
+    def test_execute_with_unfinished_jobs(self):
+        builds = {
+            Build('MOCK Try Win', 5000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Mac', 4000): TryJobStatus('STARTED'),
+            Build('MOCK Try Linux', 6000): TryJobStatus('SCHEDULED'),
+        }
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: builds
+        self.command.git_cl = lambda: git_cl
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 1)
+        self.assertLog([
+            'INFO: Finished try jobs:\n',
+            'INFO:   MOCK Try Win\n',
+            'INFO: Scheduled or started try jobs:\n',
+            'INFO:   MOCK Try Linux\n',
+            'INFO:   MOCK Try Mac\n',
+            'INFO: There are some builders with no results:\n',
+            'INFO:   MOCK Try Linux\n',
+            'INFO:   MOCK Try Mac\n',
+            'INFO: Would you like to try to fill in missing results with\n'
+            'available results? This assumes that layout test results\n'
+            'for the platforms with missing results are the same as\n'
+            'results on other platforms.\n',
+            'INFO: Aborting.\n',
+        ])
+
+    def test_execute_with_canceled_job(self):
+        builds = {
+            Build('MOCK Try Win', 5000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Mac', 4000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Linux', 6000): TryJobStatus('COMPLETED', 'CANCELED'),
+        }
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: builds
+        self.command.git_cl = lambda: git_cl
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 1)
+        self.assertLog([
+            'INFO: Finished try jobs found for all try bots.\n',
+            'INFO: There are some builders with no results:\n',
+            'INFO:   MOCK Try Linux\n',
+            'INFO: Would you like to try to fill in missing results with\n'
+            'available results? This assumes that layout test results\n'
+            'for the platforms with missing results are the same as\n'
+            'results on other platforms.\n',
+            'INFO: Aborting.\n',
+        ])
+
+    def test_execute_with_passing_jobs(self):
+        builds = {
+            Build('MOCK Try Win', 5000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Mac', 4000): TryJobStatus('COMPLETED', 'SUCCESS'),
+            Build('MOCK Try Linux', 6000): TryJobStatus('COMPLETED', 'SUCCESS'),
+        }
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: builds
+        self.command.git_cl = lambda: git_cl
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 0)
+        self.assertLog([
+            'INFO: Finished try jobs found for all try bots.\n',
+            'INFO: Rebaselining one/flaky-fail.html\n',
+            'INFO: Rebaselining one/missing.html\n',
+            'INFO: Rebaselining one/slow-fail.html\n',
+            'INFO: Rebaselining one/text-fail.html\n',
+            'INFO: Rebaselining two/image-fail.html\n'
+        ])
+
+    def test_execute_with_no_trigger_jobs_option(self):
+        builds = {
+            Build('MOCK Try Win', 5000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Mac', 4000): TryJobStatus('COMPLETED', 'FAILURE'),
+        }
+        git_cl = GitCL(self.tool)
+        git_cl.get_issue_number = lambda: '11112222'
+        git_cl.latest_try_jobs = lambda _: builds
+        self.command.git_cl = lambda: git_cl
+        exit_code = self.command.execute(
+            self.command_options(trigger_jobs=False), [], self.tool)
+        self.assertEqual(exit_code, 1)
+        self.assertLog([
+            'INFO: Finished try jobs:\n',
+            'INFO:   MOCK Try Mac\n',
+            'INFO:   MOCK Try Win\n',
+            'INFO: There are some builders with no results:\n',
+            'INFO:   MOCK Try Linux\n',
+            'INFO: Would you like to try to fill in missing results with\n'
+            'available results? This assumes that layout test results\n'
+            'for the platforms with missing results are the same as\n'
+            'results on other platforms.\n',
+            'INFO: Aborting.\n'
         ])
 
     def test_execute_with_only_changed_tests_option(self):
-        self.command.execute(self.command_options(issue=11112222, only_changed_tests=True), [], self.tool)
-        # svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html
-        # is in the list of failed tests, but not in the list of files modified
-        # in the given CL; it should be included because all_tests is set to True.
+        # When --only-changed-tests is passed, the tool only rebaselines tests
+        # that were modified in the CL.
+        exit_code = self.command.execute(
+            self.command_options(only_changed_tests=True), [], self.tool)
+        self.assertEqual(exit_code, 0)
         self.assertLog([
-            'INFO: Rebaselining fast/dom/prototype-inheritance.html\n',
-            'INFO: Rebaselining fast/dom/prototype-taco.html\n',
+            'INFO: Finished try jobs found for all try bots.\n',
+            'INFO: Rebaselining one/flaky-fail.html\n',
+            'INFO: Rebaselining one/text-fail.html\n',
         ])
 
-    def test_execute_with_flaky_test_that_fails_on_retry(self):
-        # In this example, the --only-changed-tests flag is not given, but
-        # svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html
-        # failed both with and without the patch in the try job, so it is not
-        # rebaselined.
-        self.tool.buildbot.set_retry_sumary_json(Build('MOCK Try Win', 5000), json.dumps({
-            'failures': [
-                'fast/dom/prototype-taco.html',
-                'fast/dom/prototype-inheritance.html',
-            ],
-            'ignored': ['svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html'],
-        }))
-        self.command.execute(self.command_options(issue=11112222), [], self.tool)
+    def test_execute_with_test_that_fails_on_retry(self):
+        # In this example, one test failed both with and without the patch
+        # in the try job, so it is not rebaselined.
+        builds = {
+            Build('MOCK Try Win', 5000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Mac', 4000): TryJobStatus('COMPLETED', 'FAILURE'),
+            Build('MOCK Try Linux', 6000): TryJobStatus('COMPLETED', 'FAILURE'),
+        }
+        for build in builds:
+            self.tool.buildbot.set_retry_sumary_json(build, json.dumps({
+                'failures': ['one/text-fail.html'],
+                'ignored': ['two/image-fail.html'],
+            }))
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 0)
         self.assertLog([
-            'INFO: Rebaselining fast/dom/prototype-inheritance.html\n',
-            'INFO: Rebaselining fast/dom/prototype-taco.html\n',
+            'INFO: Finished try jobs found for all try bots.\n',
+            'INFO: Rebaselining one/text-fail.html\n',
         ])
 
     def test_execute_with_no_retry_summary_downloaded(self):
-        # In this example, the --only-changed-tests flag is not given, but
-        # svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html
-        # failed both with and without the patch in the try job, so it is not
-        # rebaselined.
+        # In this example, the retry summary could not be downloaded, so
+        # a warning is printed and all tests are rebaselined.
         self.tool.buildbot.set_retry_sumary_json(
             Build('MOCK Try Win', 5000), None)
-        self.command.execute(self.command_options(issue=11112222), [], self.tool)
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 0)
         self.assertLog([
-            'WARNING: No retry summary available for build Build(builder_name=u\'MOCK Try Win\', build_number=5000).\n',
-            'INFO: Rebaselining fast/dom/prototype-inheritance.html\n',
-            'INFO: Rebaselining fast/dom/prototype-newtest.html\n',
-            'INFO: Rebaselining fast/dom/prototype-taco.html\n',
-            'INFO: Rebaselining svg/dynamic-updates/SVGFEDropShadowElement-dom-stdDeviation-attr.html\n',
+            'INFO: Finished try jobs found for all try bots.\n',
+            'WARNING: No retry summary available for "MOCK Try Win".\n',
+            'INFO: Rebaselining one/flaky-fail.html\n',
+            'INFO: Rebaselining one/missing.html\n',
+            'INFO: Rebaselining one/slow-fail.html\n',
+            'INFO: Rebaselining one/text-fail.html\n',
+            'INFO: Rebaselining two/image-fail.html\n',
         ])
 
-    def test_execute_with_trigger_jobs_option(self):
-        self.command.execute(self.command_options(issue=11112222, trigger_jobs=True), [], self.tool)
-        self.assertLog([
-            'INFO: Triggering try jobs for:\n',
-            'INFO:   MOCK Try Linux\n',
-            'INFO: Please re-run webkit-patch rebaseline-cl once all pending try jobs have finished.\n',
-        ])
-        self.assertEqual(
-            self.tool.executive.calls,
-            [['git', 'cl', 'try', '-b', 'MOCK Try Linux']])
-
-    def test_rebaseline_calls(self):
-        """Tests the list of commands that are invoked when rebaseline is called."""
+    def test_rebaseline_command_invocations(self):
+        """Tests the list of commands that are called for rebaselining."""
         # First write test contents to the mock filesystem so that
-        # fast/dom/prototype-taco.html is considered a real test to rebaseline.
+        # one/flaky-fail.html is considered a real test to rebaseline.
         port = self.tool.port_factory.get('test-win-win7')
-        self._write(
-            port.host.filesystem.join(port.layout_tests_dir(), 'fast/dom/prototype-taco.html'),
-            'test contents')
-
-        self.command.rebaseline(
-            self.command_options(issue=11112222),
-            {"fast/dom/prototype-taco.html": {Build("MOCK Try Win", 5000): ["txt", "png"]}})
-
+        path = port.host.filesystem.join(
+            port.layout_tests_dir(), 'one/flaky-fail.html')
+        self._write(path, 'contents')
+        test_baseline_set = TestBaselineSet(self.tool)
+        test_baseline_set.add(
+            'one/flaky-fail.html', Build('MOCK Try Win', 5000))
+        self.command.rebaseline(self.command_options(), test_baseline_set)
         self.assertEqual(
             self.tool.executive.calls,
             [
-                [['python', 'echo', 'copy-existing-baselines-internal', '--suffixes', 'txt',
-                  '--builder', 'MOCK Try Win', '--test', 'fast/dom/prototype-taco.html']],
-                [['python', 'echo', 'rebaseline-test-internal', '--suffixes', 'txt',
-                  '--builder', 'MOCK Try Win', '--test', 'fast/dom/prototype-taco.html', '--build-number', '5000']],
-                [['python', 'echo', 'optimize-baselines', '--suffixes', 'txt', 'fast/dom/prototype-taco.html']]
+                [[
+                    'python', 'echo', 'copy-existing-baselines-internal',
+                    '--test', 'one/flaky-fail.html',
+                    '--suffixes', 'txt',
+                    '--port-name', 'test-win-win7',
+                ]],
+                [[
+                    'python', 'echo', 'rebaseline-test-internal',
+                    '--test', 'one/flaky-fail.html',
+                    '--suffixes', 'txt',
+                    '--port-name', 'test-win-win7',
+                    '--builder', 'MOCK Try Win',
+                    '--build-number', '5000',
+                ]],
+                [[
+                    'python', 'echo', 'optimize-baselines',
+                    '--suffixes', 'txt',
+                    'one/flaky-fail.html',
+                ]]
             ])
 
-    def test_trigger_jobs_for_missing_builds_empty_list(self):
-        # Passing in no builds implies that no try jobs were started.
-        self.assertTrue(self.command.trigger_jobs_for_missing_builds([]))
+    def test_trigger_try_jobs(self):
+        # The trigger_try_jobs method just uses git cl to trigger jobs for
+        # the given builders.
+        self.command.trigger_try_jobs(['MOCK Try Linux', 'MOCK Try Win'])
         self.assertEqual(
             self.tool.executive.calls,
-            [['git', 'cl', 'try', '-b', 'MOCK Try Linux', '-b', 'MOCK Try Win']])
+            [['git', 'cl', 'try', '-m', 'tryserver.blink',
+              '-b', 'MOCK Try Linux', '-b', 'MOCK Try Win']])
         self.assertLog([
-            'INFO: Triggering try jobs for:\n',
+            'INFO: Triggering try jobs:\n',
             'INFO:   MOCK Try Linux\n',
             'INFO:   MOCK Try Win\n',
+            'INFO: Once all pending try jobs have finished, please re-run\n'
+            'webkit-patch rebaseline-cl to fetch new baselines.\n',
         ])
 
-    def test_trigger_jobs_for_missing_builds_started_and_successful(self):
-        # A build number of None implies that a job has been started but not finished yet.
-        self.assertTrue(self.command.trigger_jobs_for_missing_builds([
-            Build('MOCK Try Linux', None),
-            Build('MOCK Try Win', 123),
-        ]))
-        self.assertEqual(self.tool.executive.calls, [])
+    def test_execute_missing_results_aborts(self):
+        self.tool.buildbot.set_results(Build('MOCK Try Win', 5000), None)
+        exit_code = self.command.execute(self.command_options(), [], self.tool)
+        self.assertEqual(exit_code, 1)
         self.assertLog([
-            'INFO: There are existing pending builds for:\n',
-            'INFO:   MOCK Try Linux\n',
-        ])
-
-    def test_trigger_jobs_for_missing_builds_one_started(self):
-        self.assertTrue(self.command.trigger_jobs_for_missing_builds([
-            Build('MOCK Try Linux', None),
-        ]))
-        self.assertEqual(self.tool.executive.calls, [['git', 'cl', 'try', '-b', 'MOCK Try Win']])
-        self.assertLog([
-            'INFO: There are existing pending builds for:\n',
-            'INFO:   MOCK Try Linux\n',
-            'INFO: Triggering try jobs for:\n',
+            'INFO: Finished try jobs found for all try bots.\n',
+            'INFO: Failed to fetch results for "MOCK Try Win".\n',
+            ('INFO: Results URL: https://storage.googleapis.com/chromium-layout-test-archives'
+             '/MOCK_Try_Win/5000/layout-test-results/results.html\n'),
+            'INFO: There are some builders with no results:\n',
             'INFO:   MOCK Try Win\n',
+            'INFO: Would you like to try to fill in missing results with\n'
+            'available results? This assumes that layout test results\n'
+            'for the platforms with missing results are the same as\n'
+            'results on other platforms.\n',
+            'INFO: Aborting.\n'
+        ])
+
+    def test_execute_missing_results_with_fill_missing_continues(self):
+        self.tool.buildbot.set_results(Build('MOCK Try Win', 5000), None)
+        exit_code = self.command.execute(
+            self.command_options(fill_missing=True),
+            ['one/flaky-fail.html'], self.tool)
+        self.assertEqual(exit_code, 0)
+        self.assertLog([
+            'INFO: Finished try jobs found for all try bots.\n',
+            'INFO: Failed to fetch results for "MOCK Try Win".\n',
+            ('INFO: Results URL: https://storage.googleapis.com/chromium-layout-test-archives'
+             '/MOCK_Try_Win/5000/layout-test-results/results.html\n'),
+            'INFO: There are some builders with no results:\n',
+            'INFO:   MOCK Try Win\n',
+            'INFO: For one/flaky-fail.html:\n',
+            'INFO: Using "MOCK Try Linux" build 6000 for test-win-win7.\n',
+            'INFO: Rebaselining one/flaky-fail.html\n'
+        ])
+
+    def test_fill_in_missing_results(self):
+        test_baseline_set = TestBaselineSet(self.tool)
+        test_baseline_set.add('one/flaky-fail.html', Build('MOCK Try Linux', 100))
+        test_baseline_set.add('one/flaky-fail.html', Build('MOCK Try Win', 200))
+        self.command.fill_in_missing_results(test_baseline_set)
+        self.assertEqual(
+            test_baseline_set.build_port_pairs('one/flaky-fail.html'),
+            [
+                (Build('MOCK Try Linux', 100), 'test-linux-trusty'),
+                (Build('MOCK Try Win', 200), 'test-win-win7'),
+                (Build('MOCK Try Linux', 100), 'test-mac-mac10.11'),
+            ])
+        self.assertLog([
+            'INFO: For one/flaky-fail.html:\n',
+            'INFO: Using "MOCK Try Linux" build 100 for test-mac-mac10.11.\n',
+        ])
+
+    def test_fill_in_missing_results_prefers_build_with_same_os_type(self):
+        self.tool.builders = BuilderList({
+            'MOCK Foo12': {
+                'port_name': 'foo-foo12',
+                'specifiers': ['Foo12', 'Release'],
+                'is_try_builder': True,
+            },
+            'MOCK Foo45': {
+                'port_name': 'foo-foo45',
+                'specifiers': ['Foo45', 'Release'],
+                'is_try_builder': True,
+            },
+            'MOCK Bar3': {
+                'port_name': 'bar-bar3',
+                'specifiers': ['Bar3', 'Release'],
+                'is_try_builder': True,
+            },
+            'MOCK Bar4': {
+                'port_name': 'bar-bar4',
+                'specifiers': ['Bar4', 'Release'],
+                'is_try_builder': True,
+            },
+        })
+        test_baseline_set = TestBaselineSet(self.tool)
+        test_baseline_set.add('one/flaky-fail.html', Build('MOCK Foo12', 100))
+        test_baseline_set.add('one/flaky-fail.html', Build('MOCK Bar4', 200))
+        self.command.fill_in_missing_results(test_baseline_set)
+        self.assertEqual(
+            test_baseline_set.build_port_pairs('one/flaky-fail.html'),
+            [
+                (Build('MOCK Foo12', 100), 'foo-foo12'),
+                (Build('MOCK Bar4', 200), 'bar-bar4'),
+                (Build('MOCK Foo12', 100), 'foo-foo45'),
+                (Build('MOCK Bar4', 200), 'bar-bar3'),
+            ])
+        self.assertLog([
+            'INFO: For one/flaky-fail.html:\n',
+            'INFO: Using "MOCK Foo12" build 100 for foo-foo45.\n',
+            'INFO: Using "MOCK Bar4" build 200 for bar-bar3.\n',
         ])

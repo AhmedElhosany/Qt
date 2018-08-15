@@ -52,11 +52,11 @@
 //
 #include <QtNetwork/private/qtnetworkglobal_p.h>
 
+#ifndef QT_NO_HTTP
+
 #include <private/qhttpnetworkheader_p.h>
 #include <QtNetwork/qnetworkrequest.h>
 #include <qmetatype.h>
-
-QT_REQUIRE_CONFIG(http);
 
 QT_BEGIN_NAMESPACE
 
@@ -102,6 +102,7 @@ public:
     QList<QPair<QByteArray, QByteArray> > header() const Q_DECL_OVERRIDE;
     QByteArray headerField(const QByteArray &name, const QByteArray &defaultValue = QByteArray()) const Q_DECL_OVERRIDE;
     void setHeaderField(const QByteArray &name, const QByteArray &data) Q_DECL_OVERRIDE;
+    void prependHeaderField(const QByteArray &name, const QByteArray &data);
 
     Operation operation() const;
     void setOperation(Operation operation);
@@ -183,5 +184,8 @@ public:
 QT_END_NAMESPACE
 
 Q_DECLARE_METATYPE(QHttpNetworkRequest)
+
+#endif // QT_NO_HTTP
+
 
 #endif // QHTTPNETWORKREQUEST_H

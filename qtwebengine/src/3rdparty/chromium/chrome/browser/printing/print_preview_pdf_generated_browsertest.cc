@@ -50,6 +50,7 @@
 #include "printing/pdf_render_settings.h"
 #include "printing/units.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
 
@@ -208,8 +209,7 @@ class PrintPreviewObserver : public WebContentsObserver {
     }
 
     ASSERT_FALSE(script_argument.empty());
-    GetUI()->web_ui()->CallJavascriptFunctionUnsafe(
-        "onManipulateSettingsForTest", script_argument);
+    GetUI()->SendManipulateSettingsForTest(script_argument);
   }
 
   // Saves the print preview settings to be sent to the print preview dialog.
@@ -280,10 +280,9 @@ class PrintPreviewObserver : public WebContentsObserver {
     ASSERT_TRUE(ui);
     ASSERT_TRUE(ui->web_ui());
 
-    // The |ui->web_ui()| owns the message handler.
-    ui->web_ui()->AddMessageHandler(new UIDoneLoadingMessageHandler(this));
-    ui->web_ui()->CallJavascriptFunctionUnsafe(
-        "onEnableManipulateSettingsForTest");
+    ui->web_ui()->AddMessageHandler(
+        base::MakeUnique<UIDoneLoadingMessageHandler>(this));
+    ui->SendEnableManipulateSettingsForTest();
   }
 
   void DidCloneToNewWebContents(WebContents* old_web_contents,
@@ -370,7 +369,8 @@ class PrintPreviewPdfGeneratedBrowserTest : public InProcessBrowserTest {
 
       total_height_in_pixels += height_in_pixels;
       gfx::Rect rect(width_in_pixels, height_in_pixels);
-      PdfRenderSettings settings(rect, kDpi, true);
+      PdfRenderSettings settings(rect, gfx::Point(0, 0), kDpi, true,
+                                 PdfRenderSettings::Mode::NORMAL);
 
       int int_max = std::numeric_limits<int>::max();
       if (settings.area.width() > int_max / kColorChannels ||

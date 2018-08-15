@@ -33,78 +33,66 @@
 #include "core/frame/Navigator.h"
 #include "modules/quota/DeprecatedStorageQuota.h"
 #include "modules/quota/StorageManager.h"
-#include "modules/quota/StorageQuota.h"
 
 namespace blink {
 
-NavigatorStorageQuota::NavigatorStorageQuota(LocalFrame* frame)
-    : DOMWindowProperty(frame) {}
+NavigatorStorageQuota::NavigatorStorageQuota(Navigator& navigator)
+    : Supplement<Navigator>(navigator) {}
 
-const char* NavigatorStorageQuota::supplementName() {
+const char* NavigatorStorageQuota::SupplementName() {
   return "NavigatorStorageQuota";
 }
 
-NavigatorStorageQuota& NavigatorStorageQuota::from(Navigator& navigator) {
+NavigatorStorageQuota& NavigatorStorageQuota::From(Navigator& navigator) {
   NavigatorStorageQuota* supplement = static_cast<NavigatorStorageQuota*>(
-      Supplement<Navigator>::from(navigator, supplementName()));
+      Supplement<Navigator>::From(navigator, SupplementName()));
   if (!supplement) {
-    supplement = new NavigatorStorageQuota(navigator.frame());
-    provideTo(navigator, supplementName(), supplement);
+    supplement = new NavigatorStorageQuota(navigator);
+    ProvideTo(navigator, SupplementName(), supplement);
   }
   return *supplement;
 }
 
-StorageQuota* NavigatorStorageQuota::storageQuota(Navigator& navigator) {
-  return NavigatorStorageQuota::from(navigator).storageQuota();
-}
 
 DeprecatedStorageQuota* NavigatorStorageQuota::webkitTemporaryStorage(
     Navigator& navigator) {
-  return NavigatorStorageQuota::from(navigator).webkitTemporaryStorage();
+  return NavigatorStorageQuota::From(navigator).webkitTemporaryStorage();
 }
 
 DeprecatedStorageQuota* NavigatorStorageQuota::webkitPersistentStorage(
     Navigator& navigator) {
-  return NavigatorStorageQuota::from(navigator).webkitPersistentStorage();
+  return NavigatorStorageQuota::From(navigator).webkitPersistentStorage();
 }
 
 StorageManager* NavigatorStorageQuota::storage(Navigator& navigator) {
-  return NavigatorStorageQuota::from(navigator).storage();
-}
-
-StorageQuota* NavigatorStorageQuota::storageQuota() const {
-  if (!m_storageQuota && frame())
-    m_storageQuota = StorageQuota::create();
-  return m_storageQuota.get();
+  return NavigatorStorageQuota::From(navigator).storage();
 }
 
 DeprecatedStorageQuota* NavigatorStorageQuota::webkitTemporaryStorage() const {
-  if (!m_temporaryStorage && frame())
-    m_temporaryStorage =
-        DeprecatedStorageQuota::create(DeprecatedStorageQuota::Temporary);
-  return m_temporaryStorage.get();
+  if (!temporary_storage_)
+    temporary_storage_ =
+        DeprecatedStorageQuota::Create(DeprecatedStorageQuota::kTemporary);
+  return temporary_storage_.Get();
 }
 
 DeprecatedStorageQuota* NavigatorStorageQuota::webkitPersistentStorage() const {
-  if (!m_persistentStorage && frame())
-    m_persistentStorage =
-        DeprecatedStorageQuota::create(DeprecatedStorageQuota::Persistent);
-  return m_persistentStorage.get();
+  if (!persistent_storage_)
+    persistent_storage_ =
+        DeprecatedStorageQuota::Create(DeprecatedStorageQuota::kPersistent);
+  return persistent_storage_.Get();
 }
 
 StorageManager* NavigatorStorageQuota::storage() const {
-  if (!m_storageManager && frame())
-    m_storageManager = new StorageManager();
-  return m_storageManager.get();
+  if (!storage_manager_)
+    storage_manager_ = new StorageManager();
+  return storage_manager_.Get();
 }
 
 DEFINE_TRACE(NavigatorStorageQuota) {
-  visitor->trace(m_storageQuota);
-  visitor->trace(m_temporaryStorage);
-  visitor->trace(m_persistentStorage);
-  visitor->trace(m_storageManager);
-  Supplement<Navigator>::trace(visitor);
-  DOMWindowProperty::trace(visitor);
+  visitor->Trace(temporary_storage_);
+  visitor->Trace(persistent_storage_);
+  visitor->Trace(storage_manager_);
+  Supplement<Navigator>::Trace(visitor);
 }
 
 }  // namespace blink

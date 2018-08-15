@@ -49,6 +49,30 @@
 
 QT_BEGIN_NAMESPACE
 
+// This function gives derived classes the chance set the devicePixelRatio
+// if they're not happy with our implementation of it.
+bool QQuickImageBasePrivate::updateDevicePixelRatio(qreal targetDevicePixelRatio)
+{
+    // QQuickImageProvider and SVG can generate a high resolution image when
+    // sourceSize is set (this function is only called if it's set).
+    // If sourceSize is not set then the provider default size will be used, as usual.
+    bool setDevicePixelRatio = false;
+    if (url.scheme() == QLatin1String("image")) {
+        setDevicePixelRatio = true;
+    } else {
+        QString stringUrl = url.path(QUrl::PrettyDecoded);
+        if (stringUrl.endsWith(QLatin1String("svg")) ||
+            stringUrl.endsWith(QLatin1String("svgz"))) {
+            setDevicePixelRatio = true;
+        }
+    }
+
+    if (setDevicePixelRatio)
+        devicePixelRatio = targetDevicePixelRatio;
+
+    return setDevicePixelRatio;
+}
+
 QQuickImageBase::QQuickImageBase(QQuickItem *parent)
 : QQuickImplicitSizeItem(*(new QQuickImageBasePrivate), parent)
 {
@@ -221,26 +245,11 @@ void QQuickImageBase::load()
 
         QUrl loadUrl = d->url;
 
-        // QQuickImageProvider and SVG can generate a high resolution image when
-        // sourceSize is set. If sourceSize is not set then the provider default size
-        // will be used, as usual.
-        bool setDevicePixelRatio = false;
-        if (d->sourcesize.isValid()) {
-            if (loadUrl.scheme() == QLatin1String("image")) {
-                setDevicePixelRatio = true;
-            } else {
-                QString stringUrl = loadUrl.path(QUrl::PrettyDecoded);
-                if (stringUrl.endsWith(QLatin1String("svg")) ||
-                    stringUrl.endsWith(QLatin1String("svgz"))) {
-                    setDevicePixelRatio = true;
-                }
-            }
+        bool updatedDevicePixelRatio = false;
+        if (d->sourcesize.isValid())
+            updatedDevicePixelRatio = d->updateDevicePixelRatio(targetDevicePixelRatio);
 
-            if (setDevicePixelRatio)
-                d->devicePixelRatio = targetDevicePixelRatio;
-        }
-
-        if (!setDevicePixelRatio) {
+        if (!updatedDevicePixelRatio) {
             // (possible) local file: loadUrl and d->devicePixelRatio will be modified if
             // an "@2x" file is found.
             resolve2xLocalFile(d->url, targetDevicePixelRatio, &loadUrl, &d->devicePixelRatio);
@@ -319,16 +328,16 @@ void QQuickImageBase::requestProgress(qint64 received, qint64 total)
 
 void QQuickImageBase::itemChange(ItemChange change, const ItemChangeData &value)
 {
-    if (change == ItemSceneChange && value.window)
-        connect(value.window, &QQuickWindow::screenChanged, this, &QQuickImageBase::handleScreenChanged);
+    Q_D(QQuickImageBase);
+    // If the screen DPI changed, reload image.
+    if (change == ItemDevicePixelRatioHasChanged && value.realValue != d->devicePixelRatio) {
+        // ### how can we get here with !qmlEngine(this)? that implies
+        // itemChange() on an item pending deletion, which seems strange.
+        if (qmlEngine(this) && isComponentComplete() && d->url.isValid()) {
+            load();
+        }
+    }
     QQuickItem::itemChange(change, value);
-}
-
-void QQuickImageBase::handleScreenChanged(QScreen* screen)
-{
-    // Screen DPI might have changed, reload images on screen change.
-    if (qmlEngine(this) && screen && isComponentComplete())
-        load();
 }
 
 void QQuickImageBase::componentComplete()

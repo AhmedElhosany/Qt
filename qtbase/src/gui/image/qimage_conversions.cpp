@@ -40,6 +40,7 @@
 #include <private/qdrawhelper_p.h>
 #include <private/qguiapplication_p.h>
 #include <private/qcolorprofile_p.h>
+#include <private/qendian_p.h>
 #include <private/qsimd_p.h>
 #include <private/qimage_p.h>
 #include <qendian.h>
@@ -126,8 +127,8 @@ static const uint *QT_FASTCALL convertRGB32FromARGB32PM(uint *buffer, const uint
     return buffer;
 }
 
-static const uint *QT_FASTCALL convertRGB32ToARGB32PM(uint *buffer, const uint *src, int count,
-                                                      const QVector<QRgb> *, QDitherInfo *)
+static const uint *QT_FASTCALL maskRGB32(uint *buffer, const uint *src, int count,
+                                         const QVector<QRgb> *, QDitherInfo *)
 {
     for (int i = 0; i < count; ++i)
         buffer[i] = 0xff000000 |src[i];
@@ -160,8 +161,9 @@ void convert_generic(QImageData *dest, const QImageData *src, Qt::ImageConversio
         // If the source doesn't have an alpha channel, we can use the faster convertFromRGB32 method.
         convertFromARGB32PM = destLayout->convertFromRGB32;
     } else {
+        // The drawhelpers do not mask the alpha value in RGB32, we want to here.
         if (src->format == QImage::Format_RGB32)
-            convertToARGB32PM = convertRGB32ToARGB32PM;
+            convertToARGB32PM = maskRGB32;
         if (dest->format == QImage::Format_RGB32) {
 #ifdef QT_COMPILER_SUPPORTS_SSE4_1
             if (qCpuHasFeature(SSE4_1))
@@ -170,6 +172,15 @@ void convert_generic(QImageData *dest, const QImageData *src, Qt::ImageConversio
 #endif
                 convertFromARGB32PM = convertRGB32FromARGB32PM;
         }
+    }
+    if ((src->format == QImage::Format_ARGB32 || src->format == QImage::Format_RGBA8888) &&
+            destLayout->alphaWidth == 0 && destLayout->convertFromRGB32) {
+        // Avoid unnecessary premultiply and unpremultiply when converting from unpremultiplied src format.
+        convertToARGB32PM = qPixelLayouts[src->format + 1].convertToARGB32PM;
+        if (dest->format == QImage::Format_RGB32)
+            convertFromARGB32PM = maskRGB32;
+        else
+            convertFromARGB32PM = destLayout->convertFromRGB32;
     }
     QDitherInfo dither;
     QDitherInfo *ditherPtr = 0;
@@ -221,7 +232,7 @@ bool convert_generic_inplace(QImageData *data, QImage::Format dst_format, Qt::Im
         convertFromARGB32PM = destLayout->convertFromRGB32;
     } else {
         if (data->format == QImage::Format_RGB32)
-            convertToARGB32PM = convertRGB32ToARGB32PM;
+            convertToARGB32PM = maskRGB32;
         if (dst_format == QImage::Format_RGB32) {
 #ifdef QT_COMPILER_SUPPORTS_SSE4_1
             if (qCpuHasFeature(SSE4_1))
@@ -230,6 +241,15 @@ bool convert_generic_inplace(QImageData *data, QImage::Format dst_format, Qt::Im
 #endif
                 convertFromARGB32PM = convertRGB32FromARGB32PM;
         }
+    }
+    if ((data->format == QImage::Format_ARGB32 || data->format == QImage::Format_RGBA8888) &&
+            destLayout->alphaWidth == 0 && destLayout->convertFromRGB32) {
+        // Avoid unnecessary premultiply and unpremultiply when converting from unpremultiplied src format.
+        convertToARGB32PM = qPixelLayouts[data->format + 1].convertToARGB32PM;
+        if (dst_format == QImage::Format_RGB32)
+            convertFromARGB32PM = maskRGB32;
+        else
+            convertFromARGB32PM = destLayout->convertFromRGB32;
     }
     QDitherInfo dither;
     QDitherInfo *ditherPtr = 0;
@@ -322,10 +342,10 @@ Q_GUI_EXPORT void QT_FASTCALL qt_convert_rgb888_to_rgb32(quint32 *dest_data, con
 
     // Handle 4 pixels at a time 12 bytes input to 16 bytes output.
     for (; pixel + 3 < len; pixel += 4) {
-        const quint32 *src_packed = (const quint32 *) src_data;
-        const quint32 src1 = qFromBigEndian(src_packed[0]);
-        const quint32 src2 = qFromBigEndian(src_packed[1]);
-        const quint32 src3 = qFromBigEndian(src_packed[2]);
+        const quint32_be *src_packed = reinterpret_cast<const quint32_be *>(src_data);
+        const quint32 src1 = src_packed[0];
+        const quint32 src2 = src_packed[1];
+        const quint32 src3 = src_packed[2];
 
         dest_data[0] = 0xff000000 | (src1 >> 8);
         dest_data[1] = 0xff000000 | (src1 << 16) | (src2 >> 16);
@@ -803,8 +823,8 @@ static bool convert_indexed8_to_ARGB_PM_inplace(QImageData *data, Qt::ImageConve
 
     const int depth = 32;
 
-    const int dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
-    const int nbytes = dst_bytes_per_line * data->height;
+    const qsizetype dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
+    const qsizetype nbytes = dst_bytes_per_line * data->height;
     uchar *const newData = (uchar *)realloc(data->data, nbytes);
     if (!newData)
         return false;
@@ -857,8 +877,8 @@ static bool convert_indexed8_to_ARGB_inplace(QImageData *data, Qt::ImageConversi
 
     const int depth = 32;
 
-    const int dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
-    const int nbytes = dst_bytes_per_line * data->height;
+    const qsizetype dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
+    const qsizetype nbytes = dst_bytes_per_line * data->height;
     uchar *const newData = (uchar *)realloc(data->data, nbytes);
     if (!newData)
         return false;
@@ -925,8 +945,8 @@ static bool convert_indexed8_to_RGB16_inplace(QImageData *data, Qt::ImageConvers
 
     const int depth = 16;
 
-    const int dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
-    const int nbytes = dst_bytes_per_line * data->height;
+    const qsizetype dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
+    const qsizetype nbytes = dst_bytes_per_line * data->height;
     uchar *const newData = (uchar *)realloc(data->data, nbytes);
     if (!newData)
         return false;
@@ -982,8 +1002,8 @@ static bool convert_RGB_to_RGB16_inplace(QImageData *data, Qt::ImageConversionFl
 
     const int depth = 16;
 
-    const int dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
-    const int src_bytes_per_line = data->bytes_per_line;
+    const qsizetype dst_bytes_per_line = ((data->width * depth + 31) >> 5) << 2;
+    const qsizetype src_bytes_per_line = data->bytes_per_line;
     quint32 *src_data = (quint32 *) data->data;
     quint16 *dst_data = (quint16 *) data->data;
 
@@ -1237,9 +1257,9 @@ void dither_to_Mono(QImageData *dst, const QImageData *src,
     }
 
     uchar *dst_data = dst->data;
-    int dst_bpl = dst->bytes_per_line;
+    qsizetype dst_bpl = dst->bytes_per_line;
     const uchar *src_data = src->data;
-    int src_bpl = src->bytes_per_line;
+    qsizetype src_bpl = src->bytes_per_line;
 
     switch (dithermode) {
     case Diffuse: {
@@ -1892,8 +1912,8 @@ static void convert_Indexed8_to_Alpha8(QImageData *dest, const QImageData *src, 
     if (simpleCase)
         memcpy(dest->data, src->data, src->bytes_per_line * src->height);
     else {
-        int size = src->bytes_per_line * src->height;
-        for (int i = 0; i < size; ++i) {
+        qsizetype size = src->bytes_per_line * src->height;
+        for (qsizetype i = 0; i < size; ++i) {
             dest->data[i] = translate[src->data[i]];
         }
     }
@@ -1916,8 +1936,8 @@ static void convert_Indexed8_to_Grayscale8(QImageData *dest, const QImageData *s
     if (simpleCase)
         memcpy(dest->data, src->data, src->bytes_per_line * src->height);
     else {
-        int size = src->bytes_per_line * src->height;
-        for (int i = 0; i < size; ++i) {
+        qsizetype size = src->bytes_per_line * src->height;
+        for (qsizetype i = 0; i < size; ++i) {
             dest->data[i] = translate[src->data[i]];
         }
     }

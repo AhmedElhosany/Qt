@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CRYPTO_KEYCHAIN_MAC_H_
-#define CRYPTO_KEYCHAIN_MAC_H_
+#ifndef CRYPTO_APPLE_KEYCHAIN_H_
+#define CRYPTO_APPLE_KEYCHAIN_H_
 
 #include <Security/Security.h>
 
@@ -54,50 +54,7 @@ class CRYPTO_EXPORT AppleKeychain {
                                       SecKeychainItemRef* itemRef) const;
 
 #if !defined(OS_IOS)
-  virtual OSStatus ItemCopyAttributesAndData(
-      SecKeychainItemRef itemRef,
-      SecKeychainAttributeInfo* info,
-      SecItemClass* itemClass,
-      SecKeychainAttributeList** attrList,
-      UInt32* length,
-      void** outData) const;
-
-  virtual OSStatus ItemModifyAttributesAndData(
-      SecKeychainItemRef itemRef,
-      const SecKeychainAttributeList* attrList,
-      UInt32 length,
-      const void* data) const;
-
-  virtual OSStatus ItemFreeAttributesAndData(SecKeychainAttributeList* attrList,
-                                             void* data) const;
-
   virtual OSStatus ItemDelete(SecKeychainItemRef itemRef) const;
-
-  virtual OSStatus SearchCreateFromAttributes(
-      CFTypeRef keychainOrArray,
-      SecItemClass itemClass,
-      const SecKeychainAttributeList* attrList,
-      SecKeychainSearchRef* searchRef) const;
-
-  virtual OSStatus SearchCopyNext(SecKeychainSearchRef searchRef,
-                                  SecKeychainItemRef* itemRef) const;
-
-  virtual OSStatus AddInternetPassword(SecKeychainRef keychain,
-                                       UInt32 serverNameLength,
-                                       const char* serverName,
-                                       UInt32 securityDomainLength,
-                                       const char* securityDomain,
-                                       UInt32 accountNameLength,
-                                       const char* accountName,
-                                       UInt32 pathLength, const char* path,
-                                       UInt16 port, SecProtocolType protocol,
-                                       SecAuthenticationType authenticationType,
-                                       UInt32 passwordLength,
-                                       const void* passwordData,
-                                       SecKeychainItemRef* itemRef) const;
-
-  // Calls CFRelease on the given ref, after checking that |ref| is non-NULL.
-  virtual void Free(CFTypeRef ref) const;
 #endif  // !defined(OS_IOS)
 
  private:
@@ -106,4 +63,4 @@ class CRYPTO_EXPORT AppleKeychain {
 
 }  // namespace crypto
 
-#endif  // CRYPTO_KEYCHAIN_MAC_H_
+#endif  // CRYPTO_APPLE_KEYCHAIN_H_

@@ -77,11 +77,10 @@ Q_GLOBAL_STATIC(QPlatformTextureList, qt_dummy_platformTextureList)
 
 /**
  * Flushes the contents of the \a backingStore into the screen area of \a widget.
- * \a tlwOffset is the position of the top level widget relative to the window surface.
  * \a region is the region to be updated in \a widget coordinates.
  */
 void QWidgetBackingStore::qt_flush(QWidget *widget, const QRegion &region, QBackingStore *backingStore,
-                                   QWidget *tlw, const QPoint &tlwOffset, QPlatformTextureList *widgetTextures,
+                                   QWidget *tlw, QPlatformTextureList *widgetTextures,
                                    QWidgetBackingStore *widgetBackingStore)
 {
 #ifdef QT_NO_OPENGL
@@ -112,7 +111,7 @@ void QWidgetBackingStore::qt_flush(QWidget *widget, const QRegion &region, QBack
         }
     }
 
-    QPoint offset = tlwOffset;
+    QPoint offset;
     if (widget != tlw)
         offset += widget->mapTo(tlw, QPoint());
 
@@ -144,10 +143,8 @@ void QWidgetBackingStore::qt_flush(QWidget *widget, const QRegion &region, QBack
         // WA_TranslucentBackground. Therefore the compositor needs to know whether the app intends
         // to rely on translucency, in order to decide if it should clear to transparent or opaque.
         const bool translucentBackground = widget->testAttribute(Qt::WA_TranslucentBackground);
-        // Use the tlw's context, not widget's. The difference is important with native child
-        // widgets where tlw != widget.
-        backingStore->handle()->composeAndFlush(widget->windowHandle(), effectiveRegion, offset, widgetTextures,
-                                                tlw->d_func()->shareContext(), translucentBackground);
+        backingStore->handle()->composeAndFlush(widget->windowHandle(), effectiveRegion, offset,
+                                                widgetTextures, translucentBackground);
         widget->window()->d_func()->sendComposeStatus(widget->window(), true);
     } else
 #endif
@@ -288,8 +285,7 @@ void QWidgetBackingStore::unflushPaint(QWidget *widget, const QRegion &rgn)
     if (!tlwExtra)
         return;
 
-    const QPoint offset = widget->mapTo(tlw, QPoint());
-    qt_flush(widget, rgn, tlwExtra->backingStoreTracker->store, tlw, offset, 0, tlw->d_func()->maybeBackingStore());
+    qt_flush(widget, rgn, tlwExtra->backingStoreTracker->store, tlw, 0, tlw->d_func()->maybeBackingStore());
 }
 #endif // QT_NO_PAINT_DEBUG
 
@@ -299,7 +295,7 @@ void QWidgetBackingStore::unflushPaint(QWidget *widget, const QRegion &rgn)
 */
 bool QWidgetBackingStore::bltRect(const QRect &rect, int dx, int dy, QWidget *widget)
 {
-    const QPoint pos(tlwOffset + widget->mapTo(tlw, rect.topLeft()));
+    const QPoint pos(widget->mapTo(tlw, rect.topLeft()));
     const QRect tlwRect(QRect(pos, rect.size()));
     if (dirty.intersects(tlwRect))
         return false; // We don't want to scroll junk.
@@ -949,9 +945,7 @@ static void findTextureWidgetsRecursively(QWidget *tlw, QWidget *widget, QPlatfo
 {
     QWidgetPrivate *wd = QWidgetPrivate::get(widget);
     if (wd->renderToTexture) {
-        QPlatformTextureList::Flags flags = 0;
-        if (widget->testAttribute(Qt::WA_AlwaysStackOnTop))
-            flags |= QPlatformTextureList::StacksOnTop;
+        QPlatformTextureList::Flags flags = wd->textureListFlags();
         const QRect rect(widget->mapTo(tlw, QPoint()), widget->size());
         widgetTextures->appendTexture(widget, wd->textureId(), rect, wd->clipRect(), flags);
     }
@@ -1123,7 +1117,7 @@ void QWidgetBackingStore::sync(QWidget *exposedWidget, const QRegion &exposedReg
     // Nothing to repaint.
     if (!isDirty() && store->size().isValid()) {
         QPlatformTextureList *tl = widgetTexturesFor(tlw, exposedWidget);
-        qt_flush(exposedWidget, tl ? QRegion() : exposedRegion, store, tlw, tlwOffset, tl, this);
+        qt_flush(exposedWidget, tl ? QRegion() : exposedRegion, store, tlw, tl, this);
         return;
     }
 
@@ -1369,7 +1363,7 @@ void QWidgetBackingStore::doSync()
         QRegion toBePainted(wd->dirty);
         resetWidget(w);
 
-        QPoint offset(tlwOffset);
+        QPoint offset;
         if (w != tlw)
             offset += w->mapTo(tlw, QPoint());
         wd->drawWidget(store->paintDevice(), toBePainted, offset, flags, 0, this);
@@ -1378,7 +1372,7 @@ void QWidgetBackingStore::doSync()
     // Paint the rest with composition.
     if (repaintAllWidgets || !dirtyCopy.isEmpty()) {
         const int flags = QWidgetPrivate::DrawAsRoot | QWidgetPrivate::DrawRecursive;
-        tlw->d_func()->drawWidget(store->paintDevice(), dirtyCopy, tlwOffset, flags, 0, this);
+        tlw->d_func()->drawWidget(store->paintDevice(), dirtyCopy, QPoint(), flags, 0, this);
     }
 
     endPaint(toClean, store, &beginPaintInfo);
@@ -1397,7 +1391,7 @@ void QWidgetBackingStore::flush(QWidget *widget)
     // Flush the region in dirtyOnScreen.
     if (!dirtyOnScreen.isEmpty()) {
         QWidget *target = widget ? widget : tlw;
-        qt_flush(target, dirtyOnScreen, store, tlw, tlwOffset, widgetTexturesFor(tlw, tlw), this);
+        qt_flush(target, dirtyOnScreen, store, tlw, widgetTexturesFor(tlw, tlw), this);
         dirtyOnScreen = QRegion();
         flushed = true;
     }
@@ -1409,7 +1403,7 @@ void QWidgetBackingStore::flush(QWidget *widget)
             QPlatformTextureList *tl = widgetTexturesFor(tlw, tlw);
             if (tl) {
                 QWidget *target = widget ? widget : tlw;
-                qt_flush(target, QRegion(), store, tlw, tlwOffset, tl, this);
+                qt_flush(target, QRegion(), store, tlw, tl, this);
             }
         }
 #endif
@@ -1423,7 +1417,7 @@ void QWidgetBackingStore::flush(QWidget *widget)
         QWidgetPrivate *wd = w->d_func();
         Q_ASSERT(wd->needsFlush);
         QPlatformTextureList *widgetTexturesForNative = wd->textureChildSeen ? widgetTexturesFor(tlw, w) : 0;
-        qt_flush(w, *wd->needsFlush, store, tlw, tlwOffset, widgetTexturesForNative, this);
+        qt_flush(w, *wd->needsFlush, store, tlw, widgetTexturesForNative, this);
         *wd->needsFlush = QRegion();
     }
     dirtyOnScreenWidgets->clear();

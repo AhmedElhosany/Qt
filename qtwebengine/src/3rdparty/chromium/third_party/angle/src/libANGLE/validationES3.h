@@ -33,7 +33,7 @@ bool ValidateES3TexImageParametersBase(ValidationContext *context,
                                        GLenum format,
                                        GLenum type,
                                        GLsizei imageSize,
-                                       const GLvoid *pixels);
+                                       const void *pixels);
 
 bool ValidateES3TexStorageParameters(Context *context,
                                      GLenum target,
@@ -59,7 +59,7 @@ bool ValidateES3TexImage2DParameters(Context *context,
                                      GLenum format,
                                      GLenum type,
                                      GLsizei imageSize,
-                                     const GLvoid *pixels);
+                                     const void *pixels);
 
 bool ValidateES3TexImage3DParameters(Context *context,
                                      GLenum target,
@@ -77,7 +77,7 @@ bool ValidateES3TexImage3DParameters(Context *context,
                                      GLenum format,
                                      GLenum type,
                                      GLsizei bufSize,
-                                     const GLvoid *pixels);
+                                     const void *pixels);
 
 bool ValidateES3CopyTexImageParametersBase(ValidationContext *context,
                                            GLenum target,
@@ -153,13 +153,16 @@ bool ValidateGetQueryiv(Context *context, GLenum target, GLenum pname, GLint *pa
 
 bool ValidateGetQueryObjectuiv(Context *context, GLuint id, GLenum pname, GLuint *params);
 
-bool ValidateFramebufferTextureLayer(Context *context, GLenum target, GLenum attachment,
-                                     GLuint texture, GLint level, GLint layer);
+bool ValidateFramebufferTextureLayer(Context *context,
+                                     GLenum target,
+                                     GLenum attachment,
+                                     GLuint texture,
+                                     GLint level,
+                                     GLint layer);
 
-bool ValidateES3RenderbufferStorageParameters(Context *context, GLenum target, GLsizei samples,
-                                              GLenum internalformat, GLsizei width, GLsizei height);
-
-bool ValidateInvalidateFramebuffer(Context *context, GLenum target, GLsizei numAttachments,
+bool ValidateInvalidateFramebuffer(Context *context,
+                                   GLenum target,
+                                   GLsizei numAttachments,
                                    const GLenum *attachments);
 
 bool ValidateClearBuffer(ValidationContext *context);
@@ -170,10 +173,9 @@ bool ValidateDrawRangeElements(Context *context,
                                GLuint end,
                                GLsizei count,
                                GLenum type,
-                               const GLvoid *indices,
-                               IndexRange *indexRange);
+                               const void *indices);
 
-bool ValidateGetUniformuiv(Context *context, GLuint program, GLint location, GLuint* params);
+bool ValidateGetUniformuiv(Context *context, GLuint program, GLint location, GLuint *params);
 
 bool ValidateReadBuffer(Context *context, GLenum mode);
 
@@ -186,10 +188,29 @@ bool ValidateCompressedTexImage3D(Context *context,
                                   GLsizei depth,
                                   GLint border,
                                   GLsizei imageSize,
-                                  const GLvoid *data);
+                                  const void *data);
+bool ValidateCompressedTexImage3DRobustANGLE(Context *context,
+                                             GLenum target,
+                                             GLint level,
+                                             GLenum internalformat,
+                                             GLsizei width,
+                                             GLsizei height,
+                                             GLsizei depth,
+                                             GLint border,
+                                             GLsizei imageSize,
+                                             GLsizei dataSize,
+                                             const void *data);
 
 bool ValidateBindVertexArray(Context *context, GLuint array);
 bool ValidateIsVertexArray(Context *context);
+
+bool ValidateBindBufferBase(Context *context, GLenum target, GLuint index, GLuint buffer);
+bool ValidateBindBufferRange(Context *context,
+                             GLenum target,
+                             GLuint index,
+                             GLuint buffer,
+                             GLintptr offset,
+                             GLsizeiptr size);
 
 bool ValidateProgramBinary(Context *context,
                            GLuint program,
@@ -252,7 +273,7 @@ bool ValidateTexImage3D(Context *context,
                         GLint border,
                         GLenum format,
                         GLenum type,
-                        const GLvoid *pixels);
+                        const void *pixels);
 bool ValidateTexImage3DRobustANGLE(Context *context,
                                    GLenum target,
                                    GLint level,
@@ -264,7 +285,7 @@ bool ValidateTexImage3DRobustANGLE(Context *context,
                                    GLenum format,
                                    GLenum type,
                                    GLsizei bufSize,
-                                   const GLvoid *pixels);
+                                   const void *pixels);
 bool ValidateTexSubImage3D(Context *context,
                            GLenum target,
                            GLint level,
@@ -276,7 +297,7 @@ bool ValidateTexSubImage3D(Context *context,
                            GLsizei depth,
                            GLenum format,
                            GLenum type,
-                           const GLvoid *pixels);
+                           const void *pixels);
 bool ValidateTexSubImage3DRobustANGLE(Context *context,
                                       GLenum target,
                                       GLint level,
@@ -289,7 +310,7 @@ bool ValidateTexSubImage3DRobustANGLE(Context *context,
                                       GLenum format,
                                       GLenum type,
                                       GLsizei bufSize,
-                                      const GLvoid *pixels);
+                                      const void *pixels);
 bool ValidateCompressedTexSubImage3D(Context *context,
                                      GLenum target,
                                      GLint level,
@@ -301,7 +322,20 @@ bool ValidateCompressedTexSubImage3D(Context *context,
                                      GLsizei depth,
                                      GLenum format,
                                      GLsizei imageSize,
-                                     const GLvoid *data);
+                                     const void *data);
+bool ValidateCompressedTexSubImage3DRobustANGLE(Context *context,
+                                                GLenum target,
+                                                GLint level,
+                                                GLint xoffset,
+                                                GLint yoffset,
+                                                GLint zoffset,
+                                                GLsizei width,
+                                                GLsizei height,
+                                                GLsizei depth,
+                                                GLenum format,
+                                                GLsizei imageSize,
+                                                GLsizei dataSize,
+                                                const void *data);
 
 bool ValidateGenQueries(Context *context, GLint n, GLuint *ids);
 bool ValidateDeleteQueries(Context *context, GLint n, const GLuint *ids);
@@ -317,13 +351,13 @@ bool ValidateGenOrDeleteCountES3(Context *context, GLint count);
 
 bool ValidateBeginTransformFeedback(Context *context, GLenum primitiveMode);
 
-bool ValidateGetBufferPointerv(Context *context, GLenum target, GLenum pname, GLvoid **params);
+bool ValidateGetBufferPointerv(Context *context, GLenum target, GLenum pname, void **params);
 bool ValidateGetBufferPointervRobustANGLE(Context *context,
                                           GLenum target,
                                           GLenum pname,
                                           GLsizei bufSize,
                                           GLsizei *length,
-                                          GLvoid **params);
+                                          void **params);
 bool ValidateUnmapBuffer(Context *context, GLenum target);
 bool ValidateMapBufferRange(Context *context,
                             GLenum target,
@@ -364,6 +398,51 @@ bool ValidateCopyBufferSubData(ValidationContext *context,
                                GLintptr writeOffset,
                                GLsizeiptr size);
 
+bool ValidateGetStringi(Context *context, GLenum name, GLuint index);
+bool ValidateRenderbufferStorageMultisample(ValidationContext *context,
+                                            GLenum target,
+                                            GLsizei samples,
+                                            GLenum internalformat,
+                                            GLsizei width,
+                                            GLsizei height);
+
+bool ValidateVertexAttribIPointer(ValidationContext *context,
+                                  GLuint index,
+                                  GLint size,
+                                  GLenum type,
+                                  GLsizei stride,
+                                  const void *pointer);
+
+bool ValidateGetSynciv(Context *context,
+                       GLsync sync,
+                       GLenum pname,
+                       GLsizei bufSize,
+                       GLsizei *length,
+                       GLint *values);
+
+bool ValidateDrawElementsInstanced(ValidationContext *context,
+                                   GLenum mode,
+                                   GLsizei count,
+                                   GLenum type,
+                                   const void *indices,
+                                   GLsizei instanceCount);
+
+bool ValidateFramebufferTextureMultiviewLayeredANGLE(Context *context,
+                                                     GLenum target,
+                                                     GLenum attachment,
+                                                     GLuint texture,
+                                                     GLint level,
+                                                     GLint baseViewIndex,
+                                                     GLsizei numViews);
+
+bool ValidateFramebufferTextureMultiviewSideBySideANGLE(Context *context,
+                                                        GLenum target,
+                                                        GLenum attachment,
+                                                        GLuint texture,
+                                                        GLint level,
+                                                        GLsizei numViews,
+                                                        const GLint *viewportOffsets);
+
 }  // namespace gl
 
-#endif // LIBANGLE_VALIDATION_ES3_H_
+#endif  // LIBANGLE_VALIDATION_ES3_H_

@@ -70,6 +70,7 @@ class FilterKey;
 class Effect;
 class Entity;
 class Shader;
+class ShaderBuilder;
 class FrameGraphNode;
 class Layer;
 class LevelOfDetail;
@@ -94,6 +95,9 @@ class EnvironmentLight;
 class ComputeCommand;
 class GLBuffer;
 class RenderStateNode;
+class Armature;
+class Skeleton;
+class Joint;
 
 typedef Qt3DCore::QHandle<RenderTargetOutput> HAttachment;
 typedef Qt3DCore::QHandle<CameraLens> HCamera;
@@ -107,6 +111,7 @@ typedef Qt3DCore::QHandle<Material> HMaterial;
 typedef Qt3DCore::QHandle<QMatrix4x4> HMatrix;
 typedef Qt3DCore::QHandle<OpenGLVertexArrayObject> HVao;
 typedef Qt3DCore::QHandle<Shader> HShader;
+typedef Qt3DCore::QHandle<ShaderBuilder> HShaderBuilder;
 typedef Qt3DCore::QHandle<Technique> HTechnique;
 typedef Qt3DCore::QHandle<Texture> HTexture;
 typedef Qt3DCore::QHandle<Transform> HTransform;
@@ -127,6 +132,9 @@ typedef Qt3DCore::QHandle<EnvironmentLight> HEnvironmentLight;
 typedef Qt3DCore::QHandle<ComputeCommand> HComputeCommand;
 typedef Qt3DCore::QHandle<GLBuffer> HGLBuffer;
 typedef Qt3DCore::QHandle<RenderStateNode> HRenderState;
+typedef Qt3DCore::QHandle<Armature> HArmature;
+typedef Qt3DCore::QHandle<Skeleton> HSkeleton;
+typedef Qt3DCore::QHandle<Joint> HJoint;
 
 } // namespace Render
 

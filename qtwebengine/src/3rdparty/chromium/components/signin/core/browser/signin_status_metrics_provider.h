@@ -37,7 +37,7 @@ class SigninStatusMetricsProvider : public SigninStatusMetricsProviderBase,
       metrics::ChromeUserMetricsExtension* uma_proto) override;
 
   // Factory method, creates a new instance of this class.
-  static SigninStatusMetricsProvider* CreateInstance(
+  static std::unique_ptr<SigninStatusMetricsProvider> CreateInstance(
       std::unique_ptr<SigninStatusMetricsProviderDelegate> delegate);
 
   // Update the sign-in status when a SigninManager is created.
@@ -70,8 +70,7 @@ class SigninStatusMetricsProvider : public SigninStatusMetricsProviderBase,
 
   // SigninManagerBase::Observer:
   void GoogleSigninSucceeded(const std::string& account_id,
-                             const std::string& username,
-                             const std::string& password) override;
+                             const std::string& username) override;
   void GoogleSignedOut(const std::string& account_id,
                        const std::string& username) override;
 

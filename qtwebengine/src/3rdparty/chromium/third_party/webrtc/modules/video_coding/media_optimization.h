@@ -17,7 +17,7 @@
 #include "webrtc/modules/include/module_common_types.h"
 #include "webrtc/modules/video_coding/include/video_coding.h"
 #include "webrtc/modules/video_coding/media_opt_util.h"
-#include "webrtc/system_wrappers/include/critical_section_wrapper.h"
+#include "webrtc/rtc_base/criticalsection.h"
 
 namespace webrtc {
 
@@ -49,14 +49,8 @@ class MediaOptimization {
                        int32_t mtu);
 
   // Sets target rates for the encoder given the channel parameters.
-  // Inputs:  target bitrate - the encoder target bitrate in bits/s.
-  //          fraction_lost - packet loss rate in % in the network.
-  //          round_trip_time_ms - round trip time in milliseconds.
-  //          min_bit_rate - the bit rate of the end-point with lowest rate.
-  //          max_bit_rate - the bit rate of the end-point with highest rate.
-  uint32_t SetTargetRates(uint32_t target_bitrate,
-                          uint8_t fraction_lost,
-                          int64_t round_trip_time_ms);
+  // Input:  target bitrate - the encoder target bitrate in bits/s.
+  uint32_t SetTargetRates(uint32_t target_bitrate);
 
   void EnableFrameDropper(bool enable);
   bool DropFrame();
@@ -80,9 +74,10 @@ class MediaOptimization {
   typedef std::list<EncodedFrameSample> FrameSampleList;
 
   void UpdateIncomingFrameRate() EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
-  void PurgeOldFrameSamples(int64_t now_ms)
+  void PurgeOldFrameSamples(int64_t threshold_ms)
       EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
-  void UpdateSentBitrate(int64_t now_ms) EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
+  // Updates the sent bitrate field, a call to PurgeOldFrameSamples must preceed
+  int GetSentBitrate(int64_t now_ms) EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
   void UpdateSentFramerate() EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
 
   void ProcessIncomingFrameRate(int64_t now)
@@ -107,7 +102,7 @@ class MediaOptimization {
   uint32_t SentFrameRateInternal() EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
 
   // Protect all members.
-  std::unique_ptr<CriticalSectionWrapper> crit_sect_;
+  rtc::CriticalSection crit_sect_;
 
   Clock* clock_ GUARDED_BY(crit_sect_);
   int32_t max_bit_rate_ GUARDED_BY(crit_sect_);
@@ -115,7 +110,6 @@ class MediaOptimization {
   uint16_t codec_height_ GUARDED_BY(crit_sect_);
   float user_frame_rate_ GUARDED_BY(crit_sect_);
   std::unique_ptr<FrameDropper> frame_dropper_ GUARDED_BY(crit_sect_);
-  uint8_t fraction_lost_ GUARDED_BY(crit_sect_);
   uint32_t send_statistics_[4] GUARDED_BY(crit_sect_);
   uint32_t send_statistics_zero_encode_ GUARDED_BY(crit_sect_);
   int32_t max_payload_size_ GUARDED_BY(crit_sect_);
@@ -123,7 +117,6 @@ class MediaOptimization {
   float incoming_frame_rate_ GUARDED_BY(crit_sect_);
   int64_t incoming_frame_times_[kFrameCountHistorySize] GUARDED_BY(crit_sect_);
   std::list<EncodedFrameSample> encoded_frame_samples_ GUARDED_BY(crit_sect_);
-  uint32_t avg_sent_bit_rate_bps_ GUARDED_BY(crit_sect_);
   uint32_t avg_sent_framerate_ GUARDED_BY(crit_sect_);
   int num_layers_ GUARDED_BY(crit_sect_);
 };

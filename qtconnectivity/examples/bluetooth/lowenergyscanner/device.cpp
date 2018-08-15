@@ -50,6 +50,7 @@
 ****************************************************************************/
 
 #include "device.h"
+
 #include <qbluetoothaddress.h>
 #include <qbluetoothdevicediscoveryagent.h>
 #include <qbluetoothlocaldevice.h>

@@ -4,31 +4,42 @@
 
 #include "modules/webaudio/AudioWorklet.h"
 
-#include "bindings/core/v8/V8Binding.h"
+#include "bindings/core/v8/V8BindingForCore.h"
+#include "core/dom/Document.h"
 #include "core/frame/LocalFrame.h"
-#include "core/workers/ThreadedWorkletGlobalScopeProxy.h"
+#include "core/workers/WorkerClients.h"
+#include "modules/webaudio/AudioWorkletMessagingProxy.h"
+#include "modules/webaudio/AudioWorkletThread.h"
 
 namespace blink {
 
-// static
-AudioWorklet* AudioWorklet::create(LocalFrame* frame) {
-  AudioWorklet* worklet = new AudioWorklet(frame);
-  worklet->suspendIfNeeded();
-  return worklet;
+AudioWorklet* AudioWorklet::Create(LocalFrame* frame) {
+  return new AudioWorklet(frame);
 }
 
-AudioWorklet::AudioWorklet(LocalFrame* frame)
-    : Worklet(frame),
-      m_workletGlobalScopeProxy(new ThreadedWorkletGlobalScopeProxy()) {}
+AudioWorklet::AudioWorklet(LocalFrame* frame) : Worklet(frame) {}
 
 AudioWorklet::~AudioWorklet() {}
 
-WorkletGlobalScopeProxy* AudioWorklet::workletGlobalScopeProxy() const {
-  return m_workletGlobalScopeProxy.get();
+bool AudioWorklet::NeedsToCreateGlobalScope() {
+  // For now, create only one global scope per document.
+  // TODO(nhiroki): Revisit this later.
+  return GetNumberOfGlobalScopes() == 0;
+}
+
+WorkletGlobalScopeProxy* AudioWorklet::CreateGlobalScope() {
+  DCHECK(NeedsToCreateGlobalScope());
+  AudioWorkletThread::EnsureSharedBackingThread();
+
+  WorkerClients* worker_clients = WorkerClients::Create();
+  AudioWorkletMessagingProxy* proxy =
+      new AudioWorkletMessagingProxy(GetExecutionContext(), worker_clients);
+  proxy->Initialize();
+  return proxy;
 }
 
 DEFINE_TRACE(AudioWorklet) {
-  Worklet::trace(visitor);
+  Worklet::Trace(visitor);
 }
 
 }  // namespace blink

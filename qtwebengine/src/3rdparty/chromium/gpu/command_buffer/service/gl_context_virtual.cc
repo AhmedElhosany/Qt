@@ -11,7 +11,6 @@
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gpu_preference.h"
 #include "ui/gl/gpu_timing.h"
-#include "ui/gl/scoped_api.h"
 
 namespace gpu {
 
@@ -70,6 +69,14 @@ void GLContextVirtual::OnSetSwapInterval(int interval) {
   shared_context_->SetSwapInterval(interval);
 }
 
+std::string GLContextVirtual::GetGLVersion() {
+  return shared_context_->GetGLVersion();
+}
+
+std::string GLContextVirtual::GetGLRenderer() {
+  return shared_context_->GetGLRenderer();
+}
+
 std::string GLContextVirtual::GetExtensions() {
   return shared_context_->GetExtensions();
 }
@@ -91,6 +98,10 @@ void GLContextVirtual::SetUnbindFboOnMakeCurrent() {
 
 gl::YUVToRGBConverter* GLContextVirtual::GetYUVToRGBConverter() {
   return shared_context_->GetYUVToRGBConverter();
+}
+
+void GLContextVirtual::ForceReleaseVirtuallyCurrent() {
+  shared_context_->OnReleaseVirtuallyCurrent(this);
 }
 
 GLContextVirtual::~GLContextVirtual() {

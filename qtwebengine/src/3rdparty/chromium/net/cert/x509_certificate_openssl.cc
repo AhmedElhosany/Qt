@@ -5,7 +5,6 @@
 #include "net/cert/x509_certificate.h"
 
 #include "base/macros.h"
-#include "base/memory/singleton.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/pickle.h"
 #include "base/sha1.h"
@@ -15,6 +14,7 @@
 #include "crypto/openssl_util.h"
 #include "net/base/ip_address.h"
 #include "net/base/net_errors.h"
+#include "net/cert/x509_util.h"
 #include "net/cert/x509_util_openssl.h"
 #include "third_party/boringssl/src/include/openssl/asn1.h"
 #include "third_party/boringssl/src/include/openssl/bytestring.h"
@@ -67,11 +67,11 @@ void ParsePrincipalValues(X509_NAME* name,
   }
 }
 
-void ParsePrincipal(X509Certificate::OSCertHandle cert,
+bool ParsePrincipal(X509Certificate::OSCertHandle cert,
                     X509_NAME* x509_name,
                     CertPrincipal* principal) {
   if (!x509_name)
-    return;
+    return false;
 
   ParsePrincipalValues(x509_name, NID_streetAddress,
                        &principal->street_addresses);
@@ -90,79 +90,53 @@ void ParsePrincipal(X509Certificate::OSCertHandle cert,
                                       &principal->state_or_province_name);
   x509_util::ParsePrincipalValueByNID(x509_name, NID_countryName,
                                       &principal->country_name);
+  return true;
 }
 
-void ParseSubjectAltName(X509Certificate::OSCertHandle cert,
+bool ParseSubjectAltName(X509Certificate::OSCertHandle cert,
                          std::vector<std::string>* dns_names,
                          std::vector<std::string>* ip_addresses) {
-  DCHECK(dns_names || ip_addresses);
   int index = X509_get_ext_by_NID(cert, NID_subject_alt_name, -1);
   X509_EXTENSION* alt_name_ext = X509_get_ext(cert, index);
   if (!alt_name_ext)
-    return;
+    return false;
 
   bssl::UniquePtr<GENERAL_NAMES> alt_names(
       reinterpret_cast<GENERAL_NAMES*>(X509V3_EXT_d2i(alt_name_ext)));
   if (!alt_names.get())
-    return;
+    return false;
 
+  bool has_san = false;
   for (size_t i = 0; i < sk_GENERAL_NAME_num(alt_names.get()); ++i) {
     const GENERAL_NAME* name = sk_GENERAL_NAME_value(alt_names.get(), i);
-    if (name->type == GEN_DNS && dns_names) {
-      const unsigned char* dns_name = ASN1_STRING_data(name->d.dNSName);
-      if (!dns_name)
-        continue;
-      int dns_name_len = ASN1_STRING_length(name->d.dNSName);
-      dns_names->push_back(
-          std::string(reinterpret_cast<const char*>(dns_name), dns_name_len));
-    } else if (name->type == GEN_IPADD && ip_addresses) {
-      const unsigned char* ip_addr = name->d.iPAddress->data;
-      if (!ip_addr)
-        continue;
-      int ip_addr_len = name->d.iPAddress->length;
-      if (ip_addr_len != static_cast<int>(IPAddress::kIPv4AddressSize) &&
-          ip_addr_len != static_cast<int>(IPAddress::kIPv6AddressSize)) {
-        // http://www.ietf.org/rfc/rfc3280.txt requires subjectAltName iPAddress
-        // to have 4 or 16 bytes, whereas in a name constraint it includes a
-        // net mask hence 8 or 32 bytes. Logging to help diagnose any mixup.
-        LOG(WARNING) << "Bad sized IP Address in cert: " << ip_addr_len;
-        continue;
+    if (name->type == GEN_DNS) {
+      has_san = true;
+      if (dns_names) {
+        const unsigned char* dns_name = ASN1_STRING_data(name->d.dNSName);
+        int dns_name_len = ASN1_STRING_length(name->d.dNSName);
+        dns_names->push_back(
+            base::StringPiece(reinterpret_cast<const char*>(dns_name),
+                              dns_name_len)
+                .as_string());
       }
-      ip_addresses->push_back(
-          std::string(reinterpret_cast<const char*>(ip_addr), ip_addr_len));
+    } else if (name->type == GEN_IPADD) {
+      has_san = true;
+      if (ip_addresses) {
+        const unsigned char* ip_addr = name->d.iPAddress->data;
+        int ip_addr_len = name->d.iPAddress->length;
+        ip_addresses->push_back(
+            base::StringPiece(reinterpret_cast<const char*>(ip_addr),
+                              ip_addr_len)
+                .as_string());
+      }
     }
+    // Fast path: Found at least one subjectAltName and the caller doesn't
+    // need the actual values.
+    if (has_san && !ip_addresses && !dns_names)
+      return true;
   }
+  return has_san;
 }
-
-class X509InitSingleton {
- public:
-  static X509InitSingleton* GetInstance() {
-    // We allow the X509 store to leak, because it is used from a non-joinable
-    // worker that is not stopped on shutdown, hence may still be using
-    // OpenSSL library after the AtExit runner has completed.
-    return base::Singleton<X509InitSingleton, base::LeakySingletonTraits<
-                                                  X509InitSingleton>>::get();
-  }
-  X509_STORE* store() const { return store_.get(); }
-
-  void ResetCertStore() {
-    store_.reset(X509_STORE_new());
-    DCHECK(store_.get());
-    X509_STORE_set_default_paths(store_.get());
-    // TODO(joth): Enable CRL (see X509_STORE_set_flags(X509_V_FLAG_CRL_CHECK)).
-  }
-
- private:
-  friend struct base::DefaultSingletonTraits<X509InitSingleton>;
-  X509InitSingleton() {
-    crypto::EnsureOpenSSLInit();
-    ResetCertStore();
-  }
-
-  bssl::UniquePtr<X509_STORE> store_;
-
-  DISALLOW_COPY_AND_ASSIGN(X509InitSingleton);
-};
 
 }  // namespace
 
@@ -182,33 +156,31 @@ void X509Certificate::FreeOSCertHandle(OSCertHandle cert_handle) {
   X509_free(cert_handle);
 }
 
-void X509Certificate::Initialize() {
+bool X509Certificate::Initialize() {
   crypto::EnsureOpenSSLInit();
 
   ASN1_INTEGER* serial_num = X509_get_serialNumber(cert_handle_);
-  if (serial_num) {
-    // ASN1_INTEGERS represent the decoded number, in a format internal to
-    // OpenSSL. Most notably, this may have leading zeroes stripped off for
-    // numbers whose first byte is >= 0x80. Thus, it is necessary to
-    // re-encoded the integer back into DER, which is what the interface
-    // of X509Certificate exposes, to ensure callers get the proper (DER)
-    // value.
-    int bytes_required = i2c_ASN1_INTEGER(serial_num, NULL);
-    unsigned char* buffer = reinterpret_cast<unsigned char*>(
-        base::WriteInto(&serial_number_, bytes_required + 1));
-    int bytes_written = i2c_ASN1_INTEGER(serial_num, &buffer);
-    DCHECK_EQ(static_cast<size_t>(bytes_written), serial_number_.size());
-  }
+  if (!serial_num)
+    return false;
+  // ASN1_INTEGERS represent the decoded number, in a format internal to
+  // OpenSSL. Most notably, this may have leading zeroes stripped off for
+  // numbers whose first byte is >= 0x80. Thus, it is necessary to
+  // re-encoded the integer back into DER, which is what the interface
+  // of X509Certificate exposes, to ensure callers get the proper (DER)
+  // value.
+  int bytes_required = i2c_ASN1_INTEGER(serial_num, NULL);
+  unsigned char* buffer = reinterpret_cast<unsigned char*>(
+      base::WriteInto(&serial_number_, bytes_required + 1));
+  int bytes_written = i2c_ASN1_INTEGER(serial_num, &buffer);
+  DCHECK_EQ(static_cast<size_t>(bytes_written), serial_number_.size());
 
-  ParsePrincipal(cert_handle_, X509_get_subject_name(cert_handle_), &subject_);
-  ParsePrincipal(cert_handle_, X509_get_issuer_name(cert_handle_), &issuer_);
-  x509_util::ParseDate(X509_get_notBefore(cert_handle_), &valid_start_);
-  x509_util::ParseDate(X509_get_notAfter(cert_handle_), &valid_expiry_);
-}
-
-// static
-void X509Certificate::ResetCertStore() {
-  X509InitSingleton::GetInstance()->ResetCertStore();
+  return (
+      ParsePrincipal(cert_handle_, X509_get_subject_name(cert_handle_),
+                     &subject_) &&
+      ParsePrincipal(cert_handle_, X509_get_issuer_name(cert_handle_),
+                     &issuer_) &&
+      x509_util::ParseDate(X509_get_notBefore(cert_handle_), &valid_start_) &&
+      x509_util::ParseDate(X509_get_notAfter(cert_handle_), &valid_expiry_));
 }
 
 // static
@@ -245,12 +217,9 @@ X509Certificate::OSCertHandle X509Certificate::CreateOSCertHandleFromBytes(
     const char* data,
     size_t length) {
   crypto::EnsureOpenSSLInit();
-  const unsigned char* d2i_data =
-      reinterpret_cast<const unsigned char*>(data);
-  // Don't cache this data for x509_util::GetDER as this wire format
-  // may be not be identical from the i2d_X509 roundtrip.
-  X509* cert = d2i_X509(NULL, &d2i_data, base::checked_cast<long>(length));
-  return cert;
+  bssl::UniquePtr<CRYPTO_BUFFER> buffer = x509_util::CreateCryptoBuffer(
+      reinterpret_cast<const uint8_t*>(data), length);
+  return X509_parse_from_buffer(buffer.get());
 }
 
 // static
@@ -280,7 +249,7 @@ X509Certificate::OSCertHandles X509Certificate::CreateOSCertHandlesFromBytes(
   return results;
 }
 
-void X509Certificate::GetSubjectAltName(
+bool X509Certificate::GetSubjectAltName(
     std::vector<std::string>* dns_names,
     std::vector<std::string>* ip_addrs) const {
   if (dns_names)
@@ -288,12 +257,7 @@ void X509Certificate::GetSubjectAltName(
   if (ip_addrs)
     ip_addrs->clear();
 
-  ParseSubjectAltName(cert_handle_, dns_names, ip_addrs);
-}
-
-// static
-X509_STORE* X509Certificate::cert_store() {
-  return X509InitSingleton::GetInstance()->store();
+  return ParseSubjectAltName(cert_handle_, dns_names, ip_addrs);
 }
 
 // static

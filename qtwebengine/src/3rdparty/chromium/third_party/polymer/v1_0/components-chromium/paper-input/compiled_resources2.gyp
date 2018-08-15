@@ -1,18 +1,10 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
 # NOTE: Created with generate_compiled_resources_gyp.py, please do not edit.
 {
   'targets': [
-    {
-      'target_name': 'all-imports-extracted',
-      'dependencies': [
-        'paper-input-extracted',
-        'paper-textarea-extracted',
-      ],
-      'includes': ['../../../../closure_compiler/compile_js2.gypi'],
-    },
     {
       'target_name': 'paper-input-addon-behavior-extracted',
       'includes': ['../../../../closure_compiler/compile_js2.gypi'],

@@ -43,6 +43,7 @@
 #include <Qt3DRender/private/nodemanagers_p.h>
 #include <Qt3DRender/private/managers_p.h>
 #include <Qt3DRender/private/sphere_p.h>
+#include <Qt3DRender/private/pickboundingvolumeutils_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -95,22 +96,6 @@ void UpdateLevelOfDetailJob::run()
     updateEntityLod(m_root);
 }
 
-bool UpdateLevelOfDetailJob::viewMatrixForCamera(const Qt3DCore::QNodeId &cameraId,
-                                                 QMatrix4x4 &viewMatrix,
-                                                 QMatrix4x4 &projectionMatrix) const
-{
-    Render::CameraLens *lens = nullptr;
-    Entity *camNode = m_manager->renderNodesManager()->lookupResource(cameraId);
-    if (camNode != nullptr &&
-            (lens = camNode->renderComponent<CameraLens>()) != nullptr &&
-            lens->isEnabled()) {
-        viewMatrix = lens->viewMatrix(*camNode->worldTransform());
-        projectionMatrix = lens->projection();
-        return true;
-    }
-    return false;
-}
-
 QRect UpdateLevelOfDetailJob::windowViewport(const QSize &area, const QRectF &relativeViewport) const
 {
     if (area.isValid()) {
@@ -157,7 +142,7 @@ void UpdateLevelOfDetailJob::updateEntityLodByDistance(Entity *entity, LevelOfDe
 {
     QMatrix4x4 viewMatrix;
     QMatrix4x4 projectionMatrix;
-    if (!viewMatrixForCamera(lod->camera(), viewMatrix, projectionMatrix))
+    if (!Render::CameraLens::viewMatrixForCamera(m_manager->renderNodesManager(), lod->camera(), viewMatrix, projectionMatrix))
         return;
 
     const QVector<qreal> thresholds = lod->thresholds();
@@ -186,15 +171,15 @@ void UpdateLevelOfDetailJob::updateEntityLodByScreenArea(Entity *entity, LevelOf
 {
     QMatrix4x4 viewMatrix;
     QMatrix4x4 projectionMatrix;
-    if (!viewMatrixForCamera(lod->camera(), viewMatrix, projectionMatrix))
+    if (!Render::CameraLens::viewMatrixForCamera(m_manager->renderNodesManager(), lod->camera(), viewMatrix, projectionMatrix))
         return;
 
     PickingUtils::ViewportCameraAreaGatherer vcaGatherer(lod->camera());
-    const QVector<PickingUtils::ViewportCameraAreaDetails> vcaTriplets = vcaGatherer.gather(m_frameGraphRoot);
+    const QVector<PickingUtils::ViewportCameraAreaTriplet> vcaTriplets = vcaGatherer.gather(m_frameGraphRoot);
     if (vcaTriplets.isEmpty())
         return;
 
-    const PickingUtils::ViewportCameraAreaDetails &vca = vcaTriplets.front();
+    const PickingUtils::ViewportCameraAreaTriplet &vca = vcaTriplets.front();
 
     const QVector<qreal> thresholds = lod->thresholds();
     Sphere bv(lod->center(), lod->radius());

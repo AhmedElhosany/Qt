@@ -9,22 +9,20 @@
 #include <memory>
 #include <set>
 #include <utility>
+#include <vector>
 
 #include "base/containers/hash_tables.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_vector.h"
 #include "tools/gn/err.h"
+#include "tools/gn/input_file.h"
 #include "tools/gn/pattern.h"
 #include "tools/gn/source_dir.h"
 #include "tools/gn/value.h"
 
-class FunctionCallNode;
-class ImportManager;
 class Item;
 class ParseNode;
 class Settings;
-class TargetManager;
 class Template;
 
 // Scope for the script execution.
@@ -43,7 +41,7 @@ class Scope {
   typedef base::hash_map<base::StringPiece, Value, base::StringPieceHash>
       KeyValueMap;
   // Holds an owning list of Items.
-  typedef ScopedVector<Item> ItemVector;
+  typedef std::vector<std::unique_ptr<Item>> ItemVector;
 
   // A flag to indicate whether a function should recurse into nested scopes,
   // or only operate on the current scope.
@@ -102,7 +100,7 @@ class Scope {
   };
 
   // Creates an empty toplevel scope.
-  explicit Scope(const Settings* settings);
+  Scope(const Settings* settings, const InputFileSet& input_files);
 
   // Creates a dependent scope.
   explicit Scope(Scope* parent);
@@ -112,7 +110,7 @@ class Scope {
 
   const Settings* settings() const { return settings_; }
 
-  // See the const_/mutable_containing_ var declaraions below. Yes, it's a
+  // See the const_/mutable_containing_ var declarations below. Yes, it's a
   // bit weird that we can have a const pointer to the "mutable" one.
   Scope* mutable_containing() { return mutable_containing_; }
   const Scope* mutable_containing() const { return mutable_containing_; }
@@ -137,9 +135,18 @@ class Scope {
   //
   // counts_as_used should be set if the variable is being read in a way that
   // should count for unused variable checking.
+  //
+  // found_in_scope is set to the scope that contains the definition of the
+  // ident. If the value was provided programmatically (like host_cpu),
+  // found_in_scope will be set to null.
   const Value* GetValue(const base::StringPiece& ident,
                         bool counts_as_used);
   const Value* GetValue(const base::StringPiece& ident) const;
+  const Value* GetValueWithScope(const base::StringPiece& ident,
+                                 const Scope** found_in_scope) const;
+  const Value* GetValueWithScope(const base::StringPiece& ident,
+                                 bool counts_as_used,
+                                 const Scope** found_in_scope);
 
   // Returns the requested value as a mutable one if possible. If the value
   // is not found in a mutable scope, then returns null. Note that the value
@@ -200,6 +207,7 @@ class Scope {
   // Marks the given identifier as (un)used in the current scope.
   void MarkUsed(const base::StringPiece& ident);
   void MarkAllUsed();
+  void MarkAllUsed(const std::set<std::string>& excluded_values);
   void MarkUnused(const base::StringPiece& ident);
 
   // Checks to see if the scope has a var set that hasn't been used. This is
@@ -276,6 +284,10 @@ class Scope {
   // an empty dir if no containing scope has a source dir set.
   const SourceDir& GetSourceDir() const;
   void set_source_dir(const SourceDir& d) { source_dir_ = d; }
+
+  // The set of source files which affected this scope.
+  const InputFileSet& input_files() const { return input_files_; }
+  void AddInputFile(const InputFile* input_file);
 
   // The item collector is where Items (Targets, Configs, etc.) go that have
   // been defined. If a scope can generate items, this non-owning pointer will
@@ -371,6 +383,8 @@ class Scope {
   ProviderSet programmatic_providers_;
 
   SourceDir source_dir_;
+
+  InputFileSet input_files_;
 
   DISALLOW_COPY_AND_ASSIGN(Scope);
 };

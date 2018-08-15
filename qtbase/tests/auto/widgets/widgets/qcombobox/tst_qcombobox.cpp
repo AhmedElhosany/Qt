@@ -164,6 +164,7 @@ private slots:
     void task_QTBUG_49831_scrollerNotActivated();
     void task_QTBUG_56693_itemFontFromModel();
     void inputMethodUpdate();
+    void task_QTBUG_52027_mapCompleterIndex();
 
 private:
     PlatformInputContext m_platformInputContext;
@@ -2256,7 +2257,7 @@ void tst_QComboBox::task190351_layout()
     listCombo.setCurrentIndex(70);
     listCombo.showPopup();
     QTRY_VERIFY(listCombo.view());
-    QTest::qWaitForWindowExposed(listCombo.view());
+    QVERIFY(QTest::qWaitForWindowExposed(listCombo.view()));
     QTRY_VERIFY(listCombo.view()->isVisible());
     QApplication::processEvents();
 
@@ -2403,7 +2404,7 @@ void tst_QComboBox::task248169_popupWithMinimalSize()
     QTRY_VERIFY(comboBox.isVisible());
     comboBox.showPopup();
     QTRY_VERIFY(comboBox.view());
-    QTest::qWaitForWindowExposed(comboBox.view());
+    QVERIFY(QTest::qWaitForWindowExposed(comboBox.view()));
     QTRY_VERIFY(comboBox.view()->isVisible());
 
 #if defined QT_BUILD_INTERNAL
@@ -3249,12 +3250,12 @@ void tst_QComboBox::task_QTBUG_49831_scrollerNotActivated()
     box.setModel(&model);
     box.setCurrentIndex(500);
     box.show();
-    QTest::qWaitForWindowExposed(&box);
+    QVERIFY(QTest::qWaitForWindowExposed(&box));
     QTest::mouseMove(&box, QPoint(5, 5), 100);
     box.showPopup();
     QFrame *container = box.findChild<QComboBoxPrivateContainer *>();
     QVERIFY(container);
-    QTest::qWaitForWindowExposed(container);
+    QVERIFY(QTest::qWaitForWindowExposed(container));
 
     QList<QComboBoxPrivateScroller *> scrollers = container->findChildren<QComboBoxPrivateScroller *>();
     // Not all styles support scrollers. We rely only on those platforms that do to catch any regression.
@@ -3330,11 +3331,11 @@ void tst_QComboBox::task_QTBUG_56693_itemFontFromModel()
         box.addItem(QLatin1String("Item ") + QString::number(i));
 
     box.show();
-    QTest::qWaitForWindowExposed(&box);
+    QVERIFY(QTest::qWaitForWindowExposed(&box));
     box.showPopup();
     QFrame *container = box.findChild<QComboBoxPrivateContainer *>();
     QVERIFY(container);
-    QTest::qWaitForWindowExposed(container);
+    QVERIFY(QTest::qWaitForWindowExposed(container));
 
     QCOMPARE(proxyStyle->italicItemsNo, 5);
 
@@ -3393,6 +3394,63 @@ void tst_QComboBox::inputMethodUpdate()
         QApplication::sendEvent(testWidget, &event);
     }
     QVERIFY(m_platformInputContext.m_updateCallCount >= 1);
+}
+
+void tst_QComboBox::task_QTBUG_52027_mapCompleterIndex()
+{
+    QStringList words;
+    words << "" << "foobar1" << "foobar2";
+
+    QStringList altWords;
+    altWords << "foobar2" << "hello" << "," << "world" << "" << "foobar0" << "foobar1";
+
+    QComboBox cbox;
+    setFrameless(&cbox);
+    cbox.setEditable(true);
+    cbox.setInsertPolicy(QComboBox::NoInsert);
+    cbox.addItems(words);
+
+    QCompleter *completer = new QCompleter(altWords);
+    completer->setCaseSensitivity(Qt::CaseInsensitive);
+    cbox.setCompleter(completer);
+
+    QSignalSpy spy(&cbox, SIGNAL(activated(int)));
+    QCOMPARE(spy.count(), 0);
+    cbox.move(200, 200);
+    cbox.show();
+    QApplication::setActiveWindow(&cbox);
+    QVERIFY(QTest::qWaitForWindowActive(&cbox));
+
+    QTest::keyClicks(&cbox, "foobar2");
+    QApplication::processEvents();
+    QTRY_VERIFY(completer->popup());
+    QTest::keyClick(completer->popup(), Qt::Key_Down);
+    QApplication::processEvents();
+    QTest::keyClick(completer->popup(), Qt::Key_Return);
+    QApplication::processEvents();
+    QList<QVariant> arguments = spy.takeLast();
+    QCOMPARE(arguments.at(0).toInt(), 2);
+
+    cbox.lineEdit()->selectAll();
+    cbox.lineEdit()->del();
+
+    QSortFilterProxyModel* model = new QSortFilterProxyModel();
+    model->setSourceModel(cbox.model());
+    model->setFilterFixedString("foobar1");
+    completer->setModel(model);
+
+    QApplication::setActiveWindow(&cbox);
+    QVERIFY(QTest::qWaitForWindowActive(&cbox));
+
+    QTest::keyClicks(&cbox, "foobar1");
+    QApplication::processEvents();
+    QTRY_VERIFY(completer->popup());
+    QTest::keyClick(completer->popup(), Qt::Key_Down);
+    QApplication::processEvents();
+    QTest::keyClick(completer->popup(), Qt::Key_Return);
+    QApplication::processEvents();
+    arguments = spy.takeLast();
+    QCOMPARE(arguments.at(0).toInt(), 1);
 }
 
 QTEST_MAIN(tst_QComboBox)

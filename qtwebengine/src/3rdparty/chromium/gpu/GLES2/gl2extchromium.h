@@ -84,6 +84,14 @@ GL_APICALL GLuint GL_APIENTRY glCreateImageCHROMIUM(ClientBuffer buffer,
                                                     GLsizei height,
                                                     GLenum internalformat);
 GL_APICALL void GL_APIENTRY glDestroyImageCHROMIUM(GLuint image_id);
+GL_APICALL void GL_APIENTRY glBindTexImage2DCHROMIUM(GLenum target,
+                                                     GLint imageId);
+GL_APICALL void GL_APIENTRY
+glBindTexImage2DWithInternalformatCHROMIUM(GLenum target,
+                                           GLenum internalformat,
+                                           GLint imageId);
+GL_APICALL void GL_APIENTRY glReleaseTexImage2DCHROMIUM(GLenum target,
+                                                        GLint imageId);
 #endif
 typedef GLuint(GL_APIENTRYP PFNGLCREATEIMAGECHROMIUMPROC)(
     ClientBuffer buffer,
@@ -92,15 +100,15 @@ typedef GLuint(GL_APIENTRYP PFNGLCREATEIMAGECHROMIUMPROC)(
     GLenum internalformat);
 typedef void (
     GL_APIENTRYP PFNGLDESTROYIMAGECHROMIUMPROC)(GLuint image_id);
+typedef void(GL_APIENTRYP PFNGLBINDTEXIMAGE2DCHROMIUMPROC)(GLenum target,
+                                                           GLint imageId);
+typedef void(GL_APIENTRYP PFNGLBINDTEXIMAGE2DWITHINTERNALFORMATCHROMIUMPROC)(
+    GLenum target,
+    GLenum internalformat,
+    GLint imageId);
+typedef void(GL_APIENTRYP PFNGLRELEASETEXIMAGE2DCHROMIUMPROC)(GLenum target,
+                                                              GLint imageId);
 #endif  /* GL_CHROMIUM_image */
-
-  /* GL_CHROMIUM_gpu_memory_buffer_image */
-#ifndef GL_CHROMIUM_gpu_memory_buffer_image
-#define GL_CHROMIUM_gpu_memory_buffer_image 1
-
-#ifndef GL_READ_WRITE_CHROMIUM
-#define GL_READ_WRITE_CHROMIUM 0x78F2
-#endif
 
 #ifndef GL_RGB_YCRCB_420_CHROMIUM
 #define GL_RGB_YCRCB_420_CHROMIUM 0x78FA
@@ -113,20 +121,6 @@ typedef void (
 #ifndef GL_RGB_YCBCR_420V_CHROMIUM
 #define GL_RGB_YCBCR_420V_CHROMIUM 0x78FC
 #endif
-
-#ifdef GL_GLEXT_PROTOTYPES
-GL_APICALL GLuint GL_APIENTRY glCreateGpuMemoryBufferImageCHROMIUM(
-    GLsizei width,
-    GLsizei height,
-    GLenum internalformat,
-    GLenum usage);
-#endif
-typedef GLuint(GL_APIENTRYP PFNGLCREATEGPUMEMORYBUFFERIMAGECHROMIUMPROC)(
-    GLsizei width,
-    GLsizei height,
-    GLenum internalformat,
-    GLenum usage);
-#endif  /* GL_CHROMIUM_gpu_memory_buffer_image */
 
 /* GL_CHROMIUM_deschedule */
 #ifndef GL_CHROMIUM_deschedule
@@ -190,21 +184,6 @@ typedef void (GL_APIENTRYP PFNGLREQUESTEXTENSIONCHROMIUMPROC) (
 #define GL_GET_ERROR_QUERY_CHROMIUM 0x6003
 #endif
 #endif  /* GL_CHROMIUM_get_error_query */
-
-/* GL_CHROMIUM_texture_from_image */
-#ifndef GL_CHROMIUM_texture_from_image
-#define GL_CHROMIUM_texture_from_image 1
-#ifdef GL_GLEXT_PROTOTYPES
-GL_APICALL void GL_APIENTRY glBindTexImage2DCHROMIUM(
-    GLenum target, GLint imageId);
-GL_APICALL void GL_APIENTRY glReleaseTexImage2DCHROMIUM(
-    GLenum target, GLint imageId);
-#endif
-typedef void (GL_APIENTRYP PFNGLBINDTEXIMAGE2DCHROMIUMPROC) (
-    GLenum target, GLint imageId);
-typedef void (GL_APIENTRYP PFNGLRELEASETEXIMAGE2DCHROMIUMPROC) (
-    GLenum target, GLint imageId);
-#endif  /* GL_CHROMIUM_texture_from_image */
 
 /* GL_CHROMIUM_post_sub_buffer */
 #ifndef GL_CHROMIUM_post_sub_buffer
@@ -362,31 +341,40 @@ typedef void (GL_APIENTRYP PFNGLBLITFRAMEBUFFERCHROMIUMPROC) (GLint srcX0, GLint
 #endif
 
 #ifdef GL_GLEXT_PROTOTYPES
-GL_APICALL void GL_APIENTRY glCopyTextureCHROMIUM(
-    GLenum source_id,
-    GLenum dest_id,
-    GLint internalformat,
-    GLenum dest_type,
-    GLboolean unpack_flip_y,
-    GLboolean unpack_premultiply_alpha,
-    GLboolean unpack_unmultiply_alpha);
+GL_APICALL void GL_APIENTRY
+glCopyTextureCHROMIUM(GLenum source_id,
+                      GLint source_level,
+                      GLenum dest_target,
+                      GLenum dest_id,
+                      GLint dest_level,
+                      GLint internalformat,
+                      GLenum dest_type,
+                      GLboolean unpack_flip_y,
+                      GLboolean unpack_premultiply_alpha,
+                      GLboolean unpack_unmultiply_alpha);
 
-GL_APICALL void GL_APIENTRY glCopySubTextureCHROMIUM(
-    GLenum source_id,
-    GLenum dest_id,
-    GLint xoffset,
-    GLint yoffset,
-    GLint x,
-    GLint y,
-    GLsizei width,
-    GLsizei height,
-    GLboolean unpack_flip_y,
-    GLboolean unpack_premultiply_alpha,
-    GLboolean unpack_unmultiply_alpha);
+GL_APICALL void GL_APIENTRY
+glCopySubTextureCHROMIUM(GLenum source_id,
+                         GLint source_level,
+                         GLenum dest_target,
+                         GLenum dest_id,
+                         GLint dest_level,
+                         GLint xoffset,
+                         GLint yoffset,
+                         GLint x,
+                         GLint y,
+                         GLsizei width,
+                         GLsizei height,
+                         GLboolean unpack_flip_y,
+                         GLboolean unpack_premultiply_alpha,
+                         GLboolean unpack_unmultiply_alpha);
 #endif
 typedef void(GL_APIENTRYP PFNGLCOPYTEXTURECHROMIUMPROC)(
     GLenum source_id,
+    GLint source_level,
+    GLenum dest_target,
     GLenum dest_id,
+    GLint dest_level,
     GLint internalformat,
     GLenum dest_type,
     GLboolean unpack_flip_y,
@@ -395,7 +383,10 @@ typedef void(GL_APIENTRYP PFNGLCOPYTEXTURECHROMIUMPROC)(
 
 typedef void(GL_APIENTRYP PFNGLCOPYSUBTEXTURECHROMIUMPROC)(
     GLenum source_id,
+    GLint source_level,
+    GLenum dest_target,
     GLenum dest_id,
+    GLint dest_level,
     GLint xoffset,
     GLint yoffset,
     GLint x,
@@ -1202,6 +1193,11 @@ GL_APICALL void GL_APIENTRY glCoverageModulationCHROMIUM(GLenum components);
 #endif
 #define GL_COVERAGE_MODULATION_CHROMIUM 0x9332
 #endif /* GL_CHROMIUM_framebuffer_mixed_samples */
+
+#ifndef GL_ARB_occlusion_query
+#define GL_ARB_occlusion_query 1
+#define GL_SAMPLES_PASSED_ARB 0x8914
+#endif /* GL_ARB_occlusion_query */
 
 #ifdef __cplusplus
 }

@@ -34,8 +34,7 @@ class PasswordStoreConsumer {
 
   // Called when the GetLogins() request is finished, with the associated site
   // statistics.
-  virtual void OnGetSiteStatistics(
-      std::vector<std::unique_ptr<InteractionsStats>> stats);
+  virtual void OnGetSiteStatistics(std::vector<InteractionsStats> stats);
 
   // The base::CancelableTaskTracker can be used for cancelling the
   // tasks associated with the consumer.
@@ -46,6 +45,8 @@ class PasswordStoreConsumer {
   base::WeakPtr<PasswordStoreConsumer> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
   }
+
+  bool HasWeakPtrs() const { return weak_ptr_factory_.HasWeakPtrs(); }
 
  protected:
   virtual ~PasswordStoreConsumer();

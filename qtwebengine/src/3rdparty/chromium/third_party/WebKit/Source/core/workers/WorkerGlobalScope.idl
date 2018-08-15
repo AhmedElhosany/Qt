@@ -30,7 +30,7 @@
     ActiveScriptWrappable,
     DependentLifetime,
     Exposed=Worker,
-    ImmutablePrototype,
+    ImmutablePrototype
 ] interface WorkerGlobalScope : EventTarget {
     readonly attribute WorkerGlobalScope self;
     readonly attribute WorkerLocation location;
@@ -53,7 +53,7 @@
     // and is left commented here just for documentation.
 
     // CORS and RFC1918
-    // https://mikewest.github.io/cors-rfc1918/#feature-detect
+    // https://wicg.github.io/cors-rfc1918/#feature-detect
     [RuntimeEnabled=CorsRFC1918, ImplementedAs=addressSpaceForBindings] readonly attribute AddressSpace addressSpace;
 
     // Unhandled Promise Rejection Events
@@ -63,6 +63,9 @@
     // Secure Contexts
     // https://w3c.github.io/webappsec-secure-contexts/#dom-windoworworkerglobalscope-issecurecontext
     [ImplementedAs=isSecureContextForBindings] readonly attribute boolean isSecureContext;
+
+    // https://html.spec.whatwg.org/#windoworworkerglobalscope-mixin
+    [Replaceable] readonly attribute DOMString origin;
 };
 
 WorkerGlobalScope implements WindowBase64;

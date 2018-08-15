@@ -17,12 +17,11 @@ namespace media {
 
 class MEDIA_EXPORT AudioManagerPulse : public AudioManagerBase {
  public:
-  AudioManagerPulse(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> worker_task_runner,
-      AudioLogFactory* audio_log_factory);
-
-  bool Init();
+  AudioManagerPulse(std::unique_ptr<AudioThread> audio_thread,
+                    AudioLogFactory* audio_log_factory,
+                    pa_threaded_mainloop* pa_mainloop,
+                    pa_context* pa_context);
+  ~AudioManagerPulse() override;
 
   // Implementation of AudioManager.
   bool HasAudioOutputDevices() override;
@@ -32,6 +31,7 @@ class MEDIA_EXPORT AudioManagerPulse : public AudioManagerBase {
   void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
   AudioParameters GetInputStreamParameters(
       const std::string& device_id) override;
+  const char* GetName() override;
 
   // Implementation of AudioManagerBase.
   AudioOutputStream* MakeLinearOutputStream(
@@ -51,16 +51,12 @@ class MEDIA_EXPORT AudioManagerPulse : public AudioManagerBase {
       const LogCallback& log_callback) override;
 
  protected:
-  ~AudioManagerPulse() override;
-
+  void ShutdownOnAudioThread() override;
   AudioParameters GetPreferredOutputStreamParameters(
       const std::string& output_device_id,
       const AudioParameters& input_params) override;
 
  private:
-  bool InitPulse();
-  void DestroyPulse();
-
   void GetAudioDeviceNames(bool input, media::AudioDeviceNames* device_names);
 
   // Callback to get the devices' info like names, used by GetInputDevices().

@@ -54,11 +54,12 @@
 #include "net/cert/ct_log_verifier.h"
 #include "net/cert/ct_policy_enforcer.h"
 #include "net/cert/multi_log_ct_verifier.h"
-#include "net/disk_cache/disk_cache.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/mapped_host_resolver.h"
 #include "net/extras/sqlite/sqlite_channel_id_store.h"
 #include "net/http/http_auth_handler_factory.h"
+#include "net/http/http_auth_preferences.h"
+#include "net/http/http_auth_scheme.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties_impl.h"
@@ -175,9 +176,7 @@ void URLRequestContextGetterQt::updateStorageSettings()
         m_proxyConfigService =
                 new ProxyConfigServiceQt(
                     net::ProxyService::CreateSystemProxyConfigService(
-                        content::BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
-                        content::BrowserThread::GetTaskRunnerForThread(BrowserThread::FILE)
-                ));
+                        content::BrowserThread::GetTaskRunnerForThread(BrowserThread::IO)));
         if (m_contextInitialized)
             content::BrowserThread::PostTask(content::BrowserThread::IO, FROM_HERE,
                                              base::Bind(&URLRequestContextGetterQt::generateAllStorage, this));
@@ -189,9 +188,9 @@ void URLRequestContextGetterQt::cancelAllUrlRequests()
     Q_ASSERT(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
     Q_ASSERT(m_urlRequestContext);
 
-    std::set<const net::URLRequest*>* url_requests = m_urlRequestContext->url_requests();
-    std::set<const net::URLRequest*>::const_iterator it = url_requests->begin();
-    std::set<const net::URLRequest*>::const_iterator end = url_requests->end();
+    const std::set<const net::URLRequest*>& url_requests = m_urlRequestContext->url_requests();
+    std::set<const net::URLRequest*>::const_iterator it = url_requests.begin();
+    std::set<const net::URLRequest*>::const_iterator end = url_requests.end();
     for ( ; it != end; ++it) {
         net::URLRequest* request = const_cast<net::URLRequest*>(*it);
         if (request)
@@ -210,6 +209,13 @@ void URLRequestContextGetterQt::generateAllStorage()
     generateHttpCache();
     m_updateAllStorage = false;
 }
+
+static const char* const kDefaultAuthSchemes[] = { net::kBasicAuthScheme,
+                                                   net::kDigestAuthScheme,
+#if defined(USE_KERBEROS) && !defined(OS_ANDROID)
+                                                   net::kNegotiateAuthScheme,
+#endif
+                                                   net::kNtlmAuthScheme };
 
 void URLRequestContextGetterQt::generateStorage()
 {
@@ -253,7 +259,15 @@ void URLRequestContextGetterQt::generateStorage()
     m_storage->set_ssl_config_service(new net::SSLConfigServiceDefaults);
     m_storage->set_transport_security_state(std::unique_ptr<net::TransportSecurityState>(new net::TransportSecurityState()));
 
-    m_storage->set_http_auth_handler_factory(net::HttpAuthHandlerFactory::CreateDefault(host_resolver.get()));
+    if (!m_httpAuthPreferences) {
+        std::vector<std::string> auth_types(std::begin(kDefaultAuthSchemes), std::end(kDefaultAuthSchemes));
+        m_httpAuthPreferences.reset(new net::HttpAuthPreferences(auth_types
+#if defined(OS_POSIX) && !defined(OS_ANDROID)
+                                                                , std::string() /* gssapi library name */
+#endif
+                                   ));
+    }
+    m_storage->set_http_auth_handler_factory(net::HttpAuthHandlerRegistryFactory::Create(m_httpAuthPreferences.get(), host_resolver.get()));
     m_storage->set_http_server_properties(std::unique_ptr<net::HttpServerProperties>(new net::HttpServerPropertiesImpl));
 
      // Give |m_storage| ownership at the end in case it's |mapped_host_resolver|.
@@ -295,8 +309,7 @@ void URLRequestContextGetterQt::generateCookieStore()
 
     m_storage->set_channel_id_service(
             base::WrapUnique(new net::ChannelIDService(
-                    new net::DefaultChannelIDStore(channel_id_db.get()),
-                    base::WorkerPool::GetTaskRunner(true))));
+                    new net::DefaultChannelIDStore(channel_id_db.get()))));
 
     // Unset it first to get a chance to destroy and flush the old cookie store before opening a new on possibly the same file.
     m_storage->set_cookie_store(0);
@@ -411,7 +424,7 @@ void URLRequestContextGetterQt::updateRequestInterceptor()
     // We in this case do not need to regenerate any Chromium classes.
 }
 
-static bool doNetworkSessionParamsMatch(const net::HttpNetworkSession::Params &first, const net::HttpNetworkSession::Params &second)
+static bool doNetworkSessionContextMatch(const net::HttpNetworkSession::Context &first, const net::HttpNetworkSession::Context &second)
 {
     if (first.transport_security_state != second.transport_security_state)
         return false;
@@ -427,8 +440,6 @@ static bool doNetworkSessionParamsMatch(const net::HttpNetworkSession::Params &f
         return false;
     if (first.http_server_properties != second.http_server_properties)
         return false;
-    if (first.ignore_certificate_errors != second.ignore_certificate_errors)
-        return false;
     if (first.host_resolver != second.host_resolver)
         return false;
     if (first.cert_transparency_verifier != second.cert_transparency_verifier)
@@ -439,23 +450,41 @@ static bool doNetworkSessionParamsMatch(const net::HttpNetworkSession::Params &f
     return true;
 }
 
+static bool doNetworkSessionParamsMatch(const net::HttpNetworkSession::Params &first, const net::HttpNetworkSession::Params &second)
+{
+    if (first.ignore_certificate_errors != second.ignore_certificate_errors)
+        return false;
+
+    return true;
+}
+
+net::HttpNetworkSession::Context URLRequestContextGetterQt::generateNetworkSessionContext()
+{
+    Q_ASSERT(m_urlRequestContext);
+
+    net::HttpNetworkSession::Context network_session_context;
+
+    network_session_context.transport_security_state     = m_urlRequestContext->transport_security_state();
+    network_session_context.cert_verifier                = m_urlRequestContext->cert_verifier();
+    network_session_context.channel_id_service           = m_urlRequestContext->channel_id_service();
+    network_session_context.proxy_service                = m_urlRequestContext->proxy_service();
+    network_session_context.ssl_config_service           = m_urlRequestContext->ssl_config_service();
+    network_session_context.http_auth_handler_factory    = m_urlRequestContext->http_auth_handler_factory();
+    network_session_context.http_server_properties       = m_urlRequestContext->http_server_properties();
+    network_session_context.host_resolver                = m_urlRequestContext->host_resolver();
+    network_session_context.cert_transparency_verifier   = m_urlRequestContext->cert_transparency_verifier();
+    network_session_context.ct_policy_enforcer           = m_urlRequestContext->ct_policy_enforcer();
+
+    return network_session_context;
+}
+
 net::HttpNetworkSession::Params URLRequestContextGetterQt::generateNetworkSessionParams()
 {
     Q_ASSERT(m_urlRequestContext);
 
     net::HttpNetworkSession::Params network_session_params;
 
-    network_session_params.transport_security_state     = m_urlRequestContext->transport_security_state();
-    network_session_params.cert_verifier                = m_urlRequestContext->cert_verifier();
-    network_session_params.channel_id_service           = m_urlRequestContext->channel_id_service();
-    network_session_params.proxy_service                = m_urlRequestContext->proxy_service();
-    network_session_params.ssl_config_service           = m_urlRequestContext->ssl_config_service();
-    network_session_params.http_auth_handler_factory    = m_urlRequestContext->http_auth_handler_factory();
-    network_session_params.http_server_properties       = m_urlRequestContext->http_server_properties();
     network_session_params.ignore_certificate_errors    = m_ignoreCertificateErrors;
-    network_session_params.host_resolver                = m_urlRequestContext->host_resolver();
-    network_session_params.cert_transparency_verifier   = m_urlRequestContext->cert_transparency_verifier();
-    network_session_params.ct_policy_enforcer           = m_urlRequestContext->ct_policy_enforcer();
 
     return network_session_params;
 }
@@ -500,33 +529,19 @@ void URLRequestContextGetterQt::generateHttpCache()
     }
 
     net::HttpCache *cache = 0;
+    net::HttpNetworkSession::Context network_session_context = generateNetworkSessionContext();
     net::HttpNetworkSession::Params network_session_params = generateNetworkSessionParams();
 
-    if (!m_httpNetworkSession || !doNetworkSessionParamsMatch(network_session_params, m_httpNetworkSession->params())) {
+    if (!m_httpNetworkSession
+            || !doNetworkSessionParamsMatch(network_session_params, m_httpNetworkSession->params())
+            || !doNetworkSessionContextMatch(network_session_context, m_httpNetworkSession->context())) {
         cancelAllUrlRequests();
-        m_httpNetworkSession.reset(new net::HttpNetworkSession(network_session_params));
+        m_httpNetworkSession.reset(new net::HttpNetworkSession(network_session_params, network_session_context));
     }
 
     cache = new net::HttpCache(m_httpNetworkSession.get(), std::unique_ptr<net::HttpCache::DefaultBackend>(main_backend), false);
 
     m_storage->set_http_transaction_factory(std::unique_ptr<net::HttpCache>(cache));
-}
-
-void URLRequestContextGetterQt::clearHttpCache()
-{
-    if (m_urlRequestContext)
-        content::BrowserThread::PostTask(content::BrowserThread::IO, FROM_HERE, base::Bind(&URLRequestContextGetterQt::clearCurrentCacheBackend, this));
-}
-
-static void doomCallback(int error_code) { Q_UNUSED(error_code); }
-
-void URLRequestContextGetterQt::clearCurrentCacheBackend()
-{
-    if (m_urlRequestContext->http_transaction_factory() && m_urlRequestContext->http_transaction_factory()->GetCache()) {
-        disk_cache::Backend *backend = m_urlRequestContext->http_transaction_factory()->GetCache()->GetCurrentBackend();
-        if (backend)
-            backend->DoomAllEntries(base::Bind(&doomCallback));
-    }
 }
 
 void URLRequestContextGetterQt::generateJobFactory()
@@ -572,10 +587,11 @@ void URLRequestContextGetterQt::generateJobFactory()
     // Set up interceptors in the reverse order.
     std::unique_ptr<net::URLRequestJobFactory> topJobFactory = std::move(jobFactory);
 
-    for (content::URLRequestInterceptorScopedVector::reverse_iterator i = m_requestInterceptors.rbegin(); i != m_requestInterceptors.rend(); ++i)
-        topJobFactory.reset(new net::URLRequestInterceptingJobFactory(std::move(topJobFactory), std::unique_ptr<net::URLRequestInterceptor>(*i)));
+    for (content::URLRequestInterceptorScopedVector::reverse_iterator i = m_requestInterceptors.rbegin(); i != m_requestInterceptors.rend(); ++i) {
+        topJobFactory.reset(new net::URLRequestInterceptingJobFactory(std::move(topJobFactory), std::move(*i)));
+    }
 
-    m_requestInterceptors.weak_clear();
+    m_requestInterceptors.clear();
 
     m_jobFactory = std::move(topJobFactory);
 

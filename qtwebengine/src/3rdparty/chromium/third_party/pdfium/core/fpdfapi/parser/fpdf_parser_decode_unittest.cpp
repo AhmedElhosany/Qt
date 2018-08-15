@@ -31,7 +31,7 @@ TEST(fpdf_parser_decode, A85Decode) {
     uint8_t* result = nullptr;
     uint32_t result_size = 0;
     EXPECT_EQ(ptr->processed_size,
-              A85Decode(ptr->input, ptr->input_size, result, result_size))
+              A85Decode(ptr->input, ptr->input_size, &result, &result_size))
         << "for case " << i;
     ASSERT_EQ(ptr->expected_size, result_size);
     for (size_t j = 0; j < result_size; ++j) {
@@ -66,7 +66,7 @@ TEST(fpdf_parser_decode, HexDecode) {
     uint8_t* result = nullptr;
     uint32_t result_size = 0;
     EXPECT_EQ(ptr->processed_size,
-              HexDecode(ptr->input, ptr->input_size, result, result_size))
+              HexDecode(ptr->input, ptr->input_size, &result, &result_size))
         << "for case " << i;
     ASSERT_EQ(ptr->expected_size, result_size);
     for (size_t j = 0; j < result_size; ++j) {
@@ -74,5 +74,38 @@ TEST(fpdf_parser_decode, HexDecode) {
                                              << j;
     }
     FX_Free(result);
+  }
+}
+
+TEST(fpdf_parser_decode, EncodeText) {
+  struct EncodeTestData {
+    const wchar_t* input;
+    const char* expected_output;
+    FX_STRSIZE expected_length;
+  } test_data[] = {
+      // Empty src string.
+      {L"", "", 0},
+      // ASCII text.
+      {L"the quick\tfox", "the quick\tfox", 13},
+      // Unicode text.
+      {L"\x0330\x0331", "\xFE\xFF\x03\x30\x03\x31", 6},
+      // More Unicode text.
+      {L"\x7F51\x9875\x0020\x56FE\x7247\x0020"
+       L"\x8D44\x8BAF\x66F4\x591A\x0020\x00BB",
+       "\xFE\xFF\x7F\x51\x98\x75\x00\x20\x56\xFE\x72\x47\x00"
+       "\x20\x8D\x44\x8B\xAF\x66\xF4\x59\x1A\x00\x20\x00\xBB",
+       26},
+  };
+
+  for (size_t i = 0; i < FX_ArraySize(test_data); ++i) {
+    const auto& test_case = test_data[i];
+    CFX_ByteString output = PDF_EncodeText(test_case.input);
+    ASSERT_EQ(test_case.expected_length, output.GetLength()) << "for case "
+                                                             << i;
+    const char* str_ptr = output.c_str();
+    for (FX_STRSIZE j = 0; j < test_case.expected_length; ++j) {
+      EXPECT_EQ(test_case.expected_output[j], str_ptr[j]) << "for case " << i
+                                                          << " char " << j;
+    }
   }
 }

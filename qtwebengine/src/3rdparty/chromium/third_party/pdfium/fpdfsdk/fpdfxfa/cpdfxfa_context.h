@@ -8,16 +8,20 @@
 #define FPDFSDK_FPDFXFA_CPDFXFA_CONTEXT_H_
 
 #include <memory>
+#include <vector>
 
+#include "core/fxcrt/cfx_observable.h"
+#include "core/fxcrt/cfx_unowned_ptr.h"
+#include "core/fxcrt/fx_system.h"
 #include "fpdfsdk/fpdfxfa/cpdfxfa_docenvironment.h"
-#include "xfa/fxfa/xfa_ffdoc.h"
+#include "fpdfsdk/fpdfxfa/cpdfxfa_page.h"
+#include "xfa/fxfa/cxfa_ffdoc.h"
 
 class CJS_Runtime;
 class CPDFSDK_FormFillEnvironment;
-class CPDFXFA_Page;
 class CXFA_FFDocHandler;
+class IJS_EventContext;
 class IJS_Runtime;
-class IJS_Context;
 
 enum LoadStatus {
   FXFA_LOADSTATUS_PRELOAD = 0,
@@ -29,34 +33,33 @@ enum LoadStatus {
 
 class CPDFXFA_Context : public IXFA_AppProvider {
  public:
-  CPDFXFA_Context(std::unique_ptr<CPDF_Document> pPDFDoc);
+  explicit CPDFXFA_Context(std::unique_ptr<CPDF_Document> pPDFDoc);
   ~CPDFXFA_Context() override;
 
   bool LoadXFADoc();
   CPDF_Document* GetPDFDoc() { return m_pPDFDoc.get(); }
   CXFA_FFDoc* GetXFADoc() { return m_pXFADoc.get(); }
-  CXFA_FFDocView* GetXFADocView() { return m_pXFADocView; }
-  int GetDocType() const { return m_iDocType; }
+  CXFA_FFDocView* GetXFADocView() { return m_pXFADocView.Get(); }
+  XFA_DocType GetDocType() const { return m_iDocType; }
   v8::Isolate* GetJSERuntime() const;
   CXFA_FFApp* GetXFAApp() { return m_pXFAApp.get(); }
 
-  CPDFSDK_FormFillEnvironment* GetFormFillEnv() const { return m_pFormFillEnv; }
+  CPDFSDK_FormFillEnvironment* GetFormFillEnv() const {
+    return m_pFormFillEnv.Get();
+  }
   void SetFormFillEnv(CPDFSDK_FormFillEnvironment* pFormFillEnv);
 
-  void DeletePage(int page_index);
   int GetPageCount() const;
-
-  CPDFXFA_Page* GetXFAPage(int page_index);
-  CPDFXFA_Page* GetXFAPage(CXFA_FFPageView* pPage) const;
-
-  void RemovePage(CPDFXFA_Page* page);
-
+  void DeletePage(int page_index);
+  CFX_RetainPtr<CPDFXFA_Page> GetXFAPage(int page_index);
+  CFX_RetainPtr<CPDFXFA_Page> GetXFAPage(CXFA_FFPageView* pPage) const;
   void ClearChangeMark();
 
   // IFXA_AppProvider:
-  void GetLanguage(CFX_WideString& wsLanguage) override;
-  void GetPlatform(CFX_WideString& wsPlatform) override;
-  void GetAppName(CFX_WideString& wsName) override;
+  CFX_WideString GetLanguage() override;
+  CFX_WideString GetPlatform() override;
+  CFX_WideString GetAppName() override;
+  CFX_WideString GetAppTitle() const override;
 
   void Beep(uint32_t dwType) override;
   int32_t MsgBox(const CFX_WideString& wsMessage,
@@ -67,7 +70,8 @@ class CPDFXFA_Context : public IXFA_AppProvider {
                           const CFX_WideString& wsTitle,
                           const CFX_WideString& wsDefaultAnswer,
                           bool bMark) override;
-  IFX_SeekableReadStream* DownloadURL(const CFX_WideString& wsURL) override;
+  CFX_RetainPtr<IFX_SeekableReadStream> DownloadURL(
+      const CFX_WideString& wsURL) override;
   bool PostRequestURL(const CFX_WideString& wsURL,
                       const CFX_WideString& wsData,
                       const CFX_WideString& wsContentType,
@@ -78,7 +82,6 @@ class CPDFXFA_Context : public IXFA_AppProvider {
                      const CFX_WideString& wsData,
                      const CFX_WideString& wsEncode) override;
 
-  void LoadString(int32_t iStringID, CFX_WideString& wsString) override;
   IFWL_AdapterTimerMgr* GetTimerMgr() override;
 
  protected:
@@ -87,25 +90,25 @@ class CPDFXFA_Context : public IXFA_AppProvider {
   int GetOriginalPageCount() const { return m_nPageCount; }
   void SetOriginalPageCount(int count) {
     m_nPageCount = count;
-    m_XFAPageList.SetSize(count);
+    m_XFAPageList.resize(count);
   }
 
   LoadStatus GetLoadStatus() const { return m_nLoadStatus; }
-
-  CFX_ArrayTemplate<CPDFXFA_Page*>* GetXFAPageList() { return &m_XFAPageList; }
+  std::vector<CFX_RetainPtr<CPDFXFA_Page>>* GetXFAPageList() {
+    return &m_XFAPageList;
+  }
 
  private:
   void CloseXFADoc();
 
-  int m_iDocType;
-
+  XFA_DocType m_iDocType;
   std::unique_ptr<CPDF_Document> m_pPDFDoc;
   std::unique_ptr<CXFA_FFDoc> m_pXFADoc;
-  CPDFSDK_FormFillEnvironment* m_pFormFillEnv;  // not owned.
-  CXFA_FFDocView* m_pXFADocView;                // not owned.
+  CFX_Observable<CPDFSDK_FormFillEnvironment>::ObservedPtr m_pFormFillEnv;
+  CFX_UnownedPtr<CXFA_FFDocView> m_pXFADocView;
   std::unique_ptr<CXFA_FFApp> m_pXFAApp;
   std::unique_ptr<CJS_Runtime> m_pRuntime;
-  CFX_ArrayTemplate<CPDFXFA_Page*> m_XFAPageList;
+  std::vector<CFX_RetainPtr<CPDFXFA_Page>> m_XFAPageList;
   LoadStatus m_nLoadStatus;
   int m_nPageCount;
 

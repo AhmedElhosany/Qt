@@ -27,6 +27,10 @@ std::unique_ptr<Scope> UncachedImport(const Settings* settings,
   std::unique_ptr<Scope> scope(new Scope(settings->base_config()));
   scope->set_source_dir(file.GetDir());
 
+  const Location& location = node->GetRange().begin();
+  if (!location.is_null())
+    scope->AddInputFile(location.file());
+
   // Don't allow ScopePerFileProvider to provide target-related variables.
   // These will be relative to the imported file, which is probably not what
   // people mean when they use these.
@@ -111,7 +115,7 @@ bool ImportManager::DoImport(const SourceFile& file,
           base::TimeDelta::FromMilliseconds(20);
       if (TracingEnabled() &&
           import_block_end - import_block_begin > kImportBlockTraceThreshold) {
-        auto import_block_trace =
+        auto* import_block_trace =
             new TraceItem(TraceItem::TRACE_IMPORT_BLOCK, file.value(),
                           base::PlatformThread::CurrentId());
         import_block_trace->set_begin(import_block_begin);

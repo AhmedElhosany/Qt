@@ -119,8 +119,7 @@ QQuickTextFieldPrivate::QQuickTextFieldPrivate()
       explicitHoverEnabled(false),
 #endif
       background(nullptr),
-      focusReason(Qt::OtherFocusReason),
-      accessibleAttached(nullptr)
+      focusReason(Qt::OtherFocusReason)
 {
 #if QT_CONFIG(accessibility)
     QAccessible::installActivationObserver(this);
@@ -164,19 +163,69 @@ void QQuickTextFieldPrivate::resolveFont()
     inheritFont(QQuickControlPrivate::parentFont(q));
 }
 
-void QQuickTextFieldPrivate::inheritFont(const QFont &f)
+void QQuickTextFieldPrivate::inheritFont(const QFont &font)
 {
-    Q_Q(QQuickTextField);
-    QFont parentFont = font.resolve(f);
-    parentFont.resolve(font.resolve() | f.resolve());
+    QFont parentFont = extra.isAllocated() ? extra->requestedFont.resolve(font) : font;
+    parentFont.resolve(extra.isAllocated() ? extra->requestedFont.resolve() | font.resolve() : font.resolve());
 
     const QFont defaultFont = QQuickControlPrivate::themeFont(QPlatformTheme::EditorFont);
     const QFont resolvedFont = parentFont.resolve(defaultFont);
 
-    const bool changed = resolvedFont != sourceFont;
-    q->QQuickTextInput::setFont(resolvedFont);
-    if (changed)
+    setFont_helper(resolvedFont);
+}
+
+/*!
+    \internal
+
+    Assign \a font to this control, and propagate it to all children.
+*/
+void QQuickTextFieldPrivate::updateFont(const QFont &font)
+{
+    Q_Q(QQuickTextField);
+    QFont oldFont = sourceFont;
+    q->QQuickTextInput::setFont(font);
+
+    QQuickControlPrivate::updateFontRecur(q, font);
+
+    if (oldFont != font)
         emit q->fontChanged();
+}
+
+/*!
+    \internal
+
+    Determine which palette is implicitly imposed on this control by its ancestors
+    and QGuiApplication::palette, resolve this against its own palette (attributes from
+    the implicit palette are copied over). Then propagate this palette to this
+    control's children.
+*/
+void QQuickTextFieldPrivate::resolvePalette()
+{
+    Q_Q(QQuickTextField);
+    inheritPalette(QQuickControlPrivate::parentPalette(q));
+}
+
+void QQuickTextFieldPrivate::inheritPalette(const QPalette &palette)
+{
+    QPalette parentPalette = extra.isAllocated() ? extra->requestedPalette.resolve(palette) : palette;
+    parentPalette.resolve(extra.isAllocated() ? extra->requestedPalette.resolve() | palette.resolve() : palette.resolve());
+
+    const QPalette defaultPalette = QQuickControlPrivate::themePalette(QPlatformTheme::TextLineEditPalette);
+    const QPalette resolvedPalette = parentPalette.resolve(defaultPalette);
+
+    setPalette_helper(resolvedPalette);
+}
+
+void QQuickTextFieldPrivate::updatePalette(const QPalette &palette)
+{
+    Q_Q(QQuickTextField);
+    QPalette oldPalette = resolvedPalette;
+    resolvedPalette = palette;
+
+    QQuickControlPrivate::updatePaletteRecur(q, palette);
+
+    if (oldPalette != palette)
+        emit q->paletteChanged();
 }
 
 #if QT_CONFIG(quicktemplates2_hover)
@@ -224,7 +273,7 @@ void QQuickTextFieldPrivate::readOnlyChanged(bool isReadOnly)
 {
     Q_UNUSED(isReadOnly);
 #if QT_CONFIG(accessibility)
-    if (accessibleAttached)
+    if (QQuickAccessibleAttached *accessibleAttached = QQuickControlPrivate::accessibleAttached(q_func()))
         accessibleAttached->set_readOnly(isReadOnly);
 #endif
 #if QT_CONFIG(cursor)
@@ -235,7 +284,7 @@ void QQuickTextFieldPrivate::readOnlyChanged(bool isReadOnly)
 void QQuickTextFieldPrivate::echoModeChanged(QQuickTextField::EchoMode echoMode)
 {
 #if QT_CONFIG(accessibility)
-    if (accessibleAttached)
+    if (QQuickAccessibleAttached *accessibleAttached = QQuickControlPrivate::accessibleAttached(q_func()))
         accessibleAttached->set_passwordEdit((echoMode == QQuickTextField::Password || echoMode == QQuickTextField::PasswordEchoOnEdit) ? true : false);
 #else
     Q_UNUSED(echoMode)
@@ -245,19 +294,16 @@ void QQuickTextFieldPrivate::echoModeChanged(QQuickTextField::EchoMode echoMode)
 #if QT_CONFIG(accessibility)
 void QQuickTextFieldPrivate::accessibilityActiveChanged(bool active)
 {
-    if (accessibleAttached || !active)
+    if (!active)
         return;
 
     Q_Q(QQuickTextField);
-    accessibleAttached = qobject_cast<QQuickAccessibleAttached *>(qmlAttachedPropertiesObject<QQuickAccessibleAttached>(q, true));
-    if (accessibleAttached) {
-        accessibleAttached->setRole(accessibleRole());
-        accessibleAttached->set_readOnly(m_readOnly);
-        accessibleAttached->set_passwordEdit((m_echoMode == QQuickTextField::Password || m_echoMode == QQuickTextField::PasswordEchoOnEdit) ? true : false);
-        accessibleAttached->setDescription(placeholder);
-    } else {
-        qWarning() << "QQuickTextField: " << q << " QQuickAccessibleAttached object creation failed!";
-    }
+    QQuickAccessibleAttached *accessibleAttached = qobject_cast<QQuickAccessibleAttached *>(qmlAttachedPropertiesObject<QQuickAccessibleAttached>(q, true));
+    Q_ASSERT(accessibleAttached);
+    accessibleAttached->setRole(accessibleRole());
+    accessibleAttached->set_readOnly(m_readOnly);
+    accessibleAttached->set_passwordEdit((m_echoMode == QQuickTextField::Password || m_echoMode == QQuickTextField::PasswordEchoOnEdit) ? true : false);
+    accessibleAttached->setDescription(placeholder);
 }
 
 QAccessible::Role QQuickTextFieldPrivate::accessibleRole() const
@@ -309,10 +355,10 @@ QFont QQuickTextField::font() const
 void QQuickTextField::setFont(const QFont &font)
 {
     Q_D(QQuickTextField);
-    if (d->font.resolve() == font.resolve() && d->font == font)
+    if (d->extra.value().requestedFont.resolve() == font.resolve() && d->extra.value().requestedFont == font)
         return;
 
-    d->font = font;
+    d->extra.value().requestedFont = font;
     d->resolveFont();
 }
 
@@ -375,8 +421,8 @@ void QQuickTextField::setPlaceholderText(const QString &text)
 
     d->placeholder = text;
 #if QT_CONFIG(accessibility)
-    if (d->accessibleAttached)
-        d->accessibleAttached->setDescription(text);
+    if (QQuickAccessibleAttached *accessibleAttached = QQuickControlPrivate::accessibleAttached(this))
+        accessibleAttached->setDescription(text);
 #endif
     emit placeholderTextChanged();
 }
@@ -478,11 +524,44 @@ void QQuickTextField::resetHoverEnabled()
 #endif
 }
 
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty palette QtQuick.Controls::TextField::palette
+
+    This property holds the palette currently set for the text field.
+
+    \sa Control::palette
+*/
+QPalette QQuickTextField::palette() const
+{
+    Q_D(const QQuickTextField);
+    QPalette palette = d->resolvedPalette;
+    if (!isEnabled())
+        palette.setCurrentColorGroup(QPalette::Disabled);
+    return palette;
+}
+
+void QQuickTextField::setPalette(const QPalette &palette)
+{
+    Q_D(QQuickTextField);
+    if (d->extra.value().requestedPalette.resolve() == palette.resolve() && d->extra.value().requestedPalette == palette)
+        return;
+
+    d->extra.value().requestedPalette = palette;
+    d->resolvePalette();
+}
+
+void QQuickTextField::resetPalette()
+{
+    setPalette(QPalette());
+}
+
 void QQuickTextField::classBegin()
 {
     Q_D(QQuickTextField);
     QQuickTextInput::classBegin();
     d->resolveFont();
+    d->resolvePalette();
 }
 
 void QQuickTextField::componentComplete()
@@ -490,13 +569,12 @@ void QQuickTextField::componentComplete()
     Q_D(QQuickTextField);
     d->executeBackground(true);
     QQuickTextInput::componentComplete();
-    d->resizeBackground();
 #if QT_CONFIG(quicktemplates2_hover)
     if (!d->explicitHoverEnabled)
         setAcceptHoverEvents(QQuickControlPrivate::calcHoverEnabled(d->parentItem));
 #endif
 #if QT_CONFIG(accessibility)
-    if (!d->accessibleAttached && QAccessible::isActive())
+    if (QAccessible::isActive())
         d->accessibilityActiveChanged(true);
 #endif
 }
@@ -505,12 +583,23 @@ void QQuickTextField::itemChange(QQuickItem::ItemChange change, const QQuickItem
 {
     Q_D(QQuickTextField);
     QQuickTextInput::itemChange(change, value);
-    if ((change == ItemParentHasChanged && value.item) || (change == ItemSceneChange && value.window)) {
-        d->resolveFont();
+    switch (change) {
+    case ItemEnabledHasChanged:
+        emit paletteChanged();
+        break;
+    case ItemSceneChange:
+    case ItemParentHasChanged:
+        if ((change == ItemParentHasChanged && value.item) || (change == ItemSceneChange && value.window)) {
+            d->resolveFont();
+            d->resolvePalette();
 #if QT_CONFIG(quicktemplates2_hover)
-        if (!d->explicitHoverEnabled)
-            d->updateHoverEnabled(QQuickControlPrivate::calcHoverEnabled(d->parentItem), false); // explicit=false
+            if (!d->explicitHoverEnabled)
+                d->updateHoverEnabled(QQuickControlPrivate::calcHoverEnabled(d->parentItem), false); // explicit=false
 #endif
+        }
+        break;
+    default:
+        break;
     }
 }
 

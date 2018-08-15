@@ -10,16 +10,20 @@ import shutil
 import tempfile
 import threading
 
+import devil_chromium
 from devil import base_error
 from devil.android import device_blacklist
 from devil.android import device_errors
 from devil.android import device_list
 from devil.android import device_utils
 from devil.android import logcat_monitor
+from devil.android.sdk import adb_wrapper
 from devil.utils import file_utils
 from devil.utils import parallelizer
 from pylib import constants
 from pylib.base import environment
+from pylib.utils import instrumentation_tracing
+from py_trace_event import trace_event
 
 
 def _DeviceCachePath(device):
@@ -78,7 +82,7 @@ class LocalDeviceEnvironment(environment.Environment):
     self._blacklist = (device_blacklist.Blacklist(args.blacklist_file)
                        if args.blacklist_file
                        else None)
-    self._device_serial = args.test_device
+    self._device_serials = args.test_devices
     self._devices_lock = threading.Lock()
     self._devices = None
     self._concurrent_adb = args.enable_concurrent_adb
@@ -90,10 +94,31 @@ class LocalDeviceEnvironment(environment.Environment):
     self._skip_clear_data = args.skip_clear_data
     self._target_devices_file = args.target_devices_file
     self._tool_name = args.tool
+    self._trace_output = None
+    if hasattr(args, 'trace_output'):
+      self._trace_output = args.trace_output
+    self._trace_all = None
+    if hasattr(args, 'trace_all'):
+      self._trace_all = args.trace_all
+
+    devil_chromium.Initialize(
+        output_directory=constants.GetOutDirectory(),
+        adb_path=args.adb_path)
+
+    # Some things such as Forwarder require ADB to be in the environment path.
+    adb_dir = os.path.dirname(adb_wrapper.AdbWrapper.GetAdbPath())
+    if adb_dir and adb_dir not in os.environ['PATH'].split(os.pathsep):
+      os.environ['PATH'] = adb_dir + os.pathsep + os.environ['PATH']
 
   #override
   def SetUp(self):
-    pass
+    if self.trace_output and self._trace_all:
+      to_include = [r"pylib\..*", r"devil\..*", "__main__"]
+      to_exclude = ["logging"]
+      instrumentation_tracing.start_instrumenting(self.trace_output, to_include,
+                                                  to_exclude)
+    elif self.trace_output:
+      self.EnableTracing()
 
   def _InitDevices(self):
     device_arg = 'default'
@@ -107,20 +132,22 @@ class LocalDeviceEnvironment(environment.Environment):
       else:
         logging.info(
             'Read device list %s from target devices file.', str(device_arg))
-    elif self._device_serial:
-      device_arg = self._device_serial
+    elif self._device_serials:
+      device_arg = self._device_serials
 
     self._devices = device_utils.DeviceUtils.HealthyDevices(
         self._blacklist, enable_device_files_cache=self._enable_device_cache,
         default_retries=self._max_tries - 1, device_arg=device_arg)
     if not self._devices:
-      raise device_errors.NoDevicesError
+      raise device_errors.NoDevicesError('No devices were available')
 
     if self._logcat_output_file:
       self._logcat_output_dir = tempfile.mkdtemp()
 
     @handle_shard_failures_with(on_failure=self.BlacklistDevice)
     def prepare_device(d):
+      d.WaitUntilFullyBooted()
+
       if self._enable_device_cache:
         cache_path = _DeviceCachePath(d)
         if os.path.exists(cache_path):
@@ -156,8 +183,6 @@ class LocalDeviceEnvironment(environment.Environment):
     # attached.
     if self._devices is None:
       self._InitDevices()
-    if not self._devices:
-      raise device_errors.NoDevicesError()
     return self._devices
 
   @property
@@ -176,10 +201,18 @@ class LocalDeviceEnvironment(environment.Environment):
   def tool(self):
     return self._tool_name
 
+  @property
+  def trace_output(self):
+    return self._trace_output
+
   #override
   def TearDown(self):
-    if self._devices is None:
+    if self.trace_output:
+      self.DisableTracing()
+
+    if not self._devices:
       return
+
     @handle_shard_failures_with(on_failure=self.BlacklistDevice)
     def tear_down_device(d):
       # Write the cache even when not using it so that it will be ready the
@@ -187,9 +220,14 @@ class LocalDeviceEnvironment(environment.Environment):
       # so that an invalid cache can be flushed just by disabling it for one
       # run.
       cache_path = _DeviceCachePath(d)
-      with open(cache_path, 'w') as f:
-        f.write(d.DumpCacheData())
-        logging.info('Wrote device cache: %s', cache_path)
+      if os.path.exists(os.path.dirname(cache_path)):
+        with open(cache_path, 'w') as f:
+          f.write(d.DumpCacheData())
+          logging.info('Wrote device cache: %s', cache_path)
+      else:
+        logging.warning(
+            'Unable to write device cache as %s directory does not exist',
+            os.path.dirname(cache_path))
 
     self.parallel_devices.pMap(tear_down_device)
 
@@ -223,4 +261,20 @@ class LocalDeviceEnvironment(environment.Environment):
       self._blacklist.Extend([device_serial], reason=reason)
     with self._devices_lock:
       self._devices = [d for d in self._devices if str(d) != device_serial]
+    logging.error('Device %s blacklisted: %s', device_serial, reason)
+    if not self._devices:
+      raise device_errors.NoDevicesError(
+          'All devices were blacklisted due to errors')
 
+  @staticmethod
+  def DisableTracing():
+    if not trace_event.trace_is_enabled():
+      logging.warning('Tracing is not running.')
+    else:
+      trace_event.trace_disable()
+
+  def EnableTracing(self):
+    if trace_event.trace_is_enabled():
+      logging.warning('Tracing is already running.')
+    else:
+      trace_event.trace_enable(self._trace_output)

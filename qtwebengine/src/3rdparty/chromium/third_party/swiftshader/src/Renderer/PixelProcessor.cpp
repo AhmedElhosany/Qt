@@ -444,6 +444,15 @@ namespace sw
 		else ASSERT(false);
 	}
 
+	void PixelProcessor::setHighPrecisionFiltering(unsigned int sampler, bool highPrecisionFiltering)
+	{
+		if(sampler < TEXTURE_IMAGE_UNITS)
+		{
+			context->sampler[sampler].setHighPrecisionFiltering(highPrecisionFiltering);
+		}
+		else ASSERT(false);
+	}
+
 	void PixelProcessor::setSwizzleR(unsigned int sampler, SwizzleType swizzleR)
 	{
 		if(sampler < TEXTURE_IMAGE_UNITS)
@@ -972,9 +981,7 @@ namespace sw
 		{
 			state.depthTestActive = true;
 			state.depthCompareMode = context->depthCompareMode;
-			state.quadLayoutDepthBuffer = context->depthBuffer->getInternalFormat() != FORMAT_D32F_LOCKABLE &&
-			                              context->depthBuffer->getInternalFormat() != FORMAT_D32FS8_TEXTURE &&
-			                              context->depthBuffer->getInternalFormat() != FORMAT_D32FS8_SHADOW;
+			state.quadLayoutDepthBuffer = Surface::hasQuadLayout(context->depthBuffer->getInternalFormat());
 		}
 
 		state.occlusionEnabled = context->occlusionEnabled;

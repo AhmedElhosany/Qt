@@ -158,6 +158,7 @@
 #include "QtWidgets/qapplication.h"
 #include "QtGui/qevent.h"
 #include "QtWidgets/qdesktopwidget.h"
+#include <private/qdesktopwidget_p.h>
 #if QT_CONFIG(lineedit)
 #include "QtWidgets/qlineedit.h"
 #endif
@@ -496,18 +497,25 @@ QMatchData QCompletionEngine::filterHistory()
 }
 
 // Returns a match hint from the cache by chopping the search string
-bool QCompletionEngine::matchHint(QString part, const QModelIndex& parent, QMatchData *hint)
+bool QCompletionEngine::matchHint(const QString &part, const QModelIndex &parent, QMatchData *hint) const
 {
-    if (c->cs == Qt::CaseInsensitive)
-        part = std::move(part).toLower();
+    if (part.isEmpty())
+        return false; // early out to avoid cache[parent] lookup costs
 
-    const CacheItem& map = cache[parent];
+    const auto cit = cache.find(parent);
+    if (cit == cache.end())
+        return false;
 
-    QString key = part;
+    const CacheItem& map = *cit;
+    const auto mapEnd = map.end();
+
+    QString key = c->cs == Qt::CaseInsensitive ? part.toLower() : part;
+
     while (!key.isEmpty()) {
         key.chop(1);
-        if (map.contains(key)) {
-            *hint = map[key];
+        const auto it = map.find(key);
+        if (it != mapEnd) {
+            *hint = *it;
             return true;
         }
     }
@@ -515,15 +523,25 @@ bool QCompletionEngine::matchHint(QString part, const QModelIndex& parent, QMatc
     return false;
 }
 
-bool QCompletionEngine::lookupCache(QString part, const QModelIndex& parent, QMatchData *m)
+bool QCompletionEngine::lookupCache(const QString &part, const QModelIndex &parent, QMatchData *m) const
 {
-   if (c->cs == Qt::CaseInsensitive)
-        part = std::move(part).toLower();
-   const CacheItem& map = cache[parent];
-   if (!map.contains(part))
-       return false;
-   *m = map[part];
-   return true;
+    if (part.isEmpty())
+        return false; // early out to avoid cache[parent] lookup costs
+
+    const auto cit = cache.find(parent);
+    if (cit == cache.end())
+        return false;
+
+    const CacheItem& map = *cit;
+
+    const QString key = c->cs == Qt::CaseInsensitive ? part.toLower() : part;
+
+    const auto it = map.find(key);
+    if (it == map.end())
+        return false;
+
+    *m = it.value();
+    return true;
 }
 
 // When the cache size exceeds 1MB, it clears out about 1/2 of the cache.
@@ -905,7 +923,7 @@ void QCompleterPrivate::_q_autoResizePopup()
 
 void QCompleterPrivate::showPopup(const QRect& rect)
 {
-    const QRect screen = QApplication::desktop()->availableGeometry(widget);
+    const QRect screen = QDesktopWidgetPrivate::availableGeometry(widget);
     Qt::LayoutDirection dir = widget->layoutDirection();
     QPoint pos;
     int rh, w;

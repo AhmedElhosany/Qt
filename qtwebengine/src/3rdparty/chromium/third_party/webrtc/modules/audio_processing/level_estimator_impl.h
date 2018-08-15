@@ -13,14 +13,14 @@
 
 #include <memory>
 
-#include "webrtc/base/constructormagic.h"
-#include "webrtc/base/criticalsection.h"
 #include "webrtc/modules/audio_processing/include/audio_processing.h"
+#include "webrtc/rtc_base/constructormagic.h"
+#include "webrtc/rtc_base/criticalsection.h"
 
 namespace webrtc {
 
 class AudioBuffer;
-class RMSLevel;
+class RmsLevel;
 
 class LevelEstimatorImpl : public LevelEstimator {
  public:
@@ -39,7 +39,7 @@ class LevelEstimatorImpl : public LevelEstimator {
  private:
   rtc::CriticalSection* const crit_ = nullptr;
   bool enabled_ GUARDED_BY(crit_) = false;
-  std::unique_ptr<RMSLevel> rms_ GUARDED_BY(crit_);
+  std::unique_ptr<RmsLevel> rms_ GUARDED_BY(crit_);
   RTC_DISALLOW_IMPLICIT_CONSTRUCTORS(LevelEstimatorImpl);
 };
 }  // namespace webrtc

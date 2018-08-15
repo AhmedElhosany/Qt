@@ -12,7 +12,9 @@
 
 namespace ui {
 
+struct AXActionData;
 struct AXNodeData;
+struct AXTreeData;
 class AXPlatformNode;
 
 // An object that wants to be accessible should derive from this class.
@@ -33,7 +35,10 @@ class AX_EXPORT AXPlatformNodeDelegate {
   // Virtually all of the information is obtained from this structure
   // (role, state, name, cursor position, etc.) - the rest of this interface
   // is mostly to implement support for walking the accessibility tree.
-  virtual const AXNodeData& GetData() = 0;
+  virtual const AXNodeData& GetData() const = 0;
+
+  // Get the accessibility tree data for this node.
+  virtual const ui::AXTreeData& GetTreeData() const = 0;
 
   // Get the window the node is contained in.
   virtual gfx::NativeWindow GetTopLevelWidget() = 0;
@@ -48,8 +53,8 @@ class AX_EXPORT AXPlatformNodeDelegate {
   // Get the child of a node given a 0-based index.
   virtual gfx::NativeViewAccessible ChildAtIndex(int index) = 0;
 
-  // Get the offset to convert local coordinates to screen global coordinates.
-  virtual gfx::Vector2d GetGlobalCoordinateOffset() = 0;
+  // Get the bounds of this node in screen coordinates.
+  virtual gfx::Rect GetScreenBoundsRect() const = 0;
 
   // Do a *synchronous* hit test of the given location in global screen
   // coordinates, and the node within this node's subtree (inclusive) that's
@@ -68,6 +73,8 @@ class AX_EXPORT AXPlatformNodeDelegate {
   // has focus.
   virtual gfx::NativeViewAccessible GetFocus() = 0;
 
+  virtual ui::AXPlatformNode* GetFromNodeID(int32_t id) = 0;
+
   //
   // Events.
   //
@@ -80,23 +87,19 @@ class AX_EXPORT AXPlatformNodeDelegate {
   // Actions.
   //
 
-  // Perform the default action, e.g. click a button, follow a link, or
-  // toggle a checkbox.
-  virtual void DoDefaultAction() = 0;
+  // Perform an accessibility action, switching on the ui::AXAction
+  // provided in |data|.
+  virtual bool AccessibilityPerformAction(const ui::AXActionData& data) = 0;
 
-  // Change the value of a control, such as the text content of a text field.
-  // If |clear_first| is true, this replaces all text with the |new_value|.
-  // Otherwise this inserts |new_value| at the cursor position, replacing any
-  // selected text. The cursor is placed at the end of |new_value|.
-  virtual bool SetStringValue(const base::string16& new_value,
-                              bool clear_first) = 0;
+  //
+  // Testing.
+  //
 
-  // Whether SetStringValue() is callable, i.e. if the string value is not read
-  // only and if the callback exists.
-  virtual bool CanSetStringValue() = 0;
-
-  // Focus or unfocus a View, checking if the View is focusable first.
-  virtual bool SetFocused(bool focused) = 0;
+  // Accessibility objects can have the "hot tracked" state set when
+  // the mouse is hovering over them, but this makes tests flaky because
+  // the test behaves differently when the mouse happens to be over an
+  // element. The default value should be falses if not in testing mode.
+  virtual bool ShouldIgnoreHoveredStateForTesting() = 0;
 };
 
 }  // namespace ui

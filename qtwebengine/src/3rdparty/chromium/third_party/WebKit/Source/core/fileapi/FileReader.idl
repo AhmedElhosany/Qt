@@ -36,7 +36,7 @@
     DependentLifetime,
     Constructor,
     ConstructorCallWith=ExecutionContext,
-    Exposed=(Window,Worker),
+    Exposed=(Window,Worker)
 ] interface FileReader : EventTarget {
     // async read methods
     [RaisesException] void readAsArrayBuffer(Blob blob);
@@ -56,7 +56,6 @@
     // File or Blob data
     readonly attribute (DOMString or ArrayBuffer)? result;
 
-    // TODO(jsbell): Spec has DOMError, which is being deprecated.
     readonly attribute DOMException? error;
 
     // event handler attributes

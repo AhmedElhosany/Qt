@@ -55,6 +55,7 @@ typedef struct {
     AVRational          step_frac;
     int                 remaining_frac;
     int                 remaining_fill;
+    int                 remaining_fill_max;
     int64_t             next_pts;
     double              *freq;
     FFTContext          *fft_ctx;
@@ -62,6 +63,7 @@ typedef struct {
     FFTComplex          *fft_data;
     FFTComplex          *fft_result;
     FFTComplex          *cqt_result;
+    float               *attack_data;
     int                 fft_bits;
     int                 fft_len;
     int                 cqt_len;
@@ -78,7 +80,7 @@ typedef struct {
                                     int len, int fft_len);
     void                (*permute_coeffs)(float *v, int len);
     void                (*draw_bar)(AVFrame *out, const float *h, const float *rcp_h,
-                                    const ColorFloat *c, int bar_h);
+                                    const ColorFloat *c, int bar_h, float bar_t);
     void                (*draw_axis)(AVFrame *out, AVFrame *axis, const ColorFloat *c, int off);
     void                (*draw_sono)(AVFrame *out, AVFrame *sono, int off, int idx);
     void                (*update_sono)(AVFrame *sono, const ColorFloat *c, int idx);
@@ -102,7 +104,9 @@ typedef struct {
     char                *bar_v;
     float               sono_g;
     float               bar_g;
+    float               bar_t;
     double              timeclamp;
+    double              attack;
     double              basefreq;
     double              endfreq;
     float               coeffclamp; /* deprecated - ignored */

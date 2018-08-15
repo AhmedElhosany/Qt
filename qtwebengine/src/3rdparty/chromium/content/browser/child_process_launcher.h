@@ -5,30 +5,30 @@
 #ifndef CONTENT_BROWSER_CHILD_PROCESS_LAUNCHER_H_
 #define CONTENT_BROWSER_CHILD_PROCESS_LAUNCHER_H_
 
-#include "base/files/scoped_file.h"
+#include <memory>
+
 #include "base/macros.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/shared_memory.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/kill.h"
-#include "base/process/launch.h"
 #include "base/process/process.h"
-#include "base/threading/non_thread_safe.h"
+#include "base/sequence_checker.h"
 #include "build/build_config.h"
+#include "content/browser/child_process_launcher_helper.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
-#include "mojo/edk/embedder/embedder.h"
+#include "content/public/common/result_codes.h"
+#include "mojo/edk/embedder/outgoing_broker_client_invitation.h"
 #include "mojo/edk/embedder/scoped_platform_handle.h"
-
-#if defined(OS_WIN)
-#include "sandbox/win/src/sandbox_types.h"
-#endif
 
 namespace base {
 class CommandLine;
 }
 
 namespace content {
+
+class SandboxedProcessLauncherDelegate;
 
 // Note: These codes are listed in a histogram and any new codes should be added
 // at the end.
@@ -52,7 +52,7 @@ static_assert(static_cast<int>(LAUNCH_RESULT_START) >
 // Launches a process asynchronously and notifies the client of the process
 // handle when it's available.  It's used to avoid blocking the calling thread
 // on the OS since often it can take > 100 ms to create the process.
-class CONTENT_EXPORT ChildProcessLauncher : public base::NonThreadSafe {
+class CONTENT_EXPORT ChildProcessLauncher {
  public:
   class CONTENT_EXPORT Client {
    public:
@@ -76,11 +76,12 @@ class CONTENT_EXPORT ChildProcessLauncher : public base::NonThreadSafe {
   // is encountered when processing messages from the child process. This
   // callback must be safe to call from any thread.
   ChildProcessLauncher(
-      SandboxedProcessLauncherDelegate* delegate,
-      base::CommandLine* cmd_line,
+      std::unique_ptr<SandboxedProcessLauncherDelegate> delegate,
+      std::unique_ptr<base::CommandLine> cmd_line,
       int child_process_id,
       Client* client,
-      const std::string& mojo_child_token,
+      std::unique_ptr<mojo::edk::OutgoingBrokerClientInvitation>
+          broker_client_invitation,
       const mojo::edk::ProcessErrorCallback& process_error_callback,
       bool terminate_on_shutdown = true);
   ~ChildProcessLauncher();
@@ -107,54 +108,71 @@ class CONTENT_EXPORT ChildProcessLauncher : public base::NonThreadSafe {
 
   // Changes whether the process runs in the background or not.  Only call
   // this after the process has started.
-  void SetProcessBackgrounded(bool background);
+  void SetProcessPriority(bool background, bool boost_for_pending_views);
+
+  // Terminates the process associated with this ChildProcessLauncher.
+  // Returns true if the process was stopped, false if the process had not been
+  // started yet or could not be stopped.
+  // Note that |exit_code| and |wait| are not used on Android.
+  bool Terminate(int exit_code, bool wait);
+
+  // Similar to Terminate() but takes in a |process|.
+  // On Android |process| must have been started by ChildProcessLauncher for
+  // this method to work.
+  static bool TerminateProcess(const base::Process& process,
+                               int exit_code,
+                               bool wait);
 
   // Replaces the ChildProcessLauncher::Client for testing purposes. Returns the
   // previous  client.
   Client* ReplaceClientForTest(Client* client);
 
+  // Sets the files that should be mapped when a new child process is created
+  // for the service |service_name|.
+  static void SetRegisteredFilesForService(
+      const std::string& service_name,
+      catalog::RequiredFileMap required_files);
+
+  // Resets all files registered by |SetRegisteredFilesForService|. Used to
+  // support multiple shell context creation in unit_tests.
+  static void ResetRegisteredFilesForTesting();
+
+#if defined(OS_ANDROID)
+  // Temporary until crbug.com/693484 is fixed.
+  static size_t GetNumberOfRendererSlots();
+#endif  // OS_ANDROID
+
  private:
-  // Posts a task to the launcher thread to do the actual work.
-  void Launch(SandboxedProcessLauncherDelegate* delegate,
-              base::CommandLine* cmd_line,
-              int child_process_id);
+  friend class internal::ChildProcessLauncherHelper;
 
   void UpdateTerminationStatus(bool known_dead);
 
-  // This is always called on the client thread after an attempt
-  // to launch the child process on the launcher thread.
-  // It makes sure we always perform the necessary cleanup if the
-  // client went away.
-  static void DidLaunch(base::WeakPtr<ChildProcessLauncher> instance,
-                        bool terminate_on_shutdown,
-                        mojo::edk::ScopedPlatformHandle server_handle,
-                        ZygoteHandle zygote,
-#if defined(OS_ANDROID)
-                        base::ScopedFD mojo_fd,
-#endif
-                        base::Process process,
-                        int error_code);
-
   // Notifies the client about the result of the operation.
-  void Notify(ZygoteHandle zygote,
+  void Notify(internal::ChildProcessLauncherHelper::Process process,
               mojo::edk::ScopedPlatformHandle server_handle,
-              base::Process process,
               int error_code);
 
   Client* client_;
   BrowserThread::ID client_thread_id_;
-  base::Process process_;
+
+  // The process associated with this ChildProcessLauncher. Set in Notify by
+  // ChildProcessLauncherHelper once the process was started.
+  internal::ChildProcessLauncherHelper::Process process_;
+
   base::TerminationStatus termination_status_;
   int exit_code_;
-  ZygoteHandle zygote_;
   bool starting_;
+  std::unique_ptr<mojo::edk::OutgoingBrokerClientInvitation>
+      broker_client_invitation_;
   const mojo::edk::ProcessErrorCallback process_error_callback_;
 
   // Controls whether the child process should be terminated on browser
   // shutdown. Default behavior is to terminate the child.
   const bool terminate_child_on_shutdown_;
 
-  const std::string mojo_child_token_;
+  scoped_refptr<internal::ChildProcessLauncherHelper> helper_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<ChildProcessLauncher> weak_factory_;
 

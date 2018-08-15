@@ -24,7 +24,6 @@
 #include "ui/gl/gl_export.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_surface_overlay.h"
-#include "ui/gl/sync_control_vsync_provider.h"
 
 namespace gl {
 
@@ -48,25 +47,6 @@ GL_EXPORT void GetEGLInitDisplays(bool supports_angle_d3d,
                                   const base::CommandLine* command_line,
                                   std::vector<DisplayType>* init_displays);
 
-// VSync provider for EGL surface;
-class GL_EXPORT EGLSyncControlVSyncProvider : public SyncControlVSyncProvider {
- public:
-  explicit EGLSyncControlVSyncProvider(EGLSurface surface);
-  ~EGLSyncControlVSyncProvider() override;
-
- protected:
-  bool GetSyncValues(int64_t* system_time,
-                     int64_t* media_stream_counter,
-                     int64_t* swap_buffer_counter) override;
-
-  bool GetMscRate(int32_t* numerator, int32_t* denominator) override;
-
- private:
-  EGLSurface surface_;
-
-  DISALLOW_COPY_AND_ASSIGN(EGLSyncControlVSyncProvider);
-};
-
 // Interface for EGL surface.
 class GL_EXPORT GLSurfaceEGL : public GLSurface {
  public:
@@ -75,10 +55,10 @@ class GL_EXPORT GLSurfaceEGL : public GLSurface {
   // Implement GLSurface.
   EGLDisplay GetDisplay() override;
   EGLConfig GetConfig() override;
-  GLSurface::Format GetFormat() override;
+  GLSurfaceFormat GetFormat() override;
 
   static bool InitializeOneOff(EGLNativeDisplayType native_display);
-  static void ResetForTesting();
+  static void ShutdownOneOff();
   static EGLDisplay GetHardwareDisplay();
   static EGLDisplay InitializeDisplay(EGLNativeDisplayType native_display);
   static EGLNativeDisplayType GetNativeDisplay();
@@ -92,13 +72,14 @@ class GL_EXPORT GLSurfaceEGL : public GLSurface {
   static bool IsCreateContextBindGeneratesResourceSupported();
   static bool IsCreateContextWebGLCompatabilitySupported();
   static bool IsEGLSurfacelessContextSupported();
+  static bool IsEGLContextPrioritySupported();
   static bool IsDirectCompositionSupported();
 
  protected:
   ~GLSurfaceEGL() override;
 
   EGLConfig config_ = nullptr;
-  GLSurface::Format format_ = GLSurface::SURFACE_DEFAULT;
+  GLSurfaceFormat format_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(GLSurfaceEGL);
@@ -108,11 +89,12 @@ class GL_EXPORT GLSurfaceEGL : public GLSurface {
 // Encapsulates an EGL surface bound to a view.
 class GL_EXPORT NativeViewGLSurfaceEGL : public GLSurfaceEGL {
  public:
-  explicit NativeViewGLSurfaceEGL(EGLNativeWindowType window);
+  NativeViewGLSurfaceEGL(EGLNativeWindowType window,
+                         std::unique_ptr<gfx::VSyncProvider> vsync_provider);
 
   // Implement GLSurface.
   using GLSurfaceEGL::Initialize;
-  bool Initialize(GLSurface::Format format) override;
+  bool Initialize(GLSurfaceFormat format) override;
   void Destroy() override;
   bool Resize(const gfx::Size& size,
               float scale_factor,
@@ -122,12 +104,7 @@ class GL_EXPORT NativeViewGLSurfaceEGL : public GLSurfaceEGL {
   gfx::SwapResult SwapBuffers() override;
   gfx::Size GetSize() override;
   EGLSurface GetHandle() override;
-  bool SupportsSwapBuffersWithDamage() override;
   bool SupportsPostSubBuffer() override;
-  gfx::SwapResult SwapBuffersWithDamage(int x,
-                                        int y,
-                                        int width,
-                                        int height) override;
   gfx::SwapResult PostSubBuffer(int x, int y, int width, int height) override;
   bool SupportsCommitOverlayPlanes() override;
   gfx::SwapResult CommitOverlayPlanes() override;
@@ -140,10 +117,6 @@ class GL_EXPORT NativeViewGLSurfaceEGL : public GLSurfaceEGL {
   bool FlipsVertically() const override;
   bool BuffersFlipped() const override;
 
-  // Create a NativeViewGLSurfaceEGL with an externally provided
-  // gfx::VSyncProvider. Takes ownership of the gfx::VSyncProvider.
-  virtual bool Initialize(std::unique_ptr<gfx::VSyncProvider> sync_provider);
-
   // Takes care of the platform dependant bits, of any, for creating the window.
   virtual bool InitializeNativeWindow();
 
@@ -154,33 +127,22 @@ class GL_EXPORT NativeViewGLSurfaceEGL : public GLSurfaceEGL {
   gfx::Size size_;
   bool enable_fixed_size_angle_;
 
-  void OnSetSwapInterval(int interval) override;
+  gfx::SwapResult SwapBuffersWithDamage(const std::vector<int>& rects);
 
  private:
   // Commit the |pending_overlays_| and clear the vector. Returns false if any
   // fail to be committed.
   bool CommitAndClearPendingOverlays();
-  void UpdateSwapInterval();
 
   EGLSurface surface_;
   bool supports_post_sub_buffer_;
   bool supports_swap_buffer_with_damage_;
   bool flips_vertically_;
 
-  std::unique_ptr<gfx::VSyncProvider> vsync_provider_;
-
-  int swap_interval_;
+  std::unique_ptr<gfx::VSyncProvider> vsync_provider_external_;
+  std::unique_ptr<gfx::VSyncProvider> vsync_provider_internal_;
 
   std::vector<GLSurfaceOverlay> pending_overlays_;
-
-#if defined(OS_WIN)
-  bool vsync_override_;
-
-  unsigned int swap_generation_;
-  static unsigned int current_swap_generation_;
-  static unsigned int swaps_this_generation_;
-  static unsigned int last_multiswap_generation_;
-#endif
 
   DISALLOW_COPY_AND_ASSIGN(NativeViewGLSurfaceEGL);
 };
@@ -191,8 +153,7 @@ class GL_EXPORT PbufferGLSurfaceEGL : public GLSurfaceEGL {
   explicit PbufferGLSurfaceEGL(const gfx::Size& size);
 
   // Implement GLSurface.
-  bool Initialize() override;
-  bool Initialize(GLSurface::Format format) override;
+  bool Initialize(GLSurfaceFormat format) override;
   void Destroy() override;
   bool IsOffscreen() override;
   gfx::SwapResult SwapBuffers() override;
@@ -221,8 +182,7 @@ class GL_EXPORT SurfacelessEGL : public GLSurfaceEGL {
   explicit SurfacelessEGL(const gfx::Size& size);
 
   // Implement GLSurface.
-  bool Initialize() override;
-  bool Initialize(GLSurface::Format format) override;
+  bool Initialize(GLSurfaceFormat format) override;
   void Destroy() override;
   bool IsOffscreen() override;
   bool IsSurfaceless() const override;

@@ -7,14 +7,11 @@
 #include <cert.h>
 #include <certdb.h>
 
-#include "base/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "crypto/scoped_test_nss_db.h"
+#include "net/cert/internal/cert_issuer_source_sync_unittest.h"
 #include "net/cert/internal/test_helpers.h"
-#include "net/cert/internal/trust_store_test_helpers.h"
 #include "net/cert/scoped_nss_types.h"
 #include "net/cert/x509_certificate.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -23,46 +20,37 @@ namespace net {
 
 namespace {
 
-void NotCalled(TrustAnchors anchors) {
-  ADD_FAILURE() << "NotCalled was called";
-}
-
 class TrustStoreNSSTest : public testing::Test {
  public:
   void SetUp() override {
     ASSERT_TRUE(test_nssdb_.is_open());
-
     ParsedCertificateList chain;
-    bool unused_verify_result;
-    der::GeneralizedTime unused_time;
-    std::string unused_errors;
+    ReadCertChainFromFile(
+        "net/data/verify_certificate_chain_unittest/key-rollover/oldchain.pem",
+        &chain);
 
-    ReadVerifyCertChainTestFromFile(
-        "net/data/verify_certificate_chain_unittest/key-rollover-oldchain.pem",
-        &chain, &oldroot_, &unused_time, &unused_verify_result, &unused_errors);
-    ASSERT_EQ(2U, chain.size());
+    ASSERT_EQ(3U, chain.size());
     target_ = chain[0];
     oldintermediate_ = chain[1];
+    oldroot_ = chain[2];
     ASSERT_TRUE(target_);
     ASSERT_TRUE(oldintermediate_);
     ASSERT_TRUE(oldroot_);
 
-    scoped_refptr<TrustAnchor> unused_root;
-    ReadVerifyCertChainTestFromFile(
+    ReadCertChainFromFile(
         "net/data/verify_certificate_chain_unittest/"
-        "key-rollover-longrolloverchain.pem",
-        &chain, &unused_root, &unused_time, &unused_verify_result,
-        &unused_errors);
-    ASSERT_EQ(4U, chain.size());
+        "key-rollover/longrolloverchain.pem",
+        &chain);
+
+    ASSERT_EQ(5U, chain.size());
     newintermediate_ = chain[1];
-    newroot_ = TrustAnchor::CreateFromCertificateNoConstraints(chain[2]);
+    newroot_ = chain[2];
     newrootrollover_ = chain[3];
     ASSERT_TRUE(newintermediate_);
     ASSERT_TRUE(newroot_);
     ASSERT_TRUE(newrootrollover_);
 
-    trust_store_nss_.reset(
-        new TrustStoreNSS(trustSSL, base::ThreadTaskRunnerHandle::Get()));
+    trust_store_nss_.reset(new TrustStoreNSS(trustSSL));
   }
 
   std::string GetUniqueNickname() {
@@ -86,13 +74,27 @@ class TrustStoreNSSTest : public testing::Test {
     AddCertToNSS(target_.get());
     AddCertToNSS(oldintermediate_.get());
     AddCertToNSS(newintermediate_.get());
-    AddCertToNSS(oldroot_->cert().get());
-    AddCertToNSS(newroot_->cert().get());
+    AddCertToNSS(oldroot_.get());
+    AddCertToNSS(newroot_.get());
     AddCertToNSS(newrootrollover_.get());
+
+    // Check that the certificates can be retrieved as expected.
+    EXPECT_TRUE(
+        TrustStoreContains(target_, {newintermediate_, oldintermediate_}));
+
+    EXPECT_TRUE(TrustStoreContains(newintermediate_,
+                                   {newroot_, newrootrollover_, oldroot_}));
+    EXPECT_TRUE(TrustStoreContains(oldintermediate_,
+                                   {newroot_, newrootrollover_, oldroot_}));
+    EXPECT_TRUE(TrustStoreContains(newrootrollover_,
+                                   {newroot_, newrootrollover_, oldroot_}));
+    EXPECT_TRUE(
+        TrustStoreContains(oldroot_, {newroot_, newrootrollover_, oldroot_}));
+    EXPECT_TRUE(
+        TrustStoreContains(newroot_, {newroot_, newrootrollover_, oldroot_}));
   }
 
   // Trusts |cert|. Assumes the cert was already imported into NSS.
-  void TrustCert(const TrustAnchor* anchor) { TrustCert(anchor->cert().get()); }
   void TrustCert(const ParsedCertificate* cert) {
     SECItem der_cert;
     der_cert.data = const_cast<uint8_t*>(cert->der_cert().UnsafeData());
@@ -112,35 +114,65 @@ class TrustStoreNSSTest : public testing::Test {
   }
 
  protected:
-  void ExpectTrustStoreContains(tracked_objects::Location loc,
-                                scoped_refptr<ParsedCertificate> cert,
-                                TrustAnchors expected_async_matches) {
-    SCOPED_TRACE(loc.ToString());
+  bool TrustStoreContains(scoped_refptr<ParsedCertificate> cert,
+                          ParsedCertificateList expected_matches) {
+    ParsedCertificateList matches;
+    trust_store_nss_->SyncGetIssuersOf(cert.get(), &matches);
 
-    TrustAnchors sync_matches;
-    TrustAnchorResultRecorder anchor_results;
-    std::unique_ptr<TrustStore::Request> req;
-    trust_store_nss_->FindTrustAnchorsForCert(cert, anchor_results.Callback(),
-                                              &sync_matches, &req);
-    ASSERT_TRUE(req);
-    EXPECT_TRUE(sync_matches.empty());
+    std::vector<std::string> name_result_matches;
+    for (const auto& it : matches)
+      name_result_matches.push_back(GetCertString(it));
+    std::sort(name_result_matches.begin(), name_result_matches.end());
 
-    anchor_results.Run();
-    std::vector<der::Input> der_result_matches;
-    for (const auto& it : anchor_results.matches())
-      der_result_matches.push_back(it->cert()->der_cert());
-    std::sort(der_result_matches.begin(), der_result_matches.end());
+    std::vector<std::string> name_expected_matches;
+    for (const auto& it : expected_matches)
+      name_expected_matches.push_back(GetCertString(it));
+    std::sort(name_expected_matches.begin(), name_expected_matches.end());
 
-    std::vector<der::Input> der_expected_matches;
-    for (const auto& it : expected_async_matches)
-      der_expected_matches.push_back(it->cert()->der_cert());
-    std::sort(der_expected_matches.begin(), der_expected_matches.end());
+    if (name_expected_matches == name_result_matches)
+      return true;
 
-    EXPECT_EQ(der_expected_matches, der_result_matches);
+    // Print some extra information for debugging.
+    EXPECT_EQ(name_expected_matches, name_result_matches);
+    return false;
   }
 
-  scoped_refptr<TrustAnchor> oldroot_;
-  scoped_refptr<TrustAnchor> newroot_;
+  // Give simpler names to certificate DER (for identifying them in tests by
+  // their symbolic name).
+  std::string GetCertString(
+      const scoped_refptr<ParsedCertificate>& cert) const {
+    if (cert->der_cert() == oldroot_->der_cert())
+      return "oldroot_";
+    if (cert->der_cert() == newroot_->der_cert())
+      return "newroot_";
+    if (cert->der_cert() == target_->der_cert())
+      return "target_";
+    if (cert->der_cert() == oldintermediate_->der_cert())
+      return "oldintermediate_";
+    if (cert->der_cert() == newintermediate_->der_cert())
+      return "newintermediate_";
+    if (cert->der_cert() == newrootrollover_->der_cert())
+      return "newrootrollover_";
+    return cert->der_cert().AsString();
+  }
+
+  bool HasTrust(const ParsedCertificateList& certs,
+                CertificateTrustType expected_trust) {
+    bool success = true;
+    for (const scoped_refptr<ParsedCertificate>& cert : certs) {
+      CertificateTrust trust;
+      trust_store_nss_->GetTrust(cert.get(), &trust);
+      if (trust.type != expected_trust) {
+        EXPECT_EQ(expected_trust, trust.type) << GetCertString(cert);
+        success = false;
+      }
+    }
+
+    return success;
+  }
+
+  scoped_refptr<ParsedCertificate> oldroot_;
+  scoped_refptr<ParsedCertificate> newroot_;
 
   scoped_refptr<ParsedCertificate> target_;
   scoped_refptr<ParsedCertificate> oldintermediate_;
@@ -154,94 +186,100 @@ class TrustStoreNSSTest : public testing::Test {
 // Without adding any certs to the NSS DB, should get no anchor results for any
 // of the test certs.
 TEST_F(TrustStoreNSSTest, CertsNotPresent) {
-  ExpectTrustStoreContains(FROM_HERE, target_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newintermediate_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newroot_->cert(), TrustAnchors());
+  EXPECT_TRUE(TrustStoreContains(target_, ParsedCertificateList()));
+  EXPECT_TRUE(TrustStoreContains(newintermediate_, ParsedCertificateList()));
+  EXPECT_TRUE(TrustStoreContains(newroot_, ParsedCertificateList()));
 }
 
 // If certs are present in NSS DB but aren't marked as trusted, should get no
 // anchor results for any of the test certs.
 TEST_F(TrustStoreNSSTest, CertsPresentButNotTrusted) {
   AddCertsToNSS();
-  ExpectTrustStoreContains(FROM_HERE, newintermediate_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, target_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newintermediate_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newroot_->cert(), TrustAnchors());
+
+  // None of the certificates are trusted.
+  EXPECT_TRUE(HasTrust({oldroot_, newroot_, target_, oldintermediate_,
+                        newintermediate_, newrootrollover_},
+                       CertificateTrustType::UNSPECIFIED));
 }
 
-// A self-signed CA certificate is trusted. FindTrustAnchorsForCert should
-// return the cert on any intermediates with a matching issuer, and on any
-// matching self-signed/self-issued CA certs.
+// Trust a single self-signed CA certificate.
 TEST_F(TrustStoreNSSTest, TrustedCA) {
   AddCertsToNSS();
   TrustCert(newroot_.get());
-  ExpectTrustStoreContains(FROM_HERE, target_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newintermediate_, {newroot_});
-  ExpectTrustStoreContains(FROM_HERE, oldintermediate_, {newroot_});
-  ExpectTrustStoreContains(FROM_HERE, newrootrollover_, {newroot_});
-  ExpectTrustStoreContains(FROM_HERE, oldroot_->cert(), {newroot_});
-  ExpectTrustStoreContains(FROM_HERE, newroot_->cert(), {newroot_});
+
+  // Only one of the certificates are trusted.
+  EXPECT_TRUE(HasTrust(
+      {oldroot_, target_, oldintermediate_, newintermediate_, newrootrollover_},
+      CertificateTrustType::UNSPECIFIED));
+
+  EXPECT_TRUE(HasTrust({newroot_}, CertificateTrustType::TRUSTED_ANCHOR));
 }
 
-// When an intermediate certificate is trusted, FindTrustAnchorsForCert should
-// return that cert on any certs issued by the intermediate, but not for the
-// intermediate itself (or the CAs).
+// Trust a single intermediate certificate.
 TEST_F(TrustStoreNSSTest, TrustedIntermediate) {
   AddCertsToNSS();
   TrustCert(newintermediate_.get());
-  ExpectTrustStoreContains(
-      FROM_HERE, target_,
-      {TrustAnchor::CreateFromCertificateNoConstraints(newintermediate_)});
-  ExpectTrustStoreContains(FROM_HERE, newintermediate_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, oldintermediate_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newrootrollover_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, oldroot_->cert(), TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newroot_->cert(), TrustAnchors());
+
+  EXPECT_TRUE(HasTrust(
+      {oldroot_, newroot_, target_, oldintermediate_, newrootrollover_},
+      CertificateTrustType::UNSPECIFIED));
+  EXPECT_TRUE(
+      HasTrust({newintermediate_}, CertificateTrustType::TRUSTED_ANCHOR));
 }
 
-// Multiple self-signed CA certificates with the same name are trusted.
-// FindTrustAnchorsForCert should return all these certs on any intermediates
-// with a matching issuer, and on any matching self-signed/self-issued CA certs.
+// Trust multiple self-signed CA certificates with the same name.
 TEST_F(TrustStoreNSSTest, MultipleTrustedCAWithSameSubject) {
   AddCertsToNSS();
   TrustCert(oldroot_.get());
   TrustCert(newroot_.get());
-  ExpectTrustStoreContains(FROM_HERE, target_, TrustAnchors());
-  ExpectTrustStoreContains(FROM_HERE, newintermediate_, {newroot_, oldroot_});
-  ExpectTrustStoreContains(FROM_HERE, oldintermediate_, {newroot_, oldroot_});
-  ExpectTrustStoreContains(FROM_HERE, oldroot_->cert(), {newroot_, oldroot_});
+
+  EXPECT_TRUE(
+      HasTrust({target_, oldintermediate_, newintermediate_, newrootrollover_},
+               CertificateTrustType::UNSPECIFIED));
+  EXPECT_TRUE(
+      HasTrust({oldroot_, newroot_}, CertificateTrustType::TRUSTED_ANCHOR));
 }
 
-// Cancel a FindTrustAnchorsForCert request before it has returned any results.
-// Callback should not be called.
-TEST_F(TrustStoreNSSTest, CancelRequest) {
-  std::unique_ptr<TrustStore::Request> req;
-  TrustAnchors sync_matches;
-  trust_store_nss_->FindTrustAnchorsForCert(target_, base::Bind(&NotCalled),
-                                            &sync_matches, &req);
-  ASSERT_TRUE(req);
-  req.reset();
-  base::RunLoop().RunUntilIdle();
-}
+class TrustStoreNSSTestDelegate {
+ public:
+  TrustStoreNSSTestDelegate() : trust_store_nss_(trustSSL) {}
 
-// Cancel a FindTrustAnchorsForCert request during the callback. Should not
-// crash.
-TEST_F(TrustStoreNSSTest, CancelRequestDuringCallback) {
-  AddCertsToNSS();
-  TrustCert(newroot_.get());
+  void AddCert(scoped_refptr<ParsedCertificate> cert) {
+    ASSERT_TRUE(test_nssdb_.is_open());
+    std::string nickname = GetUniqueNickname();
+    ScopedCERTCertificate nss_cert(
+        X509Certificate::CreateOSCertHandleFromBytesWithNickname(
+            cert->der_cert().AsStringPiece().data(), cert->der_cert().Length(),
+            nickname.c_str()));
+    ASSERT_TRUE(nss_cert);
+    SECStatus srv =
+        PK11_ImportCert(test_nssdb_.slot(), nss_cert.get(), CK_INVALID_HANDLE,
+                        nickname.c_str(), PR_FALSE /* includeTrust (unused) */);
+    ASSERT_EQ(SECSuccess, srv);
+  }
 
-  base::RunLoop run_loop;
-  std::unique_ptr<TrustStore::Request> req;
-  TrustAnchors sync_matches;
-  trust_store_nss_->FindTrustAnchorsForCert(
-      newintermediate_,
-      base::Bind(&TrustStoreRequestDeleter, &req, run_loop.QuitClosure()),
-      &sync_matches, &req);
-  ASSERT_TRUE(req);
-  run_loop.Run();
-  ASSERT_FALSE(req);
-  base::RunLoop().RunUntilIdle();
-}
+  CertIssuerSource& source() { return trust_store_nss_; }
+
+ protected:
+  std::string GetUniqueNickname() {
+    return "cert_issuer_source_nss_unittest" +
+           base::UintToString(nickname_counter_++);
+  }
+
+  crypto::ScopedTestNSSDB test_nssdb_;
+  TrustStoreNSS trust_store_nss_;
+  unsigned int nickname_counter_ = 0;
+};
+
+INSTANTIATE_TYPED_TEST_CASE_P(TrustStoreNSSTest2,
+                              CertIssuerSourceSyncTest,
+                              TrustStoreNSSTestDelegate);
+
+// NSS doesn't normalize UTF8String values, so use the not-normalized version of
+// those tests.
+INSTANTIATE_TYPED_TEST_CASE_P(TrustStoreNSSNotNormalizedTest,
+                              CertIssuerSourceSyncNotNormalizedTest,
+                              TrustStoreNSSTestDelegate);
 
 }  // namespace
 

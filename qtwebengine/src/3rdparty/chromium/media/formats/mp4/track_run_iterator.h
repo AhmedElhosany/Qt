@@ -17,6 +17,7 @@
 #include "media/base/media_log.h"
 #include "media/base/stream_parser_buffer.h"
 #include "media/formats/mp4/box_definitions.h"
+#include "media/media_features.h"
 
 namespace media {
 
@@ -36,7 +37,7 @@ class MEDIA_EXPORT TrackRunIterator {
  public:
   // Create a new TrackRunIterator. A reference to |moov| will be retained for
   // the lifetime of this object.
-  TrackRunIterator(const Movie* moov, const scoped_refptr<MediaLog>& media_log);
+  TrackRunIterator(const Movie* moov, MediaLog* media_log);
   ~TrackRunIterator();
 
   // Sets up the iterator to handle all the runs from the current fragment.
@@ -79,7 +80,7 @@ class MEDIA_EXPORT TrackRunIterator {
 
   // Properties of the current sample. Only valid if IsSampleValid().
   int64_t sample_offset() const;
-  int sample_size() const;
+  uint32_t sample_size() const;
   DecodeTimestamp dts() const;
   base::TimeDelta cts() const;
   base::TimeDelta duration() const;
@@ -99,9 +100,12 @@ class MEDIA_EXPORT TrackRunIterator {
   bool IsSampleEncrypted(size_t sample_index) const;
   uint8_t GetIvSize(size_t sample_index) const;
   const std::vector<uint8_t>& GetKeyId(size_t sample_index) const;
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+  bool ApplyConstantIv(size_t sample_index, SampleEncryptionEntry* entry) const;
+#endif
 
   const Movie* moov_;
-  scoped_refptr<MediaLog> media_log_;
+  MediaLog* media_log_;
 
   std::vector<TrackRunInfo> runs_;
   std::vector<TrackRunInfo>::const_iterator run_itr_;

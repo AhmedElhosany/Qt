@@ -5,14 +5,13 @@
 #ifndef NET_HTTP_PROXY_CLIENT_SOCKET_H_
 #define NET_HTTP_PROXY_CLIENT_SOCKET_H_
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
 #include "net/base/net_export.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/socket/stream_socket.h"
-
-class GURL;
 
 namespace net {
 
@@ -21,7 +20,6 @@ class HttpAuthController;
 class HttpStream;
 class HttpResponseInfo;
 class HttpRequestHeaders;
-struct HttpRequestInfo;
 class HttpAuthController;
 class NetLogWithSource;
 
@@ -36,7 +34,7 @@ class NET_EXPORT_PRIVATE ProxyClientSocket : public StreamSocket {
 
   // Transfers ownership of a newly created HttpStream to the caller
   // which can be used to read the response body.
-  virtual HttpStream* CreateConnectResponseStream() = 0;
+  virtual std::unique_ptr<HttpStream> CreateConnectResponseStream() = 0;
 
   // Returns the HttpAuthController which can be used
   // to interact with an HTTP Proxy Authorization Required (407) request.

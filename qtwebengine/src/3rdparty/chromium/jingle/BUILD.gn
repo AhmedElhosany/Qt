@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//build/config/features.gni")
+import("//media/media_options.gni")
 import("//testing/test.gni")
 
 if (enable_webrtc || !is_android) {
@@ -25,7 +26,7 @@ if (enable_webrtc || !is_android) {
       "glue/xmpp_client_socket_factory.h",
     ]
     public_deps = [
-      "//third_party/libjingle",
+      "//third_party/webrtc_overrides",
     ]
     deps = [
       "//base",
@@ -98,9 +99,8 @@ if (enable_webrtc || !is_android) {
     defines = [ "_CRT_SECURE_NO_WARNINGS" ]
 
     public_deps = [
-      "//third_party/libjingle",
-      "//third_party/webrtc/libjingle/xmllite",
-      "//third_party/webrtc/libjingle/xmpp",
+      "//third_party/libjingle_xmpp",
+      "//third_party/webrtc_overrides",
     ]
     deps = [
       ":jingle_glue",
@@ -171,9 +171,8 @@ if (enable_webrtc || !is_android) {
     configs += [ "//build/config/compiler:no_size_t_to_int_warning" ]
 
     public_deps = [
-      "//third_party/libjingle",
-      "//third_party/webrtc/libjingle/xmllite",
-      "//third_party/webrtc/libjingle/xmpp",
+      "//third_party/libjingle_xmpp",
+      "//third_party/webrtc_overrides",
     ]
     deps = [
       ":jingle_glue",

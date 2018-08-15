@@ -12,6 +12,7 @@
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "content/common/gpu_stream_constants.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/web_preferences.h"
@@ -48,20 +49,11 @@ PPB_Graphics3D_Impl::PPB_Graphics3D_Impl(PP_Instance instance)
       bound_to_instance_(false),
       commit_pending_(false),
       has_alpha_(false),
-      use_image_chromium_(false),
-      weak_ptr_factory_(this) {
-#if defined(OS_MACOSX)
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  bool use_image_chromium =
-      !command_line->HasSwitch(switches::kDisablePepper3DImageChromium);
-
-  if (use_image_chromium) {
-    use_image_chromium =
-        base::FeatureList::IsEnabled(features::kPepper3DImageChromium);
-  }
-  use_image_chromium_ = use_image_chromium;
-#endif
-}
+      use_image_chromium_(
+          !base::CommandLine::ForCurrentProcess()->HasSwitch(
+              switches::kDisablePepper3DImageChromium) &&
+          base::FeatureList::IsEnabled(features::kPepper3DImageChromium)),
+      weak_ptr_factory_(this) {}
 
 PPB_Graphics3D_Impl::~PPB_Graphics3D_Impl() {
   // Unset the client before the command_buffer_ is destroyed, similar to how
@@ -117,15 +109,15 @@ PP_Bool PPB_Graphics3D_Impl::Flush(int32_t put_offset) {
 gpu::CommandBuffer::State PPB_Graphics3D_Impl::WaitForTokenInRange(
     int32_t start,
     int32_t end) {
-  GetCommandBuffer()->WaitForTokenInRange(start, end);
-  return GetCommandBuffer()->GetLastState();
+  return GetCommandBuffer()->WaitForTokenInRange(start, end);
 }
 
 gpu::CommandBuffer::State PPB_Graphics3D_Impl::WaitForGetOffsetInRange(
+    uint32_t set_get_buffer_count,
     int32_t start,
     int32_t end) {
-  GetCommandBuffer()->WaitForGetOffsetInRange(start, end);
-  return GetCommandBuffer()->GetLastState();
+  return GetCommandBuffer()->WaitForGetOffsetInRange(set_get_buffer_count,
+                                                     start, end);
 }
 
 void PPB_Graphics3D_Impl::EnsureWorkVisible() {
@@ -192,10 +184,15 @@ int32_t PPB_Graphics3D_Impl::DoSwapBuffers(const gpu::SyncToken& sync_token,
     // Don't need to check for NULL from GetPluginInstance since when we're
     // bound, we know our instance is valid.
     bool is_overlay_candidate = use_image_chromium_;
-    GLenum target =
-        is_overlay_candidate ? GL_TEXTURE_RECTANGLE_ARB : GL_TEXTURE_2D;
-    cc::TextureMailbox texture_mailbox(taken_front_buffer_, sync_token, target,
-                                       size, is_overlay_candidate, false);
+    viz::TextureMailbox texture_mailbox(
+        taken_front_buffer_, sync_token,
+// TODO(reveman): Get texture target from browser process.
+#if defined(OS_MACOSX)
+        use_image_chromium_ ? GL_TEXTURE_RECTANGLE_ARB : GL_TEXTURE_2D,
+#else
+        GL_TEXTURE_2D,
+#endif
+        size, is_overlay_candidate, false);
     taken_front_buffer_.SetZero();
     HostGlobals::Get()
         ->GetInstance(pp_instance())
@@ -263,7 +260,7 @@ bool PPB_Graphics3D_Impl::InitRaw(
 
   command_buffer_ = gpu::CommandBufferProxyImpl::Create(
       std::move(channel), gpu::kNullSurfaceHandle, share_buffer,
-      gpu::GPU_STREAM_DEFAULT, gpu::GpuStreamPriority::NORMAL, attrib_helper,
+      kGpuStreamIdDefault, kGpuStreamPriorityDefault, attrib_helper,
       GURL::EmptyGURL(), base::ThreadTaskRunnerHandle::Get());
   if (!command_buffer_)
     return false;
@@ -288,12 +285,12 @@ void PPB_Graphics3D_Impl::OnGpuControlErrorMessage(const char* message,
       HostGlobals::Get()->GetInstance(pp_instance())->container();
   if (!container)
     return;
-  WebLocalFrame* frame = container->document().frame();
+  WebLocalFrame* frame = container->GetDocument().GetFrame();
   if (!frame)
     return;
   WebConsoleMessage console_message = WebConsoleMessage(
-      WebConsoleMessage::LevelError, WebString(base::UTF8ToUTF16(message)));
-  frame->addMessageToConsole(console_message);
+      WebConsoleMessage::kLevelError, WebString::FromUTF8(message));
+  frame->AddMessageToConsole(console_message);
 }
 
 void PPB_Graphics3D_Impl::OnGpuControlLostContext() {

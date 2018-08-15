@@ -30,7 +30,7 @@
 import sys
 
 import hasher
-import in_generator
+import json5_generator
 import template_expander
 import name_utilities
 
@@ -40,17 +40,17 @@ def _symbol(entry):
     # FIXME: Remove this special case for the ugly x-webkit-foo attributes.
     if entry['name'].startswith('-webkit-'):
         return entry['name'].replace('-', '_')[1:]
-    return name_utilities.cpp_name(entry).replace('-', '_')
+    return name_utilities.cpp_name(entry).replace('-', '_').replace(' ', '_')
 
 
-class MakeNamesWriter(in_generator.Writer):
-    defaults = {
-        'Conditional': None,  # FIXME: Add support for Conditional.
-        'ImplementedAs': None,
-        'RuntimeEnabled': None,  # What should we do for runtime-enabled features?
-        'Symbol': None,
-    }
+class MakeNamesWriter(json5_generator.Writer):
     default_parameters = {
+        'Conditional': {},  # FIXME: Add support for Conditional.
+        'ImplementedAs': {},
+        'RuntimeEnabled': {},  # What should we do for runtime-enabled features?
+        'Symbol': {},
+    }
+    default_metadata = {
         'export': '',
         'namespace': '',
         'suffix': '',
@@ -63,12 +63,12 @@ class MakeNamesWriter(in_generator.Writer):
         'to_macro_style': name_utilities.to_macro_style,
     }
 
-    def __init__(self, in_file_path):
-        super(MakeNamesWriter, self).__init__(in_file_path)
+    def __init__(self, json5_file_path):
+        super(MakeNamesWriter, self).__init__(json5_file_path)
 
-        namespace = self.in_file.parameters['namespace'].strip('"')
-        suffix = self.in_file.parameters['suffix'].strip('"')
-        export = self.in_file.parameters['export'].strip('"')
+        namespace = self.json5_file.metadata['namespace'].strip('"')
+        suffix = self.json5_file.metadata['suffix'].strip('"')
+        export = self.json5_file.metadata['export'].strip('"')
 
         assert namespace, 'A namespace is required.'
 
@@ -80,18 +80,18 @@ class MakeNamesWriter(in_generator.Writer):
             'namespace': namespace,
             'suffix': suffix,
             'export': export,
-            'entries': self.in_file.name_dictionaries,
-            'in_files': self.in_file.file_paths,
+            'entries': self.json5_file.name_dictionaries,
+            'input_files': self._input_files,
         }
 
-    @template_expander.use_jinja("MakeNames.h.tmpl", filters=filters)
+    @template_expander.use_jinja("templates/MakeNames.h.tmpl", filters=filters)
     def generate_header(self):
         return self._template_context
 
-    @template_expander.use_jinja("MakeNames.cpp.tmpl", filters=filters)
+    @template_expander.use_jinja("templates/MakeNames.cpp.tmpl", filters=filters)
     def generate_implementation(self):
         return self._template_context
 
 
 if __name__ == "__main__":
-    in_generator.Maker(MakeNamesWriter).main(sys.argv)
+    json5_generator.Maker(MakeNamesWriter).main()

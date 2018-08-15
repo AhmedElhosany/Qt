@@ -7,12 +7,13 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "services/ui/public/interfaces/cursor.mojom.h"
+#include "services/ui/public/interfaces/cursor/cursor.mojom.h"
 #include "services/ui/ws/drag_cursor_updater.h"
 #include "services/ui/ws/drag_source.h"
 #include "services/ui/ws/drag_target_connection.h"
 #include "services/ui/ws/event_dispatcher.h"
 #include "services/ui/ws/server_window.h"
+#include "ui/base/cursor/cursor.h"
 
 namespace ui {
 namespace ws {
@@ -46,16 +47,16 @@ DragController::DragController(
     ServerWindow* source_window,
     DragTargetConnection* source_connection,
     int32_t drag_pointer,
-    mojo::Map<mojo::String, mojo::Array<uint8_t>> mime_data,
+    const std::unordered_map<std::string, std::vector<uint8_t>>& mime_data,
     DropEffectBitmask drag_operations)
     : source_(source),
       cursor_updater_(cursor_updater),
       drag_operations_(drag_operations),
       drag_pointer_id_(drag_pointer),
-      current_cursor_(ui::mojom::Cursor::NO_DROP),
+      current_cursor_(ui::CursorType::kNoDrop),
       source_window_(source_window),
       source_connection_(source_connection),
-      mime_data_(std::move(mime_data)),
+      mime_data_(mime_data),
       weak_factory_(this) {
   SetCurrentTargetWindow(nullptr);
   EnsureWindowObserved(source_window_);
@@ -75,6 +76,8 @@ void DragController::Cancel() {
 
 bool DragController::DispatchPointerEvent(const ui::PointerEvent& event,
                                           ServerWindow* current_target) {
+  DVLOG(2) << "DragController dispatching pointer event at "
+           << event.location().ToString();
   uint32_t event_flags =
       event.flags() &
       (ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN);
@@ -83,11 +86,15 @@ bool DragController::DispatchPointerEvent(const ui::PointerEvent& event,
   if (waiting_for_final_drop_response_) {
     // If we're waiting on a target window to respond to the final drag drop
     // call, don't process any more pointer events.
+    DVLOG(1) << "Ignoring event because we're waiting for final drop response";
     return false;
   }
 
-  if (event.pointer_id() != drag_pointer_id_)
+  if (event.pointer_details().id != drag_pointer_id_) {
+    DVLOG(1) << "Ignoring event from different pointer "
+             << event.pointer_details().id;
     return false;
+  }
 
   // If |current_target| doesn't accept drags, walk its hierarchy up until we
   // find one that does (or set to nullptr at the top of the tree).
@@ -100,6 +107,8 @@ bool DragController::DispatchPointerEvent(const ui::PointerEvent& event,
     // away.
     EnsureWindowObserved(current_target);
   }
+
+  source_->OnDragMoved(screen_position);
 
   if (current_target && current_target == current_target_window_ &&
       event.type() != ET_POINTER_UP) {
@@ -119,6 +128,10 @@ bool DragController::DispatchPointerEvent(const ui::PointerEvent& event,
     }
 
     SetCurrentTargetWindow(current_target);
+  } else if (event.type() != ET_POINTER_UP) {
+    DVLOG(1) << "Performing no action for pointer event at "
+             << screen_position.ToString()
+             << "! current_target=" << current_target;
   }
 
   if (event.type() == ET_POINTER_UP) {
@@ -143,6 +156,8 @@ void DragController::OnWillDestroyDragTargetConnection(
 
 void DragController::MessageDragCompleted(bool success,
                                           DropEffect action_taken) {
+  DVLOG(1) << "Drag Completed: success=" << success
+           << ", action_taken=" << action_taken;
   for (DragTargetConnection* connection : called_on_drag_mime_types_)
     connection->PerformOnDragDropDone();
   called_on_drag_mime_types_.clear();
@@ -173,12 +188,12 @@ void DragController::SetWindowDropOperations(ServerWindow* window,
   }
 }
 
-ui::mojom::Cursor DragController::CursorForEffectBitmask(
+ui::CursorData DragController::CursorForEffectBitmask(
     DropEffectBitmask bitmask) {
   DropEffectBitmask combined = bitmask & drag_operations_;
   return combined == ui::mojom::kDropEffectNone
-             ? ui::mojom::Cursor::NO_DROP
-             : ui::mojom::Cursor::COPY;
+             ? ui::CursorData(ui::CursorType::kNoDrop)
+             : ui::CursorData(ui::CursorType::kCopy);
 }
 
 void DragController::SetCurrentTargetWindow(ServerWindow* current_target) {
@@ -191,7 +206,7 @@ void DragController::SetCurrentTargetWindow(ServerWindow* current_target) {
     current_cursor_ = CursorForEffectBitmask(state.bitmask);
   } else {
     // Can't drop in empty areas.
-    current_cursor_ = ui::mojom::Cursor::NO_DROP;
+    current_cursor_ = ui::CursorData(ui::CursorType::kNoDrop);
   }
 
   cursor_updater_->OnDragCursorUpdated();
@@ -212,11 +227,13 @@ void DragController::QueueOperation(ServerWindow* window,
                                     OperationType type,
                                     uint32_t event_flags,
                                     const gfx::Point& screen_position) {
+  DVLOG(2) << "Queueing operation " << ToString(type) << " to " << window;
+
   // If this window doesn't have the mime data, send it.
   DragTargetConnection* connection = source_->GetDragTargetForWindow(window);
   if (connection != source_connection_ &&
       !base::ContainsKey(called_on_drag_mime_types_, connection)) {
-    connection->PerformOnDragDropStart(mime_data_.Clone());
+    connection->PerformOnDragDropStart(mime_data_);
     called_on_drag_mime_types_.insert(connection);
   }
 
@@ -327,6 +344,24 @@ void DragController::OnWindowDestroying(ServerWindow* window) {
     // Our source window is being deleted, fail the drag.
     MessageDragCompleted(false, ui::mojom::kDropEffectNone);
   }
+}
+
+// static
+std::string DragController::ToString(OperationType type) {
+  switch (type) {
+    case OperationType::NONE:
+      return "NONE";
+    case OperationType::ENTER:
+      return "ENTER";
+    case OperationType::OVER:
+      return "OVER";
+    case OperationType::LEAVE:
+      return "LEAVE";
+    case OperationType::DROP:
+      return "DROP";
+  }
+  NOTREACHED();
+  return std::string();
 }
 
 }  // namespace ws

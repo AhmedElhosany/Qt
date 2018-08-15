@@ -7,13 +7,20 @@ SUBDIRS += \
     customization \
     focus \
     font \
+    palette \
     platform \
     pressandhold \
     qquickapplicationwindow \
+    qquickcolor \
     qquickdrawer \
+    qquickiconimage \
+    qquickiconlabel \
+    qquickimaginestyle \
     qquickmaterialstyle \
     qquickmaterialstyleconf \
     qquickmenu \
+    qquickmenubar \
+    qquickninepatchimage \
     qquickpopup \
     qquickstyle \
     qquickstyleselector \
@@ -22,9 +29,3 @@ SUBDIRS += \
     revisions \
     sanity \
     snippets
-
-# QTBUG-60268
-boot2qt: SUBDIRS -= qquickapplicationwindow calendar controls cursor customization \
-                    qquickdrawer focus font qquickmenu platform qquickpopup qquickmaterialstyle \
-                    qquickmaterialstyleconf qquickuniversalstyle \
-                    qquickuniversalstyleconf snippets

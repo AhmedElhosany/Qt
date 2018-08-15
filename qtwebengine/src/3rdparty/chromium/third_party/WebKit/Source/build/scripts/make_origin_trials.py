@@ -29,7 +29,7 @@
 
 import sys
 
-import in_generator
+import json5_generator
 import make_runtime_features
 import name_utilities
 import template_expander
@@ -40,25 +40,27 @@ import template_expander
 class OriginTrialsWriter(make_runtime_features.RuntimeFeatureWriter):
     class_name = 'OriginTrials'
 
-    def __init__(self, in_file_path):
-        super(OriginTrialsWriter, self).__init__(in_file_path)
+    def __init__(self, json5_file_path):
+        super(OriginTrialsWriter, self).__init__(json5_file_path)
         self._outputs = {
             (self.class_name + '.cpp'): self.generate_implementation,
             (self.class_name + '.h'): self.generate_header,
         }
 
-    @template_expander.use_jinja(class_name + '.cpp.tmpl')
+    @template_expander.use_jinja('templates/' + class_name + '.cpp.tmpl')
     def generate_implementation(self):
         return {
             'features': self._features,
+            'input_files': self._input_files,
         }
 
-    @template_expander.use_jinja(class_name + '.h.tmpl')
+    @template_expander.use_jinja('templates/' + class_name + '.h.tmpl')
     def generate_header(self):
         return {
             'features': self._features,
+            'input_files': self._input_files,
         }
 
 
 if __name__ == '__main__':
-    in_generator.Maker(OriginTrialsWriter).main(sys.argv)
+    json5_generator.Maker(OriginTrialsWriter).main()

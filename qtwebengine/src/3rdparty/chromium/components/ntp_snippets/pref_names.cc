@@ -11,11 +11,26 @@ const char kEnableSnippets[] = "ntp_snippets.enable";
 
 const char kRemoteSuggestionCategories[] = "ntp_snippets.remote_categories";
 
-const char kSnippetBackgroundFetchingIntervalWifi[] =
-    "ntp_snippets.fetching_interval_wifi";
+const char kSnippetLastFetchAttempt[] = "ntp_snippets.last_fetch_attempt";
 
-const char kSnippetBackgroundFetchingIntervalFallback[] =
+// For backwards compatibility, we do not rename the "fetching_" prefs (should
+// be "persistent_fetching_").
+const char kSnippetPersistentFetchingIntervalWifi[] =
+    "ntp_snippets.fetching_interval_wifi";
+const char kSnippetPersistentFetchingIntervalFallback[] =
     "ntp_snippets.fetching_interval_fallback";
+
+const char kSnippetStartupFetchingIntervalWifi[] =
+    "ntp_snippets.startup_fetching_interval_wifi";
+const char kSnippetStartupFetchingIntervalFallback[] =
+    "ntp_snippets.startup_fetching_interval_fallback";
+
+// For backwards compatibility, we do not rename the "soft_fetching_" prefs
+// (should be "shown_fetching_").
+const char kSnippetShownFetchingIntervalWifi[] =
+    "ntp_snippets.soft_fetching_interval_wifi";
+const char kSnippetShownFetchingIntervalFallback[] =
+    "ntp_snippets.soft_fetching_interval_fallback";
 
 const char kSnippetFetcherRequestCount[] =
     "ntp.request_throttler.suggestion_fetcher.count";
@@ -33,16 +48,19 @@ const char kSnippetThumbnailsRequestsDay[] =
 
 const char kDismissedAssetDownloadSuggestions[] =
     "ntp_suggestions.downloads.assets.dismissed_ids";
-const char kDismissedRecentOfflineTabSuggestions[] =
-    "ntp_suggestions.offline_pages.recent_tabs.dismissed_ids";
-const char kDismissedOfflinePageDownloadSuggestions[] =
-    "ntp_suggestions.downloads.offline_pages.dismissed_ids";
 const char kDismissedForeignSessionsSuggestions[] =
     "ntp_suggestions.foreign_sessions.dismissed_ids";
+const char kDismissedOfflinePageDownloadSuggestions[] =
+    "ntp_suggestions.downloads.offline_pages.dismissed_ids";
+const char kDismissedPhysicalWebPageSuggestions[] =
+    "ntp_suggestions.physical_web.dismissed_ids";
+const char kDismissedRecentOfflineTabSuggestions[] =
+    "ntp_suggestions.offline_pages.recent_tabs.dismissed_ids";
+
 const char kDismissedCategories[] = "ntp_suggestions.dismissed_categories";
 
-const char kBookmarksFirstM54Start[] =
-    "ntp_suggestions.bookmarks.first_M54_start";
+const char kLastSuccessfulBackgroundFetchTime[] =
+    "ntp_suggestions.remote.last_successful_background_fetch_time";
 
 const char kUserClassifierAverageNTPOpenedPerHour[] =
     "ntp_suggestions.user_classifier.average_ntp_opened_per_hour";
@@ -57,6 +75,20 @@ const char kUserClassifierLastTimeToShowSuggestions[] =
     "ntp_suggestions.user_classifier.last_time_to_show_suggestions";
 const char kUserClassifierLastTimeToUseSuggestions[] =
     "ntp_suggestions.user_classifier.last_time_to_use_suggestions";
+
+const char kClickBasedCategoryRankerOrderWithClicks[] =
+    "ntp_suggestions.click_based_category_ranker.category_order_with_clicks";
+const char kClickBasedCategoryRankerLastDecayTime[] =
+    "ntp_suggestions.click_based_category_ranker.last_decay_time";
+
+const char kBreakingNewsSubscriptionDataToken[] =
+    "ntp_suggestions.breaking_news_subscription_data.token";
+
+const char kBreakingNewsSubscriptionDataIsAuthenticated[] =
+    "ntp_suggestions.breaking_news_subscription_data.is_authenticated";
+
+const char kBreakingNewsGCMSubscriptionTokenCache[] =
+    "ntp_suggestions.breaking_news_gcm_subscription_token_cache";
 
 }  // namespace prefs
 }  // namespace ntp_snippets

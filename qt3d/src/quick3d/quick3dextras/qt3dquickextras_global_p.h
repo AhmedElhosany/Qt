@@ -58,6 +58,22 @@
 
 QT_BEGIN_NAMESPACE
 
+namespace Qt3DExtras {
+namespace Quick {
+
+QT3DQUICKEXTRASSHARED_PRIVATE_EXPORT void Quick3DExtras_initialize();
+QT3DQUICKEXTRASSHARED_PRIVATE_EXPORT void Quick3DExtras_registerType(const char *className, const char *quickName, int major, int minor);
+
+template<class T, class E> void registerExtendedType(const char *className, const char *quickName,
+                                                     const char *uri, int major, int minor, const char *name)
+{
+    qmlRegisterExtendedType<T, E>(uri, major, minor, name);
+    Quick3DExtras_registerType(className, quickName, major, minor);
+}
+
+} // Quick
+} // Qt3DExtras
+
 QT_END_NAMESPACE
 
 #endif // QT3DQUICKEXTRAS_GLOBAL_P_H

@@ -134,7 +134,7 @@ class LoaderApplication : public QGuiApplication
 public:
     LoaderApplication(int& argc, char **argv) : QGuiApplication(argc, argv) {}
 
-    bool event(QEvent *ev)
+    bool event(QEvent *ev) override
     {
         if (ev->type() == QEvent::FileOpen) {
             if (exitTimerId >= 0) {
@@ -148,7 +148,7 @@ public:
         return true;
     }
 
-    void timerEvent(QTimerEvent *) {
+    void timerEvent(QTimerEvent *) override {
         noFilesGiven();
     }
 };

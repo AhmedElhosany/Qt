@@ -4,15 +4,11 @@
 
 #include "net/quic/core/quic_stream.h"
 
-#include "base/logging.h"
-#include "net/quic/core/quic_bug_tracker.h"
-#include "net/quic/core/quic_flags.h"
 #include "net/quic/core/quic_flow_controller.h"
 #include "net/quic/core/quic_session.h"
-#include "net/quic/core/quic_write_blocked_list.h"
+#include "net/quic/platform/api/quic_bug_tracker.h"
+#include "net/quic/platform/api/quic_logging.h"
 
-using base::StringPiece;
-using std::min;
 using std::string;
 
 namespace net {
@@ -22,7 +18,7 @@ namespace net {
 
 namespace {
 
-struct iovec MakeIovec(StringPiece data) {
+struct iovec MakeIovec(QuicStringPiece data) {
   struct iovec iov = {const_cast<char*>(data.data()),
                       static_cast<size_t>(data.size())};
   return iov;
@@ -42,9 +38,12 @@ size_t GetReceivedFlowControlWindow(QuicSession* session) {
 
 }  // namespace
 
-QuicStream::PendingData::PendingData(string data_in,
-                                     QuicAckListenerInterface* ack_listener_in)
-    : data(std::move(data_in)), offset(0), ack_listener(ack_listener_in) {}
+QuicStream::PendingData::PendingData(
+    string data_in,
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener)
+    : data(std::move(data_in)),
+      offset(0),
+      ack_listener(std::move(ack_listener)) {}
 
 QuicStream::PendingData::~PendingData() {}
 
@@ -55,12 +54,14 @@ QuicStream::QuicStream(QuicStreamId id, QuicSession* session)
       session_(session),
       stream_bytes_read_(0),
       stream_bytes_written_(0),
+      stream_bytes_outstanding_(0),
       stream_error_(QUIC_STREAM_NO_ERROR),
       connection_error_(QUIC_NO_ERROR),
       read_side_closed_(false),
       write_side_closed_(false),
       fin_buffered_(false),
       fin_sent_(false),
+      fin_outstanding_(false),
       fin_received_(false),
       rst_sent_(false),
       rst_received_(false),
@@ -70,14 +71,27 @@ QuicStream::QuicStream(QuicStreamId id, QuicSession* session)
                        perspective_,
                        GetReceivedFlowControlWindow(session),
                        GetInitialStreamFlowControlWindowToSend(session),
-                       session_->flow_controller()->auto_tune_receive_window()),
+                       session_->flow_controller()->auto_tune_receive_window(),
+                       session_->flow_controller()),
       connection_flow_controller_(session_->flow_controller()),
       stream_contributes_to_connection_flow_control_(true),
-      busy_counter_(0) {
+      busy_counter_(0),
+      add_random_padding_after_fin_(false),
+      ack_listener_(nullptr),
+      send_buffer_(session->connection()->helper()->GetBufferAllocator()) {
   SetFromConfig();
 }
 
-QuicStream::~QuicStream() {}
+QuicStream::~QuicStream() {
+  if (session_ != nullptr && session_->use_stream_notifier() &&
+      IsWaitingForAcks()) {
+    QUIC_DVLOG(1)
+        << ENDPOINT << "Stream " << id_
+        << " gets destroyed while waiting for acks. stream_bytes_outstanding = "
+        << stream_bytes_outstanding_
+        << ", fin_outstanding: " << fin_outstanding_;
+  }
+}
 
 void QuicStream::SetFromConfig() {}
 
@@ -94,8 +108,9 @@ void QuicStream::OnStreamFrame(const QuicStreamFrame& frame) {
   }
 
   if (read_side_closed_) {
-    DVLOG(1) << ENDPOINT << "Stream " << frame.stream_id
-             << " is closed for reading. Ignoring newly received stream data.";
+    QUIC_DLOG(INFO)
+        << ENDPOINT << "Stream " << frame.stream_id
+        << " is closed for reading. Ignoring newly received stream data.";
     // The subclass does not want to read data:  blackhole the data.
     return;
   }
@@ -177,9 +192,10 @@ void QuicStream::CloseConnectionWithDetails(QuicErrorCode error,
       error, details, ConnectionCloseBehavior::SEND_CONNECTION_CLOSE_PACKET);
 }
 
-void QuicStream::WriteOrBufferData(StringPiece data,
-                                   bool fin,
-                                   QuicAckListenerInterface* ack_listener) {
+void QuicStream::WriteOrBufferData(
+    QuicStringPiece data,
+    bool fin,
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener) {
   if (data.empty() && !fin) {
     QUIC_BUG << "data.empty() && !fin";
     return;
@@ -190,7 +206,8 @@ void QuicStream::WriteOrBufferData(StringPiece data,
     return;
   }
   if (write_side_closed_) {
-    DLOG(ERROR) << ENDPOINT << "Attempt to write when the write side is closed";
+    QUIC_DLOG(ERROR) << ENDPOINT
+                     << "Attempt to write when the write side is closed";
     return;
   }
 
@@ -206,7 +223,7 @@ void QuicStream::WriteOrBufferData(StringPiece data,
   // If there's unconsumed data or an unconsumed fin, queue it.
   if (consumed_data.bytes_consumed < data.length() ||
       (fin && !consumed_data.fin_consumed)) {
-    StringPiece remainder(data.substr(consumed_data.bytes_consumed));
+    QuicStringPiece remainder(data.substr(consumed_data.bytes_consumed));
     queued_data_bytes_ += remainder.size();
     queued_data_.emplace_back(remainder.as_string(), ack_listener);
   }
@@ -216,7 +233,8 @@ void QuicStream::OnCanWrite() {
   bool fin = false;
   while (!queued_data_.empty()) {
     PendingData* pending_data = &queued_data_.front();
-    QuicAckListenerInterface* ack_listener = pending_data->ack_listener.get();
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener =
+        pending_data->ack_listener;
     if (queued_data_.size() == 1 && fin_buffered_) {
       fin = true;
     }
@@ -266,9 +284,10 @@ QuicConsumedData QuicStream::WritevData(
     const struct iovec* iov,
     int iov_count,
     bool fin,
-    QuicAckListenerInterface* ack_listener) {
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener) {
   if (write_side_closed_) {
-    DLOG(ERROR) << ENDPOINT << "Attempt to write when the write side is closed";
+    QUIC_DLOG(ERROR) << ENDPOINT << "Stream " << id()
+                     << "attempting to write when the write side is closed";
     return QuicConsumedData(0, false);
   }
 
@@ -287,7 +306,7 @@ QuicConsumedData QuicStream::WritevData(
   QuicByteCount send_window = flow_controller_.SendWindowSize();
   if (stream_contributes_to_connection_flow_control_) {
     send_window =
-        min(send_window, connection_flow_controller_->SendWindowSize());
+        std::min(send_window, connection_flow_controller_->SendWindowSize());
   }
 
   if (session_->ShouldYield(id())) {
@@ -307,14 +326,15 @@ QuicConsumedData QuicStream::WritevData(
 
     // Writing more data would be a violation of flow control.
     write_length = static_cast<size_t>(send_window);
-    DVLOG(1) << "stream " << id() << " shortens write length to "
-             << write_length << " due to flow control";
+    QUIC_DVLOG(1) << "stream " << id() << " shortens write length to "
+                  << write_length << " due to flow control";
   }
 
   QuicConsumedData consumed_data =
       WritevDataInner(QuicIOVector(iov, iov_count, write_length),
-                      stream_bytes_written_, fin, ack_listener);
+                      stream_bytes_written_, fin, std::move(ack_listener));
   stream_bytes_written_ += consumed_data.bytes_consumed;
+  stream_bytes_outstanding_ += consumed_data.bytes_consumed;
 
   AddBytesSent(consumed_data.bytes_consumed);
 
@@ -330,6 +350,7 @@ QuicConsumedData QuicStream::WritevData(
     }
     if (fin && consumed_data.fin_consumed) {
       fin_sent_ = true;
+      fin_outstanding_ = true;
       if (fin_received_) {
         session_->StreamDraining(id_);
       }
@@ -340,6 +361,9 @@ QuicConsumedData QuicStream::WritevData(
   } else {
     session_->MarkConnectionLevelWriteBlocked(id());
   }
+  if (consumed_data.bytes_consumed > 0 || consumed_data.fin_consumed) {
+    busy_counter_ = 0;
+  }
   return consumed_data;
 }
 
@@ -347,22 +371,26 @@ QuicConsumedData QuicStream::WritevDataInner(
     QuicIOVector iov,
     QuicStreamOffset offset,
     bool fin,
-    QuicAckListenerInterface* ack_notifier_delegate) {
-  return session()->WritevData(this, id(), iov, offset, fin,
-                               ack_notifier_delegate);
+    QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener) {
+  StreamSendingState state = fin ? FIN : NO_FIN;
+  if (fin && add_random_padding_after_fin_) {
+    state = FIN_AND_PADDING;
+  }
+  return session()->WritevData(this, id(), iov, offset, state,
+                               std::move(ack_listener));
 }
 
 void QuicStream::CloseReadSide() {
   if (read_side_closed_) {
     return;
   }
-  DVLOG(1) << ENDPOINT << "Done reading from stream " << id();
+  QUIC_DLOG(INFO) << ENDPOINT << "Done reading from stream " << id();
 
   read_side_closed_ = true;
   sequencer_.ReleaseBuffer();
 
   if (write_side_closed_) {
-    DVLOG(1) << ENDPOINT << "Closing stream: " << id();
+    QUIC_DLOG(INFO) << ENDPOINT << "Closing stream " << id();
     session_->CloseStream(id());
   }
 }
@@ -371,11 +399,11 @@ void QuicStream::CloseWriteSide() {
   if (write_side_closed_) {
     return;
   }
-  DVLOG(1) << ENDPOINT << "Done writing to stream " << id();
+  QUIC_DLOG(INFO) << ENDPOINT << "Done writing to stream " << id();
 
   write_side_closed_ = true;
   if (read_side_closed_) {
-    DVLOG(1) << ENDPOINT << "Closing stream: " << id();
+    QUIC_DLOG(INFO) << ENDPOINT << "Closing stream " << id();
     session_->CloseStream(id());
   }
 }
@@ -389,11 +417,11 @@ QuicVersion QuicStream::version() const {
 }
 
 void QuicStream::StopReading() {
-  DVLOG(1) << ENDPOINT << "Stop reading from stream " << id();
+  QUIC_DLOG(INFO) << ENDPOINT << "Stop reading from stream " << id();
   sequencer_.StopReading();
 }
 
-const IPEndPoint& QuicStream::PeerAddressOfLatestPacket() const {
+const QuicSocketAddress& QuicStream::PeerAddressOfLatestPacket() const {
   return session_->connection()->last_packet_source_address();
 }
 
@@ -405,7 +433,7 @@ void QuicStream::OnClose() {
     // For flow control accounting, tell the peer how many bytes have been
     // written on this stream before termination. Done here if needed, using a
     // RST_STREAM frame.
-    DVLOG(1) << ENDPOINT << "Sending RST_STREAM in OnClose: " << id();
+    QUIC_DLOG(INFO) << ENDPOINT << "Sending RST_STREAM in OnClose: " << id();
     session_->SendRstStream(id(), QUIC_RST_ACKNOWLEDGEMENT,
                             stream_bytes_written_);
     rst_sent_ = true;
@@ -473,6 +501,63 @@ void QuicStream::UpdateSendWindowOffset(QuicStreamOffset new_window) {
   if (flow_controller_.UpdateSendWindowOffset(new_window)) {
     OnCanWrite();
   }
+}
+
+void QuicStream::AddRandomPaddingAfterFin() {
+  add_random_padding_after_fin_ = true;
+}
+
+void QuicStream::OnStreamFrameAcked(const QuicStreamFrame& frame,
+                                    QuicTime::Delta ack_delay_time) {
+  OnStreamFrameDiscarded(frame);
+  if (ack_listener_ != nullptr) {
+    ack_listener_->OnPacketAcked(frame.data_length, ack_delay_time);
+  }
+}
+
+void QuicStream::OnStreamFrameRetransmitted(const QuicStreamFrame& frame) {
+  if (ack_listener_ != nullptr) {
+    ack_listener_->OnPacketRetransmitted(frame.data_length);
+  }
+}
+
+void QuicStream::OnStreamFrameDiscarded(const QuicStreamFrame& frame) {
+  DCHECK_EQ(id_, frame.stream_id);
+  if (stream_bytes_outstanding_ < frame.data_length ||
+      (!fin_outstanding_ && frame.fin)) {
+    CloseConnectionWithDetails(QUIC_INTERNAL_ERROR,
+                               "Trying to discard unsent data.");
+    return;
+  }
+  stream_bytes_outstanding_ -= frame.data_length;
+  if (frame.fin) {
+    fin_outstanding_ = false;
+  }
+  if (session_->streams_own_data() && frame.data_length > 0) {
+    send_buffer_.RemoveStreamFrame(frame.offset, frame.data_length);
+  }
+  if (!IsWaitingForAcks()) {
+    session_->OnStreamDoneWaitingForAcks(id_);
+  }
+}
+
+bool QuicStream::IsWaitingForAcks() const {
+  return stream_bytes_outstanding_ || fin_outstanding_;
+}
+
+void QuicStream::SaveStreamData(QuicIOVector iov,
+                                size_t iov_offset,
+                                QuicStreamOffset offset,
+                                QuicByteCount data_length) {
+  DCHECK_LT(0u, data_length);
+  send_buffer_.SaveStreamData(iov, iov_offset, offset, data_length);
+}
+
+bool QuicStream::WriteStreamData(QuicStreamOffset offset,
+                                 QuicByteCount data_length,
+                                 QuicDataWriter* writer) {
+  DCHECK_LT(0u, data_length);
+  return send_buffer_.WriteStreamData(offset, data_length, writer);
 }
 
 }  // namespace net

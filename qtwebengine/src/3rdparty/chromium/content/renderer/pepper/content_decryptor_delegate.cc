@@ -10,11 +10,11 @@
 
 #include "base/callback_helpers.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "content/renderer/pepper/ppb_buffer_impl.h"
-#include "media/base/audio_buffer.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/bind_to_current_loop.h"
 #include "media/base/cdm_key_information.h"
@@ -36,9 +36,11 @@
 #include "ppapi/thunk/ppb_buffer_api.h"
 #include "ui/gfx/geometry/rect.h"
 
+using media::CdmMessageType;
 using media::CdmPromise;
+using media::CdmSessionType;
+using media::ContentDecryptionModule;
 using media::Decryptor;
-using media::MediaKeys;
 using media::NewSessionCdmPromise;
 using media::SimpleCdmPromise;
 using ppapi::ArrayBufferVar;
@@ -94,32 +96,31 @@ bool CopyStringToArray(const std::string& str, uint8_t(&array)[array_size]) {
   return true;
 }
 
-// Fills the |block_info| with information from |encrypted_buffer|.
+// Fills the |block_info| with information from |buffer|.
 //
 // Returns true if |block_info| is successfully filled. Returns false
 // otherwise.
-bool MakeEncryptedBlockInfo(
-    const scoped_refptr<media::DecoderBuffer>& encrypted_buffer,
-    uint32_t request_id,
-    PP_EncryptedBlockInfo* block_info) {
+bool MakeEncryptedBlockInfo(const scoped_refptr<media::DecoderBuffer>& buffer,
+                            uint32_t request_id,
+                            PP_EncryptedBlockInfo* block_info) {
   // TODO(xhwang): Fix initialization of PP_EncryptedBlockInfo here and
   // anywhere else.
   memset(block_info, 0, sizeof(*block_info));
   block_info->tracking_info.request_id = request_id;
 
   // EOS buffers need a request ID and nothing more.
-  if (encrypted_buffer->end_of_stream())
+  if (buffer->end_of_stream())
     return true;
 
-  DCHECK(encrypted_buffer->data_size())
-      << "DecryptConfig is set on an empty buffer";
+  DCHECK(buffer->data_size()) << "DecryptConfig is set on an empty buffer";
 
-  block_info->tracking_info.timestamp =
-      encrypted_buffer->timestamp().InMicroseconds();
-  block_info->data_size = encrypted_buffer->data_size();
+  block_info->tracking_info.timestamp = buffer->timestamp().InMicroseconds();
+  block_info->data_size = buffer->data_size();
 
-  const media::DecryptConfig* decrypt_config =
-      encrypted_buffer->decrypt_config();
+  const media::DecryptConfig* decrypt_config = buffer->decrypt_config();
+  // There's no need to fill encryption related fields for unencrypted buffer.
+  if (!decrypt_config)
+    return true;
 
   if (!CopyStringToArray(decrypt_config->key_id(), block_info->key_id) ||
       !CopyStringToArray(decrypt_config->iv(), block_info->iv))
@@ -272,14 +273,13 @@ media::SampleFormat PpDecryptedSampleFormatToMediaSampleFormat(
   }
 }
 
-PP_SessionType MediaSessionTypeToPpSessionType(
-    MediaKeys::SessionType session_type) {
+PP_SessionType MediaSessionTypeToPpSessionType(CdmSessionType session_type) {
   switch (session_type) {
-    case MediaKeys::TEMPORARY_SESSION:
+    case CdmSessionType::TEMPORARY_SESSION:
       return PP_SESSIONTYPE_TEMPORARY;
-    case MediaKeys::PERSISTENT_LICENSE_SESSION:
+    case CdmSessionType::PERSISTENT_LICENSE_SESSION:
       return PP_SESSIONTYPE_PERSISTENT_LICENSE;
-    case MediaKeys::PERSISTENT_RELEASE_MESSAGE_SESSION:
+    case CdmSessionType::PERSISTENT_RELEASE_MESSAGE_SESSION:
       return PP_SESSIONTYPE_PERSISTENT_RELEASE;
     default:
       NOTREACHED();
@@ -349,18 +349,18 @@ media::CdmKeyInformation::KeyStatus PpCdmKeyStatusToCdmKeyInformationKeyStatus(
   }
 }
 
-MediaKeys::MessageType PpCdmMessageTypeToMediaMessageType(
+CdmMessageType PpCdmMessageTypeToMediaMessageType(
     PP_CdmMessageType message_type) {
   switch (message_type) {
     case PP_CDMMESSAGETYPE_LICENSE_REQUEST:
-      return MediaKeys::LICENSE_REQUEST;
+      return CdmMessageType::LICENSE_REQUEST;
     case PP_CDMMESSAGETYPE_LICENSE_RENEWAL:
-      return MediaKeys::LICENSE_RENEWAL;
+      return CdmMessageType::LICENSE_RENEWAL;
     case PP_CDMMESSAGETYPE_LICENSE_RELEASE:
-      return MediaKeys::LICENSE_RELEASE;
+      return CdmMessageType::LICENSE_RELEASE;
     default:
       NOTREACHED();
-      return MediaKeys::LICENSE_REQUEST;
+      return CdmMessageType::LICENSE_REQUEST;
   }
 }
 
@@ -385,6 +385,7 @@ ContentDecryptorDelegate::ContentDecryptorDelegate(
       audio_samples_per_second_(0),
       audio_channel_count_(0),
       audio_channel_layout_(media::CHANNEL_LAYOUT_NONE),
+      pool_(new media::AudioBufferMemoryPool()),
       weak_ptr_factory_(this) {
   weak_this_ = weak_ptr_factory_.GetWeakPtr();
 }
@@ -444,7 +445,7 @@ void ContentDecryptorDelegate::SetServerCertificate(
 }
 
 void ContentDecryptorDelegate::CreateSessionAndGenerateRequest(
-    MediaKeys::SessionType session_type,
+    CdmSessionType session_type,
     media::EmeInitDataType init_data_type,
     const std::vector<uint8_t>& init_data,
     std::unique_ptr<NewSessionCdmPromise> promise) {
@@ -458,7 +459,7 @@ void ContentDecryptorDelegate::CreateSessionAndGenerateRequest(
 }
 
 void ContentDecryptorDelegate::LoadSession(
-    media::MediaKeys::SessionType session_type,
+    CdmSessionType session_type,
     const std::string& session_id,
     std::unique_ptr<NewSessionCdmPromise> promise) {
   uint32_t promise_id = cdm_promise_adapter_.SavePromise(std::move(promise));
@@ -529,7 +530,6 @@ bool ContentDecryptorDelegate::Decrypt(
   DVLOG(2) << "Decrypt() - request_id " << request_id;
 
   PP_EncryptedBlockInfo block_info = {};
-  DCHECK(encrypted_buffer->decrypt_config());
   if (!MakeEncryptedBlockInfo(encrypted_buffer, request_id, &block_info)) {
     return false;
   }
@@ -810,7 +810,7 @@ void ContentDecryptorDelegate::OnSessionKeysChange(
   keys_info.reserve(key_count);
   for (uint32_t i = 0; i < key_count; ++i) {
     const auto& info = key_information[i];
-    keys_info.push_back(new media::CdmKeyInformation(
+    keys_info.push_back(base::MakeUnique<media::CdmKeyInformation>(
         info.key_id, info.key_id_size,
         PpCdmKeyStatusToCdmKeyInformationKeyStatus(info.key_status),
         info.system_code));
@@ -830,8 +830,13 @@ void ContentDecryptorDelegate::OnSessionExpirationChange(
   StringVar* session_id_string = StringVar::FromPPVar(session_id);
   DCHECK(session_id_string);
 
-  session_expiration_update_cb_.Run(session_id_string->value(),
-                                    ppapi::PPTimeToTime(new_expiry_time));
+  // PPTimeToTime() converts exact 0 to base::Time::UnixEpoch, which is not
+  // desired here. We want to convert 0.0 to a null base::Time.
+  base::Time expiry_time;
+  if (new_expiry_time != 0.0)
+    expiry_time = ppapi::PPTimeToTime(new_expiry_time);
+
+  session_expiration_update_cb_.Run(session_id_string->value(), expiry_time);
 }
 
 void ContentDecryptorDelegate::OnSessionClosed(PP_Var session_id) {
@@ -1108,12 +1113,12 @@ void ContentDecryptorDelegate::CancelDecode(Decryptor::StreamType stream_type) {
 
 bool ContentDecryptorDelegate::MakeMediaBufferResource(
     Decryptor::StreamType stream_type,
-    const scoped_refptr<media::DecoderBuffer>& encrypted_buffer,
+    const scoped_refptr<media::DecoderBuffer>& buffer,
     scoped_refptr<PPB_Buffer_Impl>* resource) {
   TRACE_EVENT0("media", "ContentDecryptorDelegate::MakeMediaBufferResource");
 
   // End of stream buffers are represented as null resources.
-  if (encrypted_buffer->end_of_stream()) {
+  if (buffer->end_of_stream()) {
     *resource = NULL;
     return true;
   }
@@ -1123,7 +1128,7 @@ bool ContentDecryptorDelegate::MakeMediaBufferResource(
       (stream_type == Decryptor::kAudio) ? audio_input_resource_
                                          : video_input_resource_;
 
-  const size_t data_size = static_cast<size_t>(encrypted_buffer->data_size());
+  const size_t data_size = static_cast<size_t>(buffer->data_size());
   if (!media_resource.get() || media_resource->size() < data_size) {
     // Either the buffer hasn't been created yet, or we have one that isn't big
     // enough to fit |size| bytes.
@@ -1154,7 +1159,7 @@ bool ContentDecryptorDelegate::MakeMediaBufferResource(
     media_resource = NULL;
     return false;
   }
-  memcpy(mapper.data(), encrypted_buffer->data(), data_size);
+  memcpy(mapper.data(), buffer->data(), data_size);
 
   *resource = media_resource;
   return true;
@@ -1235,13 +1240,9 @@ bool ContentDecryptorDelegate::DeserializeAudioFrames(
 
     const int frame_count = frame_size / audio_bytes_per_frame;
     scoped_refptr<media::AudioBuffer> frame = media::AudioBuffer::CopyFrom(
-        sample_format,
-        audio_channel_layout_,
-        audio_channel_count_,
-        audio_samples_per_second_,
-        frame_count,
-        &channel_ptrs[0],
-        base::TimeDelta::FromMicroseconds(timestamp));
+        sample_format, audio_channel_layout_, audio_channel_count_,
+        audio_samples_per_second_, frame_count, &channel_ptrs[0],
+        base::TimeDelta::FromMicroseconds(timestamp), pool_);
     frames->push_back(frame);
 
     cur += frame_size;

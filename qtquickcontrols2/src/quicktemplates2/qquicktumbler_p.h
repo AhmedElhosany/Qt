@@ -119,6 +119,9 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void updatePolish() override;
 
+    QFont defaultFont() const override;
+    QPalette defaultPalette() const override;
+
 private:
     Q_DISABLE_COPY(QQuickTumbler)
     Q_DECLARE_PRIVATE(QQuickTumbler)
@@ -127,7 +130,8 @@ private:
     Q_PRIVATE_SLOT(d_func(), void _q_updateItemHeights())
     Q_PRIVATE_SLOT(d_func(), void _q_onViewCurrentIndexChanged())
     Q_PRIVATE_SLOT(d_func(), void _q_onViewCountChanged())
-    Q_PRIVATE_SLOT(d_func(), void _q_calculateAttachedDisplacements())
+    Q_PRIVATE_SLOT(d_func(), void _q_onViewOffsetChanged())
+    Q_PRIVATE_SLOT(d_func(), void _q_onViewContentYChanged())
 };
 
 class QQuickTumblerAttachedPrivate;
@@ -135,12 +139,11 @@ class QQuickTumblerAttachedPrivate;
 class Q_QUICKTEMPLATES2_PRIVATE_EXPORT QQuickTumblerAttached : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QQuickTumbler *tumbler READ tumbler CONSTANT)
+    Q_PROPERTY(QQuickTumbler *tumbler READ tumbler CONSTANT FINAL)
     Q_PROPERTY(qreal displacement READ displacement NOTIFY displacementChanged FINAL)
 
 public:
     explicit QQuickTumblerAttached(QObject *parent = nullptr);
-    ~QQuickTumblerAttached();
 
     QQuickTumbler *tumbler() const;
     qreal displacement() const;
@@ -151,8 +154,6 @@ Q_SIGNALS:
 private:
     Q_DISABLE_COPY(QQuickTumblerAttached)
     Q_DECLARE_PRIVATE(QQuickTumblerAttached)
-
-    Q_PRIVATE_SLOT(d_func(), void _q_calculateDisplacement())
 };
 
 QT_END_NAMESPACE

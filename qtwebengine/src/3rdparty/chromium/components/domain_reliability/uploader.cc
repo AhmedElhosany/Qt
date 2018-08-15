@@ -8,14 +8,16 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/supports_user_data.h"
-#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/domain_reliability/util.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -40,8 +42,9 @@ class UploadUserData : public base::SupportsUserData::Data {
  private:
   UploadUserData(int depth) : depth_(depth) {}
 
-  static base::SupportsUserData::Data* CreateUploadUserData(int depth) {
-    return new UploadUserData(depth);
+  static std::unique_ptr<base::SupportsUserData::Data> CreateUploadUserData(
+      int depth) {
+    return base::WrapUnique(new UploadUserData(depth));
   }
 
   int depth_;
@@ -59,9 +62,12 @@ class DomainReliabilityUploaderImpl
           net::URLRequestContextGetter>& url_request_context_getter)
       : time_(time),
         url_request_context_getter_(url_request_context_getter),
-        discard_uploads_(true) {}
+        discard_uploads_(true),
+        shutdown_(false) {}
 
-  ~DomainReliabilityUploaderImpl() override {}
+  ~DomainReliabilityUploaderImpl() override {
+    DCHECK(shutdown_);
+  }
 
   // DomainReliabilityUploader implementation:
   void UploadReport(
@@ -72,7 +78,7 @@ class DomainReliabilityUploaderImpl
     VLOG(1) << "Uploading report to " << upload_url;
     VLOG(2) << "Report JSON: " << report_json;
 
-    if (discard_uploads_) {
+    if (discard_uploads_ || shutdown_) {
       VLOG(1) << "Discarding report instead of uploading.";
       UploadResult result;
       result.status = UploadResult::SUCCESS;
@@ -80,11 +86,35 @@ class DomainReliabilityUploaderImpl
       return;
     }
 
-    std::unique_ptr<net::URLFetcher> owned_fetcher =
-        net::URLFetcher::Create(0, upload_url, net::URLFetcher::POST, this);
+    net::NetworkTrafficAnnotationTag traffic_annotation =
+        net::DefineNetworkTrafficAnnotation("domain_reliability_report_upload",
+                                            R"(
+          semantics {
+            sender: "Domain Reliability"
+            description:
+              "If Chromium has trouble reaching certain Google sites or "
+              "services, Domain Reliability may report the problems back to "
+              "Google."
+            trigger: "Failure to load certain Google sites or services."
+            data:
+              "Details of the failed request, including the URL, any IP "
+              "addresses the browser tried to connect to, error(s) "
+              "encountered loading the resource, and other connection details."
+            destination: GOOGLE_OWNED_SERVICE
+          }
+          policy {
+            cookies_allowed: false
+            setting:
+              "Users can enable or disable Domain Reliability on desktop, via "
+              "toggling 'Automatically send usage statistics and crash reports "
+              "to Google' in Chromium's settings under Privacy. On ChromeOS, "
+              "the setting is named 'Automatically send diagnostic and usage "
+              "data to Google'."
+            policy_exception_justification: "Not implemented."
+          })");
+    std::unique_ptr<net::URLFetcher> owned_fetcher = net::URLFetcher::Create(
+        0, upload_url, net::URLFetcher::POST, this, traffic_annotation);
     net::URLFetcher* fetcher = owned_fetcher.get();
-    data_use_measurement::DataUseUserData::AttachToFetcher(
-        fetcher, data_use_measurement::DataUseUserData::DOMAIN_RELIABILITY);
     fetcher->SetRequestContext(url_request_context_getter_.get());
     fetcher->SetLoadFlags(net::LOAD_DO_NOT_SEND_COOKIES |
                           net::LOAD_DO_NOT_SAVE_COOKIES);
@@ -95,7 +125,7 @@ class DomainReliabilityUploaderImpl
         UploadUserData::CreateCreateDataCallback(max_upload_depth + 1));
     fetcher->Start();
 
-    upload_callbacks_[fetcher] = {std::move(owned_fetcher), callback};
+    uploads_[fetcher] = {std::move(owned_fetcher), callback};
 
     base::TimeTicks now = base::TimeTicks::Now();
     if (!last_upload_start_time_.is_null()) {
@@ -110,12 +140,18 @@ class DomainReliabilityUploaderImpl
     VLOG(1) << "Setting discard_uploads to " << discard_uploads;
   }
 
+  void Shutdown() override {
+    DCHECK(!shutdown_);
+    shutdown_ = true;
+    uploads_.clear();
+  }
+
   // net::URLFetcherDelegate implementation:
   void OnURLFetchComplete(const net::URLFetcher* fetcher) override {
     DCHECK(fetcher);
 
-    auto callback_it = upload_callbacks_.find(fetcher);
-    DCHECK(callback_it != upload_callbacks_.end());
+    auto callback_it = uploads_.find(fetcher);
+    DCHECK(callback_it != uploads_.end());
 
     int net_error = GetNetErrorFromURLRequestStatus(fetcher->GetStatus());
     int http_response_code = fetcher->GetResponseCode();
@@ -148,7 +184,7 @@ class DomainReliabilityUploaderImpl
                                        &result);
     callback_it->second.second.Run(result);
 
-    upload_callbacks_.erase(callback_it);
+    uploads_.erase(callback_it);
   }
 
  private:
@@ -158,9 +194,10 @@ class DomainReliabilityUploaderImpl
   scoped_refptr<net::URLRequestContextGetter> url_request_context_getter_;
   std::map<const net::URLFetcher*,
            std::pair<std::unique_ptr<net::URLFetcher>, UploadCallback>>
-      upload_callbacks_;
+      uploads_;
   bool discard_uploads_;
   base::TimeTicks last_upload_start_time_;
+  bool shutdown_;
 };
 
 }  // namespace
@@ -178,6 +215,12 @@ std::unique_ptr<DomainReliabilityUploader> DomainReliabilityUploader::Create(
 }
 
 // static
+bool DomainReliabilityUploader::OriginatedFromDomainReliability(
+    const net::URLRequest& request) {
+  return request.GetUserData(UploadUserData::kUserDataKey) != nullptr;
+}
+
+// static
 int DomainReliabilityUploader::GetURLRequestUploadDepth(
     const net::URLRequest& request) {
   UploadUserData* data = static_cast<UploadUserData*>(
@@ -186,5 +229,7 @@ int DomainReliabilityUploader::GetURLRequestUploadDepth(
     return 0;
   return data->depth();
 }
+
+void DomainReliabilityUploader::Shutdown() {}
 
 }  // namespace domain_reliability

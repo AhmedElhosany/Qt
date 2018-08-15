@@ -576,6 +576,7 @@ TESTPLANARTOB(I420, 2, 2, RGB565, 2, 2, 1, 9, ARGB, 4)
 TESTPLANARTOB(I420, 2, 2, ARGB1555, 2, 2, 1, 9, ARGB, 4)
 TESTPLANARTOB(I420, 2, 2, ARGB4444, 2, 2, 1, 17, ARGB, 4)
 TESTPLANARTOB(I422, 2, 1, ARGB, 4, 4, 1, 2, ARGB, 4)
+TESTPLANARTOB(I422, 2, 1, RGB565, 2, 2, 1, 9, ARGB, 4)
 TESTPLANARTOB(J422, 2, 1, ARGB, 4, 4, 1, 2, ARGB, 4)
 TESTPLANARTOB(J422, 2, 1, ABGR, 4, 4, 1, 2, ARGB, 4)
 TESTPLANARTOB(H422, 2, 1, ARGB, 4, 4, 1, 2, ARGB, 4)
@@ -1800,7 +1801,7 @@ TESTPLANARTOE(I420, 2, 2, RAW, 1, 3, ARGB, 4)
 TESTPLANARTOE(I420, 2, 2, ARGB, 1, 4, RGB565, 2)
 TESTPLANARTOE(I420, 2, 2, ARGB, 1, 4, ARGB1555, 2)
 TESTPLANARTOE(I420, 2, 2, ARGB, 1, 4, ARGB4444, 2)
-TESTPLANARTOE(I422, 2, 1, ARGB, 1, 4, ARGB, 4)
+TESTPLANARTOE(I422, 2, 1, ARGB, 1, 4, RGB565, 2)
 TESTPLANARTOE(J422, 2, 1, ARGB, 1, 4, ARGB, 4)
 TESTPLANARTOE(J422, 2, 1, ABGR, 1, 4, ARGB, 4)
 TESTPLANARTOE(H422, 2, 1, ARGB, 1, 4, ARGB, 4)
@@ -1884,5 +1885,40 @@ TESTPLANARTOE(I422, 2, 1, UYVY, 2, 4, ARGB, 4)
 
 TESTQPLANARTOE(I420Alpha, 2, 2, ARGB, 1, 4, ABGR, 4)
 TESTQPLANARTOE(I420Alpha, 2, 2, ABGR, 1, 4, ARGB, 4)
+
+TEST_F(LibYUVConvertTest, RotateWithARGBSource) {
+  // 2x2 frames
+  uint32_t src[4];
+  uint32_t dst[4];
+  // some random input
+  src[0] = 0x11000000;
+  src[1] = 0x00450000;
+  src[2] = 0x00009f00;
+  src[3] = 0x000000ff;
+  // zeros on destination
+  dst[0] = 0x00000000;
+  dst[1] = 0x00000000;
+  dst[2] = 0x00000000;
+  dst[3] = 0x00000000;
+
+  int r = ConvertToARGB(reinterpret_cast<uint8_t*>(src),
+                        16,  // input size
+                        reinterpret_cast<uint8_t*>(dst),
+                        8,  // destination stride
+                        0,  // crop_x
+                        0,  // crop_y
+                        2,  // width
+                        2,  // height
+                        2,  // crop width
+                        2,  // crop height
+                        kRotate90, FOURCC_ARGB);
+
+  EXPECT_EQ(r, 0);
+  // 90 degrees rotation, no conversion
+  EXPECT_EQ(dst[0], src[2]);
+  EXPECT_EQ(dst[1], src[0]);
+  EXPECT_EQ(dst[2], src[3]);
+  EXPECT_EQ(dst[3], src[1]);
+}
 
 }  // namespace libyuv

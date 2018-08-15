@@ -67,6 +67,7 @@
 #include <Qt3DRender/private/stringtoint_p.h>
 #include <Qt3DRender/private/techniquemanager_p.h>
 #include <Qt3DRender/private/memorybarrier_p.h>
+#include <Qt3DRender/private/blitframebuffer_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -118,8 +119,11 @@ void setRenderViewConfigFromFrameGraphLeafNode(RenderView *rv, const FrameGraphN
                 break;
 
             case FrameGraphNode::LayerFilter: // Can be set multiple times in the tree
-                rv->setHasLayerFilter(true);
-                rv->appendLayerFilter(static_cast<const LayerFilterNode *>(node)->layerIds());
+                rv->appendLayerFilter(static_cast<const LayerFilterNode *>(node)->peerId());
+                break;
+
+            case FrameGraphNode::ProximityFilter: // Can be set multiple times in the tree
+                rv->appendProximityFilterId(node->peerId());
                 break;
 
             case FrameGraphNode::RenderPassFilter:
@@ -141,7 +145,7 @@ void setRenderViewConfigFromFrameGraphLeafNode(RenderView *rv, const FrameGraphN
 
                     RenderTarget *renderTarget = manager->renderTargetManager()->data(renderTargetHandle);
                     if (renderTarget)
-                        rv->setAttachmentPack(AttachmentPack(targetSelector, renderTarget, manager->attachmentManager()));
+                        rv->setAttachmentPack(AttachmentPack(renderTarget, manager->attachmentManager(), targetSelector->outputs()));
                 }
                 break;
             }
@@ -232,8 +236,8 @@ void setRenderViewConfigFromFrameGraphLeafNode(RenderView *rv, const FrameGraphN
                 auto *renderCapture = const_cast<Render::RenderCapture *>(
                                             static_cast<const Render::RenderCapture *>(node));
                 if (rv->renderCaptureNodeId().isNull() && renderCapture->wasCaptureRequested()) {
-                    renderCapture->acknowledgeCaptureRequest();
                     rv->setRenderCaptureNodeId(renderCapture->peerId());
+                    rv->setRenderCaptureRequest(renderCapture->takeCaptureRequest());
                 }
                 break;
             }
@@ -249,6 +253,22 @@ void setRenderViewConfigFromFrameGraphLeafNode(RenderView *rv, const FrameGraphN
                                             static_cast<const Render::BufferCapture *>(node));
                 if (bufferCapture != nullptr)
                      rv->setIsDownloadBuffersEnable(bufferCapture->isEnabled());
+                break;
+            }
+
+            case FrameGraphNode::BlitFramebuffer: {
+                const Render::BlitFramebuffer *blitFramebufferNode =
+                        static_cast<const Render::BlitFramebuffer *>(node);
+                rv->setHasBlitFramebufferInfo(true);
+                BlitFramebufferInfo bfbInfo;
+                bfbInfo.sourceRenderTargetId = blitFramebufferNode->sourceRenderTargetId();
+                bfbInfo.destinationRenderTargetId = blitFramebufferNode->destinationRenderTargetId();
+                bfbInfo.sourceRect = blitFramebufferNode->sourceRect();
+                bfbInfo.destinationRect = blitFramebufferNode->destinationRect();
+                bfbInfo.sourceAttachmentPoint = blitFramebufferNode->sourceAttachmentPoint();
+                bfbInfo.destinationAttachmentPoint = blitFramebufferNode->destinationAttachmentPoint();
+                bfbInfo.interpolationMethod = blitFramebufferNode->interpolationMethod();
+                rv->setBlitFrameBufferInfo(bfbInfo);
                 break;
             }
 

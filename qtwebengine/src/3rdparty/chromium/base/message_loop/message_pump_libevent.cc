@@ -43,12 +43,13 @@
 
 namespace base {
 
-MessagePumpLibevent::FileDescriptorWatcher::FileDescriptorWatcher()
+MessagePumpLibevent::FileDescriptorWatcher::FileDescriptorWatcher(
+    const tracked_objects::Location& from_here)
     : event_(NULL),
       pump_(NULL),
       watcher_(NULL),
-      was_destroyed_(NULL) {
-}
+      was_destroyed_(NULL),
+      created_from_location_(from_here) {}
 
 MessagePumpLibevent::FileDescriptorWatcher::~FileDescriptorWatcher() {
   if (event_) {
@@ -152,13 +153,12 @@ bool MessagePumpLibevent::WatchFileDescriptor(int fd,
   }
 
   std::unique_ptr<event> evt(controller->ReleaseEvent());
-  if (evt.get() == NULL) {
+  if (!evt) {
     // Ownership is transferred to the controller.
     evt.reset(new event);
   } else {
     // Make sure we don't pick up any funky internal libevent masks.
-    int old_interest_mask = evt.get()->ev_events &
-        (EV_READ | EV_WRITE | EV_PERSIST);
+    int old_interest_mask = evt->ev_events & (EV_READ | EV_WRITE | EV_PERSIST);
 
     // Combine old/new event masks.
     event_mask |= old_interest_mask;
@@ -179,11 +179,13 @@ bool MessagePumpLibevent::WatchFileDescriptor(int fd,
 
   // Tell libevent which message pump this socket will belong to when we add it.
   if (event_base_set(event_base_, evt.get())) {
+    DPLOG(ERROR) << "event_base_set(fd=" << EVENT_FD(evt.get()) << ")";
     return false;
   }
 
   // Add this socket to the list of monitored sockets.
   if (event_add(evt.get(), NULL)) {
+    DPLOG(ERROR) << "event_add failed(fd=" << EVENT_FD(evt.get()) << ")";
     return false;
   }
 
@@ -315,8 +317,11 @@ void MessagePumpLibevent::OnLibeventNotification(int fd,
   FileDescriptorWatcher* controller =
       static_cast<FileDescriptorWatcher*>(context);
   DCHECK(controller);
-  TRACE_EVENT1("toplevel", "MessagePumpLibevent::OnLibeventNotification",
-               "fd", fd);
+  TRACE_EVENT2("toplevel", "MessagePumpLibevent::OnLibeventNotification",
+               "src_file", controller->created_from_location().file_name(),
+               "src_func", controller->created_from_location().function_name());
+  TRACE_HEAP_PROFILER_API_SCOPED_TASK_EXECUTION heap_profiler_scope(
+      controller->created_from_location().file_name());
 
   MessagePumpLibevent* pump = controller->pump();
   pump->processed_io_events_ = true;

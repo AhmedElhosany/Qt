@@ -238,11 +238,25 @@ GL_FUNCTIONS = [
       'GLenum target, GLint level, GLenum internalformat, GLsizei width, '
       'GLsizei height, GLint border, GLsizei imageSize, const void* data', },
 { 'return_type': 'void',
+  'versions': [{'name': 'glCompressedTexImage2DRobustANGLE',
+                'extensions': ['GL_ANGLE_robust_client_memory']}],
+  'arguments':
+      'GLenum target, GLint level, GLenum internalformat, GLsizei width, '
+      'GLsizei height, GLint border, GLsizei imageSize, GLsizei dataSize, '
+      'const void* data', },
+{ 'return_type': 'void',
   'versions': [{ 'name': 'glCompressedTexImage3D' }],
   'arguments':
       'GLenum target, GLint level, GLenum internalformat, GLsizei width, '
       'GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, '
       'const void* data', },
+{ 'return_type': 'void',
+  'versions': [{'name': 'glCompressedTexImage3DRobustANGLE',
+                'extensions': ['GL_ANGLE_robust_client_memory']}],
+  'arguments':
+      'GLenum target, GLint level, GLenum internalformat, GLsizei width, '
+      'GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, '
+      'GLsizei dataSize, const void* data', },
 { 'return_type': 'void',
   'names': ['glCompressedTexSubImage2D'],
   'arguments':
@@ -250,11 +264,26 @@ GL_FUNCTIONS = [
       'GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, '
       'const void* data', },
 { 'return_type': 'void',
+  'versions': [{'name': 'glCompressedTexSubImage2DRobustANGLE',
+                'extensions': ['GL_ANGLE_robust_client_memory']}],
+  'arguments':
+      'GLenum target, GLint level, GLint xoffset, GLint yoffset, '
+      'GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, '
+      'GLsizei dataSize, const void* data', },
+{ 'return_type': 'void',
   'versions': [{ 'name': 'glCompressedTexSubImage3D' }],
   'arguments':
       'GLenum target, GLint level, GLint xoffset, GLint yoffset, '
       'GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, '
       'GLenum format, GLsizei imageSize, const void* data', },
+{ 'return_type': 'void',
+  'versions': [{'name': 'glCompressedTexSubImage3DRobustANGLE',
+                'extensions': ['GL_ANGLE_robust_client_memory']}],
+  'arguments':
+      'GLenum target, GLint level, GLint xoffset, GLint yoffset, '
+      'GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, '
+      'GLenum format, GLsizei imageSize, GLsizei dataSize, '
+      'const void* data', },
 { 'return_type': 'void',
   'versions': [{ 'name': 'glCopyBufferSubData' }],
   'arguments':
@@ -264,10 +293,10 @@ GL_FUNCTIONS = [
   'versions': [{ 'name': 'glCopySubTextureCHROMIUM',
                  'extensions': ['GL_CHROMIUM_copy_texture'], }],
   'arguments':
-      'GLuint sourceId, GLuint destId, GLint xoffset, GLint yoffset, '
-      'GLint x, GLint y, GLsizei width, GLsizei height, '
-      'GLboolean unpackFlipY, GLboolean unpackPremultiplyAlpha, '
-      'GLboolean unpackUnmultiplyAlpha', },
+      'GLuint sourceId, GLint sourceLevel, GLenum destTarget, GLuint destId, '
+      'GLint destLevel, GLint xoffset, GLint yoffset, GLint x, GLint y, '
+      'GLsizei width, GLsizei height, GLboolean unpackFlipY, '
+      'GLboolean unpackPremultiplyAlpha, GLboolean unpackUnmultiplyAlpha', },
 { 'return_type': 'void',
   'names': ['glCopyTexImage2D'],
   'arguments':
@@ -287,9 +316,10 @@ GL_FUNCTIONS = [
   'versions': [{ 'name': 'glCopyTextureCHROMIUM',
                  'extensions': ['GL_CHROMIUM_copy_texture'], }],
   'arguments':
-      'GLuint sourceId, GLuint destId, GLint internalFormat, '
-      'GLenum destType, GLboolean unpackFlipY, '
-      'GLboolean unpackPremultiplyAlpha, GLboolean unpackUnmultiplyAlpha', },
+      'GLuint sourceId, GLint sourceLevel, GLenum destTarget, GLuint destId, '
+      'GLint destLevel, GLint internalFormat, GLenum destType, '
+      'GLboolean unpackFlipY, GLboolean unpackPremultiplyAlpha, '
+      'GLboolean unpackUnmultiplyAlpha', },
 { 'return_type': 'void',
   'names': ['glCoverageModulationNV'],
   'arguments': 'GLenum components'},
@@ -1294,7 +1324,8 @@ GL_FUNCTIONS = [
                 'extensions': ['GL_ANGLE_robust_client_memory']}],
   'arguments':
       'GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, '
-      'GLenum type, GLsizei bufSize, GLsizei* length, void* data', },
+      'GLenum type, GLsizei bufSize, GLsizei* length, GLsizei* columns, '
+      'GLsizei* rows, void* data', },
 { 'return_type': 'void',
   'names': ['glReadPixels'],
   'arguments':
@@ -1305,7 +1336,8 @@ GL_FUNCTIONS = [
                 'extensions': ['GL_ANGLE_robust_client_memory']}],
   'arguments':
       'GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, '
-      'GLenum type, GLsizei bufSize, GLsizei* length, void* pixels', },
+      'GLenum type, GLsizei bufSize, GLsizei* length, GLsizei* columns, '
+      'GLsizei* rows, void* pixels', },
 { 'return_type': 'void',
   'names': ['glReleaseShaderCompiler'],
   'arguments': 'void', },
@@ -1329,6 +1361,10 @@ GL_FUNCTIONS = [
   'names': ['glRenderbufferStorageMultisampleIMG'],
   'arguments': 'GLenum target, GLsizei samples, GLenum internalformat, '
                'GLsizei width, GLsizei height', },
+{ 'return_type': 'void',
+  'versions': [{ 'name': 'glRequestExtensionANGLE',
+                 'extensions': ['GL_ANGLE_request_extension'] }],
+  'arguments': 'const char* name', },
 { 'return_type': 'void',
   'versions': [{ 'name': 'glResumeTransformFeedback',
                  'extensions': ['GL_ARB_transform_feedback2'] }],
@@ -1946,6 +1982,24 @@ EGL_FUNCTIONS = [
   'names': ['eglPostSubBufferNV'],
   'arguments': 'EGLDisplay dpy, EGLSurface surface, '
     'EGLint x, EGLint y, EGLint width, EGLint height', },
+{ 'return_type': 'EGLint',
+  'versions': [{ 'name': 'eglProgramCacheGetAttribANGLE',
+                 'extensions': ['EGL_ANGLE_program_cache_control'] }],
+  'arguments': 'EGLDisplay dpy, EGLenum attrib', },
+{ 'return_type': 'void',
+  'versions': [{ 'name': 'eglProgramCachePopulateANGLE',
+                 'extensions': ['EGL_ANGLE_program_cache_control'] }],
+  'arguments': 'EGLDisplay dpy, const void* key, '
+    'EGLint keysize, const void* binary, EGLint binarysize', },
+{ 'return_type': 'void',
+  'versions': [{ 'name': 'eglProgramCacheQueryANGLE',
+                 'extensions': ['EGL_ANGLE_program_cache_control'] }],
+  'arguments': 'EGLDisplay dpy, EGLint index, '
+    'void* key, EGLint* keysize, void* binary, EGLint* binarysize', },
+{ 'return_type': 'EGLint',
+  'versions': [{ 'name': 'eglProgramCacheResizeANGLE',
+                 'extensions': ['EGL_ANGLE_program_cache_control'] }],
+  'arguments': 'EGLDisplay dpy, EGLint limit, EGLenum mode', },
 { 'return_type': 'EGLenum',
   'names': ['eglQueryAPI'],
   'arguments': 'void', },
@@ -2556,8 +2610,8 @@ namespace gl {
 """ % includes_string)
 
   file.write('\n')
-  file.write('static bool g_debugBindingsInitialized;\n')
-  file.write('Driver%s g_driver_%s;\n' % (set_name.upper(), set_name.lower()))
+  if set_name != 'gl':
+    file.write('Driver%s g_driver_%s;\n' % (set_name.upper(), set_name.lower()))
   file.write('\n')
 
   # Write stub functions that take the place of some functions before a context
@@ -2650,11 +2704,8 @@ namespace gl {
   if set_name == 'gl':
     file.write("""\
 void DriverGL::InitializeDynamicBindings(
-    GLContext* context) {
-  DCHECK(context && context->IsCurrent(NULL));
-  const GLVersionInfo* ver = context->GetVersionInfo();
-  ALLOW_UNUSED_LOCAL(ver);
-  std::string extensions = context->GetExtensions() + " ";
+    const GLVersionInfo* ver, const std::string& context_extensions) {
+  std::string extensions = context_extensions + " ";
   ALLOW_UNUSED_LOCAL(extensions);
 
 """)
@@ -2685,7 +2736,6 @@ void Driver%s::InitializeExtensionBindings() {
     for func in extension_funcs:
       if not 'static_binding' in func:
         file.write('\n')
-        file.write('  debug_fn.%sFn = 0;\n' % func['known_as'])
         WriteConditionalFuncBinding(file, func)
 
   OutputExtensionBindings(
@@ -2708,104 +2758,6 @@ void DriverEGL::InitializeExtensionBindings() {
     'extensions',
     sorted(used_extensions),
     [ f for f in functions if not IsClientExtensionFunc(f) ])
-
-  # Some new function pointers have been added, so update them in debug bindings
-  file.write('\n')
-  file.write('  if (g_debugBindingsInitialized)\n')
-  file.write('    InitializeDebugBindings();\n')
-  file.write('}\n')
-  file.write('\n')
-
-  # Write logging wrappers for each function.
-  file.write('extern "C" {\n')
-  for func in functions:
-    return_type = func['return_type']
-    arguments = func['arguments']
-    file.write('\n')
-    file.write('static %s GL_BINDING_CALL Debug_%s(%s) {\n' %
-        (return_type, func['known_as'], arguments))
-    argument_names = re.sub(
-        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2', arguments)
-    argument_names = re.sub(
-        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2', argument_names)
-    log_argument_names = re.sub(
-        r'const char\* ([a-zA-Z0-9_]+)', r'CONSTCHAR_\1', arguments)
-    log_argument_names = re.sub(
-        r'(const )?[a-zA-Z0-9_]+\* ([a-zA-Z0-9_]+)',
-        r'CONSTVOID_\2', log_argument_names)
-    log_argument_names = re.sub(
-        r'(?<!E)GLenum ([a-zA-Z0-9_]+)', r'GLenum_\1', log_argument_names)
-    log_argument_names = re.sub(
-        r'(?<!E)GLboolean ([a-zA-Z0-9_]+)', r'GLboolean_\1', log_argument_names)
-    log_argument_names = re.sub(
-        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2',
-        log_argument_names)
-    log_argument_names = re.sub(
-        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2',
-        log_argument_names)
-    log_argument_names = re.sub(
-        r'CONSTVOID_([a-zA-Z0-9_]+)',
-        r'static_cast<const void*>(\1)', log_argument_names)
-    log_argument_names = re.sub(
-        r'CONSTCHAR_([a-zA-Z0-9_]+)', r'\1', log_argument_names)
-    log_argument_names = re.sub(
-        r'GLenum_([a-zA-Z0-9_]+)', r'GLEnums::GetStringEnum(\1)',
-        log_argument_names)
-    log_argument_names = re.sub(
-        r'GLboolean_([a-zA-Z0-9_]+)', r'GLEnums::GetStringBool(\1)',
-        log_argument_names)
-    log_argument_names = log_argument_names.replace(',', ' << ", " <<')
-    if argument_names == 'void' or argument_names == '':
-      argument_names = ''
-      log_argument_names = ''
-    else:
-      log_argument_names = " << " + log_argument_names
-    function_name = func['known_as']
-    if return_type == 'void':
-      file.write('  GL_SERVICE_LOG("%s" << "(" %s << ")");\n' %
-          (function_name, log_argument_names))
-      file.write('  DCHECK(g_driver_%s.debug_fn.%sFn != nullptr);\n' %
-          (set_name.lower(), function_name))
-      file.write('  g_driver_%s.debug_fn.%sFn(%s);\n' %
-          (set_name.lower(), function_name, argument_names))
-      if 'logging_code' in func:
-        file.write("%s\n" % func['logging_code'])
-      if options.generate_dchecks and set_name == 'gl':
-        file.write('  {\n')
-        file.write('    GLenum error = g_driver_gl.debug_fn.glGetErrorFn();\n')
-        file.write('    DCHECK(error == 0);\n')
-        file.write('  }\n')
-    else:
-      file.write('  GL_SERVICE_LOG("%s" << "(" %s << ")");\n' %
-          (function_name, log_argument_names))
-      file.write('  DCHECK(g_driver_%s.debug_fn.%sFn != nullptr);\n' %
-          (set_name.lower(), function_name))
-      file.write('  %s result = g_driver_%s.debug_fn.%sFn(%s);\n' %
-          (return_type, set_name.lower(), function_name, argument_names))
-      if 'logging_code' in func:
-        file.write("%s\n" % func['logging_code'])
-      else:
-        file.write('  GL_SERVICE_LOG("GL_RESULT: " << result);\n')
-      if options.generate_dchecks and set_name == 'gl':
-        file.write('  {\n')
-        file.write('    GLenum _error = g_driver_gl.debug_fn.glGetErrorFn();\n')
-        file.write('    DCHECK(_error == 0);\n')
-        file.write('  }\n')
-      file.write('  return result;\n')
-    file.write('}\n')
-  file.write('}  // extern "C"\n')
-
-  # Write function to initialize the debug function pointers.
-  file.write('\n')
-  file.write('void Driver%s::InitializeDebugBindings() {\n' %
-             set_name.upper())
-  for func in functions:
-    first_name = func['known_as']
-    file.write('  if (!debug_fn.%sFn) {\n' % first_name)
-    file.write('    debug_fn.%sFn = fn.%sFn;\n' % (first_name, first_name))
-    file.write('    fn.%sFn = Debug_%s;\n' % (first_name, first_name))
-    file.write('  }\n')
-  file.write('  g_debugBindingsInitialized = true;\n')
   file.write('}\n')
 
   # Write function to clear all function pointers.
@@ -2858,6 +2810,81 @@ void DriverEGL::InitializeExtensionBindings() {
     else:
       file.write('  return %s_api_->%sFn(%s);\n' %
           (set_name.lower(), function_name, argument_names))
+    file.write('}\n')
+
+  # Write DebugGLApi functions
+  for func in functions:
+    return_type = func['return_type']
+    arguments = func['arguments']
+    file.write('\n')
+    file.write('%s Debug%sApi::%sFn(%s) {\n' %
+        (return_type, set_name.upper(), func['known_as'], arguments))
+    argument_names = re.sub(
+        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2', arguments)
+    argument_names = re.sub(
+        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2', argument_names)
+    log_argument_names = re.sub(
+        r'const char\* ([a-zA-Z0-9_]+)', r'CONSTCHAR_\1', arguments)
+    log_argument_names = re.sub(
+        r'(const )?[a-zA-Z0-9_]+\* ([a-zA-Z0-9_]+)',
+        r'CONSTVOID_\2', log_argument_names)
+    log_argument_names = re.sub(
+        r'(?<!E)GLenum ([a-zA-Z0-9_]+)', r'GLenum_\1', log_argument_names)
+    log_argument_names = re.sub(
+        r'(?<!E)GLboolean ([a-zA-Z0-9_]+)', r'GLboolean_\1', log_argument_names)
+    log_argument_names = re.sub(
+        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2',
+        log_argument_names)
+    log_argument_names = re.sub(
+        r'(const )?[a-zA-Z0-9_]+\** ([a-zA-Z0-9_]+)', r'\2',
+        log_argument_names)
+    log_argument_names = re.sub(
+        r'CONSTVOID_([a-zA-Z0-9_]+)',
+        r'static_cast<const void*>(\1)', log_argument_names)
+    log_argument_names = re.sub(
+        r'CONSTCHAR_([a-zA-Z0-9_]+)', r'\1', log_argument_names)
+    log_argument_names = re.sub(
+        r'GLenum_([a-zA-Z0-9_]+)', r'GLEnums::GetStringEnum(\1)',
+        log_argument_names)
+    log_argument_names = re.sub(
+        r'GLboolean_([a-zA-Z0-9_]+)', r'GLEnums::GetStringBool(\1)',
+        log_argument_names)
+    log_argument_names = log_argument_names.replace(',', ' << ", " <<')
+    if argument_names == 'void' or argument_names == '':
+      argument_names = ''
+      log_argument_names = ''
+    else:
+      log_argument_names = " << " + log_argument_names
+    function_name = func['known_as']
+    if return_type == 'void':
+      file.write('  GL_SERVICE_LOG("%s" << "(" %s << ")");\n' %
+          (function_name, log_argument_names))
+      file.write('  %s_api_->%sFn(%s);\n' %
+          (set_name.lower(), function_name, argument_names))
+      if 'logging_code' in func:
+        file.write("%s\n" % func['logging_code'])
+      if options.generate_dchecks and set_name == 'gl':
+        file.write('  {\n')
+        file.write('    GLenum error = %s_api_->glGetErrorFn();\n'
+            % set_name.lower())
+        file.write('    DCHECK(error == 0);\n')
+        file.write('  }\n')
+    else:
+      file.write('  GL_SERVICE_LOG("%s" << "(" %s << ")");\n' %
+          (function_name, log_argument_names))
+      file.write('  %s result = %s_api_->%sFn(%s);\n' %
+          (return_type, set_name.lower(), function_name, argument_names))
+      if 'logging_code' in func:
+        file.write("%s\n" % func['logging_code'])
+      else:
+        file.write('  GL_SERVICE_LOG("GL_RESULT: " << result);\n')
+      if options.generate_dchecks and set_name == 'gl':
+        file.write('  {\n')
+        file.write('    GLenum _error = %s_api_->glGetErrorFn();\n' %
+            set_name.lower())
+        file.write('    DCHECK(_error == 0);\n')
+        file.write('  }\n')
+      file.write('  return result;\n')
     file.write('}\n')
 
   # Write NoContextGLApi functions
@@ -2976,18 +3003,24 @@ void MakeFunctionUnique(const char *func_name) {
 
   # Write a function to lookup a mock GL function based on its name.
   file.write('\n')
-  file.write('void* GL_BINDING_CALL ' +
+  file.write('GLFunctionPointerType GL_BINDING_CALL ' +
       'MockGLInterface::GetGLProcAddress(const char* name) {\n')
   for key in sorted_function_names:
     name = uniquely_named_functions[key]['name']
     file.write('  if (strcmp(name, "%s") == 0)\n' % name)
-    file.write('    return reinterpret_cast<void*>(Mock_%s);\n' % name)
+    file.write(
+        '    return reinterpret_cast<GLFunctionPointerType>(Mock_%s);\n' %
+            name)
   # Always return a non-NULL pointer like some EGL implementations do.
-  file.write('  return reinterpret_cast<void*>(&MockInvalidFunction);\n')
+  file.write('  return reinterpret_cast<GLFunctionPointerType>('
+             '&MockInvalidFunction);\n')
   file.write('}\n')
 
   file.write('\n')
   file.write('}  // namespace gl\n')
+
+def SamePrefix(a, b):
+  return a[:a.rfind("_")] == b[:b.rfind("_")]
 
 def GenerateEnumUtils(out_file, input_filenames):
   enum_re = re.compile(r'\#define\s+(GL_[a-zA-Z0-9_]+)\s+([0-9A-Fa-fx]+)')
@@ -3003,9 +3036,11 @@ def GenerateEnumUtils(out_file, input_filenames):
           if not value in dict:
             dict[value] = name
           # check our own _CHROMIUM macro conflicts with khronos GL headers.
-          elif dict[value] != name and (name.endswith('_CHROMIUM') or
-              dict[value].endswith('_CHROMIUM')):
-            raise RunTimeError("code collision: %s and %s have the same code %s"
+          # we allow for name duplication if they have the same prefix.
+          elif dict[value] != name and ((name.endswith('_CHROMIUM') or
+              dict[value].endswith('_CHROMIUM')) and
+              not SamePrefix(name, dict[value])):
+            raise RuntimeError("code collision: %s and %s have the same code %s"
                                %  (dict[value], name, value))
 
   out_file.write(LICENSE_AND_HEADER)

@@ -275,6 +275,11 @@ namespace QTest
     static QObject *currentTestObject = 0;
     static QString mainSourcePath;
 
+#if defined(Q_OS_MACOS)
+    bool macNeedsActivate = false;
+    IOPMAssertionID powerID;
+#endif
+
     class TestMethods {
         Q_DISABLE_COPY(TestMethods)
     public:
@@ -1269,6 +1274,16 @@ char *toPrettyCString(const char *p, int length)
     return buffer.take();
 }
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+// this used to be the signature up to and including Qt 5.9
+// keep it for BC reasons:
+Q_TESTLIB_EXPORT
+char *toPrettyUnicode(const ushort *p, int length)
+{
+    return toPrettyUnicode(QStringView(p, length));
+}
+#endif
+
 /*!
     \internal
     Returns the same QString but with only the ASCII characters still shown;
@@ -1276,8 +1291,10 @@ char *toPrettyCString(const char *p, int length)
 
     Similar to QDebug::putString().
 */
-char *toPrettyUnicode(const ushort *p, int length)
+char *toPrettyUnicode(QStringView string)
 {
+    auto p = reinterpret_cast<const ushort *>(string.utf16());
+    auto length = string.size();
     // keep it simple for the vast majority of cases
     bool trimmed = false;
     QScopedArrayPointer<char> buffer(new char[256]);
@@ -1343,9 +1360,7 @@ void TestMethods::invokeTests(QObject *testObject) const
 {
     const QMetaObject *metaObject = testObject->metaObject();
     QTEST_ASSERT(metaObject);
-    QTestLog::startLogging();
     QTestResult::setCurrentTestFunction("initTestCase");
-    QTestTable::globalTestTable();
     if (m_initTestCaseDataMethod.isValid())
         m_initTestCaseDataMethod.invoke(testObject, Qt::DirectConnection);
 
@@ -1390,9 +1405,6 @@ void TestMethods::invokeTests(QObject *testObject) const
     }
     QTestResult::finishedCurrentTestFunction();
     QTestResult::setCurrentTestFunction(0);
-    QTestTable::clearGlobalTestTable();
-
-    QTestLog::stopLogging();
 }
 
 #if defined(Q_OS_UNIX)
@@ -1702,23 +1714,27 @@ static void initEnvironment()
 
 int QTest::qExec(QObject *testObject, int argc, char **argv)
 {
-    initEnvironment();
-    QBenchmarkGlobalData benchmarkData;
-    QBenchmarkGlobalData::current = &benchmarkData;
+    qInit(testObject, argc, argv);
+    int ret = qRun();
+    qCleanup();
+    return ret;
+}
 
-#ifdef QTESTLIB_USE_VALGRIND
-    int callgrindChildExitCode = 0;
-#endif
+/*! \internal
+ */
+void QTest::qInit(QObject *testObject, int argc, char **argv)
+{
+    initEnvironment();
+    QBenchmarkGlobalData::current = new QBenchmarkGlobalData;
 
 #if defined(Q_OS_MACX)
-    bool macNeedsActivate = qApp && (qstrcmp(qApp->metaObject()->className(), "QApplication") == 0);
-    IOPMAssertionID powerID;
+    macNeedsActivate = qApp && (qstrcmp(qApp->metaObject()->className(), "QApplication") == 0);
 
     // Don't restore saved window state for auto tests.
     QTestPrivate::disableWindowRestore();
-#endif
-#ifndef QT_NO_EXCEPTIONS
-    try {
+
+    // Disable App Nap which may cause tests to stall.
+    QTestPrivate::AppNapDisabler appNapDisabler;
 #endif
 
 #if defined(Q_OS_MACX)
@@ -1748,6 +1764,24 @@ int QTest::qExec(QObject *testObject, int argc, char **argv)
         QTestResult::setCurrentAppName(argv[0]);
 
     qtest_qParseArgs(argc, argv, false);
+
+    QTestTable::globalTestTable();
+    QTestLog::startLogging();
+}
+
+/*! \internal
+ */
+int QTest::qRun()
+{
+    QTEST_ASSERT(currentTestObject);
+
+#ifdef QTESTLIB_USE_VALGRIND
+    int callgrindChildExitCode = 0;
+#endif
+
+#ifndef QT_NO_EXCEPTIONS
+    try {
+#endif
 
 #if defined(Q_OS_WIN)
     if (!noCrashHandler) {
@@ -1784,17 +1818,17 @@ int QTest::qExec(QObject *testObject, int argc, char **argv)
         for (const QString &tf : qAsConst(QTest::testFunctions)) {
                 const QByteArray tfB = tf.toLatin1();
                 const QByteArray signature = tfB + QByteArrayLiteral("()");
-                QMetaMethod m = TestMethods::findMethod(testObject, signature.constData());
+                QMetaMethod m = TestMethods::findMethod(currentTestObject, signature.constData());
                 if (!m.isValid() || !isValidSlot(m)) {
                     fprintf(stderr, "Unknown test function: '%s'. Possible matches:\n", tfB.constData());
                     qPrintTestSlots(stderr, tfB.constData());
-                    fprintf(stderr, "\n%s -functions\nlists all available test functions.\n", argv[0]);
+                    fprintf(stderr, "\n%s -functions\nlists all available test functions.\n", QTestResult::currentAppName());
                     exit(1);
                 }
                 commandLineMethods.push_back(m);
         }
-        TestMethods test(testObject, commandLineMethods);
-        test.invokeTests(testObject);
+        TestMethods test(currentTestObject, commandLineMethods);
+        test.invokeTests(currentTestObject);
     }
 
 #ifndef QT_NO_EXCEPTIONS
@@ -1819,16 +1853,6 @@ int QTest::qExec(QObject *testObject, int argc, char **argv)
      }
 #endif
 
-    currentTestObject = 0;
-
-    QSignalDumper::endDump();
-
-#if defined(Q_OS_MACX)
-     if (macNeedsActivate) {
-         IOPMAssertionRelease(powerID);
-     }
-#endif
-
 #ifdef QTESTLIB_USE_VALGRIND
     if (QBenchmarkGlobalData::current->mode() == QBenchmarkGlobalData::CallgrindParentProcess)
         return callgrindChildExitCode;
@@ -1836,6 +1860,26 @@ int QTest::qExec(QObject *testObject, int argc, char **argv)
     // make sure our exit code is never going above 127
     // since that could wrap and indicate 0 test fails
     return qMin(QTestLog::failCount(), 127);
+}
+
+/*! \internal
+ */
+void QTest::qCleanup()
+{
+    currentTestObject = 0;
+
+    QTestTable::clearGlobalTestTable();
+    QTestLog::stopLogging();
+
+    delete QBenchmarkGlobalData::current;
+    QBenchmarkGlobalData::current = 0;
+
+    QSignalDumper::endDump();
+
+#if defined(Q_OS_MACOS)
+    if (macNeedsActivate)
+        IOPMAssertionRelease(powerID);
+#endif
 }
 
 /*!

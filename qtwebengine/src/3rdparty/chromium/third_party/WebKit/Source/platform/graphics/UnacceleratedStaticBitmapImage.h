@@ -13,25 +13,22 @@ class PLATFORM_EXPORT UnacceleratedStaticBitmapImage final
     : public StaticBitmapImage {
  public:
   ~UnacceleratedStaticBitmapImage() override;
-  static PassRefPtr<UnacceleratedStaticBitmapImage> create(sk_sp<SkImage>);
+  static PassRefPtr<UnacceleratedStaticBitmapImage> Create(sk_sp<SkImage>);
 
-  bool currentFrameKnownToBeOpaque(MetadataMode = UseCurrentMetadata) override;
-  IntSize size() const override;
-  sk_sp<SkImage> imageForCurrentFrame() override;
-  // In our current design, the SkImage in this class is always *not*
-  // texture-backed.
-  bool isTextureBacked() { return false; }
+  bool CurrentFrameKnownToBeOpaque(MetadataMode = kUseCurrentMetadata) override;
+  IntSize Size() const override;
+  sk_sp<SkImage> ImageForCurrentFrame() override;
 
-  void draw(SkCanvas*,
-            const SkPaint&,
-            const FloatRect& dstRect,
-            const FloatRect& srcRect,
+  void Draw(PaintCanvas*,
+            const PaintFlags&,
+            const FloatRect& dst_rect,
+            const FloatRect& src_rect,
             RespectImageOrientationEnum,
             ImageClampingMode) override;
 
  private:
   UnacceleratedStaticBitmapImage(sk_sp<SkImage>);
-  sk_sp<SkImage> m_image;
+  sk_sp<SkImage> image_;
 };
 
 }  // namespace blink

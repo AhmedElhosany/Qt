@@ -5,80 +5,81 @@
 #include "net/quic/core/quic_crypto_client_stream.h"
 
 #include <memory>
-#include <vector>
 
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
-#include "base/strings/stringprintf.h"
 #include "net/quic/core/crypto/crypto_protocol.h"
 #include "net/quic/core/crypto/crypto_utils.h"
 #include "net/quic/core/crypto/null_encrypter.h"
-#include "net/quic/core/quic_flags.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/quic/core/quic_session.h"
 #include "net/quic/core/quic_utils.h"
+#include "net/quic/platform/api/quic_flags.h"
+#include "net/quic/platform/api/quic_logging.h"
+#include "net/quic/platform/api/quic_str_cat.h"
 
 using std::string;
-using std::vector;
 
 namespace net {
+
+const int QuicCryptoClientStream::kMaxClientHellos;
 
 QuicCryptoClientStreamBase::QuicCryptoClientStreamBase(QuicSession* session)
     : QuicCryptoStream(session) {}
 
-QuicCryptoClientStream::ChannelIDSourceCallbackImpl::
-    ChannelIDSourceCallbackImpl(QuicCryptoClientStream* stream)
-    : stream_(stream) {}
+QuicCryptoClientHandshaker::ChannelIDSourceCallbackImpl::
+    ChannelIDSourceCallbackImpl(QuicCryptoClientHandshaker* parent)
+    : parent_(parent) {}
 
-QuicCryptoClientStream::ChannelIDSourceCallbackImpl::
+QuicCryptoClientHandshaker::ChannelIDSourceCallbackImpl::
     ~ChannelIDSourceCallbackImpl() {}
 
-void QuicCryptoClientStream::ChannelIDSourceCallbackImpl::Run(
+void QuicCryptoClientHandshaker::ChannelIDSourceCallbackImpl::Run(
     std::unique_ptr<ChannelIDKey>* channel_id_key) {
-  if (stream_ == nullptr) {
+  if (parent_ == nullptr) {
     return;
   }
 
-  stream_->channel_id_key_.reset(channel_id_key->release());
-  stream_->channel_id_source_callback_run_ = true;
-  stream_->channel_id_source_callback_ = nullptr;
-  stream_->DoHandshakeLoop(nullptr);
+  parent_->channel_id_key_ = std::move(*channel_id_key);
+  parent_->channel_id_source_callback_run_ = true;
+  parent_->channel_id_source_callback_ = nullptr;
+  parent_->DoHandshakeLoop(nullptr);
 
   // The ChannelIDSource owns this object and will delete it when this method
   // returns.
 }
 
-void QuicCryptoClientStream::ChannelIDSourceCallbackImpl::Cancel() {
-  stream_ = nullptr;
+void QuicCryptoClientHandshaker::ChannelIDSourceCallbackImpl::Cancel() {
+  parent_ = nullptr;
 }
 
-QuicCryptoClientStream::ProofVerifierCallbackImpl::ProofVerifierCallbackImpl(
-    QuicCryptoClientStream* stream)
-    : stream_(stream) {}
+QuicCryptoClientHandshaker::ProofVerifierCallbackImpl::
+    ProofVerifierCallbackImpl(QuicCryptoClientHandshaker* parent)
+    : parent_(parent) {}
 
-QuicCryptoClientStream::ProofVerifierCallbackImpl::
+QuicCryptoClientHandshaker::ProofVerifierCallbackImpl::
     ~ProofVerifierCallbackImpl() {}
 
-void QuicCryptoClientStream::ProofVerifierCallbackImpl::Run(
+void QuicCryptoClientHandshaker::ProofVerifierCallbackImpl::Run(
     bool ok,
     const string& error_details,
     std::unique_ptr<ProofVerifyDetails>* details) {
-  if (stream_ == nullptr) {
+  if (parent_ == nullptr) {
     return;
   }
 
-  stream_->verify_ok_ = ok;
-  stream_->verify_error_details_ = error_details;
-  stream_->verify_details_.reset(details->release());
-  stream_->proof_verify_callback_ = nullptr;
-  stream_->DoHandshakeLoop(nullptr);
+  parent_->verify_ok_ = ok;
+  parent_->verify_error_details_ = error_details;
+  parent_->verify_details_ = std::move(*details);
+  parent_->proof_verify_callback_ = nullptr;
+  parent_->DoHandshakeLoop(nullptr);
 
   // The ProofVerifier owns this object and will delete it when this method
   // returns.
 }
 
-void QuicCryptoClientStream::ProofVerifierCallbackImpl::Cancel() {
-  stream_ = nullptr;
+void QuicCryptoClientHandshaker::ProofVerifierCallbackImpl::Cancel() {
+  parent_ = nullptr;
 }
 
 QuicCryptoClientStream::QuicCryptoClientStream(
@@ -87,7 +88,65 @@ QuicCryptoClientStream::QuicCryptoClientStream(
     ProofVerifyContext* verify_context,
     QuicCryptoClientConfig* crypto_config,
     ProofHandler* proof_handler)
-    : QuicCryptoClientStreamBase(session),
+    : QuicCryptoClientStreamBase(session) {
+  DCHECK_EQ(Perspective::IS_CLIENT, session->connection()->perspective());
+  handshaker_.reset(new QuicCryptoClientHandshaker(
+      server_id, this, session, verify_context, crypto_config, proof_handler));
+}
+
+QuicCryptoClientStream::~QuicCryptoClientStream() {}
+
+bool QuicCryptoClientStream::CryptoConnect() {
+  return handshaker_->CryptoConnect();
+}
+
+int QuicCryptoClientStream::num_sent_client_hellos() const {
+  return handshaker_->num_sent_client_hellos();
+}
+
+int QuicCryptoClientStream::num_scup_messages_received() const {
+  return handshaker_->num_scup_messages_received();
+}
+
+bool QuicCryptoClientStream::encryption_established() const {
+  return handshaker_->encryption_established();
+}
+
+bool QuicCryptoClientStream::handshake_confirmed() const {
+  return handshaker_->handshake_confirmed();
+}
+
+const QuicCryptoNegotiatedParameters&
+QuicCryptoClientStream::crypto_negotiated_params() const {
+  return handshaker_->crypto_negotiated_params();
+}
+
+CryptoMessageParser* QuicCryptoClientStream::crypto_message_parser() {
+  return handshaker_->crypto_message_parser();
+}
+
+bool QuicCryptoClientStream::WasChannelIDSent() const {
+  return handshaker_->WasChannelIDSent();
+}
+
+bool QuicCryptoClientStream::WasChannelIDSourceCallbackRun() const {
+  return handshaker_->WasChannelIDSourceCallbackRun();
+}
+
+string QuicCryptoClientStream::chlo_hash() const {
+  return handshaker_->chlo_hash();
+}
+
+QuicCryptoClientHandshaker::QuicCryptoClientHandshaker(
+    const QuicServerId& server_id,
+    QuicCryptoClientStream* stream,
+    QuicSession* session,
+    ProofVerifyContext* verify_context,
+    QuicCryptoClientConfig* crypto_config,
+    QuicCryptoClientStream::ProofHandler* proof_handler)
+    : QuicCryptoHandshaker(stream, session),
+      stream_(stream),
+      session_(session),
       next_state_(STATE_IDLE),
       num_client_hellos_(0),
       crypto_config_(crypto_config),
@@ -99,12 +158,14 @@ QuicCryptoClientStream::QuicCryptoClientStream(
       verify_context_(verify_context),
       proof_verify_callback_(nullptr),
       proof_handler_(proof_handler),
+      verify_ok_(false),
       stateless_reject_received_(false),
-      num_scup_messages_received_(0) {
-  DCHECK_EQ(Perspective::IS_CLIENT, session->connection()->perspective());
-}
+      num_scup_messages_received_(0),
+      encryption_established_(false),
+      handshake_confirmed_(false),
+      crypto_negotiated_params_(new QuicCryptoNegotiatedParameters) {}
 
-QuicCryptoClientStream::~QuicCryptoClientStream() {
+QuicCryptoClientHandshaker::~QuicCryptoClientHandshaker() {
   if (channel_id_source_callback_) {
     channel_id_source_callback_->Cancel();
   }
@@ -113,14 +174,14 @@ QuicCryptoClientStream::~QuicCryptoClientStream() {
   }
 }
 
-void QuicCryptoClientStream::OnHandshakeMessage(
+void QuicCryptoClientHandshaker::OnHandshakeMessage(
     const CryptoHandshakeMessage& message) {
-  QuicCryptoClientStreamBase::OnHandshakeMessage(message);
-
+  QuicCryptoHandshaker::OnHandshakeMessage(message);
   if (message.tag() == kSCUP) {
     if (!handshake_confirmed()) {
-      CloseConnectionWithDetails(QUIC_CRYPTO_UPDATE_BEFORE_HANDSHAKE_COMPLETE,
-                                 "Early SCUP disallowed");
+      stream_->CloseConnectionWithDetails(
+          QUIC_CRYPTO_UPDATE_BEFORE_HANDSHAKE_COMPLETE,
+          "Early SCUP disallowed");
       return;
     }
 
@@ -133,37 +194,59 @@ void QuicCryptoClientStream::OnHandshakeMessage(
 
   // Do not process handshake messages after the handshake is confirmed.
   if (handshake_confirmed()) {
-    CloseConnectionWithDetails(QUIC_CRYPTO_MESSAGE_AFTER_HANDSHAKE_COMPLETE,
-                               "Unexpected handshake message");
+    stream_->CloseConnectionWithDetails(
+        QUIC_CRYPTO_MESSAGE_AFTER_HANDSHAKE_COMPLETE,
+        "Unexpected handshake message");
     return;
   }
 
   DoHandshakeLoop(&message);
 }
 
-void QuicCryptoClientStream::CryptoConnect() {
+bool QuicCryptoClientHandshaker::CryptoConnect() {
   next_state_ = STATE_INITIALIZE;
   DoHandshakeLoop(nullptr);
+  return session()->connection()->connected();
 }
 
-int QuicCryptoClientStream::num_sent_client_hellos() const {
+int QuicCryptoClientHandshaker::num_sent_client_hellos() const {
   return num_client_hellos_;
 }
 
-int QuicCryptoClientStream::num_scup_messages_received() const {
+int QuicCryptoClientHandshaker::num_scup_messages_received() const {
   return num_scup_messages_received_;
 }
 
-// Used in Chromium, but not in the server.
-bool QuicCryptoClientStream::WasChannelIDSent() const {
+bool QuicCryptoClientHandshaker::WasChannelIDSent() const {
   return channel_id_sent_;
 }
 
-bool QuicCryptoClientStream::WasChannelIDSourceCallbackRun() const {
+bool QuicCryptoClientHandshaker::WasChannelIDSourceCallbackRun() const {
   return channel_id_source_callback_run_;
 }
 
-void QuicCryptoClientStream::HandleServerConfigUpdateMessage(
+string QuicCryptoClientHandshaker::chlo_hash() const {
+  return chlo_hash_;
+}
+
+bool QuicCryptoClientHandshaker::encryption_established() const {
+  return encryption_established_;
+}
+
+bool QuicCryptoClientHandshaker::handshake_confirmed() const {
+  return handshake_confirmed_;
+}
+
+const QuicCryptoNegotiatedParameters&
+QuicCryptoClientHandshaker::crypto_negotiated_params() const {
+  return *crypto_negotiated_params_;
+}
+
+CryptoMessageParser* QuicCryptoClientHandshaker::crypto_message_parser() {
+  return QuicCryptoHandshaker::crypto_message_parser();
+}
+
+void QuicCryptoClientHandshaker::HandleServerConfigUpdateMessage(
     const CryptoHandshakeMessage& server_config_update) {
   DCHECK(server_config_update.tag() == kSCUP);
   string error_details;
@@ -171,11 +254,11 @@ void QuicCryptoClientStream::HandleServerConfigUpdateMessage(
       crypto_config_->LookupOrCreate(server_id_);
   QuicErrorCode error = crypto_config_->ProcessServerConfigUpdate(
       server_config_update, session()->connection()->clock()->WallNow(),
-      session()->connection()->version(), cached->chlo_hash(), cached,
+      session()->connection()->version(), chlo_hash_, cached,
       crypto_negotiated_params_, &error_details);
 
   if (error != QUIC_NO_ERROR) {
-    CloseConnectionWithDetails(
+    stream_->CloseConnectionWithDetails(
         error, "Server config update invalid: " + error_details);
     return;
   }
@@ -188,7 +271,8 @@ void QuicCryptoClientStream::HandleServerConfigUpdateMessage(
   DoHandshakeLoop(nullptr);
 }
 
-void QuicCryptoClientStream::DoHandshakeLoop(const CryptoHandshakeMessage* in) {
+void QuicCryptoClientHandshaker::DoHandshakeLoop(
+    const CryptoHandshakeMessage* in) {
   QuicCryptoClientConfig::CachedState* cached =
       crypto_config_->LookupOrCreate(server_id_);
 
@@ -225,20 +309,20 @@ void QuicCryptoClientStream::DoHandshakeLoop(const CryptoHandshakeMessage* in) {
         break;
       case STATE_IDLE:
         // This means that the peer sent us a message that we weren't expecting.
-        CloseConnectionWithDetails(QUIC_INVALID_CRYPTO_MESSAGE_TYPE,
-                                   "Handshake in idle state");
+        stream_->CloseConnectionWithDetails(QUIC_INVALID_CRYPTO_MESSAGE_TYPE,
+                                            "Handshake in idle state");
         return;
       case STATE_INITIALIZE_SCUP:
         DoInitializeServerConfigUpdate(cached);
         break;
       case STATE_NONE:
-        NOTREACHED();
+        QUIC_NOTREACHED();
         return;  // We are done.
     }
   } while (rv != QUIC_PENDING && next_state_ != STATE_NONE);
 }
 
-void QuicCryptoClientStream::DoInitialize(
+void QuicCryptoClientHandshaker::DoInitialize(
     QuicCryptoClientConfig::CachedState* cached) {
   if (!cached->IsEmpty() && !cached->signature().empty()) {
     // Note that we verify the proof even if the cached proof is valid.
@@ -256,7 +340,7 @@ void QuicCryptoClientStream::DoInitialize(
   }
 }
 
-void QuicCryptoClientStream::DoSendCHLO(
+void QuicCryptoClientHandshaker::DoSendCHLO(
     QuicCryptoClientConfig::CachedState* cached) {
   if (stateless_reject_received_) {
     // If we've gotten to this point, we've sent at least one hello
@@ -275,10 +359,11 @@ void QuicCryptoClientStream::DoSendCHLO(
   // Send the client hello in plaintext.
   session()->connection()->SetDefaultEncryptionLevel(ENCRYPTION_NONE);
   encryption_established_ = false;
-  if (num_client_hellos_ > kMaxClientHellos) {
-    CloseConnectionWithDetails(
+  if (num_client_hellos_ > QuicCryptoClientStream::kMaxClientHellos) {
+    stream_->CloseConnectionWithDetails(
         QUIC_CRYPTO_TOO_MANY_REJECTS,
-        base::StringPrintf("More than %u rejects", kMaxClientHellos).c_str());
+        QuicStrCat("More than ", QuicCryptoClientStream::kMaxClientHellos,
+                   " rejects"));
     return;
   }
   num_client_hellos_++;
@@ -304,30 +389,31 @@ void QuicCryptoClientStream::DoSendCHLO(
     const QuicByteCount max_packet_size =
         session()->connection()->max_packet_length();
     if (max_packet_size <= kFramingOverhead) {
-      DLOG(DFATAL) << "max_packet_length (" << max_packet_size
-                   << ") has no room for framing overhead.";
-      CloseConnectionWithDetails(QUIC_INTERNAL_ERROR,
-                                 "max_packet_size too smalll");
+      QUIC_DLOG(DFATAL) << "max_packet_length (" << max_packet_size
+                        << ") has no room for framing overhead.";
+      stream_->CloseConnectionWithDetails(QUIC_INTERNAL_ERROR,
+                                          "max_packet_size too smalll");
       return;
     }
     if (kClientHelloMinimumSize > max_packet_size - kFramingOverhead) {
-      DLOG(DFATAL) << "Client hello won't fit in a single packet.";
-      CloseConnectionWithDetails(QUIC_INTERNAL_ERROR, "CHLO too large");
+      QUIC_DLOG(DFATAL) << "Client hello won't fit in a single packet.";
+      stream_->CloseConnectionWithDetails(QUIC_INTERNAL_ERROR,
+                                          "CHLO too large");
       return;
     }
     // TODO(rch): Remove this when we remove:
-    // FLAGS_quic_use_chlo_packet_size
+    // FLAGS_quic_reloadable_flag_quic_use_chlo_packet_size
     out.set_minimum_size(
         static_cast<size_t>(max_packet_size - kFramingOverhead));
     next_state_ = STATE_RECV_REJ;
-    CryptoUtils::HashHandshakeMessage(out, &chlo_hash_);
+    CryptoUtils::HashHandshakeMessage(out, &chlo_hash_, Perspective::IS_CLIENT);
     SendHandshakeMessage(out);
     return;
   }
 
   // If the server nonce is empty, copy over the server nonce from a previous
   // SREJ, if there is one.
-  if (FLAGS_enable_quic_stateless_reject_support &&
+  if (FLAGS_quic_reloadable_flag_enable_quic_stateless_reject_support &&
       crypto_negotiated_params_->server_nonce.empty() &&
       cached->has_server_nonce()) {
     crypto_negotiated_params_->server_nonce = cached->GetNextServerNonce();
@@ -337,7 +423,6 @@ void QuicCryptoClientStream::DoSendCHLO(
   string error_details;
   QuicErrorCode error = crypto_config_->FillClientHello(
       server_id_, session()->connection()->connection_id(),
-      session()->connection()->version(),
       session()->connection()->supported_versions().front(), cached,
       session()->connection()->clock()->WallNow(),
       session()->connection()->random_generator(), channel_id_key_.get(),
@@ -346,10 +431,10 @@ void QuicCryptoClientStream::DoSendCHLO(
     // Flush the cached config so that, if it's bad, the server has a
     // chance to send us another in the future.
     cached->InvalidateServerConfig();
-    CloseConnectionWithDetails(error, error_details);
+    stream_->CloseConnectionWithDetails(error, error_details);
     return;
   }
-  CryptoUtils::HashHandshakeMessage(out, &chlo_hash_);
+  CryptoUtils::HashHandshakeMessage(out, &chlo_hash_, Perspective::IS_CLIENT);
   channel_id_sent_ = (channel_id_key_.get() != nullptr);
   if (cached->proof_verify_details()) {
     proof_handler_->OnProofVerifyDetailsAvailable(
@@ -375,7 +460,7 @@ void QuicCryptoClientStream::DoSendCHLO(
   session()->OnCryptoHandshakeEvent(QuicSession::ENCRYPTION_REESTABLISHED);
 }
 
-void QuicCryptoClientStream::DoReceiveREJ(
+void QuicCryptoClientHandshaker::DoReceiveREJ(
     const CryptoHandshakeMessage* in,
     QuicCryptoClientConfig::CachedState* cached) {
   // We sent a dummy CHLO because we didn't have enough information to
@@ -384,18 +469,16 @@ void QuicCryptoClientStream::DoReceiveREJ(
   // that we need.
   if ((in->tag() != kREJ) && (in->tag() != kSREJ)) {
     next_state_ = STATE_NONE;
-    CloseConnectionWithDetails(QUIC_INVALID_CRYPTO_MESSAGE_TYPE,
-                               "Expected REJ");
+    stream_->CloseConnectionWithDetails(QUIC_INVALID_CRYPTO_MESSAGE_TYPE,
+                                        "Expected REJ");
     return;
   }
 
-  const uint32_t* reject_reasons;
-  size_t num_reject_reasons;
+  QuicTagVector reject_reasons;
   static_assert(sizeof(QuicTag) == sizeof(uint32_t), "header out of sync");
-  if (in->GetTaglist(kRREJ, &reject_reasons, &num_reject_reasons) ==
-      QUIC_NO_ERROR) {
+  if (in->GetTaglist(kRREJ, &reject_reasons) == QUIC_NO_ERROR) {
     uint32_t packed_error = 0;
-    for (size_t i = 0; i < num_reject_reasons; ++i) {
+    for (size_t i = 0; i < reject_reasons.size(); ++i) {
       // HANDSHAKE_OK is 0 and don't report that as error.
       if (reject_reasons[i] == HANDSHAKE_OK || reject_reasons[i] >= 32) {
         continue;
@@ -405,7 +488,7 @@ void QuicCryptoClientStream::DoReceiveREJ(
       packed_error |= 1 << (reason - 1);
     }
     DVLOG(1) << "Reasons for rejection: " << packed_error;
-    if (num_client_hellos_ == kMaxClientHellos) {
+    if (num_client_hellos_ == QuicCryptoClientStream::kMaxClientHellos) {
       UMA_HISTOGRAM_SPARSE_SLOWLY("Net.QuicClientHelloRejectReasons.TooMany",
                                   packed_error);
     }
@@ -426,7 +509,7 @@ void QuicCryptoClientStream::DoReceiveREJ(
 
   if (error != QUIC_NO_ERROR) {
     next_state_ = STATE_NONE;
-    CloseConnectionWithDetails(error, error_details);
+    stream_->CloseConnectionWithDetails(error, error_details);
     return;
   }
   if (!cached->proof_valid()) {
@@ -443,7 +526,7 @@ void QuicCryptoClientStream::DoReceiveREJ(
   next_state_ = STATE_GET_CHANNEL_ID;
 }
 
-QuicAsyncStatus QuicCryptoClientStream::DoVerifyProof(
+QuicAsyncStatus QuicCryptoClientHandshaker::DoVerifyProof(
     QuicCryptoClientConfig::CachedState* cached) {
   ProofVerifier* verifier = crypto_config_->proof_verifier();
   DCHECK(verifier);
@@ -465,7 +548,7 @@ QuicAsyncStatus QuicCryptoClientStream::DoVerifyProof(
   switch (status) {
     case QUIC_PENDING:
       proof_verify_callback_ = proof_verify_callback;
-      DVLOG(1) << "Doing VerifyProof";
+      QUIC_DVLOG(1) << "Doing VerifyProof";
       break;
     case QUIC_FAILURE:
       break;
@@ -476,7 +559,7 @@ QuicAsyncStatus QuicCryptoClientStream::DoVerifyProof(
   return status;
 }
 
-void QuicCryptoClientStream::DoVerifyProofComplete(
+void QuicCryptoClientHandshaker::DoVerifyProofComplete(
     QuicCryptoClientConfig::CachedState* cached) {
   if (!proof_verify_start_time_.is_null()) {
     UMA_HISTOGRAM_TIMES("Net.QuicSession.VerifyProofTime.CachedServerConfig",
@@ -494,8 +577,8 @@ void QuicCryptoClientStream::DoVerifyProofComplete(
     next_state_ = STATE_NONE;
     UMA_HISTOGRAM_BOOLEAN("Net.QuicVerifyProofFailed.HandshakeConfirmed",
                           handshake_confirmed());
-    CloseConnectionWithDetails(QUIC_PROOF_INVALID,
-                               "Proof invalid: " + verify_error_details_);
+    stream_->CloseConnectionWithDetails(
+        QUIC_PROOF_INVALID, "Proof invalid: " + verify_error_details_);
     return;
   }
 
@@ -515,7 +598,7 @@ void QuicCryptoClientStream::DoVerifyProofComplete(
   }
 }
 
-QuicAsyncStatus QuicCryptoClientStream::DoGetChannelID(
+QuicAsyncStatus QuicCryptoClientHandshaker::DoGetChannelID(
     QuicCryptoClientConfig::CachedState* cached) {
   next_state_ = STATE_GET_CHANNEL_ID_COMPLETE;
   channel_id_key_.reset();
@@ -532,13 +615,13 @@ QuicAsyncStatus QuicCryptoClientStream::DoGetChannelID(
   switch (status) {
     case QUIC_PENDING:
       channel_id_source_callback_ = channel_id_source_callback;
-      DVLOG(1) << "Looking up channel ID";
+      QUIC_DVLOG(1) << "Looking up channel ID";
       break;
     case QUIC_FAILURE:
       next_state_ = STATE_NONE;
       delete channel_id_source_callback;
-      CloseConnectionWithDetails(QUIC_INVALID_CHANNEL_ID_SIGNATURE,
-                                 "Channel ID lookup failed");
+      stream_->CloseConnectionWithDetails(QUIC_INVALID_CHANNEL_ID_SIGNATURE,
+                                          "Channel ID lookup failed");
       break;
     case QUIC_SUCCESS:
       delete channel_id_source_callback;
@@ -547,17 +630,17 @@ QuicAsyncStatus QuicCryptoClientStream::DoGetChannelID(
   return status;
 }
 
-void QuicCryptoClientStream::DoGetChannelIDComplete() {
+void QuicCryptoClientHandshaker::DoGetChannelIDComplete() {
   if (!channel_id_key_.get()) {
     next_state_ = STATE_NONE;
-    CloseConnectionWithDetails(QUIC_INVALID_CHANNEL_ID_SIGNATURE,
-                               "Channel ID lookup failed");
+    stream_->CloseConnectionWithDetails(QUIC_INVALID_CHANNEL_ID_SIGNATURE,
+                                        "Channel ID lookup failed");
     return;
   }
   next_state_ = STATE_SEND_CHLO;
 }
 
-void QuicCryptoClientStream::DoReceiveSHLO(
+void QuicCryptoClientHandshaker::DoReceiveSHLO(
     const CryptoHandshakeMessage* in,
     QuicCryptoClientConfig::CachedState* cached) {
   next_state_ = STATE_NONE;
@@ -571,8 +654,8 @@ void QuicCryptoClientStream::DoReceiveSHLO(
     // if we received a message encrypted with the INITIAL key.
     if (session()->connection()->alternative_decrypter() == nullptr) {
       // The rejection was sent encrypted!
-      CloseConnectionWithDetails(QUIC_CRYPTO_ENCRYPTION_LEVEL_INCORRECT,
-                                 "encrypted REJ message");
+      stream_->CloseConnectionWithDetails(
+          QUIC_CRYPTO_ENCRYPTION_LEVEL_INCORRECT, "encrypted REJ message");
       return;
     }
     next_state_ = STATE_RECV_REJ;
@@ -580,8 +663,8 @@ void QuicCryptoClientStream::DoReceiveSHLO(
   }
 
   if (in->tag() != kSHLO) {
-    CloseConnectionWithDetails(QUIC_INVALID_CRYPTO_MESSAGE_TYPE,
-                               "Expected SHLO or REJ");
+    stream_->CloseConnectionWithDetails(QUIC_INVALID_CRYPTO_MESSAGE_TYPE,
+                                        "Expected SHLO or REJ");
     return;
   }
 
@@ -590,8 +673,8 @@ void QuicCryptoClientStream::DoReceiveSHLO(
   // if we received a message encrypted with the INITIAL key.
   if (session()->connection()->alternative_decrypter() != nullptr) {
     // The server hello was sent without encryption.
-    CloseConnectionWithDetails(QUIC_CRYPTO_ENCRYPTION_LEVEL_INCORRECT,
-                               "unencrypted SHLO message");
+    stream_->CloseConnectionWithDetails(QUIC_CRYPTO_ENCRYPTION_LEVEL_INCORRECT,
+                                        "unencrypted SHLO message");
     return;
   }
 
@@ -603,12 +686,14 @@ void QuicCryptoClientStream::DoReceiveSHLO(
       crypto_negotiated_params_, &error_details);
 
   if (error != QUIC_NO_ERROR) {
-    CloseConnectionWithDetails(error, "Server hello invalid: " + error_details);
+    stream_->CloseConnectionWithDetails(
+        error, "Server hello invalid: " + error_details);
     return;
   }
   error = session()->config()->ProcessPeerHello(*in, SERVER, &error_details);
   if (error != QUIC_NO_ERROR) {
-    CloseConnectionWithDetails(error, "Server hello invalid: " + error_details);
+    stream_->CloseConnectionWithDetails(
+        error, "Server hello invalid: " + error_details);
     return;
   }
   session()->OnConfigNegotiated();
@@ -630,7 +715,7 @@ void QuicCryptoClientStream::DoReceiveSHLO(
   session()->connection()->OnHandshakeComplete();
 }
 
-void QuicCryptoClientStream::DoInitializeServerConfigUpdate(
+void QuicCryptoClientHandshaker::DoInitializeServerConfigUpdate(
     QuicCryptoClientConfig::CachedState* cached) {
   bool update_ignored = false;
   if (!cached->IsEmpty() && !cached->signature().empty()) {
@@ -641,17 +726,17 @@ void QuicCryptoClientStream::DoInitializeServerConfigUpdate(
     update_ignored = true;
     next_state_ = STATE_NONE;
   }
-  UMA_HISTOGRAM_COUNTS("Net.QuicNumServerConfig.UpdateMessagesIgnored",
-                       update_ignored);
+  UMA_HISTOGRAM_COUNTS_1M("Net.QuicNumServerConfig.UpdateMessagesIgnored",
+                          update_ignored);
 }
 
-void QuicCryptoClientStream::SetCachedProofValid(
+void QuicCryptoClientHandshaker::SetCachedProofValid(
     QuicCryptoClientConfig::CachedState* cached) {
   cached->SetProofValid();
   proof_handler_->OnProofValid(*cached);
 }
 
-bool QuicCryptoClientStream::RequiresChannelID(
+bool QuicCryptoClientHandshaker::RequiresChannelID(
     QuicCryptoClientConfig::CachedState* cached) {
   if (server_id_.privacy_mode() == PRIVACY_MODE_ENABLED ||
       !crypto_config_->channel_id_source()) {
@@ -661,14 +746,12 @@ bool QuicCryptoClientStream::RequiresChannelID(
   if (!scfg) {  // scfg may be null then we send an inchoate CHLO.
     return false;
   }
-  const QuicTag* their_proof_demands;
-  size_t num_their_proof_demands;
-  if (scfg->GetTaglist(kPDMD, &their_proof_demands, &num_their_proof_demands) !=
-      QUIC_NO_ERROR) {
+  QuicTagVector their_proof_demands;
+  if (scfg->GetTaglist(kPDMD, &their_proof_demands) != QUIC_NO_ERROR) {
     return false;
   }
-  for (size_t i = 0; i < num_their_proof_demands; i++) {
-    if (their_proof_demands[i] == kCHID) {
+  for (const QuicTag tag : their_proof_demands) {
+    if (tag == kCHID) {
       return true;
     }
   }

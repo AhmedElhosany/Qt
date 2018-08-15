@@ -6,15 +6,14 @@
 #define SensorProviderProxy_h
 
 #include "core/frame/LocalFrame.h"
-#include "device/generic_sensor/public/interfaces/sensor.mojom-blink.h"
-#include "device/generic_sensor/public/interfaces/sensor_provider.mojom-blink.h"
 #include "platform/Supplementable.h"
 #include "platform/heap/Handle.h"
+#include "services/device/public/interfaces/sensor.mojom-blink.h"
+#include "services/device/public/interfaces/sensor_provider.mojom-blink.h"
 
 namespace blink {
 
 class SensorProxy;
-class SensorReadingFactory;
 
 // This class wraps 'SensorProvider' mojo interface and it manages
 // 'SensorProxy' instances.
@@ -25,33 +24,34 @@ class SensorProviderProxy final
   WTF_MAKE_NONCOPYABLE(SensorProviderProxy);
 
  public:
-  static SensorProviderProxy* from(LocalFrame*);
+  static SensorProviderProxy* From(LocalFrame*);
 
   ~SensorProviderProxy();
 
-  SensorProxy* createSensor(device::mojom::blink::SensorType,
-                            std::unique_ptr<SensorReadingFactory>);
+  SensorProxy* CreateSensorProxy(device::mojom::blink::SensorType, Page*);
 
-  SensorProxy* getSensor(device::mojom::blink::SensorType);
+  SensorProxy* GetSensorProxy(device::mojom::blink::SensorType);
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
-  friend class SensorProxy;  // To call sensorProvider().
+  friend class SensorProxy;  // To call getSensorProvider().
 
-  explicit SensorProviderProxy(LocalFrame*);
-  static const char* supplementName();
+  explicit SensorProviderProxy(LocalFrame&);
+  static const char* SupplementName();
+  void InitializeIfNeeded();
+  bool IsInitialized() const { return sensor_provider_.is_bound(); }
 
-  device::mojom::blink::SensorProvider* sensorProvider() const {
-    return m_sensorProvider.get();
+  device::mojom::blink::SensorProvider* GetSensorProvider() const {
+    return sensor_provider_.get();
   }
 
-  void onSensorProviderConnectionError();
+  void OnSensorProviderConnectionError();
 
   using SensorsSet = HeapHashSet<WeakMember<SensorProxy>>;
-  SensorsSet m_sensors;
+  SensorsSet sensor_proxies_;
 
-  device::mojom::blink::SensorProviderPtr m_sensorProvider;
+  device::mojom::blink::SensorProviderPtr sensor_provider_;
 };
 
 }  // namespace blink

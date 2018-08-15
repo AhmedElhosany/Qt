@@ -173,7 +173,8 @@ public:
         ItemActiveFocusHasChanged, // value.boolValue
         ItemRotationHasChanged,    // value.realValue
         ItemAntialiasingHasChanged, // value.boolValue
-        ItemDevicePixelRatioHasChanged // value.realValue
+        ItemDevicePixelRatioHasChanged, // value.realValue
+        ItemEnabledHasChanged      // value.boolValue
     };
 
     union ItemChangeData {
@@ -237,6 +238,7 @@ public:
     void setImplicitHeight(qreal);
     qreal implicitHeight() const;
 
+    QSizeF size() const;
     void setSize(const QSizeF &size);
 
     TransformOrigin transformOrigin() const;
@@ -291,6 +293,8 @@ public:
     void setAcceptedMouseButtons(Qt::MouseButtons buttons);
     bool acceptHoverEvents() const;
     void setAcceptHoverEvents(bool enabled);
+    bool acceptTouchEvents() const;
+    void setAcceptTouchEvents(bool accept);
 
 #if QT_CONFIG(cursor)
     QCursor cursor() const;
@@ -447,6 +451,7 @@ private:
     Q_PRIVATE_SLOT(d_func(), void _q_resourceObjectDeleted(QObject *))
     Q_PRIVATE_SLOT(d_func(), quint64 _q_createJSWrapper(QV4::ExecutionEngine *))
 
+    friend class QQuickEventPoint;
     friend class QQuickWindow;
     friend class QQuickWindowPrivate;
     friend class QSGRenderer;

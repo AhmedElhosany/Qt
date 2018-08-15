@@ -165,6 +165,10 @@ BASE_EXPORT bool ReadFileToStringWithMaxSize(const FilePath& path,
 // Returns true iff |bytes| bytes have been successfully read from |fd|.
 BASE_EXPORT bool ReadFromFD(int fd, char* buffer, size_t bytes);
 
+// The following functions use POSIX functionality that isn't supported by
+// Fuchsia.
+#if !defined(OS_FUCHSIA)
+
 // Creates a symbolic link at |symlink| pointing to |target|.  Returns
 // false on failure.
 BASE_EXPORT bool CreateSymbolicLink(const FilePath& target,
@@ -205,6 +209,7 @@ BASE_EXPORT bool SetPosixFilePermissions(const FilePath& path, int mode);
 BASE_EXPORT bool ExecutableExistsInPath(Environment* env,
                                         const FilePath::StringType& executable);
 
+#endif  // !OS_FUCHSIA
 #endif  // OS_POSIX
 
 // Returns true if the given directory is empty
@@ -307,7 +312,9 @@ BASE_EXPORT bool TouchFile(const FilePath& path,
                            const Time& last_accessed,
                            const Time& last_modified);
 
-// Wrapper for fopen-like calls. Returns non-NULL FILE* on success.
+// Wrapper for fopen-like calls. Returns non-NULL FILE* on success. The
+// underlying file descriptor (POSIX) or handle (Windows) is unconditionally
+// configured to not be propagated to child processes.
 BASE_EXPORT FILE* OpenFile(const FilePath& filename, const char* mode);
 
 // Closes file opened by OpenFile. Returns true on success.
@@ -404,7 +411,7 @@ BASE_EXPORT bool VerifyPathControlledByAdmin(const base::FilePath& path);
 // the directory |path|, in the number of FilePath::CharType, or -1 on failure.
 BASE_EXPORT int GetMaximumPathComponentLength(const base::FilePath& path);
 
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_AIX)
 // Broad categories of file systems as returned by statfs() on Linux.
 enum FileSystemType {
   FILE_SYSTEM_UNKNOWN,  // statfs failed.

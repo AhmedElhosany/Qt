@@ -132,12 +132,10 @@ public:
 
     class GeometryChangeEvent : public WindowSystemEvent {
     public:
-        GeometryChangeEvent(QWindow *window, const QRect &newGeometry, const QRect &oldGeometry)
-            : WindowSystemEvent(GeometryChange), window(window), newGeometry(newGeometry), oldGeometry(oldGeometry)
-        { }
+        GeometryChangeEvent(QWindow *window, const QRect &newGeometry);
         QPointer<QWindow> window;
+        QRect requestedGeometry;
         QRect newGeometry;
-        QRect oldGeometry;
     };
 
     class EnterEvent : public WindowSystemEvent {
@@ -169,13 +167,13 @@ public:
 
     class WindowStateChangedEvent : public WindowSystemEvent {
     public:
-        WindowStateChangedEvent(QWindow *_window, Qt::WindowState _newState, Qt::WindowState _oldState)
+        WindowStateChangedEvent(QWindow *_window, Qt::WindowStates _newState, Qt::WindowStates _oldState)
             : WindowSystemEvent(WindowStateChanged), window(_window), newState(_newState), oldState(_oldState)
         { }
 
         QPointer<QWindow> window;
-        Qt::WindowState newState;
-        Qt::WindowState oldState;
+        Qt::WindowStates newState;
+        Qt::WindowStates oldState;
     };
 
     class WindowScreenChangedEvent : public WindowSystemEvent {
@@ -433,9 +431,9 @@ public:
 #ifndef QT_NO_GESTURES
     class GestureEvent : public InputEvent {
     public:
-        GestureEvent(QWindow *window, ulong time, Qt::NativeGestureType type, QPointF pos, QPointF globalPos)
+        GestureEvent(QWindow *window, ulong time, Qt::NativeGestureType type, QTouchDevice *dev, QPointF pos, QPointF globalPos)
             : InputEvent(window, time, Gesture, Qt::NoModifier), type(type), pos(pos), globalPos(globalPos),
-              realValue(0), sequenceId(0), intValue(0) { }
+              realValue(0), sequenceId(0), intValue(0), device(dev) { }
         Qt::NativeGestureType type;
         QPointF pos;
         QPointF globalPos;
@@ -444,6 +442,7 @@ public:
         // Windows
         ulong sequenceId;
         quint64 intValue;
+        QTouchDevice *device;
     };
 #endif
 

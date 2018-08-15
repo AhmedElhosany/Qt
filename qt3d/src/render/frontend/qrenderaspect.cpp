@@ -83,9 +83,16 @@
 #include <Qt3DRender/qrendercapture.h>
 #include <Qt3DRender/qbuffercapture.h>
 #include <Qt3DRender/qmemorybarrier.h>
+#include <Qt3DRender/qproximityfilter.h>
+#include <Qt3DRender/qshaderprogrambuilder.h>
+#include <Qt3DRender/qblitframebuffer.h>
+#include <Qt3DCore/qarmature.h>
+#include <Qt3DCore/qjoint.h>
+#include <Qt3DCore/qskeletonloader.h>
 
 #include <Qt3DRender/private/cameraselectornode_p.h>
 #include <Qt3DRender/private/layerfilternode_p.h>
+#include <Qt3DRender/private/cameralens_p.h>
 #include <Qt3DRender/private/filterkey_p.h>
 #include <Qt3DRender/private/entity_p.h>
 #include <Qt3DRender/private/renderer_p.h>
@@ -133,6 +140,13 @@
 #include <Qt3DRender/private/technique_p.h>
 #include <Qt3DRender/private/offscreensurfacehelper_p.h>
 #include <Qt3DRender/private/memorybarrier_p.h>
+#include <Qt3DRender/private/shaderbuilder_p.h>
+#include <Qt3DRender/private/blitframebuffer_p.h>
+#include <Qt3DRender/private/armature_p.h>
+#include <Qt3DRender/private/skeleton_p.h>
+#include <Qt3DRender/private/joint_p.h>
+#include <Qt3DRender/private/loadskeletonjob_p.h>
+#include <Qt3DRender/private/proximityfilter_p.h>
 
 #include <private/qrenderpluginfactory_p.h>
 #include <private/qrenderplugin_p.h>
@@ -141,6 +155,7 @@
 #include <Qt3DCore/qtransform.h>
 
 #include <Qt3DCore/qnode.h>
+#include <Qt3DCore/QAspectEngine>
 #include <Qt3DCore/private/qservicelocator_p.h>
 
 #include <QDebug>
@@ -188,6 +203,17 @@ QRenderAspectPrivate::~QRenderAspectPrivate()
     qDeleteAll(m_sceneImporter);
 }
 
+QRenderAspectPrivate *QRenderAspectPrivate::findPrivate(Qt3DCore::QAspectEngine *engine)
+{
+    const QVector<QAbstractAspect*> aspects = engine->aspects();
+    for (QAbstractAspect* aspect : aspects) {
+        QRenderAspect *renderAspect = qobject_cast<QRenderAspect *>(aspect);
+        if (renderAspect)
+            return static_cast<QRenderAspectPrivate *>(renderAspect->d_ptr.data());
+    }
+    return nullptr;
+}
+
 /*! \internal */
 void QRenderAspectPrivate::registerBackendTypes()
 {
@@ -197,11 +223,13 @@ void QRenderAspectPrivate::registerBackendTypes()
     qRegisterMetaType<Qt3DRender::QEffect*>();
     qRegisterMetaType<Qt3DRender::QFrameGraphNode *>();
     qRegisterMetaType<Qt3DRender::QCamera*>();
+    qRegisterMetaType<Qt3DRender::QShaderProgram*>();
+    qRegisterMetaType<Qt3DCore::QJoint*>();
 
     q->registerBackendType<Qt3DCore::QEntity>(QSharedPointer<Render::RenderEntityFunctor>::create(m_renderer, m_nodeManagers));
     q->registerBackendType<Qt3DCore::QTransform>(QSharedPointer<Render::NodeFunctor<Render::Transform, Render::TransformManager> >::create(m_renderer));
 
-    q->registerBackendType<Qt3DRender::QCameraLens>(QSharedPointer<Render::NodeFunctor<Render::CameraLens, Render::CameraManager> >::create(m_renderer));
+    q->registerBackendType<Qt3DRender::QCameraLens>(QSharedPointer<Render::CameraLensFunctor>::create(m_renderer, q));
     q->registerBackendType<QLayer>(QSharedPointer<Render::NodeFunctor<Render::Layer, Render::LayerManager> >::create(m_renderer));
     q->registerBackendType<QLevelOfDetail>(QSharedPointer<Render::NodeFunctor<Render::LevelOfDetail, Render::LevelOfDetailManager> >::create(m_renderer));
     q->registerBackendType<QLevelOfDetailSwitch>(QSharedPointer<Render::NodeFunctor<Render::LevelOfDetail, Render::LevelOfDetailManager> >::create(m_renderer));
@@ -217,6 +245,9 @@ void QRenderAspectPrivate::registerBackendTypes()
     q->registerBackendType<QComputeCommand>(QSharedPointer<Render::NodeFunctor<Render::ComputeCommand, Render::ComputeCommandManager> >::create(m_renderer));
     q->registerBackendType<QGeometry>(QSharedPointer<Render::NodeFunctor<Render::Geometry, Render::GeometryManager> >::create(m_renderer));
     q->registerBackendType<QGeometryRenderer>(QSharedPointer<Render::GeometryRendererFunctor>::create(m_renderer, m_nodeManagers->geometryRendererManager()));
+    q->registerBackendType<Qt3DCore::QArmature>(QSharedPointer<Render::NodeFunctor<Render::Armature, Render::ArmatureManager>>::create(m_renderer));
+    q->registerBackendType<Qt3DCore::QSkeletonLoader>(QSharedPointer<Render::SkeletonFunctor>::create(m_renderer, m_nodeManagers->skeletonManager(), m_nodeManagers->jointManager()));
+    q->registerBackendType<Qt3DCore::QJoint>(QSharedPointer<Render::JointFunctor>::create(m_renderer, m_nodeManagers->jointManager(), m_nodeManagers->skeletonManager()));
 
     // Textures
     q->registerBackendType<QAbstractTexture>(QSharedPointer<Render::TextureFunctor>::create(m_renderer, m_nodeManagers->textureManager(), m_nodeManagers->textureImageManager()));
@@ -232,6 +263,7 @@ void QRenderAspectPrivate::registerBackendTypes()
     q->registerBackendType<QRenderPass>(QSharedPointer<Render::NodeFunctor<Render::RenderPass, Render::RenderPassManager> >::create(m_renderer));
     q->registerBackendType<QShaderData>(QSharedPointer<Render::RenderShaderDataFunctor>::create(m_renderer, m_nodeManagers));
     q->registerBackendType<QShaderProgram>(QSharedPointer<Render::NodeFunctor<Render::Shader, Render::ShaderManager> >::create(m_renderer));
+    q->registerBackendType<QShaderProgramBuilder>(QSharedPointer<Render::NodeFunctor<Render::ShaderBuilder, Render::ShaderBuilderManager> >::create(m_renderer));
     q->registerBackendType<QTechnique>(QSharedPointer<Render::TechniqueFunctor>::create(m_renderer, m_nodeManagers));
 
     // Framegraph
@@ -252,6 +284,8 @@ void QRenderAspectPrivate::registerBackendTypes()
     q->registerBackendType<QRenderCapture>(QSharedPointer<Render::FrameGraphNodeFunctor<Render::RenderCapture, QRenderCapture> >::create(m_renderer));
     q->registerBackendType<QBufferCapture>(QSharedPointer<Render::FrameGraphNodeFunctor<Render::BufferCapture, QBufferCapture> >::create(m_renderer));
     q->registerBackendType<QMemoryBarrier>(QSharedPointer<Render::FrameGraphNodeFunctor<Render::MemoryBarrier, QMemoryBarrier> >::create(m_renderer));
+    q->registerBackendType<QProximityFilter>(QSharedPointer<Render::FrameGraphNodeFunctor<Render::ProximityFilter, QProximityFilter> >::create(m_renderer));
+    q->registerBackendType<QBlitFramebuffer>(QSharedPointer<Render::FrameGraphNodeFunctor<Render::BlitFramebuffer, QBlitFramebuffer> >::create(m_renderer));
 
     // Picking
     q->registerBackendType<QObjectPicker>(QSharedPointer<Render::NodeFunctor<Render::ObjectPicker, Render::ObjectPickerManager> >::create(m_renderer));
@@ -297,6 +331,7 @@ void QRenderAspectPrivate::unregisterBackendTypes()
     unregisterBackendType<QRenderPass>();
     unregisterBackendType<QShaderData>();
     unregisterBackendType<QShaderProgram>();
+    unregisterBackendType<QShaderProgramBuilder>();
     unregisterBackendType<QTechnique>();
 
     // Framegraph
@@ -429,10 +464,22 @@ QVector<Qt3DCore::QAspectJobPtr> QRenderAspect::jobsToExecute(qint64 time)
             jobs.append(loadTextureJob);
         }
 
+        // Launch skeleton loader jobs. We join on the syncTextureLoadingJob for now
+        // which should likely be renamed to something more generic or we introduce
+        // another synchronizing job for skeleton loading
+        const QVector<Render::HSkeleton> skeletonsToLoad =
+                manager->skeletonManager()->dirtySkeletons(Render::SkeletonManager::SkeletonDataDirty);
+        for (const auto &skeletonHandle : skeletonsToLoad) {
+            auto loadSkeletonJob = Render::LoadSkeletonJobPtr::create(skeletonHandle);
+            loadSkeletonJob->setNodeManagers(manager);
+            textureLoadingSync->addDependency(loadSkeletonJob);
+            jobs.append(loadSkeletonJob);
+        }
+
         // TO DO: Have 2 jobs queue
         // One for urgent jobs that are mandatory for the rendering of a frame
         // Another for jobs that can span across multiple frames (Scene/Mesh loading)
-        const QVector<Render::LoadSceneJobPtr> sceneJobs = manager->sceneManager()->pendingSceneLoaderJobs();
+        const QVector<Render::LoadSceneJobPtr> sceneJobs = manager->sceneManager()->takePendingSceneLoaderJobs();
         for (const Render::LoadSceneJobPtr &job : sceneJobs) {
             job->setNodeManagers(d->m_nodeManagers);
             job->setSceneImporters(d->m_sceneImporter);
@@ -513,7 +560,8 @@ void QRenderAspect::onRegistered()
                                                        advanceService);
         }
 
-        d->m_renderer->setServices(d->services());
+        if (d->services())
+            d->m_renderer->setServices(d->services());
         d->m_initialized = true;
     }
 

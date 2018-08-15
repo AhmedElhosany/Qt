@@ -5,18 +5,20 @@
 #ifndef CONTENT_CHILD_WEB_URL_LOADER_IMPL_H_
 #define CONTENT_CHILD_WEB_URL_LOADER_IMPL_H_
 
+#include "base/callback_forward.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "content/common/content_export.h"
-#include "content/common/url_loader_factory.mojom.h"
 #include "content/public/common/resource_response.h"
+#include "content/public/common/url_loader_factory.mojom.h"
+#include "mojo/public/cpp/system/data_pipe.h"
 #include "net/url_request/redirect_info.h"
 #include "third_party/WebKit/public/platform/WebURLLoader.h"
 #include "url/gurl.h"
 
-namespace mojo {
-class AssociatedGroup;
-}  // namespace mojo
+namespace base {
+class SingleThreadTaskRunner;
+}
 
 namespace content {
 
@@ -28,22 +30,31 @@ struct CONTENT_EXPORT StreamOverrideParameters {
  public:
   StreamOverrideParameters();
   ~StreamOverrideParameters();
-  // TODO(clamy): The browser should be made aware on destruction of this struct
-  // that it can release its associated stream handle.
+
   GURL stream_url;
+  mojo::ScopedDataPipeConsumerHandle consumer_handle;
   ResourceResponseHead response;
   std::vector<GURL> redirects;
   std::vector<ResourceResponseInfo> redirect_responses;
+  std::vector<net::RedirectInfo> redirect_infos;
+
+  // The delta between the actual transfer size and the one reported by the
+  // AsyncResourceLoader due to not having the ResourceResponse.
+  int total_transfer_size_delta;
+
+  int total_transferred = 0;
+
+  // Called when this struct is deleted. Used to notify the browser that it can
+  // release its associated StreamHandle.
+  base::OnceCallback<void(const GURL&)> on_delete;
 };
 
 class CONTENT_EXPORT WebURLLoaderImpl
     : public NON_EXPORTED_BASE(blink::WebURLLoader) {
  public:
-
-  // Takes ownership of |web_task_runner|.
   WebURLLoaderImpl(ResourceDispatcher* resource_dispatcher,
-                   mojom::URLLoaderFactory* url_loader_factory,
-                   mojo::AssociatedGroup* associated_group);
+                   scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+                   mojom::URLLoaderFactory* url_loader_factory);
   ~WebURLLoaderImpl() override;
 
   static void PopulateURLResponse(const GURL& url,
@@ -53,24 +64,21 @@ class CONTENT_EXPORT WebURLLoaderImpl
   static blink::WebURLRequest PopulateURLRequestForRedirect(
       const blink::WebURLRequest& request,
       const net::RedirectInfo& redirect_info,
-      blink::WebURLRequest::SkipServiceWorker skip_service_worker);
+      blink::WebURLRequest::ServiceWorkerMode service_worker_mode);
 
   // WebURLLoader methods:
-  void loadSynchronously(const blink::WebURLRequest& request,
+  void LoadSynchronously(const blink::WebURLRequest& request,
                          blink::WebURLResponse& response,
                          blink::WebURLError& error,
                          blink::WebData& data,
-                         int64_t& encoded_data_length) override;
-  void loadAsynchronously(
-      const blink::WebURLRequest& request,
-      blink::WebURLLoaderClient* client) override;
-  void cancel() override;
-  void setDefersLoading(bool value) override;
-  void didChangePriority(blink::WebURLRequest::Priority new_priority,
+                         int64_t& encoded_data_length,
+                         int64_t& encoded_body_length) override;
+  void LoadAsynchronously(const blink::WebURLRequest& request,
+                          blink::WebURLLoaderClient* client) override;
+  void Cancel() override;
+  void SetDefersLoading(bool value) override;
+  void DidChangePriority(blink::WebURLRequest::Priority new_priority,
                          int intra_priority_value) override;
-  void setLoadingTaskRunner(
-      base::SingleThreadTaskRunner* loading_task_runner) override;
-
  private:
   class Context;
   class RequestPeerImpl;

@@ -14,16 +14,21 @@
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
-#include "services/service_manager/public/cpp/connection.h"
 #include "ui/gfx/native_pixmap_handle.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/vsync_provider.h"
 #include "ui/ozone/common/gpu/ozone_gpu_message_params.h"
+#include "ui/ozone/platform/drm/common/display_types.h"
 #include "ui/ozone/public/interfaces/device_cursor.mojom.h"
 #include "ui/ozone/public/swap_completion_callback.h"
 
 namespace base {
 struct FileDescriptor;
+}
+
+namespace display {
+class DisplayMode;
+struct GammaRampRGBEntry;
 }
 
 namespace gfx {
@@ -39,7 +44,6 @@ class GbmBuffer;
 class ScanoutBufferGenerator;
 class ScreenManager;
 
-struct GammaRampRGBEntry;
 struct OverlayPlane;
 
 // Holds all the DRM related state and performs all DRM related operations.
@@ -73,7 +77,7 @@ class DrmThread : public base::Thread, public ozone::mojom::DeviceCursor {
                          std::vector<gfx::BufferFormat>* scanout_formats);
   void SchedulePageFlip(gfx::AcceleratedWidget widget,
                         const std::vector<OverlayPlane>& planes,
-                        const SwapCompletionCallback& callback);
+                        SwapCompletionOnceCallback callback);
   void GetVSyncParameters(
       gfx::AcceleratedWidget widget,
       const gfx::VSyncProvider::UpdateVSyncCallback& callback);
@@ -90,35 +94,34 @@ class DrmThread : public base::Thread, public ozone::mojom::DeviceCursor {
   void CheckOverlayCapabilities(
       gfx::AcceleratedWidget widget,
       const std::vector<OverlayCheck_Params>& overlays,
-      const base::Callback<void(gfx::AcceleratedWidget,
-                                const std::vector<OverlayCheck_Params>&)>&
+      base::OnceCallback<void(gfx::AcceleratedWidget,
+                              const std::vector<OverlayCheck_Params>&,
+                              const std::vector<OverlayCheckReturn_Params>&)>
           callback);
   void RefreshNativeDisplays(
-      const base::Callback<void(const std::vector<DisplaySnapshot_Params>&)>&
-          callback);
-  void ConfigureNativeDisplay(
-      int64_t id,
-      const DisplayMode_Params& mode,
-      const gfx::Point& origin,
-      const base::Callback<void(int64_t, bool)>& callback);
-  void DisableNativeDisplay(
-      int64_t id,
-      const base::Callback<void(int64_t, bool)>& callback);
-  void TakeDisplayControl(const base::Callback<void(bool)>& callback);
-  void RelinquishDisplayControl(const base::Callback<void(bool)>& callback);
+      base::OnceCallback<void(MovableDisplaySnapshots)> callback);
+  void ConfigureNativeDisplay(int64_t id,
+                              std::unique_ptr<display::DisplayMode> mode,
+                              const gfx::Point& origin,
+                              base::OnceCallback<void(int64_t, bool)> callback);
+  void DisableNativeDisplay(int64_t id,
+                            base::OnceCallback<void(int64_t, bool)> callback);
+  void TakeDisplayControl(base::OnceCallback<void(bool)> callback);
+  void RelinquishDisplayControl(base::OnceCallback<void(bool)> callback);
   void AddGraphicsDevice(const base::FilePath& path,
                          const base::FileDescriptor& fd);
   void RemoveGraphicsDevice(const base::FilePath& path);
   void GetHDCPState(
       int64_t display_id,
-      const base::Callback<void(int64_t, bool, HDCPState)>& callback);
+      base::OnceCallback<void(int64_t, bool, display::HDCPState)> callback);
   void SetHDCPState(int64_t display_id,
-                    HDCPState state,
-                    const base::Callback<void(int64_t, bool)>& callback);
-  void SetColorCorrection(int64_t display_id,
-                          const std::vector<GammaRampRGBEntry>& degamma_lut,
-                          const std::vector<GammaRampRGBEntry>& gamma_lut,
-                          const std::vector<float>& correction_matrix);
+                    display::HDCPState state,
+                    base::OnceCallback<void(int64_t, bool)> callback);
+  void SetColorCorrection(
+      int64_t display_id,
+      const std::vector<display::GammaRampRGBEntry>& degamma_lut,
+      const std::vector<display::GammaRampRGBEntry>& gamma_lut,
+      const std::vector<float>& correction_matrix);
 
   // base::Thread:
   void Init() override;

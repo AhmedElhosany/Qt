@@ -8,69 +8,108 @@
 #include "GrRenderTargetProxy.h"
 
 #include "GrCaps.h"
+#include "GrGpuResourcePriv.h"
 #include "GrRenderTargetOpList.h"
 #include "GrRenderTargetPriv.h"
-#include "GrTextureProvider.h"
+#include "GrResourceProvider.h"
 #include "GrTextureRenderTargetProxy.h"
+#include "SkMathPriv.h"
 
 // Deferred version
 // TODO: we can probably munge the 'desc' in both the wrapped and deferred
 // cases to make the sampleConfig/numSamples stuff more rational.
 GrRenderTargetProxy::GrRenderTargetProxy(const GrCaps& caps, const GrSurfaceDesc& desc,
-                                         SkBackingFit fit, SkBudgeted budgeted)
-    : INHERITED(desc, fit, budgeted)
-    , fFlags(GrRenderTarget::Flags::kNone) {
+                                         SkBackingFit fit, SkBudgeted budgeted, uint32_t flags)
+        : INHERITED(desc, fit, budgeted, flags)
+        , fSampleCnt(desc.fSampleCnt)
+        , fRenderTargetFlags(GrRenderTargetFlags::kNone) {
     // Since we know the newly created render target will be internal, we are able to precompute
     // what the flags will ultimately end up being.
-    if (caps.usesMixedSamples() && fDesc.fSampleCnt > 0) {
-        fFlags |= GrRenderTarget::Flags::kMixedSampled;
+    if (caps.usesMixedSamples() && fSampleCnt > 0) {
+        fRenderTargetFlags |= GrRenderTargetFlags::kMixedSampled;
     }
     if (caps.maxWindowRectangles() > 0) {
-        fFlags |= GrRenderTarget::Flags::kWindowRectsSupport;
+        fRenderTargetFlags |= GrRenderTargetFlags::kWindowRectsSupport;
     }
 }
 
 // Wrapped version
 GrRenderTargetProxy::GrRenderTargetProxy(sk_sp<GrSurface> surf)
     : INHERITED(std::move(surf), SkBackingFit::kExact)
-    , fFlags(fTarget->asRenderTarget()->renderTargetPriv().flags()) {
+    , fSampleCnt(fTarget->asRenderTarget()->numStencilSamples())
+    , fRenderTargetFlags(fTarget->asRenderTarget()->renderTargetPriv().flags()) {
 }
 
 int GrRenderTargetProxy::maxWindowRectangles(const GrCaps& caps) const {
-    return (fFlags & GrRenderTarget::Flags::kWindowRectsSupport) ? caps.maxWindowRectangles() : 0;
+    return (fRenderTargetFlags & GrRenderTargetFlags::kWindowRectsSupport)
+                   ? caps.maxWindowRectangles()
+                   : 0;
 }
 
-GrRenderTarget* GrRenderTargetProxy::instantiate(GrTextureProvider* texProvider) {
-    SkASSERT(fDesc.fFlags & GrSurfaceFlags::kRenderTarget_GrSurfaceFlag);
+bool GrRenderTargetProxy::instantiate(GrResourceProvider* resourceProvider) {
+    static constexpr GrSurfaceFlags kFlags = kRenderTarget_GrSurfaceFlag;
 
-    GrSurface* surf = INHERITED::instantiate(texProvider);
-    if (!surf || !surf->asRenderTarget()) {
+    if (!this->instantiateImpl(resourceProvider, fSampleCnt, kFlags,
+                               /* isMipped = */ false,
+                               SkDestinationSurfaceColorMode::kLegacy)) {
+        return false;
+    }
+    SkASSERT(fTarget->asRenderTarget());
+    // Check that our a priori computation matched the ultimate reality
+    SkASSERT(fRenderTargetFlags == fTarget->asRenderTarget()->renderTargetPriv().flags());
+
+    return true;
+}
+
+sk_sp<GrSurface> GrRenderTargetProxy::createSurface(GrResourceProvider* resourceProvider) const {
+    static constexpr GrSurfaceFlags kFlags = kRenderTarget_GrSurfaceFlag;
+
+    sk_sp<GrSurface> surface = this->createSurfaceImpl(resourceProvider, fSampleCnt, kFlags,
+                                                       /* isMipped = */ false,
+                                                       SkDestinationSurfaceColorMode::kLegacy);
+    if (!surface) {
         return nullptr;
     }
-
+    SkASSERT(surface->asRenderTarget());
     // Check that our a priori computation matched the ultimate reality
-    SkASSERT(fFlags == surf->asRenderTarget()->renderTargetPriv().flags());
+    SkASSERT(fRenderTargetFlags == surface->asRenderTarget()->renderTargetPriv().flags());
 
-    return surf->asRenderTarget();
+    return surface;
 }
 
-
-#ifdef SK_DEBUG
-void GrRenderTargetProxy::validate(GrContext* context) const {
+int GrRenderTargetProxy::worstCaseWidth() const {
     if (fTarget) {
-        SkASSERT(fTarget->getContext() == context);
+        return fTarget->width();
     }
 
-    INHERITED::validate();
+    if (SkBackingFit::kExact == fFit) {
+        return fWidth;
+    }
+    return SkTMax(GrResourceProvider::kMinScratchTextureSize, GrNextPow2(fWidth));
 }
-#endif
 
-size_t GrRenderTargetProxy::onGpuMemorySize() const {
+int GrRenderTargetProxy::worstCaseHeight() const {
     if (fTarget) {
-        return fTarget->gpuMemorySize();
+        return fTarget->height();
     }
 
+    if (SkBackingFit::kExact == fFit) {
+        return fHeight;
+    }
+    return SkTMax(GrResourceProvider::kMinScratchTextureSize, GrNextPow2(fHeight));
+}
+
+size_t GrRenderTargetProxy::onUninstantiatedGpuMemorySize() const {
+    int colorSamplesPerPixel = this->numColorSamples() + 1;
     // TODO: do we have enough information to improve this worst case estimate?
-    return GrSurface::ComputeSize(fDesc, fDesc.fSampleCnt+1, false);
+    return GrSurface::ComputeSize(fConfig, fWidth, fHeight, colorSamplesPerPixel, false,
+                                  SkBackingFit::kApprox == fFit);
 }
 
+bool GrRenderTargetProxy::refsWrappedObjects() const {
+    if (!fTarget) {
+        return false;
+    }
+
+    return fTarget->resourcePriv().refsWrappedObjects();
+}

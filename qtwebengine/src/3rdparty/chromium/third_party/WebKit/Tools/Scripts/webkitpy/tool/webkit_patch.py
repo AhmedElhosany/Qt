@@ -29,10 +29,11 @@
 
 """Webkit-patch is a tool with multiple sub-commands with different purposes.
 
-Historically, it had commands related to dealing with bugzilla, and posting
-and comitting patches to WebKit. More recently, it has commands for printing
-expectations, fetching new test baselines, starting a commit-announcer IRC bot,
-etc. These commands don't necessarily have anything to do with each other.
+Historically, it had commands related to dealing with bugzilla and posting
+and committing patches to WebKit. More recently, it has commands for printing
+expectations, fetching new test baselines, etc.
+
+These commands don't necessarily have anything to do with each other.
 """
 
 import logging
@@ -41,9 +42,8 @@ import sys
 
 from webkitpy.common.host import Host
 from webkitpy.tool.commands.analyze_baselines import AnalyzeBaselines
-from webkitpy.tool.commands.auto_rebaseline import AutoRebaseline
 from webkitpy.tool.commands.command import HelpPrintingOptionParser
-from webkitpy.tool.commands.commit_announcer import CommitAnnouncerCommand
+from webkitpy.tool.commands.copy_existing_baselines import CopyExistingBaselines
 from webkitpy.tool.commands.flaky_tests import FlakyTests
 from webkitpy.tool.commands.help_command import HelpCommand
 from webkitpy.tool.commands.layout_tests_server import LayoutTestsServer
@@ -52,26 +52,27 @@ from webkitpy.tool.commands.pretty_diff import PrettyDiff
 from webkitpy.tool.commands.queries import CrashLog
 from webkitpy.tool.commands.queries import PrintBaselines
 from webkitpy.tool.commands.queries import PrintExpectations
-from webkitpy.tool.commands.rebaseline import CopyExistingBaselinesInternal
 from webkitpy.tool.commands.rebaseline import Rebaseline
 from webkitpy.tool.commands.rebaseline import RebaselineExpectations
-from webkitpy.tool.commands.rebaseline import RebaselineJson
-from webkitpy.tool.commands.rebaseline import RebaselineTest
 from webkitpy.tool.commands.rebaseline_cl import RebaselineCL
 from webkitpy.tool.commands.rebaseline_server import RebaselineServer
+from webkitpy.tool.commands.rebaseline_test import RebaselineTest
 
 
 _log = logging.getLogger(__name__)
 
 
 class WebKitPatch(Host):
+    # FIXME: It might make more sense if this class had a Host attribute
+    # instead of being a Host subclass.
+
     global_options = [
         optparse.make_option(
-            "-v", "--verbose", action="store_true", dest="verbose", default=False,
-            help="enable all logging"),
+            '-v', '--verbose', action='store_true', dest='verbose', default=False,
+            help='enable all logging'),
         optparse.make_option(
-            "-d", "--directory", action="append", dest="patch_directories", default=[],
-            help="Directory to look at for changed files"),
+            '-d', '--directory', action='append', default=[],
+            help='Directory to look at for changed files'),
     ]
 
     def __init__(self, path):
@@ -79,9 +80,7 @@ class WebKitPatch(Host):
         self._path = path
         self.commands = [
             AnalyzeBaselines(),
-            AutoRebaseline(),
-            CommitAnnouncerCommand(),
-            CopyExistingBaselinesInternal(),
+            CopyExistingBaselines(),
             CrashLog(),
             FlakyTests(),
             LayoutTestsServer(),
@@ -92,7 +91,6 @@ class WebKitPatch(Host):
             Rebaseline(),
             RebaselineCL(),
             RebaselineExpectations(),
-            RebaselineJson(),
             RebaselineServer(),
             RebaselineTest(),
         ]
@@ -108,16 +106,10 @@ class WebKitPatch(Host):
 
         command = self.command_by_name(command_name) or self.help_command
         if not command:
-            option_parser.error("%s is not a recognized command", command_name)
+            option_parser.error('%s is not a recognized command', command_name)
 
         command.set_option_parser(option_parser)
         (options, args) = command.parse_args(args)
-        self._handle_global_options(options)
-
-        (should_execute, failure_reason) = self._should_execute_command(command)
-        if not should_execute:
-            _log.error(failure_reason)
-            return 0  # FIXME: Should this really be 0?
 
         result = command.check_arguments_and_execute(options, args, self)
         return result
@@ -130,7 +122,7 @@ class WebKitPatch(Host):
         # Assume the first argument which doesn't start with "-" is the command name.
         command_index = 0
         for arg in args:
-            if arg[0] != "-":
+            if arg[0] != '-':
                 break
             command_index += 1
         else:
@@ -140,7 +132,7 @@ class WebKitPatch(Host):
         return (command, args[:command_index] + args[command_index + 1:])
 
     def _create_option_parser(self):
-        usage = "Usage: %prog [options] COMMAND [ARGS]"
+        usage = 'Usage: %prog [options] COMMAND [ARGS]'
         name = optparse.OptionParser().get_prog_name()
         return HelpPrintingOptionParser(epilog_method=self.help_command.help_epilog, prog=name, usage=usage)
 
@@ -149,26 +141,11 @@ class WebKitPatch(Host):
         for option in global_options:
             option_parser.add_option(option)
 
-    # FIXME: This may be unnecessary since we pass global options to all commands during execute() as well.
-    def _handle_global_options(self, options):
-        self.initialize_scm(options.patch_directories)
-
-    def _should_execute_command(self, command):
-        if command.requires_local_commits and not self.scm().supports_local_commits():
-            failure_reason = "%s requires local commits using %s in %s." % (
-                command.name, self.scm().display_name(), self.scm().checkout_root)
-            return (False, failure_reason)
-        return (True, None)
-
     def name(self):
         return optparse.OptionParser().get_prog_name()
 
     def should_show_in_main_help(self, command):
-        if not command.show_in_main_help:
-            return False
-        if command.requires_local_commits:
-            return self.scm().supports_local_commits()
-        return True
+        return command.show_in_main_help
 
     def command_by_name(self, command_name):
         for command in self.commands:

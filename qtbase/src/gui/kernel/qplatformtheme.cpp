@@ -161,6 +161,8 @@ QT_BEGIN_NAMESPACE
                         The default value is double the MouseDoubleClickDistance, or 10 logical pixels
                         if that is not specified.
 
+    \value ShowShortcutsInContextMenus (bool) Whether to display shortcut key sequences in context menus.
+
     \sa themeHint(), QStyle::pixelMetric()
 */
 
@@ -516,6 +518,8 @@ QVariant QPlatformTheme::defaultThemeHint(ThemeHint hint)
         return QVariant(QStringList());
     case QPlatformTheme::StyleNames:
         return QVariant(QStringList());
+    case QPlatformTheme::ShowShortcutsInContextMenus:
+        return QVariant(false);
     case TextCursorWidth:
         return QVariant(1);
     case DropShadow:
@@ -527,7 +531,7 @@ QVariant QPlatformTheme::defaultThemeHint(ThemeHint hint)
     case UiEffects:
         return QVariant(int(0));
     case SpellCheckUnderlineStyle:
-        return QVariant(int(QTextCharFormat::SpellCheckUnderline));
+        return QVariant(int(QTextCharFormat::WaveUnderline));
     case TabFocusBehavior:
         return QVariant(int(Qt::TabFocusAllControls));
     case IconPixmapSizes:

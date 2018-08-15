@@ -12,10 +12,12 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/stl_util.h"
 #include "base/timer/timer.h"
+#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request_context_getter.h"
 
@@ -120,7 +122,7 @@ void RecordV4GetHashCheckResult(V4GetHashCheckResultType result_type) {
 
 const char kPermission[] = "permission";
 const char kPhaPatternType[] = "pha_pattern_type";
-const char kMalwarePatternType[] = "malware_pattern_type";
+const char kMalwareThreatType[] = "malware_threat_type";
 const char kSePatternType[] = "se_pattern_type";
 const char kLanding[] = "LANDING";
 const char kDistribution[] = "DISTRIBUTION";
@@ -253,10 +255,12 @@ V4GetHashProtocolManager::V4GetHashProtocolManager(
   threat_types_.assign(threat_types.begin(), threat_types.end());
 }
 
-V4GetHashProtocolManager::~V4GetHashProtocolManager() {}
+V4GetHashProtocolManager::~V4GetHashProtocolManager() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
 
 void V4GetHashProtocolManager::ClearCache() {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   full_hash_cache_.clear();
 }
 
@@ -265,7 +269,7 @@ void V4GetHashProtocolManager::GetFullHashes(
         full_hash_to_store_and_hash_prefixes,
     FullHashCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!full_hash_to_store_and_hash_prefixes.empty());
 
   std::vector<HashPrefix> prefixes_to_request;
@@ -300,8 +304,41 @@ void V4GetHashProtocolManager::GetFullHashes(
   net::HttpRequestHeaders headers;
   GetHashUrlAndHeaders(req_base64, &gethash_url, &headers);
 
-  std::unique_ptr<net::URLFetcher> owned_fetcher = net::URLFetcher::Create(
-      url_fetcher_id_++, gethash_url, net::URLFetcher::GET, this);
+  net::NetworkTrafficAnnotationTag traffic_annotation =
+      net::DefineNetworkTrafficAnnotation("safe_browsing_v4_get_hash", R"(
+        semantics {
+          sender: "Safe Browsing"
+          description:
+            "When Safe Browsing detects that a URL might be dangerous based on "
+            "its local database, it sends a partial hash of that URL to Google "
+            "to verify it before showing a warning to the user. This partial "
+            "hash does not expose the URL to Google."
+          trigger:
+            "When a resource URL matches the local hash-prefix database of "
+            "potential threats (malware, phishing etc), and the full-hash "
+            "result is not already cached, this will be sent."
+          data:
+             "The 32-bit hash prefix of any potentially bad URLs. The URLs "
+             "themselves are not sent."
+          destination: GOOGLE_OWNED_SERVICE
+        }
+        policy {
+          cookies_allowed: true
+          cookies_store: "Safe Browsing cookie store"
+          setting:
+            "Users can disable Safe Browsing by unchecking 'Protect you and "
+            "your device from dangerous sites' in Chromium settings under "
+            "Privacy. The feature is enabled by default."
+          chrome_policy {
+            SafeBrowsingEnabled {
+              policy_options {mode: MANDATORY}
+              SafeBrowsingEnabled: false
+            }
+          }
+        })");
+  std::unique_ptr<net::URLFetcher> owned_fetcher =
+      net::URLFetcher::Create(url_fetcher_id_++, gethash_url,
+                              net::URLFetcher::GET, this, traffic_annotation);
   net::URLFetcher* fetcher = owned_fetcher.get();
   pending_hash_requests_[fetcher].reset(new FullHashCallbackInfo(
       cached_full_hash_infos, prefixes_to_request, std::move(owned_fetcher),
@@ -310,6 +347,8 @@ void V4GetHashProtocolManager::GetFullHashes(
   fetcher->SetExtraRequestHeaders(headers.ToString());
   fetcher->SetLoadFlags(net::LOAD_DISABLE_CACHE);
   fetcher->SetRequestContext(request_context_getter_.get());
+  data_use_measurement::DataUseUserData::AttachToFetcher(
+      fetcher, data_use_measurement::DataUseUserData::SAFE_BROWSING);
   fetcher->Start();
 }
 
@@ -469,7 +508,7 @@ void V4GetHashProtocolManager::GetHashUrlAndHeaders(
 }
 
 void V4GetHashProtocolManager::HandleGetHashError(const Time& now) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   TimeDelta next = V4ProtocolManagerUtil::GetNextBackOffInterval(
       &gethash_error_count_, &gethash_back_off_mult_);
   next_gethash_time_ = now + next;
@@ -590,7 +629,7 @@ void V4GetHashProtocolManager::ParseMetadata(const ThreatMatch& match,
              match.threat_type() == POTENTIALLY_HARMFUL_APPLICATION) {
     for (const ThreatEntryMetadata::MetadataEntry& m :
          match.threat_entry_metadata().entries()) {
-      if (m.key() == kPhaPatternType || m.key() == kMalwarePatternType) {
+      if (m.key() == kPhaPatternType || m.key() == kMalwareThreatType) {
         if (m.value() == kLanding) {
           metadata->threat_pattern_type = ThreatPatternType::MALWARE_LANDING;
           break;
@@ -701,7 +740,7 @@ void V4GetHashProtocolManager::MergeResults(
 // SafeBrowsing request responses are handled here.
 void V4GetHashProtocolManager::OnURLFetchComplete(
     const net::URLFetcher* source) {
-  DCHECK(CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   PendingHashRequests::iterator it = pending_hash_requests_.find(source);

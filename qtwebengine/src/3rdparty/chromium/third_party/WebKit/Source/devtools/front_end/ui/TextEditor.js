@@ -11,11 +11,12 @@ UI.TextEditorFactory.prototype = {
    * @param {!UI.TextEditor.Options} options
    * @return {!UI.TextEditor}
    */
-  createEditor: function(options) {}
+  createEditor(options) {}
 };
 
 /**
  * @interface
+ * @extends {Common.EventTarget}
  */
 UI.TextEditor = function() {};
 
@@ -24,53 +25,65 @@ UI.TextEditor.prototype = {
   /**
    * @return {!UI.Widget}
    */
-  widget: function() {},
+  widget() {},
 
   /**
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
-  fullRange: function() {},
+  fullRange() {},
 
   /**
-   * @return {!Common.TextRange}
+   * @return {!TextUtils.TextRange}
    */
-  selection: function() {},
+  selection() {},
 
   /**
-   * @param {!Common.TextRange} selection
+   * @param {!TextUtils.TextRange} selection
    */
-  setSelection: function(selection) {},
+  setSelection(selection) {},
 
   /**
-   * @param {!Common.TextRange=} textRange
+   * @param {!TextUtils.TextRange=} textRange
    * @return {string}
    */
-  text: function(textRange) {},
+  text(textRange) {},
 
   /**
    * @param {string} text
    */
-  setText: function(text) {},
+  setText(text) {},
 
   /**
    * @param {number} lineNumber
    * @return {string}
    */
-  line: function(lineNumber) {},
+  line(lineNumber) {},
 
-  newlineAndIndent: function() {},
+  newlineAndIndent() {},
 
   /**
    * @param {function(!KeyboardEvent)} handler
    */
-  addKeyDownHandler: function(handler) {},
+  addKeyDownHandler(handler) {},
 
   /**
    * @param {?UI.AutocompleteConfig} config
    */
-  configureAutocomplete: function(config) {},
+  configureAutocomplete(config) {},
 
-  clearAutocomplete: function() {}
+  clearAutocomplete() {},
+
+  /**
+   * @param {number} lineNumber
+   * @param {number} columnNumber
+   * @return {?{startColumn: number, endColumn: number, type: string}}
+   */
+  tokenAtTextPosition(lineNumber, columnNumber) {}
+};
+
+/** @enum {symbol} */
+UI.TextEditor.Events = {
+  TextChanged: Symbol('TextChanged')
 };
 
 /**
@@ -79,15 +92,17 @@ UI.TextEditor.prototype = {
  *  lineNumbers: boolean,
  *  lineWrapping: boolean,
  *  mimeType: (string|undefined),
- *  autoHeight: (boolean|undefined)
+ *  autoHeight: (boolean|undefined),
+ *  padBottom: (boolean|undefined),
+ *  maxHighlightLength: (number|undefined)
  * }}
  */
 UI.TextEditor.Options;
 
 /**
  * @typedef {{
- *     substituteRangeCallback: ((function(number, number):?Common.TextRange)|undefined),
- *     suggestionsCallback: ((function(!Common.TextRange, !Common.TextRange, boolean=, string=):?Promise.<!UI.SuggestBox.Suggestions>)|undefined),
+ *     substituteRangeCallback: ((function(number, number):?TextUtils.TextRange)|undefined),
+ *     suggestionsCallback: ((function(!TextUtils.TextRange, !TextUtils.TextRange, boolean=):?Promise.<!UI.SuggestBox.Suggestions>)|undefined),
  *     isWordChar: ((function(string):boolean)|undefined),
  *     captureEnter: (boolean|undefined)
  * }}

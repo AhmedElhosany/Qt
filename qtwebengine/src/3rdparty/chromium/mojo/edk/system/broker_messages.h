@@ -23,11 +23,16 @@ struct BrokerMessageHeader {
   uint32_t padding;
 };
 
-static_assert(sizeof(BrokerMessageHeader) % kChannelMessageAlignment == 0,
+static_assert(IsAlignedForChannelMessage(sizeof(BrokerMessageHeader)),
               "Invalid header size.");
 
 struct BufferRequestData {
   uint32_t size;
+};
+
+struct BufferResponseData {
+  uint64_t guid_high;
+  uint64_t guid_low;
 };
 
 #if defined(OS_WIN)
@@ -42,6 +47,17 @@ struct InitData {
 #pragma pack(pop)
 
 template <typename T>
+inline bool GetBrokerMessageData(Channel::Message* message, T** out_data) {
+  const size_t required_size = sizeof(BrokerMessageHeader) + sizeof(T);
+  if (message->payload_size() < required_size)
+    return false;
+
+  auto* header = static_cast<BrokerMessageHeader*>(message->mutable_payload());
+  *out_data = reinterpret_cast<T*>(header + 1);
+  return true;
+}
+
+template <typename T>
 inline Channel::MessagePtr CreateBrokerMessage(
     BrokerMessageType type,
     size_t num_handles,
@@ -49,7 +65,7 @@ inline Channel::MessagePtr CreateBrokerMessage(
     T** out_message_data,
     void** out_extra_data = nullptr) {
   const size_t message_size = sizeof(BrokerMessageHeader) +
-      sizeof(**out_message_data) + extra_data_size;
+                              sizeof(**out_message_data) + extra_data_size;
   Channel::MessagePtr message(new Channel::Message(message_size, num_handles));
   BrokerMessageHeader* header =
       reinterpret_cast<BrokerMessageHeader*>(message->mutable_payload());

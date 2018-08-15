@@ -8,15 +8,24 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
-#include "cc/base/cc_export.h"
+#include "cc/cc_export.h"
 #include "cc/resources/single_release_callback.h"
-#include "cc/resources/texture_mailbox.h"
+#include "components/viz/common/quads/texture_mailbox.h"
+#include "mojo/public/cpp/bindings/struct_traits.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/size.h"
 
 class SkBitmap;
 
-namespace cc {
+namespace viz {
 class TextureMailbox;
+}
+
+namespace cc {
+
+namespace mojom {
+class CopyOutputResultDataView;
+}
 
 class CC_EXPORT CopyOutputResult {
  public:
@@ -29,7 +38,7 @@ class CC_EXPORT CopyOutputResult {
   }
   static std::unique_ptr<CopyOutputResult> CreateTextureResult(
       const gfx::Size& size,
-      const TextureMailbox& texture_mailbox,
+      const viz::TextureMailbox& texture_mailbox,
       std::unique_ptr<SingleReleaseCallback> release_callback) {
     return base::WrapUnique(new CopyOutputResult(size, texture_mailbox,
                                                  std::move(release_callback)));
@@ -38,26 +47,31 @@ class CC_EXPORT CopyOutputResult {
   ~CopyOutputResult();
 
   bool IsEmpty() const { return !HasBitmap() && !HasTexture(); }
-  bool HasBitmap() const { return !!bitmap_; }
+  bool HasBitmap() const { return !!bitmap_ && !bitmap_->isNull(); }
   bool HasTexture() const { return texture_mailbox_.IsValid(); }
 
   gfx::Size size() const { return size_; }
   std::unique_ptr<SkBitmap> TakeBitmap();
-  void TakeTexture(TextureMailbox* texture_mailbox,
+  void TakeTexture(viz::TextureMailbox* texture_mailbox,
                    std::unique_ptr<SingleReleaseCallback>* release_callback);
 
  private:
+  friend struct mojo::StructTraits<mojom::CopyOutputResultDataView,
+                                   std::unique_ptr<CopyOutputResult>>;
+
   CopyOutputResult();
   explicit CopyOutputResult(std::unique_ptr<SkBitmap> bitmap);
   explicit CopyOutputResult(
       const gfx::Size& size,
-      const TextureMailbox& texture_mailbox,
+      const viz::TextureMailbox& texture_mailbox,
       std::unique_ptr<SingleReleaseCallback> release_callback);
 
   gfx::Size size_;
   std::unique_ptr<SkBitmap> bitmap_;
-  TextureMailbox texture_mailbox_;
+  viz::TextureMailbox texture_mailbox_;
   std::unique_ptr<SingleReleaseCallback> release_callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(CopyOutputResult);
 };
 
 }  // namespace cc

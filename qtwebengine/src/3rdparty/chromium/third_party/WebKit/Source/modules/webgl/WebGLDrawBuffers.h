@@ -27,7 +27,7 @@
 #define WebGLDrawBuffers_h
 
 #include "modules/webgl/WebGLExtension.h"
-#include "wtf/PassRefPtr.h"
+#include "platform/wtf/PassRefPtr.h"
 
 namespace blink {
 
@@ -35,19 +35,16 @@ class WebGLDrawBuffers final : public WebGLExtension {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static WebGLDrawBuffers* create(WebGLRenderingContextBase*);
-  static bool supported(WebGLRenderingContextBase*);
-  static const char* extensionName();
+  static WebGLDrawBuffers* Create(WebGLRenderingContextBase*);
+  static bool Supported(WebGLRenderingContextBase*);
+  static const char* ExtensionName();
 
-  ~WebGLDrawBuffers() override;
-  WebGLExtensionName name() const override;
+  WebGLExtensionName GetName() const override;
 
   void drawBuffersWEBGL(const Vector<GLenum>& buffers);
 
  private:
   explicit WebGLDrawBuffers(WebGLRenderingContextBase*);
-
-  static bool satisfiesWebGLRequirements(WebGLRenderingContextBase*);
 };
 
 }  // namespace blink

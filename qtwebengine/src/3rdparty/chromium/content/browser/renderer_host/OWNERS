@@ -25,10 +25,17 @@ per-file render_sandbox_host_linux.*=jorgelo@chromium.org
 per-file sandbox_ipc_linux.*=jln@chromium.org
 per-file sandbox_ipc_linux.*=jorgelo@chromium.org
 
+# DelegatedFrame*
+per-file *delegated_frame*=jbauman@chromium.org
+per-file *delegated_frame*=fsamuel@chromium.org
+
 # WebSQL
 per-file database_*=jsbell@chromium.org
 per-file database_*=michaeln@chromium.org
 
 # Offscreen Canvas
-per-file offscreen_canvas*_impl.*=junov@chromium.org
-per-file offscreen_canvas*_impl.*=xlai@chromium.org
+per-file offscreen_canvas*.*=xlai@chromium.org
+per-file offscreen_canvas*.*=xidachen@chromium.org
+per-file offscreen_canvas*.*=junov@chromium.org
+
+# COMPONENT: Internals>Core

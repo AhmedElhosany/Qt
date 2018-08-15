@@ -8,18 +8,13 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
-#include "device/vr/vr_device.h"
 #include "device/vr/vr_device_provider.h"
 #include "device/vr/vr_export.h"
 
 namespace device {
 
 class GvrDelegateProvider;
-class GvrDelegate;
 class GvrDevice;
-class VRServiceImpl;
 
 class DEVICE_VR_EXPORT GvrDeviceProvider : public VRDeviceProvider {
  public:
@@ -29,24 +24,13 @@ class DEVICE_VR_EXPORT GvrDeviceProvider : public VRDeviceProvider {
   void GetDevices(std::vector<VRDevice*>* devices) override;
   void Initialize() override;
 
-  void SetListeningForActivate(bool listening) override;
+  device::GvrDelegateProvider* GetDelegateProvider();
 
-  // Called from GvrDevice.
-  void RequestPresent(const base::Callback<void(bool)>& callback);
-  void ExitPresent();
-
-  void OnGvrDelegateReady(const base::WeakPtr<GvrDelegate>& delegate);
-  void OnGvrDelegateRemoved();
-  void OnDisplayBlur();
-  void OnDisplayFocus();
-  void OnDisplayActivate();
+  GvrDevice* Device() { return vr_device_.get(); }
 
  private:
-  void SwitchToNonPresentingDelegate();
-
+  void Initialize(device::GvrDelegateProvider* provider);
   std::unique_ptr<GvrDevice> vr_device_;
-
-  base::WeakPtrFactory<GvrDeviceProvider> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(GvrDeviceProvider);
 };

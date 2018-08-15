@@ -40,20 +40,19 @@ class tst_AbstractOAuth : public QObject
 
 private:
     struct AbstractOAuth : QAbstractOAuth {
-        AbstractOAuth() : QAbstractOAuth(*new QAbstractOAuthPrivate(QUrl(), nullptr), nullptr) {}
+        AbstractOAuth() : QAbstractOAuth(*new QAbstractOAuthPrivate("", QUrl(), QString(), nullptr),
+                                         nullptr)
+        {}
 
-        virtual QString clientIdentifier() const override { return QString(); }
-        virtual void setClientIdentifier(const QString &) override {}
-        virtual QString token() const override { return QString(); }
-        virtual void setToken(const QString &) override {}
-        virtual QNetworkReply *head(const QUrl &, const QVariantMap &) override { return nullptr; }
-        virtual QNetworkReply *get(const QUrl &, const QVariantMap &) override { return nullptr; }
-        virtual QNetworkReply *post(const QUrl &, const QVariantMap &) override { return nullptr; }
-        virtual QNetworkReply *deleteResource(const QUrl &, const QVariantMap &) override
+        QNetworkReply *head(const QUrl &, const QVariantMap &) override { return nullptr; }
+        QNetworkReply *get(const QUrl &, const QVariantMap &) override { return nullptr; }
+        QNetworkReply *post(const QUrl &, const QVariantMap &) override { return nullptr; }
+        QNetworkReply *put(const QUrl &, const QVariantMap &) override { return nullptr; }
+        QNetworkReply *deleteResource(const QUrl &, const QVariantMap &) override
         {
             return nullptr;
         }
-        virtual void grant() override {}
+        void grant() override {}
     };
 
 private Q_SLOTS:

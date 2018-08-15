@@ -45,11 +45,24 @@
     right-clicking. It can also be used for popup menus; for example, a
     menu that is shown after clicking a button.
 
-   \l MenuItem is an item in the Menu control. Each item in a menu:
-   \list
-   \li displays text to the user
-   \li allows checking/unchecking
-   \li is highlighted (for example, on keyboard navigation)
-   \li performs some action on activation
-   \endlist
+    \l MenuItem is an item in the Menu control. Each item in a menu:
+    \list
+    \li displays text to the user
+    \li allows checking/unchecking
+    \li is highlighted (for example, on keyboard navigation)
+    \li performs some action on activation
+    \endlist
+
+    \section1 MenuBar Control
+
+    \image qtquickcontrols2-menubar.png
+
+    \l MenuBar control can be used for window menu bars.
+
+    \l MenuBarItem is an item in the MenuBar control. Each item in a menu bar:
+    \list
+    \li displays text to the user
+    \li is highlighted (for example, on keyboard navigation)
+    \li pops up the respective menu on activation
+    \endlist
 */

@@ -11,8 +11,12 @@
 #include "vpx_config.h"
 #include "vp8_rtcd.h"
 #include "./vpx_dsp_rtcd.h"
+#include "bitstream.h"
 #include "encodemb.h"
 #include "encodemv.h"
+#if CONFIG_MULTITHREAD
+#include "ethreading.h"
+#endif
 #include "vp8/common/common.h"
 #include "onyx_int.h"
 #include "vp8/common/extend.h"
@@ -35,13 +39,6 @@
 #include "encodeframe.h"
 
 extern void vp8_stuff_mb(VP8_COMP *cpi, MACROBLOCK *x, TOKENEXTRA **t);
-extern void vp8_calc_ref_frame_costs(int *ref_frame_cost, int prob_intra,
-                                     int prob_last, int prob_garf);
-extern void vp8_convert_rfct_to_prob(VP8_COMP *const cpi);
-extern void vp8cx_initialize_me_consts(VP8_COMP *cpi, int QIndex);
-extern void vp8_auto_select_speed(VP8_COMP *cpi);
-extern void vp8cx_init_mbrthread_data(VP8_COMP *cpi, MACROBLOCK *x,
-                                      MB_ROW_COMP *mbr_ei, int count);
 static void adjust_act_zbin(VP8_COMP *cpi, MACROBLOCK *x);
 
 #ifdef MODE_STATS
@@ -345,8 +342,8 @@ static void encode_mb_row(VP8_COMP *cpi, VP8_COMMON *cm, int mb_row,
 #if CONFIG_MULTITHREAD
   const int nsync = cpi->mt_sync_range;
   const int rightmost_col = cm->mb_cols + nsync;
-  volatile const int *last_row_current_mb_col;
-  volatile int *current_mb_col = &cpi->mt_current_mb_col[mb_row];
+  const int *last_row_current_mb_col;
+  int *current_mb_col = &cpi->mt_current_mb_col[mb_row];
 
   if ((cpi->b_multi_threaded != 0) && (mb_row != 0)) {
     last_row_current_mb_col = &cpi->mt_current_mb_col[mb_row - 1];
@@ -419,13 +416,14 @@ static void encode_mb_row(VP8_COMP *cpi, VP8_COMMON *cm, int mb_row,
 
 #if CONFIG_MULTITHREAD
     if (cpi->b_multi_threaded != 0) {
-      *current_mb_col = mb_col - 1; /* set previous MB done */
+      if (((mb_col - 1) % nsync) == 0) {
+        pthread_mutex_t *mutex = &cpi->pmutex[mb_row];
+        protected_write(mutex, current_mb_col, mb_col - 1);
+      }
 
-      if ((mb_col & (nsync - 1)) == 0) {
-        while (mb_col > (*last_row_current_mb_col - nsync)) {
-          x86_pause_hint();
-          thread_sleep(0);
-        }
+      if (mb_row && !(mb_col & (nsync - 1))) {
+        pthread_mutex_t *mutex = &cpi->pmutex[mb_row - 1];
+        sync_read(mutex, mb_col, last_row_current_mb_col, nsync);
       }
     }
 #endif
@@ -565,7 +563,9 @@ static void encode_mb_row(VP8_COMP *cpi, VP8_COMMON *cm, int mb_row,
                     xd->dst.u_buffer + 8, xd->dst.v_buffer + 8);
 
 #if CONFIG_MULTITHREAD
-  if (cpi->b_multi_threaded != 0) *current_mb_col = rightmost_col;
+  if (cpi->b_multi_threaded != 0) {
+    protected_write(&cpi->pmutex[mb_row], current_mb_col, rightmost_col);
+  }
 #endif
 
   /* this is to account for the border */

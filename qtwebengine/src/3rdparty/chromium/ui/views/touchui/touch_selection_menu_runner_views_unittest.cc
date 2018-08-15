@@ -4,7 +4,6 @@
 
 #include "base/macros.h"
 #include "ui/events/event_utils.h"
-#include "ui/strings/grit/ui_strings.h"
 #include "ui/touch_selection/touch_selection_menu_runner.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/test/views_test_base.h"
@@ -67,7 +66,7 @@ class TouchSelectionMenuRunnerViewsTest : public ViewsTestBase,
 // and closing the menu works properly.
 TEST_F(TouchSelectionMenuRunnerViewsTest, InstalledAndWorksProperly) {
   // See comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   gfx::Rect menu_anchor(0, 0, 10, 10);
@@ -98,7 +97,7 @@ TEST_F(TouchSelectionMenuRunnerViewsTest, InstalledAndWorksProperly) {
 // distance of handles.
 TEST_F(TouchSelectionMenuRunnerViewsTest, QuickMenuAdjustsAnchorRect) {
   // See comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   gfx::Size handle_size(10, 10);
@@ -134,7 +133,7 @@ TEST_F(TouchSelectionMenuRunnerViewsTest, QuickMenuAdjustsAnchorRect) {
 // Tests that running one of menu actions closes the menu properly.
 TEST_F(TouchSelectionMenuRunnerViewsTest, RunningActionClosesProperly) {
   // See comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   gfx::Rect menu_anchor(0, 0, 10, 10);
@@ -169,7 +168,7 @@ TEST_F(TouchSelectionMenuRunnerViewsTest, RunningActionClosesProperly) {
 // Tests that closing the menu widget cleans up the menu runner state properly.
 TEST_F(TouchSelectionMenuRunnerViewsTest, ClosingWidgetClosesProperly) {
   // See comment in SetUp().
-  if (IsAuraMusClient())
+  if (IsMus())
     return;
 
   gfx::Rect menu_anchor(0, 0, 10, 10);

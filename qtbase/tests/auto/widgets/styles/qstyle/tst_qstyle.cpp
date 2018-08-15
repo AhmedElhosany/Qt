@@ -82,9 +82,6 @@ private slots:
     void testFusionStyle();
 #endif
     void testWindowsStyle();
-#if defined(Q_OS_WIN) && !defined(QT_NO_STYLE_WINDOWSXP)
-    void testWindowsXPStyle();
-#endif
 #if defined(Q_OS_WIN) && !defined(QT_NO_STYLE_WINDOWSVISTA)
     void testWindowsVistaStyle();
 #endif
@@ -141,14 +138,6 @@ void tst_QStyle::testStyleFactory()
 #endif
 #ifndef QT_NO_STYLE_WINDOWS
     QVERIFY(keys.contains("Windows"));
-#endif
-#ifdef Q_OS_WIN
-    if (QSysInfo::WindowsVersion >= QSysInfo::WV_XP &&
-        (QSysInfo::WindowsVersion & QSysInfo::WV_NT_based))
-        QVERIFY(keys.contains("WindowsXP"));
-    if (QSysInfo::WindowsVersion >= QSysInfo::WV_VISTA &&
-        (QSysInfo::WindowsVersion & QSysInfo::WV_NT_based))
-        QVERIFY(keys.contains("WindowsVista"));
 #endif
 
     foreach (QString styleName , keys) {
@@ -295,16 +284,22 @@ bool tst_QStyle::testAllFunctions(QStyle *style)
 
 bool tst_QStyle::testScrollBarSubControls()
 {
+    const auto *style = testWidget->style();
+    const bool isMacStyle = style->objectName().toLower() == "macintosh";
     QScrollBar scrollBar;
     setFrameless(&scrollBar);
     scrollBar.show();
     const QStyleOptionSlider opt = qt_qscrollbarStyleOption(&scrollBar);
-    foreach (int subControl, QList<int>() << 1 << 2 << 4 << 8) {
-        QRect sr = testWidget->style()->subControlRect(QStyle::CC_ScrollBar, &opt,
-                                    QStyle::SubControl(subControl), &scrollBar);
+    foreach (int sc, QList<int>() << 1 << 2 << 4 << 8) {
+        const auto subControl = static_cast<QStyle::SubControl>(sc);
+        const QRect sr = style->subControlRect(QStyle::CC_ScrollBar, &opt, subControl, &scrollBar);
         if (sr.isNull()) {
-            qWarning("Null rect for subcontrol %d", subControl);
-            return false;
+            // macOS scrollbars no longer have these, so there's no reason to fail
+            if (!(isMacStyle && (subControl == QStyle::SC_ScrollBarAddLine ||
+                                 subControl == QStyle::SC_ScrollBarSubLine))) {
+                qWarning() << "Unexpected null rect for subcontrol" << subControl;
+                return false;
+            }
         }
     }
     return true;
@@ -335,17 +330,6 @@ void tst_QStyle::testWindowsStyle()
     delete wstyle;
 }
 
-#if defined(Q_OS_WIN) && !defined(QT_NO_STYLE_WINDOWSXP)
-// WindowsXP style
-void tst_QStyle::testWindowsXPStyle()
-{
-    QStyle *xpstyle = QStyleFactory::create("WindowsXP");
-    QVERIFY(testAllFunctions(xpstyle));
-    lineUpLayoutTest(xpstyle);
-    delete xpstyle;
-}
-#endif
-
 void writeImage(const QString &fileName, QImage image)
 {
     QImageWriter imageWriter(fileName);
@@ -368,8 +352,6 @@ void tst_QStyle::testWindowsVistaStyle()
 
     if (QSysInfo::WindowsVersion == QSysInfo::WV_VISTA)
         testPainting(vistastyle, "vista");
-    else if (QSysInfo::WindowsVersion == QSysInfo::WV_XP)
-        testPainting(vistastyle, "xp");
     delete vistastyle;
 }
 #endif

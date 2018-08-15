@@ -34,8 +34,8 @@ import sys
 import time
 import unittest
 
-from webkitpy.common.system.executive_mock import MockExecutive2
-from webkitpy.common.system.systemhost_mock import MockSystemHost
+from webkitpy.common.system.executive_mock import MockExecutive
+from webkitpy.common.system.system_host_mock import MockSystemHost
 from webkitpy.layout_tests.port import android
 from webkitpy.layout_tests.port import driver_unittest
 from webkitpy.layout_tests.port import port_testcase
@@ -68,7 +68,6 @@ def mock_devices():
         devices.append(mock_device)
     return devices
 
-
 class AndroidPortTest(port_testcase.PortTestCase):
     port_name = 'android'
     port_maker = android.AndroidPort
@@ -85,14 +84,21 @@ class AndroidPortTest(port_testcase.PortTestCase):
             return_value={'level': 100})
         self._mock_battery.start()
 
+        self._mock_perf_control = mock.patch(
+            'devil.android.perf.perf_control.PerfControl')
+        self._mock_perf_control.start()
+
     def tearDown(self):
         super(AndroidPortTest, self).tearDown()
         self._mock_devices.stop()
         self._mock_battery.stop()
+        self._mock_perf_control.stop()
 
     def test_check_build(self):
         host = MockSystemHost()
         port = self.make_port(host=host, options=optparse.Values({'child_processes': 1}))
+        # Checking the devices is not tested in this unit test.
+        port._check_devices = lambda _: None
         host.filesystem.exists = lambda p: True
         port.check_build(needs_http=True, printer=port_testcase.FakePrinter())
 
@@ -100,13 +106,10 @@ class AndroidPortTest(port_testcase.PortTestCase):
         # FIXME: Do something useful here, but testing the full logic would be hard.
         pass
 
-    def make_wdiff_available(self, port):
-        port._wdiff_available = True
-        port._host_port._wdiff_available = True
-
     # Test that content_shell currently is the only supported driver.
     def test_non_content_shell_driver(self):
-        self.assertRaises(self.make_port, options=optparse.Values({'driver_name': 'foobar'}))
+        with self.assertRaises(Exception):
+            self.make_port(options=optparse.Values({'driver_name': 'foobar'}))
 
     # Test that the number of child processes to create depends on the devices.
     def test_default_child_processes(self):
@@ -130,10 +133,6 @@ class AndroidPortTest(port_testcase.PortTestCase):
         port._host_port.path_to_apache_config_file = lambda: '/host/apache/conf'  # pylint: disable=protected-access
         self.assertEqual(port.path_to_apache_config_file(), '/host/apache/conf')
 
-    def test_skipped_directories_for_symbols(self):
-        pass
-
-
 
 class ChromiumAndroidDriverTest(unittest.TestCase):
 
@@ -148,7 +147,11 @@ class ChromiumAndroidDriverTest(unittest.TestCase):
             return_value={'level': 100})
         self._mock_battery.start()
 
-        self._port = android.AndroidPort(MockSystemHost(executive=MockExecutive2()), 'android')
+        self._mock_perf_control = mock.patch(
+            'devil.android.perf.perf_control.PerfControl')
+        self._mock_perf_control.start()
+
+        self._port = android.AndroidPort(MockSystemHost(executive=MockExecutive()), 'android')
         self._driver = android.ChromiumAndroidDriver(
             self._port,
             worker_number=0,
@@ -159,9 +162,9 @@ class ChromiumAndroidDriverTest(unittest.TestCase):
     def tearDown(self):
         # Make ChromiumAndroidDriver.__del__ run before we stop the mocks.
         del self._driver
-
         self._mock_battery.stop()
         self._mock_devices.stop()
+        self._mock_perf_control.stop()
 
     # The cmd_line() method in the Android port is used for starting a shell, not the test runner.
     def test_cmd_line(self):
@@ -183,17 +186,23 @@ class ChromiumAndroidDriverTwoDriversTest(unittest.TestCase):
             'devil.android.device_utils.DeviceUtils.HealthyDevices',
             return_value=mock_devices())
         self._mock_devices.start()
+
         self._mock_battery = mock.patch(
             'devil.android.battery_utils.BatteryUtils.GetBatteryInfo',
             return_value={'level': 100})
         self._mock_battery.start()
 
+        self._mock_perf_control = mock.patch(
+            'devil.android.perf.perf_control.PerfControl')
+        self._mock_perf_control.start()
+
     def tearDown(self):
         self._mock_battery.stop()
         self._mock_devices.stop()
+        self._mock_perf_control.stop()
 
     def test_two_drivers(self):
-        port = android.AndroidPort(MockSystemHost(executive=MockExecutive2()), 'android')
+        port = android.AndroidPort(MockSystemHost(executive=MockExecutive()), 'android')
         driver0 = android.ChromiumAndroidDriver(port, worker_number=0, pixel_tests=True,
                                                 driver_details=android.ContentShellDriverDetails(), android_devices=port._devices)
         driver1 = android.ChromiumAndroidDriver(port, worker_number=1, pixel_tests=True,
@@ -211,21 +220,27 @@ class ChromiumAndroidTwoPortsTest(unittest.TestCase):
             'devil.android.device_utils.DeviceUtils.HealthyDevices',
             return_value=mock_devices())
         self._mock_devices.start()
+
         self._mock_battery = mock.patch(
             'devil.android.battery_utils.BatteryUtils.GetBatteryInfo',
             return_value={'level': 100})
         self._mock_battery.start()
 
+        self._mock_perf_control = mock.patch(
+            'devil.android.perf.perf_control.PerfControl')
+        self._mock_perf_control.start()
+
     def tearDown(self):
         self._mock_battery.stop()
         self._mock_devices.stop()
+        self._mock_perf_control.stop()
 
     def test_options_with_two_ports(self):
         port0 = android.AndroidPort(
-            MockSystemHost(executive=MockExecutive2()), 'android',
+            MockSystemHost(executive=MockExecutive()), 'android',
             options=optparse.Values({'additional_driver_flag': ['--foo=bar']}))
         port1 = android.AndroidPort(
-            MockSystemHost(executive=MockExecutive2()), 'android',
+            MockSystemHost(executive=MockExecutive()), 'android',
             options=optparse.Values({'driver_name': 'content_shell'}))
 
         self.assertEqual(1, port0.driver_cmd_line().count('--foo=bar'))
@@ -246,7 +261,7 @@ class ChromiumAndroidDriverTombstoneTest(unittest.TestCase):
             return_value={'level': 100})
         self._mock_battery.start()
 
-        self._port = android.AndroidPort(MockSystemHost(executive=MockExecutive2()), 'android')
+        self._port = android.AndroidPort(MockSystemHost(executive=MockExecutive()), 'android')
         self._driver = android.ChromiumAndroidDriver(
             self._port,
             worker_number=0,

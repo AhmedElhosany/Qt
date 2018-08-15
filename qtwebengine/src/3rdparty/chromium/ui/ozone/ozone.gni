@@ -8,33 +8,37 @@ import("//build/config/ui.gni")
 declare_args() {
   # Select platforms automatically. Turn this off for manual control.
   ozone_auto_platforms = use_ozone
-
-  # This enables memory-mapped access to accelerated graphics buffers via the
-  # VGEM ("virtual GEM") driver. This is currently only available on Chrome OS
-  # kernels and affects code in the GBM ozone platform.
-  # TODO(dshwang): remove this flag when all gbm hardware supports vgem map.
-  # crbug.com/519587
-  use_vgem_map = false
 }
 
 declare_args() {
-  # The platform that will be active by default.
+  # The platform that will used at runtime by default. This can be overridden
+  # with the command line flag --ozone-platform=<platform>.
   ozone_platform = ""
 
-  # Enable individual platforms.
+  # Compile the 'cast' platform.
   ozone_platform_cast = false
+
+  # Compile the 'gbm' platform.
   ozone_platform_gbm = false
+
+  # Compile the 'headless' platform.
   ozone_platform_headless = false
+
+  # Compile the 'x11' platform.
   ozone_platform_x11 = false
+
+  # Compile the 'wayland' platform.
   ozone_platform_wayland = false
   ozone_platform_external = false
 
   if (ozone_auto_platforms) {
-    # Use headless as the default platform.
+    # Use headless as the default platform unless modified below.
     ozone_platform = "headless"
     ozone_platform_headless = true
 
-    if (is_chromecast) {
+    if (is_cast_audio_only) {
+      # Just use headless for audio-only Cast platforms.
+    } else if (is_chromecast) {
       # Enable the Cast ozone platform on all A/V Cast builds.
       ozone_platform_cast = true
 
@@ -48,10 +52,12 @@ declare_args() {
         ozone_platform = "cast"
       }
     } else if (is_chromeos) {
+      ozone_platform = "x11"
       ozone_platform_gbm = true
       ozone_platform_x11 = true
       ozone_platform_wayland = true
     } else if (is_desktop_linux) {
+      ozone_platform = "x11"
       ozone_platform_wayland = true
       ozone_platform_x11 = true
     }

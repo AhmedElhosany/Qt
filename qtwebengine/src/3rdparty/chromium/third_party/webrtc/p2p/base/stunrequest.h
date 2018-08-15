@@ -14,14 +14,19 @@
 #include <map>
 #include <string>
 #include "webrtc/p2p/base/stun.h"
-#include "webrtc/base/sigslot.h"
-#include "webrtc/base/thread.h"
+#include "webrtc/rtc_base/sigslot.h"
+#include "webrtc/rtc_base/thread.h"
 
 namespace cricket {
 
 class StunRequest;
 
 const int kAllRequests = 0;
+
+// Total max timeouts: 39.75 seconds
+// For years, this was 9.5 seconds, but for networks that experience moments of
+// high RTT (such as 40s on 2G networks), this doesn't work well.
+const int STUN_TOTAL_TIMEOUT = 39750;  // milliseconds
 
 // Manages a set of STUN requests, sending and resending until we receive a
 // response or determine that the request has timed out.

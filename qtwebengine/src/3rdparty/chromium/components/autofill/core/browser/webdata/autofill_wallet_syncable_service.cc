@@ -6,14 +6,14 @@
 
 #include <stddef.h>
 
-#include <set>
+#include <map>
 #include <utility>
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_profile.h"
-#include "components/autofill/core/browser/credit_card.h"
 #include "components/autofill/core/browser/webdata/autofill_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
@@ -24,6 +24,10 @@ namespace autofill {
 
 namespace {
 
+// The length of the GUIDs used for local autofill data. It is different than
+// the length used for server autofill data.
+const int kLocalGuidSize = 36;
+
 void* UserDataKey() {
   // Use the address of a static so that COMDAT folding won't ever fold
   // with something else.
@@ -31,7 +35,7 @@ void* UserDataKey() {
   return reinterpret_cast<void*>(&user_data_key);
 }
 
-const char* CardTypeFromWalletCardType(
+const char* CardNetworkFromWalletCardType(
     sync_pb::WalletMaskedCreditCard::WalletCardType type) {
   switch (type) {
     case sync_pb::WalletMaskedCreditCard::AMEX:
@@ -42,6 +46,8 @@ const char* CardTypeFromWalletCardType(
       return kJCBCard;
     case sync_pb::WalletMaskedCreditCard::MASTER_CARD:
       return kMasterCard;
+    case sync_pb::WalletMaskedCreditCard::UNIONPAY:
+      return kUnionPay;
     case sync_pb::WalletMaskedCreditCard::VISA:
       return kVisaCard;
 
@@ -51,6 +57,20 @@ const char* CardTypeFromWalletCardType(
     case sync_pb::WalletMaskedCreditCard::SWITCH:
     default:
       return kGenericCard;
+  }
+}
+
+CreditCard::CardType CardTypeFromWalletCardClass(
+    sync_pb::WalletMaskedCreditCard::WalletCardClass card_class) {
+  switch (card_class) {
+    case sync_pb::WalletMaskedCreditCard::CREDIT:
+      return CreditCard::CARD_TYPE_CREDIT;
+    case sync_pb::WalletMaskedCreditCard::DEBIT:
+      return CreditCard::CARD_TYPE_DEBIT;
+    case sync_pb::WalletMaskedCreditCard::PREPAID:
+      return CreditCard::CARD_TYPE_PREPAID;
+    default:
+      return CreditCard::CARD_TYPE_UNKNOWN;
   }
 }
 
@@ -70,11 +90,14 @@ CreditCard CardFromSpecifics(const sync_pb::WalletMaskedCreditCard& card) {
   CreditCard result(CreditCard::MASKED_SERVER_CARD, card.id());
   result.SetNumber(base::UTF8ToUTF16(card.last_four()));
   result.SetServerStatus(ServerToLocalStatus(card.status()));
-  result.SetTypeForMaskedCard(CardTypeFromWalletCardType(card.type()));
+  result.SetNetworkForMaskedCard(CardNetworkFromWalletCardType(card.type()));
+  result.set_card_type(CardTypeFromWalletCardClass(card.card_class()));
   result.SetRawInfo(CREDIT_CARD_NAME_FULL,
                     base::UTF8ToUTF16(card.name_on_card()));
   result.SetExpirationMonth(card.exp_month());
   result.SetExpirationYear(card.exp_year());
+  result.set_billing_address_id(card.billing_address_id());
+  result.set_bank_name(card.bank_name());
   return result;
 }
 
@@ -83,16 +106,15 @@ AutofillProfile ProfileFromSpecifics(
   AutofillProfile profile(AutofillProfile::SERVER_PROFILE, std::string());
 
   // AutofillProfile stores multi-line addresses with newline separators.
-  std::vector<std::string> street_address(address.street_address().begin(),
-                                          address.street_address().end());
+  std::vector<base::StringPiece> street_address(
+      address.street_address().begin(), address.street_address().end());
   profile.SetRawInfo(ADDRESS_HOME_STREET_ADDRESS,
                      base::UTF8ToUTF16(base::JoinString(street_address, "\n")));
 
   profile.SetRawInfo(COMPANY_NAME, base::UTF8ToUTF16(address.company_name()));
   profile.SetRawInfo(ADDRESS_HOME_STATE,
                      base::UTF8ToUTF16(address.address_1()));
-  profile.SetRawInfo(ADDRESS_HOME_CITY,
-                     base::UTF8ToUTF16(address.address_2()));
+  profile.SetRawInfo(ADDRESS_HOME_CITY, base::UTF8ToUTF16(address.address_2()));
   profile.SetRawInfo(ADDRESS_HOME_DEPENDENT_LOCALITY,
                      base::UTF8ToUTF16(address.address_3()));
   // AutofillProfile doesn't support address_4 ("sub dependent locality").
@@ -118,25 +140,6 @@ AutofillProfile ProfileFromSpecifics(
   return profile;
 }
 
-// Searches for CreditCards with identical server IDs and copies the billing
-// address ID from the existing cards on disk into the new cards from server.
-// The credit card's IDs do not change over time.
-void CopyBillingAddressesFromDisk(AutofillTable* table,
-                                  std::vector<CreditCard>* cards_from_server) {
-  std::vector<std::unique_ptr<CreditCard>> cards_on_disk;
-  table->GetServerCreditCards(&cards_on_disk);
-
-  // The reasons behind brute-force search are explained in SetDataIfChanged.
-  for (const auto& saved_card : cards_on_disk) {
-    for (CreditCard& server_card : *cards_from_server) {
-      if (saved_card->server_id() == server_card.server_id()) {
-        server_card.set_billing_address_id(saved_card->billing_address_id());
-        break;
-      }
-    }
-  }
-}
-
 // This function handles conditionally updating the AutofillTable with either
 // a set of CreditCards or AutocompleteProfiles only when the existing data
 // doesn't match.
@@ -154,7 +157,7 @@ template <class Data>
 bool SetDataIfChanged(
     AutofillTable* table,
     const std::vector<Data>& data,
-    bool (AutofillTable::*getter)(std::vector<std::unique_ptr<Data>>*),
+    bool (AutofillTable::*getter)(std::vector<std::unique_ptr<Data>>*) const,
     void (AutofillTable::*setter)(const std::vector<Data>&),
     size_t* prev_item_count) {
   std::vector<std::unique_ptr<Data>> existing_data;
@@ -204,11 +207,9 @@ bool SetDataIfChanged(
 AutofillWalletSyncableService::AutofillWalletSyncableService(
     AutofillWebDataBackend* webdata_backend,
     const std::string& app_locale)
-    : webdata_backend_(webdata_backend) {
-}
+    : webdata_backend_(webdata_backend) {}
 
-AutofillWalletSyncableService::~AutofillWalletSyncableService() {
-}
+AutofillWalletSyncableService::~AutofillWalletSyncableService() {}
 
 syncer::SyncMergeResult AutofillWalletSyncableService::MergeDataAndStartSyncing(
     syncer::ModelType type,
@@ -253,8 +254,8 @@ void AutofillWalletSyncableService::CreateForWebDataServiceAndBackend(
     AutofillWebDataBackend* webdata_backend,
     const std::string& app_locale) {
   web_data_service->GetDBUserData()->SetUserData(
-      UserDataKey(),
-      new AutofillWalletSyncableService(webdata_backend, app_locale));
+      UserDataKey(), base::WrapUnique(new AutofillWalletSyncableService(
+                         webdata_backend, app_locale)));
 }
 
 // static
@@ -270,10 +271,12 @@ void AutofillWalletSyncableService::InjectStartSyncFlare(
   flare_ = flare;
 }
 
-syncer::SyncMergeResult AutofillWalletSyncableService::SetSyncData(
-    const syncer::SyncDataList& data_list) {
-  std::vector<CreditCard> wallet_cards;
-  std::vector<AutofillProfile> wallet_addresses;
+// static
+void AutofillWalletSyncableService::PopulateWalletCardsAndAddresses(
+    const syncer::SyncDataList& data_list,
+    std::vector<CreditCard>* wallet_cards,
+    std::vector<AutofillProfile>* wallet_addresses) {
+  std::map<std::string, std::string> ids;
 
   for (const syncer::SyncData& data : data_list) {
     DCHECK_EQ(syncer::AUTOFILL_WALLET_DATA, data.GetDataType());
@@ -281,23 +284,69 @@ syncer::SyncMergeResult AutofillWalletSyncableService::SetSyncData(
         data.GetSpecifics().autofill_wallet();
     if (autofill_specifics.type() ==
         sync_pb::AutofillWalletSpecifics::MASKED_CREDIT_CARD) {
-      wallet_cards.push_back(
+      wallet_cards->push_back(
           CardFromSpecifics(autofill_specifics.masked_card()));
     } else {
       DCHECK_EQ(sync_pb::AutofillWalletSpecifics::POSTAL_ADDRESS,
                 autofill_specifics.type());
-      wallet_addresses.push_back(
+      wallet_addresses->push_back(
           ProfileFromSpecifics(autofill_specifics.address()));
+
+      // Map the sync billing address id to the profile's id.
+      ids[autofill_specifics.address().id()] =
+          wallet_addresses->back().server_id();
     }
   }
 
+  // Set the billing address of the wallet cards to the id of the appropriate
+  // profile.
+  for (CreditCard& card : *wallet_cards) {
+    auto it = ids.find(card.billing_address_id());
+    if (it != ids.end())
+      card.set_billing_address_id(it->second);
+  }
+}
+
+// static
+void AutofillWalletSyncableService::CopyRelevantMetadataFromDisk(
+    const AutofillTable& table,
+    std::vector<CreditCard>* cards_from_server) {
+  std::vector<std::unique_ptr<CreditCard>> cards_on_disk;
+  table.GetServerCreditCards(&cards_on_disk);
+
+  // The reasons behind brute-force search are explained in SetDataIfChanged.
+  for (const auto& saved_card : cards_on_disk) {
+    for (CreditCard& server_card : *cards_from_server) {
+      if (saved_card->server_id() == server_card.server_id()) {
+        // The wallet data doesn't have the use stats. Use the ones present on
+        // disk to not overwrite them with bad data.
+        server_card.set_use_count(saved_card->use_count());
+        server_card.set_use_date(saved_card->use_date());
+
+        // Keep the billing address id of the saved cards only if it points to
+        // a local address.
+        if (saved_card->billing_address_id().length() == kLocalGuidSize) {
+          server_card.set_billing_address_id(saved_card->billing_address_id());
+          break;
+        }
+      }
+    }
+  }
+}
+
+syncer::SyncMergeResult AutofillWalletSyncableService::SetSyncData(
+    const syncer::SyncDataList& data_list) {
+  std::vector<CreditCard> wallet_cards;
+  std::vector<AutofillProfile> wallet_addresses;
+  PopulateWalletCardsAndAddresses(data_list, &wallet_cards, &wallet_addresses);
+
   // Users can set billing address of the server credit card locally, but that
   // information does not propagate to either Chrome Sync or Google Payments
-  // server. To preserve user's preferred billing address, copy the billing
-  // addresses from disk into |wallet_cards|.
+  // server. To preserve user's preferred billing address and most recent use
+  // stats, copy them from disk into |wallet_cards|.
   AutofillTable* table =
       AutofillTable::FromWebDatabase(webdata_backend_->GetDatabase());
-  CopyBillingAddressesFromDisk(table, &wallet_cards);
+  CopyRelevantMetadataFromDisk(*table, &wallet_cards);
 
   // In the common case, the database won't have changed. Committing an update
   // to the database will require at least one DB page write and will schedule
@@ -306,10 +355,8 @@ syncer::SyncMergeResult AutofillWalletSyncableService::SetSyncData(
   size_t prev_card_count = 0;
   size_t prev_address_count = 0;
   bool changed_cards = SetDataIfChanged(
-      table, wallet_cards,
-      &AutofillTable::GetServerCreditCards,
-      &AutofillTable::SetServerCreditCards,
-      &prev_card_count);
+      table, wallet_cards, &AutofillTable::GetServerCreditCards,
+      &AutofillTable::SetServerCreditCards, &prev_card_count);
   bool changed_addresses = SetDataIfChanged(
       table, wallet_addresses, &AutofillTable::GetServerProfiles,
       &AutofillTable::SetServerProfiles, &prev_address_count);
@@ -326,4 +373,4 @@ syncer::SyncMergeResult AutofillWalletSyncableService::SetSyncData(
   return merge_result;
 }
 
-}  // namespace autofil
+}  // namespace autofill

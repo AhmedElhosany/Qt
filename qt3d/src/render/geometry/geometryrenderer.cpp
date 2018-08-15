@@ -41,11 +41,13 @@
 #include <Qt3DRender/private/geometryrenderermanager_p.h>
 #include <Qt3DRender/private/qboundingvolume_p.h>
 #include <Qt3DRender/private/qgeometryrenderer_p.h>
+#include <Qt3DRender/private/qmesh_p.h>
 #include <Qt3DCore/qpropertyupdatedchange.h>
 #include <Qt3DCore/qpropertynodeaddedchange.h>
 #include <Qt3DCore/qpropertynoderemovedchange.h>
 #include <Qt3DCore/private/qnode_p.h>
 #include <Qt3DCore/private/qtypedpropertyupdatechange_p.h>
+#include <Qt3DCore/private/qservicelocator_p.h>
 #include <QtCore/qcoreapplication.h>
 
 #include <memory>
@@ -64,6 +66,7 @@ GeometryRenderer::GeometryRenderer()
     , m_indexOffset(0)
     , m_firstInstance(0)
     , m_firstVertex(0)
+    , m_indexBufferByteOffset(0)
     , m_restartIndexValue(-1)
     , m_verticesPerPatch(0)
     , m_primitiveRestartEnabled(false)
@@ -85,6 +88,7 @@ void GeometryRenderer::cleanup()
     m_indexOffset = 0;
     m_firstInstance = 0;
     m_firstVertex = 0;
+    m_indexBufferByteOffset = 0;
     m_restartIndexValue = -1;
     m_verticesPerPatch = 0;
     m_primitiveRestartEnabled = false;
@@ -111,6 +115,7 @@ void GeometryRenderer::initializeFromPeer(const Qt3DCore::QNodeCreatedChangeBase
     m_indexOffset = data.indexOffset;
     m_firstInstance = data.firstInstance;
     m_firstVertex = data.firstVertex;
+    m_indexBufferByteOffset = data.indexBufferByteOffset;
     m_restartIndexValue = data.restartIndexValue;
     m_verticesPerPatch = data.verticesPerPatch;
     m_primitiveRestartEnabled = data.primitiveRestart;
@@ -122,6 +127,7 @@ void GeometryRenderer::initializeFromPeer(const Qt3DCore::QNodeCreatedChangeBase
         m_manager->addDirtyGeometryRenderer(peerId());
 
     m_dirty = true;
+    markDirty(AbstractRenderer::GeometryDirty);
 }
 
 void GeometryRenderer::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
@@ -146,6 +152,9 @@ void GeometryRenderer::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
         } else if (propertyName == QByteArrayLiteral("firstVertex")) {
             m_firstVertex = propertyChange->value().value<int>();
             m_dirty = true;
+        } else if (propertyName == QByteArrayLiteral("indexBufferByteOffset")) {
+            m_indexBufferByteOffset = propertyChange->value().value<int>();
+            m_dirty = true;
         } else if (propertyName == QByteArrayLiteral("restartIndexValue")) {
             m_restartIndexValue = propertyChange->value().value<int>();
             m_dirty = true;
@@ -160,10 +169,15 @@ void GeometryRenderer::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
             m_dirty = true;
         } else if (propertyName == QByteArrayLiteral("geometryFactory")) {
             QGeometryFactoryPtr newFunctor = propertyChange->value().value<QGeometryFactoryPtr>();
-            m_dirty |= !(newFunctor && m_geometryFactory && *newFunctor == *m_geometryFactory);
-            m_geometryFactory = newFunctor;
-            if (m_geometryFactory && m_manager != nullptr)
-                m_manager->addDirtyGeometryRenderer(peerId());
+            const bool functorDirty = ((m_geometryFactory && !newFunctor)
+                                    || (!m_geometryFactory && newFunctor)
+                                    || (m_geometryFactory && newFunctor && !(*newFunctor == *m_geometryFactory)));
+            m_dirty |= functorDirty;
+            if (functorDirty) {
+                m_geometryFactory = newFunctor;
+                if (m_geometryFactory && m_manager != nullptr)
+                    m_manager->addDirtyGeometryRenderer(peerId());
+            }
         } else if (propertyName == QByteArrayLiteral("geometry")) {
             m_geometryId = propertyChange->value().value<Qt3DCore::QNodeId>();
             m_dirty = true;
@@ -175,7 +189,7 @@ void GeometryRenderer::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
         break;
     }
 
-    markDirty(AbstractRenderer::AllDirty);
+    markDirty(AbstractRenderer::GeometryDirty);
 
     BackendNode::sceneChangeEvent(e);
 
@@ -185,7 +199,28 @@ void GeometryRenderer::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
 void GeometryRenderer::executeFunctor()
 {
     Q_ASSERT(m_geometryFactory);
+
+    // What kind of functor are we dealing with?
+    const bool isQMeshFunctor = m_geometryFactory->id() == Qt3DRender::functorTypeId<MeshLoaderFunctor>();
+
+    if (isQMeshFunctor) {
+        QSharedPointer<MeshLoaderFunctor> meshLoader = qSharedPointerCast<MeshLoaderFunctor>(m_geometryFactory);
+
+        // Set the aspect engine to allow remote downloads
+        if (meshLoader->nodeManagers() == nullptr)
+            meshLoader->setNodeManagers(m_renderer->nodeManagers());
+
+        if (meshLoader->downloaderService() == nullptr) {
+            Qt3DCore::QServiceLocator *services = m_renderer->services();
+            meshLoader->setDownloaderService(services->service<Qt3DCore::QDownloadHelperService>(Qt3DCore::QServiceLocator::DownloadHelperService));
+        };
+    }
+
+    // Load geometry
     std::unique_ptr<QGeometry> geometry((*m_geometryFactory)());
+
+    // If the geometry is null, then we were either unable to load it (Error)
+    // or the mesh is located at a remote url and needs to be downloaded first (Loading)
     if (!geometry)
         return;
 

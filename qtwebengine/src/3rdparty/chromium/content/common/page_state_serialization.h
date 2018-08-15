@@ -13,7 +13,7 @@
 #include "base/strings/nullable_string16.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
-#include "content/common/resource_request_body_impl.h"
+#include "content/public/common/resource_request_body.h"
 #include "third_party/WebKit/public/platform/WebHTTPBody.h"
 #include "third_party/WebKit/public/platform/WebHistoryScrollRestorationType.h"
 #include "third_party/WebKit/public/platform/WebReferrerPolicy.h"
@@ -25,7 +25,7 @@ namespace content {
 
 struct CONTENT_EXPORT ExplodedHttpBody {
   base::NullableString16 http_content_type;
-  scoped_refptr<ResourceRequestBodyImpl> request_body;
+  scoped_refptr<ResourceRequestBody> request_body;
   bool contains_passwords;
 
   ExplodedHttpBody();
@@ -39,6 +39,7 @@ struct CONTENT_EXPORT ExplodedFrameState {
   base::NullableString16 state_object;
   std::vector<base::NullableString16> document_state;
   blink::WebHistoryScrollRestorationType scroll_restoration_type;
+  bool did_save_scroll_or_scale_state;
   gfx::PointF visual_viewport_scroll_offset;
   gfx::Point scroll_offset;
   int64_t item_sequence_number;
@@ -73,6 +74,9 @@ CONTENT_EXPORT bool DecodePageState(const std::string& encoded,
                                     ExplodedPageState* exploded);
 CONTENT_EXPORT void EncodePageState(const ExplodedPageState& exploded,
                                     std::string* encoded);
+CONTENT_EXPORT void EncodePageStateForTesting(const ExplodedPageState& exploded,
+                                              int version,
+                                              std::string* encoded);
 
 #if defined(OS_ANDROID)
 CONTENT_EXPORT bool DecodePageStateWithDeviceScaleFactorForTesting(
@@ -81,15 +85,14 @@ CONTENT_EXPORT bool DecodePageStateWithDeviceScaleFactorForTesting(
     ExplodedPageState* exploded);
 
 // Converts results of EncodeResourceRequestBody (passed in as a pair of |data|
-// + |size|) back into a ResourceRequestBodyImpl.  Returns nullptr if the
+// + |size|) back into a ResourceRequestBody.  Returns nullptr if the
 // decoding fails (e.g. if |data| is malformed).
-scoped_refptr<ResourceRequestBodyImpl> DecodeResourceRequestBody(
-    const char* data,
-    size_t size);
+scoped_refptr<ResourceRequestBody> DecodeResourceRequestBody(const char* data,
+                                                             size_t size);
 
 // Encodes |resource_request_body| into |encoded|.
 std::string EncodeResourceRequestBody(
-    const ResourceRequestBodyImpl& resource_request_body);
+    const ResourceRequestBody& resource_request_body);
 #endif
 
 }  // namespace content

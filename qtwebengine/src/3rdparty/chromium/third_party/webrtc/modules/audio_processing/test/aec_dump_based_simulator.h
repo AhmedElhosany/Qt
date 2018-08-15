@@ -13,8 +13,8 @@
 
 #include "webrtc/modules/audio_processing/test/audio_processing_simulator.h"
 
-#include "webrtc/base/constructormagic.h"
-#include "webrtc/base/ignore_wundef.h"
+#include "webrtc/rtc_base/constructormagic.h"
+#include "webrtc/rtc_base/ignore_wundef.h"
 
 RTC_PUSH_IGNORING_WUNDEF()
 #ifdef WEBRTC_ANDROID_PLATFORM_BUILD
@@ -30,9 +30,8 @@ namespace test {
 // Used to perform an audio processing simulation from an aec dump.
 class AecDumpBasedSimulator final : public AudioProcessingSimulator {
  public:
-  explicit AecDumpBasedSimulator(const SimulationSettings& settings)
-      : AudioProcessingSimulator(settings) {}
-  ~AecDumpBasedSimulator() override {}
+  explicit AecDumpBasedSimulator(const SimulationSettings& settings);
+  ~AecDumpBasedSimulator() override;
 
   // Processes the messages in the aecdump file.
   void Process() override;
@@ -55,6 +54,9 @@ class AecDumpBasedSimulator final : public AudioProcessingSimulator {
   };
 
   FILE* dump_input_file_;
+  std::unique_ptr<ChannelBuffer<float>> artificial_nearend_buf_;
+  std::unique_ptr<ChannelBufferWavReader> artificial_nearend_buffer_reader_;
+  bool artificial_nearend_eof_reported_ = false;
   InterfaceType interface_used_ = InterfaceType::kNotSpecified;
 
   RTC_DISALLOW_IMPLICIT_CONSTRUCTORS(AecDumpBasedSimulator);

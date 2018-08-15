@@ -8,21 +8,22 @@
 #include <stdint.h>
 
 #include "base/compiler_specific.h"
+#include "mojo/public/cpp/bindings/struct_traits.h"
 #include "ui/display/display_export.h"
+#include "ui/display/types/display_constants.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/icc_profile.h"
-
-#if !defined(OS_IOS)
-#include "mojo/public/cpp/bindings/struct_traits.h"  // nogncheck
-#endif
 
 namespace display {
 
-#if !defined(OS_IOS)
 namespace mojom {
 class DisplayDataView;
 }
-#endif
+
+// Returns true if one of following conditions is met.
+// 1) id1 is internal.
+// 2) output index of id1 < output index of id2 and id2 isn't internal.
+DISPLAY_EXPORT bool CompareDisplayIds(int64_t id1, int64_t id2);
 
 // This class typically, but does not always, correspond to a physical display
 // connected to the system. A fake Display may exist on a headless system, or a
@@ -65,9 +66,14 @@ class DISPLAY_EXPORT Display final {
     TOUCH_SUPPORT_UNAVAILABLE,
   };
 
-  enum : int64_t { kInvalidDisplayID = -1 };
+  // Accelerometer support for the display.
+  enum AccelerometerSupport {
+    ACCELEROMETER_SUPPORT_UNKNOWN,
+    ACCELEROMETER_SUPPORT_AVAILABLE,
+    ACCELEROMETER_SUPPORT_UNAVAILABLE,
+  };
 
-  // Creates a display with kInvalidDisplayID as default.
+  // Creates a display with kInvalidDisplayId as default.
   Display();
   explicit Display(int64_t id);
   Display(int64_t id, const gfx::Rect& bounds);
@@ -82,21 +88,32 @@ class DISPLAY_EXPORT Display final {
   // command line via "--force-device-scale-factor".
   static bool HasForceDeviceScaleFactor();
 
+  // Returns the forced display color profile, which is given by
+  // "--force-color-profile".
+  static gfx::ColorSpace GetForcedColorProfile();
+
+  // Indicates if a display color profile is being explicitly enforced from the
+  // command line via "--force-color-profile".
+  static bool HasForceColorProfile();
+
   // Resets the caches used to determine if a device scale factor is being
   // forced from the command line via "--force-device-scale-factor", and thus
   // ensures that the command line is reevaluated.
   static void ResetForceDeviceScaleFactorForTesting();
+
+  // Resets the cache and sets a new force device scale factor.
+  static void SetForceDeviceScaleFactor(double dsf);
 
   // Sets/Gets unique identifier associated with the display.
   // -1 means invalid display and it doesn't not exit.
   int64_t id() const { return id_; }
   void set_id(int64_t id) { id_ = id; }
 
-  // Gets/Sets the display's bounds in display::Screen's coordinates.
+  // Gets/Sets the display's bounds in Screen's coordinates.
   const gfx::Rect& bounds() const { return bounds_; }
   void set_bounds(const gfx::Rect& bounds) { bounds_ = bounds; }
 
-  // Gets/Sets the display's work area in display::Screen's coordinates.
+  // Gets/Sets the display's work area in Screen's coordinates.
   const gfx::Rect& work_area() const { return work_area_; }
   void set_work_area(const gfx::Rect& work_area) { work_area_ = work_area; }
 
@@ -114,6 +131,13 @@ class DISPLAY_EXPORT Display final {
 
   TouchSupport touch_support() const { return touch_support_; }
   void set_touch_support(TouchSupport support) { touch_support_ = support; }
+
+  AccelerometerSupport accelerometer_support() const {
+    return accelerometer_support_;
+  }
+  void set_accelerometer_support(AccelerometerSupport support) {
+    accelerometer_support_ = support;
+  }
 
   // Utility functions that just return the size of display and
   // work area.
@@ -139,12 +163,15 @@ class DISPLAY_EXPORT Display final {
 
   // Returns the display's size in pixel coordinates.
   gfx::Size GetSizeInPixel() const;
+#if defined(OS_ANDROID)
+  void set_size_in_pixels(const gfx::Size& size) { size_in_pixels_ = size; }
+#endif  // defined(OS_ANDROID)
 
   // Returns a string representation of the display;
   std::string ToString() const;
 
   // True if the display contains valid display id.
-  bool is_valid() const { return id_ != kInvalidDisplayID; }
+  bool is_valid() const { return id_ != kInvalidDisplayId; }
 
   // True if the display corresponds to internal panel.
   bool IsInternal() const;
@@ -165,10 +192,10 @@ class DISPLAY_EXPORT Display final {
     maximum_cursor_size_ = size;
   }
 
-  // The full ICC profile of the display.
-  gfx::ICCProfile icc_profile() const { return icc_profile_; }
-  void set_icc_profile(const gfx::ICCProfile& icc_profile) {
-    icc_profile_ = icc_profile;
+  // The full color space of the display.
+  gfx::ColorSpace color_space() const { return color_space_; }
+  void set_color_space(const gfx::ColorSpace& color_space) {
+    color_space_ = color_space;
   }
 
   // The number of bits per pixel. Used by media query APIs.
@@ -192,22 +219,25 @@ class DISPLAY_EXPORT Display final {
   }
 
  private:
+  friend struct mojo::StructTraits<mojom::DisplayDataView, Display>;
+
   int64_t id_;
   gfx::Rect bounds_;
+  // If non-empty, then should be same size as |bounds_|. Used to avoid rounding
+  // errors.
+  gfx::Size size_in_pixels_;
   gfx::Rect work_area_;
   float device_scale_factor_;
   Rotation rotation_ = ROTATE_0;
   TouchSupport touch_support_ = TOUCH_SUPPORT_UNKNOWN;
+  AccelerometerSupport accelerometer_support_ = ACCELEROMETER_SUPPORT_UNKNOWN;
   gfx::Size maximum_cursor_size_;
-  gfx::ICCProfile icc_profile_;
+  // NOTE: this is not currently written to the mojom as it is not used in
+  // aura.
+  gfx::ColorSpace color_space_;
   int color_depth_;
   int depth_per_component_;
   bool is_monochrome_ = false;
-
-#if !defined(OS_IOS)
-  friend struct mojo::StructTraits<display::mojom::DisplayDataView,
-                                   display::Display>;
-#endif
 };
 
 }  // namespace display

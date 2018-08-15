@@ -32,15 +32,11 @@
 #ifndef WebElementCollection_h
 #define WebElementCollection_h
 
-#include "../platform/WebCommon.h"
-#include "../platform/WebPrivatePtr.h"
+#include "public/platform/WebCommon.h"
+#include "public/platform/WebPrivatePtr.h"
 
 #if BLINK_IMPLEMENTATION
 #include "platform/heap/Handle.h"
-namespace WTF {
-template <typename T>
-class PassRefPtr;
-}
 #endif
 
 namespace blink {
@@ -51,23 +47,23 @@ class WebElement;
 // Provides readonly access to some properties of a DOM node.
 class WebElementCollection {
  public:
-  ~WebElementCollection() { reset(); }
+  ~WebElementCollection() { Reset(); }
 
-  WebElementCollection() : m_current(0) {}
-  WebElementCollection(const WebElementCollection& n) { assign(n); }
+  WebElementCollection() : current_(0) {}
+  WebElementCollection(const WebElementCollection& n) { Assign(n); }
   WebElementCollection& operator=(const WebElementCollection& n) {
-    assign(n);
+    Assign(n);
     return *this;
   }
 
-  bool isNull() const { return m_private.isNull(); }
+  bool IsNull() const { return private_.IsNull(); }
 
-  BLINK_EXPORT void reset();
-  BLINK_EXPORT void assign(const WebElementCollection&);
+  BLINK_EXPORT void Reset();
+  BLINK_EXPORT void Assign(const WebElementCollection&);
 
   BLINK_EXPORT unsigned length() const;
-  BLINK_EXPORT WebElement nextItem() const;
-  BLINK_EXPORT WebElement firstItem() const;
+  BLINK_EXPORT WebElement NextItem() const;
+  BLINK_EXPORT WebElement FirstItem() const;
 
 #if BLINK_IMPLEMENTATION
   WebElementCollection(HTMLCollection*);
@@ -75,8 +71,8 @@ class WebElementCollection {
 #endif
 
  private:
-  WebPrivatePtr<HTMLCollection> m_private;
-  mutable unsigned m_current;
+  WebPrivatePtr<HTMLCollection> private_;
+  mutable unsigned current_;
 };
 
 }  // namespace blink

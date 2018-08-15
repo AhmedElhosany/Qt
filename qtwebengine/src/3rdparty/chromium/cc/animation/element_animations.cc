@@ -15,7 +15,8 @@
 #include "cc/animation/animation_host.h"
 #include "cc/animation/animation_player.h"
 #include "cc/animation/keyframed_animation_curve.h"
-#include "cc/output/filter_operations.h"
+#include "cc/animation/transform_operations.h"
+#include "cc/base/filter_operations.h"
 #include "cc/trees/mutator_host_client.h"
 #include "ui/gfx/geometry/box_f.h"
 
@@ -28,10 +29,8 @@ scoped_refptr<ElementAnimations> ElementAnimations::Create() {
 ElementAnimations::ElementAnimations()
     : animation_host_(),
       element_id_(),
-      is_active_(false),
       has_element_in_active_list_(false),
       has_element_in_pending_list_(false),
-      scroll_offset_animation_was_interrupted_(false),
       needs_push_properties_(false),
       needs_update_impl_client_state_(false) {}
 
@@ -49,7 +48,7 @@ void ElementAnimations::InitAffectedElementTypes() {
   DCHECK(element_id_);
   DCHECK(animation_host_);
 
-  UpdateActivation(ActivationType::FORCE);
+  UpdatePlayersTickingState(UpdateTickingType::FORCE);
 
   DCHECK(animation_host_->mutator_host_client());
   if (animation_host_->mutator_host_client()->IsElementInList(
@@ -92,8 +91,7 @@ void ElementAnimations::ClearAffectedElementTypes() {
   }
   set_has_element_in_pending_list(false);
 
-  animation_host_->DidDeactivateElementAnimations(this);
-  UpdateActivation(ActivationType::FORCE);
+  RemovePlayersFromTicking();
 }
 
 void ElementAnimations::ElementRegistered(ElementId element_id,
@@ -101,7 +99,7 @@ void ElementAnimations::ElementRegistered(ElementId element_id,
   DCHECK_EQ(element_id_, element_id);
 
   if (!has_element_in_any_list())
-    UpdateActivation(ActivationType::FORCE);
+    UpdatePlayersTickingState(UpdateTickingType::FORCE);
 
   if (list_type == ElementListType::ACTIVE)
     set_has_element_in_active_list(true);
@@ -118,7 +116,7 @@ void ElementAnimations::ElementUnregistered(ElementId element_id,
     set_has_element_in_pending_list(false);
 
   if (!has_element_in_any_list())
-    animation_host_->DidDeactivateElementAnimations(this);
+    RemovePlayersFromTicking();
 }
 
 void ElementAnimations::AddPlayer(AnimationPlayer* player) {
@@ -138,82 +136,28 @@ void ElementAnimations::SetNeedsPushProperties() {
 }
 
 void ElementAnimations::PushPropertiesTo(
-    scoped_refptr<ElementAnimations> element_animations_impl) {
+    scoped_refptr<ElementAnimations> element_animations_impl) const {
   DCHECK_NE(this, element_animations_impl);
 
   if (!needs_push_properties_)
     return;
   needs_push_properties_ = false;
 
-  element_animations_impl->scroll_offset_animation_was_interrupted_ =
-      scroll_offset_animation_was_interrupted_;
-  scroll_offset_animation_was_interrupted_ = false;
-
   // Update impl client state.
   if (needs_update_impl_client_state_)
     element_animations_impl->UpdateClientAnimationState();
   needs_update_impl_client_state_ = false;
-
-  element_animations_impl->UpdateActivation(ActivationType::NORMAL);
-  UpdateActivation(ActivationType::NORMAL);
 }
 
-void ElementAnimations::Animate(base::TimeTicks monotonic_time) {
-  DCHECK(!monotonic_time.is_null());
-  if (!has_element_in_active_list() && !has_element_in_pending_list())
-    return;
-
-  for (auto& player : players_list_) {
-    if (player.needs_to_start_animations())
-      player.StartAnimations(monotonic_time);
-  }
-
+void ElementAnimations::UpdatePlayersTickingState(
+    UpdateTickingType update_ticking_type) const {
   for (auto& player : players_list_)
-    player.TickAnimations(monotonic_time);
-
-  last_tick_time_ = monotonic_time;
-  UpdateClientAnimationState();
+    player.UpdateTickingState(update_ticking_type);
 }
 
-void ElementAnimations::UpdateState(bool start_ready_animations,
-                                    AnimationEvents* events) {
-  if (!has_element_in_active_list())
-    return;
-
-  // Animate hasn't been called, this happens if an element has been added
-  // between the Commit and Draw phases.
-  if (last_tick_time_ == base::TimeTicks())
-    return;
-
-  if (start_ready_animations) {
-    for (auto& player : players_list_)
-      player.PromoteStartedAnimations(last_tick_time_, events);
-  }
-
+void ElementAnimations::RemovePlayersFromTicking() const {
   for (auto& player : players_list_)
-    player.MarkFinishedAnimations(last_tick_time_);
-
-  for (auto& player : players_list_)
-    player.MarkAnimationsForDeletion(last_tick_time_, events);
-
-  if (start_ready_animations) {
-    for (auto& player : players_list_) {
-      if (player.needs_to_start_animations()) {
-        player.StartAnimations(last_tick_time_);
-        player.PromoteStartedAnimations(last_tick_time_, events);
-      }
-    }
-  }
-
-  UpdateActivation(ActivationType::NORMAL);
-}
-
-void ElementAnimations::ActivateAnimations() {
-  for (auto& player : players_list_)
-    player.ActivateAnimations();
-
-  scroll_offset_animation_was_interrupted_ = false;
-  UpdateActivation(ActivationType::NORMAL);
+    player.RemoveFromTicking();
 }
 
 void ElementAnimations::NotifyAnimationStarted(const AnimationEvent& event) {
@@ -251,25 +195,6 @@ void ElementAnimations::NotifyAnimationAborted(const AnimationEvent& event) {
   UpdateClientAnimationState();
 }
 
-void ElementAnimations::NotifyAnimationPropertyUpdate(
-    const AnimationEvent& event) {
-  DCHECK(!event.is_impl_only);
-  bool notify_active_elements = true;
-  bool notify_pending_elements = true;
-  switch (event.target_property) {
-    case TargetProperty::OPACITY:
-      NotifyClientOpacityAnimated(event.opacity, notify_active_elements,
-                                  notify_pending_elements);
-      break;
-    case TargetProperty::TRANSFORM:
-      NotifyClientTransformAnimated(event.transform, notify_active_elements,
-                                    notify_pending_elements);
-      break;
-    default:
-      NOTREACHED();
-  }
-}
-
 bool ElementAnimations::HasFilterAnimationThatInflatesBounds() const {
   for (auto& player : players_list_) {
     if (player.HasFilterAnimationThatInflatesBounds())
@@ -298,6 +223,8 @@ bool ElementAnimations::TransformAnimationBoundsForBox(
   *bounds = gfx::BoxF();
 
   for (auto& player : players_list_) {
+    if (!player.HasTransformAnimationThatInflatesBounds())
+      continue;
     gfx::BoxF player_bounds;
     bool success = player.TransformAnimationBoundsForBox(box, &player_bounds);
     if (!success)
@@ -356,76 +283,52 @@ bool ElementAnimations::MaximumTargetScale(ElementListType list_type,
   return true;
 }
 
+bool ElementAnimations::ScrollOffsetAnimationWasInterrupted() const {
+  for (auto& player : players_list_) {
+    if (player.scroll_offset_animation_was_interrupted())
+      return true;
+  }
+  return false;
+}
+
 void ElementAnimations::SetNeedsUpdateImplClientState() {
   needs_update_impl_client_state_ = true;
   SetNeedsPushProperties();
 }
 
-void ElementAnimations::UpdateActivation(ActivationType type) {
-  bool force = type == ActivationType::FORCE;
-  if (animation_host_) {
-    bool was_active = is_active_;
-    is_active_ = false;
-
-    for (auto& player : players_list_) {
-      if (player.HasNonDeletedAnimation()) {
-        is_active_ = true;
-        break;
-      }
-    }
-
-    if (is_active_ && (!was_active || force)) {
-      animation_host_->DidActivateElementAnimations(this);
-    } else if (!is_active_ && (was_active || force)) {
-      // Resetting last_tick_time_ here ensures that calling ::UpdateState
-      // before ::Animate doesn't start an animation.
-      last_tick_time_ = base::TimeTicks();
-      animation_host_->DidDeactivateElementAnimations(this);
-    }
-  }
-}
-
-void ElementAnimations::UpdateActivationNormal() {
-  UpdateActivation(ActivationType::NORMAL);
-}
-
-void ElementAnimations::NotifyClientOpacityAnimated(
-    float opacity,
-    bool notify_active_elements,
-    bool notify_pending_elements) {
-  if (notify_active_elements && has_element_in_active_list())
+void ElementAnimations::NotifyClientOpacityAnimated(float opacity,
+                                                    Animation* animation) {
+  if (AnimationAffectsActiveElements(animation))
     OnOpacityAnimated(ElementListType::ACTIVE, opacity);
-  if (notify_pending_elements && has_element_in_pending_list())
+  if (AnimationAffectsPendingElements(animation))
     OnOpacityAnimated(ElementListType::PENDING, opacity);
-}
-
-void ElementAnimations::NotifyClientTransformAnimated(
-    const gfx::Transform& transform,
-    bool notify_active_elements,
-    bool notify_pending_elements) {
-  if (notify_active_elements && has_element_in_active_list())
-    OnTransformAnimated(ElementListType::ACTIVE, transform);
-  if (notify_pending_elements && has_element_in_pending_list())
-    OnTransformAnimated(ElementListType::PENDING, transform);
 }
 
 void ElementAnimations::NotifyClientFilterAnimated(
     const FilterOperations& filters,
-    bool notify_active_elements,
-    bool notify_pending_elements) {
-  if (notify_active_elements && has_element_in_active_list())
+    Animation* animation) {
+  if (AnimationAffectsActiveElements(animation))
     OnFilterAnimated(ElementListType::ACTIVE, filters);
-  if (notify_pending_elements && has_element_in_pending_list())
+  if (AnimationAffectsPendingElements(animation))
     OnFilterAnimated(ElementListType::PENDING, filters);
+}
+
+void ElementAnimations::NotifyClientTransformOperationsAnimated(
+    const TransformOperations& operations,
+    Animation* animation) {
+  gfx::Transform transform = operations.Apply();
+  if (AnimationAffectsActiveElements(animation))
+    OnTransformAnimated(ElementListType::ACTIVE, transform);
+  if (AnimationAffectsPendingElements(animation))
+    OnTransformAnimated(ElementListType::PENDING, transform);
 }
 
 void ElementAnimations::NotifyClientScrollOffsetAnimated(
     const gfx::ScrollOffset& scroll_offset,
-    bool notify_active_elements,
-    bool notify_pending_elements) {
-  if (notify_active_elements && has_element_in_active_list())
+    Animation* animation) {
+  if (AnimationAffectsActiveElements(animation))
     OnScrollOffsetAnimated(ElementListType::ACTIVE, scroll_offset);
-  if (notify_pending_elements && has_element_in_pending_list())
+  if (AnimationAffectsPendingElements(animation))
     OnScrollOffsetAnimated(ElementListType::PENDING, scroll_offset);
 }
 
@@ -473,9 +376,9 @@ void ElementAnimations::UpdateClientAnimationState() {
   }
 }
 
-bool ElementAnimations::HasActiveAnimation() const {
+bool ElementAnimations::HasTickingAnimation() const {
   for (auto& player : players_list_) {
-    if (player.HasActiveAnimation())
+    if (player.HasTickingAnimation())
       return true;
   }
 
@@ -520,10 +423,6 @@ bool ElementAnimations::IsCurrentlyAnimatingProperty(
   }
 
   return false;
-}
-
-void ElementAnimations::SetScrollOffsetAnimationWasInterrupted() {
-  scroll_offset_animation_was_interrupted_ = true;
 }
 
 void ElementAnimations::OnFilterAnimated(ElementListType list_type,
@@ -571,6 +470,24 @@ gfx::ScrollOffset ElementAnimations::ScrollOffsetForAnimation() const {
   }
 
   return gfx::ScrollOffset();
+}
+
+bool ElementAnimations::AnimationAffectsActiveElements(
+    Animation* animation) const {
+  // When we force an animation update due to a notification, we do not have an
+  // Animation instance. In this case, we force an update of active elements.
+  if (!animation)
+    return true;
+  return animation->affects_active_elements() && has_element_in_active_list();
+}
+
+bool ElementAnimations::AnimationAffectsPendingElements(
+    Animation* animation) const {
+  // When we force an animation update due to a notification, we do not have an
+  // Animation instance. In this case, we force an update of pending elements.
+  if (!animation)
+    return true;
+  return animation->affects_pending_elements() && has_element_in_pending_list();
 }
 
 }  // namespace cc

@@ -12,6 +12,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
 #include "ui/base/layout.h"
@@ -38,6 +39,13 @@ const char* const kPathAliases[][2] = {
     {"../../views/resources/default_200_percent/common/", "images/2x/apps/"},
     {"../../webui/resources/cr_elements/", "cr_elements/"}};
 
+const struct {
+  const char* const path;
+  const int resource_id;
+} kAdditionalResourceMapEntries[] = {
+    {"js/mojo_bindings.js", IDR_WEBUI_MOJO_BINDINGS_JS},
+};
+
 void AddResource(const std::string& path,
                  int resource_id,
                  ResourcesMap* resources_map) {
@@ -59,7 +67,10 @@ const ResourcesMap* CreateResourcesMap() {
       }
     }
   }
-
+  for (size_t i = 0; i < arraysize(kAdditionalResourceMapEntries); ++i) {
+    const auto& entry = kAdditionalResourceMapEntries[i];
+    AddResource(entry.path, entry.resource_id, result);
+  }
   return result;
 }
 
@@ -67,6 +78,12 @@ const ResourcesMap& GetResourcesMap() {
   // This pointer will be intentionally leaked on shutdown.
   static const ResourcesMap* resources_map = CreateResourcesMap();
   return *resources_map;
+}
+
+int GetIdrForPath(const std::string& path) {
+  const ResourcesMap& resources_map = GetResourcesMap();
+  auto it = resources_map.find(path);
+  return it != resources_map.end() ? it->second : -1;
 }
 
 }  // namespace
@@ -85,9 +102,7 @@ void SharedResourcesDataSource::StartDataRequest(
     const std::string& path,
     const ResourceRequestInfo::WebContentsGetter& wc_getter,
     const URLDataSource::GotDataCallback& callback) {
-  const ResourcesMap& resources_map = GetResourcesMap();
-  auto it = resources_map.find(path);
-  int idr = (it != resources_map.end()) ? it->second : -1;
+  int idr = GetIdrForPath(path);
   DCHECK_NE(-1, idr) << " path: " << path;
   scoped_refptr<base::RefCountedMemory> bytes;
 
@@ -102,6 +117,12 @@ void SharedResourcesDataSource::StartDataRequest(
   }
 
   callback.Run(bytes.get());
+}
+
+bool SharedResourcesDataSource::AllowCaching() const {
+  // Should not be cached to reflect dynamically-generated contents that may
+  // depend on the current locale.
+  return false;
 }
 
 std::string SharedResourcesDataSource::GetMimeType(
@@ -148,6 +169,14 @@ std::string SharedResourcesDataSource::GetMimeType(
 scoped_refptr<base::SingleThreadTaskRunner>
 SharedResourcesDataSource::TaskRunnerForRequestPath(
     const std::string& path) const {
+  int idr = GetIdrForPath(path);
+  if (idr == IDR_WEBUI_CSS_TEXT_DEFAULTS ||
+      idr == IDR_WEBUI_CSS_TEXT_DEFAULTS_MD) {
+    // Use UI thread to load CSS since its construction touches non-thread-safe
+    // gfx::Font names in ui::ResourceBundle.
+    return BrowserThread::GetTaskRunnerForThread(BrowserThread::UI);
+  }
+
   return nullptr;
 }
 
@@ -165,6 +194,10 @@ SharedResourcesDataSource::GetAccessControlAllowOriginForOrigin(
     return "null";
   }
   return origin;
+}
+
+bool SharedResourcesDataSource::IsGzipped(const std::string& path) const {
+  return path == "js/mojo_bindings.js";
 }
 
 }  // namespace content

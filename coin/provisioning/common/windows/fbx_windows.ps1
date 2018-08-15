@@ -51,16 +51,18 @@ $sha1 = "3690400625672bef6369bcf90dcde4d78b493b24"
 #$targetFile = "C:\Windows\Temp\$packageName"
 $targetFolder = "C:\Program Files\"
 
-#Write-Host "Downloading '$installerName'"
+#echo "Downloading '$installerName'"
 #Download $officialUrl $cacheUrl $targetFile
 #Verify-Checksum $targetFile $sha1
 
-Write-Host "Extracting '$cacheUrl'"
-Extract-7Zip $cacheUrl $targetFolder
+echo "Extracting '$cacheUrl'"
+#Extract-7Zip $cacheUrl $targetFolder
+Start-Process -FilePath "C:\Utils\sevenzip\7z.exe" -ArgumentList "x -y `"$cacheUrl`" -o`"$targetFolder`"" -Wait
 
 #Remove-Item -Recurse -Force "$packageName"
 
-Set-EnvironmentVariable "FBXSDK" "$targetFolder\Autodesk\FBX\FBX SDK\2016.1.2"
+echo "Adding environment variables."
+[Environment]::SetEnvironmentVariable("FBXSDK", "$targetFolder\Autodesk\FBX\FBX SDK\2016.1.2", [EnvironmentVariableTarget]::Machine)
 
-Write-Output "FBX SDK = $version" >> ~\versions.txt
+echo "FBX SDK = $version" >> ~\versions.txt
 

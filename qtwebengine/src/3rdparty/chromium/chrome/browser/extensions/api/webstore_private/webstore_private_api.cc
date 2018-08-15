@@ -10,19 +10,17 @@
 #include "base/bind.h"
 #include "base/lazy_instance.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher.h"
 #include "chrome/browser/extensions/crx_installer.h"
-#include "chrome/browser/extensions/extension_install_ui_util.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/install_tracker.h"
-#include "chrome/browser/gpu/gpu_feature_checker.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/browser/ui/app_list/app_list_service.h"
@@ -32,6 +30,7 @@
 #include "components/crx_file/id_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/signin_manager.h"
+#include "content/public/browser/gpu_feature_checker.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_registry.h"
@@ -122,8 +121,8 @@ api::webstore_private::Result WebstoreInstallHelperResultToApiResult(
   return api::webstore_private::RESULT_NONE;
 }
 
-static base::LazyInstance<PendingApprovals> g_pending_approvals =
-    LAZY_INSTANCE_INITIALIZER;
+static base::LazyInstance<PendingApprovals>::DestructorAtExit
+    g_pending_approvals = LAZY_INSTANCE_INITIALIZER;
 
 // A preference set by the web store to indicate login information for
 // purchased apps.
@@ -544,17 +543,16 @@ ExtensionFunction::ResponseAction WebstorePrivateSetStoreLoginFunction::Run() {
 }
 
 WebstorePrivateGetWebGLStatusFunction::WebstorePrivateGetWebGLStatusFunction()
-  : feature_checker_(new GPUFeatureChecker(
-        gpu::GPU_FEATURE_TYPE_WEBGL,
-        base::Bind(&WebstorePrivateGetWebGLStatusFunction::OnFeatureCheck,
-                   base::Unretained(this)))) {
-}
+    : feature_checker_(content::GpuFeatureChecker::Create(
+          gpu::GPU_FEATURE_TYPE_ACCELERATED_WEBGL,
+          base::Bind(&WebstorePrivateGetWebGLStatusFunction::OnFeatureCheck,
+                     base::Unretained(this)))) {}
 
 WebstorePrivateGetWebGLStatusFunction::
     ~WebstorePrivateGetWebGLStatusFunction() {}
 
 ExtensionFunction::ResponseAction WebstorePrivateGetWebGLStatusFunction::Run() {
-  feature_checker_->CheckGPUFeatureAvailability();
+  feature_checker_->CheckGpuFeatureAvailability();
   return RespondLater();
 }
 
@@ -656,7 +654,7 @@ WebstorePrivateIsPendingCustodianApprovalFunction::Run() {
 
 ExtensionFunction::ResponseValue
 WebstorePrivateIsPendingCustodianApprovalFunction::BuildResponse(bool result) {
-  return OneArgument(base::MakeUnique<base::FundamentalValue>(result));
+  return OneArgument(base::MakeUnique<base::Value>(result));
 }
 
 }  // namespace extensions

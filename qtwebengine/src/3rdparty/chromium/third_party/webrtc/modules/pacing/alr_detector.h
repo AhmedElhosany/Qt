@@ -12,7 +12,10 @@
 #define WEBRTC_MODULES_PACING_ALR_DETECTOR_H_
 
 #include "webrtc/common_types.h"
+#include "webrtc/modules/pacing/interval_budget.h"
 #include "webrtc/modules/pacing/paced_sender.h"
+#include "webrtc/rtc_base/optional.h"
+#include "webrtc/rtc_base/rate_statistics.h"
 #include "webrtc/typedefs.h"
 
 namespace webrtc {
@@ -28,19 +31,45 @@ class AlrDetector {
  public:
   AlrDetector();
   ~AlrDetector();
-  void OnBytesSent(size_t bytes_sent, int64_t elapsed_time_ms);
+
+  void OnBytesSent(size_t bytes_sent, int64_t delta_time_ms);
+
   // Set current estimated bandwidth.
   void SetEstimatedBitrate(int bitrate_bps);
-  // Returns true if currently in application-limited region.
-  bool InApplicationLimitedRegion();
+
+  // Returns time in milliseconds when the current application-limited region
+  // started or empty result if the sender is currently not application-limited.
+  rtc::Optional<int64_t> GetApplicationLimitedRegionStartTime() const;
+
+  struct AlrExperimentSettings {
+    float pacing_factor = PacedSender::kDefaultPaceMultiplier;
+    int64_t max_paced_queue_time = PacedSender::kMaxQueueLengthMs;
+    int alr_bandwidth_usage_percent = kDefaultAlrBandwidthUsagePercent;
+    int alr_start_budget_level_percent = kDefaultAlrStartBudgetLevelPercent;
+    int alr_stop_budget_level_percent = kDefaultAlrStopBudgetLevelPercent;
+  };
+  static rtc::Optional<AlrExperimentSettings> ParseAlrSettingsFromFieldTrial();
+
+  // Sent traffic percentage as a function of network capacity used to determine
+  // application-limited region. ALR region start when bandwidth usage drops
+  // below kAlrStartUsagePercent and ends when it raises above
+  // kAlrEndUsagePercent. NOTE: This is intentionally conservative at the moment
+  // until BW adjustments of application limited region is fine tuned.
+  static constexpr int kDefaultAlrBandwidthUsagePercent = 65;
+  static constexpr int kDefaultAlrStartBudgetLevelPercent = 80;
+  static constexpr int kDefaultAlrStopBudgetLevelPercent = 50;
+  static const char* kScreenshareProbingBweExperimentName;
+
+  void UpdateBudgetWithElapsedTime(int64_t delta_time_ms);
+  void UpdateBudgetWithBytesSent(size_t bytes_sent);
 
  private:
-  size_t measurement_interval_bytes_sent_;
-  int64_t measurement_interval_elapsed_time_ms_;
-  int estimated_bitrate_bps_;
-  // Number of consecutive periods over which we observe traffic is application
-  // limited.
-  int application_limited_count_;
+  int bandwidth_usage_percent_;
+  int alr_start_budget_level_percent_;
+  int alr_stop_budget_level_percent_;
+
+  IntervalBudget alr_budget_;
+  rtc::Optional<int64_t> alr_started_time_ms_;
 };
 
 }  // namespace webrtc

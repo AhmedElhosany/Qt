@@ -11,6 +11,7 @@
 #define SkTemplates_DEFINED
 
 #include "SkMath.h"
+#include "SkMalloc.h"
 #include "SkTLogic.h"
 #include "SkTypes.h"
 #include <limits.h>
@@ -204,6 +205,14 @@ public:
      */
     T* get() const { return fArray; }
 
+    T* begin() { return fArray; }
+
+    const T* begin() const { return fArray; }
+
+    T* end() { return fArray + fCount; }
+
+    const T* end() const { return fArray + fCount; }
+
     /** Return the nth element in the array
      */
     T&  operator[](int index) const {
@@ -244,6 +253,8 @@ public:
         fPtr = count ? (T*)sk_malloc_flags(count * sizeof(T), SK_MALLOC_THROW) : nullptr;
     }
 
+    SkAutoTMalloc(SkAutoTMalloc<T>&& that) : fPtr(that.release()) {}
+
     ~SkAutoTMalloc() {
         sk_free(fPtr);
     }
@@ -280,6 +291,14 @@ public:
 
     const T& operator[](int index) const {
         return fPtr[index];
+    }
+
+    SkAutoTMalloc& operator=(SkAutoTMalloc<T>&& that) {
+        if (this != &that) {
+            sk_free(fPtr);
+            fPtr = that.release();
+        }
+        return *this;
     }
 
     /**
@@ -461,5 +480,7 @@ public:
 private:
     SkAlignedSStorage<sizeof(T)*N> fStorage;
 };
+
+using SkAutoFree = std::unique_ptr<void, SkFunctionWrapper<void, void, sk_free>>;
 
 #endif

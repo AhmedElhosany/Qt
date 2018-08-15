@@ -8,6 +8,7 @@
 #include "public/platform/WebCallbacks.h"
 #include "public/platform/WebURL.h"
 #include "public/platform/modules/serviceworker/WebServiceWorkerError.h"
+#include <memory>
 
 namespace blink {
 
@@ -42,27 +43,29 @@ class WebServiceWorkerRegistration {
   class Handle {
    public:
     virtual ~Handle() {}
-    virtual WebServiceWorkerRegistration* registration() { return nullptr; }
+    virtual WebServiceWorkerRegistration* Registration() { return nullptr; }
   };
 
-  virtual void setProxy(WebServiceWorkerRegistrationProxy*) {}
-  virtual WebServiceWorkerRegistrationProxy* proxy() { return nullptr; }
-  virtual void proxyStopped() {}
+  virtual void SetProxy(WebServiceWorkerRegistrationProxy*) {}
+  virtual WebServiceWorkerRegistrationProxy* Proxy() { return nullptr; }
+  virtual void ProxyStopped() {}
 
-  virtual WebURL scope() const { return WebURL(); }
-  virtual void update(WebServiceWorkerProvider*,
-                      WebServiceWorkerUpdateCallbacks*) {}
-  virtual void unregister(WebServiceWorkerProvider*,
-                          WebServiceWorkerUnregistrationCallbacks*) {}
+  virtual WebURL Scope() const { return WebURL(); }
+  virtual int64_t RegistrationId() const = 0;
+  virtual void Update(WebServiceWorkerProvider*,
+                      std::unique_ptr<WebServiceWorkerUpdateCallbacks>) {}
+  virtual void Unregister(
+      WebServiceWorkerProvider*,
+      std::unique_ptr<WebServiceWorkerUnregistrationCallbacks>) {}
 
-  virtual void enableNavigationPreload(
+  virtual void EnableNavigationPreload(
       bool enable,
       WebServiceWorkerProvider*,
       std::unique_ptr<WebEnableNavigationPreloadCallbacks>) {}
-  virtual void getNavigationPreloadState(
+  virtual void GetNavigationPreloadState(
       WebServiceWorkerProvider*,
       std::unique_ptr<WebGetNavigationPreloadStateCallbacks>) {}
-  virtual void setNavigationPreloadHeader(
+  virtual void SetNavigationPreloadHeader(
       const WebString& value,
       WebServiceWorkerProvider*,
       std::unique_ptr<WebSetNavigationPreloadHeaderCallbacks>) {}

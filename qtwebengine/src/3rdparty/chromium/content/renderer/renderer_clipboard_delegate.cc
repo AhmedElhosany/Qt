@@ -123,8 +123,8 @@ bool RendererClipboardDelegate::WriteImage(ui::ClipboardType clipboard_type,
 
   const gfx::Size size(bitmap.width(), bitmap.height());
   std::unique_ptr<base::SharedMemory> shared_buf;
+
   {
-    SkAutoLockPixels locked(bitmap);
     void* pixels = bitmap.getPixels();
     // TODO(piman): this should not be NULL, but it is. crbug.com/369621
     if (!pixels)
@@ -138,7 +138,7 @@ bool RendererClipboardDelegate::WriteImage(ui::ClipboardType clipboard_type,
 
     // Allocate a shared memory buffer to hold the bitmap bits.
     uint32_t buf_size = checked_buf_size.ValueOrDie();
-    shared_buf = ChildThreadImpl::current()->AllocateSharedMemory(buf_size);
+    shared_buf = ChildThreadImpl::AllocateSharedMemory(buf_size);
     if (!shared_buf)
       return false;
     if (!shared_buf->Map(buf_size))

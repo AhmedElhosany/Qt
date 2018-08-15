@@ -31,6 +31,7 @@ class GFX_EXPORT RenderTextMac : public RenderText {
 
   // RenderText:
   std::unique_ptr<RenderText> CreateInstanceOfSameType() const override;
+  void SetFontList(const FontList& font_list) override;
   bool MultilineSupported() const override;
   const base::string16& GetDisplayText() override;
   Size GetStringSize() override;
@@ -73,7 +74,6 @@ class GFX_EXPORT RenderTextMac : public RenderText {
     SkColor foreground;
     bool underline;
     bool strike;
-    bool diagonal_strike;
 
     TextRun();
     TextRun(const TextRun& other) = delete;

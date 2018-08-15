@@ -57,6 +57,11 @@ InputMethodWin::InputMethodWin(internal::InputMethodDelegate* delegate,
 
 InputMethodWin::~InputMethodWin() {}
 
+void InputMethodWin::OnFocus() {
+  InputMethodBase::OnFocus();
+  RefreshInputLanguage();
+}
+
 bool InputMethodWin::OnUntranslatedIMEMessage(
     const base::NativeEvent& event,
     InputMethod::NativeEventResult* result) {
@@ -102,11 +107,9 @@ bool InputMethodWin::OnUntranslatedIMEMessage(
   return !!handled;
 }
 
-void InputMethodWin::DispatchKeyEvent(ui::KeyEvent* event) {
-  if (!event->HasNativeEvent()) {
-    DispatchFabricatedKeyEvent(event);
-    return;
-  }
+ui::EventDispatchDetails InputMethodWin::DispatchKeyEvent(ui::KeyEvent* event) {
+  if (!event->HasNativeEvent())
+    return DispatchFabricatedKeyEvent(event);
 
   const base::NativeEvent& native_key_event = event->native_event();
   BOOL handled = FALSE;
@@ -116,7 +119,7 @@ void InputMethodWin::DispatchKeyEvent(ui::KeyEvent* event) {
            &handled);
     if (handled)
       event->StopPropagation();
-    return;
+    return ui::EventDispatchDetails();
   }
 
   std::vector<MSG> char_msgs;
@@ -187,27 +190,34 @@ void InputMethodWin::DispatchKeyEvent(ui::KeyEvent* event) {
         base::Owned(new ui::KeyEvent(*event)),
         base::Owned(new std::vector<MSG>(char_msgs)));
     GetEngine()->ProcessKeyEvent(*event, callback);
-  } else {
-    ProcessKeyEventDone(event, &char_msgs, false);
+    return ui::EventDispatchDetails();
   }
+
+  return ProcessUnhandledKeyEvent(event, &char_msgs);
 }
 
 void InputMethodWin::ProcessKeyEventDone(ui::KeyEvent* event,
                                          const std::vector<MSG>* char_msgs,
                                          bool is_handled) {
-  DCHECK(event);
   if (is_handled)
     return;
+  ProcessUnhandledKeyEvent(event, char_msgs);
+}
 
+ui::EventDispatchDetails InputMethodWin::ProcessUnhandledKeyEvent(
+    ui::KeyEvent* event,
+    const std::vector<MSG>* char_msgs) {
+  DCHECK(event);
   ui::EventDispatchDetails details = DispatchKeyEventPostIME(event);
   if (details.dispatcher_destroyed || details.target_destroyed ||
       event->stopped_propagation()) {
-    return;
+    return details;
   }
 
   BOOL handled;
   for (const auto& msg : (*char_msgs))
     OnChar(msg.hwnd, msg.message, msg.wParam, msg.lParam, msg, &handled);
+  return details;
 }
 
 void InputMethodWin::OnTextInputTypeChanged(const TextInputClient* client) {
@@ -220,6 +230,7 @@ void InputMethodWin::OnTextInputTypeChanged(const TextInputClient* client) {
 void InputMethodWin::OnCaretBoundsChanged(const TextInputClient* client) {
   if (!IsTextInputClientFocused(client) || !IsWindowFocused(client))
     return;
+  NotifyTextInputCaretBoundsChanged(client);
   TextInputType text_input_type = GetTextInputType();
   if (client == GetTextInputClient() &&
       text_input_type != TEXT_INPUT_TYPE_NONE &&
@@ -275,8 +286,7 @@ void InputMethodWin::OnInputLocaleChanged() {
   // which is known to be incompatible with TSF.
   // TODO(shuchen): Use ITfLanguageProfileNotifySink instead.
   OnInputMethodChanged();
-  imm32_manager_.SetInputLanguage();
-  UpdateIMEState();
+  RefreshInputLanguage();
 }
 
 bool InputMethodWin::IsInputLocaleCJK() const {
@@ -656,6 +666,20 @@ LRESULT InputMethodWin::OnQueryCharPosition(IMECHARPOSITION* char_positon) {
   return 1;  // returns non-zero value when succeeded.
 }
 
+void InputMethodWin::RefreshInputLanguage() {
+  TextInputType type_original = GetTextInputType();
+  imm32_manager_.SetInputLanguage();
+  if (type_original != GetTextInputType()) {
+    // Only update the IME state when necessary.
+    // It's unnecessary to report IME state, when:
+    // 1) Switching betweeen 2 top-level windows, and the switched-away window
+    //    receives OnInputLocaleChanged.
+    // 2) The text input type is not changed by |SetInputLanguage|.
+    // Please refer to crbug.com/679564.
+    UpdateIMEState();
+  }
+}
+
 bool InputMethodWin::IsWindowFocused(const TextInputClient* client) const {
   if (!client)
     return false;
@@ -668,17 +692,19 @@ bool InputMethodWin::IsWindowFocused(const TextInputClient* client) const {
       GetActiveWindow() == toplevel_window_handle_;
 }
 
-void InputMethodWin::DispatchFabricatedKeyEvent(ui::KeyEvent* event) {
+ui::EventDispatchDetails InputMethodWin::DispatchFabricatedKeyEvent(
+    ui::KeyEvent* event) {
   // The key event if from calling input.ime.sendKeyEvent or test.
   ui::EventDispatchDetails details = DispatchKeyEventPostIME(event);
   if (details.dispatcher_destroyed || details.target_destroyed ||
       event->stopped_propagation()) {
-    return;
+    return details;
   }
 
   if ((event->is_char() || event->GetDomKey().IsCharacter()) &&
       event->type() == ui::ET_KEY_PRESSED && GetTextInputClient())
     GetTextInputClient()->InsertChar(*event);
+  return details;
 }
 
 void InputMethodWin::ConfirmCompositionText() {

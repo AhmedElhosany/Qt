@@ -54,7 +54,7 @@ uniform lowp float spread;
 
 varying lowp float vT;
 
-#define PI 3.14159265359
+#define PI 3.14159265358979323846
 
 void main(void)
 {

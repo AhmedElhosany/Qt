@@ -59,10 +59,10 @@ QT_BEGIN_NAMESPACE
 
 using namespace QV4;
 
-DEFINE_OBJECT_VTABLE(QmlContextWrapper);
+DEFINE_OBJECT_VTABLE(QQmlContextWrapper);
 DEFINE_MANAGED_VTABLE(QmlContext);
 
-void Heap::QmlContextWrapper::init(QQmlContextData *context, QObject *scopeObject)
+void Heap::QQmlContextWrapper::init(QQmlContextData *context, QObject *scopeObject)
 {
     Object::init();
     readOnly = true;
@@ -71,17 +71,17 @@ void Heap::QmlContextWrapper::init(QQmlContextData *context, QObject *scopeObjec
     this->scopeObject.init(scopeObject);
 }
 
-void Heap::QmlContextWrapper::destroy()
+void Heap::QQmlContextWrapper::destroy()
 {
     delete context;
     scopeObject.destroy();
     Object::destroy();
 }
 
-ReturnedValue QmlContextWrapper::get(const Managed *m, String *name, bool *hasProperty)
+ReturnedValue QQmlContextWrapper::get(const Managed *m, String *name, bool *hasProperty)
 {
-    Q_ASSERT(m->as<QmlContextWrapper>());
-    const QmlContextWrapper *resource = static_cast<const QmlContextWrapper *>(m);
+    Q_ASSERT(m->as<QQmlContextWrapper>());
+    const QQmlContextWrapper *resource = static_cast<const QQmlContextWrapper *>(m);
     QV4::ExecutionEngine *v4 = resource->engine();
     QV4::Scope scope(v4);
 
@@ -131,20 +131,18 @@ ReturnedValue QmlContextWrapper::get(const Managed *m, String *name, bool *hasPr
 
     if (context->imports && name->startsWithUpper()) {
         // Search for attached properties, enums and imported scripts
-        QQmlTypeNameCache::Result r = context->imports->query(name);
+        QQmlTypeNameCache::Result r = context->imports->query(name, QQmlImport::AllowRecursion);
 
         if (r.isValid()) {
             if (hasProperty)
                 *hasProperty = true;
             if (r.scriptIndex != -1) {
                 QV4::ScopedObject scripts(scope, context->importedScripts.valueRef());
-                if (scripts)
-                    return scripts->getIndexed(r.scriptIndex);
-                return QV4::Encode::null();
+                return scripts->getIndexed(r.scriptIndex);
             } else if (r.type.isValid()) {
-                return QmlTypeWrapper::create(v4, scopeObject, r.type);
+                return QQmlTypeWrapper::create(v4, scopeObject, r.type);
             } else if (r.importNamespace) {
-                return QmlTypeWrapper::create(v4, scopeObject, context->imports, r.importNamespace);
+                return QQmlTypeWrapper::create(v4, scopeObject, context->imports, r.importNamespace);
             }
             Q_ASSERT(!"Unreachable");
         }
@@ -224,21 +222,19 @@ ReturnedValue QmlContextWrapper::get(const Managed *m, String *name, bool *hasPr
     return Encode::undefined();
 }
 
-void QmlContextWrapper::put(Managed *m, String *name, const Value &value)
+bool QQmlContextWrapper::put(Managed *m, String *name, const Value &value)
 {
-    Q_ASSERT(m->as<QmlContextWrapper>());
-    QmlContextWrapper *resource = static_cast<QmlContextWrapper *>(m);
+    Q_ASSERT(m->as<QQmlContextWrapper>());
+    QQmlContextWrapper *resource = static_cast<QQmlContextWrapper *>(m);
     ExecutionEngine *v4 = resource->engine();
     QV4::Scope scope(v4);
     if (scope.hasException())
-        return;
-    QV4::Scoped<QmlContextWrapper> wrapper(scope, resource);
+        return false;
+    QV4::Scoped<QQmlContextWrapper> wrapper(scope, resource);
 
     uint member = wrapper->internalClass()->find(name);
-    if (member < UINT_MAX) {
-        wrapper->putValue(member, value);
-        return;
-    }
+    if (member < UINT_MAX)
+        return wrapper->putValue(member, value);
 
     if (wrapper->d()->isNullWrapper) {
         if (wrapper && wrapper->d()->readOnly) {
@@ -246,11 +242,10 @@ void QmlContextWrapper::put(Managed *m, String *name, const Value &value)
                             QLatin1Char('"');
             ScopedString e(scope, v4->newString(error));
             v4->throwError(e);
-            return;
+            return false;
         }
 
-        Object::put(m, name, value);
-        return;
+        return Object::put(m, name, value);
     }
 
     // Its possible we could delay the calculation of the "actual" context (in the case
@@ -259,7 +254,7 @@ void QmlContextWrapper::put(Managed *m, String *name, const Value &value)
     QQmlContextData *expressionContext = context;
 
     if (!context)
-        return;
+        return false;
 
     // See QV8ContextWrapper::Getter for resolution order
 
@@ -269,18 +264,18 @@ void QmlContextWrapper::put(Managed *m, String *name, const Value &value)
         const QV4::IdentifierHash<int> &properties = context->propertyNames();
         // Search context properties
         if (properties.count() && properties.value(name) != -1)
-            return;
+            return false;
 
         // Search scope object
         if (scopeObject &&
             QV4::QObjectWrapper::setQmlProperty(v4, context, scopeObject, name, QV4::QObjectWrapper::CheckRevision, value))
-            return;
+            return true;
         scopeObject = 0;
 
         // Search context object
         if (context->contextObject &&
             QV4::QObjectWrapper::setQmlProperty(v4, context, context->contextObject, name, QV4::QObjectWrapper::CheckRevision, value))
-            return;
+            return true;
 
         context = context->parent;
     }
@@ -291,23 +286,23 @@ void QmlContextWrapper::put(Managed *m, String *name, const Value &value)
         QString error = QLatin1String("Invalid write to global property \"") + name->toQString() +
                         QLatin1Char('"');
         v4->throwError(error);
-        return;
+        return false;
     }
 
-    Object::put(m, name, value);
+    return Object::put(m, name, value);
 }
 
-void Heap::QmlContext::init(QV4::ExecutionContext *outerContext, QV4::QmlContextWrapper *qml)
+void Heap::QmlContext::init(QV4::ExecutionContext *outerContext, QV4::QQmlContextWrapper *qml)
 {
     Heap::ExecutionContext::init(Heap::ExecutionContext::Type_QmlContext);
-    outer = outerContext->d();
+    outer.set(internalClass->engine, outerContext->d());
     strictMode = false;
     callData = outer->callData;
     lookups = outer->lookups;
     constantTable = outer->constantTable;
     compilationUnit = outer->compilationUnit;
 
-    this->qml = qml->d();
+    this->qml.set(internalClass->engine, qml->d());
 }
 
 Heap::QmlContext *QmlContext::createWorkerContext(ExecutionContext *parent, const QUrl &source, Value *sendFunction)
@@ -320,7 +315,7 @@ Heap::QmlContext *QmlContext::createWorkerContext(ExecutionContext *parent, cons
     context->isInternal = true;
     context->isJSContext = true;
 
-    Scoped<QmlContextWrapper> qml(scope, scope.engine->memoryManager->allocObject<QmlContextWrapper>(context, (QObject*)0));
+    Scoped<QQmlContextWrapper> qml(scope, scope.engine->memoryManager->allocObject<QQmlContextWrapper>(context, (QObject*)0));
     qml->d()->isNullWrapper = true;
 
     qml->setReadOnly(false);
@@ -338,7 +333,7 @@ Heap::QmlContext *QmlContext::create(ExecutionContext *parent, QQmlContextData *
 {
     Scope scope(parent);
 
-    Scoped<QmlContextWrapper> qml(scope, scope.engine->memoryManager->allocObject<QmlContextWrapper>(context, scopeObject));
+    Scoped<QQmlContextWrapper> qml(scope, scope.engine->memoryManager->allocObject<QQmlContextWrapper>(context, scopeObject));
     Heap::QmlContext *c = scope.engine->memoryManager->alloc<QmlContext>(parent, qml);
     Q_ASSERT(c->vtable() == staticVTable());
     return c;

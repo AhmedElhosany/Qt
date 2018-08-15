@@ -1,3 +1,5 @@
+QT_FOR_CONFIG += webengine-private
+
 TEMPLATE = subdirs
 
 SUBDIRS += \
@@ -6,7 +8,7 @@ SUBDIRS += \
     qquickwebenginedefaultsurfaceformat \
     qquickwebengineview
 
-isQMLTestSupportApiEnabled() {
+qtConfig(webengine-testsupport) {
     SUBDIRS += \
         qmltests \
         qquickwebengineviewgraphics

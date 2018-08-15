@@ -11,9 +11,9 @@
 #include "components/ui_devtools/Forward.h"
 #include "components/ui_devtools/Protocol.h"
 #include "components/ui_devtools/devtools_base_agent.h"
+#include "components/ui_devtools/devtools_export.h"
 
-namespace ui {
-namespace devtools {
+namespace ui_devtools {
 
 class UiDevToolsServer;
 
@@ -21,7 +21,7 @@ class UiDevToolsServer;
 // this class and attach the corresponding backends/frontends (i.e: DOM, CSS,
 // etc). This client is then attached to the UiDevToolsServer and all messages
 // from this client are sent over the web socket owned by the server.
-class UiDevToolsClient : public protocol::FrontendChannel {
+class UI_DEVTOOLS_EXPORT UiDevToolsClient : public protocol::FrontendChannel {
  public:
   static const int kNotConnected = -1;
 
@@ -40,8 +40,11 @@ class UiDevToolsClient : public protocol::FrontendChannel {
   void DisableAllAgents();
 
   // protocol::FrontendChannel
-  void sendProtocolResponse(int callId, const String& message) override;
-  void sendProtocolNotification(const String& message) override;
+  void sendProtocolResponse(
+      int callId,
+      std::unique_ptr<protocol::Serializable> message) override;
+  void sendProtocolNotification(
+      std::unique_ptr<protocol::Serializable> message) override;
   void flushProtocolNotifications() override;
 
   std::string name_;
@@ -54,7 +57,6 @@ class UiDevToolsClient : public protocol::FrontendChannel {
   DISALLOW_COPY_AND_ASSIGN(UiDevToolsClient);
 };
 
-}  // namespace devtools
-}  // namespace ui
+}  // namespace ui_devtools
 
 #endif  // COMPONENTS_UI_DEVTOOLS_DEVTOOLS_CLIENT_H_

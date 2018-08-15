@@ -10,6 +10,7 @@
 #include "SkImage.h"
 #include "SkImageDeserializer.h"
 #include "SkImageGenerator.h"
+#include "SkMakeUnique.h"
 #include "SkReadBuffer.h"
 #include "SkStream.h"
 #include "SkTypeface.h"
@@ -28,7 +29,7 @@ namespace {
 
     static sk_sp<SkImage> MakeEmptyImage(int width, int height) {
         return SkImage::MakeFromGenerator(
-            new EmptyImageGenerator(SkImageInfo::MakeN32Premul(width, height)));
+              skstd::make_unique<EmptyImageGenerator>(SkImageInfo::MakeN32Premul(width, height)));
     }
 
 } // anonymous namespace
@@ -148,6 +149,12 @@ void SkReadBuffer::readColor4f(SkColor4f* color) {
 void SkReadBuffer::readPoint(SkPoint* point) {
     point->fX = fReader.readScalar();
     point->fY = fReader.readScalar();
+}
+
+void SkReadBuffer::readPoint3(SkPoint3* point) {
+    point->fX = fReader.readScalar();
+    point->fY = fReader.readScalar();
+    point->fZ = fReader.readScalar();
 }
 
 void SkReadBuffer::readMatrix(SkMatrix* matrix) {
@@ -311,7 +318,7 @@ sk_sp<SkTypeface> SkReadBuffer::readTypeface() {
         return sk_ref_sp(fInflator->getTypeface(this->read32()));
     }
 
-    uint32_t index = fReader.readU32();
+    uint32_t index = this->readUInt();
     if (0 == index || index > (unsigned)fTFCount) {
         return nullptr;
     } else {

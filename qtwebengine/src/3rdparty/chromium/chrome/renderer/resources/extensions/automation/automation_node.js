@@ -135,6 +135,21 @@ var GetState = requireNative('automationInternal').GetState;
 /**
  * @param {number} axTreeID The id of the accessibility tree.
  * @param {number} nodeID The id of a node.
+ * @return {string} The restriction, one of
+ * "disabled", "readOnly" or undefined if enabled or other object not disabled
+ */
+var GetRestriction = requireNative('automationInternal').GetRestriction;
+
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {string} The checked state, as undefined, "true", "false" or "mixed".
+ */
+var GetChecked = requireNative('automationInternal').GetChecked;
+
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
  * @return {string} The role of the node, or undefined if the tree or
  *     node wasn't found.
  */
@@ -224,9 +239,51 @@ var GetIntListAttribute =
  */
 var GetHtmlAttribute = requireNative('automationInternal').GetHtmlAttribute;
 
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {automation.NameFromType} The source of the node's name.
+ */
+var GetNameFrom = requireNative('automationInternal').GetNameFrom;
+
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+var GetBold = requireNative('automationInternal').GetBold;
+
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+var GetItalic = requireNative('automationInternal').GetItalic;
+
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+var GetUnderline = requireNative('automationInternal').GetUnderline;
+
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+var GetLineThrough = requireNative('automationInternal').GetLineThrough;
+
+/**
+ * @param {number} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {?Array.<automation.CustomAction>} List of custom actions of the
+ *     node.
+ */
+var GetCustomActions = requireNative('automationInternal').GetCustomActions;
+
 var lastError = require('lastError');
 var logging = requireNative('logging');
-var schema = requireNative('automationInternal').GetSchemaAdditions();
 var utils = require('utils');
 
 /**
@@ -275,6 +332,14 @@ AutomationNodeImpl.prototype = {
 
   get role() {
     return GetRole(this.treeID, this.id);
+  },
+
+  get restriction() {
+    return GetRestriction(this.treeID, this.id);
+  },
+
+  get checked() {
+    return GetChecked(this.treeID, this.id);
   },
 
   get location() {
@@ -359,6 +424,30 @@ AutomationNodeImpl.prototype = {
         GetChildIDAtIndex(parent.treeID, parent.id, indexInParent + 1));
   },
 
+  get nameFrom() {
+    return GetNameFrom(this.treeID, this.id);
+  },
+
+  get bold() {
+    return GetBold(this.treeID, this.id);
+  },
+
+  get italic() {
+    return GetItalic(this.treeID, this.id);
+  },
+
+  get underline() {
+    return GetUnderline(this.treeID, this.id);
+  },
+
+  get lineThrough() {
+    return GetLineThrough(this.treeID, this.id);
+  },
+
+  get customActions() {
+    return GetCustomActions(this.treeID, this.id);
+  },
+
   doDefault: function() {
     this.performAction_('doDefault');
   },
@@ -367,8 +456,31 @@ AutomationNodeImpl.prototype = {
     this.performAction_('focus');
   },
 
+  getImageData: function(maxWidth, maxHeight) {
+    this.performAction_('getImageData',
+                        { maxWidth: maxWidth,
+                          maxHeight: maxHeight });
+  },
+
+  hitTest: function(x, y, eventToFire) {
+    // Convert from global to tree-relative coordinates.
+    var location = GetLocation(this.treeID, GetRootID(this.treeID));
+    this.performAction_('hitTest',
+                        { x: Math.floor(x - location.left),
+                          y: Math.floor(y - location.top),
+                          eventToFire: eventToFire });
+  },
+
   makeVisible: function() {
     this.performAction_('makeVisible');
+  },
+
+  performCustomAction: function(customActionId) {
+    this.performAction_('customAction', { customActionID: customActionId });
+  },
+
+  resumeMedia: function() {
+    this.performAction_('resumeMedia');
   },
 
   setSelection: function(startIndex, endIndex) {
@@ -386,6 +498,18 @@ AutomationNodeImpl.prototype = {
 
   showContextMenu: function() {
     this.performAction_('showContextMenu');
+  },
+
+  startDuckingMedia: function() {
+    this.performAction_('startDuckingMedia');
+  },
+
+  stopDuckingMedia: function() {
+    this.performAction_('stopDuckingMedia');
+  },
+
+  suspendMedia: function() {
+    this.performAction_('suspendMedia');
   },
 
   domQuerySelector: function(selector, callback) {
@@ -647,47 +771,34 @@ AutomationNodeImpl.prototype = {
 
 var stringAttributes = [
     'accessKey',
-    'action',
     'ariaInvalidValue',
-    'autoComplete',
     'containerLiveRelevant',
     'containerLiveStatus',
     'description',
     'display',
-    'dropeffect',
-    'help',
     'htmlTag',
+    'imageDataUrl',
     'language',
     'liveRelevant',
     'liveStatus',
     'name',
     'placeholder',
-    'shortcut',
+    'roleDescription',
     'textInputType',
     'url',
     'value'];
 
 var boolAttributes = [
-    'ariaReadonly',
-    'buttonMixed',
-    'canSetValue',
-    'canvasHasFallback',
     'containerLiveAtomic',
     'containerLiveBusy',
-    'grabbed',
-    'isAxTreeHost',
     'liveAtomic',
-    'liveBusy',
-    'updateLocationOnly'];
+    'liveBusy'];
 
 var intAttributes = [
     'backgroundColor',
     'color',
     'colorValue',
-    'descriptionFrom',
     'hierarchicalLevel',
-    'invalidState',
-    'nameFrom',
     'posInSet',
     'scrollX',
     'scrollXMax',
@@ -696,31 +807,31 @@ var intAttributes = [
     'scrollYMax',
     'scrollYMin',
     'setSize',
-    'sortDirection',
     'tableCellColumnIndex',
+    'ariaCellColumnIndex',
     'tableCellColumnSpan',
     'tableCellRowIndex',
+    'ariaCellRowIndex',
     'tableCellRowSpan',
     'tableColumnCount',
+    'ariaColumnCount',
     'tableColumnIndex',
     'tableRowCount',
+    'ariaRowCount',
     'tableRowIndex',
-    'textDirection',
     'textSelEnd',
-    'textSelStart',
-    'textStyle'];
+    'textSelStart'];
 
 var nodeRefAttributes = [
     ['activedescendantId', 'activeDescendant'],
+    ['inPageLinkTargetId', 'inPageLinkTarget'],
     ['nextOnLineId', 'nextOnLine'],
     ['previousOnLineId', 'previousOnLine'],
     ['tableColumnHeaderId', 'tableColumnHeader'],
     ['tableHeaderId', 'tableHeader'],
-    ['tableRowHeaderId', 'tableRowHeader'],
-    ['titleUiElement', 'titleUIElement']];
+    ['tableRowHeaderId', 'tableRowHeader']];
 
 var intListAttributes = [
-    'characterOffsets',
     'lineBreaks',
     'markerEnds',
     'markerStarts',
@@ -729,18 +840,15 @@ var intListAttributes = [
     'wordStarts'];
 
 var nodeRefListAttributes = [
-    ['cellIds', 'cells'],
     ['controlsIds', 'controls'],
     ['describedbyIds', 'describedBy'],
     ['flowtoIds', 'flowTo'],
-    ['labelledbyIds', 'labelledBy'],
-    ['uniqueCellIds', 'uniqueCells']];
+    ['labelledbyIds', 'labelledBy']];
 
 var floatAttributes = [
     'valueForRange',
     'minValueForRange',
-    'maxValueForRange',
-    'fontSize'];
+    'maxValueForRange'];
 
 var htmlAttributes = [
     ['type', 'inputType']];
@@ -927,6 +1035,10 @@ AutomationRootNodeImpl.prototype = {
     return result;
   },
 
+  get chromeChannel() {
+    return GetStringAttribute(this.treeID, this.id, 'chromeChannel');
+  },
+
   get docUrl() {
     return GetDocURL(this.treeID);
   },
@@ -1009,7 +1121,7 @@ AutomationRootNodeImpl.prototype = {
   },
 
   destroy: function() {
-    this.dispatchEvent(schema.EventType.destroyed, 'none');
+    this.dispatchEvent('destroyed', 'none');
     for (var id in this.axNodeDataCache_)
       this.remove(id);
     this.detach();
@@ -1062,11 +1174,18 @@ utils.expose(AutomationNode, AutomationNodeImpl, {
     'find',
     'findAll',
     'focus',
+    'getImageData',
+    'hitTest',
     'makeVisible',
     'matches',
+    'performCustomAction',
+    'resumeMedia',
     'setSelection',
     'setSequentialFocusNavigationStartingPoint',
     'showContextMenu',
+    'startDuckingMedia',
+    'stopDuckingMedia',
+    'suspendMedia',
     'addEventListener',
     'removeEventListener',
     'domQuerySelector',
@@ -1082,12 +1201,20 @@ utils.expose(AutomationNode, AutomationNodeImpl, {
       'nextSibling',
       'isRootNode',
       'role',
+      'checked',
+      'restriction',
       'state',
       'location',
       'indexInParent',
       'lineStartOffsets',
       'root',
       'htmlAttributes',
+      'nameFrom',
+      'bold',
+      'italic',
+      'underline',
+      'lineThrough',
+      'customActions',
   ]),
 });
 
@@ -1097,6 +1224,7 @@ function AutomationRootNode() {
 utils.expose(AutomationRootNode, AutomationRootNodeImpl, {
   superclass: AutomationNode,
   readonly: [
+    'chromeChannel',
     'docTitle',
     'docUrl',
     'docLoaded',

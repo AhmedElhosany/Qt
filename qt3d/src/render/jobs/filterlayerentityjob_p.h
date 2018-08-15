@@ -54,6 +54,7 @@
 #include <Qt3DCore/qaspectjob.h>
 #include <Qt3DCore/qnodeid.h>
 #include <Qt3DRender/private/qt3drender_global_p.h>
+#include <Qt3DRender/qlayerfilter.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -70,24 +71,27 @@ public:
     FilterLayerEntityJob();
 
     inline void setManager(NodeManagers *manager) Q_DECL_NOEXCEPT { m_manager = manager; }
-    inline void setLayers(const Qt3DCore::QNodeIdVector &layerIds) Q_DECL_NOEXCEPT { m_layerIds = layerIds; }
-    inline void setHasLayerFilter(bool hasLayerFilter) Q_DECL_NOEXCEPT { m_hasLayerFilter = hasLayerFilter; }
+    inline void setLayerFilters(const Qt3DCore::QNodeIdVector &layerIds) Q_DECL_NOEXCEPT { m_layerFilterIds = layerIds; }
     inline QVector<Entity *> filteredEntities() const Q_DECL_NOEXCEPT { return m_filteredEntities; }
 
-    inline bool hasLayerFilter() const Q_DECL_NOTHROW { return m_hasLayerFilter; }
-    inline Qt3DCore::QNodeIdVector layers() const { return m_layerIds; }
+    inline bool hasLayerFilter() const Q_DECL_NOTHROW { return !m_layerFilterIds.isEmpty(); }
+    inline Qt3DCore::QNodeIdVector layerFilters() const { return m_layerFilterIds; }
 
     // QAspectJob interface
     void run() Q_DECL_FINAL;
+
+    void filterAcceptAnyMatchingLayers(Entity *entity, const Qt3DCore::QNodeIdVector &layerIds);
+    void filterAcceptAllMatchingLayers(Entity *entity, const Qt3DCore::QNodeIdVector &layerIds);
+    void filterDiscardAnyMatchingLayers(Entity *entity, const Qt3DCore::QNodeIdVector &layerIds);
+    void filterDiscardAllMatchingLayers(Entity *entity, const Qt3DCore::QNodeIdVector &layerIds);
 
 private:
     void filterLayerAndEntity();
     void selectAllEntities();
 
     NodeManagers *m_manager;
-    Qt3DCore::QNodeIdVector m_layerIds;
+    Qt3DCore::QNodeIdVector m_layerFilterIds;
     QVector<Entity *> m_filteredEntities;
-    bool m_hasLayerFilter;
 };
 
 typedef QSharedPointer<FilterLayerEntityJob> FilterLayerEntityJobPtr;

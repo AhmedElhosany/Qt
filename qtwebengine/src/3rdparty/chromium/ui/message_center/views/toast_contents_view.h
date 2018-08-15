@@ -12,8 +12,10 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/message_center/message_center_export.h"
 #include "ui/message_center/views/message_center_controller.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "ui/views/widget/widget_observer.h"
 
 namespace gfx {
 class Animation;
@@ -39,10 +41,14 @@ class PopupAlignmentDelegate;
 // which delegates over to MessagePopupCollection, but takes care about
 // checking the weakref since MessagePopupCollection may disappear before
 // widget/views are closed/destructed.
-class ToastContentsView : public views::WidgetDelegateView,
-                          public MessageCenterController,
-                          public gfx::AnimationDelegate {
+class MESSAGE_CENTER_EXPORT ToastContentsView
+    : public views::WidgetDelegateView,
+      public views::WidgetObserver,
+      public MessageCenterController,
+      public gfx::AnimationDelegate {
  public:
+  static const char kViewClassName[];
+
   // Computes the size of a toast assuming it will host the given view.
   static gfx::Size GetToastSizeForView(const views::View* view);
 
@@ -80,8 +86,9 @@ class ToastContentsView : public views::WidgetDelegateView,
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
   void Layout() override;
-  gfx::Size GetPreferredSize() const override;
+  gfx::Size CalculatePreferredSize() const override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  const char* GetClassName() const override;
 
  private:
   friend class test::MessagePopupCollectionTest;
@@ -97,6 +104,7 @@ class ToastContentsView : public views::WidgetDelegateView,
   void ClickOnNotificationButton(const std::string& notification_id,
                                  int button_index) override;
   void ClickOnSettingsButton(const std::string& notification_id) override;
+  void UpdateNotificationSize(const std::string& notification_id) override;
 
   // Overridden from gfx::AnimationDelegate:
   void AnimationProgressed(const gfx::Animation* animation) override;
@@ -108,6 +116,9 @@ class ToastContentsView : public views::WidgetDelegateView,
   void OnDisplayChanged() override;
   void OnWorkAreaChanged() override;
 
+  // Overridden from views::WidgetObserver:
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+
   // Recalculates preferred size from underlying view and notifies about it.
   void UpdatePreferredSize();
 
@@ -117,10 +128,9 @@ class ToastContentsView : public views::WidgetDelegateView,
   // Immediately moves the toast without any sort of delay or animation.
   void SetBoundsInstantly(gfx::Rect new_bounds);
 
-  // Given the bounds of a toast on the screen, compute the bouds for that
+  // Given the bounds of a toast on the screen, compute the bounds for that
   // toast in 'closed' node_data. The 'closed' node_data is used as
-  // origin/destination
-  // in reveal/closing animations.
+  // origin/destination in reveal/closing animations.
   gfx::Rect GetClosedToastBounds(gfx::Rect bounds);
 
   void StartFadeIn();

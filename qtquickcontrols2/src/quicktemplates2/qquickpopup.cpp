@@ -203,6 +203,8 @@ QT_BEGIN_NAMESPACE
     \sa closed()
 */
 
+static const QQuickPopup::ClosePolicy DefaultClosePolicy = QQuickPopup::CloseOnEscape | QQuickPopup::CloseOnPressOutside;
+
 QQuickPopupPrivate::QQuickPopupPrivate()
     : focus(false),
       modal(false),
@@ -225,6 +227,7 @@ QQuickPopupPrivate::QQuickPopupPrivate()
       allowHorizontalResize(true),
       hadActiveFocusBeforeExitTransition(false),
       interactive(true),
+      hasClosePolicy(false),
       touchId(-1),
       x(0),
       y(0),
@@ -238,7 +241,7 @@ QQuickPopupPrivate::QQuickPopupPrivate()
       contentWidth(0),
       contentHeight(0),
       transitionState(QQuickPopupPrivate::NoTransition),
-      closePolicy(QQuickPopup::CloseOnEscape | QQuickPopup::CloseOnPressOutside),
+      closePolicy(DefaultClosePolicy),
       parentItem(nullptr),
       dimmer(nullptr),
       window(nullptr),
@@ -260,6 +263,7 @@ void QQuickPopupPrivate::init()
     popupItem = new QQuickPopupItem(q);
     popupItem->setVisible(false);
     q->setParentItem(qobject_cast<QQuickItem *>(parent));
+    QObject::connect(popupItem, &QQuickItem::enabledChanged, q, &QQuickPopup::enabledChanged);
     QObject::connect(popupItem, &QQuickControl::paddingChanged, q, &QQuickPopup::paddingChanged);
     QObject::connect(popupItem, &QQuickControl::backgroundChanged, q, &QQuickPopup::backgroundChanged);
     QObject::connect(popupItem, &QQuickControl::contentItemChanged, q, &QQuickPopup::contentItemChanged);
@@ -426,6 +430,9 @@ bool QQuickPopupPrivate::prepareEnterTransition()
 
     if (transitionState != EnterTransition) {
         popupItem->setParentItem(QQuickOverlay::overlay(window));
+        if (dim)
+            createOverlay();
+        showOverlay();
         emit q->aboutToShow();
         visible = true;
         transitionState = EnterTransition;
@@ -443,13 +450,16 @@ bool QQuickPopupPrivate::prepareExitTransition()
         return false;
 
     if (transitionState != ExitTransition) {
-        // The setFocus(false) call below removes any active focus before we're
-        // able to check it in finalizeExitTransition.
-        hadActiveFocusBeforeExitTransition = popupItem->hasActiveFocus();
-        if (focus)
+        if (focus) {
+            // The setFocus(false) call below removes any active focus before we're
+            // able to check it in finalizeExitTransition.
+            hadActiveFocusBeforeExitTransition = popupItem->hasActiveFocus();
             popupItem->setFocus(false);
+        }
         transitionState = ExitTransition;
+        hideOverlay();
         emit q->aboutToHide();
+        emit q->openedChanged();
     }
     return true;
 }
@@ -460,6 +470,7 @@ void QQuickPopupPrivate::finalizeEnterTransition()
     if (focus)
         popupItem->setFocus(true);
     transitionState = NoTransition;
+    emit q->openedChanged();
     emit q->opened();
 }
 
@@ -469,6 +480,7 @@ void QQuickPopupPrivate::finalizeExitTransition()
     positioner->setParentItem(nullptr);
     popupItem->setParentItem(nullptr);
     popupItem->setVisible(false);
+    destroyOverlay();
 
     if (hadActiveFocusBeforeExitTransition && window) {
         // restore focus to the next popup in chain, or to the window content if there are no other popups open
@@ -572,6 +584,7 @@ void QQuickPopupPrivate::setWindow(QQuickWindow *newWindow)
 
         QQuickControlPrivate *p = QQuickControlPrivate::get(popupItem);
         p->resolveFont();
+        p->resolvePalette();
         if (QQuickApplicationWindow *appWindow = qobject_cast<QQuickApplicationWindow *>(newWindow))
             p->updateLocale(appWindow->locale(), false); // explicit=false
     }
@@ -592,6 +605,96 @@ void QQuickPopupPrivate::itemDestroyed(QQuickItem *item)
 void QQuickPopupPrivate::reposition()
 {
     positioner->reposition();
+}
+
+static QQuickItem *createDimmer(QQmlComponent *component, QQuickPopup *popup, QQuickItem *parent)
+{
+    QQuickItem *item = nullptr;
+    if (component) {
+        QQmlContext *creationContext = component->creationContext();
+        if (!creationContext)
+            creationContext = qmlContext(popup);
+        QQmlContext *context = new QQmlContext(creationContext, popup);
+        context->setContextObject(popup);
+        item = qobject_cast<QQuickItem*>(component->beginCreate(context));
+    }
+
+    // when there is no overlay component available (with plain QQuickWindow),
+    // use a plain QQuickItem as a fallback to block hover events
+    if (!item && popup->isModal())
+        item = new QQuickItem;
+
+    if (item) {
+        item->setOpacity(popup->isVisible() ? 1.0 : 0.0);
+        item->setParentItem(parent);
+        item->stackBefore(popup->popupItem());
+        item->setZ(popup->z());
+        if (popup->isModal()) {
+            item->setAcceptedMouseButtons(Qt::AllButtons);
+#if QT_CONFIG(cursor)
+            item->setCursor(Qt::ArrowCursor);
+#endif
+#if QT_CONFIG(quicktemplates2_hover)
+            // TODO: switch to QStyleHints::useHoverEffects in Qt 5.8
+            item->setAcceptHoverEvents(true);
+            // item->setAcceptHoverEvents(QGuiApplication::styleHints()->useHoverEffects());
+            // connect(QGuiApplication::styleHints(), &QStyleHints::useHoverEffectsChanged, item, &QQuickItem::setAcceptHoverEvents);
+#endif
+        }
+        if (component)
+            component->completeCreate();
+    }
+    return item;
+}
+
+void QQuickPopupPrivate::createOverlay()
+{
+    Q_Q(QQuickPopup);
+    QQuickOverlay *overlay = QQuickOverlay::overlay(window);
+    if (!overlay)
+        return;
+
+    QQmlComponent *component = nullptr;
+    QQuickOverlayAttached *overlayAttached = qobject_cast<QQuickOverlayAttached *>(qmlAttachedPropertiesObject<QQuickOverlay>(q, false));
+    if (overlayAttached)
+        component = modal ? overlayAttached->modal() : overlayAttached->modeless();
+
+    if (!component)
+        component = modal ? overlay->modal() : overlay->modeless();
+
+    if (!dimmer)
+        dimmer = createDimmer(component, q, overlay);
+    resizeOverlay();
+}
+
+void QQuickPopupPrivate::destroyOverlay()
+{
+    if (dimmer) {
+        dimmer->setParentItem(nullptr);
+        dimmer->deleteLater();
+        dimmer = nullptr;
+    }
+}
+
+void QQuickPopupPrivate::toggleOverlay()
+{
+    destroyOverlay();
+    if (dim)
+        createOverlay();
+}
+
+void QQuickPopupPrivate::showOverlay()
+{
+    // use QQmlProperty instead of QQuickItem::setOpacity() to trigger QML Behaviors
+    if (dim && dimmer)
+        QQmlProperty::write(dimmer, QStringLiteral("opacity"), 1.0);
+}
+
+void QQuickPopupPrivate::hideOverlay()
+{
+    // use QQmlProperty instead of QQuickItem::setOpacity() to trigger QML Behaviors
+    if (dim && dimmer)
+        QQmlProperty::write(dimmer, QStringLiteral("opacity"), 0.0);
 }
 
 void QQuickPopupPrivate::resizeOverlay()
@@ -662,6 +765,7 @@ QQuickPopup::~QQuickPopup()
     setParentItem(nullptr);
     d->popupItem->ungrabShortcut();
     delete d->popupItem;
+    d->popupItem = nullptr;
 }
 
 /*!
@@ -1291,7 +1395,7 @@ void QQuickPopup::resetBottomPadding()
 
     This property holds the locale of the popup.
 
-    \sa {LayoutMirroring}{LayoutMirroring}
+    \sa mirrored, {LayoutMirroring}{LayoutMirroring}
 */
 QLocale QQuickPopup::locale() const
 {
@@ -1309,6 +1413,25 @@ void QQuickPopup::resetLocale()
 {
     Q_D(QQuickPopup);
     d->popupItem->resetLocale();
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty bool QtQuick.Controls::Popup::mirrored
+    \readonly
+
+    This property holds whether the popup is mirrored.
+
+    This property is provided for convenience. A popup is considered mirrored
+    when its visual layout direction is right-to-left; that is, when using a
+    right-to-left locale.
+
+    \sa locale, {Right-to-left User Interfaces}
+*/
+bool QQuickPopup::isMirrored() const
+{
+    Q_D(const QQuickPopup);
+    return d->popupItem->isMirrored();
 }
 
 /*!
@@ -1356,6 +1479,53 @@ void QQuickPopup::resetFont()
     d->popupItem->resetFont();
 }
 
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty palette QtQuick.Controls::Popup::palette
+
+    This property holds the palette currently set for the popup.
+
+    Popup propagates explicit palette properties to its children. If you change a specific
+    property on a popup's palette, that property propagates to all of the popup's children,
+    overriding any system defaults for that property.
+
+    \code
+    Popup {
+        palette.text: "red"
+
+        Column {
+            Label {
+                text: qsTr("This will use red color...")
+            }
+
+            Switch {
+                text: qsTr("... and so will this")
+            }
+        }
+    }
+    \endcode
+
+    \sa Control::palette, ApplicationWindow::palette, {qtquickcontrols2-palette}{palette QML Basic Type}
+*/
+QPalette QQuickPopup::palette() const
+{
+    Q_D(const QQuickPopup);
+    return d->popupItem->palette();
+}
+
+void QQuickPopup::setPalette(const QPalette &palette)
+{
+    Q_D(QQuickPopup);
+    d->popupItem->setPalette(palette);
+}
+
+void QQuickPopup::resetPalette()
+{
+    Q_D(QQuickPopup);
+    d->popupItem->resetPalette();
+}
+
 QQuickWindow *QQuickPopup::window() const
 {
     Q_D(const QQuickPopup);
@@ -1400,6 +1570,14 @@ void QQuickPopup::setParentItem(QQuickItem *parent)
     }
     d->setWindow(parent ? parent->window() : nullptr);
     emit parentChanged();
+}
+
+void QQuickPopup::resetParentItem()
+{
+    if (QQuickWindow *window = qobject_cast<QQuickWindow *>(parent()))
+        setParentItem(window->contentItem());
+    else
+        setParentItem(qobject_cast<QQuickItem *>(parent()));
 }
 
 /*!
@@ -1602,6 +1780,8 @@ void QQuickPopup::setModal(bool modal)
     if (d->modal == modal)
         return;
     d->modal = modal;
+    if (d->complete && d->visible)
+        d->toggleOverlay();
     emit modalChanged();
 
     if (!d->hasDim) {
@@ -1635,6 +1815,8 @@ void QQuickPopup::setDim(bool dim)
         return;
 
     d->dim = dim;
+    if (d->complete && d->visible)
+        d->toggleOverlay();
     emit dimChanged();
 }
 
@@ -1653,7 +1835,7 @@ void QQuickPopup::resetDim()
 
     This property holds whether the popup is visible. The default value is \c false.
 
-    \sa open(), close()
+    \sa open(), close(), opened
 */
 bool QQuickPopup::isVisible() const
 {
@@ -1675,6 +1857,41 @@ void QQuickPopup::setVisible(bool visible)
     } else {
         d->visible = visible;
     }
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty bool QtQuick.Controls::Popup::enabled
+
+    This property holds whether the popup is enabled. The default value is \c true.
+
+    \sa visible, Item::enabled
+*/
+bool QQuickPopup::isEnabled() const
+{
+    Q_D(const QQuickPopup);
+    return d->popupItem->isEnabled();
+}
+
+void QQuickPopup::setEnabled(bool enabled)
+{
+    Q_D(QQuickPopup);
+    d->popupItem->setEnabled(enabled);
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty bool QtQuick.Controls::Popup::opened
+
+    This property holds whether the popup is fully open. The popup is considered opened
+    when it's visible and neither the \l enter nor \l exit transitions are running.
+
+    \sa open(), close(), visible
+*/
+bool QQuickPopup::isOpened() const
+{
+    Q_D(const QQuickPopup);
+    return d->transitionState == QQuickPopupPrivate::NoTransition && isVisible();
 }
 
 /*!
@@ -1751,6 +1968,7 @@ QQuickPopup::ClosePolicy QQuickPopup::closePolicy() const
 void QQuickPopup::setClosePolicy(ClosePolicy policy)
 {
     Q_D(QQuickPopup);
+    d->hasClosePolicy = true;
     if (d->closePolicy == policy)
         return;
     d->closePolicy = policy;
@@ -1761,6 +1979,13 @@ void QQuickPopup::setClosePolicy(ClosePolicy policy)
             d->popupItem->ungrabShortcut();
     }
     emit closePolicyChanged();
+}
+
+void QQuickPopup::resetClosePolicy()
+{
+    Q_D(QQuickPopup);
+    setClosePolicy(DefaultClosePolicy);
+    d->hasClosePolicy = false;
 }
 
 /*!
@@ -1894,12 +2119,8 @@ void QQuickPopup::classBegin()
 void QQuickPopup::componentComplete()
 {
     Q_D(QQuickPopup);
-    if (!parentItem()) {
-        if (QQuickItem *item = qobject_cast<QQuickItem *>(parent()))
-            setParentItem(item);
-        else if (QQuickWindow *window = qobject_cast<QQuickWindow *>(parent()))
-            setParentItem(window->contentItem());
-    }
+    if (!parentItem())
+        resetParentItem();
 
     if (d->visible && d->window)
         d->transitionManager.transitionEnter();
@@ -2113,6 +2334,13 @@ void QQuickPopup::paddingChange(const QMarginsF &newPadding, const QMarginsF &ol
         emit availableHeightChanged();
 }
 
+void QQuickPopup::paletteChange(const QPalette &newPalette, const QPalette &oldPalette)
+{
+    Q_UNUSED(newPalette);
+    Q_UNUSED(oldPalette);
+    emit paletteChanged();
+}
+
 void QQuickPopup::spacingChange(qreal newSpacing, qreal oldSpacing)
 {
     Q_UNUSED(newSpacing);
@@ -2123,6 +2351,11 @@ void QQuickPopup::spacingChange(qreal newSpacing, qreal oldSpacing)
 QFont QQuickPopup::defaultFont() const
 {
     return QQuickControlPrivate::themeFont(QPlatformTheme::SystemFont);
+}
+
+QPalette QQuickPopup::defaultPalette() const
+{
+    return QQuickControlPrivate::themePalette(QPlatformTheme::SystemPalette);
 }
 
 #if QT_CONFIG(accessibility)

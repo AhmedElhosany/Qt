@@ -42,6 +42,7 @@
 #include <qapplication.h>
 #include <qdatetimeedit.h>
 #include <qdesktopwidget.h>
+#include <private/qdesktopwidget_p.h>
 #include <qdebug.h>
 #include <qevent.h>
 #include <qlineedit.h>
@@ -1073,7 +1074,7 @@ void QDateTimeEdit::keyPressEvent(QKeyEvent *event)
 
                 //hide cursor
                 d->edit->d_func()->setCursorVisible(false);
-                d->edit->d_func()->control->setCursorBlinkPeriod(0);
+                d->edit->d_func()->control->setBlinkingCursorEnabled(false);
                 d->setSelected(0);
             }
         }
@@ -1094,7 +1095,7 @@ void QDateTimeEdit::keyPressEvent(QKeyEvent *event)
 
             //hide cursor
             d->edit->d_func()->setCursorVisible(false);
-            d->edit->d_func()->control->setCursorBlinkPeriod(0);
+            d->edit->d_func()->control->setBlinkingCursorEnabled(false);
             d->setSelected(0);
             oldCurrent = 0;
         }
@@ -1921,6 +1922,7 @@ QDateTime QDateTimeEditPrivate::validateAndInterpret(QString &input, int &positi
     }
     StateNode tmp = parse(input, position, value.toDateTime(), fixup);
     input = tmp.input;
+    position += tmp.padded;
     state = QValidator::State(int(tmp.state));
     if (state == QValidator::Acceptable) {
         if (tmp.conflicts && conflictGuard != tmp.value) {
@@ -2515,7 +2517,7 @@ void QDateTimeEditPrivate::positionCalendarPopup()
     pos = q->mapToGlobal(pos);
     pos2 = q->mapToGlobal(pos2);
     QSize size = monthCalendar->sizeHint();
-    QRect screen = QApplication::desktop()->availableGeometry(pos);
+    QRect screen = QDesktopWidgetPrivate::availableGeometry(pos);
     //handle popup falling "off screen"
     if (q->layoutDirection() == Qt::RightToLeft) {
         pos.setX(pos.x()-size.width());

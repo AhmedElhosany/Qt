@@ -818,6 +818,7 @@ static const PluginModuleMapping pluginModuleMappings[] =
     {"sqldrivers", QtSqlModule},
     {"texttospeech", QtTextToSpeechModule},
     {"qtwebengine", QtWebEngineModule | QtWebEngineCoreModule | QtWebEngineWidgetsModule},
+    {"styles", QtWidgetsModule},
     {"sceneparsers", Qt3DRendererModule},
     {"renderplugins", Qt3DRendererModule},
     {"geometryloaders", Qt3DRendererModule}

@@ -83,21 +83,6 @@ private:
     WebEngineSettings *m_settings;
 };
 
-static inline bool isTouchScreenAvailable() {
-    static bool initialized = false;
-    static bool touchScreenAvailable = false;
-    if (!initialized) {
-        Q_FOREACH (const QTouchDevice *d, QTouchDevice::devices()) {
-            if (d->type() == QTouchDevice::TouchScreen) {
-                touchScreenAvailable = true;
-                break;
-            }
-        }
-        initialized = true;
-    }
-    return touchScreenAvailable;
-}
-
 static inline bool isTouchEventsAPIEnabled() {
     static bool initialized = false;
     static bool touchEventsAPIEnabled = false;
@@ -107,20 +92,19 @@ static inline bool isTouchEventsAPIEnabled() {
         // By default the Touch Events API support (presence of 'ontouchstart' in 'window' object)
         // will be determined based on the availability of touch screen devices.
         const std::string touchEventsSwitchValue =
-            parsedCommandLine->HasSwitch(switches::kTouchEvents) ?
-                parsedCommandLine->GetSwitchValueASCII(switches::kTouchEvents) :
-                switches::kTouchEventsAuto;
+            parsedCommandLine->HasSwitch(switches::kTouchEventFeatureDetection) ?
+                parsedCommandLine->GetSwitchValueASCII(switches::kTouchEventFeatureDetection) :
+                switches::kTouchEventFeatureDetectionAuto;
 
-        if (touchEventsSwitchValue == switches::kTouchEventsEnabled)
+        if (touchEventsSwitchValue == switches::kTouchEventFeatureDetectionEnabled)
             touchEventsAPIEnabled = true;
-        else if (touchEventsSwitchValue == switches::kTouchEventsAuto)
-            touchEventsAPIEnabled = isTouchScreenAvailable();
+        else if (touchEventsSwitchValue == switches::kTouchEventFeatureDetectionAuto)
+            touchEventsAPIEnabled = (ui::GetTouchScreensAvailability() == ui::TouchScreensAvailability::ENABLED);
 
         initialized = true;
     }
     return touchEventsAPIEnabled;
 }
-
 
 WebEngineSettings::WebEngineSettings(WebEngineSettings *_parentSettings)
     : m_adapter(0)
@@ -228,7 +212,7 @@ QString WebEngineSettings::defaultTextEncoding() const
     return m_defaultEncoding.isEmpty()? parentSettings->defaultTextEncoding() : m_defaultEncoding;
 }
 
-void WebEngineSettings::initDefaults(bool offTheRecord)
+void WebEngineSettings::initDefaults()
 {
     if (s_defaultAttributes.isEmpty()) {
         // Initialize the default settings.
@@ -247,6 +231,7 @@ void WebEngineSettings::initDefaults(bool offTheRecord)
         s_defaultAttributes.insert(PluginsEnabled, false);
         s_defaultAttributes.insert(FullScreenSupportEnabled, false);
         s_defaultAttributes.insert(ScreenCaptureEnabled, false);
+        s_defaultAttributes.insert(ShowScrollBars, true);
         // The following defaults matches logic in render_view_host_impl.cc
         // But first we must ensure the WebContext has been initialized
         QtWebEngineCore::WebEngineContext::current();
@@ -263,13 +248,12 @@ void WebEngineSettings::initDefaults(bool offTheRecord)
         s_defaultAttributes.insert(Accelerated2dCanvasEnabled, accelerated2dCanvas);
         s_defaultAttributes.insert(AutoLoadIconsForPage, true);
         s_defaultAttributes.insert(TouchIconsEnabled, false);
-        s_defaultAttributes.insert(FocusOnNavigationEnabled, true);
+        s_defaultAttributes.insert(FocusOnNavigationEnabled, false);
         s_defaultAttributes.insert(PrintElementBackgrounds, true);
         s_defaultAttributes.insert(AllowRunningInsecureContent, allowRunningInsecureContent);
         s_defaultAttributes.insert(AllowGeolocationOnInsecureOrigins, false);
+        s_defaultAttributes.insert(AllowWindowActivationFromJavaScript, false);
     }
-    if (offTheRecord)
-        m_attributes.insert(LocalStorageEnabled, false);
 
     if (s_defaultFontFamilies.isEmpty()) {
         // Default fonts
@@ -322,8 +306,7 @@ void WebEngineSettings::doApply()
 void WebEngineSettings::applySettingsToWebPreferences(content::WebPreferences *prefs)
 {
     // Override for now
-    prefs->touch_enabled = isTouchEventsAPIEnabled();
-    prefs->device_supports_touch = isTouchScreenAvailable();
+    prefs->touch_event_feature_detection_enabled = isTouchEventsAPIEnabled();
     if (prefs->viewport_enabled) {
         // We need to enable the viewport options together as it doesn't really work
         // to enable them separately. With viewport-enabled we match Android defaults.
@@ -334,7 +317,6 @@ void WebEngineSettings::applySettingsToWebPreferences(content::WebPreferences *p
     // Attributes mapping.
     prefs->loads_images_automatically = testAttribute(AutoLoadImages);
     prefs->javascript_enabled = testAttribute(JavascriptEnabled);
-    prefs->javascript_can_open_windows_automatically = testAttribute(JavascriptCanOpenWindows);
     prefs->javascript_can_access_clipboard = testAttribute(JavascriptCanAccessClipboard);
     prefs->tabs_to_links = testAttribute(LinksIncludedInFocusChain);
     prefs->local_storage_enabled = testAttribute(LocalStorageEnabled);
@@ -353,6 +335,7 @@ void WebEngineSettings::applySettingsToWebPreferences(content::WebPreferences *p
     prefs->should_print_backgrounds = testAttribute(PrintElementBackgrounds);
     prefs->allow_running_insecure_content = testAttribute(AllowRunningInsecureContent);
     prefs->allow_geolocation_on_insecure_origins = testAttribute(AllowGeolocationOnInsecureOrigins);
+    prefs->hide_scrollbars = !testAttribute(ShowScrollBars);
 
     // Fonts settings.
     prefs->standard_font_family_map[content::kCommonScript] = toString16(fontFamily(StandardFont));
@@ -375,6 +358,11 @@ void WebEngineSettings::scheduleApplyRecursively()
     Q_FOREACH (WebEngineSettings *settings, childSettings) {
         settings->scheduleApply();
     }
+}
+
+bool WebEngineSettings::getJavaScriptCanOpenWindowsAutomatically()
+{
+    return testAttribute(JavascriptCanOpenWindows);
 }
 
 void WebEngineSettings::setParentSettings(WebEngineSettings *_parentSettings)

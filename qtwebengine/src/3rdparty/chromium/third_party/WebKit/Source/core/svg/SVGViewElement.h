@@ -28,8 +28,6 @@
 
 namespace blink {
 
-class SVGStaticStringList;
-
 class SVGViewElement final : public SVGElement,
                              public SVGFitToViewBox,
                              public SVGZoomAndPan {
@@ -43,11 +41,9 @@ class SVGViewElement final : public SVGElement,
  private:
   explicit SVGViewElement(Document&);
 
-  void parseAttribute(const QualifiedName&,
-                      const AtomicString&,
-                      const AtomicString&) override;
+  void ParseAttribute(const AttributeModificationParams&) override;
 
-  bool layoutObjectIsNeeded(const ComputedStyle&) override { return false; }
+  bool LayoutObjectIsNeeded(const ComputedStyle&) override { return false; }
 };
 
 }  // namespace blink

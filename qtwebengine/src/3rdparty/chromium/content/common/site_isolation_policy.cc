@@ -6,8 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/lazy_instance.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -16,10 +14,17 @@ namespace content {
 
 // static
 bool SiteIsolationPolicy::AreCrossProcessFramesPossible() {
+// Before turning this on for Android, input event routing needs to be
+// completed there, and perf regressions in https://crbug.com/690229 need to be
+// investigated.
+#if defined(OS_ANDROID)
   return UseDedicatedProcessesForAllSites() ||
-         IsTopDocumentIsolationEnabled() ||
+         IsTopDocumentIsolationEnabled() || AreIsolatedOriginsEnabled() ||
          GetContentClient()->IsSupplementarySiteIsolationModeEnabled() ||
          base::FeatureList::IsEnabled(::features::kGuestViewCrossProcessFrames);
+#else
+  return true;
+#endif
 }
 
 // static
@@ -34,13 +39,17 @@ bool SiteIsolationPolicy::IsTopDocumentIsolationEnabled() {
   if (UseDedicatedProcessesForAllSites())
     return false;
 
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kTopDocumentIsolation);
+  return base::FeatureList::IsEnabled(::features::kTopDocumentIsolation);
 }
 
 // static
-bool SiteIsolationPolicy::UseSubframeNavigationEntries() {
-  return true;
+bool SiteIsolationPolicy::AreIsolatedOriginsEnabled() {
+  // TODO(alexmos): This currently assumes that isolated origins are only added
+  // via the command-line switch, which may not be true in the future.  Remove
+  // this function when AreCrossProcessFramesPossible becomes true on Android
+  // above.
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kIsolateOrigins);
 }
 
 }  // namespace content

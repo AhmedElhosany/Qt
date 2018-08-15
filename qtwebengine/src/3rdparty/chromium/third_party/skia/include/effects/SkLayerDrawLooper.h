@@ -11,11 +11,11 @@
 #include "SkDrawLooper.h"
 #include "SkPaint.h"
 #include "SkPoint.h"
-#include "SkXfermode.h"
+#include "SkBlendMode.h"
 
 class SK_API SkLayerDrawLooper : public SkDrawLooper {
 public:
-    virtual ~SkLayerDrawLooper();
+    ~SkLayerDrawLooper() override;
 
     /**
      *  Bits specifies which aspects of the layer's paint should replace the
@@ -51,9 +51,9 @@ public:
      *      The layer's paint's color is treated as the SRC
      *      The draw's paint's color is treated as the DST
      *      final-color = Mode(layers-color, draws-color);
-     *  Any SkXfermode::Mode will work. Two common choices are:
-     *      kSrc_Mode: to use the layer's color, ignoring the draw's
-     *      kDst_Mode: to just keep the draw's color, ignoring the layer's
+     *  Any SkBlendMode will work. Two common choices are:
+     *      kSrc: to use the layer's color, ignoring the draw's
+     *      kDst: to just keep the draw's color, ignoring the layer's
      */
     struct SK_API LayerInfo {
         BitFlags    fPaintBits;
@@ -71,9 +71,7 @@ public:
         LayerInfo();
     };
 
-    SkDrawLooper::Context* createContext(SkCanvas*, void* storage) const override;
-
-    size_t contextSize() const override { return sizeof(LayerDrawLooperContext); }
+    SkDrawLooper::Context* makeContext(SkCanvas*, SkArenaAlloc*) const override;
 
     bool asABlurShadow(BlurShadowRec* rec) const override;
 
@@ -83,6 +81,8 @@ public:
     static sk_sp<SkFlattenable> CreateProc(SkReadBuffer& buffer);
 
 protected:
+    sk_sp<SkDrawLooper> onMakeColorSpace(SkColorSpaceXformer*) const override;
+
     SkLayerDrawLooper();
 
     void flatten(SkWriteBuffer&) const override;

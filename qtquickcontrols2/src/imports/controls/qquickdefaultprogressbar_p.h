@@ -49,14 +49,16 @@
 //
 
 #include <QtQuick/qquickitem.h>
+#include <QtGui/qcolor.h>
 
 QT_BEGIN_NAMESPACE
 
 class QQuickDefaultProgressBar : public QQuickItem
 {
     Q_OBJECT
-    Q_PROPERTY(bool indeterminate READ isIndeterminate WRITE setIndeterminate NOTIFY indeterminateChanged FINAL)
-    Q_PROPERTY(qreal progress READ progress WRITE setProgress NOTIFY progressChanged FINAL)
+    Q_PROPERTY(bool indeterminate READ isIndeterminate WRITE setIndeterminate FINAL)
+    Q_PROPERTY(qreal progress READ progress WRITE setProgress FINAL)
+    Q_PROPERTY(QColor color READ color WRITE setColor FINAL)
 
 public:
     explicit QQuickDefaultProgressBar(QQuickItem *parent = nullptr);
@@ -67,9 +69,8 @@ public:
     qreal progress() const;
     void setProgress(qreal progress);
 
-Q_SIGNALS:
-    void progressChanged();
-    void indeterminateChanged();
+    QColor color() const;
+    void setColor(const QColor &color);
 
 protected:
     void itemChange(ItemChange change, const ItemChangeData &data) override;
@@ -78,6 +79,7 @@ protected:
 private:
     qreal m_progress;
     bool m_indeterminate;
+    QColor m_color;
 };
 
 QT_END_NAMESPACE

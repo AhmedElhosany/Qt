@@ -18,39 +18,44 @@
 #include "base/timer/timer.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/gpu_preferences.h"
+#include "media/base/android/media_codec_bridge_impl.h"
 #include "media/base/android/media_drm_bridge_cdm_context.h"
-#include "media/base/android/sdk_media_codec_bridge.h"
-#include "media/base/media_keys.h"
+#include "media/base/android_overlay_mojo_factory.h"
+#include "media/base/content_decryption_module.h"
+#include "media/gpu/android/device_info.h"
+#include "media/gpu/android_video_surface_chooser.h"
 #include "media/gpu/avda_codec_allocator.h"
 #include "media/gpu/avda_picture_buffer_manager.h"
 #include "media/gpu/avda_state_provider.h"
-#include "media/gpu/avda_surface_tracker.h"
 #include "media/gpu/gpu_video_decode_accelerator_helpers.h"
 #include "media/gpu/media_gpu_export.h"
 #include "media/video/video_decode_accelerator.h"
 #include "ui/gl/android/scoped_java_surface.h"
-
-namespace gl {
-class SurfaceTexture;
-}
+#include "ui/gl/android/surface_texture.h"
 
 namespace media {
 class SharedMemoryRegion;
+class PromotionHintAggregator;
 
 // A VideoDecodeAccelerator implementation for Android. This class decodes the
-// encded input stream using Android's MediaCodec. It handles the work of
+// encoded input stream using Android's MediaCodec. It handles the work of
 // transferring data to and from MediaCodec, and delegates attaching MediaCodec
 // output buffers to PictureBuffers to AVDAPictureBufferManager.
 class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
     : public VideoDecodeAccelerator,
-      public AVDAStateProvider {
+      public AVDAStateProvider,
+      public AVDACodecAllocatorClient {
  public:
   static VideoDecodeAccelerator::Capabilities GetCapabilities(
       const gpu::GpuPreferences& gpu_preferences);
 
   AndroidVideoDecodeAccelerator(
+      AVDACodecAllocator* codec_allocator,
+      std::unique_ptr<AndroidVideoSurfaceChooser> surface_chooser,
       const MakeGLContextCurrentCallback& make_context_current_cb,
-      const GetGLES2DecoderCallback& get_gles2_decoder_cb);
+      const GetGLES2DecoderCallback& get_gles2_decoder_cb,
+      const AndroidOverlayMojoFactoryCB& overlay_factory_cb,
+      DeviceInfo* device_info);
 
   ~AndroidVideoDecodeAccelerator() override;
 
@@ -61,7 +66,7 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   void ReusePictureBuffer(int32_t picture_buffer_id) override;
   void Flush() override;
   void Reset() override;
-  void SetSurface(int32_t surface_id) override;
+  void SetOverlayInfo(const OverlayInfo& overlay_info) override;
   void Destroy() override;
   bool TryToSetupDecodeOnSeparateThread(
       const base::WeakPtr<Client>& decode_client,
@@ -71,8 +76,16 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // AVDAStateProvider implementation:
   const gfx::Size& GetSize() const override;
   base::WeakPtr<gpu::gles2::GLES2Decoder> GetGlDecoder() const override;
-  // Notifies the client about the error and sets |state_| to |ERROR|.
+  // Notifies the client about the error and sets |state_| to |ERROR|.  If we're
+  // in the middle of Initialize, we guarantee that Initialize will return
+  // failure.  If deferred init is pending, then we'll fail deferred init.
+  // Otherwise, we'll signal errors normally.
   void NotifyError(Error error) override;
+  PromotionHintAggregator::NotifyPromotionHintCB GetPromotionHintCB() override;
+
+  // AVDACodecAllocatorClient implementation:
+  void OnCodecConfigured(
+      std::unique_ptr<MediaCodecBridge> media_codec) override;
 
  private:
   friend class AVDAManager;
@@ -81,6 +94,10 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   enum State {
     NO_ERROR,
     ERROR,
+    // We haven't initialized |surface_chooser_| yet, so we don't have a surface
+    // or a codec.  After we initialize |surface_chooser_|, we'll transition to
+    // WAITING_FOR_CODEC, NO_ERROR, or ERROR.
+    BEFORE_OVERLAY_INIT,
     // Set when we are asynchronously constructing the codec.  Will transition
     // to NO_ERROR or ERROR depending on success.
     WAITING_FOR_CODEC,
@@ -92,65 +109,39 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   };
 
   enum DrainType {
-    DRAIN_TYPE_NONE,
     DRAIN_FOR_FLUSH,
     DRAIN_FOR_RESET,
     DRAIN_FOR_DESTROY,
   };
 
-  // Configuration info for MediaCodec.
-  // This is used to shuttle configuration info between threads without needing
-  // to worry about the lifetime of the AVDA instance.  All of these should not
-  // be modified while |state_| is WAITING_FOR_CODEC.
-  class CodecConfig : public base::RefCountedThreadSafe<CodecConfig> {
-   public:
-    CodecConfig();
+  // Called once before (possibly deferred) initialization succeeds, to set up
+  // |surface_chooser_| with our initial factory from VDA::Config.
+  void StartSurfaceChooser();
 
-    // Codec type. Used when we configure media codec.
-    VideoCodec codec_ = kUnknownVideoCodec;
+  // Start a transition to an overlay, or, if |!overlay|, SurfaceTexture.  The
+  // transition doesn't have to be immediate; we'll favor not dropping frames.
+  void OnSurfaceTransition(std::unique_ptr<AndroidOverlay> overlay);
 
-    // Whether encryption scheme requires to use protected surface.
-    bool needs_protected_surface_ = false;
+  // Called by AndroidOverlay when a surface is lost.  We will discard pending
+  // frames, as needed, to switch away from |overlay| if we're using it.  Before
+  // we return, we will have either dropped |overlay| if we own it, or posted
+  // it for async release with the codec that's using it.  We also handle the
+  // case where we're not using |overlay| at all, since that can happen too
+  // while async codec release is pending.
+  void OnStopUsingOverlayImmediately(AndroidOverlay* overlay);
 
-    // The surface that MediaCodec is configured to output to.
-    gl::ScopedJavaSurface surface_;
-
-    // The MediaCrypto object is used in the MediaCodec.configure() in case of
-    // an encrypted stream.
-    MediaDrmBridgeCdmContext::JavaObjectPtr media_crypto_;
-
-    // Initial coded size.  The actual size might change at any time, so this
-    // is only a hint.
-    gfx::Size initial_expected_coded_size_;
-
-    // The type of allocation to use for this.  We use this to select the right
-    // thread for construction / destruction, and to decide if we should
-    // restrict the codec to be software only.
-    AVDACodecAllocator::TaskType task_type_;
-
-    // Codec specific data (SPS and PPS for H264).
-    std::vector<uint8_t> csd0_;
-    std::vector<uint8_t> csd1_;
-
-   protected:
-    friend class base::RefCountedThreadSafe<CodecConfig>;
-    virtual ~CodecConfig();
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(CodecConfig);
-  };
-
-  // Callback that is called when the SurfaceView becomes available, if it's
-  // not during Initialize.  |success| is true if it is now available, false
-  // if initialization should stop.
-  void OnSurfaceAvailable(bool success);
-
-  // Initialize of the picture buffer manager.  This is to be called when the
-  // SurfaceView in |surface_id_|, if any, is no longer busy.  It will return
-  // false on failure, and true if initialization was successful.  This includes
-  // synchronous and asynchronous init; the AVDA might not yet have a codec on
-  // success, but async init will at least be in progress.
-  bool InitializePictureBufferManager();
+  // Initializes the picture buffer manager to use the current surface, once
+  // it is available.  This is not normally called directly, but rather via
+  // StartSurfaceCreation.  If we have a media codec already, then this will
+  // attempt to setSurface the new surface.  Otherwise, it will start codec
+  // config using the new surface.  In that case, there might not be a codec
+  // ready even if this succeeds, but async config will be started.  If
+  // setSurface fails, this will not replace the codec.  On failure, this will
+  // transition |state_| to ERROR.
+  // Note that this assumes that there is an |incoming_bundle_| that we'll use.
+  // On success, we'll replace the bundle in |codec_config_|.  On failure, we'll
+  // delete the incoming bundle.
+  void InitializePictureBufferManager();
 
   // A part of destruction process that is sometimes postponed after the drain.
   void ActualDestroy();
@@ -163,20 +154,10 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // |state_| is no longer WAITING_FOR_CODEC.
   void ConfigureMediaCodecAsynchronously();
 
-  // Like ConfigureMediaCodecAsynchronously, but synchronous.  Returns true if
-  // and only if |media_codec_| is non-null.  Since all configuration is done
-  // synchronously, there is no concern with modifying |codec_config_| after
-  // this returns.
-  bool ConfigureMediaCodecSynchronously();
-
-  // Instantiate a media codec using |codec_config|.
-  // This may be called on any thread.
-  static std::unique_ptr<VideoCodecBridge> ConfigureMediaCodecOnAnyThread(
-      scoped_refptr<CodecConfig> codec_config);
-
-  // Called on the main thread to update |media_codec_| and complete codec
-  // configuration.  |media_codec| will be null if configuration failed.
-  void OnCodecConfigured(std::unique_ptr<VideoCodecBridge> media_codec);
+  // Like ConfigureMediaCodecAsynchronously, but synchronous.  Will NotifyError
+  // on failure.  Since all configuration is done synchronously, there is no
+  // concern with modifying |codec_config_| after this returns.
+  void ConfigureMediaCodecSynchronously();
 
   // Sends the decoded frame specified by |codec_buffer_index| to the client.
   void SendDecodedFrameToClient(int32_t codec_buffer_index,
@@ -187,9 +168,8 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // used.
   void DoIOTask(bool start_timer);
 
-  // Feeds input data to |media_codec_|. This checks
-  // |pending_bitstream_buffers_| and queues a buffer to |media_codec_|.
-  // Returns true if any input was processed.
+  // Feeds buffers in |pending_bitstream_records_| to |media_codec_|. Returns
+  // true if one was queued.
   bool QueueInput();
 
   // Dequeues output from |media_codec_| and feeds the decoded frame to the
@@ -209,13 +189,14 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
 
   // Called after the CDM obtains a MediaCrypto object.
   void OnMediaCryptoReady(MediaDrmBridgeCdmContext::JavaObjectPtr media_crypto,
-                          bool needs_protected_surface);
+                          bool requires_secure_video_codec);
 
   // Called when a new key is added to the CDM.
   void OnKeyAdded();
 
-  // Notifies the client of the result of deferred initialization.
-  void NotifyInitializationComplete(bool success);
+  // Notifies the client that deferred initialization succeeded.  If it fails,
+  // then call NotifyError instead.
+  void NotifyInitializationSucceeded();
 
   // Notifies the client about the availability of a picture.
   void NotifyPictureReady(const Picture& picture);
@@ -234,12 +215,6 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // how long it has been since we've done work.  Calling this with true will
   // start the timer.  Calling it with false may stop the timer.
   void ManageTimer(bool did_work);
-
-  // Safely clear |media_codec_|.  Do this instead of calling reset() / assign.
-  // Otherwise, the destructor can hang if mediaserver is in a bad state.  This
-  // will release immediately if safe, else post to a separate thread.  Either
-  // way, |media_codec_| will be null upon return.
-  void ReleaseMediaCodec();
 
   // Start the MediaCodec drain process by adding end_of_stream() buffer to the
   // encoded buffers queue. When we receive EOS from the output buffer the drain
@@ -262,11 +237,6 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // is still valid and should be processed.
   void ResetCodecState();
 
-  // Registered to be called when surfaces are being destroyed. If |surface_id|
-  // is our surface, we should release the MediaCodec before returning from
-  // this.
-  void OnDestroyingSurface(int surface_id);
-
   // Indicates if MediaCodec should not be used for software decoding since we
   // have safer versions elsewhere.
   bool IsMediaCodecSoftwareDecodingForbidden() const;
@@ -277,11 +247,25 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // error if the surface change fails. Returns false on failure.
   bool UpdateSurface();
 
+  // Release |media_codec_| if it's not null, and notify
+  // |picture_buffer_manager_|.
+  void ReleaseCodec();
+
+  // ReleaseCodec(), and also drop our ref to it's surface bundle.  This is
+  // the right thing to do unless you're planning to re-use the bundle with
+  // another codec.  Normally, one doesn't.
+  void ReleaseCodecAndBundle();
+
+  // Send a |hint| to |promotion_hint_aggregator_|.
+  void NotifyPromotionHint(const PromotionHintAggregator::Hint& hint);
+
   // Used to DCHECK that we are called on the correct thread.
   base::ThreadChecker thread_checker_;
 
   // To expose client callbacks from VideoDecodeAccelerator.
   Client* client_;
+
+  AVDACodecAllocator* codec_allocator_;
 
   // Callback to set the correct gl context.
   MakeGLContextCurrentCallback make_context_current_cb_;
@@ -301,7 +285,7 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   std::queue<int32_t> free_picture_ids_;
 
   // The low-level decoder which Android SDK provides.
-  std::unique_ptr<VideoCodecBridge> media_codec_;
+  std::unique_ptr<MediaCodecBridge> media_codec_;
 
   // Set to true after requesting picture buffers to the client.
   bool picturebuffers_requested_;
@@ -342,12 +326,11 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // Time at which we last did useful work on io_timer_.
   base::TimeTicks most_recent_work_;
 
-  // Type of a drain request. We need to distinguish between DRAIN_FOR_FLUSH
-  // and other types, see IsDrainingForResetOrDestroy().
-  DrainType drain_type_;
+  // The ongoing drain operation, if any.
+  base::Optional<DrainType> drain_type_;
 
   // Holds a ref-count to the CDM to avoid using the CDM after it's destroyed.
-  scoped_refptr<MediaKeys> cdm_for_reference_holding_only_;
+  scoped_refptr<ContentDecryptionModule> cdm_for_reference_holding_only_;
 
   MediaDrmBridgeCdmContext* media_drm_bridge_cdm_context_;
 
@@ -367,6 +350,10 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   // from being sent after a reset.
   int error_sequence_token_;
 
+  // Are we currently processing a call to Initialize()?  Please don't use this
+  // unless you're NotifyError.
+  bool during_initialize_;
+
   // True if and only if VDA initialization is deferred, and we have not yet
   // called NotifyInitializationComplete.
   bool deferred_initialization_pending_;
@@ -381,14 +368,36 @@ class MEDIA_GPU_EXPORT AndroidVideoDecodeAccelerator
   bool defer_surface_creation_;
 
   // Has a value if a SetSurface() call has occurred and a new surface should be
-  // switched to when possible. Cleared during OnDestroyingSurface() and if all
+  // switched to when possible. Cleared during OnSurfaceDestroyed() and if all
   // pictures have been rendered in DequeueOutput().
   base::Optional<int32_t> pending_surface_id_;
 
   // Copy of the VDA::Config we were given.
   Config config_;
 
-  OnDestroyingSurfaceCallback on_destroying_surface_cb_;
+  // SurfaceBundle that we're going to use for StartSurfaceCreation.  This is
+  // separate than the bundle in |codec_config_|, since we can start surface
+  // creation while another codec is using the old surface.  For example, if
+  // we're going to SetSurface, then the current codec will depend on the
+  // current bundle until then.
+  scoped_refptr<AVDASurfaceBundle> incoming_bundle_;
+
+  // If we have been given an overlay to use, then this is it.  If we've been
+  // told to move to SurfaceTexture, then this will be value() == nullptr.
+  base::Optional<std::unique_ptr<AndroidOverlay>> incoming_overlay_;
+
+  std::unique_ptr<AndroidVideoSurfaceChooser> surface_chooser_;
+
+  DeviceInfo* device_info_;
+
+  bool force_defer_surface_creation_for_testing_;
+
+  AndroidVideoSurfaceChooser::State chooser_state_;
+
+  // Optional factory to produce mojo AndroidOverlay instances.
+  AndroidOverlayMojoFactoryCB overlay_factory_cb_;
+
+  std::unique_ptr<PromotionHintAggregator> promotion_hint_aggregator_;
 
   // WeakPtrFactory for posting tasks back to |this|.
   base::WeakPtrFactory<AndroidVideoDecodeAccelerator> weak_this_factory_;

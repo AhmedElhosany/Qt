@@ -12,8 +12,8 @@
 
 #include <algorithm>  // max
 
-#include "webrtc/base/checks.h"
-#include "webrtc/base/safe_conversions.h"
+#include "webrtc/rtc_base/checks.h"
+#include "webrtc/rtc_base/safe_conversions.h"
 
 namespace webrtc {
 
@@ -66,7 +66,7 @@ uint64_t DelayPeakDetector::MaxPeakPeriod() const {
   if (max_period_element == peak_history_.end()) {
     return 0;  // |peak_history_| is empty.
   }
-  RTC_DCHECK_GT(max_period_element->period_ms, 0u);
+  RTC_DCHECK_GT(max_period_element->period_ms, 0);
   return max_period_element->period_ms;
 }
 

@@ -14,7 +14,7 @@ namespace gpu {
 class GpuMemoryBufferManager;
 }
 
-namespace display_compositor {
+namespace viz {
 class BufferQueue;
 class GLHelper;
 }
@@ -25,11 +25,10 @@ class GpuSurfacelessBrowserCompositorOutputSurface
     : public GpuBrowserCompositorOutputSurface {
  public:
   GpuSurfacelessBrowserCompositorOutputSurface(
-      scoped_refptr<ContextProviderCommandBuffer> context,
+      scoped_refptr<ui::ContextProviderCommandBuffer> context,
       gpu::SurfaceHandle surface_handle,
-      scoped_refptr<ui::CompositorVSyncManager> vsync_manager,
-      cc::SyntheticBeginFrameSource* begin_frame_source,
-      std::unique_ptr<display_compositor::CompositorOverlayCandidateValidator>
+      const UpdateVSyncParametersCallback& update_vsync_parameters_callback,
+      std::unique_ptr<viz::CompositorOverlayCandidateValidator>
           overlay_candidate_validator,
       unsigned int target,
       unsigned int internalformat,
@@ -44,9 +43,11 @@ class GpuSurfacelessBrowserCompositorOutputSurface
   void Reshape(const gfx::Size& size,
                float device_scale_factor,
                const gfx::ColorSpace& color_space,
-               bool has_alpha) override;
+               bool has_alpha,
+               bool use_stencil) override;
   bool IsDisplayedAsOverlayPlane() const override;
   unsigned GetOverlayTextureId() const override;
+  gfx::BufferFormat GetOverlayBufferFormat() const override;
 
   // BrowserCompositorOutputSurface implementation.
   void OnGpuSwapBuffersCompleted(
@@ -58,8 +59,8 @@ class GpuSurfacelessBrowserCompositorOutputSurface
   gfx::Size reshape_size_;
   gfx::Size swap_size_;
 
-  std::unique_ptr<display_compositor::GLHelper> gl_helper_;
-  std::unique_ptr<display_compositor::BufferQueue> buffer_queue_;
+  std::unique_ptr<viz::GLHelper> gl_helper_;
+  std::unique_ptr<viz::BufferQueue> buffer_queue_;
   gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager_;
 };
 

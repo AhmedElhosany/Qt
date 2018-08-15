@@ -22,8 +22,13 @@
 #include "content/common/content_export.h"
 #include "content/common/origin_trials/trial_token_validator.h"
 #include "content/common/service_worker/service_worker_status_code.h"
+#include "content/common/service_worker/service_worker_types.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+namespace tracked_objects {
+class Location;
+}
 
 namespace leveldb {
 class DB;
@@ -73,6 +78,8 @@ class CONTENT_EXPORT ServiceWorkerDatabase {
     std::vector<GURL> foreign_fetch_scopes;
     std::vector<url::Origin> foreign_fetch_origins;
     base::Optional<TrialTokenValidator::FeatureToTokensMap> origin_trial_tokens;
+    NavigationPreloadState navigation_preload_state;
+    std::set<uint32_t> used_features;
 
     // Not populated until ServiceWorkerStorage::StoreRegistration is called.
     int64_t resources_total_size_bytes;
@@ -164,6 +171,15 @@ class CONTENT_EXPORT ServiceWorkerDatabase {
                              const GURL& origin,
                              const base::Time& time);
 
+  // Updates the navigation preload state for the specified registration.
+  // Returns OK if it's successfully updated. Otherwise, returns an error.
+  Status UpdateNavigationPreloadEnabled(int64_t registration_id,
+                                        const GURL& origin,
+                                        bool enable);
+  Status UpdateNavigationPreloadHeader(int64_t registration_id,
+                                       const GURL& origin,
+                                       const std::string& value);
+
   // Deletes a registration for |registration_id| and moves resource records
   // associated with it into the purgeable list. If deletion occurred, sets
   // |version_id| to the id of the version that was deleted and
@@ -182,6 +198,13 @@ class CONTENT_EXPORT ServiceWorkerDatabase {
                       const std::vector<std::string>& user_data_names,
                       std::vector<std::string>* user_data_values);
 
+  // Reads user data for |registration_id| and |key_prefix| from the database.
+  // Returns OK only if keys matched to |key_prefix| are found; otherwise
+  // NOT_FOUND, and |user_data_values| will be empty.
+  Status ReadUserDataByKeyPrefix(int64_t registration_id,
+                                 const std::string key_prefix,
+                                 std::vector<std::string>* user_data_values);
+
   // Writes |name_value_pairs| into the database. Returns NOT_FOUND if the
   // registration specified by |registration_id| does not exist in the database.
   Status WriteUserData(
@@ -199,6 +222,12 @@ class CONTENT_EXPORT ServiceWorkerDatabase {
   // from the database. Returns OK if they are successfully read or not found.
   Status ReadUserDataForAllRegistrations(
       const std::string& user_data_name,
+      std::vector<std::pair<int64_t, std::string>>* user_data);
+
+  // Reads user data for all registrations that have data with |user_data_name|
+  // from the database. Returns OK if they are successfully read or not found.
+  Status ReadUserDataForAllRegistrationsByKeyPrefix(
+      const std::string& user_data_name_prefix,
       std::vector<std::pair<int64_t, std::string>>* user_data);
 
   // Resources should belong to one of following resource lists: uncommitted,
@@ -271,6 +300,8 @@ class CONTENT_EXPORT ServiceWorkerDatabase {
       const std::string& serialized,
       RegistrationData* out);
 
+  // Populates |batch| with operations to write |registration|. It does not
+  // actually write to db yet.
   void WriteRegistrationDataInBatch(const RegistrationData& registration,
                                     leveldb::WriteBatch* batch);
 

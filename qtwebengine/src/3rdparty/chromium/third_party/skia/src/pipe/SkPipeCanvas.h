@@ -8,9 +8,9 @@
 #ifndef SkPipeCanvas_DEFINED
 #define SkPipeCanvas_DEFINED
 
-#include "SkCanvas.h"
 #include "SkDeduper.h"
 #include "SkImage.h"
+#include "SkNoDrawCanvas.h"
 #include "SkPipe.h"
 #include "SkTypeface.h"
 #include "SkWriteBuffer.h"
@@ -89,7 +89,7 @@ private:
 };
 
 
-class SkPipeCanvas : public SkCanvas {
+class SkPipeCanvas : public SkNoDrawCanvas {
 public:
     SkPipeCanvas(const SkRect& cull, SkPipeDeduper*, SkWStream*);
     ~SkPipeCanvas() override;
@@ -136,16 +136,12 @@ protected:
                          const SkPaint*) override;
     void onDrawImageLattice(const SkImage*, const Lattice& lattice, const SkRect& dst,
                             const SkPaint*) override;
-    void onDrawVertices(VertexMode vmode, int vertexCount,
-                              const SkPoint vertices[], const SkPoint texs[],
-                              const SkColor colors[], SkBlendMode,
-                              const uint16_t indices[], int indexCount,
-                              const SkPaint&) override;
+    void onDrawVerticesObject(const SkVertices*, SkBlendMode, const SkPaint&) override;
 
-    void onClipRect(const SkRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipRRect(const SkRRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipPath(const SkPath&, ClipOp, ClipEdgeStyle) override;
-    void onClipRegion(const SkRegion&, ClipOp) override;
+    void onClipRect(const SkRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRRect(const SkRRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipPath(const SkPath&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRegion(const SkRegion&, SkClipOp) override;
 
     void onDrawPicture(const SkPicture*, const SkMatrix*, const SkPaint*) override;
     void onDrawAnnotation(const SkRect&, const char[], SkData*) override;
@@ -165,7 +161,7 @@ private:
 
     friend class SkPipeWriter;
 
-    typedef SkCanvas INHERITED;
+    typedef SkNoDrawCanvas INHERITED;
 };
 
 

@@ -6,11 +6,11 @@
 #outer-container {
   -webkit-box-align: center;
   -webkit-box-pack: center;
-  -webkit-perspective: 1px; /* Workaround, see http://crbug.com/360567 */
   bottom: 57px;  /* Leave space for the header bar */
   display: -webkit-box;
   left: 0;
   min-height: 717px; /* This enables scrolling. Min resolution: 1024x768 */
+  perspective: 1px; /* Workaround, see http://crbug.com/360567 */
   position: absolute;
   right: 0;
   top: 0;
@@ -18,7 +18,8 @@
 }
 
 .oobe-display #outer-container {
-  -webkit-perspective: 600px;
+  bottom: 47px; /* header-bar is 47 pixels high during OOBE */
+  perspective: 600px;
 }
 
 .pin-container.pin-enabled {
@@ -62,7 +63,6 @@
   pointer-events: none;
 }
 
-
 #oobe[md-mode] #progress-dots {
   display: none;
 }
@@ -81,7 +81,8 @@
 #oobe.kiosk-enable #inner-container,
 #oobe.oauth-enrollment #inner-container,
 #oobe.password-changed #inner-container,
-#oobe.reset #inner-container,
+#oobe.ad-password-change #inner-container,
+#oobe:not([md-mode]).reset #inner-container,
 #oobe.supervised-user-creation #inner-container,
 #oobe.supervised-user-creation-dialog #inner-container,
 #oobe.terms-of-service #inner-container,
@@ -106,7 +107,7 @@
 
 /* Only play this animation when 'down' class is removed. */
 .oobe-display #inner-container:not(.down) {
-  -webkit-transition: transform 200ms ease-in-out;
+  transition: transform 200ms ease-in-out;
 }
 
 .oobe-display #inner-container.down {
@@ -126,10 +127,9 @@
 
 #progress-dots {
   -webkit-box-pack: center;
-  -webkit-transition: opacity 200ms ease-in-out,
-                      visibility 200ms ease-in-out;
   display: -webkit-box;
   margin-top: 15px;
+  transition: opacity 200ms ease-in-out, visibility 200ms ease-in-out;
 }
 
 #oobe[md-mode] #progress-dots {
@@ -155,6 +155,7 @@
 
 #account-picker-dot,
 #app-launch-splash-dot,
+#arc-kiosk-splash-dot,
 #auto-enrollment-check-dot,
 #autolaunch-dot,
 #confirm-password-dot,

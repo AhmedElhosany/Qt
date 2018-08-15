@@ -24,6 +24,7 @@
 #include "content/browser/service_worker/service_worker_registration_status.h"
 #include "content/browser/service_worker/service_worker_storage.h"
 #include "content/common/content_export.h"
+#include "content/common/worker_url_loader_factory_provider.mojom.h"
 #include "content/public/browser/service_worker_context.h"
 
 class GURL;
@@ -34,6 +35,7 @@ class SingleThreadTaskRunner;
 }
 
 namespace storage {
+class BlobStorageContext;
 class QuotaManagerProxy;
 class SpecialStoragePolicy;
 }
@@ -41,15 +43,16 @@ class SpecialStoragePolicy;
 namespace content {
 
 class EmbeddedWorkerRegistry;
-class ServiceWorkerContextObserver;
+class ServiceWorkerContextCoreObserver;
 class ServiceWorkerContextWrapper;
 class ServiceWorkerDatabaseTaskManager;
-class ServiceWorkerHandle;
+class ServiceWorkerDispatcherHost;
 class ServiceWorkerJobCoordinator;
 class ServiceWorkerNavigationHandleCore;
 class ServiceWorkerProviderHost;
 class ServiceWorkerRegistration;
 class ServiceWorkerStorage;
+class URLLoaderFactoryGetter;
 
 // This class manages data associated with service workers.
 // The class is single threaded and should only be used on the IO thread.
@@ -60,17 +63,18 @@ class CONTENT_EXPORT ServiceWorkerContextCore
     : NON_EXPORTED_BASE(public ServiceWorkerVersion::Listener) {
  public:
   using BoolCallback = base::Callback<void(bool)>;
-  typedef base::Callback<void(ServiceWorkerStatusCode status)> StatusCallback;
-  typedef base::Callback<void(ServiceWorkerStatusCode status,
-                              const std::string& status_message,
-                              int64_t registration_id)> RegistrationCallback;
-  typedef base::Callback<void(ServiceWorkerStatusCode status,
-                              const std::string& status_message,
-                              int64_t registration_id)> UpdateCallback;
-  typedef base::Callback<
-      void(ServiceWorkerStatusCode status)> UnregistrationCallback;
-  typedef IDMap<ServiceWorkerProviderHost, IDMapOwnPointer> ProviderMap;
-  typedef IDMap<ProviderMap, IDMapOwnPointer> ProcessToProviderMap;
+  using StatusCallback = base::Callback<void(ServiceWorkerStatusCode status)>;
+  using RegistrationCallback =
+      base::Callback<void(ServiceWorkerStatusCode status,
+                          const std::string& status_message,
+                          int64_t registration_id)>;
+  using UpdateCallback = base::Callback<void(ServiceWorkerStatusCode status,
+                                             const std::string& status_message,
+                                             int64_t registration_id)>;
+  using UnregistrationCallback =
+      base::Callback<void(ServiceWorkerStatusCode status)>;
+  using ProviderMap = IDMap<std::unique_ptr<ServiceWorkerProviderHost>>;
+  using ProcessToProviderMap = IDMap<std::unique_ptr<ProviderMap>>;
 
   using ProviderByClientUUIDMap =
       std::map<std::string, ServiceWorkerProviderHost*>;
@@ -107,8 +111,10 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   // the local path on disk. Given an empty |user_data_directory|,
   // nothing will be stored on disk. |observer_list| is created in
   // ServiceWorkerContextWrapper. When Notify() of |observer_list| is called in
-  // ServiceWorkerContextCore, the methods of ServiceWorkerContextObserver will
-  // be called on the thread which called AddObserver() of |observer_list|.
+  // ServiceWorkerContextCore, the methods of ServiceWorkerContextCoreObserver
+  // will be called on the thread which called AddObserver() of |observer_list|.
+  // |blob_context| and |url_loader_factory_getter| are used only
+  // when IsServicificationEnabled is true.
   ServiceWorkerContextCore(
       const base::FilePath& user_data_directory,
       std::unique_ptr<ServiceWorkerDatabaseTaskManager>
@@ -116,12 +122,17 @@ class CONTENT_EXPORT ServiceWorkerContextCore
       const scoped_refptr<base::SingleThreadTaskRunner>& disk_cache_thread,
       storage::QuotaManagerProxy* quota_manager_proxy,
       storage::SpecialStoragePolicy* special_storage_policy,
-      base::ObserverListThreadSafe<ServiceWorkerContextObserver>* observer_list,
+      base::WeakPtr<storage::BlobStorageContext> blob_context,
+      URLLoaderFactoryGetter* url_loader_factory_getter,
+      base::ObserverListThreadSafe<ServiceWorkerContextCoreObserver>*
+          observer_list,
       ServiceWorkerContextWrapper* wrapper);
   ServiceWorkerContextCore(
       ServiceWorkerContextCore* old_context,
       ServiceWorkerContextWrapper* wrapper);
   ~ServiceWorkerContextCore() override;
+
+  void OnStorageWiped();
 
   // ServiceWorkerVersion::Listener overrides.
   void OnRunningStateChanged(ServiceWorkerVersion* version) override;
@@ -154,10 +165,17 @@ class CONTENT_EXPORT ServiceWorkerContextCore
     return job_coordinator_.get();
   }
 
+  // Maintains DispatcherHosts to exchange service worker related messages
+  // through them. The DispatcherHosts are not owned by this class.
+  void AddDispatcherHost(int process_id,
+                         ServiceWorkerDispatcherHost* dispatcher_host);
+  ServiceWorkerDispatcherHost* GetDispatcherHost(int process_id);
+  void RemoveDispatcherHost(int process_id);
+
   // The context class owns the set of ProviderHosts.
-  ServiceWorkerProviderHost* GetProviderHost(int process_id, int provider_id);
   void AddProviderHost(
       std::unique_ptr<ServiceWorkerProviderHost> provider_host);
+  ServiceWorkerProviderHost* GetProviderHost(int process_id, int provider_id);
   void RemoveProviderHost(int process_id, int provider_id);
   void RemoveAllProviderHostsForProcess(int process_id);
   std::unique_ptr<ProviderHostIterator> GetProviderHostIterator();
@@ -183,11 +201,9 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   ServiceWorkerProviderHost* GetProviderHostByClientID(
       const std::string& client_uuid);
 
-  // A child process of |source_process_id| may be used to run the created
-  // worker for initial installation.
   // Non-null |provider_host| must be given if this is called from a document.
-  void RegisterServiceWorker(const GURL& pattern,
-                             const GURL& script_url,
+  void RegisterServiceWorker(const GURL& script_url,
+                             const ServiceWorkerRegistrationOptions& options,
                              ServiceWorkerProviderHost* provider_host,
                              const RegistrationCallback& callback);
   void UnregisterServiceWorker(const GURL& pattern,
@@ -287,13 +303,29 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   // version. The count resets to zero when the worker successfully starts.
   int GetVersionFailureCount(int64_t version_id);
 
+  // Binds the ServiceWorkerWorkerClient of a dedicated (or shared) worker to
+  // the parent frame's ServiceWorkerProviderHost. (This is used only when
+  // off-main-thread-fetch is enabled.)
+  void BindWorkerFetchContext(
+      int render_process_id,
+      int service_worker_provider_id,
+      mojom::ServiceWorkerWorkerClientAssociatedPtrInfo client_ptr_info);
+
+  base::WeakPtr<storage::BlobStorageContext> blob_storage_context() {
+    return blob_storage_context_;
+  }
+
+  URLLoaderFactoryGetter* loader_factory_getter() {
+    return loader_factory_getter_.get();
+  }
+
   base::WeakPtr<ServiceWorkerContextCore> AsWeakPtr() {
     return weak_factory_.GetWeakPtr();
   }
 
  private:
-  friend class ServiceWorkerContextCoreTestP;
-  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerContextCoreTestP, FailureInfo);
+  friend class ServiceWorkerContextCoreTest;
+  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerContextCoreTest, FailureInfo);
 
   typedef std::map<int64_t, ServiceWorkerRegistration*> RegistrationsMap;
   typedef std::map<int64_t, ServiceWorkerVersion*> VersionMap;
@@ -342,6 +374,8 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   // because the Wrapper::Shutdown call that hops threads to destroy |this| uses
   // Bind() to hold a reference to |wrapper_| until |this| is fully destroyed.
   ServiceWorkerContextWrapper* wrapper_;
+  std::map<int /* process_id */, ServiceWorkerDispatcherHost*>
+      dispatcher_hosts_;
   std::unique_ptr<ProcessToProviderMap> providers_;
   std::unique_ptr<ProviderByClientUUIDMap> provider_by_uuid_;
   std::unique_ptr<ServiceWorkerStorage> storage_;
@@ -358,6 +392,10 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   std::map<int, ServiceWorkerNavigationHandleCore*>
       navigation_handle_cores_map_;
 
+  // IsServicificationEnabled
+  base::WeakPtr<storage::BlobStorageContext> blob_storage_context_;
+  scoped_refptr<URLLoaderFactoryGetter> loader_factory_getter_;
+
   bool force_update_on_page_load_;
   int next_handle_id_;
   int next_registration_handle_id_;
@@ -365,7 +403,7 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   // This is used to avoid unnecessary disk read operation in tests. This value
   // is false if Chrome was relaunched after service workers were registered.
   bool was_service_worker_registered_;
-  scoped_refptr<base::ObserverListThreadSafe<ServiceWorkerContextObserver>>
+  scoped_refptr<base::ObserverListThreadSafe<ServiceWorkerContextCoreObserver>>
       observer_list_;
   base::WeakPtrFactory<ServiceWorkerContextCore> weak_factory_;
 

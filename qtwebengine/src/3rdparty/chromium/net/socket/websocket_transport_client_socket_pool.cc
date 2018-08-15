@@ -18,6 +18,7 @@
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "net/base/net_errors.h"
+#include "net/base/trace_constants.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_source_type.h"
@@ -41,13 +42,14 @@ WebSocketTransportConnectJob::WebSocketTransportConnectJob(
     Delegate* delegate,
     NetLog* pool_net_log,
     const NetLogWithSource& request_net_log)
-    : ConnectJob(
-          group_name,
-          timeout_duration,
-          priority,
-          respect_limits,
-          delegate,
-          NetLogWithSource::Make(pool_net_log, NetLogSourceType::CONNECT_JOB)),
+    : ConnectJob(group_name,
+                 timeout_duration,
+                 priority,
+                 respect_limits,
+                 delegate,
+                 NetLogWithSource::Make(
+                     pool_net_log,
+                     NetLogSourceType::WEB_SOCKET_TRANSPORT_CONNECT_JOB)),
       params_(params),
       resolver_(host_resolver),
       client_socket_factory_(client_socket_factory),
@@ -123,7 +125,8 @@ int WebSocketTransportConnectJob::DoResolveHost() {
 }
 
 int WebSocketTransportConnectJob::DoResolveHostComplete(int result) {
-  TRACE_EVENT0("net", "WebSocketTransportConnectJob::DoResolveHostComplete");
+  TRACE_EVENT0(kNetTracingCategory,
+               "WebSocketTransportConnectJob::DoResolveHostComplete");
   connect_timing_.dns_end = base::TimeTicks::Now();
   // Overwrite connection start time, since for connections that do not go
   // through proxies, |connect_start| should not include dns lookup time.
@@ -339,10 +342,8 @@ int WebSocketTransportClientSocketPool::RequestSocket(
   if (ReachedMaxSocketsLimit() &&
       respect_limits == ClientSocketPool::RespectLimits::ENABLED) {
     request_net_log.AddEvent(NetLogEventType::SOCKET_POOL_STALLED_MAX_SOCKETS);
-    // TODO(ricea): Use emplace_back when C++11 becomes allowed.
-    StalledRequest request(
-        casted_params, priority, handle, callback, request_net_log);
-    stalled_request_queue_.push_back(request);
+    stalled_request_queue_.emplace_back(casted_params, priority, handle,
+                                        callback, request_net_log);
     StalledRequestQueue::iterator iterator = stalled_request_queue_.end();
     --iterator;
     DCHECK_EQ(handle, iterator->handle);
@@ -387,6 +388,19 @@ void WebSocketTransportClientSocketPool::RequestSockets(
     int num_sockets,
     const NetLogWithSource& net_log) {
   NOTIMPLEMENTED();
+}
+
+void WebSocketTransportClientSocketPool::SetPriority(
+    const std::string& group_name,
+    ClientSocketHandle* handle,
+    RequestPriority priority) {
+  // Since sockets requested by RequestSocket are bound early and
+  // stalled_request_{queue,map} don't take priorities into account, there's
+  // nothing to do within the pool to change priority or the request.
+  // TODO(rdsmith, ricea): Make stalled_request_{queue,map} take priorities
+  // into account.
+  // TODO(rdsmith): Investigate plumbing the reprioritization request to the
+  // connect job.
 }
 
 void WebSocketTransportClientSocketPool::CancelRequest(
@@ -444,6 +458,11 @@ void WebSocketTransportClientSocketPool::FlushWithError(int error) {
 }
 
 void WebSocketTransportClientSocketPool::CloseIdleSockets() {
+  // We have no idle sockets.
+}
+
+void WebSocketTransportClientSocketPool::CloseIdleSocketsInGroup(
+    const std::string& group_name) {
   // We have no idle sockets.
 }
 

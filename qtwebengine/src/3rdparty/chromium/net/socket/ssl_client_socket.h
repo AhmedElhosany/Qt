@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/strings/string_piece.h"
@@ -35,10 +36,7 @@ class CertVerifier;
 class ChannelIDService;
 class CTVerifier;
 class SSLCertRequestInfo;
-struct SSLConfig;
-class SSLInfo;
 class TransportSecurityState;
-class X509Certificate;
 
 // This struct groups together several fields which are used by various
 // classes related to SSLClientSocket.
@@ -66,6 +64,32 @@ struct SSLClientSocketContext {
   // SSL session cache. SSL sockets with the same ssl_session_cache_shard may
   // resume each other's SSL sessions but we'll never sessions between shards.
   const std::string ssl_session_cache_shard;
+};
+
+// Details on a failed operation. This enum is used to diagnose causes of TLS
+// version interference by buggy middleboxes. The values are histogramed so they
+// must not be changed.
+enum class SSLErrorDetails {
+  kOther = 0,
+  // The failure was due to ERR_CONNECTION_CLOSED. BlueCoat has a bug with this
+  // failure mode. https://crbug.com/694593.
+  kConnectionClosed = 1,
+  // The failure was due to ERR_CONNECTION_RESET.
+  kConnectionReset = 2,
+  // The failure was due to receiving an access_denied alert. Fortinet has a
+  // bug with this failure mode. https://crbug.com/676969.
+  kAccessDeniedAlert = 3,
+  // The failure was due to receiving a bad_record_mac alert.
+  kBadRecordMACAlert = 4,
+  // The failure was due to receiving an unencrypted application_data record
+  // during the handshake. Watchguard has a bug with this failure
+  // mode. https://crbug.com/733223.
+  kApplicationDataInsteadOfHandshake = 5,
+  // The failure was due to failing to negotiate a version or cipher suite.
+  kVersionOrCipherMismatch = 6,
+  // The failure was due to some other protocol error.
+  kProtocolError = 7,
+  kLastValue = kProtocolError,
 };
 
 // A client socket that uses SSL as the transport layer.
@@ -118,10 +142,9 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
   // establishing the connection (or NULL if no channel ID was used).
   virtual crypto::ECPrivateKey* GetChannelIDKey() const = 0;
 
-  // Returns true if the CECPQ1 (experimental post-quantum) experiment is
-  // enabled.  This should be removed after the experiment is ended, around
-  // 2017-18.
-  static bool IsPostQuantumExperimentEnabled();
+  // Returns details for a failed Connect() operation. This method is used to
+  // track causes of TLS version interference by buggy middleboxes.
+  virtual SSLErrorDetails GetConnectErrorDetails() const;
 
  protected:
   void set_signed_cert_timestamps_received(

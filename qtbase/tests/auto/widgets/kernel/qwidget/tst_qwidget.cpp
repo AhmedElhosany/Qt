@@ -50,6 +50,7 @@
 #include <qcalendarwidget.h>
 #include <qmainwindow.h>
 #include <qdockwidget.h>
+#include <qrandom.h>
 #include <qtoolbar.h>
 #include <qtoolbutton.h>
 #include <QtGui/qpaintengine.h>
@@ -183,7 +184,10 @@ private slots:
     void mapFromAndTo();
     void focusChainOnHide();
     void focusChainOnReparent();
-    void setTabOrder();
+    void defaultTabOrder();
+    void reverseTabOrder();
+    void tabOrderWithProxy();
+    void tabOrderWithCompoundWidgets();
 #ifdef Q_OS_WIN
     void activation();
 #endif
@@ -1650,79 +1654,281 @@ public:
 class Composite : public QFrame
 {
 public:
-    Composite(QWidget* parent = 0, const char* name = 0)
+    Composite(QWidget* parent = 0, const QString &name = 0)
         : QFrame(parent)
     {
         setObjectName(name);
-        //QHBoxLayout* hbox = new QHBoxLayout(this, 2, 0);
-        //hbox->setAutoAdd(true);
+
+        lineEdit1 = new QLineEdit;
+        lineEdit2 = new QLineEdit;
+        lineEdit3 = new QLineEdit;
+        lineEdit3->setEnabled(false);
+
         QHBoxLayout* hbox = new QHBoxLayout(this);
-
-        lineEdit = new QLineEdit(this);
-        hbox->addWidget(lineEdit);
-
-        button = new QPushButton(this);
-        hbox->addWidget(button);
-        button->setFocusPolicy( Qt::NoFocus );
-
-        setFocusProxy( lineEdit );
-        setFocusPolicy( Qt::StrongFocus );
-
-        setTabOrder(lineEdit, button);
+        hbox->addWidget(lineEdit1);
+        hbox->addWidget(lineEdit2);
+        hbox->addWidget(lineEdit3);
     }
 
-private:
-    QLineEdit* lineEdit;
-    QPushButton* button;
+public:
+    QLineEdit *lineEdit1;
+    QLineEdit *lineEdit2;
+    QLineEdit *lineEdit3;
 };
 
-#define NUM_WIDGETS 4
-
-void tst_QWidget::setTabOrder()
+void tst_QWidget::defaultTabOrder()
 {
-    QTest::qWait(100);
-
+    const int compositeCount = 2;
     Container container;
-    container.setObjectName("setTabOrder");
-    container.setWindowTitle(container.objectName());
+    Composite *composite[compositeCount];
 
-    Composite* comp[NUM_WIDGETS];
-
-    QLineEdit *firstEdit = new QLineEdit(&container);
+    QLineEdit *firstEdit = new QLineEdit;
     container.box->addWidget(firstEdit);
 
-    int i = 0;
-    for(i = 0; i < NUM_WIDGETS; i++) {
-        comp[i] = new Composite(&container);
-        container.box->addWidget(comp[i]);
+    for (int i = 0; i < compositeCount; i++) {
+        composite[i] = new Composite();
+        container.box->addWidget(composite[i]);
     }
 
-    QLineEdit *lastEdit = new QLineEdit(&container);
+    QLineEdit *lastEdit = new QLineEdit();
     container.box->addWidget(lastEdit);
-
-    container.setTabOrder(lastEdit, comp[NUM_WIDGETS-1]);
-    for(i = NUM_WIDGETS-1; i > 0; i--) {
-        container.setTabOrder(comp[i], comp[i-1]);
-    }
-    container.setTabOrder(comp[0], firstEdit);
-
-    int current = NUM_WIDGETS-1;
-    lastEdit->setFocus();
 
     container.show();
     container.activateWindow();
     qApp->setActiveWindow(&container);
     QVERIFY(QTest::qWaitForWindowActive(&container));
 
-    QTRY_VERIFY(lastEdit->hasFocus());
-    container.tab();
-    do {
-        QVERIFY(comp[current]->focusProxy()->hasFocus());
-        container.tab();
-        current--;
-    } while (current >= 0);
+    QTRY_VERIFY(firstEdit->hasFocus());
 
+    // Check that focus moves between the line edits when we tab forward
+    for (int i = 0; i < compositeCount; ++i) {
+        container.tab();
+        QVERIFY(composite[i]->lineEdit1->hasFocus());
+        QVERIFY(!composite[i]->lineEdit2->hasFocus());
+        container.tab();
+        QVERIFY(!composite[i]->lineEdit1->hasFocus());
+        QVERIFY(composite[i]->lineEdit2->hasFocus());
+    }
+
+    container.tab();
+    QVERIFY(lastEdit->hasFocus());
+
+    // Check that focus moves between the line edits in reverse
+    // order when we tab backwards
+    for (int i = compositeCount - 1; i >= 0; --i) {
+        container.backTab();
+        QVERIFY(!composite[i]->lineEdit1->hasFocus());
+        QVERIFY(composite[i]->lineEdit2->hasFocus());
+
+        container.backTab();
+        QVERIFY(composite[i]->lineEdit1->hasFocus());
+        QVERIFY(!composite[i]->lineEdit2->hasFocus());
+    }
+
+    container.backTab();
     QVERIFY(firstEdit->hasFocus());
+}
+
+void tst_QWidget::reverseTabOrder()
+{
+    const int compositeCount = 2;
+    Container container;
+    Composite* composite[compositeCount];
+
+    QLineEdit *firstEdit = new QLineEdit();
+    container.box->addWidget(firstEdit);
+
+    for (int i = 0; i < compositeCount; i++) {
+        composite[i] = new Composite();
+        container.box->addWidget(composite[i]);
+    }
+
+    QLineEdit *lastEdit = new QLineEdit();
+    container.box->addWidget(lastEdit);
+
+    // Reverse tab order inside each composite
+    for (int i = 0; i < compositeCount; ++i)
+        QWidget::setTabOrder(composite[i]->lineEdit2, composite[i]->lineEdit1);
+
+    container.show();
+    container.activateWindow();
+    qApp->setActiveWindow(&container);
+    QVERIFY(QTest::qWaitForWindowActive(&container));
+
+    QTRY_VERIFY(firstEdit->hasFocus());
+
+    // Check that focus moves in reverse order when tabbing inside the composites
+    // (but in the correct order when tabbing between them)
+    for (int i = 0; i < compositeCount; ++i) {
+        container.tab();
+        QVERIFY(!composite[i]->lineEdit1->hasFocus());
+        QVERIFY(composite[i]->lineEdit2->hasFocus());
+        container.tab();
+        QVERIFY(composite[i]->lineEdit1->hasFocus());
+        QVERIFY(!composite[i]->lineEdit2->hasFocus());
+    }
+
+    container.tab();
+    QVERIFY(lastEdit->hasFocus());
+
+    // Check that focus moves in "normal" order when tabbing backwards inside the
+    // composites (since backwards of reversed order cancels each other out),
+    // but in the reverse order when tabbing between them.
+    for (int i = compositeCount - 1; i >= 0; --i) {
+        container.backTab();
+        QVERIFY(composite[i]->lineEdit1->hasFocus());
+        QVERIFY(!composite[i]->lineEdit2->hasFocus());
+        container.backTab();
+        QVERIFY(!composite[i]->lineEdit1->hasFocus());
+        QVERIFY(composite[i]->lineEdit2->hasFocus());
+    }
+
+    container.backTab();
+    QVERIFY(firstEdit->hasFocus());
+}
+
+void tst_QWidget::tabOrderWithProxy()
+{
+    const int compositeCount = 2;
+    Container container;
+    Composite* composite[compositeCount];
+
+    QLineEdit *firstEdit = new QLineEdit();
+    container.box->addWidget(firstEdit);
+
+    for (int i = 0; i < compositeCount; i++) {
+        composite[i] = new Composite();
+        container.box->addWidget(composite[i]);
+
+        // Set second child as focus proxy
+        composite[i]->setFocusPolicy(Qt::StrongFocus);
+        composite[i]->setFocusProxy(composite[i]->lineEdit2);
+    }
+
+    QLineEdit *lastEdit = new QLineEdit();
+    container.box->addWidget(lastEdit);
+
+    container.show();
+    container.activateWindow();
+    qApp->setActiveWindow(&container);
+    QVERIFY(QTest::qWaitForWindowActive(&container));
+
+    QTRY_VERIFY(firstEdit->hasFocus());
+
+    // Check that focus moves between the second line edits
+    // (the focus proxies) when we tab forward
+    for (int i = 0; i < compositeCount; ++i) {
+        container.tab();
+        QVERIFY(!composite[i]->lineEdit1->hasFocus());
+        QVERIFY(composite[i]->lineEdit2->hasFocus());
+    }
+
+    container.tab();
+    QVERIFY(lastEdit->hasFocus());
+
+    // Check that focus moves between the line edits
+    // in reverse order when we tab backwards.
+    // Note that in this case, the focus proxies should not
+    // be taken into consideration, since they only take
+    // effect when tabbing forward
+    for (int i = compositeCount - 1; i >= 0; --i) {
+        container.backTab();
+        QVERIFY(!composite[i]->lineEdit1->hasFocus());
+        QVERIFY(composite[i]->lineEdit2->hasFocus());
+        container.backTab();
+        QVERIFY(composite[i]->lineEdit1->hasFocus());
+        QVERIFY(!composite[i]->lineEdit2->hasFocus());
+    }
+
+    container.backTab();
+    QVERIFY(firstEdit->hasFocus());
+}
+
+void tst_QWidget::tabOrderWithCompoundWidgets()
+{
+    const int compositeCount = 4;
+    Container container;
+    Composite *composite[compositeCount];
+
+    QLineEdit *firstEdit = new QLineEdit();
+    container.box->addWidget(firstEdit);
+
+    for (int i = 0; i < compositeCount; i++) {
+        composite[i] = new Composite(0, QStringLiteral("Composite: ") + QString::number(i));
+        container.box->addWidget(composite[i]);
+
+        // Let the composite handle focus, and set a child as focus proxy (use the second child, just
+        // to ensure that we don't just tab to the first child by coinsidence). This will make the
+        // composite "compound". Also enable the last line edit to have a bit more data to check when
+        // tabbing forwards.
+        composite[i]->setFocusPolicy(Qt::StrongFocus);
+        composite[i]->setFocusProxy(composite[i]->lineEdit2);
+        composite[i]->lineEdit3->setEnabled(true);
+    }
+
+    QLineEdit *lastEdit = new QLineEdit();
+    container.box->addWidget(lastEdit);
+
+    // Reverse tab order between each composite
+    // (but not inside them), including first and last line edit.
+    // The result should not affect local tab order inside each
+    // composite, only between them.
+    QWidget::setTabOrder(lastEdit, composite[compositeCount - 1]);
+    for (int i = compositeCount - 1; i >= 1; --i)
+        QWidget::setTabOrder(composite[i], composite[i-1]);
+    QWidget::setTabOrder(composite[0], firstEdit);
+
+    container.show();
+    container.activateWindow();
+    qApp->setActiveWindow(&container);
+    QVERIFY(QTest::qWaitForWindowActive(&container));
+
+    lastEdit->setFocus();
+    QTRY_VERIFY(lastEdit->hasFocus());
+
+    // Check that focus moves between the line edits in the normal
+    // order when tabbing inside each compound, but in the reverse
+    // order when tabbing between them. Since the composites have
+    // lineEdit2 as focus proxy, lineEdit2 will be the first with focus
+    // when the compound gets focus, and lineEdit1 will therefore be skipped.
+    for (int i = compositeCount - 1; i >= 0; --i) {
+        container.tab();
+        Composite *c = composite[i];
+        QVERIFY(!c->lineEdit1->hasFocus());
+        QVERIFY(c->lineEdit2->hasFocus());
+        QVERIFY(!c->lineEdit3->hasFocus());
+        container.tab();
+        QVERIFY(!c->lineEdit1->hasFocus());
+        QVERIFY(!c->lineEdit2->hasFocus());
+        QVERIFY(c->lineEdit3->hasFocus());
+    }
+
+    container.tab();
+    QVERIFY(firstEdit->hasFocus());
+
+    // Check that focus moves in reverse order when backTab inside the composites, but
+    // in the 'correct' order when backTab between them (since the composites are in reverse tab
+    // order from before, which cancels it out). Note that when we backtab into a compound, we start
+    // at lineEdit3 rather than the focus proxy, since that is the reverse of what happens when we tab
+    // forward. And this time we will also backtab to lineEdit1, since there is no focus proxy that interferes.
+    for (int i = 0; i < compositeCount; ++i) {
+        container.backTab();
+        Composite *c = composite[i];
+        QVERIFY(!c->lineEdit1->hasFocus());
+        QVERIFY(!c->lineEdit2->hasFocus());
+        QVERIFY(c->lineEdit3->hasFocus());
+        container.backTab();
+        QVERIFY(!c->lineEdit1->hasFocus());
+        QVERIFY(c->lineEdit2->hasFocus());
+        QVERIFY(!c->lineEdit3->hasFocus());
+        container.backTab();
+        QVERIFY(c->lineEdit1->hasFocus());
+        QVERIFY(!c->lineEdit2->hasFocus());
+        QVERIFY(!c->lineEdit3->hasFocus());
+    }
+
+    container.backTab();
+    QVERIFY(lastEdit->hasFocus());
 }
 
 #ifdef Q_OS_WIN
@@ -1787,9 +1993,11 @@ void tst_QWidget::windowState()
     QCOMPARE(widget1.pos(), pos);
     QCOMPARE(widget1.size(), size);
 
-#define VERIFY_STATE(s) QCOMPARE(int(widget1.windowState() & stateMask), int(s))
+#define VERIFY_STATE(s)                                                                            \
+    QCOMPARE(int(widget1.windowState() & stateMask), int(s));                                      \
+    QCOMPARE(int(widget1.windowHandle()->windowStates() & stateMask), int(s))
 
-    const int stateMask = Qt::WindowMaximized|Qt::WindowMinimized|Qt::WindowFullScreen;
+    const auto stateMask = Qt::WindowMaximized | Qt::WindowMinimized | Qt::WindowFullScreen;
 
     widget1.setWindowState(Qt::WindowMaximized);
     QTest::qWait(100);
@@ -2079,7 +2287,7 @@ void tst_QWidget::resizeEvent()
         wParent.resize(200, 200);
         ResizeWidget wChild(&wParent);
         wParent.show();
-        QTest::qWaitForWindowExposed(&wParent);
+        QVERIFY(QTest::qWaitForWindowExposed(&wParent));
         QCOMPARE (wChild.m_resizeEventCount, 1); // initial resize event before paint
         wParent.hide();
         QSize safeSize(640,480);
@@ -2095,7 +2303,7 @@ void tst_QWidget::resizeEvent()
         ResizeWidget wTopLevel;
         wTopLevel.resize(200, 200);
         wTopLevel.show();
-        QTest::qWaitForWindowExposed(&wTopLevel);
+        QVERIFY(QTest::qWaitForWindowExposed(&wTopLevel));
         QCOMPARE (wTopLevel.m_resizeEventCount, 1); // initial resize event before paint for toplevels
         wTopLevel.hide();
         QSize safeSize(640,480);
@@ -2104,7 +2312,7 @@ void tst_QWidget::resizeEvent()
         wTopLevel.resize(safeSize);
         QCOMPARE (wTopLevel.m_resizeEventCount, 1);
         wTopLevel.show();
-        QTest::qWaitForWindowExposed(&wTopLevel);
+        QVERIFY(QTest::qWaitForWindowExposed(&wTopLevel));
         QCOMPARE (wTopLevel.m_resizeEventCount, 2);
     }
 }
@@ -8060,8 +8268,8 @@ void tst_QWidget::setMaskInResizeEvent()
 
     QRegion expectedParentUpdate(0, 0, 100, 10); // Old testWidget area.
     expectedParentUpdate += testWidget.geometry(); // New testWidget area.
-    QCOMPARE(w.paintedRegion, expectedParentUpdate);
-    QCOMPARE(testWidget.paintedRegion, testWidget.mask());
+    QTRY_COMPARE(w.paintedRegion, expectedParentUpdate);
+    QTRY_COMPARE(testWidget.paintedRegion, testWidget.mask());
 
     testWidget.paintedRegion = QRegion();
     // Now resize the widget again, but in the oposite direction
@@ -9609,7 +9817,7 @@ void tst_QWidget::grab()
         for (int row = 0; row < image.height(); ++row) {
             QRgb *line = reinterpret_cast<QRgb *>(image.scanLine(row));
             for (int col = 0; col < image.width(); ++col)
-                line[col] = qRgba(rand() & 255, row, col, opaque ? 255 : 127);
+                line[col] = qRgba(QRandomGenerator::global()->bounded(255), row, col, opaque ? 255 : 127);
         }
 
         QPalette pal = widget.palette();
@@ -10489,6 +10697,8 @@ void tst_QWidget::qmlSetParentHelper()
 
 void tst_QWidget::testForOutsideWSRangeFlag()
 {
+    QSKIP("Test assumes QWindows can have 0x0 size, see QTBUG-61953");
+
     // QTBUG-49445
     {
         QWidget widget;

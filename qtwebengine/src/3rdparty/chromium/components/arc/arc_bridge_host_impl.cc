@@ -67,146 +67,184 @@ class MojoChannelImpl : public ArcBridgeHostImpl::MojoChannel {
 
 }  // namespace
 
-ArcBridgeHostImpl::ArcBridgeHostImpl(mojom::ArcBridgeInstancePtr instance)
-    : binding_(this), instance_(std::move(instance)) {
+ArcBridgeHostImpl::ArcBridgeHostImpl(ArcBridgeService* arc_bridge_service,
+                                     mojom::ArcBridgeInstancePtr instance)
+    : arc_bridge_service_(arc_bridge_service),
+      binding_(this),
+      instance_(std::move(instance)) {
+  DCHECK(arc_bridge_service_);
   DCHECK(instance_.is_bound());
   instance_.set_connection_error_handler(
       base::Bind(&ArcBridgeHostImpl::OnClosed, base::Unretained(this)));
-  instance_->Init(binding_.CreateInterfacePtrAndBind());
+  mojom::ArcBridgeHostPtr host_proxy;
+  binding_.Bind(mojo::MakeRequest(&host_proxy));
+  instance_->Init(std::move(host_proxy));
 }
 
 ArcBridgeHostImpl::~ArcBridgeHostImpl() {
   OnClosed();
 }
 
+void ArcBridgeHostImpl::OnAccessibilityHelperInstanceReady(
+    mojom::AccessibilityHelperInstancePtr accessibility_helper_ptr) {
+  OnInstanceReady(arc_bridge_service_->accessibility_helper(),
+                  std::move(accessibility_helper_ptr));
+}
+
 void ArcBridgeHostImpl::OnAppInstanceReady(mojom::AppInstancePtr app_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->app(), std::move(app_ptr));
+  OnInstanceReady(arc_bridge_service_->app(), std::move(app_ptr));
 }
 
 void ArcBridgeHostImpl::OnAudioInstanceReady(
     mojom::AudioInstancePtr audio_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->audio(), std::move(audio_ptr));
+  OnInstanceReady(arc_bridge_service_->audio(), std::move(audio_ptr));
 }
 
 void ArcBridgeHostImpl::OnAuthInstanceReady(mojom::AuthInstancePtr auth_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->auth(), std::move(auth_ptr));
+  OnInstanceReady(arc_bridge_service_->auth(), std::move(auth_ptr));
 }
 
 void ArcBridgeHostImpl::OnBluetoothInstanceReady(
     mojom::BluetoothInstancePtr bluetooth_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->bluetooth(),
-                  std::move(bluetooth_ptr));
+  OnInstanceReady(arc_bridge_service_->bluetooth(), std::move(bluetooth_ptr));
 }
 
 void ArcBridgeHostImpl::OnBootPhaseMonitorInstanceReady(
     mojom::BootPhaseMonitorInstancePtr boot_phase_monitor_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->boot_phase_monitor(),
+  OnInstanceReady(arc_bridge_service_->boot_phase_monitor(),
                   std::move(boot_phase_monitor_ptr));
 }
 
 void ArcBridgeHostImpl::OnClipboardInstanceReady(
     mojom::ClipboardInstancePtr clipboard_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->clipboard(),
-                  std::move(clipboard_ptr));
+  OnInstanceReady(arc_bridge_service_->clipboard(), std::move(clipboard_ptr));
 }
 
 void ArcBridgeHostImpl::OnCrashCollectorInstanceReady(
     mojom::CrashCollectorInstancePtr crash_collector_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->crash_collector(),
+  OnInstanceReady(arc_bridge_service_->crash_collector(),
                   std::move(crash_collector_ptr));
 }
 
 void ArcBridgeHostImpl::OnEnterpriseReportingInstanceReady(
     mojom::EnterpriseReportingInstancePtr enterprise_reporting_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->enterprise_reporting(),
+  OnInstanceReady(arc_bridge_service_->enterprise_reporting(),
                   std::move(enterprise_reporting_ptr));
 }
 
 void ArcBridgeHostImpl::OnFileSystemInstanceReady(
     mojom::FileSystemInstancePtr file_system_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->file_system(),
+  OnInstanceReady(arc_bridge_service_->file_system(),
                   std::move(file_system_ptr));
 }
 
 void ArcBridgeHostImpl::OnImeInstanceReady(mojom::ImeInstancePtr ime_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->ime(), std::move(ime_ptr));
+  OnInstanceReady(arc_bridge_service_->ime(), std::move(ime_ptr));
 }
 
 void ArcBridgeHostImpl::OnIntentHelperInstanceReady(
     mojom::IntentHelperInstancePtr intent_helper_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->intent_helper(),
+  OnInstanceReady(arc_bridge_service_->intent_helper(),
                   std::move(intent_helper_ptr));
 }
 
 void ArcBridgeHostImpl::OnKioskInstanceReady(
     mojom::KioskInstancePtr kiosk_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->kiosk(), std::move(kiosk_ptr));
+  OnInstanceReady(arc_bridge_service_->kiosk(), std::move(kiosk_ptr));
+}
+
+void ArcBridgeHostImpl::OnLockScreenInstanceReady(
+    mojom::LockScreenInstancePtr lock_screen_ptr) {
+  OnInstanceReady(arc_bridge_service_->lock_screen(),
+                  std::move(lock_screen_ptr));
 }
 
 void ArcBridgeHostImpl::OnMetricsInstanceReady(
     mojom::MetricsInstancePtr metrics_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->metrics(), std::move(metrics_ptr));
+  OnInstanceReady(arc_bridge_service_->metrics(), std::move(metrics_ptr));
 }
 
 void ArcBridgeHostImpl::OnNetInstanceReady(mojom::NetInstancePtr net_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->net(), std::move(net_ptr));
+  OnInstanceReady(arc_bridge_service_->net(), std::move(net_ptr));
 }
 
 void ArcBridgeHostImpl::OnNotificationsInstanceReady(
     mojom::NotificationsInstancePtr notifications_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->notifications(),
+  OnInstanceReady(arc_bridge_service_->notifications(),
                   std::move(notifications_ptr));
 }
 
 void ArcBridgeHostImpl::OnObbMounterInstanceReady(
     mojom::ObbMounterInstancePtr obb_mounter_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->obb_mounter(),
+  OnInstanceReady(arc_bridge_service_->obb_mounter(),
                   std::move(obb_mounter_ptr));
 }
 
 void ArcBridgeHostImpl::OnPolicyInstanceReady(
     mojom::PolicyInstancePtr policy_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->policy(), std::move(policy_ptr));
+  OnInstanceReady(arc_bridge_service_->policy(), std::move(policy_ptr));
 }
 
 void ArcBridgeHostImpl::OnPowerInstanceReady(
     mojom::PowerInstancePtr power_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->power(), std::move(power_ptr));
+  OnInstanceReady(arc_bridge_service_->power(), std::move(power_ptr));
 }
 
 void ArcBridgeHostImpl::OnPrintInstanceReady(
     mojom::PrintInstancePtr print_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->print(), std::move(print_ptr));
+  OnInstanceReady(arc_bridge_service_->print(), std::move(print_ptr));
 }
 
 void ArcBridgeHostImpl::OnProcessInstanceReady(
     mojom::ProcessInstancePtr process_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->process(), std::move(process_ptr));
+  OnInstanceReady(arc_bridge_service_->process(), std::move(process_ptr));
 }
 
 void ArcBridgeHostImpl::OnStorageManagerInstanceReady(
     mojom::StorageManagerInstancePtr storage_manager_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->storage_manager(),
+  OnInstanceReady(arc_bridge_service_->storage_manager(),
                   std::move(storage_manager_ptr));
 }
 
+void ArcBridgeHostImpl::OnTracingInstanceReady(
+    mojom::TracingInstancePtr tracing_ptr) {
+  OnInstanceReady(arc_bridge_service_->tracing(), std::move(tracing_ptr));
+}
+
 void ArcBridgeHostImpl::OnTtsInstanceReady(mojom::TtsInstancePtr tts_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->tts(), std::move(tts_ptr));
+  OnInstanceReady(arc_bridge_service_->tts(), std::move(tts_ptr));
 }
 
 void ArcBridgeHostImpl::OnVideoInstanceReady(
     mojom::VideoInstancePtr video_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->video(), std::move(video_ptr));
+  OnInstanceReady(arc_bridge_service_->video(), std::move(video_ptr));
+}
+
+void ArcBridgeHostImpl::OnVoiceInteractionArcHomeInstanceReady(
+    mojom::VoiceInteractionArcHomeInstancePtr home_ptr) {
+  OnInstanceReady(arc_bridge_service_->voice_interaction_arc_home(),
+                  std::move(home_ptr));
+}
+
+void ArcBridgeHostImpl::OnVoiceInteractionFrameworkInstanceReady(
+    mojom::VoiceInteractionFrameworkInstancePtr framework_ptr) {
+  OnInstanceReady(arc_bridge_service_->voice_interaction_framework(),
+                  std::move(framework_ptr));
+}
+
+void ArcBridgeHostImpl::OnVolumeMounterInstanceReady(
+    mojom::VolumeMounterInstancePtr volume_mounter_ptr) {
+  OnInstanceReady(arc_bridge_service_->volume_mounter(),
+                  std::move(volume_mounter_ptr));
 }
 
 void ArcBridgeHostImpl::OnWallpaperInstanceReady(
     mojom::WallpaperInstancePtr wallpaper_ptr) {
-  OnInstanceReady(ArcBridgeService::Get()->wallpaper(),
-                  std::move(wallpaper_ptr));
+  OnInstanceReady(arc_bridge_service_->wallpaper(), std::move(wallpaper_ptr));
 }
 
 void ArcBridgeHostImpl::OnClosed() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   VLOG(1) << "Mojo connection lost";
 
   // Close all mojo channels.
@@ -219,7 +257,7 @@ void ArcBridgeHostImpl::OnClosed() {
 template <typename T>
 void ArcBridgeHostImpl::OnInstanceReady(InstanceHolder<T>* holder,
                                         mojo::InterfacePtr<T> ptr) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(binding_.is_bound());
   DCHECK(ptr.is_bound());
 
@@ -241,7 +279,7 @@ void ArcBridgeHostImpl::OnInstanceReady(InstanceHolder<T>* holder,
 }
 
 void ArcBridgeHostImpl::OnChannelClosed(MojoChannel* channel) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   mojo_channels_.erase(
       std::find_if(mojo_channels_.begin(), mojo_channels_.end(),
                    [channel](std::unique_ptr<MojoChannel>& ptr) {

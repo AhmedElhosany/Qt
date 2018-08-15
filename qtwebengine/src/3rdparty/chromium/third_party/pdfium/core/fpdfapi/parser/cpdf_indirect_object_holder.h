@@ -10,6 +10,8 @@
 #include <map>
 #include <memory>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "core/fpdfapi/parser/cpdf_object.h"
 #include "core/fxcrt/cfx_string_pool_template.h"
@@ -34,14 +36,15 @@ class CPDF_IndirectObjectHolder {
   // handle objects that can intern strings from our ByteStringPool.
   template <typename T, typename... Args>
   typename std::enable_if<!CanInternStrings<T>::value, T*>::type NewIndirect(
-      Args... args) {
-    return static_cast<T*>(AddIndirectObject(pdfium::MakeUnique<T>(args...)));
+      Args&&... args) {
+    return static_cast<T*>(
+        AddIndirectObject(pdfium::MakeUnique<T>(std::forward<Args>(args)...)));
   }
   template <typename T, typename... Args>
   typename std::enable_if<CanInternStrings<T>::value, T*>::type NewIndirect(
-      Args... args) {
-    return static_cast<T*>(
-        AddIndirectObject(pdfium::MakeUnique<T>(m_pByteStringPool, args...)));
+      Args&&... args) {
+    return static_cast<T*>(AddIndirectObject(
+        pdfium::MakeUnique<T>(m_pByteStringPool, std::forward<Args>(args)...)));
   }
 
   // Takes ownership of |pObj|, returns unowned pointer to it.
@@ -68,6 +71,7 @@ class CPDF_IndirectObjectHolder {
  private:
   uint32_t m_LastObjNum;
   std::map<uint32_t, std::unique_ptr<CPDF_Object>> m_IndirectObjs;
+  std::vector<std::unique_ptr<CPDF_Object>> m_OrphanObjs;
   CFX_WeakPtr<CFX_ByteStringPool> m_pByteStringPool;
 };
 

@@ -53,11 +53,7 @@
 
 #include <QMainWindow>
 
-#if defined(Q_WS_MAEMO_5) || defined(Q_WS_SIMULATOR)
-    #include "ui_querywidget_mobiles.h"
-#else
-    #include "ui_querywidget.h"
-#endif
+#include "ui_querywidget.h"
 
 QT_BEGIN_NAMESPACE
 class QComboBox;
@@ -76,7 +72,7 @@ public slots:
     void displayQuery(int index);
 
 private:
-    QComboBox* ui_defaultQueries;
+    QComboBox *ui_defaultQueries = nullptr;
 
     void evaluate(const QString &str);
     void loadInputFile();

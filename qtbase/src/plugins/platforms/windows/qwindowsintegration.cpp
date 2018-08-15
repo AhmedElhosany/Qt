@@ -42,6 +42,7 @@
 #include "qwindowswindow.h"
 #include "qwindowscontext.h"
 #include "qwin10helpers.h"
+#include "qwindowsmenu.h"
 #include "qwindowsopenglcontext.h"
 
 #include "qwindowsscreen.h"
@@ -71,6 +72,7 @@
 #include <QtGui/private/qguiapplication_p.h>
 #include <QtGui/private/qhighdpiscaling_p.h>
 #include <QtGui/qpa/qplatforminputcontextfactory_p.h>
+#include <QtGui/qpa/qplatformcursor.h>
 
 #include <QtEventDispatcherSupport/private/qwindowsguieventdispatcher_p.h>
 
@@ -206,6 +208,10 @@ static inline unsigned parseOptions(const QStringList &paramList,
         } else if (parseIntOption(param, QLatin1String("verbose"), 0, INT_MAX, &QWindowsContext::verbose)
             || parseIntOption(param, QLatin1String("tabletabsoluterange"), 0, INT_MAX, tabletAbsoluteRange)
             || parseIntOption(param, QLatin1String("dpiawareness"), QtWindows::ProcessDpiUnaware, QtWindows::ProcessPerMonitorDpiAware, dpiAwareness)) {
+        } else if (param == QLatin1String("menus=native")) {
+            options |= QWindowsIntegration::AlwaysUseNativeMenus;
+        } else if (param == QLatin1String("menus=none")) {
+            options |= QWindowsIntegration::NoNativeMenus;
         } else {
             qWarning() << "Unknown option" << param;
         }
@@ -237,6 +243,7 @@ QWindowsIntegrationPrivate::QWindowsIntegrationPrivate(const QStringList &paramL
     }
 
     m_context.initTouch(m_options);
+    QPlatformCursor::setCapability(QPlatformCursor::OverrideCursor);
 }
 
 QWindowsIntegrationPrivate::~QWindowsIntegrationPrivate()
@@ -334,20 +341,8 @@ QPlatformWindow *QWindowsIntegration::createPlatformWindow(QWindow *window) cons
     QWindowsWindow *result = createPlatformWindowHelper(window, obtained);
     Q_ASSERT(result);
 
-    if (requested.flags != obtained.flags)
-        window->setFlags(obtained.flags);
-    // Trigger geometry change (unless it has a special state in which case setWindowState()
-    // will send the message) and screen change signals of QWindow.
-    if ((obtained.flags & Qt::Desktop) != Qt::Desktop) {
-        const Qt::WindowState state = window->windowState();
-        if (state != Qt::WindowMaximized && state != Qt::WindowFullScreen
-            && requested.geometry != obtained.geometry) {
-            QWindowSystemInterface::handleGeometryChange(window, obtained.geometry);
-        }
-        QPlatformScreen *screen = result->screenForGeometry(obtained.geometry);
-        if (screen && result->screen() != screen)
-            QWindowSystemInterface::handleWindowScreenChanged(window, screen->screen());
-    }
+    if (QWindowsMenuBar *menuBarToBeInstalled = QWindowsMenuBar::menuBarOf(window))
+        menuBarToBeInstalled->install(result);
 
     return result;
 }
@@ -610,5 +605,12 @@ void QWindowsIntegration::beep() const
 {
     MessageBeep(MB_OK);  // For QApplication
 }
+
+#if QT_CONFIG(vulkan)
+QPlatformVulkanInstance *QWindowsIntegration::createPlatformVulkanInstance(QVulkanInstance *instance) const
+{
+    return new QWindowsVulkanInstance(instance);
+}
+#endif
 
 QT_END_NAMESPACE

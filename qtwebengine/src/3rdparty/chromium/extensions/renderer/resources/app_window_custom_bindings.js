@@ -6,8 +6,6 @@
 
 var appWindowNatives = requireNative('app_window_natives');
 var runtimeNatives = requireNative('runtime');
-var Binding = require('binding').Binding;
-var Event = require('event_bindings').Event;
 var forEach = require('utils').forEach;
 var renderFrameObserverNatives = requireNative('renderFrameObserverNatives');
 
@@ -17,6 +15,23 @@ var currentWindowInternal = null;
 
 var kSetBoundsFunction = 'setBounds';
 var kSetSizeConstraintsFunction = 'setSizeConstraints';
+
+if (!apiBridge)
+  var binding = require('binding').Binding;
+
+var jsEvent;
+function createAnonymousEvent() {
+  if (bindingUtil) {
+    var supportsFilters = false;
+    var supportsLazyListeners = false;
+    // Native custom events ignore schema.
+    return bindingUtil.createCustomEvent(undefined, undefined, supportsFilters,
+                                         supportsLazyListeners);
+  }
+  if (!jsEvent)
+    jsEvent = require('event_bindings').Event;
+  return new jsEvent();
+}
 
 // Bounds class definition.
 var Bounds = function(boundsKey) {
@@ -109,7 +124,7 @@ Bounds.prototype.setMaximumSize = function(maxWidth, maxHeight) {
                         { maxWidth: maxWidth, maxHeight: maxHeight });
 };
 
-var appWindow = Binding.create('app.window');
+var appWindow = apiBridge || binding.create('app.window');
 appWindow.registerCustomHook(function(bindingsAPI) {
   var apiFunctions = bindingsAPI.apiFunctions;
 
@@ -207,7 +222,9 @@ appWindow.registerCustomHook(function(bindingsAPI) {
   // currentWindowInternal, appWindowData, etc.
   apiFunctions.setHandleRequest('initializeAppWindow', function(params) {
     currentWindowInternal =
-        Binding.create('app.currentWindowInternal').generate();
+        getInternalApi ?
+            getInternalApi('app.currentWindowInternal') :
+            binding.create('app.currentWindowInternal').generate();
     var AppWindow = function() {
       this.innerBounds = new Bounds('innerBounds');
       this.outerBounds = new Bounds('outerBounds');
@@ -221,8 +238,7 @@ appWindow.registerCustomHook(function(bindingsAPI) {
     AppWindow.prototype.moveTo = $Function.bind(window.moveTo, window);
     AppWindow.prototype.resizeTo = $Function.bind(window.resizeTo, window);
     AppWindow.prototype.contentWindow = window;
-    AppWindow.prototype.onClosed = new Event();
-    AppWindow.prototype.onWindowFirstShownForTests = new Event();
+    AppWindow.prototype.onClosed = createAnonymousEvent();
     AppWindow.prototype.close = function() {
       this.contentWindow.close();
     };
@@ -253,15 +269,6 @@ appWindow.registerCustomHook(function(bindingsAPI) {
     AppWindow.prototype.alphaEnabled = function() {
       return appWindowData.alphaEnabled;
     };
-    AppWindow.prototype.handleWindowFirstShownForTests = function(callback) {
-      // This allows test apps to get have their callback run even if they
-      // call this after the first show has happened.
-      if (this.firstShowHasHappened) {
-        callback();
-        return;
-      }
-      this.onWindowFirstShownForTests.addListener(callback);
-    }
 
     Object.defineProperty(AppWindow.prototype, 'id', {get: function() {
       return appWindowData.id;
@@ -366,16 +373,6 @@ function updateAppWindowProperties(update) {
     dispatchEventIfExists(currentWindow, "onAlphaEnabledChanged");
 };
 
-function onAppWindowShownForTests() {
-  if (!currentAppWindow)
-    return;
-
-  if (!currentAppWindow.firstShowHasHappened)
-    dispatchEventIfExists(currentAppWindow, "onWindowFirstShownForTests");
-
-  currentAppWindow.firstShowHasHappened = true;
-}
-
 function onAppWindowClosed() {
   if (!currentAppWindow)
     return;
@@ -404,7 +401,7 @@ function updateSizeConstraints(boundsType, constraints) {
   currentWindowInternal.setSizeConstraints(boundsType, constraints);
 }
 
-exports.$set('binding', appWindow.generate());
+if (!apiBridge)
+  exports.$set('binding', appWindow.generate());
 exports.$set('onAppWindowClosed', onAppWindowClosed);
 exports.$set('updateAppWindowProperties', updateAppWindowProperties);
-exports.$set('appWindowShownForTests', onAppWindowShownForTests);

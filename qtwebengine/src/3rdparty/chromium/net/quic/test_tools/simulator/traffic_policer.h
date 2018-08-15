@@ -5,8 +5,8 @@
 #ifndef NET_QUIC_TEST_TOOLS_SIMULATOR_TRAFFIC_POLICER_H_
 #define NET_QUIC_TEST_TOOLS_SIMULATOR_TRAFFIC_POLICER_H_
 
-#include <unordered_map>
-
+#include "net/quic/platform/api/quic_containers.h"
+#include "net/quic/test_tools/simulator/packet_filter.h"
 #include "net/quic/test_tools/simulator/port.h"
 
 namespace net {
@@ -16,8 +16,8 @@ namespace simulator {
 // passing through.  It wraps around an input port and exposes an output port.
 // Only the traffic from input to the output is policed, so in case when
 // bidirectional policing is desired, two policers have to be used.  The flows
-// are hashed by the source only.
-class TrafficPolicer : public Actor, public ConstrainedPortInterface {
+// are hashed by the destination only.
+class TrafficPolicer : public PacketFilter {
  public:
   TrafficPolicer(Simulator* simulator,
                  std::string name,
@@ -27,28 +27,10 @@ class TrafficPolicer : public Actor, public ConstrainedPortInterface {
                  Endpoint* input);
   ~TrafficPolicer() override;
 
-  Endpoint* input() { return input_; }
-  Endpoint* output() { return &output_; }
-
-  void AcceptPacket(std::unique_ptr<Packet> packet) override;
-  QuicTime::Delta TimeUntilAvailable() override;
-
-  void Act() override;
+ protected:
+  bool FilterPacket(const Packet& packet) override;
 
  private:
-  class Output : public Endpoint {
-   public:
-    explicit Output(TrafficPolicer* policer);
-    ~Output() override;
-
-    UnconstrainedPortInterface* GetRxPort() override;
-    void SetTxPort(ConstrainedPortInterface* port) override;
-    void Act() override;
-
-   private:
-    TrafficPolicer* policer_;
-  };
-
   // Refill the token buckets with all the tokens that have been granted since
   // |last_refill_time_|.
   void Refill();
@@ -60,13 +42,8 @@ class TrafficPolicer : public Actor, public ConstrainedPortInterface {
   // The time at which the token buckets were last refilled.
   QuicTime last_refill_time_;
 
-  ConstrainedPortInterface* output_tx_port_;
-
-  Endpoint* input_;
-  Output output_;
-
   // Maps each destination to the number of tokens it has left.
-  std::unordered_map<std::string, QuicByteCount> token_buckets_;
+  QuicUnorderedMap<std::string, QuicByteCount> token_buckets_;
 
   DISALLOW_COPY_AND_ASSIGN(TrafficPolicer);
 };

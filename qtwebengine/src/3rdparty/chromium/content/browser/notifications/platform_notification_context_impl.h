@@ -6,6 +6,8 @@
 #define CONTENT_BROWSER_NOTIFICATIONS_PLATFORM_NOTIFICATION_CONTEXT_IMPL_H_
 
 #include <stdint.h>
+#include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -15,7 +17,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "content/browser/notifications/notification_id_generator.h"
-#include "content/browser/service_worker/service_worker_context_observer.h"
+#include "content/browser/service_worker/service_worker_context_core_observer.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/platform_notification_context.h"
@@ -41,7 +43,7 @@ class ServiceWorkerContextWrapper;
 // otherwise specified.
 class CONTENT_EXPORT PlatformNotificationContextImpl
     : NON_EXPORTED_BASE(public PlatformNotificationContext),
-      NON_EXPORTED_BASE(public ServiceWorkerContextObserver) {
+      NON_EXPORTED_BASE(public ServiceWorkerContextCoreObserver) {
  public:
   // Constructs a new platform notification context. If |path| is non-empty, the
   // database will be initialized in the "Platform Notifications" subdirectory
@@ -61,9 +63,8 @@ class CONTENT_EXPORT PlatformNotificationContextImpl
   // Creates a BlinkNotificationServiceImpl that is owned by this context. Must
   // be called on the UI thread, although the service will be created on and
   // bound to the IO thread.
-  void CreateService(
-      int render_process_id,
-      mojo::InterfaceRequest<blink::mojom::NotificationService> request);
+  void CreateService(int render_process_id,
+                     blink::mojom::NotificationServiceRequest request);
 
   // Removes |service| from the list of owned services, for example because the
   // Mojo pipe disconnected. Must be called on the IO thread.
@@ -89,7 +90,7 @@ class CONTENT_EXPORT PlatformNotificationContextImpl
       int64_t service_worker_registration_id,
       const ReadAllResultCallback& callback) override;
 
-  // ServiceWorkerContextObserver implementation.
+  // ServiceWorkerContextCoreObserver implementation.
   void OnRegistrationDeleted(int64_t registration_id,
                              const GURL& pattern) override;
   void OnStorageWiped() override;
@@ -99,7 +100,12 @@ class CONTENT_EXPORT PlatformNotificationContextImpl
 
   ~PlatformNotificationContextImpl() override;
 
-  void InitializeOnIO();
+  void DidGetNotificationsOnUI(
+      std::unique_ptr<std::set<std::string>> displayed_notifications,
+      bool supports_synchronization);
+  void InitializeOnIO(
+      std::unique_ptr<std::set<std::string>> displayed_notifications,
+      bool supports_synchronization);
   void ShutdownOnIO();
   void CreateServiceOnIO(
       int render_process_id,
@@ -126,13 +132,33 @@ class CONTENT_EXPORT PlatformNotificationContextImpl
                               const GURL& origin,
                               const ReadResultCallback& callback);
 
+  // Updates the database (and the result callback) based on
+  // |displayed_notifications| if |supports_synchronization|.
+  void SynchronizeDisplayedNotificationsForServiceWorkerRegistrationOnUI(
+      const GURL& origin,
+      int64_t service_worker_registration_id,
+      const ReadAllResultCallback& callback,
+      std::unique_ptr<std::set<std::string>> displayed_notifications,
+      bool supports_synchronization);
+
+  // Updates the database (and the result callback) based on
+  // |displayed_notifications| if |supports_synchronization|.
+  void SynchronizeDisplayedNotificationsForServiceWorkerRegistrationOnIO(
+      const GURL& origin,
+      int64_t service_worker_registration_id,
+      const ReadAllResultCallback& callback,
+      std::unique_ptr<std::set<std::string>> displayed_notifications,
+      bool supports_synchronization);
+
   // Actually reads all notification data from the database. Must only be
   // called on the |task_runner_| thread. |callback| will be invoked on the
   // IO thread when the operation has completed.
   void DoReadAllNotificationDataForServiceWorkerRegistration(
       const GURL& origin,
       int64_t service_worker_registration_id,
-      const ReadAllResultCallback& callback);
+      const ReadAllResultCallback& callback,
+      std::unique_ptr<std::set<std::string>> displayed_notifications,
+      bool supports_synchronization);
 
   // Actually writes the notification database to the database. Must only be
   // called on the |task_runner_| thread. |callback| will be invoked on the

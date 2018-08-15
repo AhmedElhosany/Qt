@@ -13,11 +13,13 @@
 #include "SkImageInfo.h"
 #include "SkPixelSerializer.h"
 #include "SkRandom.h"
+#include "SkStream.h"
 #include "SkTDArray.h"
 #include "SkTypeface.h"
 
 class SkBitmap;
 class SkCanvas;
+class SkColorFilter;
 class SkPaint;
 class SkPath;
 class SkRRect;
@@ -224,6 +226,35 @@ namespace sk_tool_utils {
 
         SkTDArray<TopoTestNode*> fDependencies;
     };
+
+    template <typename T>
+    inline bool EncodeImageToFile(const char* path, const T& src, SkEncodedImageFormat f, int q) {
+        SkFILEWStream file(path);
+        return file.isValid() && SkEncodeImage(&file, src, f, q);
+    }
+
+    template <typename T>
+    inline sk_sp<SkData> EncodeImageToData(const T& src, SkEncodedImageFormat f, int q) {
+        SkDynamicMemoryWStream buf;
+        return SkEncodeImage(&buf, src , f, q) ? buf.detachAsData() : nullptr;
+    }
+
+    /**
+     * Uses SkEncodeImage to serialize images that are not already
+     * encoded as SkEncodedImageFormat::kPNG images.
+     */
+    inline sk_sp<SkPixelSerializer> MakePixelSerializer() {
+        struct EncodeImagePixelSerializer final : SkPixelSerializer {
+            bool onUseEncodedData(const void*, size_t) override { return true; }
+            SkData* onEncode(const SkPixmap& pmap) override {
+                return EncodeImageToData(pmap, SkEncodedImageFormat::kPNG, 100).release();
+            }
+        };
+        return sk_make_sp<EncodeImagePixelSerializer>();
+    }
+
+    bool copy_to(SkBitmap* dst, SkColorType dstCT, const SkBitmap& src);
+    void copy_to_g8(SkBitmap* dst, const SkBitmap& src);
 
 }  // namespace sk_tool_utils
 

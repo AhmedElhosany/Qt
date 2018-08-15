@@ -8,6 +8,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
+#include "headless/public/headless_export.h"
 #include "headless/public/util/url_request_dispatcher.h"
 #include "net/base/net_errors.h"
 
@@ -17,7 +18,7 @@ class ManagedDispatchURLRequestJob;
 
 // This class dispatches calls to OnHeadersComplete and OnStartError
 // immediately sacrificing determinism for performance.
-class ExpeditedDispatcher : public URLRequestDispatcher {
+class HEADLESS_EXPORT ExpeditedDispatcher : public URLRequestDispatcher {
  public:
   explicit ExpeditedDispatcher(
       scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner);
@@ -29,8 +30,10 @@ class ExpeditedDispatcher : public URLRequestDispatcher {
   void JobFailed(ManagedDispatchURLRequestJob* job, net::Error error) override;
   void DataReady(ManagedDispatchURLRequestJob* job) override;
   void JobDeleted(ManagedDispatchURLRequestJob* job) override;
+  void NavigationRequested(
+      std::unique_ptr<NavigationRequest> navigation_request) override;
 
- private:
+ protected:
   scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(ExpeditedDispatcher);

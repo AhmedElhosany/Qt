@@ -9,23 +9,40 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/simple_thread.h"
 #include "base/threading/thread.h"
+#include "mojo/edk/embedder/embedder.h"
+#include "mojo/edk/embedder/scoped_ipc_support.h"
+#include "services/catalog/catalog.h"
 #include "services/service_manager/background/background_service_manager.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "services/service_manager/public/cpp/service.h"
 #include "services/service_manager/public/cpp/service_context.h"
 #include "services/ui/common/switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/aura/mus/window_tree_host_mus.h"
+#include "ui/aura/test/env_test_helper.h"
+#include "ui/aura/test/mus/input_method_mus_test_api.h"
 #include "ui/aura/window.h"
-#include "ui/views/mus/window_manager_connection.h"
+#include "ui/compositor/test/fake_context_factory.h"
+#include "ui/gl/gl_switches.h"
+#include "ui/views/mus/desktop_window_tree_host_mus.h"
+#include "ui/views/mus/mus_client.h"
+#include "ui/views/mus/test_utils.h"
 #include "ui/views/test/platform_test_helper.h"
+#include "ui/views/test/views_test_helper_aura.h"
 #include "ui/views/views_delegate.h"
+#include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 
 namespace views {
 namespace {
+
+const base::FilePath::CharType kCatalogFilename[] =
+    FILE_PATH_LITERAL("views_mus_tests_catalog.json");
 
 void EnsureCommandLineSwitch(const std::string& name) {
   base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
@@ -39,10 +56,9 @@ class DefaultService : public service_manager::Service {
   ~DefaultService() override {}
 
   // service_manager::Service:
-  bool OnConnect(const service_manager::ServiceInfo& remote_info,
-                 service_manager::InterfaceRegistry* registry) override {
-    return false;
-  }
+  void OnBindInterface(const service_manager::BindSourceInfo& source_info,
+                       const std::string& interface_name,
+                       mojo::ScopedMessagePipeHandle interface_pipe) override {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(DefaultService);
@@ -52,19 +68,56 @@ class PlatformTestHelperMus : public PlatformTestHelper {
  public:
   PlatformTestHelperMus(service_manager::Connector* connector,
                         const service_manager::Identity& identity) {
-    // It is necessary to recreate the WindowManagerConnection for each test,
+    aura::test::EnvTestHelper().SetWindowTreeClient(nullptr);
+    // It is necessary to recreate the MusClient for each test,
     // since a new MessageLoop is created for each test.
-    connection_ = WindowManagerConnection::Create(connector, identity);
+    mus_client_ = test::MusClientTestApi::Create(connector, identity);
+    ViewsDelegate::GetInstance()->set_native_widget_factory(base::Bind(
+        &PlatformTestHelperMus::CreateNativeWidget, base::Unretained(this)));
   }
-  ~PlatformTestHelperMus() override {}
+  ~PlatformTestHelperMus() override {
+    aura::test::EnvTestHelper().SetWindowTreeClient(nullptr);
+  }
 
   // PlatformTestHelper:
+  void OnTestHelperCreated(ViewsTestHelper* helper) override {
+    static_cast<ViewsTestHelperAura*>(helper)->EnableMusWithWindowTreeClient(
+        mus_client_->window_tree_client());
+  }
   void SimulateNativeDestroy(Widget* widget) override {
-    delete widget->GetNativeView();
+    aura::WindowTreeHostMus* window_tree_host =
+        static_cast<aura::WindowTreeHostMus*>(
+            widget->GetNativeView()->GetHost());
+    static_cast<aura::WindowTreeClientDelegate*>(mus_client_.get())
+        ->OnEmbedRootDestroyed(window_tree_host);
+  }
+
+  void InitializeContextFactory(
+      ui::ContextFactory** context_factory,
+      ui::ContextFactoryPrivate** context_factory_private) override {
+    *context_factory = &context_factory_;
+    *context_factory_private = nullptr;
   }
 
  private:
-  std::unique_ptr<WindowManagerConnection> connection_;
+  NativeWidget* CreateNativeWidget(const Widget::InitParams& init_params,
+                                   internal::NativeWidgetDelegate* delegate) {
+    NativeWidget* native_widget =
+        mus_client_->CreateNativeWidget(init_params, delegate);
+    if (!native_widget)
+      return nullptr;
+
+    // Disable sending KeyEvents to IME as tests aren't set up to wait for an
+    // ack (and tests run concurrently).
+    aura::WindowTreeHostMus* window_tree_host_mus =
+        static_cast<aura::WindowTreeHostMus*>(
+            static_cast<DesktopNativeWidgetAura*>(native_widget)->host());
+    aura::InputMethodMusTestApi::Disable(window_tree_host_mus->input_method());
+    return native_widget;
+  }
+
+  std::unique_ptr<MusClient> mus_client_;
+  ui::FakeContextFactory context_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(PlatformTestHelperMus);
 };
@@ -80,7 +133,17 @@ std::unique_ptr<PlatformTestHelper> CreatePlatformTestHelper(
 class ServiceManagerConnection {
  public:
   ServiceManagerConnection()
-      : thread_("Persistent service_manager connections") {
+      : thread_("Persistent service_manager connections"),
+        ipc_thread_("IPC thread") {
+    catalog::Catalog::LoadDefaultCatalogManifest(
+        base::FilePath(kCatalogFilename));
+    mojo::edk::Init();
+    ipc_thread_.StartWithOptions(
+        base::Thread::Options(base::MessageLoop::TYPE_IO, 0));
+    ipc_support_ = base::MakeUnique<mojo::edk::ScopedIPCSupport>(
+        ipc_thread_.task_runner(),
+        mojo::edk::ScopedIPCSupport::ShutdownPolicy::CLEAN);
+
     base::WaitableEvent wait(base::WaitableEvent::ResetPolicy::AUTOMATIC,
                              base::WaitableEvent::InitialState::NOT_SIGNALED);
     base::Thread::Options options;
@@ -130,16 +193,19 @@ class ServiceManagerConnection {
 
   void SetUpConnections(base::WaitableEvent* wait) {
     background_service_manager_ =
-        base::MakeUnique<service_manager::BackgroundServiceManager>();
-    background_service_manager_->Init(nullptr);
-    context_ =
-        base::MakeUnique<service_manager::ServiceContext>(
-            base::MakeUnique<DefaultService>(),
-            background_service_manager_->CreateServiceRequest(GetTestName()));
+        base::MakeUnique<service_manager::BackgroundServiceManager>(
+            nullptr, nullptr);
+    service_manager::mojom::ServicePtr service;
+    context_ = base::MakeUnique<service_manager::ServiceContext>(
+        base::MakeUnique<DefaultService>(), mojo::MakeRequest(&service));
+    background_service_manager_->RegisterService(
+        service_manager::Identity(
+            GetTestName(), service_manager::mojom::kRootUserID),
+        std::move(service), nullptr);
 
     // ui/views/mus requires a WindowManager running, so launch test_wm.
     service_manager::Connector* connector = context_->connector();
-    connector->Connect("test_wm");
+    connector->StartService("test_wm");
     service_manager_connector_ = connector->Clone();
     service_manager_identity_ = context_->identity();
     wait->Signal();
@@ -161,6 +227,8 @@ class ServiceManagerConnection {
   }
 
   base::Thread thread_;
+  base::Thread ipc_thread_;
+  std::unique_ptr<mojo::edk::ScopedIPCSupport> ipc_support_;
   std::unique_ptr<service_manager::BackgroundServiceManager>
       background_service_manager_;
   std::unique_ptr<service_manager::ServiceContext> context_;
@@ -182,6 +250,8 @@ void ViewsMusTestSuite::Initialize() {
   // setup for tests (e.g. to unlock the screen in the window manager).
   EnsureCommandLineSwitch(ui::switches::kUseTestConfig);
 
+  EnsureCommandLineSwitch(switches::kOverrideUseSoftwareGLForTests);
+
   ViewsTestSuite::Initialize();
   service_manager_connections_ = base::MakeUnique<ServiceManagerConnection>();
 }
@@ -189,6 +259,14 @@ void ViewsMusTestSuite::Initialize() {
 void ViewsMusTestSuite::Shutdown() {
   service_manager_connections_.reset();
   ViewsTestSuite::Shutdown();
+}
+
+void ViewsMusTestSuite::InitializeEnv() {
+  env_ = aura::Env::CreateInstance(aura::Env::Mode::MUS);
+}
+
+void ViewsMusTestSuite::DestroyEnv() {
+  env_.reset();
 }
 
 }  // namespace views

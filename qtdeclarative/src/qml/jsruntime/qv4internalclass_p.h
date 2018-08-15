@@ -64,6 +64,7 @@ struct String;
 struct Object;
 struct Identifier;
 struct VTable;
+struct MarkStack;
 
 struct PropertyHashData;
 struct PropertyHash
@@ -305,7 +306,7 @@ private:
 
 struct InternalClassPool : public QQmlJS::MemoryPool
 {
-    void markObjects(ExecutionEngine *engine);
+    void markObjects(MarkStack *markStack);
 };
 
 }

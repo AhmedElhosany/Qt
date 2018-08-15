@@ -8,9 +8,10 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/single_thread_task_runner.h"
 #include "content/common/content_export.h"
 #include "media/base/android/stream_texture_wrapper.h"
-#include "media/base/demuxer_stream_provider.h"
+#include "media/base/media_resource.h"
 #include "media/base/renderer.h"
 #include "media/base/renderer_client.h"
 #include "media/base/video_renderer_sink.h"
@@ -45,7 +46,7 @@ class CONTENT_EXPORT MediaPlayerRendererClient : public media::Renderer,
   ~MediaPlayerRendererClient() override;
 
   // media::Renderer implementation.
-  void Initialize(media::DemuxerStreamProvider* demuxer_stream_provider,
+  void Initialize(media::MediaResource* media_resource,
                   media::RendererClient* client,
                   const media::PipelineStatusCB& init_cb) override;
   void SetCdm(media::CdmContext* cdm_context,
@@ -55,8 +56,6 @@ class CONTENT_EXPORT MediaPlayerRendererClient : public media::Renderer,
   void SetPlaybackRate(double playback_rate) override;
   void SetVolume(float volume) override;
   base::TimeDelta GetMediaTime() override;
-  bool HasAudio() override;
-  bool HasVideo() override;
 
   // media::RendererClient implementation.
   void OnError(media::PipelineStatus status) override;
@@ -64,6 +63,8 @@ class CONTENT_EXPORT MediaPlayerRendererClient : public media::Renderer,
   void OnStatisticsUpdate(const media::PipelineStatistics& stats) override;
   void OnBufferingStateChange(media::BufferingState state) override;
   void OnWaitingForDecryptionKey() override;
+  void OnAudioConfigChange(const media::AudioDecoderConfig& config) override;
+  void OnVideoConfigChange(const media::VideoDecoderConfig& config) override;
   void OnVideoNaturalSizeChange(const gfx::Size& size) override;
   void OnVideoOpacityChange(bool opaque) override;
   void OnDurationChange(base::TimeDelta duration) override;
@@ -73,9 +74,9 @@ class CONTENT_EXPORT MediaPlayerRendererClient : public media::Renderer,
   void OnFrameAvailable();
 
  private:
-  void InitializeRemoteRenderer(
-      media::DemuxerStreamProvider* demuxer_stream_provider);
-  void CompleteInitialization(media::PipelineStatus status);
+  void OnStreamTextureWrapperInitialized(media::MediaResource* media_resource,
+                                         bool success);
+  void OnRemoteRendererInitialized(media::PipelineStatus status);
 
   void OnScopedSurfaceRequested(const base::UnguessableToken& request_token);
 

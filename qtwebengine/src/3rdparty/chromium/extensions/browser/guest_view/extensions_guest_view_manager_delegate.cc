@@ -43,7 +43,7 @@ void ExtensionsGuestViewManagerDelegate::DispatchEvent(
     GuestViewBase* guest,
     int instance_id) {
   EventFilteringInfo info;
-  info.SetInstanceID(instance_id);
+  info.instance_id = instance_id;
   std::unique_ptr<base::ListValue> event_args(new base::ListValue());
   event_args->Append(std::move(args));
 
@@ -57,6 +57,9 @@ void ExtensionsGuestViewManagerDelegate::DispatchEvent(
                                               << " must have a histogram value";
 
   content::WebContents* owner = guest->owner_web_contents();
+  if (!owner)
+    return;  // Could happen at tab shutdown.
+
   EventRouter::DispatchEventToSender(owner, guest->browser_context(),
                                      guest->owner_host(), histogram_value,
                                      event_name, std::move(event_args),

@@ -11,6 +11,7 @@
 
     'default_source_file': '<(_target_name).js',
     'source_files%': ['<(default_source_file)'],
+    'extra_inputs%': [],
 
     'includes': ['closure_args.gypi'],
   },
@@ -31,7 +32,7 @@
       #            is created (this probably suffices for many targets).
       # - out_file: a file where the compiled output is written to. The default
       #             is gen/closure/<path to |target_name|>/|target_name|.js.
-      # - script_args: additional arguments to pass to compile.py.
+      # - script_args: additional arguments to pass to compile2.py.
       # - closure_args: additional arguments to pass to the Closure compiler.
       # - disabled_closure_args: additional arguments dealing with the
       #                          strictness of compilation; Non-strict
@@ -39,7 +40,6 @@
       'variables': {
         'target_path': '<!(python <(CLOSURE_DIR)/build/outputs.py <(default_source_file))',
         'out_file%': '<(SHARED_INTERMEDIATE_DIR)/closure/<(target_path)',
-        'runner_args%': ['enable-chrome-pass'],
         # TODO(dbeam): remove when no longer used from remoting/.
         'script_args%': [],
         'closure_args%': '<(default_closure_args)',
@@ -47,14 +47,17 @@
       },
 
       'inputs': [
-        '<(CLOSURE_DIR)/compile_js2.gypi',
+        '<(CLOSURE_DIR)/build/outputs.py',
+        '<(CLOSURE_DIR)/closure_args.gypi',
         '<(CLOSURE_DIR)/compile2.py',
+        '<(CLOSURE_DIR)/compile_js2.gypi',
+        '<(CLOSURE_DIR)/compiler/compiler.jar',
         '<(CLOSURE_DIR)/include_js.gypi',
         '<(CLOSURE_DIR)/processor.py',
-        '<(CLOSURE_DIR)/build/outputs.py',
-        '<(CLOSURE_DIR)/compiler/compiler.jar',
-        '<(CLOSURE_DIR)/runner/runner.jar',
         '>@(_sources)',
+        # When converting to GN, write the paths to additional inputs in a GN
+        # depfile file instead.
+        '<@(extra_inputs)',
       ],
 
       'outputs': ['<(out_file)'],
@@ -65,7 +68,6 @@
         '<@(script_args)',
         '>@(_sources)',
         '--out_file', '<(out_file)',
-        '--runner_args', '<@(runner_args)',
         '--closure_args', '<@(closure_args)', '<@(disabled_closure_args)',
         # '--verbose' # for make glorious log spam of Closure compiler.
       ],

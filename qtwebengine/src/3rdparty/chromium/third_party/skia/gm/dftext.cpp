@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "Resources.h"
 #include "SkCanvas.h"
 #include "SkStream.h"
@@ -42,7 +43,7 @@ protected:
         GrContext* ctx = inputCanvas->getGrContext();
         SkISize size = onISize();
         SkImageInfo info = SkImageInfo::MakeN32(size.width(), size.height(), kPremul_SkAlphaType,
-                                                sk_ref_sp(inputCanvas->imageInfo().colorSpace()));
+                                                inputCanvas->imageInfo().refColorSpace());
         SkSurfaceProps props(SkSurfaceProps::kUseDeviceIndependentFonts_Flag,
                              SkSurfaceProps::kLegacyFontHost_InitType);
         auto surface(SkSurface::MakeRenderTarget(ctx, SkBudgeted::kNo, info, 0, &props));
@@ -186,7 +187,7 @@ protected:
         if (fEmojiTypeface) {
             paint.setTypeface(fEmojiTypeface);
             paint.setTextSize(SkIntToScalar(19));
-            canvas->drawText(fEmojiText, strlen(fEmojiText), 670, 90, paint);
+            canvas->drawString(fEmojiText, 670, 90, paint);
         }
 #if SK_SUPPORT_GPU
         // render offscreen buffer

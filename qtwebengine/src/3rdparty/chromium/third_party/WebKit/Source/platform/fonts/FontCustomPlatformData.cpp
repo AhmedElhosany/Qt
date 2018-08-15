@@ -32,50 +32,112 @@
 
 #include "platform/fonts/FontCustomPlatformData.h"
 
+#include "build/build_config.h"
 #include "platform/LayoutTestSupport.h"
 #include "platform/SharedBuffer.h"
 #include "platform/fonts/FontCache.h"
 #include "platform/fonts/FontPlatformData.h"
 #include "platform/fonts/WebFontDecoder.h"
+#if defined(OS_MACOSX)
+#include "platform/fonts/mac/CoreTextVariationsSupport.h"
+#endif
+#include "platform/fonts/opentype/FontSettings.h"
+#include "platform/fonts/opentype/VariableFontCheck.h"
 #include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/include/core/SkTypeface.h"
-#include "wtf/PtrUtil.h"
-#include <memory>
+#if defined(OS_WIN) || defined(OS_MACOSX)
+#include "third_party/skia/include/ports/SkFontMgr_empty.h"
+#endif
+#include "platform/wtf/PtrUtil.h"
 
 namespace blink {
 
-FontCustomPlatformData::FontCustomPlatformData(sk_sp<SkTypeface> typeface)
-    : m_typeface(typeface) {}
+FontCustomPlatformData::FontCustomPlatformData(sk_sp<SkTypeface> typeface,
+                                               size_t data_size)
+    : base_typeface_(std::move(typeface)), data_size_(data_size) {}
 
 FontCustomPlatformData::~FontCustomPlatformData() {}
 
-FontPlatformData FontCustomPlatformData::fontPlatformData(
+FontPlatformData FontCustomPlatformData::GetFontPlatformData(
     float size,
     bool bold,
     bool italic,
-    FontOrientation orientation) {
-  ASSERT(m_typeface);
-  return FontPlatformData(m_typeface, "", size, bold && !m_typeface->isBold(),
-                          italic && !m_typeface->isItalic(), orientation);
+    FontOrientation orientation,
+    const FontVariationSettings* variation_settings) {
+  DCHECK(base_typeface_);
+
+  sk_sp<SkTypeface> return_typeface = base_typeface_;
+
+  // Maximum axis count is maximum value for the OpenType USHORT,
+  // which is a 16bit unsigned.
+  // https://www.microsoft.com/typography/otspec/fvar.htm Variation
+  // settings coming from CSS can have duplicate assignments and the
+  // list can be longer than UINT16_MAX, but ignoring the length for
+  // now, going with a reasonable upper limit. Deduplication is
+  // handled by Skia with priority given to the last occuring
+  // assignment.
+  if (VariableFontCheck::IsVariableFont(base_typeface_.get())) {
+#if defined(OS_WIN)
+    sk_sp<SkFontMgr> fm(SkFontMgr_New_Custom_Empty());
+#elif defined(OS_MACOSX)
+    sk_sp<SkFontMgr> fm;
+    if (CoreTextVersionSupportsVariations())
+      fm = SkFontMgr::RefDefault();
+    else
+      fm = SkFontMgr_New_Custom_Empty();
+#else
+    sk_sp<SkFontMgr> fm(SkFontMgr::RefDefault());
+#endif
+    Vector<SkFontMgr::FontParameters::Axis, 0> axes;
+
+    if (variation_settings && variation_settings->size() < UINT16_MAX) {
+      axes.ReserveCapacity(variation_settings->size());
+      for (size_t i = 0; i < variation_settings->size(); ++i) {
+        SkFontMgr::FontParameters::Axis axis = {
+            AtomicStringToFourByteTag(variation_settings->at(i).Tag()),
+            SkFloatToScalar(variation_settings->at(i).Value())};
+        axes.push_back(axis);
+      }
+    }
+
+    sk_sp<SkTypeface> sk_variation_font(fm->createFromStream(
+        base_typeface_->openStream(nullptr)->duplicate(),
+        SkFontMgr::FontParameters().setAxes(axes.data(), axes.size())));
+
+    if (sk_variation_font) {
+      return_typeface = sk_variation_font;
+    } else {
+      SkString family_name;
+      base_typeface_->getFamilyName(&family_name);
+      // TODO: Surface this as a console message?
+      LOG(ERROR) << "Unable for apply variation axis properties for font: "
+                 << family_name.c_str();
+    }
+  }
+
+  return FontPlatformData(return_typeface, "", size,
+                          bold && !base_typeface_->isBold(),
+                          italic && !base_typeface_->isItalic(), orientation);
 }
 
-std::unique_ptr<FontCustomPlatformData> FontCustomPlatformData::create(
+PassRefPtr<FontCustomPlatformData> FontCustomPlatformData::Create(
     SharedBuffer* buffer,
-    String& otsParseMessage) {
+    String& ots_parse_message) {
   DCHECK(buffer);
   WebFontDecoder decoder;
-  sk_sp<SkTypeface> typeface = decoder.decode(buffer);
+  sk_sp<SkTypeface> typeface = decoder.Decode(buffer);
   if (!typeface) {
-    otsParseMessage = decoder.getErrorString();
+    ots_parse_message = decoder.GetErrorString();
     return nullptr;
   }
-  return wrapUnique(new FontCustomPlatformData(std::move(typeface)));
+  return AdoptRef(
+      new FontCustomPlatformData(std::move(typeface), decoder.DecodedSize()));
 }
 
-bool FontCustomPlatformData::supportsFormat(const String& format) {
-  return equalIgnoringCase(format, "truetype") ||
-         equalIgnoringCase(format, "opentype") ||
-         WebFontDecoder::supportsFormat(format);
+bool FontCustomPlatformData::SupportsFormat(const String& format) {
+  return DeprecatedEqualIgnoringCase(format, "truetype") ||
+         DeprecatedEqualIgnoringCase(format, "opentype") ||
+         WebFontDecoder::SupportsFormat(format);
 }
 
 }  // namespace blink

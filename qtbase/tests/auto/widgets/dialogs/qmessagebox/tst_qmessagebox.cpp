@@ -185,6 +185,12 @@ void tst_QMessageBox::cleanup()
 
 void tst_QMessageBox::sanityTest()
 {
+#if defined(Q_OS_MACOS)
+    if (QSysInfo::productVersion() == QLatin1String("10.12")) {
+        QSKIP("Test hangs on macOS 10.12 -- QTQAINFRA-1362");
+        return;
+    }
+#endif
     QMessageBox msgBox;
     msgBox.setText("This is insane");
     for (int i = 0; i < 10; i++)
@@ -588,7 +594,7 @@ void tst_QMessageBox::detailsText()
     box.setDetailedText(text);
     QCOMPARE(box.detailedText(), text);
     box.show();
-    QTest::qWaitForWindowExposed(&box);
+    QVERIFY(QTest::qWaitForWindowExposed(&box));
     // QTBUG-39334, the box should now have the default "Ok" button as well as
     // the "Show Details.." button.
     QCOMPARE(box.findChildren<QAbstractButton *>().size(), 2);
@@ -641,7 +647,7 @@ void tst_QMessageBox::expandDetails_QTBUG_32473()
     // that the window manager is also done manipulating the first QMessageBox.
     QWidget fleece;
     fleece.show();
-    QTest::qWaitForWindowExposed(&fleece);
+    QVERIFY(QTest::qWaitForWindowExposed(&fleece));
     if (geom.topLeft() == box.geometry().topLeft())
         QTest::qWait(500);
     QCOMPARE(geom.topLeft(), box.geometry().topLeft());

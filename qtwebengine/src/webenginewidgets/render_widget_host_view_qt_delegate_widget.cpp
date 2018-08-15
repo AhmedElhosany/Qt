@@ -51,10 +51,6 @@
 #include <QWindow>
 #include <private/qquickwindow_p.h>
 
-#if (QT_VERSION < QT_VERSION_CHECK(5, 8, 0))
-#include <QSGSimpleRectNode>
-#include <QSGSimpleTextureNode>
-#endif
 #include <private/qwidget_p.h>
 
 namespace QtWebEngineCore {
@@ -71,7 +67,8 @@ protected:
     bool event(QEvent *event) override
     {
         if (event->type() == QEvent::ShortcutOverride)
-            return m_client->handleShortcutOverrideEvent(static_cast<QKeyEvent *>(event));
+            return m_client->forwardEvent(event);
+
         return QQuickItem::event(event);
     }
     void focusInEvent(QFocusEvent *event) override
@@ -112,10 +109,9 @@ RenderWidgetHostViewQtDelegateWidget::RenderWidgetHostViewQtDelegateWidget(Rende
     , m_client(client)
     , m_rootItem(new RenderWidgetHostViewQuickItem(client))
     , m_isPopup(false)
+    , m_isPasswordInput(false)
 {
     setFocusPolicy(Qt::StrongFocus);
-
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 4, 0))
 
     QSurfaceFormat format;
     format.setDepthBufferSize(24);
@@ -142,14 +138,29 @@ RenderWidgetHostViewQtDelegateWidget::RenderWidgetHostViewQtDelegateWidget(Rende
 
         // Make sure the OpenGL profile of the QQuickWidget matches the shared context profile.
         if (sharedFormat.profile() == QSurfaceFormat::CoreProfile) {
-            format.setMajorVersion(sharedFormat.majorVersion());
-            format.setMinorVersion(sharedFormat.minorVersion());
-            format.setProfile(sharedFormat.profile());
+            int major;
+            int minor;
+            QSurfaceFormat::OpenGLContextProfile profile;
+
+#ifdef Q_OS_MACOS
+            // Due to QTBUG-63180, requesting the sharedFormat.majorVersion() on macOS will lead to
+            // a failed creation of QQuickWidget shared context. Thus make sure to request the
+            // major version specified in the defaultFormat instead.
+            major = defaultFormat.majorVersion();
+            minor = defaultFormat.minorVersion();
+            profile = defaultFormat.profile();
+#else
+            major = sharedFormat.majorVersion();
+            minor = sharedFormat.minorVersion();
+            profile = sharedFormat.profile();
+#endif
+            format.setMajorVersion(major);
+            format.setMinorVersion(minor);
+            format.setProfile(profile);
         }
     }
 
     setFormat(format);
-#endif
 #endif
     setMouseTracking(true);
     setAttribute(Qt::WA_AcceptTouchEvents);
@@ -297,30 +308,17 @@ QSGLayer *RenderWidgetHostViewQtDelegateWidget::createLayer()
 QSGInternalImageNode *RenderWidgetHostViewQtDelegateWidget::createImageNode()
 {
     QSGRenderContext *renderContext = QQuickWindowPrivate::get(quickWindow())->context;
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 8, 0))
     return renderContext->sceneGraphContext()->createInternalImageNode();
-#else
-    return renderContext->sceneGraphContext()->createImageNode();
-#endif
 }
 
 QSGTextureNode *RenderWidgetHostViewQtDelegateWidget::createTextureNode()
 {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 8, 0))
     return quickWindow()->createImageNode();
-#else
-    return new QSGSimpleTextureNode();
-#endif
 }
 
 QSGRectangleNode *RenderWidgetHostViewQtDelegateWidget::createRectangleNode()
 {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 8, 0))
     return quickWindow()->createRectangleNode();
-#else
-    QSGRenderContext *renderContext = QQuickWindowPrivate::get(quickWindow())->context;
-    return renderContext->sceneGraphContext()->createRectangleNode();
-#endif
 }
 
 void RenderWidgetHostViewQtDelegateWidget::update()
@@ -344,12 +342,14 @@ void RenderWidgetHostViewQtDelegateWidget::move(const QPoint &screenPos)
     QQuickWidget::move(screenPos);
 }
 
-void RenderWidgetHostViewQtDelegateWidget::inputMethodStateChanged(bool editorVisible)
+void RenderWidgetHostViewQtDelegateWidget::inputMethodStateChanged(bool editorVisible, bool passwordInput)
 {
-    if (qApp->inputMethod()->isVisible() == editorVisible)
+    if (qApp->inputMethod()->isVisible() == editorVisible && m_isPasswordInput == passwordInput)
         return;
 
-    QQuickWidget::setAttribute(Qt::WA_InputMethodEnabled, editorVisible);
+    QQuickWidget::setAttribute(Qt::WA_InputMethodEnabled, editorVisible && !passwordInput);
+    m_isPasswordInput = passwordInput;
+
     qApp->inputMethod()->update(Qt::ImQueryInput | Qt::ImEnabled | Qt::ImHints);
     qApp->inputMethod()->setVisible(editorVisible);
 }
@@ -449,10 +449,6 @@ bool RenderWidgetHostViewQtDelegateWidget::event(QEvent *event)
     case QEvent::FocusOut:
         // We forward focus events later, once they have made it to the m_rootItem.
         return QQuickWidget::event(event);
-    case QEvent::ShortcutOverride:
-        if (m_client->handleShortcutOverrideEvent(static_cast<QKeyEvent *>(event)))
-            return true;
-        break;
     case QEvent::DragEnter:
     case QEvent::DragLeave:
     case QEvent::DragMove:

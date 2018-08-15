@@ -8,94 +8,74 @@
 #include "core/CoreExport.h"
 #include "core/dom/RemoteSecurityContext.h"
 #include "core/frame/Frame.h"
+#include "core/frame/RemoteFrameView.h"
 #include "public/platform/WebFocusType.h"
 
 namespace blink {
 
-class Event;
-class IntRect;
 class LocalFrame;
-class RemoteDOMWindow;
 class RemoteFrameClient;
-class RemoteFrameView;
 class WebLayer;
-class WindowProxyManager;
 struct FrameLoadRequest;
 
 class CORE_EXPORT RemoteFrame final : public Frame {
  public:
-  static RemoteFrame* create(RemoteFrameClient*, FrameHost*, FrameOwner*);
+  static RemoteFrame* Create(RemoteFrameClient*, Page&, FrameOwner*);
 
   ~RemoteFrame() override;
 
   // Frame overrides:
   DECLARE_VIRTUAL_TRACE();
-  DOMWindow* domWindow() const override;
-  WindowProxy* windowProxy(DOMWrapperWorld&) override;
-  void navigate(Document& originDocument,
+  void Navigate(Document& origin_document,
                 const KURL&,
-                bool replaceCurrentItem,
+                bool replace_current_item,
                 UserGestureStatus) override;
-  void navigate(const FrameLoadRequest& passedRequest) override;
-  void reload(FrameLoadType, ClientRedirectPolicy) override;
-  void detach(FrameDetachType) override;
-  RemoteSecurityContext* securityContext() const override;
-  void printNavigationErrorMessage(const Frame&, const char* reason) override {}
-  void printNavigationWarning(const String&) override {}
-  bool prepareForCommit() override;
-  bool shouldClose() override;
-  void setDocumentHasReceivedUserGesture() override;
+  void Navigate(const FrameLoadRequest& passed_request) override;
+  void Reload(FrameLoadType, ClientRedirectPolicy) override;
+  void Detach(FrameDetachType) override;
+  RemoteSecurityContext* GetSecurityContext() const override;
+  void PrintNavigationErrorMessage(const Frame&, const char* reason) override {}
+  void PrintNavigationWarning(const String&) override {}
+  bool PrepareForCommit() override;
+  bool ShouldClose() override;
+  void SetIsInert(bool) override;
 
-  // FIXME: Remove this method once we have input routing in the browser
-  // process. See http://crbug.com/339659.
-  void forwardInputEvent(Event*);
+  void SetWebLayer(WebLayer*);
+  WebLayer* GetWebLayer() const { return web_layer_; }
 
-  void frameRectsChanged(const IntRect& frameRect);
+  void AdvanceFocus(WebFocusType, LocalFrame* source);
 
-  void visibilityChanged(bool visible);
+  void SetView(RemoteFrameView*);
+  void CreateView();
 
-  void setRemotePlatformLayer(WebLayer*);
-  WebLayer* remotePlatformLayer() const { return m_remotePlatformLayer; }
+  RemoteFrameView* View() const override;
 
-  void advanceFocus(WebFocusType, LocalFrame* source);
-
-  void setView(RemoteFrameView*);
-  void createView();
-
-  RemoteFrameView* view() const;
-
-  RemoteFrameClient* client() const;
+  RemoteFrameClient* Client() const;
 
  private:
-  RemoteFrame(RemoteFrameClient*, FrameHost*, FrameOwner*);
+  RemoteFrame(RemoteFrameClient*, Page&, FrameOwner*);
 
-  // Internal Frame helper overrides:
-  WindowProxyManager* getWindowProxyManager() const override {
-    return m_windowProxyManager.get();
-  }
   // Intentionally private to prevent redundant checks when the type is
   // already RemoteFrame.
-  bool isLocalFrame() const override { return false; }
-  bool isRemoteFrame() const override { return true; }
+  bool IsLocalFrame() const override { return false; }
+  bool IsRemoteFrame() const override { return true; }
 
-  void detachChildren();
+  void DetachChildren();
 
-  Member<RemoteFrameView> m_view;
-  Member<RemoteSecurityContext> m_securityContext;
-  Member<RemoteDOMWindow> m_domWindow;
-  Member<WindowProxyManager> m_windowProxyManager;
-  WebLayer* m_remotePlatformLayer;
+  Member<RemoteFrameView> view_;
+  Member<RemoteSecurityContext> security_context_;
+  WebLayer* web_layer_ = nullptr;
 };
 
-inline RemoteFrameView* RemoteFrame::view() const {
-  return m_view.get();
+inline RemoteFrameView* RemoteFrame::View() const {
+  return view_.Get();
 }
 
 DEFINE_TYPE_CASTS(RemoteFrame,
                   Frame,
                   remoteFrame,
-                  remoteFrame->isRemoteFrame(),
-                  remoteFrame.isRemoteFrame());
+                  remoteFrame->IsRemoteFrame(),
+                  remoteFrame.IsRemoteFrame());
 
 }  // namespace blink
 

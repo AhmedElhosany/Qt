@@ -138,6 +138,7 @@ public:
     void Hide() override;
     bool IsShowing() override;
     gfx::Rect GetViewBounds() const override;
+    SkColor background_color() const override;
     void SetBackgroundColor(SkColor color) override;
     bool LockMouse() override;
     void UnlockMouse() override;
@@ -148,19 +149,15 @@ public:
     void RenderProcessGone(base::TerminationStatus, int) override;
     void Destroy() override;
     void SetTooltipText(const base::string16 &tooltip_text) override;
-    void CopyFromCompositingSurface(const gfx::Rect& src_subrect, const gfx::Size& dst_size, const content::ReadbackRequestCallback& callback, const SkColorType preferred_color_type) override;
-    void CopyFromCompositingSurfaceToVideoFrame(const gfx::Rect& src_subrect, const scoped_refptr<media::VideoFrame>& target, const base::Callback<void(const gfx::Rect&, bool)>& callback) override;
-
-    bool CanCopyToVideoFrame() const override;
     bool HasAcceleratedSurface(const gfx::Size&) override;
-    void OnSwapCompositorFrame(uint32_t output_surface_id, cc::CompositorFrame frame)  override;
+    void DidCreateNewRendererCompositorFrameSink(cc::mojom::CompositorFrameSinkClient* renderer_compositor_frame_sink) override;
+    void SubmitCompositorFrame(const viz::LocalSurfaceId&, cc::CompositorFrame) override;
+    void WheelEventAck(const blink::WebMouseWheelEvent &event, content::InputEventAckState ack_result) override;
 
     void GetScreenInfo(content::ScreenInfo* results);
     gfx::Rect GetBoundsInRootWindow() override;
     void ProcessAckedTouchEvent(const content::TouchEventWithLatencyInfo &touch, content::InputEventAckState ack_result) override;
     void ClearCompositorFrame() override;
-    void LockCompositingSurface() override;
-    void UnlockCompositingSurface() override;
     void SetNeedsBeginFrames(bool needs_begin_frames) override;
 
     // Overridden from ui::GestureProviderClient.
@@ -242,14 +239,14 @@ private:
     std::unique_ptr<RenderWidgetHostViewQtDelegate> m_delegate;
 
     QExplicitlySharedDataPointer<ChromiumCompositorData> m_chromiumCompositorData;
-    cc::ReturnedResourceArray m_resourcesToRelease;
+    std::vector<cc::ReturnedResource> m_resourcesToRelease;
     bool m_needsDelegatedFrameAck;
     LoadVisuallyCommittedState m_loadVisuallyCommittedState;
-    uint32_t m_pendingOutputSurfaceId;
 
     QMetaObject::Connection m_adapterClientDestroyedConnection;
     WebContentsAdapterClient *m_adapterClient;
     MultipleMouseClickHelper m_clickHelper;
+    cc::mojom::CompositorFrameSinkClient *m_rendererCompositorFrameSink;
 
     bool m_imeInProgress;
     bool m_receivedEmptyImeText;
@@ -263,6 +260,8 @@ private:
 
     gfx::Vector2dF m_lastScrollOffset;
     gfx::SizeF m_lastContentsSize;
+    SkColor m_backgroundColor;
+    viz::LocalSurfaceId m_localSurfaceId;
 
     uint m_imState;
     int m_anchorPositionWithinSelection;
@@ -270,6 +269,13 @@ private:
     uint m_cursorPosition;
     bool m_emptyPreviousSelection;
     QString m_surroundingText;
+
+    bool m_imeHasHiddenTextCapability;
+
+    bool m_wheelAckPending;
+    QList<blink::WebMouseWheelEvent> m_pendingWheelEvents;
+
+    std::string m_editCommand;
 };
 
 } // namespace QtWebEngineCore

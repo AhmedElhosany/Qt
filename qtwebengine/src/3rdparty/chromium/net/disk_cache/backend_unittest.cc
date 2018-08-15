@@ -7,6 +7,7 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/field_trial.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -18,6 +19,9 @@
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/trace_event/memory_allocator_dump.h"
+#include "base/trace_event/process_memory_dump.h"
+#include "base/trace_event/trace_event_argument.h"
 #include "net/base/cache_type.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -59,7 +63,7 @@ const char kExistingEntryKey[] = "existing entry key";
 
 std::unique_ptr<disk_cache::BackendImpl> CreateExistingEntryCache(
     const base::Thread& cache_thread,
-    base::FilePath& cache_path) {
+    const base::FilePath& cache_path) {
   net::TestCompletionCallback cb;
 
   std::unique_ptr<disk_cache::BackendImpl> cache(new disk_cache::BackendImpl(
@@ -126,6 +130,7 @@ class DiskCacheBackendTest : public DiskCacheTestWithCache {
   void BackendDoomRecent();
   void BackendDoomBetween();
   void BackendCalculateSizeOfAllEntries();
+  void BackendCalculateSizeOfEntriesBetween();
   void BackendTransaction(const std::string& name, int num_entries, bool load);
   void BackendRecoverInsert();
   void BackendRecoverRemove();
@@ -340,7 +345,6 @@ void DiskCacheBackendTest::BackendBasics() {
   ASSERT_THAT(OpenEntry("some other key", &entry3), IsOk());
   ASSERT_TRUE(NULL != entry3);
   EXPECT_TRUE(entry2 == entry3);
-  EXPECT_EQ(2, cache_->GetEntryCount());
 
   EXPECT_THAT(DoomEntry("some other key"), IsOk());
   EXPECT_EQ(1, cache_->GetEntryCount());
@@ -510,6 +514,74 @@ TEST_F(DiskCacheBackendTest, CreateBackend_MissingFile) {
 
   cache.reset();
   DisableIntegrityCheck();
+}
+
+TEST_F(DiskCacheBackendTest, MemCacheMemoryDump) {
+  SetMemoryOnlyMode();
+  BackendBasics();
+  base::trace_event::MemoryDumpArgs args = {
+      base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND};
+  base::trace_event::ProcessMemoryDump pmd(nullptr, args);
+  base::trace_event::MemoryAllocatorDump* parent =
+      pmd.CreateAllocatorDump("net/url_request_context/main/0x123/http_cache");
+
+  ASSERT_LT(0u, cache_->DumpMemoryStats(&pmd, parent->absolute_name()));
+  EXPECT_EQ(2u, pmd.allocator_dumps().size());
+  const base::trace_event::MemoryAllocatorDump* sub_dump =
+      pmd.GetAllocatorDump(parent->absolute_name() + "/memory_backend");
+  ASSERT_NE(nullptr, sub_dump);
+
+  // Verify that the appropriate attributes were set.
+  std::unique_ptr<base::Value> raw_attrs =
+      sub_dump->attributes_for_testing()->ToBaseValue();
+  base::DictionaryValue* attrs;
+  ASSERT_TRUE(raw_attrs->GetAsDictionary(&attrs));
+  EXPECT_EQ(3u, attrs->size());
+  base::DictionaryValue* size_attrs;
+  ASSERT_TRUE(attrs->GetDictionary(
+      base::trace_event::MemoryAllocatorDump::kNameSize, &size_attrs));
+  ASSERT_TRUE(attrs->GetDictionary("mem_backend_size", &size_attrs));
+  ASSERT_TRUE(attrs->GetDictionary("mem_backend_max_size", &size_attrs));
+}
+
+TEST_F(DiskCacheBackendTest, SimpleCacheMemoryDump) {
+  simple_cache_mode_ = true;
+  BackendBasics();
+  base::trace_event::MemoryDumpArgs args = {
+      base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND};
+  base::trace_event::ProcessMemoryDump pmd(nullptr, args);
+  base::trace_event::MemoryAllocatorDump* parent =
+      pmd.CreateAllocatorDump("net/url_request_context/main/0x123/http_cache");
+
+  ASSERT_LT(0u, cache_->DumpMemoryStats(&pmd, parent->absolute_name()));
+  EXPECT_EQ(2u, pmd.allocator_dumps().size());
+  const base::trace_event::MemoryAllocatorDump* sub_dump =
+      pmd.GetAllocatorDump(parent->absolute_name() + "/simple_backend");
+  ASSERT_NE(nullptr, sub_dump);
+
+  // Verify that the appropriate attributes were set.
+  std::unique_ptr<base::Value> raw_attrs =
+      sub_dump->attributes_for_testing()->ToBaseValue();
+  base::DictionaryValue* attrs;
+  ASSERT_TRUE(raw_attrs->GetAsDictionary(&attrs));
+  EXPECT_EQ(1u, attrs->size());
+  base::DictionaryValue* size_attrs;
+  ASSERT_TRUE(attrs->GetDictionary(
+      base::trace_event::MemoryAllocatorDump::kNameSize, &size_attrs));
+}
+
+TEST_F(DiskCacheBackendTest, BlockFileCacheMemoryDump) {
+  // TODO(jkarlin): If the blockfile cache gets memory dump support, update
+  // this test.
+  BackendBasics();
+  base::trace_event::MemoryDumpArgs args = {
+      base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND};
+  base::trace_event::ProcessMemoryDump pmd(nullptr, args);
+  base::trace_event::MemoryAllocatorDump* parent =
+      pmd.CreateAllocatorDump("net/url_request_context/main/0x123/http_cache");
+
+  ASSERT_EQ(0u, cache_->DumpMemoryStats(&pmd, parent->absolute_name()));
+  EXPECT_EQ(1u, pmd.allocator_dumps().size());
 }
 
 TEST_F(DiskCacheBackendTest, ExternalFiles) {
@@ -1713,45 +1785,6 @@ TEST_F(DiskCacheBackendTest, DoomAllSparse) {
   EXPECT_EQ(0, cache_->GetEntryCount());
 }
 
-// This test is for https://crbug.com/827492.
-TEST_F(DiskCacheBackendTest, InMemorySparseEvict) {
-  const int kMaxSize = 512;
-
-  SetMaxSize(kMaxSize);
-  SetMemoryOnlyMode();
-  InitCache();
-
-  scoped_refptr<net::IOBuffer> buffer(new net::IOBuffer(64));
-  CacheTestFillBuffer(buffer->data(), 64, false /* no_nulls */);
-
-  std::vector<disk_cache::ScopedEntryPtr> entries;
-
-  disk_cache::Entry* entry = nullptr;
-  // Create a bunch of entries
-  for (size_t i = 0; i < 14; i++) {
-    std::string name = "http://www." + std::to_string(i) + ".com/";
-    ASSERT_THAT(CreateEntry(name, &entry), IsOk());
-    entries.push_back(disk_cache::ScopedEntryPtr(entry));
-  }
-
-  // Create several sparse entries and fill with enough data to
-  // pass eviction threshold
-  ASSERT_EQ(64, WriteSparseData(entries[0].get(), 0, buffer.get(), 64));
-  ASSERT_EQ(net::ERR_FAILED,
-            WriteSparseData(entries[0].get(), 10000, buffer.get(), 4));
-  ASSERT_EQ(63, WriteSparseData(entries[1].get(), 0, buffer.get(), 63));
-  ASSERT_EQ(64, WriteSparseData(entries[2].get(), 0, buffer.get(), 64));
-  ASSERT_EQ(64, WriteSparseData(entries[3].get(), 0, buffer.get(), 64));
-
-  // Close all the entries, leaving a populated LRU list
-  // with all entries having refcount 0 (doom implies deletion)
-  entries.clear();
-
-  // Create a new entry, triggering buggy eviction
-  ASSERT_THAT(CreateEntry("http://www.14.com/", &entry), IsOk());
-  entry->Close();
-}
-
 void DiskCacheBackendTest::BackendDoomBetween() {
   InitCache();
 
@@ -1909,6 +1942,70 @@ TEST_F(DiskCacheBackendTest, SimpleCacheCalculateSizeOfAllEntries) {
   SetCacheType(net::APP_CACHE);
   SetSimpleCacheMode();
   BackendCalculateSizeOfAllEntries();
+}
+
+void DiskCacheBackendTest::BackendCalculateSizeOfEntriesBetween() {
+  InitCache();
+
+  EXPECT_EQ(0, CalculateSizeOfEntriesBetween(base::Time(), base::Time::Max()));
+
+  Time start = Time::Now();
+
+  disk_cache::Entry* entry;
+  ASSERT_THAT(CreateEntry("first", &entry), IsOk());
+  entry->Close();
+  FlushQueueForTest();
+
+  AddDelay();
+  Time middle = Time::Now();
+  AddDelay();
+
+  ASSERT_THAT(CreateEntry("second", &entry), IsOk());
+  entry->Close();
+  ASSERT_THAT(CreateEntry("third_entry", &entry), IsOk());
+  entry->Close();
+  FlushQueueForTest();
+
+  AddDelay();
+  Time end = Time::Now();
+
+  int size_1 = GetEntryMetadataSize("first");
+  int size_2 = GetEntryMetadataSize("second");
+  int size_3 = GetEntryMetadataSize("third_entry");
+
+  ASSERT_EQ(3, cache_->GetEntryCount());
+  ASSERT_EQ(CalculateSizeOfAllEntries(),
+            CalculateSizeOfEntriesBetween(base::Time(), base::Time::Max()));
+
+  int start_end = CalculateSizeOfEntriesBetween(start, end);
+  ASSERT_EQ(CalculateSizeOfAllEntries(), start_end);
+  ASSERT_EQ(size_1 + size_2 + size_3, start_end);
+
+  ASSERT_EQ(size_1, CalculateSizeOfEntriesBetween(start, middle));
+  ASSERT_EQ(size_2 + size_3, CalculateSizeOfEntriesBetween(middle, end));
+
+  // After dooming the entries, the size should be back to zero.
+  ASSERT_THAT(DoomAllEntries(), IsOk());
+  EXPECT_EQ(0, CalculateSizeOfEntriesBetween(base::Time(), base::Time::Max()));
+}
+
+TEST_F(DiskCacheBackendTest, CalculateSizeOfEntriesBetween) {
+  InitCache();
+  ASSERT_EQ(net::ERR_NOT_IMPLEMENTED,
+            CalculateSizeOfEntriesBetween(base::Time(), base::Time::Max()));
+}
+
+TEST_F(DiskCacheBackendTest, MemoryOnlyCalculateSizeOfEntriesBetween) {
+  SetMemoryOnlyMode();
+  BackendCalculateSizeOfEntriesBetween();
+}
+
+TEST_F(DiskCacheBackendTest, SimpleCacheCalculateSizeOfEntriesBetween) {
+  // Use net::APP_CACHE to make size estimations deterministic via
+  // non-optimistic writes.
+  SetCacheType(net::APP_CACHE);
+  SetSimpleCacheMode();
+  BackendCalculateSizeOfEntriesBetween();
 }
 
 void DiskCacheBackendTest::BackendTransaction(const std::string& name,
@@ -3084,15 +3181,54 @@ TEST_F(DiskCacheBackendTest, MemoryOnlyUseAfterFree) {
   std::string key_prefix("prefix");
   for (int i = 0; i < kTooManyEntriesCount; ++i) {
     ASSERT_THAT(CreateEntry(key_prefix + base::IntToString(i), &entry), IsOk());
-    EXPECT_EQ(kWriteSize,
-              WriteData(entry, 1, 0, buffer.get(), kWriteSize, false));
+    // Not checking the result because it will start to fail once the max size
+    // is reached.
+    WriteData(entry, 1, 0, buffer.get(), kWriteSize, false);
     open_entries.push_back(disk_cache::ScopedEntryPtr(entry));
   }
-  EXPECT_LT(kMaxSize, CalculateSizeOfAllEntries());
 
-  // Writing this sparse data should not crash.
-  EXPECT_EQ(1024, first_parent->WriteSparseData(32768, buffer.get(), 1024,
-                                                net::CompletionCallback()));
+  // Writing this sparse data should not crash. Ignoring the result because
+  // we're only concerned with not crashing in this particular test.
+  first_parent->WriteSparseData(32768, buffer.get(), 1024,
+                                net::CompletionCallback());
+}
+
+TEST_F(DiskCacheBackendTest, MemoryCapsWritesToMaxSize) {
+  // Verify that the memory backend won't grow beyond its max size if lots of
+  // open entries (each smaller than the max entry size) are trying to write
+  // beyond the max size.
+  SetMemoryOnlyMode();
+
+  const int kMaxSize = 100 * 1024;       // 100KB cache
+  const int kNumEntries = 20;            // 20 entries to write
+  const int kWriteSize = kMaxSize / 10;  // Each entry writes 1/10th the max
+
+  SetMaxSize(kMaxSize);
+  InitCache();
+
+  scoped_refptr<net::IOBuffer> buffer(new net::IOBuffer(kWriteSize));
+  CacheTestFillBuffer(buffer->data(), kWriteSize, false);
+
+  // Create an entry to be the final entry that gets written later.
+  disk_cache::Entry* entry;
+  ASSERT_THAT(CreateEntry("final", &entry), IsOk());
+  disk_cache::ScopedEntryPtr final_entry(entry);
+
+  // Create a ton of entries, write to the cache, and keep the entries open.
+  // They should start failing writes once the cache fills.
+  std::list<disk_cache::ScopedEntryPtr> open_entries;
+  std::string key_prefix("prefix");
+  for (int i = 0; i < kNumEntries; ++i) {
+    ASSERT_THAT(CreateEntry(key_prefix + base::IntToString(i), &entry), IsOk());
+    WriteData(entry, 1, 0, buffer.get(), kWriteSize, false);
+    open_entries.push_back(disk_cache::ScopedEntryPtr(entry));
+  }
+  EXPECT_GE(kMaxSize, CalculateSizeOfAllEntries());
+
+  // Any more writing at this point should cause an error.
+  EXPECT_THAT(
+      WriteData(final_entry.get(), 1, 0, buffer.get(), kWriteSize, false),
+      IsError(net::ERR_INSUFFICIENT_RESOURCES));
 }
 
 TEST_F(DiskCacheTest, Backend_UsageStatsTimer) {
@@ -3903,56 +4039,56 @@ TEST_F(DiskCacheBackendTest, SimpleCacheLateDoom) {
             simple_cache_impl_->index()->init_method());
 }
 
-TEST_F(DiskCacheBackendTest, SparseEvict) {
-  const int kMaxSize = 512;
+TEST_F(DiskCacheBackendTest, SimpleLastModified) {
+  // Simple cache used to incorrectly set LastModified on entries based on
+  // timestamp of the cache directory, and not the entries' file
+  // (https://crbug.com/714143). So this test arranges for a situation
+  // where this would occur by doing:
+  // 1) Write entry 1
+  // 2) Delay
+  // 3) Write entry 2. This sets directory time stamp to be different from
+  //    timestamp of entry 1 (due to the delay)
+  // It then checks whether the entry 1 got the proper timestamp or not.
 
-  SetMaxSize(kMaxSize);
+  SetSimpleCacheMode();
   InitCache();
+  std::string key1 = GenerateKey(true);
+  std::string key2 = GenerateKey(true);
 
-  scoped_refptr<net::IOBuffer> buffer(new net::IOBuffer(64));
-  CacheTestFillBuffer(buffer->data(), 64, false);
+  disk_cache::Entry* entry1;
+  ASSERT_THAT(CreateEntry(key1, &entry1), IsOk());
 
-  disk_cache::Entry* entry0 = nullptr;
-  ASSERT_THAT(CreateEntry("http://www.0.com/", &entry0), IsOk());
+  // Make the Create complete --- SimpleCache can handle it optimistically,
+  // and if we let it go fully async then trying to flush the Close might just
+  // flush the Create.
+  disk_cache::SimpleBackendImpl::FlushWorkerPoolForTesting();
+  base::RunLoop().RunUntilIdle();
 
-  disk_cache::Entry* entry1 = nullptr;
-  ASSERT_THAT(CreateEntry("http://www.1.com/", &entry1), IsOk());
-
-  disk_cache::Entry* entry2 = nullptr;
-  // This strange looking domain name affects cache trim order
-  // due to hashing
-  ASSERT_THAT(CreateEntry("http://www.15360.com/", &entry2), IsOk());
-
-  // Write sparse data to put us over the eviction threshold
-  ASSERT_EQ(64, WriteSparseData(entry0, 0, buffer.get(), 64));
-  ASSERT_EQ(1, WriteSparseData(entry0, 67108923, buffer.get(), 1));
-  ASSERT_EQ(1, WriteSparseData(entry1, 53, buffer.get(), 1));
-  ASSERT_EQ(1, WriteSparseData(entry2, 0, buffer.get(), 1));
-
-  // Closing these in a special order should not lead to buggy reentrant
-  // eviction.
   entry1->Close();
+
+  // Make the ::Close actually complete, since it is asynchronous.
+  disk_cache::SimpleBackendImpl::FlushWorkerPoolForTesting();
+  base::RunLoop().RunUntilIdle();
+
+  Time entry1_timestamp = Time::NowFromSystemTime();
+
+  // Don't want AddDelay since it sleep 1s(!) for SimpleCache, and we don't
+  // care about reduced precision in index here.
+  while (base::Time::NowFromSystemTime() <=
+         (entry1_timestamp + base::TimeDelta::FromMilliseconds(10))) {
+    base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(1));
+  }
+
+  disk_cache::Entry* entry2;
+  ASSERT_THAT(CreateEntry(key2, &entry2), IsOk());
   entry2->Close();
-  entry0->Close();
-}
+  disk_cache::SimpleBackendImpl::FlushWorkerPoolForTesting();
+  base::RunLoop().RunUntilIdle();
 
-TEST_F(DiskCacheBackendTest, InMemorySparseDoom) {
-  const int kMaxSize = 512;
+  disk_cache::Entry* reopen_entry1;
+  ASSERT_THAT(OpenEntry(key1, &reopen_entry1), IsOk());
 
-  SetMaxSize(kMaxSize);
-  SetMemoryOnlyMode();
-  InitCache();
-
-  scoped_refptr<net::IOBuffer> buffer(new net::IOBuffer(64));
-  CacheTestFillBuffer(buffer->data(), 64, false);
-
-  disk_cache::Entry* entry = nullptr;
-  ASSERT_THAT(CreateEntry("http://www.0.com/", &entry), IsOk());
-
-  ASSERT_EQ(net::ERR_FAILED, WriteSparseData(entry, 4337, buffer.get(), 64));
-  entry->Close();
-
-  // Dooming all entries at this point should properly iterate over
-  // the parent and its children
-  DoomAllEntries();
+  // This shouldn't pick up entry2's write time incorrectly.
+  EXPECT_LE(reopen_entry1->GetLastModified(), entry1_timestamp);
+  reopen_entry1->Close();
 }

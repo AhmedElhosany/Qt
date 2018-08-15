@@ -272,6 +272,7 @@ public:
     QMenuPrivate() :
         itemsDirty(false),
         hasCheckableItems(false),
+        lastContextMenu(false),
         collapsibleSeparators(true),
         toolTipsVisible(false),
         delayedPopupGuard(false),
@@ -294,12 +295,17 @@ public:
     QPlatformMenu *createPlatformMenu();
     void setPlatformMenu(QPlatformMenu *menu);
     void syncPlatformMenu();
+    void copyActionToPlatformItem(const QAction *action, QPlatformMenuItem *item);
+    QPlatformMenuItem *insertActionInPlatformMenu(const QAction *action, QPlatformMenuItem *beforeItem);
+
 #ifdef Q_OS_OSX
     void moveWidgetToPlatformItem(QWidget *w, QPlatformMenuItem* item);
 #endif
 
     static QMenuPrivate *get(QMenu *m) { return m->d_func(); }
     int scrollerHeight() const;
+
+    bool isContextMenu() const;
 
     //item calculations
     QRect actionRect(QAction *) const;
@@ -462,6 +468,7 @@ public:
 
     mutable bool itemsDirty : 1;
     mutable bool hasCheckableItems : 1;
+    bool lastContextMenu : 1;
     bool collapsibleSeparators : 1;
     bool toolTipsVisible : 1;
     bool delayedPopupGuard : 1;

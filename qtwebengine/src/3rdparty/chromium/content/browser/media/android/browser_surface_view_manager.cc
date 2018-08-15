@@ -6,7 +6,7 @@
 
 #include "base/android/build_info.h"
 #include "base/trace_event/trace_event.h"
-#include "content/browser/android/content_view_core_impl.h"
+#include "content/browser/android/content_view_core.h"
 #include "content/browser/gpu/gpu_process_host.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/media/surface_view_manager_messages_android.h"
@@ -41,7 +41,6 @@ void BrowserSurfaceViewManager::SetVideoSurface(gl::ScopedJavaSurface surface) {
   if (surface.IsEmpty()) {
     DCHECK_NE(surface_id_, media::SurfaceManager::kNoSurfaceID);
     gpu::GpuSurfaceTracker::Get()->RemoveSurface(surface_id_);
-    gpu::GpuSurfaceTracker::Get()->UnregisterViewSurface(surface_id_);
     SendDestroyingVideoSurface(surface_id_);
     surface_id_ = media::SurfaceManager::kNoSurfaceID;
   } else {
@@ -49,9 +48,8 @@ void BrowserSurfaceViewManager::SetVideoSurface(gl::ScopedJavaSurface surface) {
     // lookup will go through the Android specific path and get the java
     // surface directly, so there's no need to add a valid native widget here.
     surface_id_ = gpu::GpuSurfaceTracker::Get()->AddSurfaceForNativeWidget(
-        gfx::kNullAcceleratedWidget);
-    gpu::GpuSurfaceTracker::GetInstance()->RegisterViewSurface(
-        surface_id_, surface.j_surface());
+        gpu::GpuSurfaceTracker::SurfaceRecord(gfx::kNullAcceleratedWidget,
+                                              surface.j_surface().obj()));
     SendSurfaceID(surface_id_);
   }
 }
@@ -63,6 +61,16 @@ void BrowserSurfaceViewManager::DidExitFullscreen(bool release_media_player) {
 
 void BrowserSurfaceViewManager::OnCreateFullscreenSurface(
     const gfx::Size& video_natural_size) {
+  // If we are in virtual reality, no surface view is needed so just return.
+  // TODO(http://crbug.com/673886): Support overlay surfaces in VR using GVR
+  // reprojection video surface.
+  RenderWidgetHostViewBase * rwhvb =
+      static_cast<RenderWidgetHostViewBase*>(render_frame_host_->GetView());
+  if (rwhvb->IsInVR()) {
+    SendSurfaceID(media::SurfaceManager::kNoSurfaceID);
+    return;
+  }
+
   // It's valid to get this call if we already own the fullscreen view. We just
   // return the existing surface id.
   if (content_video_view_) {
@@ -84,8 +92,10 @@ void BrowserSurfaceViewManager::OnCreateFullscreenSurface(
 
   WebContents* web_contents =
       WebContents::FromRenderFrameHost(render_frame_host_);
-  if (!web_contents->GetDelegate())
+  if (!web_contents->GetDelegate()) {
+    SendSurfaceID(media::SurfaceManager::kNoSurfaceID);
     return;
+  }
   ContentViewCore* cvc = ContentViewCore::FromWebContents(web_contents);
   content_video_view_.reset(
       new ContentVideoView(this, cvc,

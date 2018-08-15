@@ -12,25 +12,20 @@
 #include <string>
 
 #include "base/strings/utf_string_conversions.h"
+#include "ui/base/platform_window_defaults.h"
 #include "ui/base/x/x11_window_event_manager.h"
-#include "ui/events/devices/x11/touch_factory_x11.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/platform/platform_event_dispatcher.h"
 #include "ui/events/platform/platform_event_source.h"
 #include "ui/events/platform/x11/x11_event_source.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/x/x11_atom_cache.h"
 #include "ui/platform_window/platform_window_delegate.h"
 
 namespace ui {
 
 namespace {
-
-const char* kAtomsToCache[] = {"UTF8_STRING",  "WM_DELETE_WINDOW",
-                               "_NET_WM_NAME", "_NET_WM_PID",
-                               "_NET_WM_PING", NULL};
-
-bool g_override_redirect = false;
 
 XID FindXEventTarget(const XEvent& xev) {
   XID target = xev.xany.window;
@@ -41,14 +36,14 @@ XID FindXEventTarget(const XEvent& xev) {
 
 }  // namespace
 
-X11WindowBase::X11WindowBase(PlatformWindowDelegate* delegate)
+X11WindowBase::X11WindowBase(PlatformWindowDelegate* delegate,
+                             const gfx::Rect& bounds)
     : delegate_(delegate),
       xdisplay_(gfx::GetXDisplay()),
       xwindow_(None),
       xroot_window_(DefaultRootWindow(xdisplay_)),
-      atom_cache_(xdisplay_, kAtomsToCache) {
+      bounds_(bounds) {
   DCHECK(delegate_);
-  TouchFactory::SetTouchDeviceListFromCommandLine();
 }
 
 X11WindowBase::~X11WindowBase() {
@@ -70,19 +65,21 @@ void X11WindowBase::Destroy() {
 }
 
 void X11WindowBase::Create() {
+  DCHECK(!bounds_.size().IsEmpty());
+
   XSetWindowAttributes swa;
   memset(&swa, 0, sizeof(swa));
   swa.background_pixmap = None;
   swa.bit_gravity = NorthWestGravity;
-  swa.override_redirect = g_override_redirect;
-  xwindow_ = XCreateWindow(
-      xdisplay_, xroot_window_, requested_bounds_.x(), requested_bounds_.y(),
-      requested_bounds_.width(), requested_bounds_.height(),
-      0,               // border width
-      CopyFromParent,  // depth
-      InputOutput,
-      CopyFromParent,  // visual
-      CWBackPixmap | CWBitGravity | CWOverrideRedirect, &swa);
+  swa.override_redirect = UseTestConfigForPlatformWindows();
+  xwindow_ =
+      XCreateWindow(xdisplay_, xroot_window_, bounds_.x(), bounds_.y(),
+                    bounds_.width(), bounds_.height(),
+                    0,               // border width
+                    CopyFromParent,  // depth
+                    InputOutput,
+                    CopyFromParent,  // visual
+                    CWBackPixmap | CWBitGravity | CWOverrideRedirect, &swa);
 
   // Setup XInput event mask.
   long event_mask = ButtonPressMask | ButtonReleaseMask | FocusChangeMask |
@@ -114,8 +111,8 @@ void X11WindowBase::Create() {
   XFlush(xdisplay_);
 
   ::Atom protocols[2];
-  protocols[0] = atom_cache_.GetAtom("WM_DELETE_WINDOW");
-  protocols[1] = atom_cache_.GetAtom("_NET_WM_PING");
+  protocols[0] = gfx::GetAtom("WM_DELETE_WINDOW");
+  protocols[1] = gfx::GetAtom("_NET_WM_PING");
   XSetWMProtocols(xdisplay_, xwindow_, protocols, 2);
 
   // We need a WM_CLIENT_MACHINE and WM_LOCALE_NAME value so we integrate with
@@ -128,15 +125,15 @@ void X11WindowBase::Create() {
   static_assert(sizeof(long) >= sizeof(pid_t),
                 "pid_t should not be larger than long");
   long pid = getpid();
-  XChangeProperty(xdisplay_, xwindow_, atom_cache_.GetAtom("_NET_WM_PID"),
-                  XA_CARDINAL, 32, PropModeReplace,
-                  reinterpret_cast<unsigned char*>(&pid), 1);
+  XChangeProperty(xdisplay_, xwindow_, gfx::GetAtom("_NET_WM_PID"), XA_CARDINAL,
+                  32, PropModeReplace, reinterpret_cast<unsigned char*>(&pid),
+                  1);
   // Before we map the window, set size hints. Otherwise, some window managers
   // will ignore toplevel XMoveWindow commands.
   XSizeHints size_hints;
   size_hints.flags = PPosition | PWinGravity;
-  size_hints.x = requested_bounds_.x();
-  size_hints.y = requested_bounds_.y();
+  size_hints.x = bounds_.x();
+  size_hints.y = bounds_.y();
   // Set StaticGravity so that the window position is not affected by the
   // frame width when running with window manager.
   size_hints.win_gravity = StaticGravity;
@@ -174,20 +171,41 @@ void X11WindowBase::Close() {
 }
 
 void X11WindowBase::SetBounds(const gfx::Rect& bounds) {
-  requested_bounds_ = bounds;
-  if (!window_mapped_ || bounds == confirmed_bounds_)
-    return;
-  XWindowChanges changes = {0};
-  unsigned value_mask = CWX | CWY | CWWidth | CWHeight;
-  changes.x = bounds.x();
-  changes.y = bounds.y();
-  changes.width = bounds.width();
-  changes.height = bounds.height();
-  XConfigureWindow(xdisplay_, xwindow_, value_mask, &changes);
+  if (window_mapped_) {
+    XWindowChanges changes = {0};
+    unsigned value_mask = 0;
+
+    if (bounds_.size() != bounds.size()) {
+      changes.width = bounds.width();
+      changes.height = bounds.height();
+      value_mask |= CWHeight | CWWidth;
+    }
+
+    if (bounds_.origin() != bounds.origin()) {
+      changes.x = bounds.x();
+      changes.y = bounds.y();
+      value_mask |= CWX | CWY;
+    }
+
+    if (value_mask)
+      XConfigureWindow(xdisplay_, xwindow_, value_mask, &changes);
+  }
+
+  // Assume that the resize will go through as requested, which should be the
+  // case if we're running without a window manager.  If there's a window
+  // manager, it can modify or ignore the request, but (per ICCCM) we'll get a
+  // (possibly synthetic) ConfigureNotify about the actual size and correct
+  // |bounds_| later.
+  bounds_ = bounds;
+
+  // Even if the pixel bounds didn't change this call to the delegate should
+  // still happen. The device scale factor may have changed which effectively
+  // changes the bounds.
+  delegate_->OnBoundsChanged(bounds_);
 }
 
 gfx::Rect X11WindowBase::GetBounds() {
-  return confirmed_bounds_;
+  return bounds_;
 }
 
 void X11WindowBase::SetTitle(const base::string16& title) {
@@ -195,8 +213,8 @@ void X11WindowBase::SetTitle(const base::string16& title) {
     return;
   window_title_ = title;
   std::string utf8str = base::UTF16ToUTF8(title);
-  XChangeProperty(xdisplay_, xwindow_, atom_cache_.GetAtom("_NET_WM_NAME"),
-                  atom_cache_.GetAtom("UTF8_STRING"), 8, PropModeReplace,
+  XChangeProperty(xdisplay_, xwindow_, gfx::GetAtom("_NET_WM_NAME"),
+                  gfx::GetAtom("UTF8_STRING"), 8, PropModeReplace,
                   reinterpret_cast<const unsigned char*>(utf8str.c_str()),
                   utf8str.size());
   XTextProperty xtp;
@@ -222,8 +240,7 @@ void X11WindowBase::Restore() {}
 
 void X11WindowBase::MoveCursorTo(const gfx::Point& location) {
   XWarpPointer(xdisplay_, None, xroot_window_, 0, 0, 0, 0,
-               confirmed_bounds_.x() + location.x(),
-               confirmed_bounds_.y() + location.y());
+               bounds_.x() + location.x(), bounds_.y() + location.y());
 }
 
 void X11WindowBase::ConfineCursorToBounds(const gfx::Rect& bounds) {}
@@ -266,18 +283,18 @@ void X11WindowBase::ProcessXWindowEvent(XEvent* xev) {
       }
       gfx::Rect bounds(translated_x_in_pixels, translated_y_in_pixels,
                        xev->xconfigure.width, xev->xconfigure.height);
-      if (confirmed_bounds_ != bounds) {
-        confirmed_bounds_ = bounds;
-        delegate_->OnBoundsChanged(confirmed_bounds_);
+      if (bounds_ != bounds) {
+        bounds_ = bounds;
+        delegate_->OnBoundsChanged(bounds_);
       }
       break;
     }
 
     case ClientMessage: {
       Atom message = static_cast<Atom>(xev->xclient.data.l[0]);
-      if (message == atom_cache_.GetAtom("WM_DELETE_WINDOW")) {
+      if (message == gfx::GetAtom("WM_DELETE_WINDOW")) {
         delegate_->OnCloseRequest();
-      } else if (message == atom_cache_.GetAtom("_NET_WM_PING")) {
+      } else if (message == gfx::GetAtom("_NET_WM_PING")) {
         XEvent reply_event = *xev;
         reply_event.xclient.window = xroot_window_;
 
@@ -291,11 +308,4 @@ void X11WindowBase::ProcessXWindowEvent(XEvent* xev) {
   }
 }
 
-namespace test {
-
-void SetUseOverrideRedirectWindowByDefault(bool override_redirect) {
-  g_override_redirect = override_redirect;
-}
-
-}  // namespace test
 }  // namespace ui

@@ -18,8 +18,8 @@ extern "C" {
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/cancellation_flag.h"
 #include "base/synchronization/lock.h"
-#include "base/threading/non_thread_safe.h"
 #include "base/threading/thread.h"
+#include "base/threading/thread_checker.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -48,7 +48,8 @@ bool g_glx_oml_sync_control_supported = false;
 // whole since on some platforms (e.g. crosbug.com/34585), glXGetMscRateOML
 // always fails even though GLX_OML_sync_control is reported as being supported.
 bool g_glx_get_msc_rate_oml_supported = false;
-
+bool g_glx_ext_swap_control_supported = false;
+bool g_glx_mesa_swap_control_supported = false;
 bool g_glx_sgi_video_sync_supported = false;
 
 // A 24-bit RGB visual and colormap to use when creating offscreen surfaces.
@@ -170,7 +171,6 @@ class OMLSyncControlVSyncProvider : public SyncControlVSyncProvider {
 };
 
 class SGIVideoSyncThread : public base::Thread,
-                           public base::NonThreadSafe,
                            public base::RefCounted<SGIVideoSyncThread> {
  public:
   static scoped_refptr<SGIVideoSyncThread> Create() {
@@ -185,16 +185,18 @@ class SGIVideoSyncThread : public base::Thread,
   friend class base::RefCounted<SGIVideoSyncThread>;
 
   SGIVideoSyncThread() : base::Thread("SGI_video_sync") {
-    DCHECK(CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   }
 
   ~SGIVideoSyncThread() override {
-    DCHECK(CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
     g_video_sync_thread = nullptr;
     Stop();
   }
 
   static SGIVideoSyncThread* g_video_sync_thread;
+
+  THREAD_CHECKER(thread_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(SGIVideoSyncThread);
 };
@@ -423,6 +425,8 @@ bool GLSurfaceGLX::InitializeOneOff() {
       HasGLXExtension("GLX_EXT_texture_from_pixmap");
   g_glx_oml_sync_control_supported = HasGLXExtension("GLX_OML_sync_control");
   g_glx_get_msc_rate_oml_supported = g_glx_oml_sync_control_supported;
+  g_glx_ext_swap_control_supported = HasGLXExtension("GLX_EXT_swap_control");
+  g_glx_mesa_swap_control_supported = HasGLXExtension("GLX_MESA_swap_control");
   g_glx_sgi_video_sync_supported = HasGLXExtension("GLX_SGI_video_sync");
 
   const XVisualInfo& visual_info =
@@ -492,6 +496,16 @@ bool GLSurfaceGLX::IsTextureFromPixmapSupported() {
 }
 
 // static
+bool GLSurfaceGLX::IsEXTSwapControlSupported() {
+  return g_glx_ext_swap_control_supported;
+}
+
+// static
+bool GLSurfaceGLX::IsMESASwapControlSupported() {
+  return g_glx_mesa_swap_control_supported;
+}
+
+// static
 bool GLSurfaceGLX::IsOMLSyncControlSupported() {
   return g_glx_oml_sync_control_supported;
 }
@@ -513,7 +527,7 @@ GLXDrawable NativeViewGLSurfaceGLX::GetDrawableHandle() const {
   return glx_window_;
 }
 
-bool NativeViewGLSurfaceGLX::Initialize(GLSurface::Format format) {
+bool NativeViewGLSurfaceGLX::Initialize(GLSurfaceFormat format) {
   XWindowAttributes attributes;
   if (!XGetWindowAttributes(g_display, parent_window_, &attributes)) {
     LOG(ERROR) << "XGetWindowAttributes failed for window " << parent_window_
@@ -593,7 +607,6 @@ bool NativeViewGLSurfaceGLX::IsOffscreen() {
 gfx::SwapResult NativeViewGLSurfaceGLX::SwapBuffers() {
   TRACE_EVENT2("gpu", "NativeViewGLSurfaceGLX:RealSwapBuffers", "width",
                GetSize().width(), "height", GetSize().height());
-
   glXSwapBuffers(g_display, GetDrawableHandle());
   return gfx::SwapResult::SWAP_ACK;
 }
@@ -614,6 +627,10 @@ void* NativeViewGLSurfaceGLX::GetConfig() {
   if (!config_)
     config_ = GetConfigForWindow(g_display, window_);
   return config_;
+}
+
+GLSurfaceFormat NativeViewGLSurfaceGLX::GetFormat() {
+  return GLSurfaceFormat();
 }
 
 unsigned long NativeViewGLSurfaceGLX::GetCompatibilityKey() {
@@ -657,7 +674,7 @@ UnmappedNativeViewGLSurfaceGLX::UnmappedNativeViewGLSurfaceGLX(
     size_.SetSize(1, 1);
 }
 
-bool UnmappedNativeViewGLSurfaceGLX::Initialize(GLSurface::Format format) {
+bool UnmappedNativeViewGLSurfaceGLX::Initialize(GLSurfaceFormat format) {
   DCHECK(!window_);
 
   gfx::AcceleratedWidget parent_window = DefaultRootWindow(g_display);
@@ -707,6 +724,10 @@ void* UnmappedNativeViewGLSurfaceGLX::GetConfig() {
   if (!config_)
     config_ = GetConfigForWindow(g_display, window_);
   return config_;
+}
+
+GLSurfaceFormat UnmappedNativeViewGLSurfaceGLX::GetFormat() {
+  return GLSurfaceFormat();
 }
 
 unsigned long UnmappedNativeViewGLSurfaceGLX::GetCompatibilityKey() {

@@ -28,6 +28,12 @@ uint32_t grsltype_to_alignment_mask(GrSLType type) {
             return 0xF;
         case kVec4f_GrSLType:
             return 0xF;
+        case kVec2i_GrSLType:
+            return 0x7;
+        case kVec3i_GrSLType:
+            return 0xF;
+        case kVec4i_GrSLType:
+            return 0xF;
         case kMat22f_GrSLType:
             return 0x7;
         case kMat33f_GrSLType:
@@ -45,6 +51,8 @@ uint32_t grsltype_to_alignment_mask(GrSLType type) {
         case kBufferSampler_GrSLType:
         case kTexture2D_GrSLType:
         case kSampler_GrSLType:
+        case kImageStorage2D_GrSLType:
+        case kIImageStorage2D_GrSLType:
             break;
     }
     SkFAIL("Unexpected type");
@@ -57,9 +65,9 @@ uint32_t grsltype_to_alignment_mask(GrSLType type) {
 static inline uint32_t grsltype_to_vk_size(GrSLType type) {
     switch(type) {
         case kInt_GrSLType:
-            return 4;
+            return sizeof(int32_t);
         case kUint_GrSLType:
-            return 4;
+            return sizeof(int32_t);
         case kFloat_GrSLType:
             return sizeof(float);
         case kVec2f_GrSLType:
@@ -68,6 +76,12 @@ static inline uint32_t grsltype_to_vk_size(GrSLType type) {
             return 3 * sizeof(float);
         case kVec4f_GrSLType:
             return 4 * sizeof(float);
+        case kVec2i_GrSLType:
+            return 2 * sizeof(int32_t);
+        case kVec3i_GrSLType:
+            return 3 * sizeof(int32_t);
+        case kVec4i_GrSLType:
+            return 4 * sizeof(int32_t);
         case kMat22f_GrSLType:
             //TODO: this will be 4 * szof(float) on std430.
             return 8 * sizeof(float);
@@ -86,6 +100,8 @@ static inline uint32_t grsltype_to_vk_size(GrSLType type) {
         case kBufferSampler_GrSLType:
         case kTexture2D_GrSLType:
         case kSampler_GrSLType:
+        case kImageStorage2D_GrSLType:
+        case kIImageStorage2D_GrSLType:
             break;
     }
     SkFAIL("Unexpected type");
@@ -129,9 +145,12 @@ GrGLSLUniformHandler::UniformHandle GrVkUniformHandler::internalAddUniformArray(
                                                                             int arrayCount,
                                                                             const char** outName) {
     SkASSERT(name && strlen(name));
-    SkDEBUGCODE(static const uint32_t kVisibilityMask = kVertex_GrShaderFlag|kFragment_GrShaderFlag);
-    SkASSERT(0 == (~kVisibilityMask & visibility));
-    SkASSERT(0 != visibility);
+    // For now asserting the the visibility is either geometry types (vertex, tesselation, geometry,
+    // etc.) or only fragment.
+    SkASSERT(kVertex_GrShaderFlag == visibility ||
+             kGeometry_GrShaderFlag == visibility ||
+             (kVertex_GrShaderFlag | kGeometry_GrShaderFlag) == visibility ||
+             kFragment_GrShaderFlag == visibility);
     SkASSERT(kDefault_GrSLPrecision == precision || GrSLTypeIsFloatType(type));
     GrSLTypeIsFloatType(type);
 
@@ -149,17 +168,25 @@ GrGLSLUniformHandler::UniformHandle GrVkUniformHandler::internalAddUniformArray(
     }
     fProgramBuilder->nameVariable(uni.fVariable.accessName(), prefix, name, mangleName);
     uni.fVariable.setArrayCount(arrayCount);
-    // For now asserting the the visibility is either only vertex or only fragment
-    SkASSERT(kVertex_GrShaderFlag == visibility || kFragment_GrShaderFlag == visibility);
     uni.fVisibility = visibility;
     uni.fVariable.setPrecision(precision);
     // When outputing the GLSL, only the outer uniform block will get the Uniform modifier. Thus
     // we set the modifier to none for all uniforms declared inside the block.
-    uni.fVariable.setTypeModifier(GrGLSLShaderVar::kNone_TypeModifier);
+    uni.fVariable.setTypeModifier(GrShaderVar::kNone_TypeModifier);
 
-    uint32_t* currentOffset = kVertex_GrShaderFlag == visibility ? &fCurrentVertexUBOOffset
-                                                                   : &fCurrentFragmentUBOOffset;
+    uint32_t* currentOffset;
+    uint32_t geomStages = kVertex_GrShaderFlag | kGeometry_GrShaderFlag;
+    if (geomStages & visibility) {
+        currentOffset = &fCurrentGeometryUBOOffset;
+    } else {
+        SkASSERT(kFragment_GrShaderFlag == visibility);
+        currentOffset = &fCurrentFragmentUBOOffset;
+    }
     get_ubo_aligned_offset(&uni.fUBOffset, currentOffset, type, arrayCount);
+
+    SkString layoutQualifier;
+    layoutQualifier.appendf("offset=%d", uni.fUBOffset);
+    uni.fVariable.addLayoutQualifier(layoutQualifier.c_str());
 
     if (outName) {
         *outName = uni.fVariable.c_str();
@@ -168,49 +195,135 @@ GrGLSLUniformHandler::UniformHandle GrVkUniformHandler::internalAddUniformArray(
     return GrGLSLUniformHandler::UniformHandle(fUniforms.count() - 1);
 }
 
-GrGLSLUniformHandler::SamplerHandle GrVkUniformHandler::internalAddSampler(uint32_t visibility,
-                                                                           GrPixelConfig config,
-                                                                           GrSLType type,
+GrGLSLUniformHandler::SamplerHandle GrVkUniformHandler::addSampler(uint32_t visibility,
+                                                                   GrSwizzle swizzle,
+                                                                   GrSLType type,
+                                                                   GrSLPrecision precision,
+                                                                   const char* name) {
+    SkASSERT(name && strlen(name));
+    // For now asserting the the visibility is either only vertex, geometry, or fragment
+    SkASSERT(kVertex_GrShaderFlag == visibility ||
+             kFragment_GrShaderFlag == visibility ||
+             kGeometry_GrShaderFlag == visibility);
+    SkString mangleName;
+    char prefix = 'u';
+    fProgramBuilder->nameVariable(&mangleName, prefix, name, true);
+
+    UniformInfo& info = fSamplers.push_back();
+    SkASSERT(GrSLTypeIsCombinedSamplerType(type));
+    info.fVariable.setType(type);
+    info.fVariable.setTypeModifier(GrShaderVar::kUniform_TypeModifier);
+    info.fVariable.setPrecision(precision);
+    info.fVariable.setName(mangleName);
+    SkString layoutQualifier;
+    layoutQualifier.appendf("set=%d, binding=%d", kSamplerDescSet, fSamplers.count() - 1);
+    info.fVariable.addLayoutQualifier(layoutQualifier.c_str());
+    info.fVisibility = visibility;
+    info.fUBOffset = 0;
+    fSamplerSwizzles.push_back(swizzle);
+    SkASSERT(fSamplerSwizzles.count() == fSamplers.count());
+    return GrGLSLUniformHandler::SamplerHandle(fSamplers.count() - 1);
+}
+
+GrGLSLUniformHandler::TexelBufferHandle GrVkUniformHandler::addTexelBuffer(uint32_t visibility,
                                                                            GrSLPrecision precision,
                                                                            const char* name) {
     SkASSERT(name && strlen(name));
-    SkDEBUGCODE(static const uint32_t kVisMask = kVertex_GrShaderFlag | kFragment_GrShaderFlag);
+    SkDEBUGCODE(static const uint32_t kVisMask = kVertex_GrShaderFlag |
+                                                 kGeometry_GrShaderFlag |
+                                                 kFragment_GrShaderFlag);
     SkASSERT(0 == (~kVisMask & visibility));
     SkASSERT(0 != visibility);
     SkString mangleName;
     char prefix = 'u';
     fProgramBuilder->nameVariable(&mangleName, prefix, name, true);
-    fSamplers.emplace_back(visibility, config, type, precision, mangleName.c_str(),
-                           (uint32_t)fSamplers.count(), kSamplerDescSet);
-    return GrGLSLUniformHandler::SamplerHandle(fSamplers.count() - 1);
+
+    UniformInfo& info = fTexelBuffers.push_back();
+    info.fVariable.setType(kBufferSampler_GrSLType);
+    info.fVariable.setTypeModifier(GrShaderVar::kUniform_TypeModifier);
+    info.fVariable.setPrecision(precision);
+    info.fVariable.setName(mangleName);
+    SkString layoutQualifier;
+    layoutQualifier.appendf("set=%d, binding=%d", kTexelBufferDescSet, fTexelBuffers.count()- 1);
+    info.fVariable.addLayoutQualifier(layoutQualifier.c_str());
+    info.fVisibility = visibility;
+    info.fUBOffset = 0;
+    return GrGLSLUniformHandler::TexelBufferHandle(fTexelBuffers.count() - 1);
 }
 
 void GrVkUniformHandler::appendUniformDecls(GrShaderFlags visibility, SkString* out) const {
-    SkASSERT(kVertex_GrShaderFlag == visibility || kFragment_GrShaderFlag == visibility);
+    SkASSERT(kVertex_GrShaderFlag == visibility ||
+             kGeometry_GrShaderFlag == visibility ||
+             kFragment_GrShaderFlag == visibility);
 
     for (int i = 0; i < fSamplers.count(); ++i) {
-        const GrVkGLSLSampler& sampler = fSamplers[i];
-        SkASSERT(sampler.type() == kTexture2DSampler_GrSLType);
-        if (visibility == sampler.visibility()) {
-            sampler.fShaderVar.appendDecl(fProgramBuilder->glslCaps(), out);
+        const UniformInfo& sampler = fSamplers[i];
+        SkASSERT(sampler.fVariable.getType() == kTexture2DSampler_GrSLType);
+        if (visibility == sampler.fVisibility) {
+            sampler.fVariable.appendDecl(fProgramBuilder->shaderCaps(), out);
             out->append(";\n");
         }
     }
 
+    for (int i = 0; i < fTexelBuffers.count(); ++i) {
+        const UniformInfo& texelBuffer = fTexelBuffers[i];
+        if (visibility == texelBuffer.fVisibility) {
+            texelBuffer.fVariable.appendDecl(fProgramBuilder->shaderCaps(), out);
+            out->append(";\n");
+        }
+    }
+
+#ifdef SK_DEBUG
+    bool firstGeomOffsetCheck = false;
+    bool firstFragOffsetCheck = false;
+    for (int i = 0; i < fUniforms.count(); ++i) {
+        const UniformInfo& localUniform = fUniforms[i];
+        if (kVertex_GrShaderFlag == localUniform.fVisibility ||
+            kGeometry_GrShaderFlag == localUniform.fVisibility ||
+            (kVertex_GrShaderFlag | kGeometry_GrShaderFlag) == localUniform.fVisibility) {
+            if (!firstGeomOffsetCheck) {
+                // Check to make sure we are starting our offset at 0 so the offset qualifier we
+                // set on each variable in the uniform block is valid.
+                SkASSERT(0 == localUniform.fUBOffset);
+                firstGeomOffsetCheck = true;
+            }
+        } else {
+            SkASSERT(kFragment_GrShaderFlag == localUniform.fVisibility);
+            if (!firstFragOffsetCheck) {
+                // Check to make sure we are starting our offset at 0 so the offset qualifier we
+                // set on each variable in the uniform block is valid.
+                SkASSERT(0 == localUniform.fUBOffset);
+                firstFragOffsetCheck = true;
+            }
+        }
+    }
+#endif
+
     SkString uniformsString;
     for (int i = 0; i < fUniforms.count(); ++i) {
         const UniformInfo& localUniform = fUniforms[i];
-        if (visibility == localUniform.fVisibility) {
+        if (visibility & localUniform.fVisibility) {
             if (GrSLTypeIsFloatType(localUniform.fVariable.getType())) {
-                localUniform.fVariable.appendDecl(fProgramBuilder->glslCaps(), &uniformsString);
+                localUniform.fVariable.appendDecl(fProgramBuilder->shaderCaps(), &uniformsString);
                 uniformsString.append(";\n");
             }
         }
     }
+
     if (!uniformsString.isEmpty()) {
-        uint32_t uniformBinding = (visibility == kVertex_GrShaderFlag) ? kVertexBinding
-                                                                       : kFragBinding;
-        const char* stage = (visibility == kVertex_GrShaderFlag) ? "vertex" : "fragment";
+        uint32_t uniformBinding;
+        const char* stage;
+        if (kVertex_GrShaderFlag == visibility) {
+            uniformBinding = kGeometryBinding;
+            stage = "vertex";
+        } else if (kGeometry_GrShaderFlag == visibility) {
+            uniformBinding = kGeometryBinding;
+            stage = "geometry";
+        } else {
+            SkASSERT(kFragment_GrShaderFlag == visibility);
+            uniformBinding = kFragBinding;
+            stage = "fragment";
+        }
         out->appendf("layout (set=%d, binding=%d) uniform %sUniformBuffer\n{\n",
                      kUniformBufferDescSet, uniformBinding, stage);
         out->appendf("%s\n};\n", uniformsString.c_str());

@@ -73,7 +73,7 @@ QIOSWindow::QIOSWindow(QWindow *window)
     m_normalGeometry = initialGeometry(window, QPlatformWindow::geometry(),
         screen()->availableGeometry().width(), screen()->availableGeometry().height());
 
-    setWindowState(window->windowState());
+    setWindowState(window->windowStates());
     setOpacity(window->opacity());
 
     Qt::ScreenOrientation initialOrientation = window->contentOrientation();
@@ -236,7 +236,7 @@ bool QIOSWindow::isExposed() const
         && window()->isVisible() && !window()->geometry().isEmpty();
 }
 
-void QIOSWindow::setWindowState(Qt::WindowState state)
+void QIOSWindow::setWindowState(Qt::WindowStates state)
 {
     // Update the QWindow representation straight away, so that
     // we can update the statusbar visibility based on the new
@@ -246,12 +246,9 @@ void QIOSWindow::setWindowState(Qt::WindowState state)
     if (window()->isTopLevel() && window()->isVisible() && window()->isActive())
         [m_view.qtViewController updateProperties];
 
-    switch (state) {
-    case Qt::WindowNoState:
-        applyGeometry(m_normalGeometry);
-        break;
-    case Qt::WindowMaximized:
-    case Qt::WindowFullScreen: {
+    if (state & Qt::WindowMinimized) {
+        applyGeometry(QRect());
+    } else if (state & (Qt::WindowFullScreen | Qt::WindowMaximized)) {
         // When an application is in split-view mode, the UIScreen still has the
         // same geometry, but the UIWindow is resized to the area reserved for the
         // application. We use this to constrain the geometry used when applying the
@@ -268,15 +265,8 @@ void QIOSWindow::setWindowState(Qt::WindowState state)
             applyGeometry(fullscreenGeometry);
         else
             applyGeometry(maximizedGeometry);
-        break;
-    }
-    case Qt::WindowMinimized:
-        applyGeometry(QRect());
-        break;
-    case Qt::WindowActive:
-        Q_UNREACHABLE();
-    default:
-        Q_UNREACHABLE();
+    } else {
+        applyGeometry(m_normalGeometry);
     }
 }
 

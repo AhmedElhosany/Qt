@@ -55,6 +55,7 @@
 #include <QMatrix4x4>
 #include <QOpenGLFunctions>
 #include <QOpenGLTexture>
+#include <QRandomGenerator>
 
 Window::Window()
     : m_compositor(0)
@@ -74,7 +75,7 @@ static int sillyrandom(int range)
 {
     if (range <= 0)
         range = 200;
-    return qrand() % range;
+    return QRandomGenerator::global()->bounded(range);
 }
 
 void Window::paintGL()
@@ -89,8 +90,6 @@ void Window::paintGL()
     m_textureBlitter.bind(currentTarget);
     functions->glEnable(GL_BLEND);
     functions->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    qsrand(31337);
 
     Q_FOREACH (View *view, m_compositor->views()) {
         if (view->isCursor())

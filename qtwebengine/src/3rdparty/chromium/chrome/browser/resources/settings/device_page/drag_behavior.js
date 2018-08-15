@@ -80,8 +80,8 @@ var DragBehavior = {
   },
 
   /** @private */
-  addListeners_() {
-    let container = this.container_;
+  addListeners_: function() {
+    var container = this.container_;
     if (!container || this.mouseDownListener_)
       return;
     this.mouseDownListener_ = this.onMouseDown_.bind(this);
@@ -102,8 +102,8 @@ var DragBehavior = {
   },
 
   /** @private */
-  removeListeners_() {
-    let container = this.container_;
+  removeListeners_: function() {
+    var container = this.container_;
     if (!container || !this.mouseDownListener_)
       return;
     container.removeEventListener('mousedown', this.mouseDownListener_);
@@ -121,7 +121,7 @@ var DragBehavior = {
   },
 
   /**
-   * @param {Event} e The mouse down event.
+   * @param {!Event} e The mouse down event.
    * @return {boolean}
    * @private
    */
@@ -134,7 +134,7 @@ var DragBehavior = {
   },
 
   /**
-   * @param {Event} e The mouse move event.
+   * @param {!Event} e The mouse move event.
    * @return {boolean}
    * @private
    */
@@ -144,7 +144,7 @@ var DragBehavior = {
   },
 
   /**
-   * @param {Event} e The touch start event.
+   * @param {!Event} e The touch start event.
    * @return {boolean}
    * @private
    */
@@ -160,7 +160,7 @@ var DragBehavior = {
   },
 
   /**
-   * @param {Event} e The touch move event.
+   * @param {!Event} e The touch move event.
    * @return {boolean}
    * @private
    */
@@ -197,7 +197,7 @@ var DragBehavior = {
   },
 
   /**
-   * @param {Event} e
+   * @param {!Event} e
    * @return {boolean}
    * @private
    */
@@ -211,7 +211,7 @@ var DragBehavior = {
   },
 
   /**
-   * @param {Event} e The event which triggers this drag.
+   * @param {!Event} e The event which triggers this drag.
    * @param {DragPosition} eventLocation The location of the event.
    * @return {boolean}
    * @private

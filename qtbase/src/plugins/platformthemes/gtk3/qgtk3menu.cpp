@@ -41,7 +41,6 @@
 
 #include <QtGui/qwindow.h>
 #include <QtGui/qpa/qplatformtheme.h>
-#include <QtGui/qpa/qplatformwindow.h>
 
 #undef signals
 #include <gtk/gtk.h>
@@ -87,7 +86,6 @@ QGtk3MenuItem::QGtk3MenuItem()
       m_enabled(true),
       m_underline(false),
       m_invalid(true),
-      m_tag(reinterpret_cast<quintptr>(this)),
       m_menu(nullptr),
       m_item(nullptr)
 {
@@ -148,16 +146,6 @@ GtkWidget *QGtk3MenuItem::create()
 GtkWidget *QGtk3MenuItem::handle() const
 {
     return m_item;
-}
-
-quintptr QGtk3MenuItem::tag() const
-{
-    return m_tag;
-}
-
-void QGtk3MenuItem::setTag(quintptr tag)
-{
-    m_tag = tag;
 }
 
 QString QGtk3MenuItem::text() const
@@ -348,7 +336,6 @@ void QGtk3MenuItem::onToggle(GtkCheckMenuItem *check, void *data)
 }
 
 QGtk3Menu::QGtk3Menu()
-    : m_tag(reinterpret_cast<quintptr>(this))
 {
     m_menu = gtk_menu_new();
 
@@ -409,16 +396,6 @@ void QGtk3Menu::syncSeparatorsCollapsible(bool enable)
     Q_UNUSED(enable);
 }
 
-quintptr QGtk3Menu::tag() const
-{
-    return m_tag;
-}
-
-void QGtk3Menu::setTag(quintptr tag)
-{
-    m_tag = tag;
-}
-
 void QGtk3Menu::setEnabled(bool enabled)
 {
     gtk_widget_set_sensitive(m_menu, enabled);
@@ -449,11 +426,9 @@ void QGtk3Menu::showPopup(const QWindow *parentWindow, const QRect &targetRect, 
     if (index != -1)
         gtk_menu_set_active(GTK_MENU(m_menu), index);
 
-    m_targetPos = QPoint(targetRect.x(), targetRect.y() + targetRect.height());
-
-    QPlatformWindow *pw = parentWindow ? parentWindow->handle() : nullptr;
-    if (pw)
-        m_targetPos = pw->mapToGlobal(m_targetPos);
+    m_targetPos = targetRect.bottomLeft();
+    if (parentWindow)
+        m_targetPos = parentWindow->mapToGlobal(m_targetPos);
 
     gtk_menu_popup(GTK_MENU(m_menu), NULL, NULL, qt_gtk_menu_position_func, this, 0, gtk_get_current_event_time());
 }

@@ -8,6 +8,7 @@
 #define FPDFSDK_FSDK_DEFINE_H_
 
 #include "core/fpdfapi/parser/cpdf_parser.h"
+#include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/fx_dib.h"
 #include "public/fpdfview.h"
 
@@ -22,46 +23,21 @@
 
 class CPDF_Annot;
 class CPDF_Page;
+class CPDF_PageObject;
 class CPDF_PageRenderContext;
+class CPDF_PathObject;
 class IFSDK_PAUSE_Adapter;
 
-class CPDF_CustomAccess final : public IFX_SeekableReadStream {
- public:
-  explicit CPDF_CustomAccess(FPDF_FILEACCESS* pFileAccess);
-  ~CPDF_CustomAccess() override {}
-
-  // IFX_SeekableReadStream
-  FX_FILESIZE GetSize() override;
-  void Release() override;
-  bool ReadBlock(void* buffer, FX_FILESIZE offset, size_t size) override;
-
- private:
-  FPDF_FILEACCESS m_FileAccess;
-};
+// Layering prevents fxcrt from knowing about FPDF_FILEACCESS, so this can't
+// be a static method of IFX_SeekableReadStream.
+CFX_RetainPtr<IFX_SeekableReadStream> MakeSeekableReadStream(
+    FPDF_FILEACCESS* pFileAccess);
 
 #ifdef PDF_ENABLE_XFA
-class CFPDF_FileStream : public IFX_SeekableStream {
- public:
-  explicit CFPDF_FileStream(FPDF_FILEHANDLER* pFS);
-  ~CFPDF_FileStream() override {}
-
-  // IFX_SeekableStream:
-  IFX_SeekableStream* Retain() override;
-  void Release() override;
-  FX_FILESIZE GetSize() override;
-  bool IsEOF() override;
-  FX_FILESIZE GetPosition() override;
-  bool ReadBlock(void* buffer, FX_FILESIZE offset, size_t size) override;
-  size_t ReadBlock(void* buffer, size_t size) override;
-  bool WriteBlock(const void* buffer, FX_FILESIZE offset, size_t size) override;
-  bool Flush() override;
-
-  void SetPosition(FX_FILESIZE pos) { m_nCurPos = pos; }
-
- protected:
-  FPDF_FILEHANDLER* m_pFS;
-  FX_FILESIZE m_nCurPos;
-};
+// Layering prevents fxcrt from knowing about FPDF_FILEHANDLER, so this can't
+// be a static method of IFX_SeekableStream.
+CFX_RetainPtr<IFX_SeekableStream> MakeSeekableStream(
+    FPDF_FILEHANDLER* pFileHandler);
 #endif  // PDF_ENABLE_XFA
 
 // Object types for public FPDF_ types; these correspond to next layer down
@@ -87,7 +63,19 @@ FPDF_DOCUMENT FPDFDocumentFromCPDFDocument(CPDF_Document* doc);
 
 CPDF_Page* CPDFPageFromFPDFPage(FPDF_PAGE page);
 
+CPDF_PathObject* CPDFPathObjectFromFPDFPageObject(FPDF_PAGEOBJECT page_object);
+
+CPDF_PageObject* CPDFPageObjectFromFPDFPageObject(FPDF_PAGEOBJECT page_object);
+
+CPDF_Object* CPDFObjectFromFPDFAttachment(FPDF_ATTACHMENT attachment);
+
+CFX_ByteString CFXByteStringFromFPDFWideString(FPDF_WIDESTRING wide_string);
+
 CFX_DIBitmap* CFXBitmapFromFPDFBitmap(FPDF_BITMAP bitmap);
+
+unsigned long Utf16EncodeMaybeCopyAndReturnLength(const CFX_WideString& text,
+                                                  void* buffer,
+                                                  unsigned long buflen);
 
 void FSDK_SetSandBoxPolicy(FPDF_DWORD policy, FPDF_BOOL enable);
 FPDF_BOOL FSDK_IsSandBoxPolicyEnabled(FPDF_DWORD policy);
@@ -105,5 +93,10 @@ void FPDF_RenderPage_Retail(CPDF_PageRenderContext* pContext,
 void CheckUnSupportError(CPDF_Document* pDoc, uint32_t err_code);
 void CheckUnSupportAnnot(CPDF_Document* pDoc, const CPDF_Annot* pPDFAnnot);
 void ProcessParseError(CPDF_Parser::Error err);
+FPDF_BOOL FPDFPageObj_SetFillColor(FPDF_PAGEOBJECT page_object,
+                                   unsigned int R,
+                                   unsigned int G,
+                                   unsigned int B,
+                                   unsigned int A);
 
 #endif  // FPDFSDK_FSDK_DEFINE_H_

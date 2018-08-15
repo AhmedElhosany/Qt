@@ -9,6 +9,8 @@
       :host {
         --cr-toolbar-field-width: 580px;
         --cr-toolbar-height: 56px;
+        --paper-icon-button-ink-color: white;
+        align-items: center;
         color: #fff;
         display: flex;
         height: var(--cr-toolbar-height);
@@ -16,22 +18,26 @@
 
       h1 {
         -webkit-margin-start: 6px;
-        -webkit-padding-end: 2px;
+        -webkit-padding-end: 12px;
         flex: 1;
         font-size: 123%;
         font-weight: 400;
-        text-overflow: ellipsis;
         overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
       }
 
       #leftContent {
-        -webkit-padding-start: 18px;
-        align-items: center;
-        box-sizing: border-box;
-        display: flex;
-        position: absolute;
+        /* margin-start here must match margin-end on #rightContent. */
+        -webkit-margin-start: 12px;
+        position: relative;
         transition: opacity 100ms;
+      }
+
+      #leftSpacer {
+        -webkit-margin-start: 6px;
+        align-items: center;
+        display: flex;
       }
 
       #menuButton {
@@ -44,37 +50,31 @@
       }
 
       #centeredContent {
-        -webkit-margin-start: var(--cr-toolbar-field-margin, 0);
         display: flex;
         flex: 1 1 0;
         justify-content: center;
       }
 
-      :host([narrow_]) #centeredContent {
-        -webkit-padding-end: var(--cr-toolbar-field-end-padding, 12px);
+      #rightContent {
+        -webkit-margin-end: 12px;
       }
 
-      :host(:not([narrow_])) h1 {
-        @apply(--cr-toolbar-header-wide);
-      }
-
-      :host(:not([narrow_])) #leftContent {
-        /* The amount of space left of the search field:
-           (width of window - width of search field) / 2. */
-        max-width: calc((100% - var(--cr-toolbar-field-width)) / 2);
-        @apply(--cr-toolbar-left-content-wide);
-      }
-
-      :host(:not([narrow_])) #rightContent {
-        @apply(--cr-toolbar-right-content-wide);
-      }
-
-      :host([narrow_]) #centeredContent {
+      :host([narrow]) #centeredContent {
         justify-content: flex-end;
       }
 
-      :host([narrow_][showing-search_]) #leftContent {
+      :host([narrow][showing-search_]) #leftContent {
         opacity: 0;
+        position: absolute;
+      }
+
+      :host(:not([narrow])) #leftContent {
+        flex: 1 1 var(--cr-toolbar-field-margin, 0);
+      }
+
+      :host(:not([narrow])) #rightContent {
+        flex: 1 1 0;
+        text-align: end;
       }
 
       #menuPromo {
@@ -99,11 +99,11 @@
       #menuPromo::before {
         background: inherit;
         /* Up arrow. 105% in Y coordinates fixes glitch at 110/125% zoom. */
-        clip-path: polygon(0 105%, 100% 105%, 50% 0);  
+        clip-path: polygon(0 105%, 100% 105%, 50% 0);
         content: '';
         display: block;
-        left: 10px;
         height: 6px;
+        left: 10px;
         position: absolute;
         top: -6px;
         width: 12px;
@@ -127,30 +127,33 @@
       }
     </style>
     <div id="leftContent">
-      <!-- Note: showing #menuPromo relies on this dom-if being [restamp]. -->
-      <template is="dom-if" if="[[showMenu]]" restamp>
-        <paper-icon-button id="menuButton" icon="cr:menu" on-tap="onMenuTap_"
-            title="[[titleIfNotShowMenuPromo_(menuLabel, showMenuPromo)]]"
-            aria-label$="[[menuLabel]]">
-        </paper-icon-button>
-        <template is="dom-if" if="[[showMenuPromo]]">
-          <div id="menuPromo" role="tooltip">
-            [[menuPromo]]
-            <button id="closePromo" on-tap="onClosePromoTap_"
-                aria-label$="[[closeMenuPromo]]">&#x2715;</button>
-          </paper-tooltip>
+      <div id="leftSpacer">
+        <!-- Note: showing #menuPromo relies on this dom-if being [restamp]. -->
+        <template is="dom-if" if="[[showMenu]]" restamp>
+          <paper-icon-button id="menuButton" icon="cr20:menu"
+              on-tap="onMenuTap_"
+              title="[[titleIfNotShowMenuPromo_(menuLabel, showMenuPromo)]]"
+              aria-label$="[[menuLabel]]">
+          </paper-icon-button>
+          <template is="dom-if" if="[[showMenuPromo]]">
+            <div id="menuPromo" role="tooltip">
+              [[menuPromo]]
+              <button id="closePromo" on-tap="onClosePromoTap_"
+                  aria-label$="[[closeMenuPromo]]">&#x2715;</button>
+            </paper-tooltip>
+          </template>
         </template>
-      </template>
-      <h1>[[pageName]]</h1>
+        <h1>[[pageName]]</h1>
+      </div>
     </div>
 
     <div id="centeredContent">
-      <cr-toolbar-search-field id="search" narrow="[[narrow_]]"
+      <cr-toolbar-search-field id="search" narrow="[[narrow]]"
           label="[[searchPrompt]]" clear-label="[[clearLabel]]"
           spinner-active="[[spinnerActive]]"
           showing-search="{{showingSearch_}}">
       </cr-toolbar-search-field>
-      <iron-media-query query="(max-width: 900px)" query-matches="{{narrow_}}">
+      <iron-media-query query="(max-width: 900px)" query-matches="{{narrow}}">
       </iron-media-query>
     </div>
 

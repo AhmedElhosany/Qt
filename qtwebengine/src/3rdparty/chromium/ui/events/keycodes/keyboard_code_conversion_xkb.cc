@@ -13,6 +13,13 @@
 
 namespace ui {
 
+// We support dead keys beyond those with predefined keysym names,
+// expressed as numeric constants with |kDeadKeyFlag| set.
+// Xkbcommon accepts and does not use any bits in 0x0E000000.
+//
+constexpr xkb_keysym_t kDeadKeyFlag = 0x08000000;
+constexpr int32_t kUnicodeMax = 0x10FFFF;
+
 DomKey NonPrintableXKeySymToDomKey(xkb_keysym_t keysym) {
   switch (keysym) {
     case XKB_KEY_BackSpace:
@@ -62,7 +69,7 @@ DomKey NonPrintableXKeySymToDomKey(xkb_keysym_t keysym) {
       return DomKey::KANA_MODE;
     case XKB_KEY_Eisu_Shift:
     case XKB_KEY_Eisu_toggle:
-      return DomKey::EISU;
+      return DomKey::ALPHANUMERIC;
     case XKB_KEY_Hangul:
       return DomKey::HANGUL_MODE;
     case XKB_KEY_Hangul_Hanja:
@@ -466,10 +473,15 @@ DomKey NonPrintableXKeySymToDomKey(xkb_keysym_t keysym) {
       // greek question mark
       return DomKey::DeadKeyFromCombiningCharacter(0x037E);
     default:
+      if (keysym & kDeadKeyFlag) {
+        int32_t character = keysym & ~kDeadKeyFlag;
+        if ((character >= 0) && (character <= kUnicodeMax)) {
+          return DomKey::DeadKeyFromCombiningCharacter(character);
+        }
+      }
       return DomKey::NONE;
   }
 }
-
 DomKey XKeySymToDomKey(xkb_keysym_t keysym, base::char16 character) {
   DomKey dom_key = NonPrintableXKeySymToDomKey(keysym);
   if (dom_key != DomKey::NONE)

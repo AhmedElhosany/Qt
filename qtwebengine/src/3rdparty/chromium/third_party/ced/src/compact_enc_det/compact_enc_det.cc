@@ -82,19 +82,19 @@ using std::string;
 
 // Norbert Runge has noted these words in CP1252 that are mistakenly identified
 // as UTF-8 because of the last pair of characters:
-//  NESTL…Æ               0xC9 0xAE U+00C9 U+00AE   C9AE = U+026E;SMALL LEZH
-//  drauﬂ\u2019           0xDF 0x92 U+00DF U+2019   DF92 = U+07D2;NKO LETTER N
-//  Mutterschoﬂ\u201c     0xDF 0x93 U+00DF U+201C   DF93 = U+07D3;NKO LETTER BA
-//  Schoﬂ\u201c           0xDF 0x93 U+00DF U+201C
-//  weiﬂ\u201c            0xDF 0x93 U+00DF U+00AB
-//  Schnellfuﬂ\u201c      0xDF 0x93 U+00DF U+201C
-//  s¸ﬂ´                  0xDF 0xAB U+00DF U+00AB   DFAB = U+07EB;NKO HIGH TONE
+//  NESTL√â¬Æ               0xC9 0xAE U+00C9 U+00AE   C9AE = U+026E;SMALL LEZH
+//  drau√ü\u2019           0xDF 0x92 U+00DF U+2019   DF92 = U+07D2;NKO LETTER N
+//  Mutterscho√ü\u201c     0xDF 0x93 U+00DF U+201C   DF93 = U+07D3;NKO LETTER BA
+//  Scho√ü\u201c           0xDF 0x93 U+00DF U+201C
+//  wei√ü\u201c            0xDF 0x93 U+00DF U+00AB
+//  Schnellfu√ü\u201c      0xDF 0x93 U+00DF U+201C
+//  s√º√ü¬´                  0xDF 0xAB U+00DF U+00AB   DFAB = U+07EB;NKO HIGH TONE
 // These four byte combinations now explicitly boost Latin1/CP1252.
 
 // And for reference, here are a couple of Portuguese spellings
 // that may be mistaken as double-byte encodings.
-//   informaÁıes          0xE7 0xF5
-//   traiÁ„o              0xE7 0xE3
+//   informa√ß√µes          0xE7 0xF5
+//   trai√ß√£o              0xE7 0xE3
 
 
 static const char* kVersion = "2.2";
@@ -271,9 +271,9 @@ typedef struct {
   uint8 x_stddev;       // Standard deviation of byte2 value
   uint8 y_stddev;       // Standard deviation of byte1 value
   int so;               // Scaling offset -- add to probabilities below
-  const uint8 b1[256];  // Unigram probability for first byte of aligned bigram
-  const uint8 b2[256];  // Unigram probability for second byte of aligned bigram
-  const uint8 b12[256]; // Unigram probability for cross bytes of aligned bigram
+  uint8 b1[256];        // Unigram probability for first byte of aligned bigram
+  uint8 b2[256];        // Unigram probability for second byte of aligned bigram
+  uint8 b12[256];       // Unigram probability for cross bytes of aligned bigram
 } UnigramEntry;
 
 //typedef struct {
@@ -4536,19 +4536,11 @@ bool QuickPrintableAsciiScan(const char* text, int text_length) {
   const uint8* srclimit = src + text_length;
   const uint8* srclimit8 = srclimit - 7;
   while (src < srclimit8) {
-    const uint32* s = reinterpret_cast<const uint32*>(src);
-    uint32 tmp1 = s[0];
-    uint32 tmp2 = s[1];
-    src += 8;
     // Exits on any byte outside [0x20..0x7E] range (HT LF CR exit)
-    uint32 byte_outside_range_mask = ((tmp1 - 0x20202020U) |
-                                      (tmp1 + 0x01010101U) |
-                                      (tmp2 - 0x20202020U) |
-                                      (tmp2 + 0x01010101U));
-    if ((byte_outside_range_mask & 0x80808080U) != 0) {
-      src -= 8;
-      break;
-    }
+    uint8 mask = 0;
+    for (int i = 0; i < 8; ++i) mask |= (src[i]-0x20)|(src[i]+0x01);
+    if ((mask & 0x80) != 0) break;
+    src += 8;
   }
   while (src < srclimit) {
     uint8 uc = *src++;
@@ -4820,14 +4812,15 @@ int RobustScan(const char* text,
   //====================================
   while (src < srclimitfast2) {
     // Skip to next interesting bigram
+
     while (src < srclimitfast4) {
-      uint32 u32 = *reinterpret_cast<const uint32*>(src);
-      src+= 4;
-      if ((u32 & 0x80808080) != 0) {src -= 4; break;}
+      if (((src[0] | src[1] | src[2] | src[3]) & 0x80) != 0) break;
+      src += 4;
     }
+
     while (src < srclimitfast2) {
-      uint8 uc = *src++;
-      if (static_cast<signed char>(uc) < 0) {src--; break;}
+      if ((src[0] & 0x80) != 0) break;
+      src++;
     }
 
     if (src < srclimitfast2) {
@@ -4871,6 +4864,7 @@ int RobustScan(const char* text,
       if ((bigram_count > kMinRobustBigramCount) && (src > srclimitmin)) {
         break;
       }
+
     }
   }
 
@@ -5335,13 +5329,13 @@ Encoding InternalDetectEncoding(
     while (src < srclimitfast2) {
       // Skip to next interesting byte (this is the faster part)
       while (src < srclimitfast4) {
-        uint32 u32 = *reinterpret_cast<const uint32*>(src);
-        src+= 4;
-        if ((u32 & 0x80808080) != 0) {src -= 4; break;}
+        if (((src[0] | src[1] | src[2] | src[3]) & 0x80) != 0) break;
+        src += 4;
       }
+
       while (src < srclimitfast2) {
-        uint8 uc = *src++;
-        if (static_cast<signed char>(uc) < 0) {src--; break;}
+        if ((src[0] & 0x80) != 0) break;
+        src++;
       }
 
       if (src < srclimitfast2) {
@@ -5647,14 +5641,44 @@ Encoding CompactEncDet::DetectEncoding(
   }
 
 #if defined(HTML5_MODE)
-  // ISO_2022_JP (JAPANESE_JIS) is the only 7-bit encoding
-  // supported in HTML5 mode. Mark all the other encodings to
-  // ASCII_7BIT.
+  // Map all the Shift-JIS variants to Shift-JIS when used in Japanese locale.
+  if (language_hint == JAPANESE && IsShiftJisOrVariant(enc)) {
+    enc = JAPANESE_SHIFT_JIS;
+  }
+
+  // 7-bit encodings (except ISO-2022-JP), and some obscure encodings not
+  // supported in WHATWG encoding standard are marked as ASCII to keep the raw
+  // bytes intact.
   switch (enc) {
     case ISO_2022_KR:
     case ISO_2022_CN:
     case HZ_GB_2312:
     case UTF7:
+
+    case CHINESE_EUC_DEC:
+    case CHINESE_CNS:
+    case CHINESE_BIG5_CP950:
+    case JAPANESE_CP932:
+    case MSFT_CP874:
+    case TSCII:
+    case TAMIL_MONO:
+    case TAMIL_BI:
+    case JAGRAN:
+    case BHASKAR:
+    case HTCHANAKYA:
+    case BINARYENC:
+    case UTF8UTF8:
+    case TAM_ELANGO:
+    case TAM_LTTMBARANI:
+    case TAM_SHREE:
+    case TAM_TBOOMIS:
+    case TAM_TMNEWS:
+    case TAM_WEBTAMIL:
+    case KDDI_SHIFT_JIS:
+    case DOCOMO_SHIFT_JIS:
+    case SOFTBANK_SHIFT_JIS:
+    case KDDI_ISO_2022_JP:
+    case SOFTBANK_ISO_2022_JP:
       enc = ASCII_7BIT;
       break;
     default:

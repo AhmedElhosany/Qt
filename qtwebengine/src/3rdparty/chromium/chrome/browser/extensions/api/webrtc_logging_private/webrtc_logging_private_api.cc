@@ -56,6 +56,8 @@ std::string HashIdWithOrigin(const std::string& security_origin,
 }
 }  // namespace
 
+// TODO(hlundin): Consolidate with WebrtcAudioPrivateFunction and improve.
+// http://crbug.com/710371
 content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
     const RequestInfo& request, const std::string& security_origin) {
   // If |guest_process_id| is defined, directly use this id to find the
@@ -65,31 +67,30 @@ content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
 
   // Otherwise, use the |tab_id|. If there's no |tab_id| and no
   // |guest_process_id|, we can't look up the RenderProcessHost.
-  if (!request.tab_id.get())
-    return NULL;
+  if (!request.tab_id.get()) {
+    error_ = "No tab ID or guest process ID specified.";
+    return nullptr;
+  }
 
   int tab_id = *request.tab_id;
-  content::WebContents* contents = NULL;
-  if (!ExtensionTabUtil::GetTabById(
-           tab_id, GetProfile(), true, NULL, NULL, &contents, NULL)) {
+  content::WebContents* contents = nullptr;
+  if (!ExtensionTabUtil::GetTabById(tab_id, GetProfile(), true, nullptr,
+                                    nullptr, &contents, nullptr)) {
     error_ = extensions::ErrorUtils::FormatErrorMessage(
         extensions::tabs_constants::kTabNotFoundError,
         base::IntToString(tab_id));
-    return NULL;
+    return nullptr;
   }
   if (!contents) {
-    error_ = extensions::ErrorUtils::FormatErrorMessage(
-        "Web contents for tab not found",
-        base::IntToString(tab_id));
-    return NULL;
+    error_ = "Web contents for tab not found.";
+    return nullptr;
   }
   GURL expected_origin = contents->GetLastCommittedURL().GetOrigin();
   if (expected_origin.spec() != security_origin) {
-    error_ = extensions::ErrorUtils::FormatErrorMessage(
-        "Invalid security origin. Expected=" + expected_origin.spec() +
-            ", actual=" + security_origin,
-        base::IntToString(tab_id));
-    return NULL;
+    error_ = base::StringPrintf(
+        "Invalid security origin. Expected=%s, actual=%s",
+        expected_origin.spec().c_str(), security_origin.c_str());
+    return nullptr;
   }
   return contents->GetRenderProcessHost();
 }
@@ -172,9 +173,10 @@ bool WebrtcLoggingPrivateSetMetaDataFunction::RunAsync() {
   for (const MetaDataEntry& entry : params->meta_data)
     (*meta_data)[entry.key] = entry.value;
 
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
-      &WebRtcLoggingHandlerHost::SetMetaData, webrtc_logging_handler_host,
-      base::Passed(&meta_data), callback));
+  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
+                          base::BindOnce(&WebRtcLoggingHandlerHost::SetMetaData,
+                                         webrtc_logging_handler_host,
+                                         base::Passed(&meta_data), callback));
 
   return true;
 }
@@ -189,9 +191,10 @@ bool WebrtcLoggingPrivateStartFunction::RunAsync() {
   if (!webrtc_logging_handler_host.get())
     return false;
 
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
-      &WebRtcLoggingHandlerHost::StartLogging, webrtc_logging_handler_host,
-      callback));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&WebRtcLoggingHandlerHost::StartLogging,
+                     webrtc_logging_handler_host, callback));
 
   return true;
 }
@@ -214,7 +217,7 @@ bool WebrtcLoggingPrivateSetUploadOnRenderCloseFunction::RunAsync() {
   // UIThreadExtensionFunction. Fix this.
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      base::Bind(
+      base::BindOnce(
           &WebrtcLoggingPrivateSetUploadOnRenderCloseFunction::SendResponse,
           this, true));
   return true;
@@ -230,9 +233,10 @@ bool WebrtcLoggingPrivateStopFunction::RunAsync() {
   if (!webrtc_logging_handler_host.get())
     return false;
 
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
-      &WebRtcLoggingHandlerHost::StopLogging, webrtc_logging_handler_host,
-      callback));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&WebRtcLoggingHandlerHost::StopLogging,
+                     webrtc_logging_handler_host, callback));
 
   return true;
 }
@@ -250,9 +254,10 @@ bool WebrtcLoggingPrivateStoreFunction::RunAsync() {
   const std::string local_log_id(HashIdWithOrigin(params->security_origin,
                                                   params->log_id));
 
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
-      &WebRtcLoggingHandlerHost::StoreLog,
-      webrtc_logging_handler_host, local_log_id, callback));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&WebRtcLoggingHandlerHost::StoreLog,
+                     webrtc_logging_handler_host, local_log_id, callback));
 
   return true;
 }
@@ -273,9 +278,10 @@ bool WebrtcLoggingPrivateUploadStoredFunction::RunAsync() {
   const std::string local_log_id(HashIdWithOrigin(params->security_origin,
                                                   params->log_id));
 
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
-      &WebRtcLoggingHandlerHost::UploadStoredLog, logging_handler, local_log_id,
-      callback));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&WebRtcLoggingHandlerHost::UploadStoredLog,
+                     logging_handler, local_log_id, callback));
 
   return true;
 }
@@ -292,8 +298,9 @@ bool WebrtcLoggingPrivateUploadFunction::RunAsync() {
   WebRtcLoggingHandlerHost::UploadDoneCallback callback = base::Bind(
       &WebrtcLoggingPrivateUploadFunction::FireCallback, this);
 
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
-      &WebRtcLoggingHandlerHost::UploadLog, logging_handler, callback));
+  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
+                          base::BindOnce(&WebRtcLoggingHandlerHost::UploadLog,
+                                         logging_handler, callback));
 
   return true;
 }
@@ -308,9 +315,10 @@ bool WebrtcLoggingPrivateDiscardFunction::RunAsync() {
   if (!webrtc_logging_handler_host.get())
     return false;
 
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
-      &WebRtcLoggingHandlerHost::DiscardLog, webrtc_logging_handler_host,
-      callback));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&WebRtcLoggingHandlerHost::DiscardLog,
+                     webrtc_logging_handler_host, callback));
 
   return true;
 }
@@ -349,13 +357,11 @@ bool WebrtcLoggingPrivateStartRtpDumpFunction::RunAsync() {
                          base::Bind(&WebRtcLoggingHandlerHost::OnRtpPacket,
                                     webrtc_logging_handler_host));
 
-  BrowserThread::PostTask(BrowserThread::IO,
-                          FROM_HERE,
-                          base::Bind(&WebRtcLoggingHandlerHost::StartRtpDump,
-                                     webrtc_logging_handler_host,
-                                     type,
-                                     callback,
-                                     stop_callback));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&WebRtcLoggingHandlerHost::StartRtpDump,
+                     webrtc_logging_handler_host, type, callback,
+                     stop_callback));
   return true;
 }
 
@@ -386,12 +392,10 @@ bool WebrtcLoggingPrivateStopRtpDumpFunction::RunAsync() {
   WebRtcLoggingHandlerHost::GenericDoneCallback callback = base::Bind(
       &WebrtcLoggingPrivateStopRtpDumpFunction::FireCallback, this);
 
-  BrowserThread::PostTask(BrowserThread::IO,
-                          FROM_HERE,
-                          base::Bind(&WebRtcLoggingHandlerHost::StopRtpDump,
-                                     webrtc_logging_handler_host,
-                                     type,
-                                     callback));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&WebRtcLoggingHandlerHost::StopRtpDump,
+                     webrtc_logging_handler_host, type, callback));
   return true;
 }
 

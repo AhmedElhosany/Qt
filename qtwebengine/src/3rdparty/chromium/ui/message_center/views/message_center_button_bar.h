@@ -14,13 +14,13 @@
 
 namespace views {
 class Label;
+class ToggleImageButton;
 }
 
 namespace message_center {
 
 class MessageCenter;
 class MessageCenterView;
-class NotificationCenterButton;
 class NotifierSettingsProvider;
 
 // MessageCenterButtonBar is the class that shows the content outside the main
@@ -43,12 +43,16 @@ class MessageCenterButtonBar : public views::View,
   void SetCloseAllButtonEnabled(bool enabled);
 
   MESSAGE_CENTER_EXPORT views::Button* GetCloseAllButtonForTest() const;
+  MESSAGE_CENTER_EXPORT views::Button* GetSettingsButtonForTest() const;
+  MESSAGE_CENTER_EXPORT views::Button* GetQuietModeButtonForTest() const;
 
   // Sometimes we shouldn't see the back arrow (not in settings).
   void SetBackArrowVisible(bool visible);
 
   // Update the label of the title.
   void SetTitle(const base::string16& title);
+
+  void SetButtonsVisible(bool visible);
 
  private:
   // Updates the layout manager which can have differing configuration
@@ -79,12 +83,12 @@ class MessageCenterButtonBar : public views::View,
 #endif
 
   // Sub-views of the button bar.
-  NotificationCenterButton* title_arrow_;
+  views::ToggleImageButton* title_arrow_;
   views::Label* notification_label_;
   views::View* button_container_;
-  NotificationCenterButton* close_all_button_;
-  NotificationCenterButton* settings_button_;
-  NotificationCenterButton* quiet_mode_button_;
+  views::ToggleImageButton* close_all_button_;
+  views::ToggleImageButton* settings_button_;
+  views::ToggleImageButton* quiet_mode_button_;
 
   DISALLOW_COPY_AND_ASSIGN(MessageCenterButtonBar);
 };

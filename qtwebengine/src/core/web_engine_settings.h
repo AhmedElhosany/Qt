@@ -83,7 +83,9 @@ public:
         FocusOnNavigationEnabled,
         PrintElementBackgrounds,
         AllowRunningInsecureContent,
-        AllowGeolocationOnInsecureOrigins
+        AllowGeolocationOnInsecureOrigins,
+        AllowWindowActivationFromJavaScript,
+        ShowScrollBars
     };
 
     // Must match the values from the public API in qwebenginesettings.h.
@@ -127,10 +129,12 @@ public:
     void setDefaultTextEncoding(const QString &encoding);
     QString defaultTextEncoding() const;
 
-    void initDefaults(bool offTheRecord = false);
+    void initDefaults();
     void scheduleApply();
 
     void scheduleApplyRecursively();
+
+    bool getJavaScriptCanOpenWindowsAutomatically();
 
 private:
     void doApply();

@@ -168,19 +168,19 @@ static void colored_fputs(int level, int tint, const char *str)
 #else
     if (local_use_color == 1) {
         fprintf(stderr,
-                "\033[%d;3%dm%s\033[0m",
+                "\033[%"PRIu32";3%"PRIu32"m%s\033[0m",
                 (color[level] >> 4) & 15,
                 color[level] & 15,
                 str);
     } else if (tint && use_color == 256) {
         fprintf(stderr,
-                "\033[48;5;%dm\033[38;5;%dm%s\033[0m",
+                "\033[48;5;%"PRIu32"m\033[38;5;%dm%s\033[0m",
                 (color[level] >> 16) & 0xff,
                 tint,
                 str);
     } else if (local_use_color == 256) {
         fprintf(stderr,
-                "\033[48;5;%dm\033[38;5;%dm%s\033[0m",
+                "\033[48;5;%"PRIu32"m\033[38;5;%"PRIu32"m%s\033[0m",
                 (color[level] >> 16) & 0xff,
                 (color[level] >> 8) & 0xff,
                 str);
@@ -390,15 +390,6 @@ int av_log_get_level(void)
 
 void av_log_set_level(int level)
 {
-#if defined(_WIN32) && defined(_M_X64)
-    // VS2013 has a bug where FMA3 instructions will be executed on CPUs that
-    // support them despite them being disabled at the OS level, causing illegal
-    // instruction exceptions. av_log_set_level() is Chromium's first call into
-    // ffmpegsumo.dll, so disable FMA3 here until we're on VS2015.
-    // See http://crbug.com/440892 for details.
-    _set_FMA3_enable(0);
-#endif
-
     av_log_level = level;
 }
 

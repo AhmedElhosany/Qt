@@ -131,6 +131,7 @@ class MockTransferBuffer : public TransferBufferInterface {
 
   ~MockTransferBuffer() override {}
 
+  base::SharedMemoryHandle shared_memory_handle() const override;
   bool Initialize(unsigned int starting_buffer_size,
                   unsigned int result_size,
                   unsigned int /* min_buffer_size */,
@@ -243,6 +244,10 @@ class MockTransferBuffer : public TransferBufferInterface {
   DISALLOW_COPY_AND_ASSIGN(MockTransferBuffer);
 };
 
+base::SharedMemoryHandle MockTransferBuffer::shared_memory_handle() const {
+  return base::SharedMemoryHandle();
+}
+
 bool MockTransferBuffer::Initialize(
     unsigned int starting_buffer_size,
     unsigned int result_size,
@@ -343,20 +348,6 @@ class GenBuffersAPI {
   }
 };
 
-// API wrapper for Framebuffers.
-class GenFramebuffersAPI {
- public:
-  static void Gen(GLES2Implementation* gl_impl, GLsizei n, GLuint* ids) {
-    gl_impl->GenFramebuffers(n, ids);
-  }
-
-  static void Delete(GLES2Implementation* gl_impl,
-                     GLsizei n,
-                     const GLuint* ids) {
-    gl_impl->DeleteFramebuffers(n, ids);
-  }
-};
-
 // API wrapper for Renderbuffers.
 class GenRenderbuffersAPI {
  public:
@@ -404,6 +395,8 @@ class GLES2ImplementationTest : public testing::Test {
   static const GLint kMaxVertexAttribs = 8;
   static const GLint kMaxVertexTextureImageUnits = 0;
   static const GLint kMaxVertexUniformVectors = 128;
+  static const GLint kMaxViewportWidth = 8192;
+  static const GLint kMaxViewportHeight = 6144;
   static const GLint kNumCompressedTextureFormats = 0;
   static const GLint kNumShaderBinaryFormats = 0;
   static const GLuint kMaxTransformFeedbackSeparateAttribs = 4;
@@ -467,6 +460,8 @@ class GLES2ImplementationTest : public testing::Test {
       capabilities.max_vertex_attribs = kMaxVertexAttribs;
       capabilities.max_vertex_texture_image_units = kMaxVertexTextureImageUnits;
       capabilities.max_vertex_uniform_vectors = kMaxVertexUniformVectors;
+      capabilities.max_viewport_width = kMaxViewportWidth;
+      capabilities.max_viewport_height = kMaxViewportHeight;
       capabilities.num_compressed_texture_formats =
           kNumCompressedTextureFormats;
       capabilities.num_shader_binary_formats = kNumShaderBinaryFormats;
@@ -508,7 +503,7 @@ class GLES2ImplementationTest : public testing::Test {
 
       scoped_refptr<Buffer> ring_buffer = helper_->get_ring_buffer();
       commands_ = static_cast<CommandBufferEntry*>(ring_buffer->memory()) +
-                  command_buffer()->GetPutOffset();
+                  command_buffer()->GetServicePutOffset();
       ClearCommands();
       EXPECT_TRUE(transfer_buffer_->InSync());
 
@@ -3144,9 +3139,6 @@ TEST_F(GLES2ImplementationTest, TexSubImage3D4Writes) {
 TEST_F(GLES2ImplementationStrictSharedTest, FlushGenerationTestBuffers) {
   FlushGenerationTest<GenBuffersAPI>();
 }
-TEST_F(GLES2ImplementationStrictSharedTest, FlushGenerationTestFramebuffers) {
-  FlushGenerationTest<GenFramebuffersAPI>();
-}
 TEST_F(GLES2ImplementationStrictSharedTest, FlushGenerationTestRenderbuffers) {
   FlushGenerationTest<GenRenderbuffersAPI>();
 }
@@ -3158,10 +3150,6 @@ TEST_F(GLES2ImplementationStrictSharedTest, FlushGenerationTestTextures) {
 // flushed by glFlush, and the Ids are lazily freed after.
 TEST_F(GLES2ImplementationStrictSharedTest, CrossContextGenerationTestBuffers) {
   CrossContextGenerationTest<GenBuffersAPI>();
-}
-TEST_F(GLES2ImplementationStrictSharedTest,
-       CrossContextGenerationTestFramebuffers) {
-  CrossContextGenerationTest<GenFramebuffersAPI>();
 }
 TEST_F(GLES2ImplementationStrictSharedTest,
        CrossContextGenerationTestRenderbuffers) {
@@ -3177,10 +3165,6 @@ TEST_F(GLES2ImplementationStrictSharedTest,
 TEST_F(GLES2ImplementationStrictSharedTest,
        CrossContextGenerationAutoFlushTestBuffers) {
   CrossContextGenerationAutoFlushTest<GenBuffersAPI>();
-}
-TEST_F(GLES2ImplementationStrictSharedTest,
-       CrossContextGenerationAutoFlushTestFramebuffers) {
-  CrossContextGenerationAutoFlushTest<GenFramebuffersAPI>();
 }
 TEST_F(GLES2ImplementationStrictSharedTest,
        CrossContextGenerationAutoFlushTestRenderbuffers) {
@@ -3199,8 +3183,7 @@ TEST_F(GLES2ImplementationTest, GetString) {
       "foobar "
       "GL_EXT_unpack_subimage "
       "GL_CHROMIUM_map_sub "
-      "GL_CHROMIUM_image "
-      "GL_CHROMIUM_gpu_memory_buffer_image";
+      "GL_CHROMIUM_image";
   const char kBad = 0x12;
   struct Cmds {
     cmd::SetBucketSize set_bucket_size1;
@@ -3973,8 +3956,7 @@ TEST_F(GLES2ImplementationTest, GenSyncTokenCHROMIUM) {
       .WillRepeatedly(Return(kNamespaceId));
   EXPECT_CALL(*gpu_control_, GetCommandBufferID())
       .WillRepeatedly(Return(kCommandBufferId));
-  EXPECT_CALL(*gpu_control_, GetExtraCommandBufferData())
-      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*gpu_control_, GetStreamId()).WillRepeatedly(Return(0));
 
   gl_->GenSyncTokenCHROMIUM(kFenceSync, nullptr);
   EXPECT_EQ(GL_INVALID_VALUE, CheckError());
@@ -4019,8 +4001,7 @@ TEST_F(GLES2ImplementationTest, GenUnverifiedSyncTokenCHROMIUM) {
       .WillRepeatedly(Return(kNamespaceId));
   EXPECT_CALL(*gpu_control_, GetCommandBufferID())
       .WillRepeatedly(Return(kCommandBufferId));
-  EXPECT_CALL(*gpu_control_, GetExtraCommandBufferData())
-      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*gpu_control_, GetStreamId()).WillRepeatedly(Return(0));
 
   gl_->GenUnverifiedSyncTokenCHROMIUM(kFenceSync, nullptr);
   EXPECT_EQ(GL_INVALID_VALUE, CheckError());
@@ -4072,8 +4053,7 @@ TEST_F(GLES2ImplementationTest, VerifySyncTokensCHROMIUM) {
       .WillRepeatedly(Return(kNamespaceId));
   EXPECT_CALL(*gpu_control_, GetCommandBufferID())
       .WillRepeatedly(Return(kCommandBufferId));
-  EXPECT_CALL(*gpu_control_, GetExtraCommandBufferData())
-      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*gpu_control_, GetStreamId()).WillRepeatedly(Return(0));
 
   EXPECT_CALL(*gpu_control_, IsFenceSyncRelease(kFenceSync))
       .WillOnce(Return(true));
@@ -4084,7 +4064,7 @@ TEST_F(GLES2ImplementationTest, VerifySyncTokensCHROMIUM) {
   ASSERT_FALSE(sync_token.verified_flush());
 
   ClearCommands();
-  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(_))
+  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(sync_token))
       .WillOnce(Return(false));
   gl_->VerifySyncTokensCHROMIUM(sync_token_datas, 1);
   EXPECT_TRUE(NoCommandsWritten());
@@ -4092,7 +4072,7 @@ TEST_F(GLES2ImplementationTest, VerifySyncTokensCHROMIUM) {
   EXPECT_FALSE(sync_token.verified_flush());
 
   ClearCommands();
-  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(_))
+  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(sync_token))
       .WillOnce(Return(true));
   EXPECT_CALL(*gpu_control_, EnsureWorkVisible());
   gl_->VerifySyncTokensCHROMIUM(sync_token_datas, arraysize(sync_token_datas));
@@ -4128,8 +4108,7 @@ TEST_F(GLES2ImplementationTest, VerifySyncTokensCHROMIUM_Sequence) {
       .WillRepeatedly(Return(kNamespaceId));
   EXPECT_CALL(*gpu_control_, GetCommandBufferID())
       .WillRepeatedly(Return(kCommandBufferId));
-  EXPECT_CALL(*gpu_control_, GetExtraCommandBufferData())
-      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*gpu_control_, GetStreamId()).WillRepeatedly(Return(0));
 
   // Generate sync token 1.
   EXPECT_CALL(*gpu_control_, IsFenceSyncRelease(kFenceSync1))
@@ -4151,10 +4130,10 @@ TEST_F(GLES2ImplementationTest, VerifySyncTokensCHROMIUM_Sequence) {
 
   // Ensure proper sequence of checking and validating.
   Sequence sequence;
-  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(Pointee(sync_token1)))
+  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(sync_token1))
       .InSequence(sequence)
       .WillOnce(Return(true));
-  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(Pointee(sync_token2)))
+  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(sync_token2))
       .InSequence(sequence)
       .WillOnce(Return(true));
   EXPECT_CALL(*gpu_control_, EnsureWorkVisible())
@@ -4168,11 +4147,12 @@ TEST_F(GLES2ImplementationTest, VerifySyncTokensCHROMIUM_Sequence) {
 }
 
 TEST_F(GLES2ImplementationTest, WaitSyncTokenCHROMIUM) {
-  const CommandBufferNamespace kNamespaceId = CommandBufferNamespace::GPU_IO;
-  const CommandBufferId kCommandBufferId =
-      CommandBufferId::FromUnsafeValue(234u);
-  const GLuint64 kFenceSync = 456u;
-  GLbyte sync_token[GL_SYNC_TOKEN_SIZE_CHROMIUM];
+  CommandBufferNamespace kNamespaceId = CommandBufferNamespace::GPU_IO;
+  CommandBufferId kCommandBufferId = CommandBufferId::FromUnsafeValue(234u);
+  GLuint64 kFenceSync = 456u;
+
+  gpu::SyncToken sync_token;
+  GLbyte* sync_token_data = sync_token.GetData();
 
   EXPECT_CALL(*gpu_control_, IsFenceSyncRelease(kFenceSync))
       .WillOnce(Return(true));
@@ -4181,8 +4161,8 @@ TEST_F(GLES2ImplementationTest, WaitSyncTokenCHROMIUM) {
   EXPECT_CALL(*gpu_control_, GetNamespaceID()).WillOnce(Return(kNamespaceId));
   EXPECT_CALL(*gpu_control_, GetCommandBufferID())
       .WillOnce(Return(kCommandBufferId));
-  EXPECT_CALL(*gpu_control_, GetExtraCommandBufferData()).WillOnce(Return(0));
-  gl_->GenSyncTokenCHROMIUM(kFenceSync, sync_token);
+  EXPECT_CALL(*gpu_control_, GetStreamId()).WillOnce(Return(0));
+  gl_->GenSyncTokenCHROMIUM(kFenceSync, sync_token_data);
 
   struct Cmds {
     cmds::WaitSyncTokenCHROMIUM wait_sync_token;
@@ -4191,7 +4171,8 @@ TEST_F(GLES2ImplementationTest, WaitSyncTokenCHROMIUM) {
   expected.wait_sync_token.Init(kNamespaceId, kCommandBufferId.GetUnsafeValue(),
                                 kFenceSync);
 
-  gl_->WaitSyncTokenCHROMIUM(sync_token);
+  EXPECT_CALL(*gpu_control_, WaitSyncTokenHint(sync_token));
+  gl_->WaitSyncTokenCHROMIUM(sync_token_data);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -4219,7 +4200,7 @@ TEST_F(GLES2ImplementationTest, WaitSyncTokenCHROMIUMErrors) {
   ClearCommands();
   gpu::SyncToken unverified_sync_token(CommandBufferNamespace::GPU_IO, 0,
                                        gpu::CommandBufferId(), 0);
-  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(_))
+  EXPECT_CALL(*gpu_control_, CanWaitUnverifiedSyncToken(unverified_sync_token))
       .WillOnce(Return(false));
   gl_->WaitSyncTokenCHROMIUM(unverified_sync_token.GetConstData());
   EXPECT_TRUE(NoCommandsWritten());
@@ -4518,7 +4499,7 @@ TEST_F(GLES2ImplementationTest, SignalSyncToken) {
   EXPECT_CALL(*gpu_control_, IsFenceSyncFlushReceived(fence_sync))
       .WillOnce(Return(true));
   EXPECT_CALL(*gpu_control_, GetNamespaceID()).WillOnce(Return(GPU_IO));
-  EXPECT_CALL(*gpu_control_, GetExtraCommandBufferData()).WillOnce(Return(0));
+  EXPECT_CALL(*gpu_control_, GetStreamId()).WillOnce(Return(0));
   EXPECT_CALL(*gpu_control_, GetCommandBufferID())
       .WillOnce(Return(CommandBufferId::FromUnsafeValue(1)));
   gpu::SyncToken sync_token;
@@ -4550,7 +4531,7 @@ TEST_F(GLES2ImplementationTest, SignalSyncTokenAfterContextLoss) {
   EXPECT_CALL(*gpu_control_, IsFenceSyncFlushReceived(fence_sync))
       .WillOnce(Return(true));
   EXPECT_CALL(*gpu_control_, GetNamespaceID()).WillOnce(Return(GPU_IO));
-  EXPECT_CALL(*gpu_control_, GetExtraCommandBufferData()).WillOnce(Return(0));
+  EXPECT_CALL(*gpu_control_, GetStreamId()).WillOnce(Return(0));
   EXPECT_CALL(*gpu_control_, GetCommandBufferID())
       .WillOnce(Return(CommandBufferId::FromUnsafeValue(1)));
   gpu::SyncToken sync_token;
@@ -4605,43 +4586,6 @@ TEST_F(GLES2ImplementationTest, ReportLossReentrant) {
   EXPECT_EQ(0, lost_count);
 }
 
-TEST_F(GLES2ImplementationManualInitTest, LoseContextOnOOM) {
-  ContextInitOptions init_options;
-  init_options.lose_context_when_out_of_memory = true;
-  ASSERT_TRUE(Initialize(init_options));
-
-  struct Cmds {
-    cmds::LoseContextCHROMIUM cmd;
-  };
-
-  GLsizei max = std::numeric_limits<GLsizei>::max();
-  EXPECT_CALL(*gpu_control_, CreateGpuMemoryBufferImage(max, max, _, _))
-      .WillOnce(Return(-1));
-  gl_->CreateGpuMemoryBufferImageCHROMIUM(max, max, GL_RGBA,
-                                          GL_READ_WRITE_CHROMIUM);
-  // The context should be lost.
-  Cmds expected;
-  expected.cmd.Init(GL_GUILTY_CONTEXT_RESET_ARB, GL_UNKNOWN_CONTEXT_RESET_ARB);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationManualInitTest, NoLoseContextOnOOM) {
-  ContextInitOptions init_options;
-  ASSERT_TRUE(Initialize(init_options));
-
-  struct Cmds {
-    cmds::LoseContextCHROMIUM cmd;
-  };
-
-  GLsizei max = std::numeric_limits<GLsizei>::max();
-  EXPECT_CALL(*gpu_control_, CreateGpuMemoryBufferImage(max, max, _, _))
-      .WillOnce(Return(-1));
-  gl_->CreateGpuMemoryBufferImageCHROMIUM(max, max, GL_RGBA,
-                                          GL_READ_WRITE_CHROMIUM);
-  // The context should not be lost.
-  EXPECT_TRUE(NoCommandsWritten());
-}
-
 TEST_F(GLES2ImplementationManualInitTest, FailInitOnBGRMismatch1) {
   ContextInitOptions init_options;
   init_options.bind_generates_resource_client = false;
@@ -4660,6 +4604,50 @@ TEST_F(GLES2ImplementationManualInitTest, FailInitOnTransferBufferFail) {
   ContextInitOptions init_options;
   init_options.transfer_buffer_initialize_fail = true;
   EXPECT_FALSE(Initialize(init_options));
+}
+
+TEST_F(GLES2ImplementationTest, DiscardableMemoryDelete) {
+  const GLuint texture_id = 1;
+  EXPECT_FALSE(share_group_->discardable_manager()->TextureIsValid(texture_id));
+  gl_->InitializeDiscardableTextureCHROMIUM(texture_id);
+  EXPECT_TRUE(share_group_->discardable_manager()->TextureIsValid(texture_id));
+
+  // Deleting a texture should clear its discardable entry.
+  gl_->DeleteTextures(1, &texture_id);
+  EXPECT_FALSE(share_group_->discardable_manager()->TextureIsValid(texture_id));
+}
+
+TEST_F(GLES2ImplementationTest, DiscardableMemoryLockFail) {
+  const GLuint texture_id = 1;
+  gl_->InitializeDiscardableTextureCHROMIUM(texture_id);
+  EXPECT_TRUE(share_group_->discardable_manager()->TextureIsValid(texture_id));
+
+  // Unlock and delete the handle.
+  ClientDiscardableHandle client_handle =
+      share_group_->discardable_manager()->GetHandleForTesting(texture_id);
+  ServiceDiscardableHandle service_handle(client_handle.BufferForTesting(),
+                                          client_handle.byte_offset(),
+                                          client_handle.shm_id());
+  service_handle.Unlock();
+  EXPECT_TRUE(service_handle.Delete());
+
+  // Trying to re-lock the texture via GL should fail and delete the entry.
+  EXPECT_FALSE(gl_->LockDiscardableTextureCHROMIUM(texture_id));
+  EXPECT_FALSE(share_group_->discardable_manager()->TextureIsValid(texture_id));
+}
+
+TEST_F(GLES2ImplementationTest, DiscardableMemoryDoubleInitError) {
+  const GLuint texture_id = 1;
+  gl_->InitializeDiscardableTextureCHROMIUM(texture_id);
+  EXPECT_EQ(GL_NO_ERROR, CheckError());
+  gl_->InitializeDiscardableTextureCHROMIUM(texture_id);
+  EXPECT_EQ(GL_INVALID_VALUE, CheckError());
+}
+
+TEST_F(GLES2ImplementationTest, DiscardableMemoryLockError) {
+  const GLuint texture_id = 1;
+  EXPECT_FALSE(gl_->LockDiscardableTextureCHROMIUM(texture_id));
+  EXPECT_EQ(GL_INVALID_VALUE, CheckError());
 }
 
 #include "base/macros.h"

@@ -35,23 +35,24 @@ namespace {{variant}} {
 
 #include <stdint.h>
 
+#include <limits>
 #include <type_traits>
 #include <utility>
 
 #include "base/callback.h"
+#include "base/macros.h"
 #include "base/optional.h"
 #include "mojo/public/cpp/bindings/associated_interface_ptr.h"
 #include "mojo/public/cpp/bindings/associated_interface_ptr_info.h"
 #include "mojo/public/cpp/bindings/associated_interface_request.h"
+#include "mojo/public/cpp/bindings/clone_traits.h"
+#include "mojo/public/cpp/bindings/equals_traits.h"
 #include "mojo/public/cpp/bindings/interface_ptr.h"
 #include "mojo/public/cpp/bindings/interface_request.h"
 #include "mojo/public/cpp/bindings/lib/control_message_handler.h"
 #include "mojo/public/cpp/bindings/lib/control_message_proxy.h"
 #include "mojo/public/cpp/bindings/lib/serialization.h"
-#include "mojo/public/cpp/bindings/lib/union_accessor.h"
-#include "mojo/public/cpp/bindings/map.h"
 #include "mojo/public/cpp/bindings/native_struct.h"
-#include "mojo/public/cpp/bindings/no_interface.h"
 #include "mojo/public/cpp/bindings/raw_ptr_impl_ref_traits.h"
 #include "mojo/public/cpp/bindings/struct_ptr.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
@@ -60,23 +61,21 @@ namespace {{variant}} {
 #include "{{module.path}}-shared.h"
 {%- for import in imports %}
 {%-   if variant %}
-#include "{{"%s-%s.h"|format(import.module.path, variant)}}"
+#include "{{"%s-%s.h"|format(import.path, variant)}}"
 {%-   else %}
-#include "{{import.module.path}}.h"
+#include "{{import.path}}.h"
 {%-   endif %}
 {%- endfor %}
 {%- if not for_blink %}
-#include "mojo/public/cpp/bindings/array.h"
-#include "mojo/public/cpp/bindings/string.h"
+#include <string>
+#include <vector>
 {%- else %}
 {# hash_util.h includes template specializations that should be present for
    every use of {Inlined}StructPtr. #}
 #include "mojo/public/cpp/bindings/lib/wtf_hash_util.h"
-#include "mojo/public/cpp/bindings/wtf_array.h"
-#include "mojo/public/cpp/bindings/wtf_map.h"
-#include "third_party/WebKit/Source/wtf/HashFunctions.h"
-#include "third_party/WebKit/Source/wtf/Optional.h"
-#include "third_party/WebKit/Source/wtf/text/WTFString.h"
+#include "third_party/WebKit/Source/platform/wtf/HashFunctions.h"
+#include "third_party/WebKit/Source/platform/wtf/Optional.h"
+#include "third_party/WebKit/Source/platform/wtf/text/WTFString.h"
 {%- endif %}
 
 {%- for header in extra_public_headers %}
@@ -85,6 +84,16 @@ namespace {{variant}} {
 
 {%- if export_header %}
 #include "{{export_header}}"
+{%- endif %}
+
+{#--- WTF enum hashing #}
+{%- from "enum_macros.tmpl" import enum_hash_blink%}
+{%- if for_blink %}
+{%-   for enum in all_enums %}
+{%-     if not enum|is_native_only_kind %}
+{{enum_hash_blink(enum)}}
+{%-     endif %}
+{%-   endfor %}
 {%- endif %}
 
 {{namespace_begin()}}
@@ -98,13 +107,7 @@ using {{enum.name}} = {{enum.name}};  // Alias for definition in the parent name
 
 {#--- Constants #}
 {%- for constant in module.constants %}
-{#-   To be consistent with constants defined inside interfaces, only make
-      integral types compile-time constants. #}
-{%-   if constant.kind|is_integral_kind %}
-const {{constant.kind|cpp_pod_type}} {{constant.name}} = {{constant|constant_value}};
-{%-   else %}
-extern const {{constant.kind|cpp_pod_type}} {{constant.name}};
-{%-   endif %}
+{{constant|format_constant_declaration}};
 {%- endfor %}
 
 {#--- Interface Forward Declarations -#}

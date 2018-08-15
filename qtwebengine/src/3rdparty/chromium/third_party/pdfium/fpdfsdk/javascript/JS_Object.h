@@ -14,7 +14,7 @@
 #include "fpdfsdk/javascript/cjs_runtime.h"
 #include "fxjs/fxjs_v8.h"
 
-class CJS_Context;
+class CJS_EventContext;
 class CJS_Object;
 class CPDFSDK_FormFillEnvironment;
 
@@ -23,10 +23,10 @@ class CJS_EmbedObj {
   explicit CJS_EmbedObj(CJS_Object* pJSObject);
   virtual ~CJS_EmbedObj();
 
-  CJS_Object* GetJSObject() const { return m_pJSObject; }
+  CJS_Object* GetJSObject() const { return m_pJSObject.Get(); }
 
  protected:
-  CJS_Object* const m_pJSObject;
+  CFX_UnownedPtr<CJS_Object> const m_pJSObject;
 };
 
 class CJS_Object {
@@ -38,7 +38,6 @@ class CJS_Object {
   void Dispose();
 
   virtual void InitInstance(IJS_Runtime* pIRuntime);
-  virtual void ExitInstance();
 
   v8::Local<v8::Object> ToV8Object() { return m_pV8Object.Get(m_pIsolate); }
 

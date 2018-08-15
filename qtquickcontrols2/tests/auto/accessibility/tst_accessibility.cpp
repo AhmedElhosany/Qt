@@ -43,6 +43,9 @@
 #include "../shared/util.h"
 
 #if QT_CONFIG(accessibility)
+#include <QtGui/private/qguiapplication_p.h>
+#include <QtGui/qpa/qplatformintegration.h>
+#include <QtGui/qpa/qplatformaccessibility.h>
 #include <QtQuick/private/qquickaccessibleattached_p.h>
 #endif
 
@@ -114,12 +117,10 @@ void tst_accessibility::a11y_data()
 }
 
 #if QT_CONFIG(accessibility)
-static QQuickAccessibleAttached *accessibleAttached(QQuickItem *item)
+static QPlatformAccessibility *platformAccessibility()
 {
-    QQuickAccessibleAttached *acc = qobject_cast<QQuickAccessibleAttached *>(qmlAttachedPropertiesObject<QQuickAccessibleAttached>(item, false));
-    if (!acc)
-        acc = item->findChild<QQuickAccessibleAttached *>();
-    return acc;
+    QPlatformIntegration *pfIntegration = QGuiApplicationPrivate::platformIntegration();
+    return pfIntegration ? pfIntegration->accessibility() : nullptr;
 }
 #endif
 
@@ -152,7 +153,7 @@ void tst_accessibility::a11y()
     QVERIFY(item);
 
 #if QT_CONFIG(accessibility)
-    QQuickAccessibleAttached *acc = accessibleAttached(item);
+    QQuickAccessibleAttached *acc = QQuickAccessibleAttached::attachedProperties(item);
     if (name != QLatin1Literal("dayofweekrow")
             && name != QLatin1Literal("monthgrid")
             && name != QLatin1Literal("weeknumbercolumn")) {
@@ -160,8 +161,11 @@ void tst_accessibility::a11y()
             QVERIFY(acc);
         } else {
             QVERIFY(!acc);
-            QAccessible::setActive(true);
-            acc = accessibleAttached(item);
+            QPlatformAccessibility *accessibility = platformAccessibility();
+            if (!accessibility)
+                QSKIP("No QPlatformAccessibility available.");
+            accessibility->setActive(true);
+            acc = QQuickAccessibleAttached::attachedProperties(item);
         }
     }
     QVERIFY(acc);
@@ -170,8 +174,6 @@ void tst_accessibility::a11y()
 #else
     Q_UNUSED(role)
     Q_UNUSED(text)
-    QObject *acc = qmlAttachedPropertiesObject<QObject>(item, false);
-    QVERIFY(!acc);
 #endif
 }
 

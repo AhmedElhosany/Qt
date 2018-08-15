@@ -6,8 +6,8 @@
 // creation, attaching, and destruction.
 
 var CreateEvent = require('guestViewEvents').CreateEvent;
-var EventBindings = require('event_bindings');
-var GuestViewInternal =
+var GuestViewInternal = getInternalApi ?
+    getInternalApi('guestViewInternal') :
     require('binding').Binding.create('guestViewInternal').generate();
 var GuestViewInternalNatives = requireNative('guest_view_internal');
 
@@ -44,6 +44,12 @@ function GuestViewImpl(guestView, viewType, guestInstanceId) {
 
   this.setupOnResize();
 }
+
+// Prevent GuestViewImpl inadvertently inheriting code from the global Object,
+// allowing a pathway for executing unintended user code execution.
+// TODO(wjmaclean): Use utils.expose() here instead? Track down other issues
+// of Object inheritance. https://crbug.com/701034
+GuestViewImpl.prototype.__proto__ = null;
 
 // Possible states.
 GuestViewImpl.GuestState = {
@@ -87,7 +93,7 @@ GuestViewImpl.prototype.performNextAction = function() {
   // Make sure that there is not already an action in progress, and that there
   // exists a queued action to perform.
   if (!this.pendingAction && this.actionQueue.length) {
-    this.pendingAction = this.actionQueue.shift();
+    this.pendingAction = $Array.shift(this.actionQueue);
     this.pendingAction();
   }
 };
@@ -303,7 +309,7 @@ function GuestView(viewType, guestInstanceId) {
 GuestView.prototype.attach = function(
     internalInstanceId, viewInstanceId, attachParams, callback) {
   var internal = privates(this).internal;
-  internal.actionQueue.push($Function.bind(internal.attachImpl$,
+  $Array.push(internal.actionQueue, $Function.bind(internal.attachImpl$,
       internal, internalInstanceId, viewInstanceId, attachParams, callback));
   internal.performNextAction();
 };
@@ -311,7 +317,7 @@ GuestView.prototype.attach = function(
 // Creates the guestview.
 GuestView.prototype.create = function(createParams, callback) {
   var internal = privates(this).internal;
-  internal.actionQueue.push($Function.bind(internal.createImpl$,
+  $Array.push(internal.actionQueue, $Function.bind(internal.createImpl$,
       internal, createParams, callback));
   internal.performNextAction();
 };
@@ -320,7 +326,7 @@ GuestView.prototype.create = function(createParams, callback) {
 // been destroyed.
 GuestView.prototype.destroy = function(callback) {
   var internal = privates(this).internal;
-  internal.actionQueue.push(
+  $Array.push(internal.actionQueue,
       $Function.bind(internal.destroyImpl, internal, callback));
   internal.performNextAction();
 };
@@ -329,7 +335,7 @@ GuestView.prototype.destroy = function(callback) {
 // Note: This is not currently used.
 GuestView.prototype.detach = function(callback) {
   var internal = privates(this).internal;
-  internal.actionQueue.push(
+  $Array.push(internal.actionQueue,
       $Function.bind(internal.detachImpl, internal, callback));
   internal.performNextAction();
 };
@@ -337,7 +343,7 @@ GuestView.prototype.detach = function(callback) {
 // Adjusts the guestview's sizing parameters.
 GuestView.prototype.setSize = function(sizeParams, callback) {
   var internal = privates(this).internal;
-  internal.actionQueue.push(
+  $Array.push(internal.actionQueue,
       $Function.bind(internal.setSizeImpl, internal, sizeParams, callback));
   internal.performNextAction();
 };
@@ -355,6 +361,8 @@ GuestView.prototype.getId = function() {
 };
 
 // Exports
-exports.$set('GuestView', GuestView);
-exports.$set('GuestViewImpl', GuestViewImpl);
-exports.$set('ResizeEvent', ResizeEvent);
+if (!apiBridge) {
+  exports.$set('GuestView', GuestView);
+  exports.$set('GuestViewImpl', GuestViewImpl);
+  exports.$set('ResizeEvent', ResizeEvent);
+}

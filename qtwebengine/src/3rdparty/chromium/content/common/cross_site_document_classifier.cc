@@ -4,6 +4,8 @@
 
 #include "content/common/cross_site_document_classifier.h"
 
+#include <stddef.h>
+
 #include "base/command_line.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
@@ -82,9 +84,9 @@ bool CrossSiteDocumentClassifier::IsBlockableScheme(const GURL& url) {
   return url.SchemeIs(url::kHttpScheme) || url.SchemeIs(url::kHttpsScheme);
 }
 
-bool CrossSiteDocumentClassifier::IsSameSite(const GURL& frame_origin,
+bool CrossSiteDocumentClassifier::IsSameSite(const url::Origin& frame_origin,
                                              const GURL& response_url) {
-  if (!frame_origin.is_valid() || !response_url.is_valid())
+  if (frame_origin.unique() || !response_url.is_valid())
     return false;
 
   if (frame_origin.scheme() != response_url.scheme())
@@ -93,7 +95,7 @@ bool CrossSiteDocumentClassifier::IsSameSite(const GURL& frame_origin,
   // SameDomainOrHost() extracts the effective domains (public suffix plus one)
   // from the two URLs and compare them.
   return net::registry_controlled_domains::SameDomainOrHost(
-      frame_origin, response_url,
+      response_url, frame_origin,
       net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
 }
 
@@ -102,7 +104,7 @@ bool CrossSiteDocumentClassifier::IsSameSite(const GURL& frame_origin,
 // when frame is sub.a.com and it is not allowed to access a document
 // with sub1.a.com. But under Site Isolation, it's allowed.
 bool CrossSiteDocumentClassifier::IsValidCorsHeaderSet(
-    const GURL& frame_origin,
+    const url::Origin& frame_origin,
     const GURL& website_origin,
     const std::string& access_control_origin) {
   // Many websites are sending back "\"*\"" instead of "*". This is
@@ -137,8 +139,6 @@ bool CrossSiteDocumentClassifier::SniffForHTML(StringPiece data) {
   // signatures. This can weaken our document block policy, but we can
   // break less websites.
   // TODO(dsjang): parameterize |net::SniffForHTML| with an option
-#include <stddef.h>
-
   // that decides whether to include <!-- or not, so that we can
   // remove this function.
   // TODO(dsjang): Once CrossSiteDocumentClassifier is moved into the browser

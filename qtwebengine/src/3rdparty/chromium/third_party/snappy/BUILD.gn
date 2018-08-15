@@ -21,10 +21,16 @@ config("snappy_config") {
 }
 
 config("snappy_warnings") {
+  cflags = []
+
   if (is_clang) {
     # ComputeTable is unused,
     # https://code.google.com/p/snappy/issues/detail?id=96
-    cflags = [ "-Wno-unused-function" ]
+    cflags += [ "-Wno-unused-function" ]
+  }
+
+  if (is_win) {
+    cflags += [ "/wd4018" ]  # Signed/unsigned mismatch in comparison.
   }
 }
 
@@ -39,6 +45,14 @@ static_library("bundled_snappy") {
     "src/snappy.h",
   ]
 
+  if (is_win) {
+    sources += [ "win32/snappy-stubs-public.h" ]
+  } else if (is_mac) {
+    sources += [ "mac/snappy-stubs-public.h" ]
+  } else {
+    sources += [ "linux/snappy-stubs-public.h" ]
+  }
+
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [
     "//build/config/compiler:no_chromium_code",
@@ -48,15 +62,9 @@ static_library("bundled_snappy") {
   ]
   public_configs = [ ":snappy_config" ]
 
-  if (is_win) {
-    cflags = [ "/wd4018" ]  # Signed/unsigned mismatch in comparison.
-  }
-
-  if (is_clang) {
-    # snappy-stubs-internal.h unapologetically has: using namespace std
-    # https://code.google.com/p/snappy/issues/detail?id=70
-    configs -= [ "//build/config/clang:extra_warnings" ]
-  }
+  # Chromium doesn't use automake, but we generated config.h offline for all the
+  # platforms that we build for.
+  defines = [ "HAVE_CONFIG_H" ]
 }
 
 if (use_system_snappy) {

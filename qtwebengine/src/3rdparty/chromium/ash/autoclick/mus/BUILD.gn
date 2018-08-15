@@ -16,16 +16,15 @@ source_set("lib") {
   deps = [
     "//ash/autoclick/common:autoclick",
     "//ash/autoclick/mus/public/interfaces",
-    "//ash/public/cpp",
-    "//ash/public/interfaces",
+    "//ash/public/cpp:ash_public_cpp",
     "//base",
     "//mash/public/interfaces",
     "//mojo/common",
     "//mojo/public/cpp/bindings",
     "//services/service_manager/public/cpp",
-    "//services/service_manager/public/cpp:sources",
     "//services/ui/public/cpp",
     "//services/ui/public/interfaces",
+    "//ui/aura",
     "//ui/views",
     "//ui/views/mus:for_mojo_application",
   ]
@@ -45,15 +44,10 @@ service("accessibility_autoclick") {
     "//base",
     "//mojo/public/cpp/bindings",
     "//services/service_manager/public/cpp",
-    "//services/service_manager/public/cpp:sources",
     "//ui/views/mus:for_mojo_application",
   ]
 
   resources = [ "$root_out_dir/views_mus_resources.pak" ]
-
-  data_deps = [
-    ":manifest",
-  ]
 }
 
 service_manifest("manifest") {

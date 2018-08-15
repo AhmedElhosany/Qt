@@ -9,10 +9,10 @@
 #include <memory>
 
 #include "base/memory/ref_counted.h"
+#include "extensions/browser/api/clipboard/clipboard_api.h"
 #include "extensions/browser/api/declarative_content/content_rules_registry.h"
 #include "extensions/browser/api/storage/settings_namespace.h"
-
-class GURL;
+#include "extensions/common/api/clipboard.h"
 
 namespace base {
 template <class T>
@@ -35,10 +35,13 @@ class ContentRulesRegistry;
 class DevicePermissionsPrompt;
 class ExtensionOptionsGuest;
 class ExtensionOptionsGuestDelegate;
+class FileSystemDelegate;
 class ManagementAPIDelegate;
 class MetricsPrivateDelegate;
 class MimeHandlerViewGuest;
 class MimeHandlerViewGuestDelegate;
+class NetworkingCastPrivateDelegate;
+class NonNativeFileSystemDelegate;
 class RulesCacheDelegate;
 class SettingsObserver;
 class ValueStoreCache;
@@ -131,6 +134,26 @@ class ExtensionsAPIClient {
   // If supported by the embedder, returns a delegate for embedder-dependent
   // MetricsPrivateAPI behavior.
   virtual MetricsPrivateDelegate* GetMetricsPrivateDelegate();
+
+  // Creates a delegate for networking.castPrivate's API behavior.
+  virtual NetworkingCastPrivateDelegate* GetNetworkingCastPrivateDelegate();
+
+  // Returns a delegate for embedder-specific chrome.fileSystem behavior.
+  virtual FileSystemDelegate* GetFileSystemDelegate();
+
+#if defined(OS_CHROMEOS)
+  // If supported by the embedder, returns a delegate for querying non-native
+  // file systems.
+  virtual NonNativeFileSystemDelegate* GetNonNativeFileSystemDelegate();
+
+  // Saves image data on clipboard.
+  virtual void SaveImageDataToClipboard(
+      const std::vector<char>& image_data,
+      api::clipboard::ImageType type,
+      AdditionalDataItemList additional_items,
+      const base::Closure& success_callback,
+      const base::Callback<void(const std::string&)>& error_callback);
+#endif
 
   // NOTE: If this interface gains too many methods (perhaps more than 20) it
   // should be split into one interface per API.

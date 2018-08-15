@@ -22,9 +22,6 @@ windows
 windows
 [ioPostToHttpFromSocket]
 windows
-# QTBUG-66247
-[ioHttpRedirect]
-windows
 [ioHttpRedirectMultipartPost]
 linux
 [ioHttpRedirectPolicy]
@@ -43,3 +40,5 @@ windows
 windows
 [getFromUnreachableIp]
 windows msvc-2017
+[ioHttpRedirectErrors:too-many-redirects]
+rhel-6.6 ci

@@ -81,14 +81,11 @@ Resources.Database = class {
   }
 
   /**
-   * @param {function(!Array.<string>)} callback
+   * @return {!Promise<!Array<string>>}
    */
-  getTableNames(callback) {
-    function sortingCallback(error, names) {
-      if (!error)
-        callback(names.sort());
-    }
-    this._model._agent.getDatabaseTableNames(this._id, sortingCallback);
+  async tableNames() {
+    var names = await this._model._agent.getDatabaseTableNames(this._id) || [];
+    return names.sort();
   }
 
   /**
@@ -96,32 +93,26 @@ Resources.Database = class {
    * @param {function(!Array.<string>=, !Array.<*>=)} onSuccess
    * @param {function(string)} onError
    */
-  executeSql(query, onSuccess, onError) {
-    /**
-     * @param {?Protocol.Error} error
-     * @param {!Array.<string>=} columnNames
-     * @param {!Array.<*>=} values
-     * @param {!Protocol.Database.Error=} errorObj
-     */
-    function callback(error, columnNames, values, errorObj) {
-      if (error) {
-        onError(error);
-        return;
-      }
-      if (errorObj) {
-        var message;
-        if (errorObj.message)
-          message = errorObj.message;
-        else if (errorObj.code === 2)
-          message = Common.UIString('Database no longer has expected version.');
-        else
-          message = Common.UIString('An unexpected error %s occurred.', errorObj.code);
-        onError(message);
-        return;
-      }
-      onSuccess(columnNames, values);
+  async executeSql(query, onSuccess, onError) {
+    var response = await this._model._agent.invoke_executeSQL({'databaseId': this._id, 'query': query});
+    var error = response[Protocol.Error];
+    if (error) {
+      onError(error);
+      return;
     }
-    this._model._agent.executeSQL(this._id, query, callback);
+    var sqlError = response.sqlError;
+    if (!sqlError) {
+      onSuccess(response.columnNames, response.values);
+      return;
+    }
+    var message;
+    if (sqlError.message)
+      message = sqlError.message;
+    else if (sqlError.code === 2)
+      message = Common.UIString('Database no longer has expected version.');
+    else
+      message = Common.UIString('An unexpected error %s occurred.', sqlError.code);
+    onError(message);
   }
 };
 
@@ -133,22 +124,11 @@ Resources.DatabaseModel = class extends SDK.SDKModel {
    * @param {!SDK.Target} target
    */
   constructor(target) {
-    super(Resources.DatabaseModel, target);
+    super(target);
 
     this._databases = [];
     this._agent = target.databaseAgent();
     this.target().registerDatabaseDispatcher(new Resources.DatabaseDispatcher(this));
-  }
-
-  /**
-   * @param {!SDK.Target} target
-   * @return {!Resources.DatabaseModel}
-   */
-  static fromTarget(target) {
-    if (!target[Resources.DatabaseModel._symbol])
-      target[Resources.DatabaseModel._symbol] = new Resources.DatabaseModel(target);
-
-    return target[Resources.DatabaseModel._symbol];
   }
 
   enable() {
@@ -186,10 +166,12 @@ Resources.DatabaseModel = class extends SDK.SDKModel {
   }
 };
 
+SDK.SDKModel.register(Resources.DatabaseModel, SDK.Target.Capability.None, false);
+
 /** @enum {symbol} */
 Resources.DatabaseModel.Events = {
   DatabaseAdded: Symbol('DatabaseAdded'),
-  DatabasesRemoved: Symbol('DatabasesRemoved')
+  DatabasesRemoved: Symbol('DatabasesRemoved'),
 };
 
 /**

@@ -470,6 +470,9 @@ static bool convert(const QVariant::Private *d, int t, void *result, bool *ok)
         case QVariant::Uuid:
             *str = v_cast<QUuid>(d)->toString();
             break;
+        case QMetaType::Nullptr:
+            *str = QString();
+            break;
         default:
 #ifndef QT_NO_QOBJECT
             {
@@ -651,6 +654,9 @@ static bool convert(const QVariant::Private *d, int t, void *result, bool *ok)
             break;
         case QVariant::Uuid:
             *ba = v_cast<QUuid>(d)->toByteArray();
+            break;
+        case QMetaType::Nullptr:
+            *ba = QByteArray();
             break;
         default:
 #ifndef QT_NO_QOBJECT
@@ -938,6 +944,107 @@ static bool convert(const QVariant::Private *d, int t, void *result, bool *ok)
             return false;
         }
         break;
+#ifndef QT_BOOTSTRAPPED
+    case QMetaType::QJsonValue:
+        switch (d->type) {
+        case QMetaType::Nullptr:
+            *static_cast<QJsonValue *>(result) = QJsonValue(QJsonValue::Null);
+            break;
+        case QVariant::Bool:
+            *static_cast<QJsonValue *>(result) = QJsonValue(d->data.b);
+            break;
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::Double:
+        case QMetaType::Float:
+        case QMetaType::ULong:
+        case QMetaType::Long:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+        case QMetaType::UShort:
+        case QMetaType::UChar:
+        case QMetaType::Char:
+        case QMetaType::SChar:
+        case QMetaType::Short:
+            *static_cast<QJsonValue *>(result) = QJsonValue(qConvertToRealNumber(d, ok));
+            Q_ASSERT(ok);
+            break;
+        case QVariant::String:
+            *static_cast<QJsonValue *>(result) = QJsonValue(*v_cast<QString>(d));
+            break;
+        case QVariant::StringList:
+            *static_cast<QJsonValue *>(result) = QJsonValue(QJsonArray::fromStringList(*v_cast<QStringList>(d)));
+            break;
+        case QVariant::List:
+            *static_cast<QJsonValue *>(result) = QJsonValue(QJsonArray::fromVariantList(*v_cast<QVariantList>(d)));
+            break;
+        case QVariant::Map:
+            *static_cast<QJsonValue *>(result) = QJsonValue(QJsonObject::fromVariantMap(*v_cast<QVariantMap>(d)));
+            break;
+        case QVariant::Hash:
+            *static_cast<QJsonValue *>(result) = QJsonValue(QJsonObject::fromVariantHash(*v_cast<QVariantHash>(d)));
+            break;
+        case QMetaType::QJsonObject:
+            *static_cast<QJsonValue *>(result) = *v_cast<QJsonObject>(d);
+            break;
+        case QMetaType::QJsonArray:
+            *static_cast<QJsonValue *>(result) = *v_cast<QJsonArray>(d);
+            break;
+        case QMetaType::QJsonDocument: {
+            QJsonDocument doc = *v_cast<QJsonDocument>(d);
+            *static_cast<QJsonValue *>(result) = doc.isArray() ? QJsonValue(doc.array()) : QJsonValue(doc.object());
+            break;
+        }
+        default:
+            *static_cast<QJsonValue *>(result) = QJsonValue(QJsonValue::Undefined);
+            return false;
+        }
+        break;
+    case QMetaType::QJsonArray:
+        switch (d->type) {
+        case QVariant::StringList:
+            *static_cast<QJsonArray *>(result) = QJsonArray::fromStringList(*v_cast<QStringList>(d));
+            break;
+        case QVariant::List:
+            *static_cast<QJsonArray *>(result) = QJsonArray::fromVariantList(*v_cast<QVariantList>(d));
+            break;
+        case QMetaType::QJsonValue:
+            if (!v_cast<QJsonValue>(d)->isArray())
+                return false;
+            *static_cast<QJsonArray *>(result) = v_cast<QJsonValue>(d)->toArray();
+            break;
+        case QMetaType::QJsonDocument:
+            if (!v_cast<QJsonDocument>(d)->isArray())
+                return false;
+            *static_cast<QJsonArray *>(result) = v_cast<QJsonDocument>(d)->array();
+            break;
+        default:
+            return false;
+        }
+        break;
+    case QMetaType::QJsonObject:
+        switch (d->type) {
+        case QVariant::Map:
+            *static_cast<QJsonObject *>(result) = QJsonObject::fromVariantMap(*v_cast<QVariantMap>(d));
+            break;
+        case QVariant::Hash:
+            *static_cast<QJsonObject *>(result) = QJsonObject::fromVariantHash(*v_cast<QVariantHash>(d));
+            break;
+        case QMetaType::QJsonValue:
+            if (!v_cast<QJsonValue>(d)->isObject())
+                return false;
+            *static_cast<QJsonObject *>(result) = v_cast<QJsonValue>(d)->toObject();
+            break;
+        case QMetaType::QJsonDocument:
+            if (v_cast<QJsonDocument>(d)->isArray())
+                return false;
+            *static_cast<QJsonObject *>(result) = v_cast<QJsonDocument>(d)->object();
+            break;
+        default:
+            return false;
+        }
+        break;
+#endif
     default:
 #ifndef QT_NO_QOBJECT
         if (d->type == QVariant::String || d->type == QVariant::ByteArray) {
@@ -1076,7 +1183,17 @@ static void customClear(QVariant::Private *d)
 
 static bool customIsNull(const QVariant::Private *d)
 {
-    return d->is_null;
+    if (d->is_null)
+        return true;
+    const char *const typeName = QMetaType::typeName(d->type);
+    if (Q_UNLIKELY(!typeName) && Q_LIKELY(!QMetaType::isRegistered(d->type)))
+        qFatal("QVariant::isNull: type %d unknown to QVariant.", d->type);
+    uint typeNameLen = qstrlen(typeName);
+    if (typeNameLen > 0 && typeName[typeNameLen - 1] == '*') {
+        const void *d_ptr = d->is_shared ? d->data.shared->ptr : &(d->data.ptr);
+        return *static_cast<void *const *>(d_ptr) == nullptr;
+    }
+    return false;
 }
 
 static bool customCompare(const QVariant::Private *a, const QVariant::Private *b)
@@ -1358,7 +1475,11 @@ Q_CORE_EXPORT void QVariantPrivate::registerHandler(const int /* Modules::Names 
 /*!
     \fn QVariant::QVariant(Type type)
 
-    Constructs a null variant of type \a type.
+    Constructs an uninitialized variant of type \a type. This will create a
+    variant in a special null state that if accessed will return a default
+    constructed value of the \a type.
+
+    \sa isNull()
 */
 
 
@@ -3109,8 +3230,8 @@ bool QVariant::canConvert(int targetTypeId) const
         }
     }
 
-    if (currentType == QMetaType::QJsonValue) {
-        switch (targetTypeId) {
+    if (currentType == QMetaType::QJsonValue || targetTypeId == QMetaType::QJsonValue) {
+        switch (currentType == QMetaType::QJsonValue ? targetTypeId : currentType) {
         case QMetaType::Nullptr:
         case QMetaType::QString:
         case QMetaType::Bool:
@@ -3166,11 +3287,11 @@ bool QVariant::canConvert(int targetTypeId) const
         case QVariant::Bitmap:
             return currentType == QVariant::Pixmap || currentType == QVariant::Image;
         case QVariant::ByteArray:
-            return currentType == QVariant::Color
+            return currentType == QVariant::Color || currentType == QMetaType::Nullptr
                               || ((QMetaType::typeFlags(currentType) & QMetaType::IsEnumeration) && QMetaType::metaObjectForType(currentType));
         case QVariant::String:
             return currentType == QVariant::KeySequence || currentType == QVariant::Font
-                              || currentType == QVariant::Color
+                              || currentType == QVariant::Color || currentType == QMetaType::Nullptr
                               || ((QMetaType::typeFlags(currentType) & QMetaType::IsEnumeration) && QMetaType::metaObjectForType(currentType));
         case QVariant::KeySequence:
             return currentType == QVariant::String || currentType == QVariant::Int;
@@ -3207,17 +3328,20 @@ bool QVariant::canConvert(int targetTypeId) const
 
 /*!
     Casts the variant to the requested type, \a targetTypeId. If the cast cannot be
-    done, the variant is cleared. Returns \c true if the current type of
-    the variant was successfully cast; otherwise returns \c false.
+    done, the variant is still changed to the requested type, but is left in a cleared
+    null state similar to that constructed by QVariant(Type).
+
+    Returns \c true if the current type of the variant was successfully cast;
+    otherwise returns \c false.
 
     A QVariant containing a pointer to a type derived from QObject will also convert
     and return true for this function if a qobject_cast to the type described
     by \a targetTypeId would succeed. Note that this only works for QObject subclasses
     which use the Q_OBJECT macro.
 
-    \warning For historical reasons, converting a null QVariant results
-    in a null value of the desired type (e.g., an empty string for
-    QString) and a result of false.
+    \note converting QVariants that are null due to not being initialized or having
+    failed a previous conversion will always fail, changing the type, remaining null,
+    and returning \c false.
 
     \sa canConvert(), clear()
 */
@@ -3234,7 +3358,8 @@ bool QVariant::convert(int targetTypeId)
         return false;
 
     create(targetTypeId, 0);
-    if (oldValue.isNull())
+    // Fail if the value is not initialized or was forced null by a previous failed convert.
+    if (oldValue.d.is_null)
         return false;
 
     if ((QMetaType::typeFlags(oldValue.userType()) & QMetaType::PointerToQObject) && (QMetaType::typeFlags(targetTypeId) & QMetaType::PointerToQObject)) {
@@ -3643,12 +3768,15 @@ void* QVariant::data()
 
 /*!
     Returns \c true if this is a null variant, false otherwise. A variant is
-    considered null if it contains a default constructed value or a built-in
-    type instance that has an isNull method, in which case the result
-    would be the same as calling isNull on the wrapped object.
+    considered null if it contains no initialized value, or the contained value
+    is a null pointer or is an instance of a built-in type that has an isNull
+    method, in which case the result would be the same as calling isNull on the
+    wrapped object.
 
-    \warning The result of the function doesn't affect == operator, which means
-    that two values can be equal even if one of them is null and another is not.
+    \warning Null variants is not a single state and two null variants may easily
+    return \c false on the == operator if they do not contain similar null values.
+
+    \sa QVariant(Type), convert(int)
 */
 bool QVariant::isNull() const
 {

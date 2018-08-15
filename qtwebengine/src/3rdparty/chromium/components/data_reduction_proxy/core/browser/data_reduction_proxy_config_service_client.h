@@ -46,7 +46,6 @@ class DataReductionProxyIOData;
 class DataReductionProxyMutableConfigValues;
 class DataReductionProxyParams;
 class DataReductionProxyRequestOptions;
-class DataReductionProxyService;
 
 typedef base::Callback<void(const std::string&)> ConfigStorer;
 
@@ -121,7 +120,7 @@ class DataReductionProxyConfigServiceClient
 
   // Examines |response_headers| to determine if an authentication failure
   // occurred on a Data Reduction Proxy. Returns true if authentication failure
-  // occured, and the session key specified in |request_headers| matches the
+  // occurred, and the session key specified in |request_headers| matches the
   // current session in use by the client. If an authentication failure is
   // detected,  it fetches a new config.
   bool ShouldRetryDueToAuthFailure(
@@ -276,6 +275,9 @@ class DataReductionProxyConfigServiceClient
 
   // Time when the IP address last changed.
   base::TimeTicks last_ip_address_change_;
+
+  // True if a client config fetch is in progress.
+  bool fetch_in_progress_;
 
   // Enforce usage on the IO thread.
   base::ThreadChecker thread_checker_;

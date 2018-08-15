@@ -50,6 +50,8 @@
 #include "ui/base/layout.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+
+#include "qrc_protocol_handler_qt.h"
 #include "type_conversion.h"
 
 #include <QCoreApplication>
@@ -69,7 +71,7 @@ static QString getLocalAppDataDir()
 }
 #endif
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 
 // The plugin logic is based on chrome/common/chrome_content_client.cc:
 // Copyright (c) 2012 The Chromium Authors. All rights reserved.
@@ -234,6 +236,7 @@ void AddPepperWidevine(std::vector<content::PepperPluginInfo>* plugins)
 #elif defined(Q_OS_LINUX)
         pluginPaths << QStringLiteral("/opt/google/chrome/libwidevinecdmadapter.so") // Google Chrome
                     << QStringLiteral("/usr/lib/chromium/libwidevinecdmadapter.so") // Arch
+                    << QStringLiteral("/usr/lib/chromium-browser/libwidevinecdmadapter.so") // Ubuntu/neon
                     << QStringLiteral("/usr/lib64/chromium/libwidevinecdmadapter.so"); // OpenSUSE style
 #endif
     }
@@ -255,7 +258,7 @@ void AddPepperWidevine(std::vector<content::PepperPluginInfo>* plugins)
             std::vector<std::string> codecs;
             codecs.push_back(kCdmSupportedCodecVp8);
             codecs.push_back(kCdmSupportedCodecVp9);
-#if defined(USE_PROPRIETARY_CODECS)
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
             codecs.push_back(kCdmSupportedCodecAvc1);
 #endif  // defined(USE_PROPRIETARY_CODECS)
             std::string codec_string =
@@ -268,7 +271,6 @@ void AddPepperWidevine(std::vector<content::PepperPluginInfo>* plugins)
             widevine_cdm.mime_types.push_back(widevine_cdm_mime_type);
             widevine_cdm.permissions = kWidevineCdmPluginPermissions;
             plugins->push_back(widevine_cdm);
-            break;
         }
     }
 #endif  // defined(WIDEVINE_CDM_AVAILABLE) && BUILDFLAG(ENABLE_PEPPER_CDMS) &&
@@ -285,7 +287,7 @@ void ContentClientQt::AddPepperPlugins(std::vector<content::PepperPluginInfo>* p
 }
 
 }
-#endif
+#endif // BUILDFLAG(ENABLE_PLUGINS)
 
 #include <QCoreApplication>
 
@@ -315,6 +317,11 @@ std::string ContentClientQt::GetProduct() const
 {
     QString productName(qApp->applicationName() % '/' % qApp->applicationVersion());
     return productName.toStdString();
+}
+
+void ContentClientQt::AddAdditionalSchemes(Schemes* schemes)
+{
+    schemes->secure_schemes.push_back(kQrcSchemeQt);
 }
 
 } // namespace QtWebEngineCore

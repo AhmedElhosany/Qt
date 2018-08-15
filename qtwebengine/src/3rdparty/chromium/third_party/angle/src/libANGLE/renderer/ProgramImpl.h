@@ -17,6 +17,12 @@
 
 #include <map>
 
+namespace gl
+{
+class Context;
+class VaryingPacking;
+}
+
 namespace sh
 {
 struct BlockMemberInfo;
@@ -24,19 +30,24 @@ struct BlockMemberInfo;
 
 namespace rx
 {
-using LinkResult = gl::ErrorOrResult<bool>;
 
 class ProgramImpl : angle::NonCopyable
 {
   public:
     ProgramImpl(const gl::ProgramState &state) : mState(state) {}
     virtual ~ProgramImpl() {}
+    virtual void destroy(const gl::Context *context) {}
 
-    virtual LinkResult load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream) = 0;
-    virtual gl::Error save(gl::BinaryOutputStream *stream) = 0;
+    virtual gl::LinkResult load(const gl::Context *context,
+                                gl::InfoLog &infoLog,
+                                gl::BinaryInputStream *stream) = 0;
+    virtual void save(const gl::Context *context, gl::BinaryOutputStream *stream) = 0;
     virtual void setBinaryRetrievableHint(bool retrievable) = 0;
+    virtual void setSeparable(bool separable)               = 0;
 
-    virtual LinkResult link(const gl::ContextState &data, gl::InfoLog &infoLog) = 0;
+    virtual gl::LinkResult link(const gl::Context *context,
+                                const gl::VaryingPacking &packing,
+                                gl::InfoLog &infoLog) = 0;
     virtual GLboolean validate(const gl::Caps &caps, gl::InfoLog *infoLog) = 0;
 
     virtual void setUniform1fv(GLint location, GLsizei count, const GLfloat *v) = 0;
@@ -83,6 +94,6 @@ class ProgramImpl : angle::NonCopyable
     const gl::ProgramState &mState;
 };
 
-}
+}  // namespace rx
 
 #endif // LIBANGLE_RENDERER_PROGRAMIMPL_H_

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_PROXY_DHCP_SCRIPT_FETCHER_FACTORY_H_
-#define NET_PROXY_DHCP_SCRIPT_FETCHER_FACTORY_H_
+#ifndef NET_PROXY_DHCP_PROXY_SCRIPT_FETCHER_FACTORY_H_
+#define NET_PROXY_DHCP_PROXY_SCRIPT_FETCHER_FACTORY_H_
 
 #include <memory>
 
@@ -33,8 +33,9 @@ class URLRequestContext;
 // this factory to select the right one.
 class NET_EXPORT DhcpProxyScriptFetcherFactory {
  public:
-  // Creates a new factory object with default settings.
   DhcpProxyScriptFetcherFactory();
+
+  virtual ~DhcpProxyScriptFetcherFactory();
 
   // url_request_context must be valid and its lifetime must exceed that of the
   // returned DhcpProxyScriptFetcher.
@@ -43,29 +44,13 @@ class NET_EXPORT DhcpProxyScriptFetcherFactory {
   // reference to |url_request_context|. Be careful not to create cycles
   // between the fetcher and the context; you can break such cycles by calling
   // Cancel().
-  std::unique_ptr<DhcpProxyScriptFetcher> Create(
+  virtual std::unique_ptr<DhcpProxyScriptFetcher> Create(
       URLRequestContext* url_request_context);
 
-  // Attempts to enable/disable the DHCP WPAD feature.  Does nothing
-  // if |IsSupported()| returns false.
-  //
-  // The default is |enabled() == true|.
-  void set_enabled(bool enabled);
-
-  // Returns true if the DHCP WPAD feature is enabled.  Always returns
-  // false if |IsSupported()| is false.
-  bool enabled() const;
-
-  // Returns true if the DHCP WPAD feature is supported on the current
-  // operating system.
-  static bool IsSupported();
-
  private:
-  bool feature_enabled_;
-
   DISALLOW_COPY_AND_ASSIGN(DhcpProxyScriptFetcherFactory);
 };
 
 }  // namespace net
 
-#endif  // NET_PROXY_DHCP_SCRIPT_FETCHER_FACTORY_H_
+#endif  // NET_PROXY_DHCP_PROXY_SCRIPT_FETCHER_FACTORY_H_

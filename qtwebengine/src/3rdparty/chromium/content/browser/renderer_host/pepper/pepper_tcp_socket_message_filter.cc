@@ -38,7 +38,7 @@
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/host/resource_host.h"
 #include "ppapi/proxy/ppapi_messages.h"
-#include "ppapi/proxy/tcp_socket_resource_base.h"
+#include "ppapi/proxy/tcp_socket_resource_constants.h"
 #include "ppapi/shared_impl/private/net_address_private_impl.h"
 
 #if defined(OS_CHROMEOS)
@@ -47,7 +47,7 @@
 
 using ppapi::NetAddressPrivateImpl;
 using ppapi::host::NetErrorToPepperError;
-using ppapi::proxy::TCPSocketResourceBase;
+using ppapi::proxy::TCPSocketResourceConstants;
 using ppapi::TCPSocketState;
 using ppapi::TCPSocketVersion;
 
@@ -86,6 +86,8 @@ PepperTCPSocketMessageFilter::PepperTCPSocketMessageFilter(
       is_potentially_secure_plugin_context_(
           host->IsPotentiallySecurePluginContext(instance)) {
   DCHECK(host);
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+
   ++g_num_instances;
   host_->AddInstanceObserver(instance_, this);
   if (!host->GetRenderFrameIDsForInstance(
@@ -122,6 +124,7 @@ PepperTCPSocketMessageFilter::PepperTCPSocketMessageFilter(
           host->IsPotentiallySecurePluginContext(instance)) {
   DCHECK(host);
   DCHECK_NE(version, ppapi::TCP_SOCKET_VERSION_1_0);
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   ++g_num_instances;
   host_->AddInstanceObserver(instance_, this);
@@ -132,6 +135,7 @@ PepperTCPSocketMessageFilter::PepperTCPSocketMessageFilter(
 }
 
 PepperTCPSocketMessageFilter::~PepperTCPSocketMessageFilter() {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (host_)
     host_->RemoveInstanceObserver(instance_, this);
   if (socket_)
@@ -203,6 +207,7 @@ void PepperTCPSocketMessageFilter::OnThrottleStateChanged(bool is_throttled) {
 }
 
 void PepperTCPSocketMessageFilter::OnHostDestroyed() {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
   host_->RemoveInstanceObserver(instance_, this);
   host_ = nullptr;
 }
@@ -369,7 +374,7 @@ int32_t PepperTCPSocketMessageFilter::OnMsgRead(
   if (read_buffer_.get())
     return PP_ERROR_INPROGRESS;
   if (bytes_to_read <= 0 ||
-      bytes_to_read > TCPSocketResourceBase::kMaxReadSize) {
+      bytes_to_read > TCPSocketResourceConstants::kMaxReadSize) {
     return PP_ERROR_BADARGUMENT;
   }
 
@@ -412,7 +417,8 @@ int32_t PepperTCPSocketMessageFilter::OnMsgWrite(
 
   size_t data_size = data.size();
   if (data_size == 0 ||
-      data_size > static_cast<size_t>(TCPSocketResourceBase::kMaxWriteSize)) {
+      data_size >
+          static_cast<size_t>(TCPSocketResourceConstants::kMaxWriteSize)) {
     return PP_ERROR_BADARGUMENT;
   }
 
@@ -524,9 +530,8 @@ int32_t PepperTCPSocketMessageFilter::OnMsgSetOption(
     }
     case PP_TCPSOCKET_OPTION_SEND_BUFFER_SIZE: {
       int32_t integer_value = 0;
-      if (!value.GetInt32(&integer_value) ||
-          integer_value <= 0 ||
-          integer_value > TCPSocketResourceBase::kMaxSendBufferSize)
+      if (!value.GetInt32(&integer_value) || integer_value <= 0 ||
+          integer_value > TCPSocketResourceConstants::kMaxSendBufferSize)
         return PP_ERROR_BADARGUMENT;
 
       // If the socket is already connected, proxy the value to TCPSocket.
@@ -542,9 +547,8 @@ int32_t PepperTCPSocketMessageFilter::OnMsgSetOption(
     }
     case PP_TCPSOCKET_OPTION_RECV_BUFFER_SIZE: {
       int32_t integer_value = 0;
-      if (!value.GetInt32(&integer_value) ||
-          integer_value <= 0 ||
-          integer_value > TCPSocketResourceBase::kMaxReceiveBufferSize)
+      if (!value.GetInt32(&integer_value) || integer_value <= 0 ||
+          integer_value > TCPSocketResourceConstants::kMaxReceiveBufferSize)
         return PP_ERROR_BADARGUMENT;
 
       // If the socket is already connected, proxy the value to TCPSocket.
@@ -581,7 +585,7 @@ void PepperTCPSocketMessageFilter::DoBind(
 
   int pp_result = PP_OK;
   do {
-    std::vector<uint8_t> address;
+    net::IPAddressBytes address;
     uint16_t port;
     if (!NetAddressPrivateImpl::NetAddressToIPEndPoint(
             net_addr, &address, &port)) {
@@ -666,7 +670,7 @@ void PepperTCPSocketMessageFilter::DoConnectWithNetAddress(
 
   state_.SetPendingTransition(TCPSocketState::CONNECT);
 
-  std::vector<uint8_t> address;
+  net::IPAddressBytes address;
   uint16_t port;
   if (!NetAddressPrivateImpl::NetAddressToIPEndPoint(
           net_addr, &address, &port)) {

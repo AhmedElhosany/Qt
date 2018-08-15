@@ -4,9 +4,14 @@
 
 #include "content/public/renderer/content_renderer_client.h"
 
-#include "cc/blimp/remote_compositor_bridge.h"
 #include "content/public/renderer/media_stream_renderer_factory.h"
 #include "media/base/renderer_factory.h"
+#include "third_party/WebKit/public/platform/WebAudioDevice.h"
+#include "third_party/WebKit/public/platform/WebMediaStreamCenter.h"
+#include "third_party/WebKit/public/platform/WebRTCPeerConnectionHandler.h"
+#include "third_party/WebKit/public/platform/WebSocketHandshakeThrottle.h"
+#include "third_party/WebKit/public/platform/WebSpeechSynthesizer.h"
+#include "third_party/WebKit/public/platform/modules/webmidi/WebMIDIAccessor.h"
 #include "ui/gfx/icc_profile.h"
 #include "url/gurl.h"
 
@@ -22,7 +27,6 @@ SkBitmap* ContentRendererClient::GetSadWebViewBitmap() {
 
 bool ContentRendererClient::OverrideCreatePlugin(
     RenderFrame* render_frame,
-    blink::WebLocalFrame* frame,
     const blink::WebPluginParams& params,
     blink::WebPlugin** plugin) {
   return false;
@@ -51,27 +55,27 @@ void ContentRendererClient::DeferMediaLoad(
   closure.Run();
 }
 
-blink::WebMediaStreamCenter*
+std::unique_ptr<blink::WebMediaStreamCenter>
 ContentRendererClient::OverrideCreateWebMediaStreamCenter(
     blink::WebMediaStreamCenterClient* client) {
   return nullptr;
 }
 
-blink::WebRTCPeerConnectionHandler*
+std::unique_ptr<blink::WebRTCPeerConnectionHandler>
 ContentRendererClient::OverrideCreateWebRTCPeerConnectionHandler(
     blink::WebRTCPeerConnectionHandlerClient* client) {
   return nullptr;
 }
 
-blink::WebMIDIAccessor*
+std::unique_ptr<blink::WebMIDIAccessor>
 ContentRendererClient::OverrideCreateMIDIAccessor(
     blink::WebMIDIAccessorClient* client) {
   return nullptr;
 }
 
-blink::WebAudioDevice*
+std::unique_ptr<blink::WebAudioDevice>
 ContentRendererClient::OverrideCreateAudioDevice(
-    double sample_rate) {
+    const blink::WebAudioLatencyHint& latency_hint) {
   return nullptr;
 }
 
@@ -83,7 +87,13 @@ blink::WebThemeEngine* ContentRendererClient::OverrideThemeEngine() {
   return nullptr;
 }
 
-blink::WebSpeechSynthesizer* ContentRendererClient::OverrideSpeechSynthesizer(
+std::unique_ptr<blink::WebSocketHandshakeThrottle>
+ContentRendererClient::CreateWebSocketHandshakeThrottle() {
+  return nullptr;
+}
+
+std::unique_ptr<blink::WebSpeechSynthesizer>
+ContentRendererClient::OverrideSpeechSynthesizer(
     blink::WebSpeechSynthesizerClient* client) {
   return nullptr;
 }
@@ -104,7 +114,7 @@ bool ContentRendererClient::AllowPopup() {
 bool ContentRendererClient::HandleNavigation(
     RenderFrame* render_frame,
     bool is_content_initiated,
-    int opener_id,
+    bool render_view_was_created_by_renderer,
     blink::WebFrame* frame,
     const blink::WebURLRequest& request,
     blink::WebNavigationType type,
@@ -128,9 +138,10 @@ bool ContentRendererClient::ShouldFork(blink::WebLocalFrame* frame,
 }
 
 bool ContentRendererClient::WillSendRequest(
-    blink::WebFrame* frame,
+    blink::WebLocalFrame* frame,
     ui::PageTransition transition_type,
     const blink::WebURL& url,
+    std::vector<std::unique_ptr<URLLoaderThrottle>>* throttles,
     GURL* new_url) {
   return false;
 }
@@ -173,25 +184,29 @@ bool ContentRendererClient::AllowPepperMediaStreamAPI(const GURL& url) {
 void ContentRendererClient::AddSupportedKeySystems(
     std::vector<std::unique_ptr<media::KeySystemProperties>>* key_systems) {}
 
+bool ContentRendererClient::IsKeySystemsUpdateNeeded() {
+  return false;
+}
+
+bool ContentRendererClient::IsSupportedAudioConfig(
+    const media::AudioConfig& config) {
+  // Defer to media's default support.
+  return ::media::IsSupportedAudioConfig(config);
+}
+
+bool ContentRendererClient::IsSupportedVideoConfig(
+    const media::VideoConfig& config) {
+  // Defer to media's default support.
+  return ::media::IsSupportedVideoConfig(config);
+}
+
+bool ContentRendererClient::IsSupportedBitstreamAudioCodec(
+    media::AudioCodec codec) {
+  return false;
+}
+
 std::unique_ptr<MediaStreamRendererFactory>
 ContentRendererClient::CreateMediaStreamRendererFactory() {
-  return nullptr;
-}
-
-cc::ImageSerializationProcessor*
-ContentRendererClient::GetImageSerializationProcessor() {
-  return nullptr;
-}
-
-std::unique_ptr<cc::RemoteCompositorBridge>
-ContentRendererClient::CreateRemoteCompositorBridge(
-    RemoteProtoChannel* remote_proto_channel,
-    scoped_refptr<base::SingleThreadTaskRunner> compositor_main_task_runner) {
-  return nullptr;
-}
-
-std::unique_ptr<gfx::ICCProfile>
-ContentRendererClient::GetImageDecodeColorProfile() {
   return nullptr;
 }
 
@@ -204,9 +219,9 @@ bool ContentRendererClient::ShouldGatherSiteIsolationStats() const {
   return true;
 }
 
-blink::WebWorkerContentSettingsClientProxy*
-ContentRendererClient::CreateWorkerContentSettingsClientProxy(
-    RenderFrame* render_frame, blink::WebFrame* frame) {
+std::unique_ptr<blink::WebContentSettingsClient>
+ContentRendererClient::CreateWorkerContentSettingsClient(
+    RenderFrame* render_frame) {
   return nullptr;
 }
 
@@ -236,6 +251,15 @@ bool ContentRendererClient::ShouldEnforceWebRTCRoutingPreferences() {
 
 GURL ContentRendererClient::OverrideFlashEmbedWithHTML(const GURL& url) {
   return GURL();
+}
+
+std::unique_ptr<base::TaskScheduler::InitParams>
+ContentRendererClient::GetTaskSchedulerInitParams() {
+  return nullptr;
+}
+
+bool ContentRendererClient::AllowIdleMediaSuspend() {
+  return true;
 }
 
 }  // namespace content

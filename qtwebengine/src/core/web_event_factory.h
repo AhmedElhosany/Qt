@@ -41,10 +41,11 @@
 #define WEB_EVENT_FACTORY_H
 
 #include "content/public/browser/native_web_keyboard_event.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
 #ifndef QT_NO_GESTURES
 #include "third_party/WebKit/public/platform/WebGestureEvent.h"
 #endif
+#include "third_party/WebKit/public/platform/WebMouseEvent.h"
+#include "third_party/WebKit/public/platform/WebMouseWheelEvent.h"
 
 #include <QtGlobal>
 
@@ -69,7 +70,9 @@ public:
     static blink::WebGestureEvent toWebGestureEvent(QNativeGestureEvent *, double dpiScale);
 #endif
     static blink::WebMouseWheelEvent toWebWheelEvent(QWheelEvent*, double dpiScale);
+    static bool coalesceWebWheelEvent(blink::WebMouseWheelEvent &, QWheelEvent*, double dpiScale);
     static content::NativeWebKeyboardEvent toWebKeyboardEvent(QKeyEvent*);
+    static bool getEditCommand(QKeyEvent *event, std::string *editCommand);
 };
 
 

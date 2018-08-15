@@ -25,7 +25,7 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_l10n_util.h"
-#include "extensions/common/extension_utility_messages.h"
+#include "extensions/common/extension_utility_types.h"
 #include "extensions/common/extensions_client.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
@@ -164,7 +164,7 @@ std::unique_ptr<base::DictionaryValue> Unpacker::ReadManifest(
     return nullptr;
   }
 
-  if (!root->IsType(base::Value::TYPE_DICTIONARY)) {
+  if (!root->IsType(base::Value::Type::DICTIONARY)) {
     *error = errors::kInvalidManifest;
     return nullptr;
   }
@@ -172,7 +172,7 @@ std::unique_ptr<base::DictionaryValue> Unpacker::ReadManifest(
   return base::DictionaryValue::From(std::move(root));
 }
 
-bool Unpacker::ReadAllMessageCatalogs(const std::string& default_locale) {
+bool Unpacker::ReadAllMessageCatalogs() {
   base::FilePath locales_path = extension_dir_.Append(kLocaleFolder);
 
   // Not all folders under _locales have to be valid locales.
@@ -231,7 +231,7 @@ bool Unpacker::Run() {
   // Parse all message catalogs (if any).
   parsed_catalogs_.reset(new base::DictionaryValue);
   if (!LocaleInfo::GetDefaultLocale(extension.get()).empty()) {
-    if (!ReadAllMessageCatalogs(LocaleInfo::GetDefaultLocale(extension.get())))
+    if (!ReadAllMessageCatalogs())
       return false;  // Error was already reported.
   }
 
@@ -318,7 +318,7 @@ bool Unpacker::ReadMessageCatalog(const base::FilePath& message_path) {
     NOTREACHED();
     return false;
   }
-  parsed_catalogs_->Set(dir_name, root.release());
+  parsed_catalogs_->Set(dir_name, std::move(root));
 
   return true;
 }

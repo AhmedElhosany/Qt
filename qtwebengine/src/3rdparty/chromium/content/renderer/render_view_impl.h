@@ -18,14 +18,13 @@
 #include "base/gtest_prod_util.h"
 #include "base/id_map.h"
 #include "base/macros.h"
-#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/process/process.h"
 #include "base/strings/string16.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "cc/input/browser_controls_state.h"
-#include "cc/resources/shared_bitmap.h"
+#include "components/viz/common/quads/shared_bitmap.h"
 #include "content/common/content_export.h"
 #include "content/common/frame_message_enums.h"
 #include "content/common/navigation_gesture.h"
@@ -51,7 +50,6 @@
 #include "third_party/WebKit/public/web/WebElement.h"
 #include "third_party/WebKit/public/web/WebFrameWidget.h"
 #include "third_party/WebKit/public/web/WebHistoryItem.h"
-#include "third_party/WebKit/public/web/WebIconURL.h"
 #include "third_party/WebKit/public/web/WebNavigationType.h"
 #include "third_party/WebKit/public/web/WebNode.h"
 #include "third_party/WebKit/public/web/WebViewClient.h"
@@ -61,7 +59,6 @@
 #include "ui/surface/transport_dib.h"
 
 #if defined(OS_ANDROID)
-#include "content/renderer/android/content_detector.h"
 #include "content/renderer/android/renderer_date_time_picker.h"
 #endif
 
@@ -73,12 +70,9 @@
 #endif
 
 namespace blink {
-class WebApplicationCacheHost;
 class WebDataSource;
 class WebDateTimeChooserCompletion;
 class WebGestureEvent;
-class WebIconURL;
-class WebImage;
 class WebMouseEvent;
 class WebSpeechRecognizer;
 class WebStorageNamespace;
@@ -89,21 +83,20 @@ struct WebMediaPlayerAction;
 struct WebPluginAction;
 struct WebPoint;
 struct WebWindowFeatures;
-
-#if defined(OS_ANDROID)
-class WebHitTestResult;
-#endif
 }  // namespace blink
+
+namespace gfx {
+class ColorSpace;
+}
 
 namespace content {
 
-class HistoryController;
+class IdleUserDetector;
+class RendererDateTimePicker;
 class RenderViewImplTest;
 class RenderViewObserver;
 class RenderViewTest;
-class RendererDateTimePicker;
 class SpeechRecognitionDispatcher;
-struct FaviconURL;
 struct FileChooserParams;
 struct ResizeParams;
 
@@ -124,18 +117,19 @@ class CONTENT_EXPORT RenderViewImpl
     : public RenderWidget,
       NON_EXPORTED_BASE(public blink::WebViewClient),
       public RenderWidgetOwnerDelegate,
-      public RenderView,
-      public base::SupportsWeakPtr<RenderViewImpl> {
+      public RenderView {
  public:
-  // Creates a new RenderView. |opener_id| is the routing ID of the RenderView
-  // responsible for creating this RenderView. Note that if the original opener
-  // has been closed, |window_was_created_with_opener| will be true and
-  // |opener_id| will be MSG_ROUTING_NONE. When |swapped_out| is true, the
-  // |proxy_routing_id| is specified, so a RenderFrameProxy can be created for
-  // this RenderView's main RenderFrame.
-  static RenderViewImpl* Create(CompositorDependencies* compositor_deps,
-                                const mojom::CreateViewParams& params,
-                                bool was_created_by_renderer);
+  // Creates a new RenderView. Note that if the original opener has been closed,
+  // |params.window_was_created_with_opener| will be true and
+  // |params.opener_frame_route_id| will be MSG_ROUTING_NONE. When
+  // |params.swapped_out| is true, |params.proxy_routing_id| is specified, so a
+  // RenderFrameProxy can be created for this RenderView's main RenderFrame. The
+  // opener should provide a non-null value for |show_callback| if it needs to
+  // send an additional IPC to finish making this view visible.
+  static RenderViewImpl* Create(
+      CompositorDependencies* compositor_deps,
+      const mojom::CreateViewParams& params,
+      const RenderWidget::ShowCallback& show_callback);
 
   // Used by content_layouttest_support to hook into the creation of
   // RenderViewImpls.
@@ -167,10 +161,6 @@ class CONTENT_EXPORT RenderViewImpl
     send_content_state_immediately_ = value;
   }
 
-  HistoryController* history_controller() {
-    return history_controller_.get();
-  }
-
   // Functions to add and remove observers for this object.
   void AddObserver(RenderViewObserver* observer);
   void RemoveObserver(RenderViewObserver* observer);
@@ -199,8 +189,7 @@ class CONTENT_EXPORT RenderViewImpl
   void FrameDidStartLoading(blink::WebFrame* frame);
   void FrameDidStopLoading(blink::WebFrame* frame);
 
-  // Sets the zoom level and notifies observers. Doesn't call zoomLevelChanged,
-  // as that is only for changes that aren't initiated by the client.
+  // Sets the zoom level and notifies observers.
   void SetZoomLevel(double zoom_level);
 
   double page_zoom_level() {
@@ -214,15 +203,21 @@ class CONTENT_EXPORT RenderViewImpl
   void AttachWebFrameWidget(blink::WebFrameWidget* frame_widget);
 
   void TransferActiveWheelFlingAnimation(
-      const blink::WebActiveWheelFlingParameters& params);
+      const blink::WebActiveWheelFlingParameters& params) override;
 
   // Starts a timer to send an UpdateState message on behalf of |frame|, if the
   // timer isn't already running. This allows multiple state changing events to
   // be coalesced into one update.
   void StartNavStateSyncTimerIfNecessary(RenderFrameImpl* frame);
 
-  // Synchronously sends the current navigation state to the browser.
-  void SendUpdateState();
+  // A popup widget opened by this view needs to be shown.
+  void ShowCreatedPopupWidget(RenderWidget* popup_widget,
+                              blink::WebNavigationPolicy policy,
+                              const gfx::Rect& initial_rect);
+  // A RenderWidgetFullscreen widget opened by this view needs to be shown.
+  void ShowCreatedFullscreenWidget(RenderWidget* fullscreen_widget,
+                                   blink::WebNavigationPolicy policy,
+                                   const gfx::Rect& initial_rect);
 
   // Returns the length of the session history of this RenderView. Note that
   // this only coincides with the actual length of the session history if this
@@ -236,6 +231,9 @@ class CONTENT_EXPORT RenderViewImpl
 
   // Change the device scale factor and force the compositor to resize.
   void SetDeviceScaleFactorForTesting(float factor);
+
+  // Change the device ICC color profile while running a layout test.
+  void SetDeviceColorSpaceForTesting(const gfx::ColorSpace& color_space);
 
   // Used to force the size of a window when running layout tests.
   void ForceResizeForTesting(const gfx::Size& new_size);
@@ -254,101 +252,91 @@ class CONTENT_EXPORT RenderViewImpl
   // blink::WebWidgetClient implementation ------------------------------------
 
   // Most methods are handled by RenderWidget.
-  void show(blink::WebNavigationPolicy policy) override;
-  void didHandleGestureEvent(const blink::WebGestureEvent& event,
+  void Show(blink::WebNavigationPolicy policy) override;
+  void DidHandleGestureEvent(const blink::WebGestureEvent& event,
                              bool event_cancelled) override;
-  void onMouseDown(const blink::WebNode& mouse_down_node) override;
-  void initializeLayerTreeView() override;
+  blink::WebLayerTreeView* InitializeLayerTreeView() override;
+
+  bool CanHandleGestureEvent() override;
+  bool CanUpdateLayout() override;
 
   // TODO(lfg): Remove once WebViewClient no longer inherits from
   // WebWidgetClient.
-  void closeWidgetSoon() override;
-  void convertViewportToWindow(blink::WebRect* rect) override;
-  void convertWindowToViewport(blink::WebFloatRect* rect) override;
-  void didOverscroll(const blink::WebFloatSize& overscrollDelta,
+  void CloseWidgetSoon() override;
+  void ConvertViewportToWindow(blink::WebRect* rect) override;
+  void ConvertWindowToViewport(blink::WebFloatRect* rect) override;
+  void DidOverscroll(const blink::WebFloatSize& overscrollDelta,
                      const blink::WebFloatSize& accumulatedOverscroll,
                      const blink::WebFloatPoint& positionInViewport,
                      const blink::WebFloatSize& velocityInViewport) override;
-  void hasTouchEventHandlers(bool has_handlers) override;
-  void resetInputMethod() override;
-  blink::WebScreenInfo screenInfo() override;
-  void setToolTipText(const blink::WebString&,
+  void HasTouchEventHandlers(bool has_handlers) override;
+  blink::WebScreenInfo GetScreenInfo() override;
+  void SetToolTipText(const blink::WebString&,
                       blink::WebTextDirection hint) override;
-  void setTouchAction(blink::WebTouchAction touchAction) override;
-  void showImeIfNeeded() override;
-  void showUnhandledTapUIIfNeeded(const blink::WebPoint& tappedPosition,
+  void SetTouchAction(cc::TouchAction touchAction) override;
+  void ShowUnhandledTapUIIfNeeded(const blink::WebPoint& tappedPosition,
                                   const blink::WebNode& tappedNode,
                                   bool pageChanged) override;
-  blink::WebWidgetClient* widgetClient() override;
+  blink::WebWidgetClient* WidgetClient() override;
 
   // blink::WebViewClient implementation --------------------------------------
 
-  blink::WebView* createView(blink::WebLocalFrame* creator,
+  blink::WebView* CreateView(blink::WebLocalFrame* creator,
                              const blink::WebURLRequest& request,
                              const blink::WebWindowFeatures& features,
                              const blink::WebString& frame_name,
                              blink::WebNavigationPolicy policy,
-                             bool suppress_opener) override;
-  blink::WebWidget* createPopupMenu(blink::WebPopupType popup_type) override;
-  blink::WebStorageNamespace* createSessionStorageNamespace() override;
-  void printPage(blink::WebLocalFrame* frame) override;
-  bool enumerateChosenDirectory(
+                             bool suppress_opener,
+                             blink::WebSandboxFlags sandbox_flags) override;
+  blink::WebWidget* CreatePopupMenu(blink::WebPopupType popup_type) override;
+  blink::WebStorageNamespace* CreateSessionStorageNamespace() override;
+  void PrintPage(blink::WebLocalFrame* frame) override;
+  bool EnumerateChosenDirectory(
       const blink::WebString& path,
       blink::WebFileChooserCompletion* chooser_completion) override;
-  void didCancelCompositionOnSelectionChange() override;
   void SetValidationMessageDirection(base::string16* main_text,
                                      blink::WebTextDirection main_text_hint,
                                      base::string16* sub_text,
                                      blink::WebTextDirection sub_text_hint);
-  void showValidationMessage(const blink::WebRect& anchor_in_viewport,
+  void ShowValidationMessage(const blink::WebRect& anchor_in_viewport,
                              const blink::WebString& main_text,
                              blink::WebTextDirection main_text_hint,
                              const blink::WebString& sub_text,
                              blink::WebTextDirection hint) override;
-  void hideValidationMessage() override;
-  void moveValidationMessage(
-      const blink::WebRect& anchor_in_viewport) override;
-  void setStatusText(const blink::WebString& text) override;
-  void setMouseOverURL(const blink::WebURL& url) override;
-  void setKeyboardFocusURL(const blink::WebURL& url) override;
-  bool acceptsLoadDrops() override;
-  void focusNext() override;
-  void focusPrevious() override;
-  void focusedNodeChanged(const blink::WebNode& fromNode,
+  void HideValidationMessage() override;
+  void MoveValidationMessage(const blink::WebRect& anchor_in_viewport) override;
+  void SetMouseOverURL(const blink::WebURL& url) override;
+  void SetKeyboardFocusURL(const blink::WebURL& url) override;
+  bool AcceptsLoadDrops() override;
+  void FocusNext() override;
+  void FocusPrevious() override;
+  void FocusedNodeChanged(const blink::WebNode& fromNode,
                           const blink::WebNode& toNode) override;
-  void didUpdateLayout() override;
+  void DidUpdateLayout() override;
 #if defined(OS_ANDROID)
-  bool didTapMultipleTargets(
+  bool DidTapMultipleTargets(
       const blink::WebSize& inner_viewport_offset,
       const blink::WebRect& touch_rect,
       const blink::WebVector<blink::WebRect>& target_rects) override;
 #endif
-  blink::WebString acceptLanguages() override;
-  void navigateBackForwardSoon(int offset) override;
-  int historyBackListCount() override;
-  int historyForwardListCount() override;
-  blink::WebSpeechRecognizer* speechRecognizer() override;
-  void zoomLimitsChanged(double minimum_level, double maximum_level) override;
-  virtual void zoomLevelChanged();
-  void pageScaleFactorChanged() override;
+  blink::WebString AcceptLanguages() override;
+  void NavigateBackForwardSoon(int offset) override;
+  int HistoryBackListCount() override;
+  int HistoryForwardListCount() override;
+  blink::WebSpeechRecognizer* SpeechRecognizer() override;
+  void ZoomLimitsChanged(double minimum_level, double maximum_level) override;
+  void PageScaleFactorChanged() override;
   virtual double zoomLevelToZoomFactor(double zoom_level) const;
   virtual double zoomFactorToZoomLevel(double factor) const;
-  void draggableRegionsChanged() override;
-  void pageImportanceSignalsChanged() override;
-  void didAutoResize(const blink::WebSize& newSize) override;
-  blink::WebRect rootWindowRect() override;
-  void didFocus(blink::WebLocalFrame* calling_frame) override;
+  void PageImportanceSignalsChanged() override;
+  void DidAutoResize(const blink::WebSize& newSize) override;
+  blink::WebRect RootWindowRect() override;
+  void DidFocus() override;
 
 #if defined(OS_ANDROID)
-  void scheduleContentIntent(const blink::WebURL& intent,
-                             bool is_main_frame) override;
-  void cancelScheduledContentIntents() override;
-  blink::WebURL detectContentIntentAt(
-      const blink::WebHitTestResult& touch_hit) override;
-
   // Only used on Android since all other platforms implement
   // date and time input fields using MULTIPLE_FIELDS_UI
-  bool openDateTimeChooser(const blink::WebDateTimeChooserParams&,
+  bool OpenDateTimeChooser(const blink::WebDateTimeChooserParams&,
                            blink::WebDateTimeChooserCompletion*) override;
   virtual void didScrollWithKeyboard(const blink::WebSize& delta);
 #endif
@@ -360,12 +348,11 @@ class CONTENT_EXPORT RenderViewImpl
   int GetRoutingID() const override;
   gfx::Size GetSize() const override;
   float GetDeviceScaleFactor() const override;
-  WebPreferences& GetWebkitPreferences() override;
+  const WebPreferences& GetWebkitPreferences() override;
   void SetWebkitPreferences(const WebPreferences& preferences) override;
   blink::WebView* GetWebView() override;
   blink::WebFrameWidget* GetWebFrameWidget() override;
   bool ShouldDisplayScrollbars(int width, int height) const override;
-  int GetEnabledBindings() const override;
   bool GetContentStateImmediately() const override;
   void Repaint(const gfx::Size& size) override;
   void SetEditCommandForNextKeyEvent(const std::string& name,
@@ -387,6 +374,15 @@ class CONTENT_EXPORT RenderViewImpl
   // appropriate section, add it there. If not, there are some random functions
   // nearer to the top you can add it to.
 
+  base::WeakPtr<RenderViewImpl> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+  void HandleInputEvent(const blink::WebCoalescedInputEvent& input_event,
+                        const ui::LatencyInfo& latency_info,
+                        HandledEventCallback callback) override;
+  void ScrollFocusedEditableNodeIntoRect(const gfx::Rect& rect);
+
  protected:
   // RenderWidget overrides:
   blink::WebWidget* GetWebWidget() const override;
@@ -395,7 +391,6 @@ class CONTENT_EXPORT RenderViewImpl
   void OnResize(const ResizeParams& params) override;
   void OnSetFocus(bool enable) override;
   GURL GetURLForGraphicsContext3D() override;
-  void OnOrientationChange() override;
   void DidCommitCompositorFrame() override;
   void DidCompletePageScaleAnimation() override;
   void OnDeviceScaleFactorChanged() override;
@@ -405,7 +400,7 @@ class CONTENT_EXPORT RenderViewImpl
                  const mojom::CreateViewParams& params);
 
   void Initialize(const mojom::CreateViewParams& params,
-                  bool was_created_by_renderer);
+                  const RenderWidget::ShowCallback& show_callback);
   void SetScreenMetricsEmulationParameters(
       bool enabled,
       const blink::WebDeviceEmulationParams& params) override;
@@ -483,9 +478,6 @@ class CONTENT_EXPORT RenderViewImpl
 
   // RenderWidgetOwnerDelegate implementation ----------------------------------
 
-  void RenderWidgetDidSetColorProfile(
-      const std::vector<char>& color_profile) override;
-  void RenderWidgetFocusChangeComplete() override;
   bool DoesRenderWidgetHaveTouchEventHandlersAt(
       const gfx::Point& point) const override;
   bool RenderWidgetWillHandleMouseEvent(
@@ -497,8 +489,6 @@ class CONTENT_EXPORT RenderViewImpl
   // WebFrameClient. However, many implementations of WebFrameClient methods
   // still live here and are called from RenderFrameImpl. These implementations
   // are to be moved to RenderFrameImpl <http://crbug.com/361761>.
-
-  void didChangeIcon(blink::WebLocalFrame*, blink::WebIconURL::Type);
 
   static Referrer GetReferrerFromRequest(
       blink::WebFrame* frame,
@@ -516,16 +506,11 @@ class CONTENT_EXPORT RenderViewImpl
   // The documentation for these functions should be in
   // content/common/*_messages.h for the message that the function is handling.
   void OnExecuteEditCommand(const std::string& name, const std::string& value);
-  void OnMoveCaret(const gfx::Point& point);
-  void OnScrollFocusedEditableNodeIntoRect(const gfx::Rect& rect);
-  void OnAllowBindings(int enabled_bindings_flags);
   void OnAllowScriptToClose(bool script_can_close);
   void OnCancelDownload(int32_t download_id);
   void OnClosePage();
   void OnClose();
 
-  void OnShowContextMenu(ui::MenuSourceType source_type,
-                         const gfx::Point& location);
   void OnDeterminePageLanguage();
   void OnDisableScrollbarsForSmallWindows(
       const gfx::Size& disable_scrollbars_size_limit);
@@ -539,7 +524,10 @@ class CONTENT_EXPORT RenderViewImpl
   void OnPluginActionAt(const gfx::Point& location,
                         const blink::WebPluginAction& action);
   void OnMoveOrResizeStarted();
-  void OnReleaseDisambiguationPopupBitmap(const cc::SharedBitmapId& id);
+  void OnReleaseDisambiguationPopupBitmap(const viz::SharedBitmapId& id);
+  void OnResolveTapDisambiguation(double timestamp_seconds,
+                                  gfx::Point tap_viewport_offset,
+                                  bool is_long_press);
   void OnSetActive(bool active);
   void OnSetBackgroundOpaque(bool opaque);
   void OnExitFullscreen();
@@ -551,7 +539,6 @@ class CONTENT_EXPORT RenderViewImpl
   void OnUpdateTargetURLAck();
   void OnUpdateWebPreferences(const WebPreferences& prefs);
   void OnSetPageScale(float page_scale_factor);
-  void OnZoom(PageZoom zoom);
   void OnForceRedraw(const ui::LatencyInfo& latency_info);
   void OnSelectWordAroundCaret();
   void OnAudioStateChanged(bool is_audio_playing);
@@ -560,7 +547,6 @@ class CONTENT_EXPORT RenderViewImpl
   void OnUpdateBrowserControlsState(bool enable_hiding,
                                     bool enable_showing,
                                     bool animate);
-  void OnExtractSmartClipData(const gfx::Rect& rect);
 #elif defined(OS_MACOSX)
   void OnGetRenderedText();
 #endif
@@ -570,6 +556,7 @@ class CONTENT_EXPORT RenderViewImpl
   void OnSetZoomLevel(PageMsg_SetZoomLevel_Command command, double zoom_level);
   void OnPageWasHidden();
   void OnPageWasShown();
+  void OnUpdateScreenInfo(const ScreenInfo& screen_info);
 
   // Adding a new message handler? Please add it in alphabetical order above
   // and put it in the same position in the .cc file.
@@ -579,10 +566,10 @@ class CONTENT_EXPORT RenderViewImpl
   void CheckPreferredSize();
 
 #if defined(OS_ANDROID)
-  // Launch an Android content intent with the given URL.
-  void LaunchAndroidContentIntent(const GURL& intent_url,
-                                  size_t request_id,
-                                  bool is_main_frame);
+  // Make the video capture devices (e.g. webcam) stop/resume delivering video
+  // frames to their clients, depending on flag |suspend|. This is called in
+  // response to a RenderView PageHidden/Shown().
+  void SuspendVideoCaptureDevices(bool suspend);
 #endif
 
 #if defined(OS_WIN) || (defined(OS_POSIX) && !defined(OS_MACOSX))
@@ -598,13 +585,6 @@ class CONTENT_EXPORT RenderViewImpl
   // Update the target url and tell the browser that the target URL has changed.
   // If |url| is empty, show |fallback_url|.
   void UpdateTargetURL(const GURL& url, const GURL& fallback_url);
-
-  // Tells the browser what the new list of favicons for the webpage is.
-  void SendUpdateFaviconURL(const std::vector<FaviconURL>& urls);
-
-  // Invoked from DidStopLoading(). Sends the current list of loaded favicons to
-  // the browser.
-  void DidStopLoadingIcons();
 
   // Coordinate conversion -----------------------------------------------------
 
@@ -634,9 +614,11 @@ class CONTENT_EXPORT RenderViewImpl
   void UpdateWebViewWithDeviceScaleFactor();
 
   // Send the appropriate ack to be able discard this input event message.
-  void OnDiscardInputEvent(const blink::WebInputEvent* input_event,
-                           const ui::LatencyInfo& latency_info,
-                           InputEventDispatchType dispatch_type);
+  void OnDiscardInputEvent(
+      const blink::WebInputEvent* input_event,
+      const std::vector<const blink::WebInputEvent*>& coalesced_events,
+      const ui::LatencyInfo& latency_info,
+      InputEventDispatchType dispatch_type);
 
   // ---------------------------------------------------------------------------
   // ADDING NEW FUNCTIONS? Please keep private functions alphabetized and put
@@ -676,9 +658,6 @@ class CONTENT_EXPORT RenderViewImpl
   // The gesture that initiated the current navigation.
   // TODO(nasko): Move to RenderFrame, as this is per-frame state.
   NavigationGesture navigation_gesture_;
-
-  // Used for popups.
-  bool opened_by_user_gesture_;
 
   // Timer used to delay the updating of nav state (see
   // StartNavStateSyncTimerIfNecessary).
@@ -789,21 +768,14 @@ class CONTENT_EXPORT RenderViewImpl
   // initialized.
   SpeechRecognitionDispatcher* speech_recognition_dispatcher_;
 
-  std::unique_ptr<HistoryController> history_controller_;
-
 #if defined(OS_ANDROID)
   // Android Specific ---------------------------------------------------------
-
-  // Expected id of the next content intent launched. Used to prevent scheduled
-  // intents to be launched if aborted.
-  size_t expected_content_intent_id_;
-
-  // List of click-based content detectors.
-  std::vector<std::unique_ptr<ContentDetector>> content_detectors_;
 
   // A date/time picker object for date and time related input elements.
   std::unique_ptr<RendererDateTimePicker> date_time_picker_client_;
 
+  // Whether this was a renderer-created or browser-created RenderView.
+  bool was_created_by_renderer_;
 #endif
 
   // Misc ----------------------------------------------------------------------
@@ -825,10 +797,10 @@ class CONTENT_EXPORT RenderViewImpl
   // constructors call the AddObservers method of RenderViewImpl.
   std::unique_ptr<StatsCollectionObserver> stats_collection_observer_;
 
-  typedef std::map<cc::SharedBitmapId, cc::SharedBitmap*> BitmapMap;
+  typedef std::map<viz::SharedBitmapId, viz::SharedBitmap*> BitmapMap;
   BitmapMap disambiguation_bitmaps_;
 
-  bool has_added_input_handler_;
+  std::unique_ptr<IdleUserDetector> idle_user_detector_;
 
   // ---------------------------------------------------------------------------
   // ADDING NEW DATA? Please see if it fits appropriately in one of the above
@@ -838,6 +810,8 @@ class CONTENT_EXPORT RenderViewImpl
   // use the Observer interface to filter IPC messages and receive frame change
   // notifications.
   // ---------------------------------------------------------------------------
+
+  base::WeakPtrFactory<RenderViewImpl> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderViewImpl);
 };

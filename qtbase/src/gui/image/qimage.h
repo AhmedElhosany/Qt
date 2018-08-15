@@ -214,7 +214,10 @@ public:
     const uchar *bits() const;
     const uchar *constBits() const;
 
-    int byteCount() const;
+#if QT_DEPRECATED_SINCE(5, 10)
+    QT_DEPRECATED_X("Use sizeInBytes") int byteCount() const;
+#endif
+    qsizetype sizeInBytes() const;
 
     uchar *scanLine(int);
     const uchar *scanLine(int) const;
@@ -468,7 +471,7 @@ inline void QImage::setNumColors(int n)
 
 inline int QImage::numBytes() const
 {
-    return byteCount();
+    return int(sizeInBytes());
 }
 #endif
 

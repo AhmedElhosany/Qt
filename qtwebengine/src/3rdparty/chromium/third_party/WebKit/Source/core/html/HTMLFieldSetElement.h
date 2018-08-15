@@ -29,46 +29,36 @@
 
 namespace blink {
 
-class HTMLFormControlsCollection;
+class HTMLCollection;
 
 class CORE_EXPORT HTMLFieldSetElement final : public HTMLFormControlElement {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static HTMLFieldSetElement* create(Document&, HTMLFormElement*);
-  DECLARE_VIRTUAL_TRACE();
-  HTMLLegendElement* legend() const;
-
-  HTMLFormControlsCollection* elements();
-
-  const FormAssociatedElement::List& associatedElements() const;
+  static HTMLFieldSetElement* Create(Document&);
+  HTMLLegendElement* Legend() const;
+  HTMLCollection* elements();
 
  protected:
-  void disabledAttributeChanged() override;
+  void DisabledAttributeChanged() override;
 
  private:
-  HTMLFieldSetElement(Document&, HTMLFormElement*);
+  explicit HTMLFieldSetElement(Document&);
 
-  bool isEnumeratable() const override { return true; }
-  bool supportsFocus() const override;
-  LayoutObject* createLayoutObject(const ComputedStyle&) override;
-  const AtomicString& formControlType() const override;
-  bool recalcWillValidate() const override { return false; }
+  bool IsEnumeratable() const override { return true; }
+  bool SupportsFocus() const override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
+  const AtomicString& FormControlType() const override;
+  bool RecalcWillValidate() const override { return false; }
   int tabIndex() const final;
-  bool matchesValidityPseudoClasses() const final;
-  bool isValidElement() final;
-  void childrenChanged(const ChildrenChange&) override;
-  bool areAuthorShadowsAllowed() const override { return false; }
-  bool isSubmittableElement() override;
-  bool alwaysCreateUserAgentShadowRoot() const override { return false; }
+  bool MatchesValidityPseudoClasses() const final;
+  bool IsValidElement() final;
+  void ChildrenChanged(const ChildrenChange&) override;
+  bool AreAuthorShadowsAllowed() const override { return false; }
+  bool IsSubmittableElement() override;
+  bool AlwaysCreateUserAgentShadowRoot() const override { return false; }
 
-  static void invalidateDisabledStateUnder(Element&);
-  void refreshElementsIfNeeded() const;
-
-  mutable FormAssociatedElement::List m_associatedElements;
-  // When dom tree is modified, we have to refresh the m_associatedElements
-  // array.
-  mutable uint64_t m_documentVersion;
+  Element* InvalidateDescendantDisabledStateAndFindFocusedOne(Element& base);
 };
 
 }  // namespace blink

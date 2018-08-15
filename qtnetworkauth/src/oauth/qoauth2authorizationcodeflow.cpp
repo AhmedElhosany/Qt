@@ -77,11 +77,9 @@ QOAuth2AuthorizationCodeFlowPrivate::QOAuth2AuthorizationCodeFlowPrivate(
         QNetworkAccessManager *manager) :
     QAbstractOAuth2Private(qMakePair(clientIdentifier, QString()), authorizationUrl, manager),
     accessTokenUrl(accessTokenUrl)
-{}
-
-QOAuth2AuthorizationCodeFlowPrivate::QOAuth2AuthorizationCodeFlowPrivate(
-        QNetworkAccessManager *manager) : QAbstractOAuth2Private(manager)
-{}
+{
+    responseType = QStringLiteral("code");
+}
 
 void QOAuth2AuthorizationCodeFlowPrivate::_q_handleCallback(const QVariantMap &data)
 {
@@ -89,7 +87,7 @@ void QOAuth2AuthorizationCodeFlowPrivate::_q_handleCallback(const QVariantMap &d
     using Key = QAbstractOAuth2Private::OAuth2KeyString;
 
     if (status != QAbstractOAuth::Status::NotAuthenticated) {
-        qWarning("QOAuth2AuthorizationCodeFlow: Unexpected call");
+        qCWarning(loggingCategory, "Unexpected call");
         return;
     }
 
@@ -101,21 +99,21 @@ void QOAuth2AuthorizationCodeFlowPrivate::_q_handleCallback(const QVariantMap &d
     if (error.size()) {
         const QString uri = data.value(Key::errorUri).toString();
         const QString description = data.value(Key::errorDescription).toString();
-        qWarning("QOAuth2AuthorizationCodeFlow: AuthenticationError: %s(%s): %s",
+        qCWarning(loggingCategory, "AuthenticationError: %s(%s): %s",
                  qPrintable(error), qPrintable(uri), qPrintable(description));
         Q_EMIT q->error(error, description, uri);
         return;
     }
     if (code.isEmpty()) {
-        qWarning("QOAuth2AuthorizationCodeFlow: AuthenticationError: Code not received");
+        qCWarning(loggingCategory, "AuthenticationError: Code not received");
         return;
     }
     if (receivedState.isEmpty()) {
-        qWarning("QOAuth2AuthorizationCodeFlow: State not received");
+        qCWarning(loggingCategory, "State not received");
         return;
     }
     if (state != receivedState) {
-        qWarning("QOAuth2AuthorizationCodeFlow: State mismatch");
+        qCWarning(loggingCategory, "State mismatch");
         return;
     }
 
@@ -134,7 +132,7 @@ void QOAuth2AuthorizationCodeFlowPrivate::_q_accessTokenRequestFinished(const QV
 
     if (values.contains(Key::error)) {
         const QString error = values.value(Key::error).toString();
-        qWarning("QOAuth2AuthorizationCodeFlow Error: %s", qPrintable(error));
+        qCWarning(loggingCategory, "Error: %s", qPrintable(error));
         return;
     }
 
@@ -147,7 +145,7 @@ void QOAuth2AuthorizationCodeFlowPrivate::_q_accessTokenRequestFinished(const QV
     refreshToken = values.value(Key::refreshToken).toString();
     scope = values.value(Key::scope).toString();
     if (accessToken.isEmpty()) {
-        qWarning("QOAuth2AuthorizationCodeFlow: Access token not received");
+        qCWarning(loggingCategory, "Access token not received");
         return;
     }
     q->setToken(accessToken);
@@ -167,7 +165,7 @@ void QOAuth2AuthorizationCodeFlowPrivate::_q_authenticate(QNetworkReply *reply,
     if (reply == currentReply){
         const auto url = reply->url();
         if (url == accessTokenUrl) {
-            authenticator->setUser(clientCredentials.first);
+            authenticator->setUser(clientIdentifier);
             authenticator->setPassword(QString());
         }
     }
@@ -178,7 +176,8 @@ void QOAuth2AuthorizationCodeFlowPrivate::_q_authenticate(QNetworkReply *reply,
     object \a parent.
 */
 QOAuth2AuthorizationCodeFlow::QOAuth2AuthorizationCodeFlow(QObject *parent) :
-    QAbstractOAuth2(*new QOAuth2AuthorizationCodeFlowPrivate, parent)
+    QOAuth2AuthorizationCodeFlow(nullptr,
+                                 parent)
 {}
 
 /*!
@@ -187,7 +186,9 @@ QOAuth2AuthorizationCodeFlow::QOAuth2AuthorizationCodeFlow(QObject *parent) :
 */
 QOAuth2AuthorizationCodeFlow::QOAuth2AuthorizationCodeFlow(QNetworkAccessManager *manager,
                                                            QObject *parent) :
-    QAbstractOAuth2(*new QOAuth2AuthorizationCodeFlowPrivate(manager), parent)
+    QOAuth2AuthorizationCodeFlow(QString(),
+                                 manager,
+                                 parent)
 {}
 
 /*!
@@ -242,18 +243,6 @@ QOAuth2AuthorizationCodeFlow::~QOAuth2AuthorizationCodeFlow()
 {}
 
 /*!
-    Returns the \l {https://tools.ietf.org/html/rfc6749#section-3.1.1}
-    {response_type} used in QOAuth2AuthorizationCodeFlow; this is
-    fixed to "code" as required in
-    \l {https://tools.ietf.org/html/rfc6749#section-4.1.1}{The OAuth
-    2.0 RFC}
-*/
-QString QOAuth2AuthorizationCodeFlow::responseType() const
-{
-    return QStringLiteral("code");
-}
-
-/*!
     Returns the URL used to request the access token.
     \sa setAccessTokenUrl()
 */
@@ -285,11 +274,11 @@ void QOAuth2AuthorizationCodeFlow::grant()
 {
     Q_D(QOAuth2AuthorizationCodeFlow);
     if (d->authorizationUrl.isEmpty()) {
-        qWarning("QOAuth2AuthorizationCodeFlow::grant: No authenticate Url set");
+        qCWarning(d->loggingCategory, "No authenticate Url set");
         return;
     }
     if (d->accessTokenUrl.isEmpty()) {
-        qWarning("QOAuth2AuthorizationCodeFlow::grant: No request access token Url set");
+        qCWarning(d->loggingCategory, "No request access token Url set");
         return;
     }
 
@@ -310,13 +299,12 @@ void QOAuth2AuthorizationCodeFlow::refreshAccessToken()
     Q_D(QOAuth2AuthorizationCodeFlow);
 
     if (d->refreshToken.isEmpty()) {
-        qWarning("QOAuth2AuthorizationCodeFlow::refreshAccessToken: Cannot refresh access token. "
-                 "Empty refresh token");
+        qCWarning(d->loggingCategory, "Cannot refresh access token. Empty refresh token");
         return;
     }
     if (d->status == Status::RefreshingToken) {
-        qWarning("QOAuth2AuthorizationCodeFlow::refreshAccessToken: Cannot refresh access token. "
-                 "Refresh Access Token in progress");
+        qCWarning(d->loggingCategory, "Cannot refresh access token. "
+                                      "Refresh Access Token is already in progress");
         return;
     }
 
@@ -367,7 +355,7 @@ QUrl QOAuth2AuthorizationCodeFlow::buildAuthenticateUrl(const QVariantMap &param
     QVariantMap p(parameters);
     QUrl url(d->authorizationUrl);
     p.insert(Key::responseType, responseType());
-    p.insert(Key::clientIdentifier, d->clientCredentials.first);
+    p.insert(Key::clientIdentifier, d->clientIdentifier);
     p.insert(Key::redirectUri, callback());
     p.insert(Key::scope, d->scope);
     p.insert(Key::state, state);
@@ -377,7 +365,7 @@ QUrl QOAuth2AuthorizationCodeFlow::buildAuthenticateUrl(const QVariantMap &param
     connect(d->replyHandler.data(), &QAbstractOAuthReplyHandler::callbackReceived, this,
             &QOAuth2AuthorizationCodeFlow::authorizationCallbackReceived, Qt::UniqueConnection);
     setStatus(QAbstractOAuth::Status::NotAuthenticated);
-    qDebug("QOAuth2AuthorizationCodeFlow::buildAuthenticateUrl: %s", qPrintable(url.toString()));
+    qCDebug(d->loggingCategory, "Generated URL: %s", qPrintable(url.toString()));
     return url;
 }
 
@@ -397,9 +385,9 @@ void QOAuth2AuthorizationCodeFlow::requestAccessToken(const QString &code)
     parameters.insert(Key::grantType, QStringLiteral("authorization_code"));
     parameters.insert(Key::code, QUrl::toPercentEncoding(code));
     parameters.insert(Key::redirectUri, QUrl::toPercentEncoding(callback()));
-    parameters.insert(Key::clientIdentifier, QUrl::toPercentEncoding(d->clientCredentials.first));
-    if (!d->clientCredentials.second.isEmpty())
-        parameters.insert(Key::clientSharedSecret, d->clientCredentials.second);
+    parameters.insert(Key::clientIdentifier, QUrl::toPercentEncoding(d->clientIdentifier));
+    if (!d->clientIdentifierSharedKey.isEmpty())
+        parameters.insert(Key::clientSharedSecret, d->clientIdentifierSharedKey);
     if (d->modifyParametersFunction)
         d->modifyParametersFunction(Stage::RequestingAccessToken, &parameters);
     query = QAbstractOAuthPrivate::createQuery(parameters);
@@ -431,7 +419,7 @@ void QOAuth2AuthorizationCodeFlow::resourceOwnerAuthorization(const QUrl &url,
 {
     Q_D(QOAuth2AuthorizationCodeFlow);
     if (Q_UNLIKELY(url != d->authorizationUrl)) {
-        qWarning("Invalid URL: %s", qPrintable(url.toString()));
+        qCWarning(d->loggingCategory, "Invalid URL: %s", qPrintable(url.toString()));
         return;
     }
     const QUrl u = buildAuthenticateUrl(parameters);

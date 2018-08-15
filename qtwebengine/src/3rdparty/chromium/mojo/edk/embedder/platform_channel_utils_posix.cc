@@ -99,7 +99,7 @@ bool IsPeerAuthorized(PlatformHandle peer_handle) {
 //    - Mac: 2.21 s, 2.91 s, 2.98 s, 3.08 s, 3.59 s, 4.74 s
 
 // Flags to use with calling |send()| or |sendmsg()| (see above).
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(OS_FUCHSIA)
 const int kSendFlags = 0;
 #else
 const int kSendFlags = MSG_NOSIGNAL;
@@ -247,7 +247,8 @@ ssize_t PlatformChannelRecvmsg(PlatformHandle h,
 }
 
 bool ServerAcceptConnection(PlatformHandle server_handle,
-                            ScopedPlatformHandle* connection_handle) {
+                            ScopedPlatformHandle* connection_handle,
+                            bool check_peer_user) {
   DCHECK(server_handle.is_valid());
   connection_handle->reset();
 #if defined(OS_NACL)
@@ -260,7 +261,7 @@ bool ServerAcceptConnection(PlatformHandle server_handle,
     return IsRecoverableError();
 
   // Verify that the IPC channel peer is running as the same user.
-  if (!IsPeerAuthorized(accept_handle.get())) {
+  if (check_peer_user && !IsPeerAuthorized(accept_handle.get())) {
     return true;
   }
 

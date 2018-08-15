@@ -8,10 +8,10 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "webrtc/base/gunit.h"
-#include "webrtc/base/thread.h"
-#include "webrtc/pc/audiomonitor.h"
 #include "webrtc/pc/currentspeakermonitor.h"
+#include "webrtc/pc/audiomonitor.h"
+#include "webrtc/rtc_base/gunit.h"
+#include "webrtc/rtc_base/thread.h"
 
 namespace cricket {
 
@@ -122,7 +122,13 @@ TEST_F(CurrentSpeakerMonitorTest, DISABLED_RapidSpeakerChange) {
   EXPECT_EQ(num_changes_, 1);
 }
 
-TEST_F(CurrentSpeakerMonitorTest, SpeakerChange) {
+// Flaky on iOS: webrtc:7057.
+#if defined(WEBRTC_IOS)
+#define MAYBE_SpeakerChange DISABLED_SpeakerChange
+#else
+#define MAYBE_SpeakerChange SpeakerChange
+#endif
+TEST_F(CurrentSpeakerMonitorTest, MAYBE_SpeakerChange) {
   AudioInfo info;
   InitAudioInfo(&info, 0, 0);
 

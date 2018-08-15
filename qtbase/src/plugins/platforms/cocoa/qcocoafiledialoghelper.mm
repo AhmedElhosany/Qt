@@ -163,7 +163,7 @@ QT_NAMESPACE_ALIAS_OBJC_CLASS(QNSOpenSavePanelDelegate);
     [mSavePanel setDelegate:self];
 
 #if QT_OSX_PLATFORM_SDK_EQUAL_OR_ABOVE(__MAC_10_11)
-    if (QOperatingSystemVersion::current() >= QOperatingSystemVersion::OSXElCapitan)
+    if (__builtin_available(macOS 10.11, *))
         mOpenPanel.accessoryViewDisclosed = YES;
 #endif
 
@@ -231,7 +231,7 @@ static QString strippedText(QString s)
         [mOpenPanel beginWithCompletionHandler:^(NSInteger result){
             mReturnCode = result;
             if (mHelper)
-                mHelper->QNSOpenSavePanelDelegate_panelClosed(result == NSOKButton);
+                mHelper->QNSOpenSavePanelDelegate_panelClosed(result == NSModalResponseOK);
         }];
     }
 }
@@ -260,12 +260,12 @@ static QString strippedText(QString s)
     QCocoaMenuBar::resetKnownMenuItemsToQt();
 
     QAbstractEventDispatcher::instance()->interrupt();
-    return (mReturnCode == NSOKButton);
+    return (mReturnCode == NSModalResponseOK);
 }
 
 - (QPlatformDialogHelper::DialogCode)dialogResultCode
 {
-    return (mReturnCode == NSOKButton) ? QPlatformDialogHelper::Accepted : QPlatformDialogHelper::Rejected;
+    return (mReturnCode == NSModalResponseOK) ? QPlatformDialogHelper::Accepted : QPlatformDialogHelper::Rejected;
 }
 
 - (void)showWindowModalSheet:(QWindow *)parent
@@ -286,7 +286,7 @@ static QString strippedText(QString s)
     [mSavePanel beginSheetModalForWindow:nsparent completionHandler:^(NSInteger result){
         mReturnCode = result;
         if (mHelper)
-            mHelper->QNSOpenSavePanelDelegate_panelClosed(result == NSOKButton);
+            mHelper->QNSOpenSavePanelDelegate_panelClosed(result == NSModalResponseOK);
     }];
 }
 
@@ -418,13 +418,6 @@ static QString strippedText(QString s)
     } else {
         QList<QUrl> result;
         QString filename = QString::fromNSString([[mSavePanel URL] path]).normalized(QString::NormalizationForm_C);
-        const QString defaultSuffix = mOptions->defaultSuffix();
-        const QFileInfo fileInfo(filename);
-        // If neither the user or the NSSavePanel have provided a suffix, use
-        // the default suffix (if it exists).
-        if (fileInfo.suffix().isEmpty() && !defaultSuffix.isEmpty()) {
-                filename.append('.').append(defaultSuffix);
-        }
         result << QUrl::fromLocalFile(filename.remove(QLatin1String("___qt_very_unlikely_prefix_")));
         return result;
     }
@@ -452,7 +445,10 @@ static QString strippedText(QString s)
     [mPopUpButton setHidden:chooseDirsOnly];    // TODO hide the whole sunken pane instead?
 
     if (mOptions->acceptMode() == QFileDialogOptions::AcceptSave) {
-        const QStringList ext = [self acceptableExtensionsForSave];
+        QStringList ext = [self acceptableExtensionsForSave];
+        const QString defaultSuffix = mOptions->defaultSuffix();
+        if (!ext.isEmpty() && !defaultSuffix.isEmpty())
+            ext.prepend(defaultSuffix);
         [mSavePanel setAllowedFileTypes:ext.isEmpty() ? nil : qt_mac_QStringListToNSMutableArray(ext)];
     } else {
         [mOpenPanel setAllowedFileTypes:nil]; // delegate panel:shouldEnableURL: does the file filtering for NSOpenPanel

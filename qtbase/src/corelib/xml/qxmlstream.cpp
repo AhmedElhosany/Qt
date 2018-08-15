@@ -775,8 +775,8 @@ QXmlStreamPrivateTagStack::QXmlStreamPrivateTagStack()
     tagStackStringStorage.reserve(32);
     tagStackStringStorageSize = 0;
     NamespaceDeclaration &namespaceDeclaration = namespaceDeclarations.push();
-    namespaceDeclaration.prefix = addToStringStorage(QLatin1String("xml"));
-    namespaceDeclaration.namespaceUri = addToStringStorage(QLatin1String("http://www.w3.org/XML/1998/namespace"));
+    namespaceDeclaration.prefix = addToStringStorage(QStringViewLiteral("xml"));
+    namespaceDeclaration.namespaceUri = addToStringStorage(QStringViewLiteral("http://www.w3.org/XML/1998/namespace"));
     initialTagStackStringStorageSize = tagStackStringStorageSize;
 }
 
@@ -796,11 +796,17 @@ QXmlStreamReaderPrivate::QXmlStreamReaderPrivate(QXmlStreamReader *q)
     reallocateStack();
     entityResolver = 0;
     init();
-    entityHash.insert(QLatin1String("lt"), Entity::createLiteral(QLatin1String("<")));
-    entityHash.insert(QLatin1String("gt"), Entity::createLiteral(QLatin1String(">")));
-    entityHash.insert(QLatin1String("amp"), Entity::createLiteral(QLatin1String("&")));
-    entityHash.insert(QLatin1String("apos"), Entity::createLiteral(QLatin1String("'")));
-    entityHash.insert(QLatin1String("quot"), Entity::createLiteral(QLatin1String("\"")));
+#define ADD_PREDEFINED(n, v) \
+    do { \
+        Entity e = Entity::createLiteral(QLatin1String(n), QLatin1String(v)); \
+        entityHash.insert(qToStringViewIgnoringNull(e.name), std::move(e)); \
+    } while (false)
+    ADD_PREDEFINED("lt", "<");
+    ADD_PREDEFINED("gt", ">");
+    ADD_PREDEFINED("amp", "&");
+    ADD_PREDEFINED("apos", "'");
+    ADD_PREDEFINED("quot", "\"");
+#undef ADD_PREDEFINED
 }
 
 void QXmlStreamReaderPrivate::init()
@@ -1558,7 +1564,7 @@ QStringRef QXmlStreamReaderPrivate::namespaceForPrefix(const QStringRef &prefix)
 
 #if 1
      if (namespaceProcessing && !prefix.isEmpty())
-         raiseWellFormedError(QXmlStream::tr("Namespace prefix '%1' not declared").arg(prefix.toString()));
+         raiseWellFormedError(QXmlStream::tr("Namespace prefix '%1' not declared").arg(prefix));
 #endif
 
      return QStringRef();
@@ -1636,7 +1642,7 @@ void QXmlStreamReaderPrivate::resolveTag()
             if (attributes[j].name() == attribute.name()
                 && attributes[j].namespaceUri() == attribute.namespaceUri()
                 && (namespaceProcessing || attributes[j].qualifiedName() == attribute.qualifiedName()))
-                raiseWellFormedError(QXmlStream::tr("Attribute '%1' redefined.").arg(attribute.qualifiedName().toString()));
+                raiseWellFormedError(QXmlStream::tr("Attribute '%1' redefined.").arg(attribute.qualifiedName()));
         }
     }
 
@@ -1798,20 +1804,19 @@ void QXmlStreamReaderPrivate::startDocument()
         QStringRef value(symString(attrib.value));
 
         if (prefix.isEmpty() && key == QLatin1String("encoding")) {
-            const QString name(value.toString());
             documentEncoding = value;
 
             if(hasStandalone)
                 err = QXmlStream::tr("The standalone pseudo attribute must appear after the encoding.");
-            if(!QXmlUtils::isEncName(name))
-                err = QXmlStream::tr("%1 is an invalid encoding name.").arg(name);
+            if (!QXmlUtils::isEncName(value))
+                err = QXmlStream::tr("%1 is an invalid encoding name.").arg(value);
             else {
 #ifdef QT_NO_TEXTCODEC
                 readBuffer = QString::fromLatin1(rawReadBuffer.data(), nbytesread);
 #else
-                QTextCodec *const newCodec = QTextCodec::codecForName(name.toLatin1());
+                QTextCodec *const newCodec = QTextCodec::codecForName(value.toLatin1());
                 if (!newCodec)
-                    err = QXmlStream::tr("Encoding %1 is unsupported").arg(name);
+                    err = QXmlStream::tr("Encoding %1 is unsupported").arg(value);
                 else if (newCodec != codec && !lockEncoding) {
                     codec = newCodec;
                     delete decoder;
@@ -1881,32 +1886,25 @@ void QXmlStreamReaderPrivate::parseError()
             }
         }
 
-    error_message.clear ();
     if (nexpected && nexpected < nmax) {
-        bool first = true;
-
-        for (int s = 0; s < nexpected; ++s) {
-            if (first)
-                error_message += QXmlStream::tr ("Expected ");
-            else if (s == nexpected - 1)
-                error_message += QLatin1String (nexpected > 2 ? ", or " : " or ");
-            else
-                error_message += QLatin1String (", ");
-
-            first = false;
-            error_message += QLatin1String("\'");
-            error_message += QLatin1String (spell [expected[s]]);
-            error_message += QLatin1String("\'");
+        //: '<first option>'
+        QString exp_str = QXmlStream::tr("'%1'", "expected").arg(QLatin1String(spell[expected[0]]));
+        if (nexpected == 2) {
+            //: <first option>, '<second option>'
+            exp_str = QXmlStream::tr("%1 or '%2'", "expected").arg(exp_str, QLatin1String(spell[expected[1]]));
+        } else if (nexpected > 2) {
+            int s = 1;
+            for (; s < nexpected - 1; ++s) {
+                //: <options so far>, '<next option>'
+                exp_str = QXmlStream::tr("%1, '%2'", "expected").arg(exp_str, QLatin1String(spell[expected[s]]));
+            }
+            //: <options so far>, or '<final option>'
+            exp_str = QXmlStream::tr("%1, or '%2'", "expected").arg(exp_str, QLatin1String(spell[expected[s]]));
         }
-        error_message += QXmlStream::tr(", but got \'");
-        error_message += QLatin1String(spell [token]);
-        error_message += QLatin1String("\'");
+        error_message = QXmlStream::tr("Expected %1, but got '%2'.").arg(exp_str, QLatin1String(spell[token]));
     } else {
-        error_message += QXmlStream::tr("Unexpected \'");
-        error_message += QLatin1String(spell [token]);
-        error_message += QLatin1String("\'");
+        error_message = QXmlStream::tr("Unexpected '%1'.").arg(QLatin1String(spell[token]));
     }
-    error_message += QLatin1Char('.');
 
     raiseWellFormedError(error_message);
 }

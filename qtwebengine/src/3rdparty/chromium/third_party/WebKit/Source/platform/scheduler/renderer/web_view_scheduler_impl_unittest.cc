@@ -8,6 +8,9 @@
 
 #include "base/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/field_trial.h"
+#include "base/metrics/field_trial_param_associator.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "cc/test/ordered_simple_task_runner.h"
 #include "platform/WebTaskRunner.h"
@@ -20,13 +23,13 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using testing::ElementsAre;
+using ::testing::ElementsAre;
 using VirtualTimePolicy = blink::WebViewScheduler::VirtualTimePolicy;
 
 namespace blink {
 namespace scheduler {
 
-class WebViewSchedulerImplTest : public testing::Test {
+class WebViewSchedulerImplTest : public ::testing::Test {
  public:
   WebViewSchedulerImplTest() {}
   ~WebViewSchedulerImplTest() override {}
@@ -43,7 +46,7 @@ class WebViewSchedulerImplTest : public testing::Test {
         new WebViewSchedulerImpl(nullptr, nullptr, scheduler_.get(),
                                  DisableBackgroundTimerThrottling()));
     web_frame_scheduler_ =
-        web_view_scheduler_->createWebFrameSchedulerImpl(nullptr);
+        web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr);
   }
 
   void TearDown() override {
@@ -65,73 +68,86 @@ class WebViewSchedulerImplTest : public testing::Test {
 
 TEST_F(WebViewSchedulerImplTest, TestDestructionOfFrameSchedulersBefore) {
   std::unique_ptr<blink::WebFrameScheduler> frame1(
-      web_view_scheduler_->createFrameScheduler(nullptr));
+      web_view_scheduler_->CreateFrameScheduler(nullptr));
   std::unique_ptr<blink::WebFrameScheduler> frame2(
-      web_view_scheduler_->createFrameScheduler(nullptr));
+      web_view_scheduler_->CreateFrameScheduler(nullptr));
 }
 
 TEST_F(WebViewSchedulerImplTest, TestDestructionOfFrameSchedulersAfter) {
   std::unique_ptr<blink::WebFrameScheduler> frame1(
-      web_view_scheduler_->createFrameScheduler(nullptr));
+      web_view_scheduler_->CreateFrameScheduler(nullptr));
   std::unique_ptr<blink::WebFrameScheduler> frame2(
-      web_view_scheduler_->createFrameScheduler(nullptr));
+      web_view_scheduler_->CreateFrameScheduler(nullptr));
   web_view_scheduler_.reset();
 }
 
 namespace {
-class RepeatingTask : public blink::WebTaskRunner::Task {
- public:
-  RepeatingTask(blink::WebTaskRunner* web_task_runner, int* run_count)
-      : web_task_runner_(web_task_runner), run_count_(run_count) {}
 
-  ~RepeatingTask() override {}
+void RunRepeatingTask(RefPtr<blink::WebTaskRunner> task_runner, int* run_count);
 
-  void run() override {
-    (*run_count_)++;
-    web_task_runner_->postDelayedTask(
-        BLINK_FROM_HERE, new RepeatingTask(web_task_runner_, run_count_), 1.0);
-  }
+std::unique_ptr<WTF::Closure> MakeRepeatingTask(
+    RefPtr<blink::WebTaskRunner> task_runner,
+    int* run_count) {
+  return WTF::Bind(&RunRepeatingTask, WTF::Passed(std::move(task_runner)),
+                   WTF::Unretained(run_count));
+}
 
- private:
-  blink::WebTaskRunner* web_task_runner_;  // NOT OWNED
-  int* run_count_;                         // NOT OWNED
-};
+void RunRepeatingTask(RefPtr<blink::WebTaskRunner> task_runner,
+                      int* run_count) {
+  ++*run_count;
+  blink::WebTaskRunner* task_runner_ptr = task_runner.Get();
+  task_runner_ptr->PostDelayedTask(
+      BLINK_FROM_HERE, MakeRepeatingTask(std::move(task_runner), run_count),
+      TimeDelta::FromMilliseconds(1));
+}
+
 }  // namespace
 
 TEST_F(WebViewSchedulerImplTest, RepeatingTimer_PageInForeground) {
-  web_view_scheduler_->setPageVisible(true);
+  web_view_scheduler_->SetPageVisible(true);
 
   int run_count = 0;
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new RepeatingTask(web_frame_scheduler_->timerTaskRunner(), &run_count),
-      1.0);
+      MakeRepeatingTask(web_frame_scheduler_->TimerTaskRunner(), &run_count),
+      TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunForPeriod(base::TimeDelta::FromSeconds(1));
   EXPECT_EQ(1000, run_count);
 }
 
-TEST_F(WebViewSchedulerImplTest, RepeatingTimer_PageInBackground) {
-  web_view_scheduler_->setPageVisible(false);
+TEST_F(WebViewSchedulerImplTest,
+       RepeatingTimer_PageInBackgroundThenForeground) {
+  web_view_scheduler_->SetPageVisible(false);
 
   int run_count = 0;
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new RepeatingTask(web_frame_scheduler_->timerTaskRunner(), &run_count),
-      1.0);
+      MakeRepeatingTask(web_frame_scheduler_->TimerTaskRunner(), &run_count),
+      TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunForPeriod(base::TimeDelta::FromSeconds(1));
   EXPECT_EQ(1, run_count);
+
+  // Make sure there's no delay in throttling being removed for pages that have
+  // become visible.
+  web_view_scheduler_->SetPageVisible(true);
+
+  run_count = 0;
+  mock_task_runner_->RunForPeriod(base::TimeDelta::FromSeconds(1));
+  EXPECT_EQ(1001, run_count);  // Note we end up running 1001 here because the
+  // task was posted while throttled with a delay of 1ms so the first task was
+  // due to run before the 1s period started.
 }
 
 TEST_F(WebViewSchedulerImplTest, RepeatingLoadingTask_PageInBackground) {
-  web_view_scheduler_->setPageVisible(false);
+  web_view_scheduler_->SetPageVisible(false);
 
   int run_count = 0;
-  web_frame_scheduler_->loadingTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->LoadingTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new RepeatingTask(web_frame_scheduler_->loadingTaskRunner(), &run_count),
-      1.0);
+      MakeRepeatingTask(web_frame_scheduler_->LoadingTaskRunner(), &run_count),
+      TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunForPeriod(base::TimeDelta::FromSeconds(1));
   EXPECT_EQ(1000, run_count);  // Loading tasks should not be throttled
@@ -141,21 +157,21 @@ TEST_F(WebViewSchedulerImplTest, RepeatingTimers_OneBackgroundOneForeground) {
   std::unique_ptr<WebViewSchedulerImpl> web_view_scheduler2(
       new WebViewSchedulerImpl(nullptr, nullptr, scheduler_.get(), false));
   std::unique_ptr<WebFrameSchedulerImpl> web_frame_scheduler2 =
-      web_view_scheduler2->createWebFrameSchedulerImpl(nullptr);
+      web_view_scheduler2->CreateWebFrameSchedulerImpl(nullptr);
 
-  web_view_scheduler_->setPageVisible(true);
-  web_view_scheduler2->setPageVisible(false);
+  web_view_scheduler_->SetPageVisible(true);
+  web_view_scheduler2->SetPageVisible(false);
 
   int run_count1 = 0;
   int run_count2 = 0;
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new RepeatingTask(web_frame_scheduler_->timerTaskRunner(), &run_count1),
-      1.0);
-  web_frame_scheduler2->timerTaskRunner()->postDelayedTask(
+      MakeRepeatingTask(web_frame_scheduler_->TimerTaskRunner(), &run_count1),
+      TimeDelta::FromMilliseconds(1));
+  web_frame_scheduler2->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new RepeatingTask(web_frame_scheduler2->timerTaskRunner(), &run_count2),
-      1.0);
+      MakeRepeatingTask(web_frame_scheduler2->TimerTaskRunner(), &run_count2),
+      TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunForPeriod(base::TimeDelta::FromSeconds(1));
   EXPECT_EQ(1000, run_count1);
@@ -163,31 +179,26 @@ TEST_F(WebViewSchedulerImplTest, RepeatingTimers_OneBackgroundOneForeground) {
 }
 
 namespace {
-class VirtualTimeRecorderTask : public blink::WebTaskRunner::Task {
- public:
-  VirtualTimeRecorderTask(base::SimpleTestTickClock* clock,
-                          blink::WebTaskRunner* web_task_runner,
-                          std::vector<base::TimeTicks>* out_real_times,
-                          std::vector<size_t>* out_virtual_times_ms)
-      : clock_(clock),
-        web_task_runner_(web_task_runner),
-        out_real_times_(out_real_times),
-        out_virtual_times_ms_(out_virtual_times_ms) {}
 
-  ~VirtualTimeRecorderTask() override {}
+void RunVirtualTimeRecorderTask(base::SimpleTestTickClock* clock,
+                                RefPtr<blink::WebTaskRunner> web_task_runner,
+                                std::vector<base::TimeTicks>* out_real_times,
+                                std::vector<size_t>* out_virtual_times_ms) {
+  out_real_times->push_back(clock->NowTicks());
+  out_virtual_times_ms->push_back(
+      web_task_runner->MonotonicallyIncreasingVirtualTimeSeconds() * 1000.0);
+}
 
-  void run() override {
-    out_real_times_->push_back(clock_->NowTicks());
-    out_virtual_times_ms_->push_back(
-        web_task_runner_->monotonicallyIncreasingVirtualTimeSeconds() * 1000.0);
-  }
-
- private:
-  base::SimpleTestTickClock* clock_;              // NOT OWNED
-  blink::WebTaskRunner* web_task_runner_;         // NOT OWNED
-  std::vector<base::TimeTicks>* out_real_times_;  // NOT OWNED
-  std::vector<size_t>* out_virtual_times_ms_;     // NOT OWNED
-};
+std::unique_ptr<WTF::Closure> MakeVirtualTimeRecorderTask(
+    base::SimpleTestTickClock* clock,
+    RefPtr<blink::WebTaskRunner> web_task_runner,
+    std::vector<base::TimeTicks>* out_real_times,
+    std::vector<size_t>* out_virtual_times_ms) {
+  return WTF::Bind(&RunVirtualTimeRecorderTask, WTF::Unretained(clock),
+                   WTF::Passed(std::move(web_task_runner)),
+                   WTF::Unretained(out_real_times),
+                   WTF::Unretained(out_virtual_times_ms));
+}
 }
 
 TEST_F(WebViewSchedulerImplTest, VirtualTime_TimerFastForwarding) {
@@ -195,32 +206,32 @@ TEST_F(WebViewSchedulerImplTest, VirtualTime_TimerFastForwarding) {
   std::vector<size_t> virtual_times_ms;
   base::TimeTicks initial_real_time = scheduler_->tick_clock()->NowTicks();
   size_t initial_virtual_time_ms =
-      web_frame_scheduler_->timerTaskRunner()
-          ->monotonicallyIncreasingVirtualTimeSeconds() *
+      web_frame_scheduler_->TimerTaskRunner()
+          ->MonotonicallyIncreasingVirtualTimeSeconds() *
       1000.0;
 
-  web_view_scheduler_->enableVirtualTime();
+  web_view_scheduler_->EnableVirtualTime();
 
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new VirtualTimeRecorderTask(clock_.get(),
-                                  web_frame_scheduler_->timerTaskRunner(),
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->TimerTaskRunner(),
                                   &real_times, &virtual_times_ms),
-      2.0);
+      TimeDelta::FromMilliseconds(2));
 
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new VirtualTimeRecorderTask(clock_.get(),
-                                  web_frame_scheduler_->timerTaskRunner(),
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->TimerTaskRunner(),
                                   &real_times, &virtual_times_ms),
-      20.0);
+      TimeDelta::FromMilliseconds(20));
 
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new VirtualTimeRecorderTask(clock_.get(),
-                                  web_frame_scheduler_->timerTaskRunner(),
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->TimerTaskRunner(),
                                   &real_times, &virtual_times_ms),
-      200.0);
+      TimeDelta::FromMilliseconds(200));
 
   mock_task_runner_->RunUntilIdle();
 
@@ -236,32 +247,32 @@ TEST_F(WebViewSchedulerImplTest, VirtualTime_LoadingTaskFastForwarding) {
   std::vector<size_t> virtual_times_ms;
   base::TimeTicks initial_real_time = scheduler_->tick_clock()->NowTicks();
   size_t initial_virtual_time_ms =
-      web_frame_scheduler_->timerTaskRunner()
-          ->monotonicallyIncreasingVirtualTimeSeconds() *
+      web_frame_scheduler_->TimerTaskRunner()
+          ->MonotonicallyIncreasingVirtualTimeSeconds() *
       1000.0;
 
-  web_view_scheduler_->enableVirtualTime();
+  web_view_scheduler_->EnableVirtualTime();
 
-  web_frame_scheduler_->loadingTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->LoadingTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new VirtualTimeRecorderTask(clock_.get(),
-                                  web_frame_scheduler_->loadingTaskRunner(),
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->LoadingTaskRunner(),
                                   &real_times, &virtual_times_ms),
-      2.0);
+      TimeDelta::FromMilliseconds(2));
 
-  web_frame_scheduler_->loadingTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->LoadingTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new VirtualTimeRecorderTask(clock_.get(),
-                                  web_frame_scheduler_->loadingTaskRunner(),
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->LoadingTaskRunner(),
                                   &real_times, &virtual_times_ms),
-      20.0);
+      TimeDelta::FromMilliseconds(20));
 
-  web_frame_scheduler_->loadingTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->LoadingTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new VirtualTimeRecorderTask(clock_.get(),
-                                  web_frame_scheduler_->loadingTaskRunner(),
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->LoadingTaskRunner(),
                                   &real_times, &virtual_times_ms),
-      200.0);
+      TimeDelta::FromMilliseconds(200));
 
   mock_task_runner_->RunUntilIdle();
 
@@ -274,15 +285,15 @@ TEST_F(WebViewSchedulerImplTest, VirtualTime_LoadingTaskFastForwarding) {
 
 TEST_F(WebViewSchedulerImplTest,
        RepeatingTimer_PageInBackground_MeansNothingForVirtualTime) {
-  web_view_scheduler_->enableVirtualTime();
-  web_view_scheduler_->setPageVisible(false);
+  web_view_scheduler_->EnableVirtualTime();
+  web_view_scheduler_->SetPageVisible(false);
   base::TimeTicks initial_real_time = scheduler_->tick_clock()->NowTicks();
 
   int run_count = 0;
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new RepeatingTask(web_frame_scheduler_->timerTaskRunner(), &run_count),
-      1.0);
+      MakeRepeatingTask(web_frame_scheduler_->TimerTaskRunner(), &run_count),
+      TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunTasksWhile(mock_task_runner_->TaskRunCountBelow(2000));
   // Virtual time means page visibility is ignored.
@@ -294,91 +305,74 @@ TEST_F(WebViewSchedulerImplTest,
 }
 
 namespace {
-class RunOrderTask : public blink::WebTaskRunner::Task {
- public:
-  RunOrderTask(int index, std::vector<int>* out_run_order)
-      : index_(index), out_run_order_(out_run_order) {}
 
-  ~RunOrderTask() override {}
+void RunOrderTask(int index, std::vector<int>* out_run_order) {
+  out_run_order->push_back(index);
+}
 
-  void run() override { out_run_order_->push_back(index_); }
-
- private:
-  int index_;
-  std::vector<int>* out_run_order_;  // NOT OWNED
-};
-
-class DelayedRunOrderTask : public blink::WebTaskRunner::Task {
- public:
-  DelayedRunOrderTask(int index,
-                      blink::WebTaskRunner* task_runner,
-                      std::vector<int>* out_run_order)
-      : index_(index),
-        task_runner_(task_runner),
-        out_run_order_(out_run_order) {}
-
-  ~DelayedRunOrderTask() override {}
-
-  void run() override {
-    out_run_order_->push_back(index_);
-    task_runner_->postTask(BLINK_FROM_HERE,
-                           new RunOrderTask(index_ + 1, out_run_order_));
-  }
-
- private:
-  int index_;
-  blink::WebTaskRunner* task_runner_;  // NOT OWNED
-  std::vector<int>* out_run_order_;    // NOT OWNED
-};
+void DelayedRunOrderTask(int index,
+                         RefPtr<blink::WebTaskRunner> task_runner,
+                         std::vector<int>* out_run_order) {
+  out_run_order->push_back(index);
+  task_runner->PostTask(
+      BLINK_FROM_HERE,
+      WTF::Bind(&RunOrderTask, index + 1, WTF::Unretained(out_run_order)));
+}
 }
 
 TEST_F(WebViewSchedulerImplTest, VirtualTime_NotAllowedToAdvance) {
   std::vector<int> run_order;
 
-  web_view_scheduler_->setVirtualTimePolicy(VirtualTimePolicy::PAUSE);
-  web_view_scheduler_->enableVirtualTime();
+  web_view_scheduler_->SetVirtualTimePolicy(VirtualTimePolicy::PAUSE);
+  web_view_scheduler_->EnableVirtualTime();
 
-  web_frame_scheduler_->timerTaskRunner()->postTask(
-      BLINK_FROM_HERE, new RunOrderTask(0, &run_order));
-
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostTask(
       BLINK_FROM_HERE,
-      new DelayedRunOrderTask(1, web_frame_scheduler_->timerTaskRunner(),
-                              &run_order),
-      2.0);
+      WTF::Bind(&RunOrderTask, 0, WTF::Unretained(&run_order)));
 
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new DelayedRunOrderTask(3, web_frame_scheduler_->timerTaskRunner(),
-                              &run_order),
-      4.0);
+      WTF::Bind(&DelayedRunOrderTask, 1,
+                WTF::Passed(web_frame_scheduler_->TimerTaskRunner()),
+                WTF::Unretained(&run_order)),
+      TimeDelta::FromMilliseconds(2));
+
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
+      BLINK_FROM_HERE,
+      WTF::Bind(&DelayedRunOrderTask, 3,
+                WTF::Passed(web_frame_scheduler_->TimerTaskRunner()),
+                WTF::Unretained(&run_order)),
+      TimeDelta::FromMilliseconds(4));
 
   mock_task_runner_->RunUntilIdle();
 
-  // Immediate tasks are allowed to run even if delayed tasks are not.
-  EXPECT_THAT(run_order, ElementsAre(0));
+  // No timer tasks are allowed to run.
+  EXPECT_THAT(run_order, ElementsAre());
 }
 
 TEST_F(WebViewSchedulerImplTest, VirtualTime_AllowedToAdvance) {
   std::vector<int> run_order;
 
-  web_view_scheduler_->setVirtualTimePolicy(VirtualTimePolicy::ADVANCE);
-  web_view_scheduler_->enableVirtualTime();
+  web_view_scheduler_->SetVirtualTimePolicy(VirtualTimePolicy::ADVANCE);
+  web_view_scheduler_->EnableVirtualTime();
 
-  web_frame_scheduler_->timerTaskRunner()->postTask(
-      BLINK_FROM_HERE, new RunOrderTask(0, &run_order));
-
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostTask(
       BLINK_FROM_HERE,
-      new DelayedRunOrderTask(1, web_frame_scheduler_->timerTaskRunner(),
-                              &run_order),
-      2.0);
+      WTF::Bind(&RunOrderTask, 0, WTF::Unretained(&run_order)));
 
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new DelayedRunOrderTask(3, web_frame_scheduler_->timerTaskRunner(),
-                              &run_order),
-      4.0);
+      WTF::Bind(&DelayedRunOrderTask, 1,
+                WTF::Passed(web_frame_scheduler_->TimerTaskRunner()),
+                WTF::Unretained(&run_order)),
+      TimeDelta::FromMilliseconds(2));
+
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
+      BLINK_FROM_HERE,
+      WTF::Bind(&DelayedRunOrderTask, 3,
+                WTF::Passed(web_frame_scheduler_->TimerTaskRunner()),
+                WTF::Unretained(&run_order)),
+      TimeDelta::FromMilliseconds(4));
 
   mock_task_runner_->RunUntilIdle();
 
@@ -396,13 +390,13 @@ class WebViewSchedulerImplTestWithDisabledBackgroundTimerThrottling
 
 TEST_F(WebViewSchedulerImplTestWithDisabledBackgroundTimerThrottling,
        RepeatingTimer_PageInBackground) {
-  web_view_scheduler_->setPageVisible(false);
+  web_view_scheduler_->SetPageVisible(false);
 
   int run_count = 0;
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
       BLINK_FROM_HERE,
-      new RepeatingTask(web_frame_scheduler_->timerTaskRunner(), &run_count),
-      1.0);
+      MakeRepeatingTask(web_frame_scheduler_->TimerTaskRunner(), &run_count),
+      TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunForPeriod(base::TimeDelta::FromSeconds(1));
   EXPECT_EQ(1000, run_count);
@@ -411,189 +405,295 @@ TEST_F(WebViewSchedulerImplTestWithDisabledBackgroundTimerThrottling,
 TEST_F(WebViewSchedulerImplTest, VirtualTimeSettings_NewWebFrameScheduler) {
   std::vector<int> run_order;
 
-  web_view_scheduler_->setVirtualTimePolicy(VirtualTimePolicy::PAUSE);
-  web_view_scheduler_->enableVirtualTime();
+  web_view_scheduler_->SetVirtualTimePolicy(VirtualTimePolicy::PAUSE);
+  web_view_scheduler_->EnableVirtualTime();
 
   std::unique_ptr<WebFrameSchedulerImpl> web_frame_scheduler =
-      web_view_scheduler_->createWebFrameSchedulerImpl(nullptr);
+      web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr);
 
-  web_frame_scheduler->timerTaskRunner()->postDelayedTask(
-      BLINK_FROM_HERE, new RunOrderTask(1, &run_order), 0.1);
+  web_frame_scheduler->TimerTaskRunner()->PostDelayedTask(
+      BLINK_FROM_HERE, WTF::Bind(&RunOrderTask, 1, WTF::Unretained(&run_order)),
+      TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunUntilIdle();
   EXPECT_TRUE(run_order.empty());
 
-  web_view_scheduler_->setVirtualTimePolicy(VirtualTimePolicy::ADVANCE);
+  web_view_scheduler_->SetVirtualTimePolicy(VirtualTimePolicy::ADVANCE);
   mock_task_runner_->RunUntilIdle();
 
   EXPECT_THAT(run_order, ElementsAre(1));
 }
 
 namespace {
-class DeleteWebFrameSchedulerTask : public blink::WebTaskRunner::Task {
- public:
-  explicit DeleteWebFrameSchedulerTask(WebViewSchedulerImpl* web_view_scheduler)
-      : web_frame_scheduler_(
-            web_view_scheduler->createWebFrameSchedulerImpl(nullptr)) {}
 
-  ~DeleteWebFrameSchedulerTask() override {}
+template <typename T>
+std::unique_ptr<WTF::Closure> MakeDeletionTask(T* obj) {
+  return WTF::Bind([](T* obj) { delete obj; }, WTF::Unretained(obj));
+}
 
-  void run() override { web_frame_scheduler_.reset(); }
-
-  WebFrameSchedulerImpl* web_frame_scheduler() const {
-    return web_frame_scheduler_.get();
-  }
-
- private:
-  std::unique_ptr<WebFrameSchedulerImpl> web_frame_scheduler_;
-};
-
-class DeleteWebViewSchedulerTask : public blink::WebTaskRunner::Task {
- public:
-  explicit DeleteWebViewSchedulerTask(WebViewSchedulerImpl* web_view_scheduler)
-      : web_view_scheduler_(web_view_scheduler) {}
-
-  ~DeleteWebViewSchedulerTask() override {}
-
-  void run() override { web_view_scheduler_.reset(); }
-
- private:
-  std::unique_ptr<WebViewSchedulerImpl> web_view_scheduler_;
-};
 }  // namespace
 
 TEST_F(WebViewSchedulerImplTest, DeleteWebFrameSchedulers_InTask) {
   for (int i = 0; i < 10; i++) {
-    DeleteWebFrameSchedulerTask* task =
-        new DeleteWebFrameSchedulerTask(web_view_scheduler_.get());
-    task->web_frame_scheduler()->timerTaskRunner()->postDelayedTask(
-        BLINK_FROM_HERE, task, 1.0);
+    WebFrameSchedulerImpl* web_frame_scheduler =
+        web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr).release();
+    web_frame_scheduler->TimerTaskRunner()->PostDelayedTask(
+        BLINK_FROM_HERE, MakeDeletionTask(web_frame_scheduler),
+        TimeDelta::FromMilliseconds(1));
   }
   mock_task_runner_->RunUntilIdle();
 }
 
 TEST_F(WebViewSchedulerImplTest, DeleteWebViewScheduler_InTask) {
-  web_frame_scheduler_->timerTaskRunner()->postTask(
-      BLINK_FROM_HERE,
-      new DeleteWebViewSchedulerTask(web_view_scheduler_.release()));
+  web_frame_scheduler_->TimerTaskRunner()->PostTask(
+      BLINK_FROM_HERE, MakeDeletionTask(web_view_scheduler_.release()));
   mock_task_runner_->RunUntilIdle();
 }
 
 TEST_F(WebViewSchedulerImplTest, DeleteThrottledQueue_InTask) {
-  web_view_scheduler_->setPageVisible(false);
+  web_view_scheduler_->SetPageVisible(false);
 
-  DeleteWebFrameSchedulerTask* delete_frame_task =
-      new DeleteWebFrameSchedulerTask(web_view_scheduler_.get());
-  blink::WebTaskRunner* timer_task_runner =
-      delete_frame_task->web_frame_scheduler()->timerTaskRunner();
+  WebFrameSchedulerImpl* web_frame_scheduler =
+      web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr).release();
+  RefPtr<blink::WebTaskRunner> timer_task_runner =
+      web_frame_scheduler->TimerTaskRunner();
 
   int run_count = 0;
-  timer_task_runner->postDelayedTask(
-      BLINK_FROM_HERE, new RepeatingTask(timer_task_runner, &run_count), 1.0);
+  timer_task_runner->PostDelayedTask(
+      BLINK_FROM_HERE, MakeRepeatingTask(timer_task_runner, &run_count),
+      TimeDelta::FromMilliseconds(1));
 
   // Note this will run at time t = 10s since we start at time t = 5000us, and
   // it will prevent further tasks from running (i.e. the RepeatingTask) by
   // deleting the WebFrameScheduler.
-  timer_task_runner->postDelayedTask(BLINK_FROM_HERE, delete_frame_task,
-                                     9990.0);
+  timer_task_runner->PostDelayedTask(BLINK_FROM_HERE,
+                                     MakeDeletionTask(web_frame_scheduler),
+                                     TimeDelta::FromMilliseconds(9990));
 
   mock_task_runner_->RunForPeriod(base::TimeDelta::FromSeconds(100));
   EXPECT_EQ(10, run_count);
 }
 
 TEST_F(WebViewSchedulerImplTest, VirtualTimePolicy_DETERMINISTIC_LOADING) {
-  web_view_scheduler_->setVirtualTimePolicy(
+  web_view_scheduler_->SetVirtualTimePolicy(
       VirtualTimePolicy::DETERMINISTIC_LOADING);
   // Initially virtual time is not allowed to advance until we have seen at
   // least one load.
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStartLoading(1u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStartLoading(2u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(2u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStartLoading(3u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(1u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(3u);
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStartLoading(4u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(4u);
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 }
 
 TEST_F(WebViewSchedulerImplTest, RedundantDidStopLoadingCallsAreHarmless) {
-  web_view_scheduler_->setVirtualTimePolicy(
+  web_view_scheduler_->SetVirtualTimePolicy(
       VirtualTimePolicy::DETERMINISTIC_LOADING);
 
   web_view_scheduler_->DidStartLoading(1u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(1u);
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(1u);
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(1u);
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStartLoading(2u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(2u);
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 }
 
 TEST_F(WebViewSchedulerImplTest, BackgroundParser_DETERMINISTIC_LOADING) {
-  web_view_scheduler_->setVirtualTimePolicy(
+  web_view_scheduler_->SetVirtualTimePolicy(
       VirtualTimePolicy::DETERMINISTIC_LOADING);
   // Initially virtual time is not allowed to advance until we have seen at
   // least one load.
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->IncrementBackgroundParserCount();
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStartLoading(1u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DidStopLoading(1u);
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->IncrementBackgroundParserCount();
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DecrementBackgroundParserCount();
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DecrementBackgroundParserCount();
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->IncrementBackgroundParserCount();
-  EXPECT_FALSE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
 
   web_view_scheduler_->DecrementBackgroundParserCount();
-  EXPECT_TRUE(web_view_scheduler_->virtualTimeAllowedToAdvance());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+}
+
+TEST_F(WebViewSchedulerImplTest, ProvisionalLoads) {
+  web_view_scheduler_->SetVirtualTimePolicy(
+      VirtualTimePolicy::DETERMINISTIC_LOADING);
+  web_view_scheduler_->DidStartLoading(1u);
+  web_view_scheduler_->DidStopLoading(1u);
+
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+
+  std::unique_ptr<WebFrameSchedulerImpl> frame1 =
+      web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr);
+  std::unique_ptr<WebFrameSchedulerImpl> frame2 =
+      web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr);
+
+  // Provisional loads are refcounted.
+  web_view_scheduler_->DidBeginProvisionalLoad(frame1.get());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+
+  web_view_scheduler_->DidBeginProvisionalLoad(frame2.get());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+
+  web_view_scheduler_->DidEndProvisionalLoad(frame2.get());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+
+  web_view_scheduler_->DidEndProvisionalLoad(frame1.get());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+}
+
+TEST_F(WebViewSchedulerImplTest, WillNavigateBackForwardSoon) {
+  web_view_scheduler_->SetVirtualTimePolicy(
+      VirtualTimePolicy::DETERMINISTIC_LOADING);
+  web_view_scheduler_->DidStartLoading(1u);
+  web_view_scheduler_->DidStopLoading(1u);
+
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+
+  std::unique_ptr<WebFrameSchedulerImpl> frame =
+      web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr);
+
+  web_view_scheduler_->WillNavigateBackForwardSoon(frame.get());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+
+  web_view_scheduler_->DidBeginProvisionalLoad(frame.get());
+  EXPECT_FALSE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+
+  web_view_scheduler_->DidEndProvisionalLoad(frame.get());
+  EXPECT_TRUE(web_view_scheduler_->VirtualTimeAllowedToAdvance());
+}
+
+TEST_F(WebViewSchedulerImplTest, SuspendTimersWhileVirtualTimeIsPaused) {
+  std::vector<int> run_order;
+
+  std::unique_ptr<WebFrameSchedulerImpl> web_frame_scheduler =
+      web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr);
+  web_view_scheduler_->SetVirtualTimePolicy(VirtualTimePolicy::PAUSE);
+  web_view_scheduler_->EnableVirtualTime();
+
+  web_frame_scheduler->TimerTaskRunner()->PostTask(
+      BLINK_FROM_HERE,
+      WTF::Bind(&RunOrderTask, 1, WTF::Unretained(&run_order)));
+
+  mock_task_runner_->RunUntilIdle();
+  EXPECT_TRUE(run_order.empty());
+
+  web_view_scheduler_->SetVirtualTimePolicy(VirtualTimePolicy::ADVANCE);
+  mock_task_runner_->RunUntilIdle();
+
+  EXPECT_THAT(run_order, ElementsAre(1));
+}
+
+TEST_F(WebViewSchedulerImplTest, VirtualTimeBudgetExhaustedCallback) {
+  std::vector<base::TimeTicks> real_times;
+  std::vector<size_t> virtual_times_ms;
+  base::TimeTicks initial_real_time = scheduler_->tick_clock()->NowTicks();
+  size_t initial_virtual_time_ms =
+      web_frame_scheduler_->TimerTaskRunner()
+          ->MonotonicallyIncreasingVirtualTimeSeconds() *
+      1000.0;
+
+  web_view_scheduler_->EnableVirtualTime();
+
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
+      BLINK_FROM_HERE,
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->TimerTaskRunner(),
+                                  &real_times, &virtual_times_ms),
+      TimeDelta::FromMilliseconds(1));
+
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
+      BLINK_FROM_HERE,
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->TimerTaskRunner(),
+                                  &real_times, &virtual_times_ms),
+      TimeDelta::FromMilliseconds(2));
+
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
+      BLINK_FROM_HERE,
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->TimerTaskRunner(),
+                                  &real_times, &virtual_times_ms),
+      TimeDelta::FromMilliseconds(5));
+
+  web_frame_scheduler_->TimerTaskRunner()->PostDelayedTask(
+      BLINK_FROM_HERE,
+      MakeVirtualTimeRecorderTask(clock_.get(),
+                                  web_frame_scheduler_->TimerTaskRunner(),
+                                  &real_times, &virtual_times_ms),
+      TimeDelta::FromMilliseconds(7));
+
+  web_view_scheduler_->GrantVirtualTimeBudget(
+      base::TimeDelta::FromMilliseconds(5),
+      WTF::Bind(
+          [](WebViewScheduler* scheduler) {
+            scheduler->SetVirtualTimePolicy(VirtualTimePolicy::PAUSE);
+          },
+          WTF::Unretained(web_view_scheduler_.get())));
+
+  mock_task_runner_->RunUntilIdle();
+
+  // The timer that is scheduled for the exact point in time when virtual time
+  // expires will not run.
+  EXPECT_THAT(real_times, ElementsAre(initial_real_time, initial_real_time,
+                                      initial_real_time));
+  EXPECT_THAT(virtual_times_ms, ElementsAre(initial_virtual_time_ms + 1,
+                                            initial_virtual_time_ms + 2,
+                                            initial_virtual_time_ms + 5));
 }
 
 namespace {
 
 using ScopedExpensiveBackgroundTimerThrottlingForTest =
     ScopedRuntimeEnabledFeatureForTest<
-        RuntimeEnabledFeatures::expensiveBackgroundTimerThrottlingEnabled,
-        RuntimeEnabledFeatures::setExpensiveBackgroundTimerThrottlingEnabled>;
+        RuntimeEnabledFeatures::ExpensiveBackgroundTimerThrottlingEnabled,
+        RuntimeEnabledFeatures::SetExpensiveBackgroundTimerThrottlingEnabled>;
 
 void ExpensiveTestTask(base::SimpleTestTickClock* clock,
                        std::vector<base::TimeTicks>* run_times) {
@@ -601,70 +701,205 @@ void ExpensiveTestTask(base::SimpleTestTickClock* clock,
   clock->Advance(base::TimeDelta::FromMilliseconds(250));
 }
 
-class FakeWebViewSchedulerSettings
-    : public WebViewScheduler::WebViewSchedulerSettings {
- public:
-  float expensiveBackgroundThrottlingCPUBudget() override { return 0.01; }
+void InitializeTrialParams() {
+  std::map<std::string, std::string> params = {{"cpu_budget", "0.01"},
+                                               {"max_budget", "0.0"},
+                                               {"initial_budget", "0.0"},
+                                               {"max_delay", "0.0"}};
+  const char kParamName[] = "ExpensiveBackgroundTimerThrottling";
+  const char kGroupName[] = "Enabled";
+  EXPECT_TRUE(base::AssociateFieldTrialParams(kParamName, kGroupName, params));
+  EXPECT_TRUE(base::FieldTrialList::CreateFieldTrial(kParamName, kGroupName));
 
-  float expensiveBackgroundThrottlingInitialBudget() override { return 0.0; }
-
-  float expensiveBackgroundThrottlingMaxBudget() override { return 0.0; }
-
-  float expensiveBackgroundThrottlingMaxDelay() override { return 0.0; }
-};
+  std::map<std::string, std::string> actual_params;
+  base::GetFieldTrialParams(kParamName, &actual_params);
+  EXPECT_EQ(actual_params, params);
+}
 
 }  // namespace
 
-TEST_F(WebViewSchedulerImplTest, BackgroundThrottlingGracePeriod) {
+TEST_F(WebViewSchedulerImplTest, BackgroundTimerThrottling) {
   ScopedExpensiveBackgroundTimerThrottlingForTest
       budget_background_throttling_enabler(true);
 
+  std::unique_ptr<base::FieldTrialList> field_trial_list =
+      base::MakeUnique<base::FieldTrialList>(nullptr);
+  InitializeTrialParams();
+  web_view_scheduler_.reset(
+      new WebViewSchedulerImpl(nullptr, nullptr, scheduler_.get(), false));
+
   std::vector<base::TimeTicks> run_times;
-  FakeWebViewSchedulerSettings web_view_scheduler_settings;
-  web_view_scheduler_.reset(new WebViewSchedulerImpl(
-      nullptr, &web_view_scheduler_settings, scheduler_.get(), false));
   web_frame_scheduler_ =
-      web_view_scheduler_->createWebFrameSchedulerImpl(nullptr);
-  web_view_scheduler_->setPageVisible(false);
+      web_view_scheduler_->CreateWebFrameSchedulerImpl(nullptr);
+  web_view_scheduler_->SetPageVisible(true);
 
   mock_task_runner_->RunUntilTime(base::TimeTicks() +
                                   base::TimeDelta::FromMilliseconds(2500));
 
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
-      BLINK_FROM_HERE, base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
-      0.1);
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
-      BLINK_FROM_HERE, base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
-      0.1);
+  web_frame_scheduler_->TimerTaskRunner()
+      ->ToSingleThreadTaskRunner()
+      ->PostDelayedTask(
+          BLINK_FROM_HERE,
+          base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+          TimeDelta::FromMilliseconds(1));
+  web_frame_scheduler_->TimerTaskRunner()
+      ->ToSingleThreadTaskRunner()
+      ->PostDelayedTask(
+          BLINK_FROM_HERE,
+          base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+          TimeDelta::FromMilliseconds(1));
 
   mock_task_runner_->RunUntilTime(base::TimeTicks() +
                                   base::TimeDelta::FromMilliseconds(3500));
 
-  // Check that these tasks are aligned, but are not subject to
-  // budget-based throttling.
+  // Check that these tasks are aligned, but are not subject to budget-based
+  // throttling.
   EXPECT_THAT(
       run_times,
-      ElementsAre(base::TimeTicks() + base::TimeDelta::FromMilliseconds(3000),
-                  base::TimeTicks() + base::TimeDelta::FromMilliseconds(3250)));
+      ElementsAre(base::TimeTicks() + base::TimeDelta::FromMilliseconds(2501),
+                  base::TimeTicks() + base::TimeDelta::FromMilliseconds(2751)));
   run_times.clear();
 
-  mock_task_runner_->RunUntilTime(base::TimeTicks() +
-                                  base::TimeDelta::FromMilliseconds(11500));
+  web_view_scheduler_->SetPageVisible(false);
 
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
-      BLINK_FROM_HERE, base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
-      0.1);
-  web_frame_scheduler_->timerTaskRunner()->postDelayedTask(
-      BLINK_FROM_HERE, base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
-      0.1);
+  web_frame_scheduler_->TimerTaskRunner()
+      ->ToSingleThreadTaskRunner()
+      ->PostDelayedTask(
+          BLINK_FROM_HERE,
+          base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+          TimeDelta::FromMicroseconds(1));
+  web_frame_scheduler_->TimerTaskRunner()
+      ->ToSingleThreadTaskRunner()
+      ->PostDelayedTask(
+          BLINK_FROM_HERE,
+          base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+          TimeDelta::FromMicroseconds(1));
 
   mock_task_runner_->RunUntilIdle();
 
   // Check that tasks are aligned and throttled.
   EXPECT_THAT(
       run_times,
-      ElementsAre(base::TimeTicks() + base::TimeDelta::FromSeconds(12),
-                  base::TimeTicks() + base::TimeDelta::FromSeconds(29)));
+      ElementsAre(base::TimeTicks() + base::TimeDelta::FromSeconds(4),
+                  base::TimeTicks() + base::TimeDelta::FromSeconds(26)));
+
+  base::FieldTrialParamAssociator::GetInstance()->ClearAllParamsForTesting();
+}
+
+TEST_F(WebViewSchedulerImplTest, OpenWebSocketExemptsFromBudgetThrottling) {
+  ScopedExpensiveBackgroundTimerThrottlingForTest
+      budget_background_throttling_enabler(true);
+
+  std::unique_ptr<base::FieldTrialList> field_trial_list =
+      base::MakeUnique<base::FieldTrialList>(nullptr);
+  InitializeTrialParams();
+  std::unique_ptr<WebViewSchedulerImpl> web_view_scheduler(
+      new WebViewSchedulerImpl(nullptr, nullptr, scheduler_.get(), false));
+
+  std::vector<base::TimeTicks> run_times;
+
+  std::unique_ptr<WebFrameSchedulerImpl> web_frame_scheduler1 =
+      web_view_scheduler->CreateWebFrameSchedulerImpl(nullptr);
+  std::unique_ptr<WebFrameSchedulerImpl> web_frame_scheduler2 =
+      web_view_scheduler->CreateWebFrameSchedulerImpl(nullptr);
+
+  web_view_scheduler->SetPageVisible(false);
+
+  // Wait for 20s to avoid initial throttling delay.
+  mock_task_runner_->RunUntilTime(base::TimeTicks() +
+                                  base::TimeDelta::FromMilliseconds(20500));
+
+  for (size_t i = 0; i < 3; ++i) {
+    web_frame_scheduler1->TimerTaskRunner()
+        ->ToSingleThreadTaskRunner()
+        ->PostDelayedTask(
+            BLINK_FROM_HERE,
+            base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+            TimeDelta::FromMilliseconds(1));
+  }
+
+  mock_task_runner_->RunUntilTime(base::TimeTicks() +
+                                  base::TimeDelta::FromMilliseconds(55500));
+
+  // Check that tasks are throttled.
+  EXPECT_THAT(
+      run_times,
+      ElementsAre(base::TimeTicks() + base::TimeDelta::FromSeconds(21),
+                  base::TimeTicks() + base::TimeDelta::FromSeconds(26),
+                  base::TimeTicks() + base::TimeDelta::FromSeconds(51)));
+  run_times.clear();
+
+  std::unique_ptr<WebFrameScheduler::ActiveConnectionHandle>
+      websocket_connection = web_frame_scheduler1->OnActiveConnectionCreated();
+
+  for (size_t i = 0; i < 3; ++i) {
+    web_frame_scheduler1->TimerTaskRunner()
+        ->ToSingleThreadTaskRunner()
+        ->PostDelayedTask(
+            BLINK_FROM_HERE,
+            base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+            TimeDelta::FromMilliseconds(1));
+  }
+
+  mock_task_runner_->RunUntilTime(base::TimeTicks() +
+                                  base::TimeDelta::FromMilliseconds(58500));
+
+  // Check that the timer task queue from the first frame is aligned,
+  // but not throttled.
+  EXPECT_THAT(
+      run_times,
+      ElementsAre(
+          base::TimeTicks() + base::TimeDelta::FromMilliseconds(56000),
+          base::TimeTicks() + base::TimeDelta::FromMilliseconds(56250),
+          base::TimeTicks() + base::TimeDelta::FromMilliseconds(56500)));
+  run_times.clear();
+
+  for (size_t i = 0; i < 3; ++i) {
+    web_frame_scheduler2->TimerTaskRunner()
+        ->ToSingleThreadTaskRunner()
+        ->PostDelayedTask(
+            BLINK_FROM_HERE,
+            base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+            TimeDelta::FromMilliseconds(1));
+  }
+
+  mock_task_runner_->RunUntilTime(base::TimeTicks() +
+                                  base::TimeDelta::FromMilliseconds(59500));
+
+  // Check that the second frame scheduler becomes unthrottled.
+  EXPECT_THAT(
+      run_times,
+      ElementsAre(
+          base::TimeTicks() + base::TimeDelta::FromMilliseconds(59000),
+          base::TimeTicks() + base::TimeDelta::FromMilliseconds(59250),
+          base::TimeTicks() + base::TimeDelta::FromMilliseconds(59500)));
+  run_times.clear();
+
+  websocket_connection.reset();
+
+  // Wait for 10s to enable throttling back.
+  mock_task_runner_->RunUntilTime(base::TimeTicks() +
+                                  base::TimeDelta::FromMilliseconds(70500));
+
+  for (size_t i = 0; i < 3; ++i) {
+    web_frame_scheduler1->TimerTaskRunner()
+        ->ToSingleThreadTaskRunner()
+        ->PostDelayedTask(
+            BLINK_FROM_HERE,
+            base::Bind(&ExpensiveTestTask, clock_.get(), &run_times),
+            TimeDelta::FromMilliseconds(1));
+  }
+
+  mock_task_runner_->RunUntilIdle();
+
+  // WebSocket is closed, budget-based throttling now applies.
+  EXPECT_THAT(
+      run_times,
+      ElementsAre(base::TimeTicks() + base::TimeDelta::FromSeconds(84),
+                  base::TimeTicks() + base::TimeDelta::FromSeconds(109),
+                  base::TimeTicks() + base::TimeDelta::FromSeconds(134)));
+
+  base::FieldTrialParamAssociator::GetInstance()->ClearAllParamsForTesting();
 }
 
 }  // namespace scheduler

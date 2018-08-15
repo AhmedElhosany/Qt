@@ -10,7 +10,7 @@
 #include "content/browser/shared_worker/worker_storage_partition.h"
 #include "content/common/content_export.h"
 #include "third_party/WebKit/public/platform/WebAddressSpace.h"
-#include "third_party/WebKit/public/web/WebContentSecurityPolicy.h"
+#include "third_party/WebKit/public/platform/WebContentSecurityPolicy.h"
 #include "third_party/WebKit/public/web/WebSharedWorkerCreationContextType.h"
 #include "url/gurl.h"
 
@@ -29,7 +29,8 @@ class CONTENT_EXPORT SharedWorkerInstance {
       blink::WebAddressSpace creation_address_space,
       ResourceContext* resource_context,
       const WorkerStoragePartitionId& partition_id,
-      blink::WebSharedWorkerCreationContextType creation_context_type);
+      blink::WebSharedWorkerCreationContextType creation_context_type,
+      bool data_saver_enabled);
   SharedWorkerInstance(const SharedWorkerInstance& other);
   ~SharedWorkerInstance();
 
@@ -64,6 +65,7 @@ class CONTENT_EXPORT SharedWorkerInstance {
   blink::WebSharedWorkerCreationContextType creation_context_type() const {
     return creation_context_type_;
   }
+  bool data_saver_enabled() const { return data_saver_enabled_; }
 
  private:
   const GURL url_;
@@ -74,6 +76,7 @@ class CONTENT_EXPORT SharedWorkerInstance {
   ResourceContext* const resource_context_;
   const WorkerStoragePartitionId partition_id_;
   const blink::WebSharedWorkerCreationContextType creation_context_type_;
+  const bool data_saver_enabled_;
 };
 
 }  // namespace content

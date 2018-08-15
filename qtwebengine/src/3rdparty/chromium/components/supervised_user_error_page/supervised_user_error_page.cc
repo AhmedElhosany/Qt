@@ -9,8 +9,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "grit/components_resources.h"
-#include "grit/components_strings.h"
+#include "components/grit/components_resources.h"
+#include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/jstemplate_builder.h"
@@ -23,11 +23,9 @@ namespace {
 static const int kAvatarSize1x = 45;
 static const int kAvatarSize2x = 90;
 
-#if defined(GOOGLE_CHROME_BUILD)
 bool ReasonIsAutomatic(FilteringBehaviorReason reason) {
   return reason == ASYNC_CHECKER || reason == BLACKLIST;
 }
-#endif
 
 std::string BuildAvatarImageUrl(const std::string& url, int size) {
   std::string result = url;
@@ -61,6 +59,8 @@ int GetBlockMessageID(FilteringBehaviorReason reason,
       if (single_parent)
         return IDS_CHILD_BLOCK_MESSAGE_MANUAL_SINGLE_PARENT;
       return IDS_CHILD_BLOCK_MESSAGE_MANUAL_MULTI_PARENT;
+    case NOT_SIGNED_IN:
+      return IDS_SUPERVISED_USER_NOT_SIGNED_IN;
   }
   NOTREACHED();
   return 0;
@@ -74,6 +74,7 @@ std::string BuildHtml(bool allow_access_requests,
                       const std::string& second_custodian,
                       const std::string& second_custodian_email,
                       bool is_child_account,
+                      bool is_deprecated,
                       FilteringBehaviorReason reason,
                       const std::string& app_locale) {
   base::DictionaryValue strings;
@@ -96,7 +97,10 @@ std::string BuildHtml(bool allow_access_requests,
                     base::UTF8ToUTF16(second_custodian_email));
   base::string16 block_header;
   base::string16 block_message;
-  if (allow_access_requests) {
+  if (reason == FilteringBehaviorReason::NOT_SIGNED_IN) {
+    block_header =
+        l10n_util::GetStringUTF16(IDS_BLOCK_INTERSTITIAL_HEADER_NOT_SIGNED_IN);
+  } else if (allow_access_requests) {
     if (is_child_account) {
       block_header =
           l10n_util::GetStringUTF16(IDS_CHILD_BLOCK_INTERSTITIAL_HEADER);
@@ -110,7 +114,12 @@ std::string BuildHtml(bool allow_access_requests,
   } else {
     block_header = l10n_util::GetStringUTF16(
         IDS_BLOCK_INTERSTITIAL_HEADER_ACCESS_REQUESTS_DISABLED);
-    // If access requests are disabled, there is no block message.
+
+    if (is_deprecated) {
+      DCHECK(!is_child_account);
+      block_message = l10n_util::GetStringUTF16(
+          IDS_BLOCK_INTERSTITIAL_MESSAGE_SUPERVISED_USERS_DEPRECATED);
+    }
   }
   strings.SetString("blockPageHeader", block_header);
   strings.SetString("blockPageMessage", block_message);
@@ -119,10 +128,9 @@ std::string BuildHtml(bool allow_access_requests,
                         reason, is_child_account, second_custodian.empty())));
   strings.SetString("blockReasonHeader", l10n_util::GetStringUTF16(
                                              IDS_SUPERVISED_USER_BLOCK_HEADER));
-  bool show_feedback = false;
-#if defined(GOOGLE_CHROME_BUILD)
-  show_feedback = is_child_account && ReasonIsAutomatic(reason);
-#endif
+  bool show_feedback = ReasonIsAutomatic(reason);
+  DCHECK(is_child_account || !show_feedback);
+
   strings.SetBoolean("showFeedbackLink", show_feedback);
   strings.SetString("feedbackLink", l10n_util::GetStringUTF16(
                                         IDS_BLOCK_INTERSTITIAL_SEND_FEEDBACK));

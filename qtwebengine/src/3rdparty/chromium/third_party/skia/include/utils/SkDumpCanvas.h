@@ -9,6 +9,7 @@
 #define SkDumpCanvas_DEFINED
 
 #include "SkCanvas.h"
+#include "SkVertices.h"
 
 /** This class overrides all the draw methods on SkCanvas, and formats them
     as text, and then sends that to a Dumper helper object.
@@ -21,7 +22,7 @@ public:
     class Dumper;
 
     explicit SkDumpCanvas(Dumper* = 0);
-    virtual ~SkDumpCanvas();
+    ~SkDumpCanvas() override;
 
     enum Verb {
         kNULL_Verb,
@@ -111,16 +112,12 @@ protected:
                          const SkPaint*, SrcRectConstraint) override;
     void onDrawBitmapNine(const SkBitmap&, const SkIRect& center, const SkRect& dst,
                           const SkPaint*) override;
-    void onDrawVertices(VertexMode vmode, int vertexCount,
-                        const SkPoint vertices[], const SkPoint texs[],
-                        const SkColor colors[], SkBlendMode,
-                        const uint16_t indices[], int indexCount,
-                        const SkPaint&) override;
+    void onDrawVerticesObject(const SkVertices*, SkBlendMode, const SkPaint&) override;
 
-    void onClipRect(const SkRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipRRect(const SkRRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipPath(const SkPath&, ClipOp, ClipEdgeStyle) override;
-    void onClipRegion(const SkRegion&, ClipOp) override;
+    void onClipRect(const SkRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRRect(const SkRRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipPath(const SkPath&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRegion(const SkRegion&, SkClipOp) override;
 
     void onDrawPicture(const SkPicture*, const SkMatrix*, const SkPaint*) override;
     void onDrawAnnotation(const SkRect&, const char key[], SkData* value) override;

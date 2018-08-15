@@ -92,9 +92,13 @@ BlobStorageContext::BlobFlattener::BlobFlattener(
   size_t num_files_with_unknown_size = 0;
   size_t num_building_dependent_blobs = 0;
 
+  bool found_memory_transport = false;
+  bool found_file_transport = false;
+
   base::CheckedNumeric<uint64_t> checked_total_size = 0;
   base::CheckedNumeric<uint64_t> checked_total_memory_size = 0;
-  base::CheckedNumeric<uint64_t> checked_memory_quota_needed = 0;
+  base::CheckedNumeric<uint64_t> checked_transport_quota_needed = 0;
+  base::CheckedNumeric<uint64_t> checked_copy_quota_needed = 0;
 
   for (scoped_refptr<BlobDataItem> input_item : input_builder.items_) {
     const DataElement& input_element = input_item->data_element();
@@ -105,11 +109,19 @@ BlobStorageContext::BlobFlattener::BlobFlattener(
 
     if (IsBytes(type)) {
       DCHECK_NE(0 + DataElement::kUnknownSize, input_element.length());
-      checked_memory_quota_needed += length;
+      found_memory_transport = true;
+      if (found_file_transport) {
+        // We cannot have both memory and file transport items.
+        status = BlobStatus::ERR_INVALID_CONSTRUCTION_ARGUMENTS;
+        return;
+      }
+      contains_unpopulated_transport_items |=
+          (type == DataElement::TYPE_BYTES_DESCRIPTION);
+      checked_transport_quota_needed += length;
       checked_total_size += length;
       scoped_refptr<ShareableBlobDataItem> item = new ShareableBlobDataItem(
           std::move(input_item), ShareableBlobDataItem::QUOTA_NEEDED);
-      pending_memory_items.push_back(item);
+      pending_transport_items.push_back(item);
       transport_items.push_back(item.get());
       output_blob->AppendSharedBlobItem(std::move(item));
       continue;
@@ -156,8 +168,10 @@ BlobStorageContext::BlobFlattener::BlobFlattener(
       }
 
       // Validate our reference has good offset & length.
-      uint64_t end_byte = input_element.offset() + length;
-      if (end_byte > ref_entry->total_size() || uint64_t(intptr_t(end_byte)) != end_byte || end_byte < input_element.offset()) {
+      uint64_t end_byte;
+      if (!base::CheckAdd(input_element.offset(), length)
+               .AssignIfValid(&end_byte) ||
+          end_byte > ref_entry->total_size()) {
         status = BlobStatus::ERR_INVALID_CONSTRUCTION_ARGUMENTS;
         return;
       }
@@ -175,14 +189,14 @@ BlobStorageContext::BlobFlattener::BlobFlattener(
         copies.push_back(ItemCopyEntry(slice.first_source_item,
                                        slice.first_item_slice_offset,
                                        slice.dest_items.front()));
-        pending_memory_items.push_back(slice.dest_items.front());
+        pending_copy_items.push_back(slice.dest_items.front());
       }
       if (slice.last_source_item) {
         copies.push_back(
             ItemCopyEntry(slice.last_source_item, 0, slice.dest_items.back()));
-        pending_memory_items.push_back(slice.dest_items.back());
+        pending_copy_items.push_back(slice.dest_items.back());
       }
-      checked_memory_quota_needed += slice.copying_memory_size;
+      checked_copy_quota_needed += slice.copying_memory_size;
 
       for (auto& shareable_item : slice.dest_items) {
         output_blob->AppendSharedBlobItem(std::move(shareable_item));
@@ -190,13 +204,29 @@ BlobStorageContext::BlobFlattener::BlobFlattener(
       continue;
     }
 
-    DCHECK(!BlobDataBuilder::IsFutureFileItem(input_element))
-        << "File allocation not implemented.";
+    // If the source item is a temporary file item, then we need to keep track
+    // of that and mark it as needing quota.
+    scoped_refptr<ShareableBlobDataItem> item;
+    if (BlobDataBuilder::IsFutureFileItem(input_element)) {
+      found_file_transport = true;
+      if (found_memory_transport) {
+        // We cannot have both memory and file transport items.
+        status = BlobStatus::ERR_INVALID_CONSTRUCTION_ARGUMENTS;
+        return;
+      }
+      contains_unpopulated_transport_items = true;
+      item = new ShareableBlobDataItem(std::move(input_item),
+                                       ShareableBlobDataItem::QUOTA_NEEDED);
+      pending_transport_items.push_back(item);
+      transport_items.push_back(item.get());
+      checked_transport_quota_needed += length;
+    } else {
+      item = new ShareableBlobDataItem(
+          std::move(input_item),
+          ShareableBlobDataItem::POPULATED_WITHOUT_QUOTA);
+    }
     if (length == DataElement::kUnknownSize)
       num_files_with_unknown_size++;
-
-    scoped_refptr<ShareableBlobDataItem> item = new ShareableBlobDataItem(
-        std::move(input_item), ShareableBlobDataItem::POPULATED_WITHOUT_QUOTA);
 
     checked_total_size += length;
     output_blob->AppendSharedBlobItem(std::move(item));
@@ -207,14 +237,18 @@ BlobStorageContext::BlobFlattener::BlobFlattener(
     return;
   }
   if (!checked_total_size.IsValid() || !checked_total_memory_size.IsValid() ||
-      !checked_memory_quota_needed.IsValid()) {
+      !checked_transport_quota_needed.IsValid() ||
+      !checked_copy_quota_needed.IsValid()) {
     status = BlobStatus::ERR_INVALID_CONSTRUCTION_ARGUMENTS;
     return;
   }
   total_size = checked_total_size.ValueOrDie();
   total_memory_size = checked_total_memory_size.ValueOrDie();
-  memory_quota_needed = checked_memory_quota_needed.ValueOrDie();
-  if (memory_quota_needed) {
+  transport_quota_needed = checked_transport_quota_needed.ValueOrDie();
+  copy_quota_needed = checked_copy_quota_needed.ValueOrDie();
+  transport_quota_type = found_file_transport ? TransportQuotaType::FILE
+                                              : TransportQuotaType::MEMORY;
+  if (transport_quota_needed) {
     status = BlobStatus::PENDING_QUOTA;
   } else {
     status = BlobStatus::PENDING_INTERNALS;
@@ -299,8 +333,16 @@ BlobStorageContext::BlobSlice::BlobSlice(const BlobEntry& source,
         data_item =
             new BlobDataItem(std::move(element), source_item->data_handle_);
 
-        DCHECK(!BlobDataBuilder::IsFutureFileItem(source_item->data_element()))
-            << "File allocation unimplemented.";
+        if (BlobDataBuilder::IsFutureFileItem(source_item->data_element())) {
+          // The source file isn't a real file yet (path is fake), so store the
+          // items we need to copy from later.
+          if (item_index == first_item_index) {
+            first_item_slice_offset = item_offset;
+            first_source_item = source_items[item_index];
+          } else {
+            last_source_item = source_items[item_index];
+          }
+        }
         break;
       }
       case DataElement::TYPE_FILE_FILESYSTEM: {
@@ -342,8 +384,13 @@ BlobStorageContext::BlobStorageContext()
     : memory_controller_(base::FilePath(), scoped_refptr<base::TaskRunner>()),
       ptr_factory_(this) {}
 
-BlobStorageContext::~BlobStorageContext() {
-}
+BlobStorageContext::BlobStorageContext(
+    base::FilePath storage_directory,
+    scoped_refptr<base::TaskRunner> file_runner)
+    : memory_controller_(std::move(storage_directory), std::move(file_runner)),
+      ptr_factory_(this) {}
+
+BlobStorageContext::~BlobStorageContext() {}
 
 std::unique_ptr<BlobDataHandle> BlobStorageContext::GetBlobDataFromUUID(
     const std::string& uuid) {
@@ -403,6 +450,32 @@ void BlobStorageContext::RevokePublicBlobURL(const GURL& blob_url) {
   DecrementBlobRefCount(uuid);
 }
 
+std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFutureBlob(
+    const std::string& uuid,
+    const std::string& content_type,
+    const std::string& content_disposition) {
+  DCHECK(!registry_.HasEntry(uuid));
+
+  BlobEntry* entry =
+      registry_.CreateEntry(uuid, content_type, content_disposition);
+  entry->set_size(DataElement::kUnknownSize);
+  entry->set_status(BlobStatus::PENDING_CONSTRUCTION);
+  entry->set_building_state(base::MakeUnique<BlobEntry::BuildingState>(
+      false, TransportAllowedCallback(), 0));
+  return CreateHandle(uuid, entry);
+}
+
+std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildPreregisteredBlob(
+    const BlobDataBuilder& content,
+    const TransportAllowedCallback& transport_allowed_callback) {
+  BlobEntry* entry = registry_.GetEntry(content.uuid());
+  DCHECK(entry);
+  DCHECK_EQ(BlobStatus::PENDING_CONSTRUCTION, entry->status());
+  entry->set_size(0);
+
+  return BuildBlobInternal(entry, content, transport_allowed_callback);
+}
+
 std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlob(
     const BlobDataBuilder& content,
     const TransportAllowedCallback& transport_allowed_callback) {
@@ -411,19 +484,23 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlob(
   BlobEntry* entry = registry_.CreateEntry(
       content.uuid(), content.content_type_, content.content_disposition_);
 
+  return BuildBlobInternal(entry, content, transport_allowed_callback);
+}
+
+std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
+    BlobEntry* entry,
+    const BlobDataBuilder& content,
+    const TransportAllowedCallback& transport_allowed_callback) {
   // This flattens all blob references in the transportion content out and
   // stores the complete item representation in the internal data.
   BlobFlattener flattener(content, entry, &registry_);
 
-  DCHECK(flattener.status != BlobStatus::PENDING_TRANSPORT ||
-         !transport_allowed_callback)
-      << "There is no pending content for the user to populate, so the "
-         "callback should be null.";
-  DCHECK(flattener.status != BlobStatus::PENDING_TRANSPORT ||
+  DCHECK(!flattener.contains_unpopulated_transport_items ||
          transport_allowed_callback)
-      << "If we have pending content then there needs to be a callback "
-         "present.";
+      << "If we have pending unpopulated content then a callback is required";
 
+  DCHECK(flattener.total_size == 0 ||
+         flattener.total_size == entry->total_size());
   entry->set_size(flattener.total_size);
   entry->set_status(flattener.status);
   std::unique_ptr<BlobDataHandle> handle = CreateHandle(content.uuid_, entry);
@@ -431,8 +508,14 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlob(
   UMA_HISTOGRAM_COUNTS("Storage.Blob.ItemCount", entry->items().size());
   UMA_HISTOGRAM_COUNTS("Storage.Blob.TotalSize",
                        flattener.total_memory_size / 1024);
+
+  uint64_t total_memory_needed =
+      flattener.copy_quota_needed +
+      (flattener.transport_quota_type == TransportQuotaType::MEMORY
+           ? flattener.transport_quota_needed
+           : 0);
   UMA_HISTOGRAM_COUNTS("Storage.Blob.TotalUnsharedSize",
-                       flattener.memory_quota_needed / 1024);
+                       total_memory_needed / 1024);
 
   size_t num_building_dependent_blobs = 0;
   std::vector<std::unique_ptr<BlobDataHandle>> dependent_blobs;
@@ -454,13 +537,27 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlob(
     }
   }
 
+  auto previous_building_state = std::move(entry->building_state_);
   entry->set_building_state(base::MakeUnique<BlobEntry::BuildingState>(
-      !flattener.transport_items.empty(), transport_allowed_callback,
+      !flattener.pending_transport_items.empty(), transport_allowed_callback,
       num_building_dependent_blobs));
   BlobEntry::BuildingState* building_state = entry->building_state_.get();
   std::swap(building_state->copies, flattener.copies);
   std::swap(building_state->dependent_blobs, dependent_blobs);
   std::swap(building_state->transport_items, flattener.transport_items);
+  if (previous_building_state) {
+    DCHECK(!previous_building_state->transport_items_present);
+    DCHECK(!previous_building_state->transport_allowed_callback);
+    DCHECK(previous_building_state->transport_items.empty());
+    DCHECK(previous_building_state->dependent_blobs.empty());
+    DCHECK(previous_building_state->copies.empty());
+    std::swap(building_state->build_completion_callbacks,
+              previous_building_state->build_completion_callbacks);
+    auto runner = base::ThreadTaskRunnerHandle::Get();
+    for (const auto& callback :
+         previous_building_state->build_started_callbacks)
+      runner->PostTask(FROM_HERE, base::BindOnce(callback, entry->status()));
+  }
 
   // Break ourselves if we have an error. BuildingState must be set first so the
   // callback is called correctly.
@@ -469,21 +566,52 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlob(
     return handle;
   }
 
-  if (!memory_controller_.CanReserveQuota(flattener.memory_quota_needed)) {
+  // Avoid the state where we might grant only one quota.
+  if (!memory_controller_.CanReserveQuota(flattener.copy_quota_needed +
+                                          flattener.transport_quota_needed)) {
     CancelBuildingBlobInternal(entry, BlobStatus::ERR_OUT_OF_MEMORY);
     return handle;
   }
 
-  if (flattener.memory_quota_needed > 0) {
-    // The blob can complete during the execution of this line.
+  if (flattener.copy_quota_needed > 0) {
+    // The blob can complete during the execution of |ReserveMemoryQuota|.
     base::WeakPtr<QuotaAllocationTask> pending_request =
         memory_controller_.ReserveMemoryQuota(
-            std::move(flattener.pending_memory_items),
-            base::Bind(&BlobStorageContext::OnEnoughSizeForMemory,
+            std::move(flattener.pending_copy_items),
+            base::Bind(&BlobStorageContext::OnEnoughSpaceForCopies,
                        ptr_factory_.GetWeakPtr(), content.uuid_));
     // Building state will be null if the blob is already finished.
     if (entry->building_state_)
-      entry->building_state_->memory_quota_request = std::move(pending_request);
+      entry->building_state_->copy_quota_request = std::move(pending_request);
+  }
+
+  if (flattener.transport_quota_needed > 0) {
+    base::WeakPtr<QuotaAllocationTask> pending_request;
+
+    switch (flattener.transport_quota_type) {
+      case TransportQuotaType::MEMORY: {
+        // The blob can complete during the execution of |ReserveMemoryQuota|.
+        std::vector<BlobMemoryController::FileCreationInfo> empty_files;
+        pending_request = memory_controller_.ReserveMemoryQuota(
+            std::move(flattener.pending_transport_items),
+            base::Bind(&BlobStorageContext::OnEnoughSpaceForTransport,
+                       ptr_factory_.GetWeakPtr(), content.uuid_,
+                       base::Passed(&empty_files)));
+        break;
+      }
+      case TransportQuotaType::FILE:
+        pending_request = memory_controller_.ReserveFileQuota(
+            std::move(flattener.pending_transport_items),
+            base::Bind(&BlobStorageContext::OnEnoughSpaceForTransport,
+                       ptr_factory_.GetWeakPtr(), content.uuid_));
+        break;
+    }
+
+    // Building state will be null if the blob is already finished.
+    if (entry->building_state_) {
+      entry->building_state_->transport_quota_request =
+          std::move(pending_request);
+    }
   }
 
   if (entry->CanFinishBuilding())
@@ -557,6 +685,18 @@ void BlobStorageContext::RunOnConstructionComplete(
   done.Run(entry->status());
 }
 
+void BlobStorageContext::RunOnConstructionBegin(
+    const std::string& uuid,
+    const BlobStatusCallback& done) {
+  BlobEntry* entry = registry_.GetEntry(uuid);
+  DCHECK(entry);
+  if (entry->status() == BlobStatus::PENDING_CONSTRUCTION) {
+    entry->building_state_->build_started_callbacks.push_back(done);
+    return;
+  }
+  done.Run(entry->status());
+}
+
 std::unique_ptr<BlobDataHandle> BlobStorageContext::CreateHandle(
     const std::string& uuid,
     BlobEntry* entry) {
@@ -587,6 +727,12 @@ void BlobStorageContext::CancelBuildingBlobInternal(BlobEntry* entry,
     transport_allowed_callback =
         entry->building_state_->transport_allowed_callback;
     entry->building_state_->transport_allowed_callback.Reset();
+  }
+  if (entry->building_state_ &&
+      entry->status() == BlobStatus::PENDING_CONSTRUCTION) {
+    auto runner = base::ThreadTaskRunnerHandle::Get();
+    for (const auto& callback : entry->building_state_->build_started_callbacks)
+      runner->PostTask(FROM_HERE, base::BindOnce(callback, reason));
   }
   ClearAndFreeMemory(entry);
   entry->set_status(reason);
@@ -623,8 +769,26 @@ void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
           const char* src_data =
               copy.source_item->item()->bytes() + copy.source_item_offset;
           copy.dest_item->item()->item_->SetToBytes(src_data, dest_size);
-        } break;
-        case DataElement::TYPE_FILE:
+          break;
+        }
+        case DataElement::TYPE_FILE: {
+          // If we expected a memory item (and our source was paged to disk) we
+          // free that memory.
+          if (dest_type == DataElement::TYPE_BYTES_DESCRIPTION)
+            copy.dest_item->set_memory_allocation(nullptr);
+
+          const DataElement& source_element =
+              copy.source_item->item()->data_element();
+          std::unique_ptr<DataElement> new_element(new DataElement());
+          new_element->SetToFilePathRange(
+              source_element.path(),
+              source_element.offset() + copy.source_item_offset, dest_size,
+              source_element.expected_modification_time());
+          scoped_refptr<BlobDataItem> new_item(new BlobDataItem(
+              std::move(new_element), copy.source_item->item()->data_handle_));
+          copy.dest_item->set_item(std::move(new_item));
+          break;
+        }
         case DataElement::TYPE_UNKNOWN:
         case DataElement::TYPE_BLOB:
         case DataElement::TYPE_BYTES_DESCRIPTION:
@@ -671,8 +835,10 @@ void BlobStorageContext::RequestTransport(
   NotifyTransportCompleteInternal(entry);
 }
 
-void BlobStorageContext::OnEnoughSizeForMemory(const std::string& uuid,
-                                               bool success) {
+void BlobStorageContext::OnEnoughSpaceForTransport(
+    const std::string& uuid,
+    std::vector<BlobMemoryController::FileCreationInfo> files,
+    bool success) {
   if (!success) {
     CancelBuildingBlob(uuid, BlobStatus::ERR_OUT_OF_MEMORY);
     return;
@@ -681,15 +847,25 @@ void BlobStorageContext::OnEnoughSizeForMemory(const std::string& uuid,
   if (!entry || !entry->building_state_.get())
     return;
   BlobEntry::BuildingState& building_state = *entry->building_state_;
-  DCHECK(!building_state.memory_quota_request);
+  DCHECK(!building_state.transport_quota_request);
+  DCHECK(building_state.transport_items_present);
 
-  if (building_state.transport_items_present) {
-    entry->set_status(BlobStatus::PENDING_TRANSPORT);
-    RequestTransport(entry,
-                     std::vector<BlobMemoryController::FileCreationInfo>());
-  } else {
-    entry->set_status(BlobStatus::PENDING_INTERNALS);
+  entry->set_status(BlobStatus::PENDING_TRANSPORT);
+  RequestTransport(entry, std::move(files));
+
+  if (entry->CanFinishBuilding())
+    FinishBuilding(entry);
+}
+
+void BlobStorageContext::OnEnoughSpaceForCopies(const std::string& uuid,
+                                                bool success) {
+  if (!success) {
+    CancelBuildingBlob(uuid, BlobStatus::ERR_OUT_OF_MEMORY);
+    return;
   }
+  BlobEntry* entry = registry_.GetEntry(uuid);
+  if (!entry)
+    return;
 
   if (entry->CanFinishBuilding())
     FinishBuilding(entry);
@@ -717,12 +893,8 @@ void BlobStorageContext::OnDependentBlobFinished(
 }
 
 void BlobStorageContext::ClearAndFreeMemory(BlobEntry* entry) {
-  if (entry->building_state_) {
-    BlobEntry::BuildingState* building_state = entry->building_state_.get();
-    if (building_state->memory_quota_request) {
-      building_state->memory_quota_request->Cancel();
-    }
-  }
+  if (entry->building_state_)
+    entry->building_state_->CancelRequests();
   entry->ClearItems();
   entry->ClearOffsets();
   entry->set_size(0);

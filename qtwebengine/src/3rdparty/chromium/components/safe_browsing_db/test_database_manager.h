@@ -10,14 +10,9 @@
 #include <vector>
 
 #include "components/safe_browsing_db/database_manager.h"
-
-namespace net {
-class URLRequestContextGetter;
-}
+#include "components/safe_browsing_db/v4_protocol_manager_util.h"
 
 namespace safe_browsing {
-
-struct V4ProtocolConfig;
 
 // This is a non-pure-virtual implementation of the SafeBrowsingDatabaseManager
 // interface.  It's used in tests by overriding only the functions that get
@@ -30,13 +25,18 @@ class TestSafeBrowsingDatabaseManager
   void CancelCheck(Client* client) override;
   bool CanCheckResourceType(content::ResourceType resource_type) const override;
   bool CanCheckUrl(const GURL& url) const override;
+  bool CanCheckSubresourceFilter() const override;
   bool ChecksAreAlwaysAsync() const override;
-  bool CheckBrowseUrl(const GURL& url, Client* client) override;
+  bool CheckBrowseUrl(const GURL& url,
+                      const SBThreatTypeSet& threat_types,
+                      Client* client) override;
+  AsyncMatch CheckCsdWhitelistUrl(const GURL& url, Client* client) override;
   bool CheckDownloadUrl(const std::vector<GURL>& url_chain,
                         Client* client) override;
   bool CheckExtensionIDs(const std::set<std::string>& extension_ids,
                          Client* client) override;
   bool CheckResourceUrl(const GURL& url, Client* client) override;
+  bool CheckUrlForSubresourceFilter(const GURL& url, Client* client) override;
   bool MatchCsdWhitelistUrl(const GURL& url) override;
   bool MatchDownloadWhitelistString(const std::string& str) override;
   bool MatchDownloadWhitelistUrl(const GURL& url) override;
@@ -47,9 +47,12 @@ class TestSafeBrowsingDatabaseManager
   bool IsDownloadProtectionEnabled() const override;
   bool IsMalwareKillSwitchOn() override;
   bool IsSupported() const override;
+  void StartOnIOThread(net::URLRequestContextGetter* request_context_getter,
+                       const V4ProtocolConfig& config) override;
+  void StopOnIOThread(bool shutdown) override;
 
  protected:
-  ~TestSafeBrowsingDatabaseManager() override {};
+  ~TestSafeBrowsingDatabaseManager() override {}
 };
 
 }  // namespace safe_browsing

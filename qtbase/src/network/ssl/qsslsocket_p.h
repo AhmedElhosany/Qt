@@ -218,6 +218,7 @@ private:
 protected:
     bool verifyErrorsHaveBeenIgnored();
     bool paused;
+    bool flushTriggered;
 };
 
 QT_END_NAMESPACE

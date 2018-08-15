@@ -31,7 +31,7 @@
 #include "drilldownslice.h"
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QMainWindow>
-#include <QtCore/QTime>
+#include <QtCore/QRandomGenerator>
 #include <QtCharts/QChartView>
 #include <QtCharts/QLegend>
 #include <QtCharts/QPieSeries>
@@ -41,8 +41,6 @@ QT_CHARTS_USE_NAMESPACE
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
-
-    qsrand(QTime(0, 0, 0).secsTo(QTime::currentTime()));
 
     QMainWindow window;
 
@@ -67,7 +65,7 @@ int main(int argc, char *argv[])
         series->setName("Sales by month - " + name);
 
         for (const QString &month : months)
-            *series << new DrilldownSlice(qrand() % 1000, month, yearSeries);
+            *series << new DrilldownSlice(QRandomGenerator::global()->bounded(1000), month, yearSeries);
 
         QObject::connect(series, &QPieSeries::clicked, chart, &DrilldownChart::handleSliceClicked);
 

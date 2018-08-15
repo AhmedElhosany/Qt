@@ -29,16 +29,6 @@ GLuint Get2dServiceId(const TextureUnit& unit) {
       ? unit.bound_texture_2d->service_id() : 0;
 }
 
-GLuint Get2dArrayServiceId(const TextureUnit& unit) {
-  return unit.bound_texture_2d_array.get()
-             ? unit.bound_texture_2d_array->service_id()
-             : 0;
-}
-
-GLuint Get3dServiceId(const TextureUnit& unit) {
-  return unit.bound_texture_3d.get() ? unit.bound_texture_3d->service_id() : 0;
-}
-
 GLuint GetCubeServiceId(const TextureUnit& unit) {
   return unit.bound_texture_cube_map.get()
       ? unit.bound_texture_cube_map->service_id() : 0;
@@ -231,7 +221,6 @@ ContextState::ContextState(FeatureInfo* feature_info,
       pack_reverse_row_order(false),
       ignore_cached_state(false),
       fbo_binding_for_scissor_workaround_dirty(false),
-      framebuffer_srgb_(false),
       feature_info_(feature_info),
       error_state_(ErrorState::Create(error_state_client, logger)) {
   Initialize();
@@ -250,8 +239,6 @@ void ContextState::RestoreTextureUnitBindings(
   DCHECK_LT(unit, texture_units.size());
   const TextureUnit& texture_unit = texture_units[unit];
   GLuint service_id_2d = Get2dServiceId(texture_unit);
-  GLuint service_id_2d_array = Get2dArrayServiceId(texture_unit);
-  GLuint service_id_3d = Get3dServiceId(texture_unit);
   GLuint service_id_cube = GetCubeServiceId(texture_unit);
   GLuint service_id_oes = GetOesServiceId(texture_unit);
   GLuint service_id_arb = GetArbServiceId(texture_unit);
@@ -262,22 +249,10 @@ void ContextState::RestoreTextureUnitBindings(
       feature_info_->feature_flags().oes_egl_image_external ||
       feature_info_->feature_flags().nv_egl_stream_consumer_external;
   bool bind_texture_arb = feature_info_->feature_flags().arb_texture_rectangle;
-  // TEXTURE_2D_ARRAY and TEXTURE_3D are only applicable from ES3 version.
-  // So set it to FALSE by default.
-  bool bind_texture_2d_array = false;
-  bool bind_texture_3d = false;
-  // set the variables to true only if the application is ES3 or newer
-  if (feature_info_->IsES3Capable()) {
-    bind_texture_2d_array = true;
-    bind_texture_3d = true;
-  }
 
   if (prev_state) {
     const TextureUnit& prev_unit = prev_state->texture_units[unit];
     bind_texture_2d = service_id_2d != Get2dServiceId(prev_unit);
-    bind_texture_2d_array =
-        service_id_2d_array != Get2dArrayServiceId(prev_unit);
-    bind_texture_3d = service_id_3d != Get3dServiceId(prev_unit);
     bind_texture_cube = service_id_cube != GetCubeServiceId(prev_unit);
     bind_texture_oes =
         bind_texture_oes && service_id_oes != GetOesServiceId(prev_unit);
@@ -286,8 +261,8 @@ void ContextState::RestoreTextureUnitBindings(
   }
 
   // Early-out if nothing has changed from the previous state.
-  if (!bind_texture_2d && !bind_texture_2d_array && !bind_texture_3d &&
-      !bind_texture_cube && !bind_texture_oes && !bind_texture_arb) {
+  if (!bind_texture_2d && !bind_texture_cube
+      && !bind_texture_oes && !bind_texture_arb) {
     return;
   }
 
@@ -304,11 +279,22 @@ void ContextState::RestoreTextureUnitBindings(
   if (bind_texture_arb) {
     glBindTexture(GL_TEXTURE_RECTANGLE_ARB, service_id_arb);
   }
-  if (bind_texture_2d_array) {
-    glBindTexture(GL_TEXTURE_2D_ARRAY, service_id_2d_array);
+}
+
+void ContextState::RestoreSamplerBinding(GLuint unit,
+                                         const ContextState* prev_state) const {
+  if (!feature_info_->IsES3Capable())
+    return;
+  const scoped_refptr<Sampler>& cur_sampler = sampler_units[unit];
+  GLuint cur_id = cur_sampler ? cur_sampler->service_id() : 0;
+  GLuint prev_id = 0;
+  if (prev_state) {
+    const scoped_refptr<Sampler>& prev_sampler =
+        prev_state->sampler_units[unit];
+    prev_id = prev_sampler ? prev_sampler->service_id() : 0;
   }
-  if (bind_texture_3d) {
-    glBindTexture(GL_TEXTURE_3D, service_id_3d);
+  if (!prev_state || cur_id != prev_id) {
+    glBindSampler(unit, cur_id);
   }
 }
 
@@ -400,11 +386,12 @@ void ContextState::RestoreActiveTexture() const {
   glActiveTexture(GL_TEXTURE0 + active_texture_unit);
 }
 
-void ContextState::RestoreAllTextureUnitBindings(
+void ContextState::RestoreAllTextureUnitAndSamplerBindings(
     const ContextState* prev_state) const {
   // Restore Texture state.
   for (size_t ii = 0; ii < texture_units.size(); ++ii) {
     RestoreTextureUnitBindings(ii, prev_state);
+    RestoreSamplerBinding(ii, prev_state);
   }
   RestoreActiveTexture();
 }
@@ -527,23 +514,20 @@ void ContextState::RestoreGlobalState(const ContextState* prev_state) const {
 }
 
 void ContextState::RestoreState(const ContextState* prev_state) {
-  RestoreAllTextureUnitBindings(prev_state);
+  RestoreAllTextureUnitAndSamplerBindings(prev_state);
   RestoreVertexAttribs();
+  // RestoreIndexedUniformBufferBindings must be called before
+  // RestoreBufferBindings. This is because setting the indexed uniform buffer
+  // bindings via glBindBuffer{Base,Range} also sets the general uniform buffer
+  // bindings (glBindBuffer), but not vice versa.
+  RestoreIndexedUniformBufferBindings(prev_state);
   RestoreBufferBindings();
   RestoreRenderbufferBindings();
   RestoreProgramSettings(prev_state, true);
-  RestoreIndexedUniformBufferBindings(prev_state);
   RestoreGlobalState(prev_state);
 
-  if (!prev_state) {
-    if (feature_info_->feature_flags().desktop_srgb_support) {
-      framebuffer_srgb_ = false;
-      glDisable(GL_FRAMEBUFFER_SRGB);
-    }
-  } else if (framebuffer_srgb_ != prev_state->framebuffer_srgb_) {
-    // FRAMEBUFFER_SRGB will be restored lazily at render time.
-    framebuffer_srgb_ = prev_state->framebuffer_srgb_;
-  }
+  // FRAMEBUFFER_SRGB will be restored lazily at render time.
+  framebuffer_srgb_valid_ = false;
 }
 
 ErrorState* ContextState::GetErrorState() {
@@ -736,10 +720,11 @@ PixelStoreParams ContextState::GetUnpackParams(Dimension dimension) {
 }
 
 void ContextState::EnableDisableFramebufferSRGB(bool enable) {
-  if (framebuffer_srgb_ == enable)
+  if (framebuffer_srgb_valid_ && framebuffer_srgb_ == enable)
     return;
   EnableDisable(GL_FRAMEBUFFER_SRGB, enable);
   framebuffer_srgb_ = enable;
+  framebuffer_srgb_valid_ = true;
 }
 
 void ContextState::InitStateManual(const ContextState*) const {

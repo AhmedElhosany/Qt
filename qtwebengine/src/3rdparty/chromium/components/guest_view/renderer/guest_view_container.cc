@@ -4,6 +4,7 @@
 
 #include "components/guest_view/renderer/guest_view_container.h"
 
+#include "base/lazy_instance.h"
 #include "base/macros.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/guest_view/common/guest_view_constants.h"
@@ -17,8 +18,8 @@
 namespace {
 
 using GuestViewContainerMap = std::map<int, guest_view::GuestViewContainer*>;
-static base::LazyInstance<GuestViewContainerMap> g_guest_view_container_map =
-    LAZY_INSTANCE_INITIALIZER;
+static base::LazyInstance<GuestViewContainerMap>::DestructorAtExit
+    g_guest_view_container_map = LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
@@ -185,8 +186,15 @@ void GuestViewContainer::RunDestructionCallback(bool embedder_frame_destroyed) {
 }
 
 void GuestViewContainer::OnHandleCallback(const IPC::Message& message) {
+  base::WeakPtr<content::BrowserPluginDelegate> weak_ptr(GetWeakPtr());
+
   // Handle the callback for the current request with a pending response.
   HandlePendingResponseCallback(message);
+
+  // Check that this container has not been deleted (crbug.com/718292).
+  if (!weak_ptr)
+    return;
+
   // Perform the subsequent request if one exists.
   PerformPendingRequest();
 }

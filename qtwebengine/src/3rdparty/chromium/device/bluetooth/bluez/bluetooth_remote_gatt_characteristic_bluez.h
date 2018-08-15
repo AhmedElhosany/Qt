@@ -57,14 +57,6 @@ class BluetoothRemoteGattCharacteristicBlueZ
       const override;
   device::BluetoothRemoteGattDescriptor* GetDescriptor(
       const std::string& identifier) const override;
-  void StartNotifySession(const NotifySessionCallback& callback,
-                          const ErrorCallback& error_callback) override;
-  // Removes one value update session and invokes |callback| on completion. This
-  // decrements the session reference count by 1 and if the number reaches 0,
-  // makes a call to the subsystem to stop notifications from this
-  // characteristic.
-  void StopNotifySession(device::BluetoothGattNotifySession* session,
-                         const base::Closure& callback) override;
   void ReadRemoteCharacteristic(const ValueCallback& callback,
                                 const ErrorCallback& error_callback) override;
   void WriteRemoteCharacteristic(const std::vector<uint8_t>& value,
@@ -84,9 +76,6 @@ class BluetoothRemoteGattCharacteristicBlueZ
  private:
   friend class BluetoothRemoteGattServiceBlueZ;
 
-  using PendingStartNotifyCall =
-      std::pair<NotifySessionCallback, ErrorCallback>;
-
   BluetoothRemoteGattCharacteristicBlueZ(
       BluetoothRemoteGattServiceBlueZ* service,
       const dbus::ObjectPath& object_path);
@@ -100,7 +89,7 @@ class BluetoothRemoteGattCharacteristicBlueZ
 
   // Called by dbus:: on successful completion of a request to start
   // notifications.
-  void OnStartNotifySuccess(const NotifySessionCallback& callback);
+  void OnStartNotifySuccess(const base::Closure& callback);
 
   // Called by dbus:: on unsuccessful completion of a request to start
   // notifications.
@@ -118,24 +107,20 @@ class BluetoothRemoteGattCharacteristicBlueZ
                          const std::string& error_name,
                          const std::string& error_message);
 
-  // Calls StartNotifySession for each queued request.
-  void ProcessStartNotifyQueue();
-
-  // Called by dbus:: on unsuccessful completion of a request to read or write
+  // Called by dbus:: on unsuccessful completion of a request to read
   // the characteristic value.
-  void OnError(const ErrorCallback& error_callback,
-               const std::string& error_name,
-               const std::string& error_message);
+  void OnReadError(const ErrorCallback& error_callback,
+                   const std::string& error_name,
+                   const std::string& error_message);
 
-  // The total number of currently active value update sessions.
-  size_t num_notify_sessions_;
+  // Called by dbus:: on unsuccessful completion of a request to write
+  // the characteristic value.
+  void OnWriteError(const ErrorCallback& error_callback,
+                    const std::string& error_name,
+                    const std::string& error_message);
 
-  // Calls to StartNotifySession that are pending. This can happen during the
-  // first remote call to start notifications.
-  std::queue<PendingStartNotifyCall> pending_start_notify_calls_;
-
-  // True, if a Start or Stop notify call to bluetoothd is currently pending.
-  bool notify_call_pending_;
+  // True, if there exists a Bluez notify session.
+  bool has_notify_session_;
 
   // TODO(rkc): Investigate and fix ownership of the descriptor objects in this
   // map. See crbug.com/604166.
@@ -150,6 +135,9 @@ class BluetoothRemoteGattCharacteristicBlueZ
 
   // The GATT service this GATT characteristic belongs to.
   BluetoothRemoteGattServiceBlueZ* service_;
+
+  // Number of gatt read requests in progress.
+  int num_of_characteristic_value_read_in_progress_;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

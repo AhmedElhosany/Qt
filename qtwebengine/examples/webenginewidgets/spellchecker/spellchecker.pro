@@ -1,9 +1,11 @@
+QT_FOR_CONFIG += webengine
+
 TEMPLATE = app
 TARGET = spellchecker
 QT += webenginewidgets
 CONFIG += c++11
 
-contains(WEBENGINE_CONFIG, use_native_spellchecker) {
+qtConfig(webengine-native-spellchecker) {
     error("Spellcheck example can not be built when using native OS dictionaries.")
 }
 

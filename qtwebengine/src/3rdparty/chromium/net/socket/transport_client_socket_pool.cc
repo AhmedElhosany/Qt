@@ -19,6 +19,7 @@
 #include "base/values.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
+#include "net/base/trace_constants.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source_type.h"
@@ -101,7 +102,8 @@ TransportConnectJob::TransportConnectJob(
           priority,
           respect_limits,
           delegate,
-          NetLogWithSource::Make(net_log, NetLogSourceType::CONNECT_JOB)),
+          NetLogWithSource::Make(net_log,
+                                 NetLogSourceType::TRANSPORT_CONNECT_JOB)),
       params_(params),
       resolver_(host_resolver),
       client_socket_factory_(client_socket_factory),
@@ -252,11 +254,6 @@ int TransportConnectJob::DoLoop(int result) {
   return rv;
 }
 int TransportConnectJob::DoResolveHost() {
-  // TODO(ricea): Remove ScopedTracker below once crbug.com/436634 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "436634 TransportConnectJob::DoResolveHost"));
-
   next_state_ = STATE_RESOLVE_HOST_COMPLETE;
   connect_timing_.dns_start = base::TimeTicks::Now();
 
@@ -267,7 +264,8 @@ int TransportConnectJob::DoResolveHost() {
 }
 
 int TransportConnectJob::DoResolveHostComplete(int result) {
-  TRACE_EVENT0("net", "TransportConnectJob::DoResolveHostComplete");
+  TRACE_EVENT0(kNetTracingCategory,
+               "TransportConnectJob::DoResolveHostComplete");
   connect_timing_.dns_end = base::TimeTicks::Now();
   // Overwrite connection start time, since for connections that do not go
   // through proxies, |connect_start| should not include dns lookup time.
@@ -301,9 +299,9 @@ int TransportConnectJob::DoTransportConnect() {
       addresses_, std::move(socket_performance_watcher), net_log().net_log(),
       net_log().source());
 
-  // If the list contains IPv6 and IPv4 addresses, the first address will
-  // be IPv6, and the IPv4 addresses will be tried as fallback addresses,
-  // per "Happy Eyeballs" (RFC 6555).
+  // If the list contains IPv6 and IPv4 addresses, and the first address
+  // is IPv6, the IPv4 addresses will be tried as fallback addresses, per
+  // "Happy Eyeballs" (RFC 6555).
   bool try_ipv6_connect_with_ipv4_fallback =
       addresses_.front().GetFamily() == ADDRESS_FAMILY_IPV6 &&
       !AddressListOnlyContainsIPv6(addresses_);
@@ -540,6 +538,12 @@ void TransportClientSocketPool::RequestSockets(
   base_.RequestSockets(group_name, *casted_params, num_sockets, net_log);
 }
 
+void TransportClientSocketPool::SetPriority(const std::string& group_name,
+                                            ClientSocketHandle* handle,
+                                            RequestPriority priority) {
+  base_.SetPriority(group_name, handle, priority);
+}
+
 void TransportClientSocketPool::CancelRequest(
     const std::string& group_name,
     ClientSocketHandle* handle) {
@@ -559,6 +563,11 @@ void TransportClientSocketPool::FlushWithError(int error) {
 
 void TransportClientSocketPool::CloseIdleSockets() {
   base_.CloseIdleSockets();
+}
+
+void TransportClientSocketPool::CloseIdleSocketsInGroup(
+    const std::string& group_name) {
+  base_.CloseIdleSocketsInGroup(group_name);
 }
 
 int TransportClientSocketPool::IdleSocketCount() const {

@@ -5,39 +5,35 @@
 #ifndef CompositorAnimationHost_h
 #define CompositorAnimationHost_h
 
-#include "base/memory/ref_counted.h"
-#include "cc/animation/animation_host.h"
 #include "platform/PlatformExport.h"
+#include "platform/graphics/CompositorElementId.h"
+#include "platform/wtf/Noncopyable.h"
 #include "ui/gfx/geometry/vector2d.h"
-#include "wtf/Noncopyable.h"
-
-#include <memory>
 
 namespace cc {
-struct ScrollOffsetAnimationUpdate;
+class AnimationHost;
 }
 
 namespace blink {
 
+class CompositorAnimationTimeline;
+
 // A compositor representation for cc::AnimationHost.
-// This class wraps cc::AnimationHost and is currently only created from
-// CompositorAnimationTimeline::compositorAnimationHost.
-// TODO(ymalik): Correctly introduce CompositorAnimationHost to blink. See
-// crbug.com/610763.
 class PLATFORM_EXPORT CompositorAnimationHost {
+  WTF_MAKE_NONCOPYABLE(CompositorAnimationHost);
+
  public:
   explicit CompositorAnimationHost(cc::AnimationHost*);
 
-  // TODO(ymalik): Remove when CompositorAnimationHost* optional nullable ptr
-  // is returned. See crbug.com/610763.
-  bool isNull() const;
+  void AddTimeline(const CompositorAnimationTimeline&);
+  void RemoveTimeline(const CompositorAnimationTimeline&);
 
-  void adjustImplOnlyScrollOffsetAnimation(cc::ElementId,
+  void AdjustImplOnlyScrollOffsetAnimation(CompositorElementId,
                                            const gfx::Vector2dF& adjustment);
-  void takeOverImplOnlyScrollOffsetAnimation(cc::ElementId);
+  void TakeOverImplOnlyScrollOffsetAnimation(CompositorElementId);
 
  private:
-  cc::AnimationHost* m_animationHost;
+  cc::AnimationHost* animation_host_;
 };
 
 }  // namespace blink

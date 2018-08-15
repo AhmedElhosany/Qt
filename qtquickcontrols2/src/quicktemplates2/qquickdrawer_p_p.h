@@ -48,9 +48,9 @@
 // We mean it.
 //
 
-#include "qquickdrawer_p.h"
-#include "qquickpopup_p_p.h"
-#include "qquickvelocitycalculator_p_p.h"
+#include <QtQuickTemplates2/private/qquickdrawer_p.h>
+#include <QtQuickTemplates2/private/qquickpopup_p_p.h>
+#include <QtQuickTemplates2/private/qquickvelocitycalculator_p_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -70,6 +70,8 @@ public:
     qreal positionAt(const QPointF &point) const;
 
     void reposition() override;
+    void showOverlay() override;
+    void hideOverlay() override;
     void resizeOverlay() override;
 
     bool startDrag(QEvent *event);

@@ -7,39 +7,42 @@
 #ifndef CORE_FPDFAPI_EDIT_CPDF_PAGECONTENTGENERATOR_H_
 #define CORE_FPDFAPI_EDIT_CPDF_PAGECONTENTGENERATOR_H_
 
+#include <sstream>
 #include <vector>
 
-#include "core/fpdfapi/parser/cpdf_document.h"
+#include "core/fxcrt/cfx_unowned_ptr.h"
 #include "core/fxcrt/fx_basic.h"
-#include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/fx_system.h"
 
-class CPDF_Object;
-class CPDF_Page;
-class CPDF_PageObject;
+class CPDF_Document;
 class CPDF_ImageObject;
+class CPDF_PageObject;
+class CPDF_PageObjectHolder;
+class CPDF_PathObject;
+class CPDF_TextObject;
 
 class CPDF_PageContentGenerator {
  public:
-  explicit CPDF_PageContentGenerator(CPDF_Page* pPage);
+  explicit CPDF_PageContentGenerator(CPDF_PageObjectHolder* pObjHolder);
   ~CPDF_PageContentGenerator();
 
-  void InsertPageObject(CPDF_PageObject* pPageObject);
   void GenerateContent();
-  void TransformContent(CFX_Matrix& matrix);
+  bool ProcessPageObjects(std::ostringstream* buf);
 
  private:
-  void ProcessImage(CFX_ByteTextBuf& buf, CPDF_ImageObject* pImageObj);
-  void ProcessForm(CFX_ByteTextBuf& buf,
-                   const uint8_t* data,
-                   uint32_t size,
-                   CFX_Matrix& matrix);
+  friend class CPDF_PageContentGeneratorTest;
+
+  void ProcessPath(std::ostringstream* buf, CPDF_PathObject* pPathObj);
+  void ProcessImage(std::ostringstream* buf, CPDF_ImageObject* pImageObj);
+  void ProcessGraphics(std::ostringstream* buf, CPDF_PageObject* pPageObj);
+  void ProcessDefaultGraphics(std::ostringstream* buf);
+  void ProcessText(std::ostringstream* buf, CPDF_TextObject* pTextObj);
   CFX_ByteString RealizeResource(uint32_t dwResourceObjNum,
                                  const CFX_ByteString& bsType);
 
-  CPDF_Page* m_pPage;
-  CPDF_Document* m_pDocument;
-  std::vector<CPDF_PageObject*> m_pageObjects;
+  CFX_UnownedPtr<CPDF_PageObjectHolder> const m_pObjHolder;
+  CFX_UnownedPtr<CPDF_Document> const m_pDocument;
+  std::vector<CFX_UnownedPtr<CPDF_PageObject>> m_pageObjects;
 };
 
 #endif  // CORE_FPDFAPI_EDIT_CPDF_PAGECONTENTGENERATOR_H_

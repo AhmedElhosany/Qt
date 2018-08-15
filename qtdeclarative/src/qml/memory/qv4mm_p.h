@@ -69,7 +69,6 @@ QT_BEGIN_NAMESPACE
 namespace QV4 {
 
 struct ChunkAllocator;
-struct MemorySegment;
 
 template<typename T>
 struct StackAllocator {
@@ -79,27 +78,28 @@ struct StackAllocator {
     StackAllocator(ChunkAllocator *chunkAlloc);
 
     T *allocate() {
-        T *m = nextFree->as<T>();
+        HeapItem *m = nextFree;
         if (Q_UNLIKELY(nextFree == lastInChunk)) {
             nextChunk();
         } else {
             nextFree += requiredSlots;
         }
-#if MM_DEBUG
+#if MM_DEBUG || !defined(QT_NO_DEBUG) || defined(QT_FORCE_ASSERTS)
         Chunk *c = m->chunk();
         Chunk::setBit(c->objectBitmap, m - c->realBase());
 #endif
-        return m;
+        return m->as<T>();
     }
     void free() {
-#if MM_DEBUG
-        Chunk::clearBit(item->chunk()->objectBitmap, item - item->chunk()->realBase());
-#endif
         if (Q_UNLIKELY(nextFree == firstInChunk)) {
             prevChunk();
         } else {
             nextFree -= requiredSlots;
         }
+#if MM_DEBUG || !defined(QT_NO_DEBUG) || defined(QT_FORCE_ASSERTS)
+        Chunk *c = nextFree->chunk();
+        Chunk::clearBit(c->objectBitmap, nextFree - c->realBase());
+#endif
     }
 
     void nextChunk();
@@ -146,6 +146,8 @@ struct BlockAllocator {
 
     void sweep();
     void freeAll();
+    void resetBlackBits();
+    void collectGrayItems(MarkStack *markStack);
 
     // bump allocations
     HeapItem *nextFree = 0;
@@ -164,8 +166,10 @@ struct HugeItemAllocator {
     {}
 
     HeapItem *allocate(size_t size);
-    void sweep();
+    void sweep(ClassDestroyStatsCallback classCountPtr);
     void freeAll();
+    void resetBlackBits();
+    void collectGrayItems(MarkStack *markStack);
 
     size_t usedMem() const {
         size_t used = 0;
@@ -177,7 +181,6 @@ struct HugeItemAllocator {
     ChunkAllocator *chunkAllocator;
     ExecutionEngine *engine;
     struct HugeChunk {
-        MemorySegment *segment;
         Chunk *chunk;
         size_t size;
     };
@@ -202,8 +205,8 @@ public:
     QV4::Heap::CallContext *allocSimpleCallContext()
     {
         Heap::CallContext *ctxt = stackAllocator.allocate();
-        memset(ctxt, 0, sizeof(Heap::CallContext));
-        ctxt->internalClass = CallContext::defaultInternalClass(engine);
+        memset(ctxt, 0, sizeof(Heap::SimpleCallContext));
+        ctxt->internalClass = SimpleCallContext::defaultInternalClass(engine);
         Q_ASSERT(ctxt->internalClass && ctxt->internalClass->vtable);
         ctxt->init();
         return ctxt;
@@ -433,7 +436,6 @@ public:
     // called when a JS object grows itself. Specifically: Heap::String::append
     void changeUnmanagedHeapSizeUsage(qptrdiff delta) { unmanagedHeapSize += delta; }
 
-
 protected:
     /// expects size to be aligned
     Heap::Base *allocString(std::size_t unmanagedSize);
@@ -441,10 +443,11 @@ protected:
     Heap::Object *allocObjectWithMemberData(const QV4::VTable *vtable, uint nMembers);
 
 private:
-    void collectFromJSStack() const;
+    void collectFromJSStack(MarkStack *markStack) const;
     void mark();
-    void sweep(bool lastSweep = false);
+    void sweep(bool lastSweep = false, ClassDestroyStatsCallback classCountPtr = nullptr);
     bool shouldRunGC() const;
+    void collectRoots(MarkStack *markStack);
 
 public:
     QV4::ExecutionEngine *engine;
@@ -458,6 +461,7 @@ public:
 
     std::size_t unmanagedHeapSize = 0; // the amount of bytes of heap that is not managed by the memory manager, but which is held onto by managed items.
     std::size_t unmanagedHeapSizeGCLimit;
+    std::size_t usedSlotsAfterLastFullSweep = 0;
 
     bool gcBlocked = false;
     bool aggressiveGC = false;

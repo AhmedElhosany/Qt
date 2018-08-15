@@ -42,7 +42,6 @@
 #include "qstring.h"
 #include "qvector.h"
 #include "qlist.h"
-#include "qthreadstorage.h"
 #include "qdir.h"
 #include "qdatetime.h"
 #include "qoperatingsystemversion.h"
@@ -134,6 +133,38 @@ Q_CORE_EXPORT void *qMemSet(void *dest, int c, size_t n);
 Q_STATIC_ASSERT_X(sizeof(int) == 4, "Qt assumes that int is 32 bits");
 Q_STATIC_ASSERT_X(UCHAR_MAX == 255, "Qt assumes that char is 8 bits");
 Q_STATIC_ASSERT_X(QT_POINTER_SIZE == sizeof(void *), "QT_POINTER_SIZE defined incorrectly");
+Q_STATIC_ASSERT_X(sizeof(float) == 4, "Qt assumes that float is 32 bits");
+
+// While we'd like to check for __STDC_IEC_559__, as per ISO/IEC 9899:2011
+// Annex F (C11, normative for C++11), there are a few corner cases regarding
+// denormals where GHS compiler is relying hardware behavior that is not IEC
+// 559 compliant. So split the check in several subchecks.
+
+// On GHC the compiler reports std::numeric_limits<float>::is_iec559 as false.
+// This is all right according to our needs.
+#if !defined(Q_CC_GHS)
+Q_STATIC_ASSERT_X(std::numeric_limits<float>::is_iec559,
+                  "Qt assumes IEEE 754 floating point");
+#endif
+
+// Technically, presence of NaN and infinities are implied from the above check,
+// but double checking our environment doesn't hurt...
+Q_STATIC_ASSERT_X(std::numeric_limits<float>::has_infinity &&
+                  std::numeric_limits<float>::has_quiet_NaN &&
+                  std::numeric_limits<float>::has_signaling_NaN,
+                  "Qt assumes IEEE 754 floating point");
+
+// is_iec559 checks for ISO/IEC/IEEE 60559:2011 (aka IEEE 754-2008) compliance,
+// but that allows for a non-binary radix. We need to recheck that.
+// Note how __STDC_IEC_559__ would instead check for IEC 60559:1989, aka
+// ANSI/IEEE 754−1985, which specifically implies binary floating point numbers.
+Q_STATIC_ASSERT_X(std::numeric_limits<float>::radix == 2,
+                  "Qt assumes binary IEEE 754 floating point");
+
+// not required by the definition of size_t, but we depend on this
+Q_STATIC_ASSERT_X(sizeof(size_t) == sizeof(void *), "size_t and a pointer don't have the same size");
+Q_STATIC_ASSERT(sizeof(size_t) == sizeof(qsizetype)); // implied by the definition
+Q_STATIC_ASSERT((std::is_same<qsizetype, qptrdiff>::value));
 
 /*!
     \class QFlag
@@ -793,6 +824,21 @@ Q_STATIC_ASSERT_X(QT_POINTER_SIZE == sizeof(void *), "QT_POINTER_SIZE defined in
     Note that qptrdiff is signed. Use quintptr for unsigned values.
 
     \sa quintptr, qint32, qint64
+*/
+
+/*!
+    \typedef qsizetype
+    \relates <QtGlobal>
+    \since 5.10
+
+    Integral type providing Posix' \c ssize_t for all platforms.
+
+    This type is guaranteed to be the same size as a \c size_t on all
+    platforms supported by Qt.
+
+    Note that qsizetype is signed. Use \c size_t for unsigned values.
+
+    \sa qptrdiff
 */
 
 /*!
@@ -3094,7 +3140,7 @@ void qt_assert_x(const char *where, const char *what, const char *file, int line
     Deliberately not exported as part of the Qt API, but used in both
     qsimplerichtext.cpp and qgfxraster_qws.cpp
 */
-Q_CORE_EXPORT unsigned int qt_int_sqrt(unsigned int n)
+Q_CORE_EXPORT Q_DECL_CONST_FUNCTION unsigned int qt_int_sqrt(unsigned int n)
 {
     // n must be in the range 0...UINT_MAX/2-1
     if (n >= (UINT_MAX>>2)) {
@@ -3124,24 +3170,27 @@ void *qMemSet(void *dest, int c, size_t n) { return memset(dest, c, n); }
 // add thread-safety for the Qt wrappers.
 static QBasicMutex environmentMutex;
 
-// getenv is declared as deprecated in VS2005. This function
-// makes use of the new secure getenv function.
 /*!
     \relates <QtGlobal>
+    \threadsafe
 
-    Returns the value of the environment variable with name \a
-    varName. To get the variable string, use QByteArray::constData().
+    Returns the value of the environment variable with name \a varName as a
+    QByteArray. If no variable by that name is found in the environment, this
+    function returns a default-constructed QByteArray.
+
+    The Qt environment manipulation functions are thread-safe, but this
+    requires that the C library equivalent functions like getenv and putenv are
+    not directly called.
+
     To convert the data to a QString use QString::fromLocal8Bit().
 
-    \note qgetenv() was introduced because getenv() from the standard
-    C library was deprecated in VC2005 (and later versions). qgetenv()
-    uses the new replacement function in VC, and calls the standard C
-    library's implementation on all other platforms.
+    \note on desktop Windows, qgetenv() may produce data loss if the
+    original string contains Unicode characters not representable in the
+    ANSI encoding. Use qEnvironmentVariable() instead.
+    On Unix systems, this function is lossless.
 
-    \warning Don't use qgetenv on Windows if the content may contain
-    non-US-ASCII characters, like file paths.
-
-    \sa qputenv(), qEnvironmentVariableIsSet(), qEnvironmentVariableIsEmpty()
+    \sa qputenv(), qEnvironmentVariable(), qEnvironmentVariableIsSet(),
+    qEnvironmentVariableIsEmpty()
 */
 QByteArray qgetenv(const char *varName)
 {
@@ -3163,6 +3212,87 @@ QByteArray qgetenv(const char *varName)
 #endif
 }
 
+
+/*!
+    \relates <QtGlobal>
+    \since 5.10
+
+    Returns the value of the environment variable with name \a varName as a
+    QString. If no variable by that name is found in the environment, this
+    function returns \a defaultValue.
+
+    The Qt environment manipulation functions are thread-safe, but this
+    requires that the C library equivalent functions like getenv and putenv are
+    not directly called.
+
+    The following table describes how to choose between qgetenv() and
+    qEnvironmentVariable():
+    \table
+      \header \li Condition         \li Recommendation
+      \row
+        \li Variable contains file paths or user text
+        \li qEnvironmentVariable()
+      \row
+        \li Windows-specific code
+        \li qEnvironmentVariable()
+      \row
+        \li Unix-specific code, destination variable is not QString and/or is
+            used to interface with non-Qt APIs
+        \li qgetenv()
+      \row
+        \li Destination variable is a QString
+        \li qEnvironmentVariable()
+      \row
+        \li Destination variable is a QByteArray or std::string
+        \li qgetenv()
+    \endtable
+
+    \note on Unix systems, this function may produce data loss if the original
+    string contains arbitrary binary data that cannot be decoded by the locale
+    codec. Use qgetenv() instead for that case. On Windows, this function is
+    lossless.
+
+    \note the variable name \a varName must contain only US-ASCII characters.
+
+    \sa qputenv(), qgetenv(), qEnvironmentVariableIsSet(), qEnvironmentVariableIsEmpty()
+*/
+QString qEnvironmentVariable(const char *varName, const QString &defaultValue)
+{
+#if defined(Q_OS_WIN) && !defined(Q_OS_WINRT)
+    QMutexLocker locker(&environmentMutex);
+    QVarLengthArray<wchar_t, 32> wname(int(strlen(varName)) + 1);
+    for (int i = 0; i < wname.size(); ++i) // wname.size() is correct: will copy terminating null
+        wname[i] = uchar(varName[i]);
+    size_t requiredSize = 0;
+    QString buffer;
+    _wgetenv_s(&requiredSize, 0, 0, wname.data());
+    if (requiredSize == 0)
+        return defaultValue;
+    buffer.resize(int(requiredSize));
+    _wgetenv_s(&requiredSize, reinterpret_cast<wchar_t *>(buffer.data()), requiredSize,
+               wname.data());
+    // requiredSize includes the terminating null, which we don't want.
+    Q_ASSERT(buffer.endsWith(QLatin1Char('\0')));
+    buffer.chop(1);
+    return buffer;
+#else
+    QByteArray value = qgetenv(varName);
+    if (value.isNull())
+        return defaultValue;
+// duplicated in qfile.h (QFile::decodeName)
+#if defined(Q_OS_DARWIN)
+    return QString::fromUtf8(value).normalized(QString::NormalizationForm_C);
+#else // other Unix
+    return QString::fromLocal8Bit(value);
+#endif
+#endif
+}
+
+QString qEnvironmentVariable(const char *varName)
+{
+    return qEnvironmentVariable(varName, QString());
+}
+
 /*!
     \relates <QtGlobal>
     \since 5.1
@@ -3175,7 +3305,7 @@ QByteArray qgetenv(const char *varName)
     \endcode
     except that it's potentially much faster, and can't throw exceptions.
 
-    \sa qgetenv(), qEnvironmentVariableIsSet()
+    \sa qgetenv(), qEnvironmentVariable(), qEnvironmentVariableIsSet()
 */
 bool qEnvironmentVariableIsEmpty(const char *varName) Q_DECL_NOEXCEPT
 {
@@ -3212,7 +3342,7 @@ bool qEnvironmentVariableIsEmpty(const char *varName) Q_DECL_NOEXCEPT
     are too long will either be truncated or this function will set \a ok to \c
     false.
 
-    \sa qgetenv(), qEnvironmentVariableIsSet()
+    \sa qgetenv(), qEnvironmentVariable(), qEnvironmentVariableIsSet()
 */
 int qEnvironmentVariableIntValue(const char *varName, bool *ok) Q_DECL_NOEXCEPT
 {
@@ -3263,7 +3393,7 @@ int qEnvironmentVariableIntValue(const char *varName, bool *ok) Q_DECL_NOEXCEPT
     \endcode
     except that it's potentially much faster, and can't throw exceptions.
 
-    \sa qgetenv(), qEnvironmentVariableIsEmpty()
+    \sa qgetenv(), qEnvironmentVariable(), qEnvironmentVariableIsEmpty()
 */
 bool qEnvironmentVariableIsSet(const char *varName) Q_DECL_NOEXCEPT
 {
@@ -3293,7 +3423,7 @@ bool qEnvironmentVariableIsSet(const char *varName) Q_DECL_NOEXCEPT
     uses the replacement function in VC, and calls the standard C
     library's implementation on all other platforms.
 
-    \sa qgetenv()
+    \sa qgetenv(), qEnvironmentVariable()
 */
 bool qputenv(const char *varName, const QByteArray& value)
 {
@@ -3324,7 +3454,7 @@ bool qputenv(const char *varName, const QByteArray& value)
 
     \since 5.1
 
-    \sa qputenv(), qgetenv()
+    \sa qputenv(), qgetenv(), qEnvironmentVariable()
 */
 bool qunsetenv(const char *varName)
 {
@@ -3346,138 +3476,6 @@ bool qunsetenv(const char *varName)
     buffer += '=';
     char *envVar = qstrdup(buffer.constData());
     return putenv(envVar) == 0;
-#endif
-}
-
-#if defined(Q_OS_ANDROID) && !defined(Q_OS_ANDROID_EMBEDDED) && (__ANDROID_API__ < 21)
-typedef QThreadStorage<QJNIObjectPrivate> AndroidRandomStorage;
-Q_GLOBAL_STATIC(AndroidRandomStorage, randomTLS)
-
-#elif defined(Q_OS_UNIX) && !defined(QT_NO_THREAD) && defined(_POSIX_THREAD_SAFE_FUNCTIONS) && (_POSIX_THREAD_SAFE_FUNCTIONS - 0 > 0)
-
-#  if defined(Q_OS_INTEGRITY) && defined(__GHS_VERSION_NUMBER) && (__GHS_VERSION_NUMBER < 500)
-// older versions of INTEGRITY used a long instead of a uint for the seed.
-typedef long SeedStorageType;
-#  else
-typedef uint SeedStorageType;
-#  endif
-
-typedef QThreadStorage<SeedStorageType *> SeedStorage;
-Q_GLOBAL_STATIC(SeedStorage, randTLS)  // Thread Local Storage for seed value
-#endif
-
-/*!
-    \relates <QtGlobal>
-    \since 4.2
-
-    Thread-safe version of the standard C++ \c srand() function.
-
-    Sets the argument \a seed to be used to generate a new random number sequence of
-    pseudo random integers to be returned by qrand().
-
-    The sequence of random numbers generated is deterministic per thread. For example,
-    if two threads call qsrand(1) and subsequently call qrand(), the threads will get
-    the same random number sequence.
-
-    \sa qrand()
-*/
-void qsrand(uint seed)
-{
-#if defined(Q_OS_ANDROID) && !defined(Q_OS_ANDROID_EMBEDDED) && (__ANDROID_API__ < 21)
-    if (randomTLS->hasLocalData()) {
-        randomTLS->localData().callMethod<void>("setSeed", "(J)V", jlong(seed));
-        return;
-    }
-
-    QJNIObjectPrivate random("java/util/Random",
-                             "(J)V",
-                             jlong(seed));
-    if (!random.isValid()) {
-        srand(seed);
-        return;
-    }
-
-    randomTLS->setLocalData(random);
-#elif defined(Q_OS_UNIX) && !defined(QT_NO_THREAD) && defined(_POSIX_THREAD_SAFE_FUNCTIONS) && (_POSIX_THREAD_SAFE_FUNCTIONS - 0 > 0)
-    SeedStorage *seedStorage = randTLS();
-    if (seedStorage) {
-        SeedStorageType *pseed = seedStorage->localData();
-        if (!pseed)
-            seedStorage->setLocalData(pseed = new SeedStorageType);
-        *pseed = seed;
-    } else {
-        //global static seed storage should always exist,
-        //except after being deleted by QGlobalStaticDeleter.
-        //But since it still can be called from destructor of another
-        //global static object, fallback to srand(seed)
-        srand(seed);
-    }
-#else
-    // On Windows srand() and rand() already use Thread-Local-Storage
-    // to store the seed between calls
-    // this is also valid for QT_NO_THREAD
-    srand(seed);
-#endif
-}
-
-/*!
-    \relates <QtGlobal>
-    \since 4.2
-
-    Thread-safe version of the standard C++ \c rand() function.
-
-    Returns a value between 0 and \c RAND_MAX (defined in \c <cstdlib> and
-    \c <stdlib.h>), the next number in the current sequence of pseudo-random
-    integers.
-
-    Use \c qsrand() to initialize the pseudo-random number generator with
-    a seed value.
-
-    \sa qsrand()
-*/
-int qrand()
-{
-#if defined(Q_OS_ANDROID) && !defined(Q_OS_ANDROID_EMBEDDED) && (__ANDROID_API__ < 21)
-    AndroidRandomStorage *randomStorage = randomTLS();
-    if (!randomStorage)
-        return rand();
-
-    if (randomStorage->hasLocalData()) {
-        return randomStorage->localData().callMethod<jint>("nextInt",
-                                                           "(I)I",
-                                                           RAND_MAX);
-    }
-
-    QJNIObjectPrivate random("java/util/Random",
-                             "(J)V",
-                             jlong(1));
-
-    if (!random.isValid())
-        return rand();
-
-    randomStorage->setLocalData(random);
-    return random.callMethod<jint>("nextInt", "(I)I", RAND_MAX);
-#elif defined(Q_OS_UNIX) && !defined(QT_NO_THREAD) && defined(_POSIX_THREAD_SAFE_FUNCTIONS) && (_POSIX_THREAD_SAFE_FUNCTIONS - 0 > 0)
-    SeedStorage *seedStorage = randTLS();
-    if (seedStorage) {
-        SeedStorageType *pseed = seedStorage->localData();
-        if (!pseed) {
-            seedStorage->setLocalData(pseed = new SeedStorageType);
-            *pseed = 1;
-        }
-        return rand_r(pseed);
-    } else {
-        //global static seed storage should always exist,
-        //except after being deleted by QGlobalStaticDeleter.
-        //But since it still can be called from destructor of another
-        //global static object, fallback to rand()
-        return rand();
-    }
-#else
-    // On Windows srand() and rand() already use Thread-Local-Storage
-    // to store the seed between calls
-    // this is also valid for QT_NO_THREAD
-    return rand();
 #endif
 }
 
@@ -4383,8 +4381,11 @@ bool QInternal::activateCallbacks(Callback cb, void **parameters)
     stderr. Under Windows, the message is sent to the debugger.
     On QNX the message is sent to slogger2. This
     function does nothing if \c QT_NO_WARNING_OUTPUT was defined
-    during compilation; it exits if the environment variable \c
-    QT_FATAL_WARNINGS is not empty.
+    during compilation; it exits if at the nth warning corresponding to the
+    counter in environment variable \c QT_FATAL_WARNINGS. That is, if the
+    environment variable contains the value 1, it will exit on the 1st message;
+    if it contains the value 10, it will exit on the 10th message. Any
+    non-numeric value is equivalent to 1.
 
     This function takes a format string and a list of arguments,
     similar to the C printf() function. The format should be a Latin-1

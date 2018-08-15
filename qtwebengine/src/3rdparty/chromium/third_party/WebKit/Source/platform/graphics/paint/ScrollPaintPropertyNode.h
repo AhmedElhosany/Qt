@@ -7,144 +7,155 @@
 
 #include "platform/PlatformExport.h"
 #include "platform/geometry/FloatSize.h"
-#include "platform/graphics/paint/TransformPaintPropertyNode.h"
+#include "platform/graphics/paint/PaintPropertyNode.h"
 #include "platform/scroll/MainThreadScrollingReason.h"
-#include "wtf/PassRefPtr.h"
-#include "wtf/RefCounted.h"
-#include "wtf/RefPtr.h"
+#include "platform/wtf/text/WTFString.h"
 
 #include <iosfwd>
 
 namespace blink {
 
 using MainThreadScrollingReasons = uint32_t;
+class WebLayerScrollClient;
 
-// A scroll node contains auxiliary scrolling information for threaded scrolling
-// which includes how far an area can be scrolled, which transform node contains
-// the scroll offset, etc.
+// A scroll node contains auxiliary scrolling information which includes how far
+// an area can be scrolled, main thread scrolling reasons, etc. Scroll nodes
+// are owned by TransformPaintPropertyNodes that are used for the scroll offset
+// translation.
 //
 // Main thread scrolling reasons force scroll updates to go to the main thread
 // and can have dependencies on other nodes. For example, all parents of a
 // scroll node with background attachment fixed set should also have it set.
+//
+// The scroll tree differs from the other trees because it does not affect
+// geometry directly. We may want to rename this class to reflect that it is
+// more like rare scroll data for TransformPaintPropertyNode.
 class PLATFORM_EXPORT ScrollPaintPropertyNode
-    : public RefCounted<ScrollPaintPropertyNode> {
+    : public PaintPropertyNode<ScrollPaintPropertyNode> {
  public:
-  static ScrollPaintPropertyNode* root();
+  // This node is really a sentinel, and does not represent a real scroll.
+  static ScrollPaintPropertyNode* Root();
 
-  static PassRefPtr<ScrollPaintPropertyNode> create(
-      PassRefPtr<ScrollPaintPropertyNode> parent,
-      PassRefPtr<const TransformPaintPropertyNode> scrollOffsetTranslation,
-      const IntSize& clip,
+  static PassRefPtr<ScrollPaintPropertyNode> Create(
+      PassRefPtr<const ScrollPaintPropertyNode> parent,
+      const IntSize& container_bounds,
       const IntSize& bounds,
-      bool userScrollableHorizontal,
-      bool userScrollableVertical) {
-    return adoptRef(new ScrollPaintPropertyNode(
-        std::move(parent), std::move(scrollOffsetTranslation), clip, bounds,
-        userScrollableHorizontal, userScrollableVertical));
+      bool user_scrollable_horizontal,
+      bool user_scrollable_vertical,
+      MainThreadScrollingReasons main_thread_scrolling_reasons,
+      WebLayerScrollClient* scroll_client) {
+    return AdoptRef(new ScrollPaintPropertyNode(
+        std::move(parent), container_bounds, bounds, user_scrollable_horizontal,
+        user_scrollable_vertical, main_thread_scrolling_reasons,
+        scroll_client));
   }
 
-  void update(
-      PassRefPtr<ScrollPaintPropertyNode> parent,
-      PassRefPtr<const TransformPaintPropertyNode> scrollOffsetTranslation,
-      const IntSize& clip,
-      const IntSize& bounds,
-      bool userScrollableHorizontal,
-      bool userScrollableVertical) {
-    DCHECK(!isRoot());
-    DCHECK(parent != this);
-    m_parent = parent;
-    DCHECK(scrollOffsetTranslation->matrix().isIdentityOr2DTranslation());
-    m_scrollOffsetTranslation = scrollOffsetTranslation;
-    m_clip = clip;
-    m_bounds = bounds;
-    m_userScrollableHorizontal = userScrollableHorizontal;
-    m_userScrollableVertical = userScrollableVertical;
-    m_mainThreadScrollingReasons = 0;
+  bool Update(PassRefPtr<const ScrollPaintPropertyNode> parent,
+              const IntSize& container_bounds,
+              const IntSize& bounds,
+              bool user_scrollable_horizontal,
+              bool user_scrollable_vertical,
+              MainThreadScrollingReasons main_thread_scrolling_reasons,
+              WebLayerScrollClient* scroll_client) {
+    bool parent_changed = PaintPropertyNode::Update(std::move(parent));
+
+    if (container_bounds == container_bounds_ && bounds == bounds_ &&
+        user_scrollable_horizontal == user_scrollable_horizontal_ &&
+        user_scrollable_vertical == user_scrollable_vertical_ &&
+        main_thread_scrolling_reasons == main_thread_scrolling_reasons_ &&
+        scroll_client == scroll_client_)
+      return parent_changed;
+
+    SetChanged();
+    container_bounds_ = container_bounds;
+    bounds_ = bounds;
+    user_scrollable_horizontal_ = user_scrollable_horizontal;
+    user_scrollable_vertical_ = user_scrollable_vertical;
+    main_thread_scrolling_reasons_ = main_thread_scrolling_reasons;
+    scroll_client_ = scroll_client;
+    return true;
   }
 
-  ScrollPaintPropertyNode* parent() const { return m_parent.get(); }
-  bool isRoot() const { return !m_parent; }
+  // Size of the container area that the contents scrolls in, not including
+  // non-overlay scrollbars. Overlay scrollbars do not affect these bounds.
+  const IntSize& ContainerBounds() const { return container_bounds_; }
 
-  // Transform that the scroll is relative to.
-  const TransformPaintPropertyNode* scrollOffsetTranslation() const {
-    return m_scrollOffsetTranslation.get();
-  }
+  // Size of the content that is scrolled within the container bounds.
+  const IntSize& Bounds() const { return bounds_; }
 
-  // The clipped area that contains the scrolled content.
-  const IntSize& clip() const { return m_clip; }
-
-  // The bounds of the content that is scrolled within |clip|.
-  const IntSize& bounds() const { return m_bounds; }
-
-  bool userScrollableHorizontal() const { return m_userScrollableHorizontal; }
-  bool userScrollableVertical() const { return m_userScrollableVertical; }
+  bool UserScrollableHorizontal() const { return user_scrollable_horizontal_; }
+  bool UserScrollableVertical() const { return user_scrollable_vertical_; }
 
   // Return reason bitfield with values from cc::MainThreadScrollingReason.
-  MainThreadScrollingReasons mainThreadScrollingReasons() const {
-    return m_mainThreadScrollingReasons;
+  MainThreadScrollingReasons GetMainThreadScrollingReasons() const {
+    return main_thread_scrolling_reasons_;
   }
-  bool hasMainThreadScrollingReasons(MainThreadScrollingReasons reasons) const {
-    return m_mainThreadScrollingReasons & reasons;
+
+  // Main thread scrolling reason for the threaded scrolling disabled setting.
+  bool ThreadedScrollingDisabled() const {
+    return main_thread_scrolling_reasons_ &
+           MainThreadScrollingReason::kThreadedScrollingDisabled;
   }
-  void addMainThreadScrollingReasons(MainThreadScrollingReasons reasons) {
-    m_mainThreadScrollingReasons |= reasons;
+
+  // Main thread scrolling reason for background attachment fixed descendants.
+  bool HasBackgroundAttachmentFixedDescendants() const {
+    return main_thread_scrolling_reasons_ &
+           MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects;
   }
-  void clearMainThreadScrollingReasons() { m_mainThreadScrollingReasons = 0; }
+
+  WebLayerScrollClient* ScrollClient() const { return scroll_client_; }
 
 #if DCHECK_IS_ON()
   // The clone function is used by FindPropertiesNeedingUpdate.h for recording
   // a scroll node before it has been updated, to later detect changes.
-  PassRefPtr<ScrollPaintPropertyNode> clone() const {
+  PassRefPtr<ScrollPaintPropertyNode> Clone() const {
     RefPtr<ScrollPaintPropertyNode> cloned =
-        adoptRef(new ScrollPaintPropertyNode(
-            m_parent, m_scrollOffsetTranslation, m_clip, m_bounds,
-            m_userScrollableHorizontal, m_userScrollableVertical));
-    cloned->addMainThreadScrollingReasons(m_mainThreadScrollingReasons);
+        AdoptRef(new ScrollPaintPropertyNode(
+            Parent(), container_bounds_, bounds_, user_scrollable_horizontal_,
+            user_scrollable_vertical_, main_thread_scrolling_reasons_,
+            scroll_client_));
     return cloned;
   }
 
   // The equality operator is used by FindPropertiesNeedingUpdate.h for checking
   // if a scroll node has changed.
   bool operator==(const ScrollPaintPropertyNode& o) const {
-    // TODO(pdr): Check main thread scrolling reason equality as well. We do
-    // not yet mark nodes as needing a paint property update on main thread
-    // scrolling reason changes. See: See: https://crbug.com/664672.
-    return m_parent == o.m_parent &&
-           m_scrollOffsetTranslation == o.m_scrollOffsetTranslation &&
-           m_clip == o.m_clip && m_bounds == o.m_bounds &&
-           m_userScrollableHorizontal == o.m_userScrollableHorizontal &&
-           m_userScrollableVertical == o.m_userScrollableVertical;
+    return Parent() == o.Parent() && container_bounds_ == o.container_bounds_ &&
+           bounds_ == o.bounds_ &&
+           user_scrollable_horizontal_ == o.user_scrollable_horizontal_ &&
+           user_scrollable_vertical_ == o.user_scrollable_vertical_ &&
+           main_thread_scrolling_reasons_ == o.main_thread_scrolling_reasons_ &&
+           scroll_client_ == o.scroll_client_;
   }
+
+  String ToTreeString() const;
 #endif
+
+  String ToString() const;
 
  private:
   ScrollPaintPropertyNode(
-      PassRefPtr<ScrollPaintPropertyNode> parent,
-      PassRefPtr<const TransformPaintPropertyNode> scrollOffsetTranslation,
-      IntSize clip,
+      PassRefPtr<const ScrollPaintPropertyNode> parent,
+      IntSize container_bounds,
       IntSize bounds,
-      bool userScrollableHorizontal,
-      bool userScrollableVertical)
-      : m_parent(parent),
-        m_scrollOffsetTranslation(scrollOffsetTranslation),
-        m_clip(clip),
-        m_bounds(bounds),
-        m_userScrollableHorizontal(userScrollableHorizontal),
-        m_userScrollableVertical(userScrollableVertical),
-        m_mainThreadScrollingReasons(0) {
-    DCHECK(m_scrollOffsetTranslation->matrix().isIdentityOr2DTranslation());
-  }
+      bool user_scrollable_horizontal,
+      bool user_scrollable_vertical,
+      MainThreadScrollingReasons main_thread_scrolling_reasons,
+      WebLayerScrollClient* scroll_client)
+      : PaintPropertyNode(std::move(parent)),
+        container_bounds_(container_bounds),
+        bounds_(bounds),
+        user_scrollable_horizontal_(user_scrollable_horizontal),
+        user_scrollable_vertical_(user_scrollable_vertical),
+        main_thread_scrolling_reasons_(main_thread_scrolling_reasons),
+        scroll_client_(scroll_client) {}
 
-  RefPtr<ScrollPaintPropertyNode> m_parent;
-  RefPtr<const TransformPaintPropertyNode> m_scrollOffsetTranslation;
-  IntSize m_clip;
-  IntSize m_bounds;
-  bool m_userScrollableHorizontal;
-  bool m_userScrollableVertical;
-  MainThreadScrollingReasons m_mainThreadScrollingReasons;
-  // TODO(pdr): Add an offset for the clip and bounds to the transform.
-  // TODO(pdr): Add 2 bits for whether this is a viewport scroll node.
-  // TODO(pdr): Add a bit for whether this is affected by page scale.
+  IntSize container_bounds_;
+  IntSize bounds_;
+  bool user_scrollable_horizontal_ : 1;
+  bool user_scrollable_vertical_ : 1;
+  MainThreadScrollingReasons main_thread_scrolling_reasons_;
+  WebLayerScrollClient* scroll_client_;
 };
 
 // Redeclared here to avoid ODR issues.

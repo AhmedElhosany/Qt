@@ -235,7 +235,7 @@ public:
     mutable quint32 connectedSignals[2];
 
     union {
-        QObject *currentChildBeingDeleted;
+        QObject *currentChildBeingDeleted; // should only be used when QObjectData::isDeletingChildren is set
         QAbstractDeclarativeData *declarativeData; //extra data used by the declarative module
     };
 
@@ -244,6 +244,7 @@ public:
     QAtomicPointer<QtSharedPointer::ExternalRefCountData> sharedRefcount;
 };
 
+Q_DECLARE_TYPEINFO(QObjectPrivate::ConnectionList, Q_MOVABLE_TYPE);
 
 /*! \internal
 

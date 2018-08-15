@@ -13,6 +13,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -52,10 +53,6 @@
 #endif
 
 namespace content {
-
-#if defined(OS_POSIX) && !defined(OS_ANDROID) && !defined(OS_MACOSX)
-ZygoteHandle g_ppapi_zygote;
-#endif  // defined(OS_POSIX) && !defined(OS_ANDROID) && !defined(OS_MACOSX)
 
 // NOTE: changes to this class need to be reviewed by the security team.
 class PpapiPluginSandboxedProcessLauncherDelegate
@@ -110,7 +107,7 @@ class PpapiPluginSandboxedProcessLauncherDelegate
   }
 
 #elif defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)
-  ZygoteHandle* GetZygote() override {
+  ZygoteHandle GetZygote() override {
     const base::CommandLine& browser_command_line =
         *base::CommandLine::ForCurrentProcess();
     base::CommandLine::StringType plugin_launcher = browser_command_line
@@ -202,14 +199,6 @@ PpapiPluginProcessHost* PpapiPluginProcessHost::CreateBrokerHost(
   NOTREACHED();  // Init is not expected to fail.
   return NULL;
 }
-
-#if defined(OS_POSIX) && !defined(OS_ANDROID) && !defined(OS_MACOSX)
-// static
-void PpapiPluginProcessHost::EarlyZygoteLaunch() {
-  DCHECK(!g_ppapi_zygote);
-  g_ppapi_zygote = CreateZygote();
-}
-#endif  // defined(OS_POSIX) && !defined(OS_ANDROID) && !defined(OS_MACOSX)
 
 // static
 void PpapiPluginProcessHost::DidCreateOutOfProcessInstance(
@@ -373,10 +362,12 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
     return false;
   }
 
-  base::CommandLine* cmd_line = new base::CommandLine(exe_path);
+  std::unique_ptr<base::CommandLine> cmd_line =
+      base::MakeUnique<base::CommandLine>(exe_path);
   cmd_line->AppendSwitchASCII(switches::kProcessType,
                               is_broker_ ? switches::kPpapiBrokerProcess
                                          : switches::kPpapiPluginProcess);
+  BrowserChildProcessHostImpl::CopyFeatureAndFieldTrialFlags(cmd_line.get());
 
 #if defined(OS_WIN)
   cmd_line->AppendArg(is_broker_ ? switches::kPrefetchArgumentPpapiBroker
@@ -402,7 +393,7 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
     cmd_line->CopySwitchesFrom(browser_command_line, kPluginForwardSwitches,
                                arraysize(kPluginForwardSwitches));
 
-    // Copy any flash args over and introduce field trials if necessary.
+    // Copy any flash args over if necessary.
     // TODO(vtl): Stop passing flash args in the command line, or windows is
     // going to explode.
     std::string existing_args =
@@ -435,8 +426,9 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
   // On posix, never use the zygote for the broker. Also, only use the zygote if
   // we are not using a plugin launcher - having a plugin launcher means we need
   // to use another process instead of just forking the zygote.
-  process_->Launch(new PpapiPluginSandboxedProcessLauncherDelegate(is_broker_),
-                   cmd_line, true);
+  process_->Launch(
+      base::MakeUnique<PpapiPluginSandboxedProcessLauncherDelegate>(is_broker_),
+      std::move(cmd_line), true);
   return true;
 }
 

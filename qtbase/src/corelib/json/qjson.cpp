@@ -45,15 +45,8 @@ QT_BEGIN_NAMESPACE
 namespace QJsonPrivate
 {
 
-#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
-#define Q_TO_LITTLE_ENDIAN(x) (x)
-#else
-#define Q_TO_LITTLE_ENDIAN(x) ( ((x & 0xff) << 24) | ((x & 0xff00) << 8) | ((x & 0xff0000) >> 8) | ((x & 0xff000000) >> 24) )
-#endif
-
-static const Base emptyArray = { { Q_TO_LITTLE_ENDIAN(sizeof(Base)) }, { 0 }, { 0 } };
-static const Base emptyObject = { { Q_TO_LITTLE_ENDIAN(sizeof(Base)) }, { 0 }, { 0 } };
-
+static Q_CONSTEXPR Base emptyArray  = { { qle_uint(sizeof(Base)) }, { 0 }, { qle_uint(0) } };
+static Q_CONSTEXPR Base emptyObject = { { qle_uint(sizeof(Base)) }, { 0 }, { qle_uint(0) } };
 
 void Data::compact()
 {
@@ -333,35 +326,40 @@ int Value::usedStorage(const Base *b) const
     return alignedSize(s);
 }
 
-inline bool isValidValueOffset(uint offset, uint tableOffset)
-{
-    return offset >= sizeof(Base)
-        && offset + sizeof(uint) <= tableOffset;
-}
-
 bool Value::isValid(const Base *b) const
 {
+    int offset = 0;
     switch (type) {
+    case QJsonValue::Double:
+        if (latinOrIntValue)
+            break;
+        Q_FALLTHROUGH();
+    case QJsonValue::String:
+    case QJsonValue::Array:
+    case QJsonValue::Object:
+        offset = value;
+        break;
     case QJsonValue::Null:
     case QJsonValue::Bool:
-        return true;
-    case QJsonValue::Double:
-        return latinOrIntValue || isValidValueOffset(value, b->tableOffset);
-    case QJsonValue::String:
-        if (!isValidValueOffset(value, b->tableOffset))
-            return false;
-        if (latinOrIntValue)
-            return asLatin1String(b).isValid(b->tableOffset - value);
-        return asString(b).isValid(b->tableOffset - value);
-    case QJsonValue::Array:
-        return isValidValueOffset(value, b->tableOffset)
-            && static_cast<Array *>(base(b))->isValid(b->tableOffset - value);
-    case QJsonValue::Object:
-        return isValidValueOffset(value, b->tableOffset)
-            && static_cast<Object *>(base(b))->isValid(b->tableOffset - value);
     default:
-        return false;
+        break;
     }
+
+    if (!offset)
+        return true;
+    if (offset + sizeof(uint) > b->tableOffset)
+        return false;
+
+    int s = usedStorage(b);
+    if (!s)
+        return true;
+    if (s < 0 || s > (int)b->tableOffset - offset)
+        return false;
+    if (type == QJsonValue::Array)
+        return static_cast<Array *>(base(b))->isValid(s);
+    if (type == QJsonValue::Object)
+        return static_cast<Object *>(base(b))->isValid(s);
+    return true;
 }
 
 /*!
@@ -389,7 +387,7 @@ int Value::requiredStorage(QJsonValue &v, bool *compressed)
             v.d->compact();
             v.base = static_cast<QJsonPrivate::Base *>(v.d->header->root());
         }
-        return v.base ? v.base->size : sizeof(QJsonPrivate::Base);
+        return v.base ? uint(v.base->size) : sizeof(QJsonPrivate::Base);
     case QJsonValue::Undefined:
     case QJsonValue::Null:
     case QJsonValue::Bool:

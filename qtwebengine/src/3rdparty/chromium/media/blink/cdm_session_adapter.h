@@ -15,7 +15,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "media/base/media_keys.h"
+#include "media/base/content_decryption_module.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModuleResult.h"
 #include "third_party/WebKit/public/platform/WebContentDecryptionModuleSession.h"
 
@@ -28,9 +28,9 @@ class CdmFactory;
 class WebContentDecryptionModuleSessionImpl;
 
 // Owns the CDM instance and makes calls from session objects to the CDM.
-// Forwards the session ID-based callbacks of the MediaKeys interface to the
-// appropriate session object. Callers should hold references to this class
-// as long as they need the CDM instance.
+// Forwards the session ID-based callbacks of the ContentDecryptionModule
+// interface to the appropriate session object. Callers should hold references
+// to this class as long as they need the CDM instance.
 class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
  public:
   CdmSessionAdapter();
@@ -49,10 +49,14 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
   void SetServerCertificate(const std::vector<uint8_t>& certificate,
                             std::unique_ptr<SimpleCdmPromise> promise);
 
-  // Creates a new session and adds it to the internal map. The caller owns the
-  // created session. RemoveSession() must be called when destroying it, if
-  // RegisterSession() was called.
-  WebContentDecryptionModuleSessionImpl* CreateSession();
+  // Gets the key status for a hypothetical key with |min_hdcp_version|
+  // requirement.
+  void GetStatusForPolicy(HdcpVersion min_hdcp_version,
+                          std::unique_ptr<KeyStatusCdmPromise> promise);
+
+  // Creates a new session and adds it to the internal map. RemoveSession()
+  // must be called when destroying it, if RegisterSession() was called.
+  std::unique_ptr<WebContentDecryptionModuleSessionImpl> CreateSession();
 
   // Adds a session to the internal map. Called once the session is successfully
   // initialized. Returns true if the session was registered, false if there is
@@ -68,11 +72,11 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
   // |session_type| provided.
   void InitializeNewSession(EmeInitDataType init_data_type,
                             const std::vector<uint8_t>& init_data,
-                            MediaKeys::SessionType session_type,
+                            CdmSessionType session_type,
                             std::unique_ptr<NewSessionCdmPromise> promise);
 
   // Loads the session specified by |session_id|.
-  void LoadSession(MediaKeys::SessionType session_type,
+  void LoadSession(CdmSessionType session_type,
                    const std::string& session_id,
                    std::unique_ptr<NewSessionCdmPromise> promise);
 
@@ -91,7 +95,7 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
                      std::unique_ptr<SimpleCdmPromise> promise);
 
   // Returns a reference to the CDM.
-  scoped_refptr<MediaKeys> GetCdm();
+  scoped_refptr<ContentDecryptionModule> GetCdm();
 
   // Returns the key system name.
   const std::string& GetKeySystem() const;
@@ -112,27 +116,25 @@ class CdmSessionAdapter : public base::RefCounted<CdmSessionAdapter> {
   // Callback for CreateCdm().
   void OnCdmCreated(const std::string& key_system,
                     base::TimeTicks start_time,
-                    const scoped_refptr<MediaKeys>& cdm,
+                    const scoped_refptr<ContentDecryptionModule>& cdm,
                     const std::string& error_message);
 
   // Callbacks for firing session events.
   void OnSessionMessage(const std::string& session_id,
-                        MediaKeys::MessageType message_type,
+                        CdmMessageType message_type,
                         const std::vector<uint8_t>& message);
   void OnSessionKeysChange(const std::string& session_id,
                            bool has_additional_usable_key,
                            CdmKeysInfo keys_info);
   void OnSessionExpirationUpdate(const std::string& session_id,
-                                 const base::Time& new_expiry_time);
+                                 base::Time new_expiry_time);
   void OnSessionClosed(const std::string& session_id);
 
   // Helper function of the callbacks.
   WebContentDecryptionModuleSessionImpl* GetSession(
       const std::string& session_id);
 
-  void ReportTimeToCreateCdmUMA(base::TimeDelta cdm_creation_time) const;
-
-  scoped_refptr<MediaKeys> cdm_;
+  scoped_refptr<ContentDecryptionModule> cdm_;
 
   SessionMap sessions_;
 

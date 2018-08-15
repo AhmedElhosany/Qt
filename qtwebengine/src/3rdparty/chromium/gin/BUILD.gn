@@ -14,6 +14,8 @@ component("gin") {
     "context_holder.cc",
     "converter.cc",
     "converter.h",
+    "data_object_builder.cc",
+    "data_object_builder.h",
     "debug_impl.cc",
     "debug_impl.h",
     "dictionary.cc",
@@ -21,7 +23,6 @@ component("gin") {
     "function_template.cc",
     "function_template.h",
     "gin_export.h",
-    "gin_features.cc",
     "handle.h",
     "interceptor.cc",
     "interceptor.h",
@@ -46,7 +47,6 @@ component("gin") {
     "public/context_holder.h",
     "public/debug.h",
     "public/gin_embedders.h",
-    "public/gin_features.h",
     "public/isolate_holder.h",
     "public/v8_idle_task_runner.h",
     "public/v8_platform.h",
@@ -84,49 +84,13 @@ component("gin") {
   ]
   deps = [
     "//base/third_party/dynamic_annotations",
-    "//crypto",
   ]
-  if (v8_use_external_startup_data && is_win) {
-    public_deps += [ ":gin_v8_snapshot_fingerprint" ]
-    sources += [ "$target_gen_dir/v8_snapshot_fingerprint.cc" ]
-    defines += [ "V8_VERIFY_EXTERNAL_STARTUP_DATA" ]
-  }
 
   if (is_mac) {
     libs = [ "CoreFoundation.framework" ]
   }
 
   configs += [ "//v8:external_startup_data" ]
-}
-
-if (v8_use_external_startup_data) {
-  action("gin_v8_snapshot_fingerprint") {
-    script = "//gin/fingerprint/fingerprint_v8_snapshot.py"
-
-    snapshot_file = "$root_out_dir/snapshot_blob.bin"
-    natives_file = "$root_out_dir/natives_blob.bin"
-    output_file = "$target_gen_dir/v8_snapshot_fingerprint.cc"
-
-    args = [
-      "--snapshot_file",
-      rebase_path(snapshot_file, root_build_dir),
-      "--natives_file",
-      rebase_path(natives_file, root_build_dir),
-      "--output_file",
-      rebase_path(output_file, root_build_dir),
-    ]
-    inputs = [
-      snapshot_file,
-      natives_file,
-    ]
-    outputs = [
-      output_file,
-    ]
-
-    deps = [
-      "//v8",
-    ]
-  }
 }
 
 executable("gin_shell") {
@@ -138,7 +102,7 @@ executable("gin_shell") {
     ":gin",
     "//base",
     "//base:i18n",
-    "//build/config/sanitizers:deps",
+    "//build/config:exe_and_shlib_deps",
     "//build/win:default_exe_manifest",
     "//v8",
   ]
@@ -169,6 +133,7 @@ source_set("gin_test") {
     "//testing/gtest",
   ]
   deps = [
+    "//base/test:test_support",
     "//v8",
   ]
 
@@ -177,7 +142,10 @@ source_set("gin_test") {
 
 test("gin_unittests") {
   sources = [
+    "arguments_unittest.cc",
+    "array_buffer_unittest.cc",
     "converter_unittest.cc",
+    "data_object_builder_unittest.cc",
     "interceptor_unittest.cc",
     "modules/module_registry_unittest.cc",
     "modules/timer_unittest.cc",
@@ -187,6 +155,7 @@ test("gin_unittests") {
     "test/run_all_unittests.cc",
     "test/run_js_tests.cc",
     "v8_isolate_memory_dump_provider_unittest.cc",
+    "v8_platform_unittest.cc",
     "wrappable_unittest.cc",
   ]
 

@@ -12,6 +12,7 @@
 #include "GrTypes.h"
 #include "vk/GrVkDefines.h"
 #include "vk/GrVkInterface.h"
+#include "ir/SkSLProgram.h"
 
 class GrVkGpu;
 
@@ -34,7 +35,7 @@ bool GrPixelConfigToVkFormat(GrPixelConfig config, VkFormat* format);
 /**
 * Returns the GrPixelConfig for the given vulkan texture format
 */
-bool GrVkFormatToPixelConfig(VkFormat format, GrPixelConfig* config);
+GrPixelConfig GrVkFormatToPixelConfig(VkFormat format);
 
 /**
  * Returns true if the given vulkan texture format is sRGB encoded.
@@ -48,6 +49,8 @@ bool GrCompileVkShaderModule(const GrVkGpu* gpu,
                              const char* shaderString,
                              VkShaderStageFlagBits stage,
                              VkShaderModule* shaderModule,
-                             VkPipelineShaderStageCreateInfo* stageInfo);
+                             VkPipelineShaderStageCreateInfo* stageInfo,
+                             const SkSL::Program::Settings& settings,
+                             SkSL::Program::Inputs* outInputs);
 
 #endif

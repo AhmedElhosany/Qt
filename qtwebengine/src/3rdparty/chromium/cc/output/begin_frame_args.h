@@ -5,13 +5,14 @@
 #ifndef CC_OUTPUT_BEGIN_FRAME_ARGS_H_
 #define CC_OUTPUT_BEGIN_FRAME_ARGS_H_
 
+#include <stdint.h>
 #include <memory>
 
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "cc/base/cc_export.h"
+#include "cc/cc_export.h"
 
 namespace base {
 namespace trace_event {
@@ -49,6 +50,15 @@ struct CC_EXPORT BeginFrameArgs {
   };
   static const char* TypeToString(BeginFrameArgsType type);
 
+  static constexpr uint32_t kStartingSourceId = 0;
+  // |source_id| for BeginFrameArgs not created by a BeginFrameSource. Used to
+  // avoid sequence number conflicts of BeginFrameArgs manually fed to an
+  // observer with those fed to the observer by the its BeginFrameSource.
+  static constexpr uint32_t kManualSourceId = UINT32_MAX;
+
+  static constexpr uint64_t kInvalidFrameNumber = 0;
+  static constexpr uint64_t kStartingFrameNumber = 1;
+
   // Creates an invalid set of values.
   BeginFrameArgs();
 
@@ -63,6 +73,8 @@ struct CC_EXPORT BeginFrameArgs {
   // created by searching for "BeginFrameArgs::Create".
   // The location argument should **always** be BEGINFRAME_FROM_HERE macro.
   static BeginFrameArgs Create(CreationLocation location,
+                               uint32_t source_id,
+                               uint64_t sequence_number,
                                base::TimeTicks frame_time,
                                base::TimeTicks deadline,
                                base::TimeDelta interval,
@@ -84,14 +96,50 @@ struct CC_EXPORT BeginFrameArgs {
   base::TimeTicks frame_time;
   base::TimeTicks deadline;
   base::TimeDelta interval;
+
+  // |source_id| and |sequence_number| identify a BeginFrame within a single
+  // process and are set by the original BeginFrameSource that created the
+  // BeginFrameArgs. When |source_id| of consecutive BeginFrameArgs changes,
+  // observers should expect the continuity of |sequence_number| to break.
+  uint64_t sequence_number;
+  uint32_t source_id;  // |source_id| after |sequence_number| for packing.
+
   BeginFrameArgsType type;
   bool on_critical_path;
 
  private:
-  BeginFrameArgs(base::TimeTicks frame_time,
+  BeginFrameArgs(uint32_t source_id,
+                 uint64_t sequence_number,
+                 base::TimeTicks frame_time,
                  base::TimeTicks deadline,
                  base::TimeDelta interval,
                  BeginFrameArgsType type);
+};
+
+// Sent by a BeginFrameObserver as acknowledgment of completing a BeginFrame.
+struct CC_EXPORT BeginFrameAck {
+  BeginFrameAck();
+  BeginFrameAck(uint32_t source_id,
+                uint64_t sequence_number,
+                bool has_damage);
+
+  // Creates a BeginFrameAck for a manual BeginFrame. Used when clients produce
+  // a CompositorFrame without prior BeginFrame, e.g. for synchronous drawing.
+  static BeginFrameAck CreateManualAckWithDamage();
+
+  // Sequence number of the BeginFrame that is acknowledged.
+  uint64_t sequence_number;
+
+  // Source identifier of the BeginFrame that is acknowledged. The
+  // BeginFrameSource that receives the acknowledgment uses this to discard
+  // BeginFrameAcks for BeginFrames sent by a different source. Such a situation
+  // may occur when the BeginFrameSource of the observer changes while a
+  // BeginFrame from the old source is still in flight.
+  uint32_t source_id;  // |source_id| after above fields for packing.
+
+  // |true| if the observer has produced damage (e.g. sent a CompositorFrame or
+  // damaged a surface) as part of responding to the BeginFrame.
+  bool has_damage;
 };
 
 }  // namespace cc

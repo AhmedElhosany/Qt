@@ -17,13 +17,13 @@ struct StructTraits<cc::mojom::CompositorFrameDataView, cc::CompositorFrame> {
     return input.metadata;
   }
 
-  static const cc::TransferableResourceArray& resources(
+  static const std::vector<cc::TransferableResource>& resources(
       const cc::CompositorFrame& input) {
-    return input.delegated_frame_data->resource_list;
+    return input.resource_list;
   }
 
   static const cc::RenderPassList& passes(const cc::CompositorFrame& input) {
-    return input.delegated_frame_data->render_pass_list;
+    return input.render_pass_list;
   }
 
   static bool Read(cc::mojom::CompositorFrameDataView data,

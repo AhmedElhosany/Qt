@@ -51,12 +51,13 @@
 // We mean it.
 //
 
+#include <private/qgsttools_global_p.h>
 #include <qaudioinputselectorcontrol.h>
 #include <QtCore/qstringlist.h>
 
 QT_BEGIN_NAMESPACE
 
-class QGstreamerAudioInputSelector : public QAudioInputSelectorControl
+class Q_GSTTOOLS_EXPORT QGstreamerAudioInputSelector : public QAudioInputSelectorControl
 {
 Q_OBJECT
 public:

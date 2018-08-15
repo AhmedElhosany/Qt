@@ -7,8 +7,8 @@
 #ifndef SkOpCoincidence_DEFINED
 #define SkOpCoincidence_DEFINED
 
+#include "SkArenaAlloc.h"
 #include "SkTDArray.h"
-#include "SkOpTAllocator.h"
 #include "SkOpSpan.h"
 #include "SkPathOpsTypes.h"
 
@@ -17,8 +17,8 @@ class SkOpSpanBase;
 
 class SkCoincidentSpans {
 public:
-    const SkOpPtT* coinPtTEnd() const { return fCoinPtTEnd; }
-    const SkOpPtT* coinPtTStart() const { return fCoinPtTStart; }
+    const SkOpPtT* coinPtTEnd() const;
+    const SkOpPtT* coinPtTStart() const;
 
     // These return non-const pointers so that, as copies, they can be added
     // to a new span pair
@@ -60,15 +60,15 @@ public:
     SkDEBUGCODE(SkOpGlobalState* globalState() { return fGlobalState; })
 
     void init(SkDEBUGCODE(SkOpGlobalState* globalState)) {
-        sk_bzero(this, sizeof(*this)); 
+        sk_bzero(this, sizeof(*this));
         SkDEBUGCODE(fGlobalState = globalState);
     }
 
     SkCoincidentSpans* next() { return fNext; }
     const SkCoincidentSpans* next() const { return fNext; }
     SkCoincidentSpans** nextPtr() { return &fNext; }
-    const SkOpPtT* oppPtTStart() const { return fOppPtTStart; }
-    const SkOpPtT* oppPtTEnd() const { return fOppPtTEnd; }
+    const SkOpPtT* oppPtTStart() const;
+    const SkOpPtT* oppPtTEnd() const;
     // These return non-const pointers so that, as copies, they can be added
     // to a new span pair
     SkOpPtT* oppPtTStartWritable() const { return const_cast<SkOpPtT*>(fOppPtTStart); }
@@ -87,7 +87,7 @@ public:
     }
 
     void setCoinPtTStart(const SkOpPtT* ptT) {
-        SkASSERT(ptT == ptT->span()->ptT());
+        SkOPASSERT(ptT == ptT->span()->ptT());
         SkOPASSERT(!fCoinPtTEnd || ptT->fT != fCoinPtTEnd->fT);
         SkASSERT(!fCoinPtTEnd || fCoinPtTEnd->segment() == ptT->segment());
         fCoinPtTStart = ptT;

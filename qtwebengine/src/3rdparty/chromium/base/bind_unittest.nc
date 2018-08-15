@@ -70,7 +70,7 @@ template <typename T>
 void VoidPolymorphic1(T t) {
 }
 
-#if defined(NCTEST_METHOD_ON_CONST_OBJECT)  // [r"fatal error: binding value of type 'const base::HasRef' to reference to type 'base::NoRef' drops 'const' qualifier"]
+#if defined(NCTEST_METHOD_ON_CONST_OBJECT)  // [r"fatal error: call to pointer to member function of type 'void \(\)' drops 'const' qualifier"]
 
 // Method bound to const-object.
 //
@@ -173,7 +173,7 @@ void WontCompile() {
   method_bound_to_array_cb.Run();
 }
 
-#elif defined(NCTEST_NO_RAW_PTR_FOR_REFCOUNTED_TYPES)  // [r"fatal error: static_assert failed \"A parameter is a refcounted type and needs scoped_refptr.\""]
+#elif defined(NCTEST_NO_RVALUE_RAW_PTR_FOR_REFCOUNTED_TYPES)  // [r"fatal error: static_assert failed \"A parameter is a refcounted type and needs scoped_refptr.\""]
 
 // Refcounted types should not be bound as a raw pointer.
 void WontCompile() {
@@ -183,6 +183,33 @@ void WontCompile() {
       Bind(&VoidPolymorphic1<int*>, &a);
   Callback<void()> ref_count_as_raw_ptr =
       Bind(&VoidPolymorphic1<HasRef*>, &for_raw_ptr);
+}
+
+#elif defined(NCTEST_NO_LVALUE_RAW_PTR_FOR_REFCOUNTED_TYPES)  // [r"fatal error: static_assert failed \"A parameter is a refcounted type and needs scoped_refptr.\""]
+
+// Refcounted types should not be bound as a raw pointer.
+void WontCompile() {
+  HasRef* for_raw_ptr = nullptr;
+  Callback<void()> ref_count_as_raw_ptr =
+      Bind(&VoidPolymorphic1<HasRef*>, for_raw_ptr);
+}
+
+#elif defined(NCTEST_NO_RVALUE_CONST_RAW_PTR_FOR_REFCOUNTED_TYPES)  // [r"fatal error: static_assert failed \"A parameter is a refcounted type and needs scoped_refptr.\""]
+
+// Refcounted types should not be bound as a raw pointer.
+void WontCompile() {
+  const HasRef for_raw_ptr;
+  Callback<void()> ref_count_as_raw_ptr =
+      Bind(&VoidPolymorphic1<const HasRef*>, &for_raw_ptr);
+}
+
+#elif defined(NCTEST_NO_LVALUE_CONST_RAW_PTR_FOR_REFCOUNTED_TYPES)  // [r"fatal error: static_assert failed \"A parameter is a refcounted type and needs scoped_refptr.\""]
+
+// Refcounted types should not be bound as a raw pointer.
+void WontCompile() {
+  const HasRef* for_raw_ptr = nullptr;
+  Callback<void()> ref_count_as_raw_ptr =
+      Bind(&VoidPolymorphic1<const HasRef*>, for_raw_ptr);
 }
 
 #elif defined(NCTEST_WEAKPTR_BIND_MUST_RETURN_VOID)  // [r"fatal error: static_assert failed \"weak_ptrs can only bind to methods without return values\""]
@@ -203,11 +230,11 @@ void WontCompile() {
   Closure callback_mismatches_bind_type = Bind(&VoidPolymorphic1<int>);
 }
 
-#elif defined(NCTEST_DISALLOW_CAPTURING_LAMBDA)  // [r"fatal error: implicit instantiation of undefined template 'base::internal::FunctorTraits<\(lambda at ../../base/bind_unittest.nc:[0-9]+:[0-9]+\), void>'"]
+#elif defined(NCTEST_DISALLOW_CAPTURING_LAMBDA)  // [r"fatal error: implicit instantiation of undefined template 'base::internal::FunctorTraits<\(lambda at (\.\./)+base/bind_unittest.nc:[0-9]+:[0-9]+\), void>'"]
 
 void WontCompile() {
-  int i = 0;
-  Bind([i]() {});
+  int i = 0, j = 0;
+  Bind([i,&j]() {j = i;});
 }
 
 #elif defined(NCTEST_DISALLOW_BINDING_ONCE_CALLBACK_WITH_NO_ARGS)  // [r"static_assert failed \"Attempting to bind a base::Callback with no additional arguments: save a heap allocation and use the original base::Callback object\""]
@@ -222,6 +249,27 @@ void WontCompile() {
 void WontCompile() {
   Closure cb = Bind([] {});
   Closure cb2 = Bind(cb);
+}
+
+#elif defined(NCTEST_DISALLOW_ONCECALLBACK_RUN_ON_LVALUE)  // [r"static_assert failed \"OnceCallback::Run\(\) may only be invoked on a non-const rvalue, i\.e\. std::move\(callback\)\.Run\(\)\.\""]
+
+void WontCompile() {
+  OnceClosure cb = Bind([] {});
+  cb.Run();
+}
+
+#elif defined(NCTEST_DISALLOW_ONCECALLBACK_RUN_ON_CONST_LVALUE)  // [r"static_assert failed \"OnceCallback::Run\(\) may only be invoked on a non-const rvalue, i\.e\. std::move\(callback\)\.Run\(\)\.\""]
+
+void WontCompile() {
+  const OnceClosure cb = Bind([] {});
+  cb.Run();
+}
+
+#elif defined(NCTEST_DISALLOW_ONCECALLBACK_RUN_ON_CONST_RVALUE)  // [r"static_assert failed \"OnceCallback::Run\(\) may only be invoked on a non-const rvalue, i\.e\. std::move\(callback\)\.Run\(\)\.\""]
+
+void WontCompile() {
+  const OnceClosure cb = Bind([] {});
+  std::move(cb).Run();
 }
 
 #endif

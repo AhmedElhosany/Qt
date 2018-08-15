@@ -3,19 +3,21 @@
 # found in the LICENSE file.
 
 source_set("itunes_links") {
+  configs += [ "//build/config/compiler:enable_arc" ]
   sources = [
     "itunes_links_observer.h",
     "itunes_links_observer.mm",
   ]
   deps = [
     "//base",
-    "//ios/chrome/browser",
+    "//ios/chrome/browser/store_kit",
     "//ios/web",
     "//url",
   ]
 }
 
 source_set("unit_tests") {
+  configs += [ "//build/config/compiler:enable_arc" ]
   testonly = true
   sources = [
     "itunes_links_observer_unittest.mm",
@@ -23,8 +25,8 @@ source_set("unit_tests") {
   deps = [
     ":itunes_links",
     "//base",
-    "//ios/chrome/browser",
-    "//ios/web:test_support",
+    "//ios/chrome/browser/store_kit",
+    "//ios/web/public/test/fakes",
     "//testing/gtest",
     "//third_party/ocmock",
     "//url",

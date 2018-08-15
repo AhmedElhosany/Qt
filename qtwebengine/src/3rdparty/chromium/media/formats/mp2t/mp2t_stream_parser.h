@@ -15,17 +15,21 @@
 #include "base/memory/ref_counted.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/byte_queue.h"
+#include "media/base/decrypt_config.h"
 #include "media/base/media_export.h"
 #include "media/base/stream_parser.h"
 #include "media/base/video_decoder_config.h"
 #include "media/formats/mp2t/timestamp_unroller.h"
+#include "media/media_features.h"
 
 namespace media {
 
+class DecryptConfig;
 class StreamParserBuffer;
 
 namespace mp2t {
 
+class Descriptors;
 class PidState;
 
 class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
@@ -41,7 +45,7 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
             const EncryptedMediaInitDataCB& encrypted_media_init_data_cb,
             const NewMediaSegmentCB& new_segment_cb,
             const EndMediaSegmentCB& end_of_segment_cb,
-            const scoped_refptr<MediaLog>& media_log) override;
+            MediaLog* media_log) override;
   void Flush() override;
   bool Parse(const uint8_t* buf, int size) override;
 
@@ -68,7 +72,11 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   // Possible values for |stream_type| are defined in:
   // ISO-13818.1 / ITU H.222 Table 2.34 "Stream type assignments".
   // |pes_pid| is part of the Program Map Table refered by |pmt_pid|.
-  void RegisterPes(int pmt_pid, int pes_pid, int stream_type);
+  // Some stream types are qualified by additional |descriptors|.
+  void RegisterPes(int pmt_pid,
+                   int pes_pid,
+                   int stream_type,
+                   const Descriptors& descriptors);
 
   // Since the StreamParser interface allows only one audio & video streams,
   // an automatic PID filtering should be applied to select the audio & video
@@ -95,6 +103,23 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
       scoped_refptr<StreamParserBuffer> stream_parser_buffer);
   bool EmitRemainingBuffers();
 
+#if BUILDFLAG(ENABLE_HLS_SAMPLE_AES)
+  std::unique_ptr<PidState> MakeCatPidState();
+  void UnregisterCat();
+
+  // Register the PIDs for the Cenc packets (CENC-ECM and CENC-PSSH).
+  void RegisterCencPids(int ca_pid, int pssh_pid);
+  void UnregisterCencPids();
+
+  // Register the DecryptConfig (parsed from CENC-ECM).
+  void RegisterDecryptConfig(const DecryptConfig& config);
+
+  // Register the PSSH (parsed from CENC-PSSH).
+  void RegisterPsshBoxes(const std::vector<uint8_t>& init_data);
+
+  const DecryptConfig* GetDecryptConfig() { return decrypt_config_.get(); }
+#endif
+
   // List of callbacks.
   InitCB init_cb_;
   NewConfigCB config_cb_;
@@ -102,7 +127,7 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   EncryptedMediaInitDataCB encrypted_media_init_data_cb_;
   NewMediaSegmentCB new_segment_cb_;
   EndMediaSegmentCB end_of_segment_cb_;
-  scoped_refptr<MediaLog> media_log_;
+  MediaLog* media_log_;
 
   // True when AAC SBR extension is signalled in the mimetype
   // (mp4a.40.5 in the codecs parameter).
@@ -131,6 +156,10 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   // Timestamps in PES packets must be unrolled using the same offset.
   // So the unroller is global between PES pids.
   TimestampUnroller timestamp_unroller_;
+
+#if BUILDFLAG(ENABLE_HLS_SAMPLE_AES)
+  std::unique_ptr<DecryptConfig> decrypt_config_;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(Mp2tStreamParser);
 };

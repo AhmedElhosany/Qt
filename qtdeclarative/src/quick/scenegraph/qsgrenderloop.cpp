@@ -150,7 +150,7 @@ public:
     QImage grab(QQuickWindow *window) override;
 
     void maybeUpdate(QQuickWindow *window) override;
-    void update(QQuickWindow *window) override{ maybeUpdate(window); } // identical for this implementation.
+    void update(QQuickWindow *window) override { maybeUpdate(window); } // identical for this implementation.
     void handleUpdateRequest(QQuickWindow *) override;
 
     void releaseResources(QQuickWindow *) override;

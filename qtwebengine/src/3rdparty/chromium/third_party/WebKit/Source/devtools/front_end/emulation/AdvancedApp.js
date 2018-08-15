@@ -29,11 +29,11 @@ Emulation.AdvancedApp = class {
 
     this._rootSplitWidget = new UI.SplitWidget(false, true, 'InspectorView.splitViewState', 555, 300, true);
     this._rootSplitWidget.show(rootView.element);
-
     this._rootSplitWidget.setSidebarWidget(UI.inspectorView);
+    this._rootSplitWidget.setDefaultFocusedChild(UI.inspectorView);
     UI.inspectorView.setOwnerSplit(this._rootSplitWidget);
 
-    this._inspectedPagePlaceholder = new Emulation.InspectedPagePlaceholder();
+    this._inspectedPagePlaceholder = Emulation.InspectedPagePlaceholder.instance();
     this._inspectedPagePlaceholder.addEventListener(
         Emulation.InspectedPagePlaceholder.Events.Update, this._onSetInspectedPageBounds.bind(this), this);
     this._deviceModeView = new Emulation.DeviceModeWrapper(this._inspectedPagePlaceholder);
@@ -48,6 +48,7 @@ Emulation.AdvancedApp = class {
 
     console.timeStamp('AdvancedApp.attachToBody');
     rootView.attachToDocument(document);
+    rootView.focus();
     this._inspectedPagePlaceholder.update();
   }
 
@@ -138,7 +139,13 @@ Emulation.AdvancedApp = class {
    * @param {string} dockSide
    */
   _updateForDocked(dockSide) {
-    this._rootSplitWidget.setVertical(dockSide === Components.DockController.State.DockedToRight);
+    this._rootSplitWidget.resizerElement().style.transform =
+        dockSide === Components.DockController.State.DockedToRight ?
+        'translateX(2px)' :
+        dockSide === Components.DockController.State.DockedToLeft ? 'translateX(-2px)' : '';
+    this._rootSplitWidget.setVertical(
+        dockSide === Components.DockController.State.DockedToRight ||
+        dockSide === Components.DockController.State.DockedToLeft);
     this._rootSplitWidget.setSecondIsSidebar(
         dockSide === Components.DockController.State.DockedToRight ||
         dockSide === Components.DockController.State.DockedToBottom);

@@ -55,9 +55,12 @@
 #endif
 #include <private/qguiapplication_p.h>
 #include <private/qrgba64_p.h>
+#include <qloggingcategory.h>
 #include <qmath.h>
 
 QT_BEGIN_NAMESPACE
+
+Q_LOGGING_CATEGORY(lcQtGuiDrawHelper, "qt.gui.drawhelper")
 
 #define MASK(src, a) src = BYTE_MUL(src, a)
 
@@ -1042,7 +1045,7 @@ QPixelLayout qPixelLayouts[QImage::NImageFormats] = {
     { 10,  20, 10,  10, 10, 0, 2, 30,  true, QPixelLayout::BPP32, convertA2RGB30PMToARGB32PM<PixelOrderBGR>, convertA2RGB30PMFromARGB32PM<PixelOrderBGR>, convertRGB30FromRGB32<PixelOrderBGR>, convertA2RGB30PMToARGB64PM<PixelOrderBGR> },  // Format_A2BGR30_Premultiplied
     { 10,  0, 10,  10, 10, 20, 0, 30, false, QPixelLayout::BPP32, convertA2RGB30PMToARGB32PM<PixelOrderRGB>, convertRGB30FromARGB32PM<PixelOrderRGB>, convertRGB30FromRGB32<PixelOrderRGB>, convertA2RGB30PMToARGB64PM<PixelOrderRGB> }, // Format_RGB30
     { 10,  0, 10,  10, 10, 20, 2, 30,  true, QPixelLayout::BPP32, convertA2RGB30PMToARGB32PM<PixelOrderRGB>, convertA2RGB30PMFromARGB32PM<PixelOrderRGB>, convertRGB30FromRGB32<PixelOrderRGB>, convertA2RGB30PMToARGB64PM<PixelOrderRGB> },  // Format_A2RGB30_Premultiplied
-    { 0, 0,  0, 0,  0, 0,  8, 0, false, QPixelLayout::BPP8, convertAlpha8ToRGB32, convertAlpha8FromARGB32PM, 0, convertAlpha8ToRGB64 }, // Format_Alpha8
+    { 0, 0,  0, 0,  0, 0,  8, 0, true, QPixelLayout::BPP8, convertAlpha8ToRGB32, convertAlpha8FromARGB32PM, 0, convertAlpha8ToRGB64 }, // Format_Alpha8
     { 0, 0,  0, 0,  0, 0,  0, 0, false, QPixelLayout::BPP8, convertGrayscale8ToRGB32, convertGrayscale8FromARGB32PM, convertGrayscale8FromRGB32, convertGrayscale8ToRGB64 } // Format_Grayscale8
 };
 
@@ -1942,10 +1945,14 @@ static void QT_FASTCALL fetchTransformedBilinearARGB32PM_simple_upscale_helper(u
     const uint *s1 = (const uint *)image.scanLine(y1);
     const uint *s2 = (const uint *)image.scanLine(y2);
 
-    int disty = (fy & 0x0000ffff) >> 8;
-    int idisty = 256 - disty;
-    int x = fx >> 16;
-    int length = end - b;
+    const int disty = (fy & 0x0000ffff) >> 8;
+    const int idisty = 256 - disty;
+    const int length = end - b;
+
+    // The intermediate buffer is generated in the positive direction
+    const int adjust = (fdx < 0) ? fdx * length : 0;
+    const int offset = (fx + adjust) >> 16;
+    int x = offset;
 
     // The idea is first to do the interpolation between the row s1 and the row s2
     // into an intermediate buffer, then we interpolate between two pixel of this buffer.
@@ -1955,7 +1962,7 @@ static void QT_FASTCALL fetchTransformedBilinearARGB32PM_simple_upscale_helper(u
     // +1 for the last pixel to interpolate with, and +1 for rounding errors.
     quint32 intermediate_buffer[2][buffer_size + 2];
     // count is the size used in the intermediate_buffer.
-    int count = (qint64(length) * fdx + fixed_scale - 1) / fixed_scale + 2;
+    int count = (qint64(length) * qAbs(fdx) + fixed_scale - 1) / fixed_scale + 2;
     Q_ASSERT(count <= buffer_size + 2); //length is supposed to be <= buffer_size and data->m11 < 1 in this case
     int f = 0;
     int lim = count;
@@ -2056,9 +2063,10 @@ static void QT_FASTCALL fetchTransformedBilinearARGB32PM_simple_upscale_helper(u
         intermediate_buffer[1][f] = ((((t>>8) & 0xff00ff) * idisty + ((b>>8) & 0xff00ff) * disty) >> 8) & 0xff00ff;
         x++;
     }
+
     // Now interpolate the values from the intermediate_buffer to get the final result.
-    fx &= fixed_scale - 1;
-    Q_ASSERT((fx >> 16) == 0);
+    fx -= offset * fixed_scale; // Switch to intermediate buffer coordinates
+
     while (b < end) {
         int x1 = (fx >> 16);
         int x2 = x1 + 1;
@@ -2375,7 +2383,7 @@ static void QT_FASTCALL fetchTransformedBilinearARGB32PM_fast_rotate_helper(uint
         __m128i v_fy = _mm_setr_epi32(fy, fy + fdy, fy + fdy + fdy, fy + fdy + fdy + fdy);
 
         const uchar *textureData = image.imageData;
-        const int bytesPerLine = image.bytesPerLine;
+        const qsizetype bytesPerLine = image.bytesPerLine;
         const __m128i vbpl = _mm_shufflelo_epi16(_mm_cvtsi32_si128(bytesPerLine/4), _MM_SHUFFLE(0, 0, 0, 0));
 
         while (b < boundedEnd - 3) {
@@ -2588,14 +2596,14 @@ static const uint * QT_FASTCALL fetchTransformedBilinearARGB32PM(uint *buffer, c
         fy -= half_point;
 
         if (fdy == 0) { // simple scale, no rotation or shear
-            if (fdx <= fixed_scale && fdx > 0) {
-                // simple scale up on X without mirroring
+            if (qAbs(fdx) <= fixed_scale) {
+                // simple scale up on X
                 bilinearFastTransformHelperARGB32PM[tiled][SimpleUpscaleTransform](b, end, data->texture, fx, fy, fdx, fdy);
-            } else if ((fdx < 0 && fdx > -(fixed_scale / 8)) || qAbs(data->m22) < qreal(1./8.)) {
-                // scale up more than 8x (on either Y or on X mirrored)
+            } else if (qAbs(data->m22) < qreal(1./8.)) {
+                // scale up more than 8x (on Y)
                 bilinearFastTransformHelperARGB32PM[tiled][UpscaleTransform](b, end, data->texture, fx, fy, fdx, fdy);
             } else {
-                // scale down on X (or up on X mirrored less than 8x)
+                // scale down on X
                 bilinearFastTransformHelperARGB32PM[tiled][DownscaleTransform](b, end, data->texture, fx, fy, fdx, fdy);
             }
         } else { // rotation or shear
@@ -2658,6 +2666,245 @@ static const uint * QT_FASTCALL fetchTransformedBilinearARGB32PM(uint *buffer, c
     return buffer;
 }
 
+template<TextureBlendType blendType, QPixelLayout::BPP bpp>
+static void QT_FASTCALL fetchTransformedBilinear_simple_upscale_helper(uint *b, uint *end, const QTextureData &image,
+                                                                       int &fx, int &fy, int fdx, int /*fdy*/)
+{
+    const QPixelLayout *layout = &qPixelLayouts[image.format];
+    const QVector<QRgb> *clut = image.colorTable;
+    Q_ASSERT(bpp == QPixelLayout::BPPNone || bpp == layout->bpp);
+    // When templated 'fetch' should be inlined at compile time:
+    const FetchPixelsFunc fetch = (bpp == QPixelLayout::BPPNone) ? qFetchPixels[layout->bpp] : fetchPixels<bpp>;
+    const ConvertFunc convertToARGB32PM = layout->convertToARGB32PM;
+
+    int y1 = (fy >> 16);
+    int y2;
+    fetchTransformedBilinear_pixelBounds<blendType>(image.height, image.y1, image.y2 - 1, y1, y2);
+    const uchar *s1 = image.scanLine(y1);
+    const uchar *s2 = image.scanLine(y2);
+
+    const int disty = (fy & 0x0000ffff) >> 8;
+    const int idisty = 256 - disty;
+    const int length = end - b;
+
+    // The intermediate buffer is generated in the positive direction
+    const int adjust = (fdx < 0) ? fdx * length : 0;
+    const int offset = (fx + adjust) >> 16;
+    int x = offset;
+
+    // The idea is first to do the interpolation between the row s1 and the row s2
+    // into an intermediate buffer, then we interpolate between two pixel of this buffer.
+    // +1 for the last pixel to interpolate with, and +1 for rounding errors.
+    uint buf1[buffer_size + 2];
+    uint buf2[buffer_size + 2];
+    const uint *ptr1;
+    const uint *ptr2;
+
+    int count = (qint64(length) * qAbs(fdx) + fixed_scale - 1) / fixed_scale + 2;
+    Q_ASSERT(count <= buffer_size + 2); //length is supposed to be <= buffer_size and data->m11 < 1 in this case
+
+    if (blendType == BlendTransformedBilinearTiled) {
+        x %= image.width;
+        if (x < 0)
+            x += image.width;
+        int len1 = qMin(count, image.width - x);
+        int len2 = qMin(x, count - len1);
+
+        ptr1 = fetch(buf1, s1, x, len1);
+        ptr1 = convertToARGB32PM(buf1, ptr1, len1, clut, 0);
+        ptr2 = fetch(buf2, s2, x, len1);
+        ptr2 = convertToARGB32PM(buf2, ptr2, len1, clut, 0);
+        for (int i = 0; i < len1; ++i) {
+            uint t = ptr1[i];
+            uint b = ptr2[i];
+            buf1[i] = (((t & 0xff00ff) * idisty + (b & 0xff00ff) * disty) >> 8) & 0xff00ff;
+            buf2[i] = ((((t >> 8) & 0xff00ff) * idisty + ((b >> 8) & 0xff00ff) * disty) >> 8) & 0xff00ff;
+        }
+
+        if (len2) {
+            ptr1 = fetch(buf1 + len1, s1, 0, len2);
+            ptr1 = convertToARGB32PM(buf1 + len1, ptr1, len2, clut, 0);
+            ptr2 = fetch(buf2 + len1, s2, 0, len2);
+            ptr2 = convertToARGB32PM(buf2 + len1, ptr2, len2, clut, 0);
+            for (int i = 0; i < len2; ++i) {
+                uint t = ptr1[i];
+                uint b = ptr2[i];
+                buf1[i + len1] = (((t & 0xff00ff) * idisty + (b & 0xff00ff) * disty) >> 8) & 0xff00ff;
+                buf2[i + len1] = ((((t >> 8) & 0xff00ff) * idisty + ((b >> 8) & 0xff00ff) * disty) >> 8) & 0xff00ff;
+            }
+        }
+        for (int i = image.width; i < count; ++i) {
+            buf1[i] = buf1[i - image.width];
+            buf2[i] = buf2[i - image.width];
+        }
+    } else {
+        int start = qMax(x, image.x1);
+        int end = qMin(x + count, image.x2);
+        int len = qMax(1, end - start);
+        int leading = start - x;
+
+        ptr1 = fetch(buf1 + leading, s1, start, len);
+        ptr1 = convertToARGB32PM(buf1 + leading, ptr1, len, clut, 0);
+        ptr2 = fetch(buf2 + leading, s2, start, len);
+        ptr2 = convertToARGB32PM(buf2 + leading, ptr2, len, clut, 0);
+
+        for (int i = 0; i < len; ++i) {
+            uint t = ptr1[i];
+            uint b = ptr2[i];
+            buf1[i + leading] = (((t & 0xff00ff) * idisty + (b & 0xff00ff) * disty) >> 8) & 0xff00ff;
+            buf2[i + leading] = ((((t >> 8) & 0xff00ff) * idisty + ((b >> 8) & 0xff00ff) * disty) >> 8) & 0xff00ff;
+        }
+
+        for (int i = 0; i < leading; ++i) {
+            buf1[i] = buf1[leading];
+            buf2[i] = buf2[leading];
+        }
+        for (int i = leading + len; i < count; ++i) {
+            buf1[i] = buf1[i - 1];
+            buf2[i] = buf2[i - 1];
+        }
+    }
+
+    // Now interpolate the values from the intermediate_buffer to get the final result.
+    fx -= offset * fixed_scale; // Switch to intermediate buffer coordinates
+
+    while (b < end) {
+        int x1 = (fx >> 16);
+        int x2 = x1 + 1;
+        Q_ASSERT(x1 >= 0);
+        Q_ASSERT(x2 < count);
+
+        int distx = (fx & 0x0000ffff) >> 8;
+        int idistx = 256 - distx;
+        int rb = ((buf1[x1] * idistx + buf1[x2] * distx) >> 8) & 0xff00ff;
+        int ag = (buf2[x1] * idistx + buf2[x2] * distx) & 0xff00ff00;
+        *b++ = rb | ag;
+        fx += fdx;
+    }
+}
+
+
+typedef void (QT_FASTCALL *BilinearFastTransformFetcher)(uint *buf1, uint *buf2, const int len, const QTextureData &image,
+                                                         int fx, int fy, const int fdx, const int fdy);
+
+template<TextureBlendType blendType, QPixelLayout::BPP bpp>
+static void QT_FASTCALL fetchTransformedBilinear_fetcher(uint *buf1, uint *buf2, const int len, const QTextureData &image,
+                                                         int fx, int fy, const int fdx, const int fdy)
+{
+    const QPixelLayout &layout = qPixelLayouts[image.format];
+    Q_ASSERT(bpp == QPixelLayout::BPPNone || bpp == layout.bpp);
+    // When templated 'fetch1' should be inlined at compile time:
+    const FetchPixelFunc fetch1 = (bpp == QPixelLayout::BPPNone) ? qFetchPixel[layout.bpp] : fetchPixel<bpp>;
+    if (fdy == 0) {
+        int y1 = (fy >> 16);
+        int y2;
+        fetchTransformedBilinear_pixelBounds<blendType>(image.height, image.y1, image.y2 - 1, y1, y2);
+        const uchar *s1 = image.scanLine(y1);
+        const uchar *s2 = image.scanLine(y2);
+
+        int i = 0;
+        if (blendType == BlendTransformedBilinear) {
+            for (; i < len; ++i) {
+                int x1 = (fx >> 16);
+                int x2;
+                fetchTransformedBilinear_pixelBounds<blendType>(image.width, image.x1, image.x2 - 1, x1, x2);
+                if (x1 != x2)
+                    break;
+                buf1[i * 2 + 0] = buf1[i * 2 + 1] = fetch1(s1, x1);
+                buf2[i * 2 + 0] = buf2[i * 2 + 1] = fetch1(s2, x1);
+                fx += fdx;
+            }
+            int fastLen = len;
+            if (fdx > 0)
+                fastLen = qMin(fastLen, int((qint64(image.x2 - 1) * fixed_scale - fx) / fdx));
+            else if (fdx < 0)
+                fastLen = qMin(fastLen, int((qint64(image.x1) * fixed_scale - fx) / fdx));
+
+            for (; i < fastLen; ++i) {
+                int x = (fx >> 16);
+                buf1[i * 2 + 0] = fetch1(s1, x);
+                buf1[i * 2 + 1] = fetch1(s1, x + 1);
+                buf2[i * 2 + 0] = fetch1(s2, x);
+                buf2[i * 2 + 1] = fetch1(s2, x + 1);
+                fx += fdx;
+            }
+        }
+
+        for (; i < len; ++i) {
+            int x1 = (fx >> 16);
+            int x2;
+            fetchTransformedBilinear_pixelBounds<blendType>(image.width, image.x1, image.x2 - 1, x1, x2);
+            buf1[i * 2 + 0] = fetch1(s1, x1);
+            buf1[i * 2 + 1] = fetch1(s1, x2);
+            buf2[i * 2 + 0] = fetch1(s2, x1);
+            buf2[i * 2 + 1] = fetch1(s2, x2);
+            fx += fdx;
+        }
+    } else {
+        int i = 0;
+        if (blendType == BlendTransformedBilinear) {
+            for (; i < len; ++i) {
+                int x1 = (fx >> 16);
+                int x2;
+                int y1 = (fy >> 16);
+                int y2;
+                fetchTransformedBilinear_pixelBounds<blendType>(image.width, image.x1, image.x2 - 1, x1, x2);
+                fetchTransformedBilinear_pixelBounds<blendType>(image.height, image.y1, image.y2 - 1, y1, y2);
+                if (x1 != x2 && y1 != y2)
+                    break;
+                const uchar *s1 = image.scanLine(y1);
+                const uchar *s2 = image.scanLine(y2);
+                buf1[i * 2 + 0] = fetch1(s1, x1);
+                buf1[i * 2 + 1] = fetch1(s1, x2);
+                buf2[i * 2 + 0] = fetch1(s2, x1);
+                buf2[i * 2 + 1] = fetch1(s2, x2);
+                fx += fdx;
+                fy += fdy;
+            }
+            int fastLen = len;
+            if (fdx > 0)
+                fastLen = qMin(fastLen, int((qint64(image.x2 - 1) * fixed_scale - fx) / fdx));
+            else if (fdx < 0)
+                fastLen = qMin(fastLen, int((qint64(image.x1) * fixed_scale - fx) / fdx));
+            if (fdy > 0)
+                fastLen = qMin(fastLen, int((qint64(image.y2 - 1) * fixed_scale - fy) / fdy));
+            else if (fdy < 0)
+                fastLen = qMin(fastLen, int((qint64(image.y1) * fixed_scale - fy) / fdy));
+
+            for (; i < fastLen; ++i) {
+                int x = (fx >> 16);
+                int y = (fy >> 16);
+                const uchar *s1 = image.scanLine(y);
+                const uchar *s2 = s1 + image.bytesPerLine;
+                buf1[i * 2 + 0] = fetch1(s1, x);
+                buf1[i * 2 + 1] = fetch1(s1, x + 1);
+                buf2[i * 2 + 0] = fetch1(s2, x);
+                buf2[i * 2 + 1] = fetch1(s2, x + 1);
+                fx += fdx;
+                fy += fdy;
+            }
+        }
+
+        for (; i < len; ++i) {
+            int x1 = (fx >> 16);
+            int x2;
+            int y1 = (fy >> 16);
+            int y2;
+            fetchTransformedBilinear_pixelBounds<blendType>(image.width, image.x1, image.x2 - 1, x1, x2);
+            fetchTransformedBilinear_pixelBounds<blendType>(image.height, image.y1, image.y2 - 1, y1, y2);
+
+            const uchar *s1 = image.scanLine(y1);
+            const uchar *s2 = image.scanLine(y2);
+            buf1[i * 2 + 0] = fetch1(s1, x1);
+            buf1[i * 2 + 1] = fetch1(s1, x2);
+            buf2[i * 2 + 0] = fetch1(s2, x1);
+            buf2[i * 2 + 1] = fetch1(s2, x2);
+            fx += fdx;
+            fy += fdy;
+        }
+    }
+}
+
 // blendType = BlendTransformedBilinear or BlendTransformedBilinearTiled
 template<TextureBlendType blendType, QPixelLayout::BPP bpp>
 static const uint *QT_FASTCALL fetchTransformedBilinear(uint *buffer, const Operator *,
@@ -2665,19 +2912,7 @@ static const uint *QT_FASTCALL fetchTransformedBilinear(uint *buffer, const Oper
 {
     const QPixelLayout *layout = &qPixelLayouts[data->texture.format];
     const QVector<QRgb> *clut = data->texture.colorTable;
-    if (bpp != QPixelLayout::BPPNone) // Like this to not ICE on GCC 5.3.1
-        Q_ASSERT(layout->bpp == bpp);
-    // When templated 'fetch' should be inlined at compile time:
-    const FetchPixelsFunc fetch = (bpp == QPixelLayout::BPPNone) ? qFetchPixels[layout->bpp] : FetchPixelsFunc(fetchPixels<bpp>);
-    const FetchPixelFunc fetch1 = (bpp == QPixelLayout::BPPNone) ? qFetchPixel[layout->bpp] : FetchPixelFunc(fetchPixel<bpp>);
-
-    int image_width = data->texture.width;
-    int image_height = data->texture.height;
-
-    int image_x1 = data->texture.x1;
-    int image_y1 = data->texture.y1;
-    int image_x2 = data->texture.x2 - 1;
-    int image_y2 = data->texture.y2 - 1;
+    Q_ASSERT(bpp == QPixelLayout::BPPNone || layout->bpp == bpp);
 
     const qreal cx = x + qreal(0.5);
     const qreal cy = y + qreal(0.5);
@@ -2693,203 +2928,80 @@ static const uint *QT_FASTCALL fetchTransformedBilinear(uint *buffer, const Oper
         fx -= half_point;
         fy -= half_point;
 
-        if (fdy == 0) { //simple scale, no rotation
-            int y1 = (fy >> 16);
-            int y2;
-            fetchTransformedBilinear_pixelBounds<blendType>(image_height, image_y1, image_y2, y1, y2);
-            const uchar *s1 = data->texture.scanLine(y1);
-            const uchar *s2 = data->texture.scanLine(y2);
-
-            if (fdx <= fixed_scale && fdx > 0) { // scale up on X
-                int disty = (fy & 0x0000ffff) >> 8;
-                int idisty = 256 - disty;
-                int x = fx >> 16;
-
-                // The idea is first to do the interpolation between the row s1 and the row s2
-                // into an intermediate buffer, then we interpolate between two pixel of this buffer.
-                // +1 for the last pixel to interpolate with, and +1 for rounding errors.
-                uint buf1[buffer_size + 2];
-                uint buf2[buffer_size + 2];
-                const uint *ptr1;
-                const uint *ptr2;
-
-                int count = (qint64(length) * fdx + fixed_scale - 1) / fixed_scale + 2;
-                Q_ASSERT(count <= buffer_size + 2); //length is supposed to be <= buffer_size and data->m11 < 1 in this case
-
-                if (blendType == BlendTransformedBilinearTiled) {
-                    x %= image_width;
-                    if (x < 0)
-                        x += image_width;
-                    int len1 = qMin(count, image_width - x);
-                    int len2 = qMin(x, count - len1);
-
-                    ptr1 = fetch(buf1, s1, x, len1);
-                    ptr1 = layout->convertToARGB32PM(buf1, ptr1, len1, clut, 0);
-                    ptr2 = fetch(buf2, s2, x, len1);
-                    ptr2 = layout->convertToARGB32PM(buf2, ptr2, len1, clut, 0);
-                    for (int i = 0; i < len1; ++i) {
-                        uint t = ptr1[i];
-                        uint b = ptr2[i];
-                        buf1[i] = (((t & 0xff00ff) * idisty + (b & 0xff00ff) * disty) >> 8) & 0xff00ff;
-                        buf2[i] = ((((t >> 8) & 0xff00ff) * idisty + ((b >> 8) & 0xff00ff) * disty) >> 8) & 0xff00ff;
-                    }
-
-                    if (len2) {
-                        ptr1 = fetch(buf1 + len1, s1, 0, len2);
-                        ptr1 = layout->convertToARGB32PM(buf1 + len1, ptr1, len2, clut, 0);
-                        ptr2 = fetch(buf2 + len1, s2, 0, len2);
-                        ptr2 = layout->convertToARGB32PM(buf2 + len1, ptr2, len2, clut, 0);
-                        for (int i = 0; i < len2; ++i) {
-                            uint t = ptr1[i];
-                            uint b = ptr2[i];
-                            buf1[i + len1] = (((t & 0xff00ff) * idisty + (b & 0xff00ff) * disty) >> 8) & 0xff00ff;
-                            buf2[i + len1] = ((((t >> 8) & 0xff00ff) * idisty + ((b >> 8) & 0xff00ff) * disty) >> 8) & 0xff00ff;
-                        }
-                    }
-                    for (int i = image_width; i < count; ++i) {
-                        buf1[i] = buf1[i - image_width];
-                        buf2[i] = buf2[i - image_width];
-                    }
-                } else {
-                    int start = qMax(x, image_x1);
-                    int end = qMin(x + count, image_x2 + 1);
-                    int len = qMax(1, end - start);
-                    int leading = start - x;
-
-                    ptr1 = fetch(buf1 + leading, s1, start, len);
-                    ptr1 = layout->convertToARGB32PM(buf1 + leading, ptr1, len, clut, 0);
-                    ptr2 = fetch(buf2 + leading, s2, start, len);
-                    ptr2 = layout->convertToARGB32PM(buf2 + leading, ptr2, len, clut, 0);
-
-                    for (int i = 0; i < len; ++i) {
-                        uint t = ptr1[i];
-                        uint b = ptr2[i];
-                        buf1[i + leading] = (((t & 0xff00ff) * idisty + (b & 0xff00ff) * disty) >> 8) & 0xff00ff;
-                        buf2[i + leading] = ((((t >> 8) & 0xff00ff) * idisty + ((b >> 8) & 0xff00ff) * disty) >> 8) & 0xff00ff;
-                    }
-
-                    for (int i = 0; i < leading; ++i) {
-                        buf1[i] = buf1[leading];
-                        buf2[i] = buf2[leading];
-                    }
-                    for (int i = leading + len; i < count; ++i) {
-                        buf1[i] = buf1[i - 1];
-                        buf2[i] = buf2[i - 1];
-                    }
-                }
-
-                // Now interpolate the values from the intermediate_buffer to get the final result.
-                fx &= fixed_scale - 1;
-                Q_ASSERT((fx >> 16) == 0);
-                for (int i = 0; i < length; ++i) {
-                    int x1 = (fx >> 16);
-                    int x2 = x1 + 1;
-                    Q_ASSERT(x1 >= 0);
-                    Q_ASSERT(x2 < count);
-
-                    int distx = (fx & 0x0000ffff) >> 8;
-                    int idistx = 256 - distx;
-                    int rb = ((buf1[x1] * idistx + buf1[x2] * distx) >> 8) & 0xff00ff;
-                    int ag = (buf2[x1] * idistx + buf2[x2] * distx) & 0xff00ff00;
-                    buffer[i] = rb | ag;
-                    fx += fdx;
-                }
+        if (fdy == 0) { // simple scale, no rotation or shear
+            if (qAbs(fdx) <= fixed_scale) { // scale up on X
+                fetchTransformedBilinear_simple_upscale_helper<blendType, bpp>(buffer, buffer + length, data->texture, fx, fy, fdx, fdy);
             } else {
+                const BilinearFastTransformFetcher fetcher = fetchTransformedBilinear_fetcher<blendType,bpp>;
+
                 uint buf1[buffer_size];
                 uint buf2[buffer_size];
                 uint *b = buffer;
                 while (length) {
                     int len = qMin(length, buffer_size / 2);
-                    int fracX = fx;
-                    for (int i = 0; i < len; ++i) {
-                        int x1 = (fx >> 16);
-                        int x2;
-                        fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
-                        buf1[i * 2 + 0] = fetch1(s1, x1);
-                        buf1[i * 2 + 1] = fetch1(s1, x2);
-                        buf2[i * 2 + 0] = fetch1(s2, x1);
-                        buf2[i * 2 + 1] = fetch1(s2, x2);
-                        fx += fdx;
-                    }
+                    fetcher(buf1, buf2, len, data->texture, fx, fy, fdx, 0);
                     layout->convertToARGB32PM(buf1, buf1, len * 2, clut, 0);
                     layout->convertToARGB32PM(buf2, buf2, len * 2, clut, 0);
 
-                    if ((fdx < 0 && fdx > -(fixed_scale / 8)) || qAbs(data->m22) < qreal(1./8.)) { // scale up more than 8x
+                    if (qAbs(data->m22) < qreal(1./8.)) { // scale up more than 8x (on Y)
                         int disty = (fy & 0x0000ffff) >> 8;
                         for (int i = 0; i < len; ++i) {
-                            int distx = (fracX & 0x0000ffff) >> 8;
+                            int distx = (fx & 0x0000ffff) >> 8;
                             b[i] = interpolate_4_pixels(buf1 + i * 2, buf2 + i * 2, distx, disty);
-                            fracX += fdx;
+                            fx += fdx;
                         }
-                    } else { //scale down
+                    } else {
                         int disty = ((fy & 0x0000ffff) + 0x0800) >> 12;
                         for (int i = 0; i < len; ++i) {
                             uint tl = buf1[i * 2 + 0];
                             uint tr = buf1[i * 2 + 1];
                             uint bl = buf2[i * 2 + 0];
                             uint br = buf2[i * 2 + 1];
-                            int distx = ((fracX & 0x0000ffff) + 0x0800) >> 12;
+                            int distx = ((fx & 0x0000ffff) + 0x0800) >> 12;
                             b[i] = interpolate_4_pixels_16(tl, tr, bl, br, distx, disty);
-                            fracX += fdx;
+                            fx += fdx;
                         }
                     }
                     length -= len;
                     b += len;
                 }
             }
-        } else { //rotation
+        } else { // rotation or shear
+            const BilinearFastTransformFetcher fetcher = fetchTransformedBilinear_fetcher<blendType,bpp>;
+
             uint buf1[buffer_size];
             uint buf2[buffer_size];
             uint *b = buffer;
-
             while (length) {
                 int len = qMin(length, buffer_size / 2);
-                int fracX = fx;
-                int fracY = fy;
-                for (int i = 0; i < len; ++i) {
-                    int x1 = (fx >> 16);
-                    int x2;
-                    int y1 = (fy >> 16);
-                    int y2;
-                    fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
-                    fetchTransformedBilinear_pixelBounds<blendType>(image_height, image_y1, image_y2, y1, y2);
-
-                    const uchar *s1 = data->texture.scanLine(y1);
-                    const uchar *s2 = data->texture.scanLine(y2);
-                    buf1[i * 2 + 0] = fetch1(s1, x1);
-                    buf1[i * 2 + 1] = fetch1(s1, x2);
-                    buf2[i * 2 + 0] = fetch1(s2, x1);
-                    buf2[i * 2 + 1] = fetch1(s2, x2);
-                    fx += fdx;
-                    fy += fdy;
-                }
+                fetcher(buf1, buf2, len, data->texture, fx, fy, fdx, fdy);
                 layout->convertToARGB32PM(buf1, buf1, len * 2, clut, 0);
                 layout->convertToARGB32PM(buf2, buf2, len * 2, clut, 0);
 
-                if (qAbs(data->m11) < qreal(1./8.) || qAbs(data->m22) < qreal(1./8.) ) {
-                    //if we are zooming more than 8 times, we use 8bit precision for the position.
+                if (qAbs(data->m11) < qreal(1./8.)|| qAbs(data->m22) < qreal(1./8.)) {
+                    // If we are zooming more than 8 times, we use 8bit precision for the position.
                     for (int i = 0; i < len; ++i) {
-                        int distx = (fracX & 0x0000ffff) >> 8;
-                        int disty = (fracY & 0x0000ffff) >> 8;
+                        int distx = (fx & 0x0000ffff) >> 8;
+                        int disty = (fy & 0x0000ffff) >> 8;
 
                         b[i] = interpolate_4_pixels(buf1 + i * 2, buf2 + i * 2, distx, disty);
-                        fracX += fdx;
-                        fracY += fdy;
+                        fx += fdx;
+                        fy += fdy;
                     }
                 } else {
-                    //we are zooming less than 8x, use 4bit precision
+                    // We are zooming less than 8x, use 4bit precision
                     for (int i = 0; i < len; ++i) {
                         uint tl = buf1[i * 2 + 0];
                         uint tr = buf1[i * 2 + 1];
                         uint bl = buf2[i * 2 + 0];
                         uint br = buf2[i * 2 + 1];
 
-                        int distx = ((fracX & 0x0000ffff) + 0x0800) >> 12;
-                        int disty = ((fracY & 0x0000ffff) + 0x0800) >> 12;
+                        int distx = ((fx & 0x0000ffff) + 0x0800) >> 12;
+                        int disty = ((fy & 0x0000ffff) + 0x0800) >> 12;
 
                         b[i] = interpolate_4_pixels_16(tl, tr, bl, br, distx, disty);
-                        fracX += fdx;
-                        fracY += fdy;
+                        fx += fdx;
+                        fy += fdy;
                     }
                 }
 
@@ -2898,6 +3010,11 @@ static const uint *QT_FASTCALL fetchTransformedBilinear(uint *buffer, const Oper
             }
         }
     } else {
+        // When templated 'fetch' should be inlined at compile time:
+        const FetchPixelFunc fetch1 = (bpp == QPixelLayout::BPPNone) ? qFetchPixel[layout->bpp] : fetchPixel<bpp>;
+
+        const QTextureData &image = data->texture;
+
         const qreal fdx = data->m11;
         const qreal fdy = data->m12;
         const qreal fdw = data->m13;
@@ -2928,8 +3045,8 @@ static const uint *QT_FASTCALL fetchTransformedBilinear(uint *buffer, const Oper
                 distxs[i] = int((px - x1) * 256);
                 distys[i] = int((py - y1) * 256);
 
-                fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
-                fetchTransformedBilinear_pixelBounds<blendType>(image_height, image_y1, image_y2, y1, y2);
+                fetchTransformedBilinear_pixelBounds<blendType>(image.width, image.x1, image.x2 - 1, x1, x2);
+                fetchTransformedBilinear_pixelBounds<blendType>(image.height, image.y1, image.y2 - 1, y1, y2);
 
                 const uchar *s1 = data->texture.scanLine(y1);
                 const uchar *s2 = data->texture.scanLine(y2);
@@ -2970,20 +3087,8 @@ static const QRgba64 *QT_FASTCALL fetchTransformedBilinear64(QRgba64 *buffer, co
     const QPixelLayout *layout = &qPixelLayouts[data->texture.format];
     const QVector<QRgb> *clut = data->texture.colorTable;
 
-    int image_width = data->texture.width;
-    int image_height = data->texture.height;
-
-    int image_x1 = data->texture.x1;
-    int image_y1 = data->texture.y1;
-    int image_x2 = data->texture.x2 - 1;
-    int image_y2 = data->texture.y2 - 1;
-
     const qreal cx = x + qreal(0.5);
     const qreal cy = y + qreal(0.5);
-
-    const qreal fdx = data->m11;
-    const qreal fdy = data->m12;
-    const qreal fdw = data->m13;
 
     if (data->fast_matrix) {
         // The increment pr x in the scanline
@@ -2996,14 +3101,13 @@ static const QRgba64 *QT_FASTCALL fetchTransformedBilinear64(QRgba64 *buffer, co
         fx -= half_point;
         fy -= half_point;
 
-        if (fdy == 0) { //simple scale, no rotation
-            int y1 = (fy >> 16);
-            int y2;
-            fetchTransformedBilinear_pixelBounds<blendType>(image_height, image_y1, image_y2, y1, y2);
-            const uchar *s1 = data->texture.scanLine(y1);
-            const uchar *s2 = data->texture.scanLine(y2);
+        const BilinearFastTransformFetcher fetcher =
+                (layout->bpp == QPixelLayout::BPP32)
+                        ? fetchTransformedBilinear_fetcher<blendType, QPixelLayout::BPP32>
+                        : fetchTransformedBilinear_fetcher<blendType, QPixelLayout::BPPNone>;
 
-            FetchPixelFunc fetch = qFetchPixel[layout->bpp];
+        if (fdy == 0) { //simple scale, no rotation
+
             uint sbuf1[buffer_size];
             uint sbuf2[buffer_size];
             quint64 buf1[buffer_size];
@@ -3011,84 +3115,19 @@ static const QRgba64 *QT_FASTCALL fetchTransformedBilinear64(QRgba64 *buffer, co
             QRgba64 *b = buffer;
             while (length) {
                 int len = qMin(length, buffer_size / 2);
-                int fracX = fx;
-                int i = 0;
                 int disty = (fy & 0x0000ffff);
 #if defined(__SSE2__)
                 const __m128i vdy = _mm_set1_epi16(disty);
                 const __m128i vidy = _mm_set1_epi16(0x10000 - disty);
-                if (blendType != BlendTransformedBilinearTiled && layout->bpp == QPixelLayout::BPP32) {
-                    for (; i < len; ++i) {
-                        int x1 = (fx >> 16);
-                        int x2;
-                        fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
-                        if (x1 != x2)
-                            break;
-                        sbuf1[i * 2 + 0] = sbuf1[i * 2 + 1] = ((const uint*)s1)[x1];
-                        sbuf2[i * 2 + 0] = sbuf2[i * 2 + 1] = ((const uint*)s2)[x1];
-                        fx += fdx;
-                    }
-                    int fastLen;
-                    if (fdx > 0)
-                        fastLen = qMin(len, int((image_x2 - (fx >> 16)) / data->m11));
-                    else
-                        fastLen = qMin(len, int((image_x1 - (fx >> 16)) / data->m11));
-                    fastLen -= 3;
-
-                    const __m128i v_fdx = _mm_set1_epi32(fdx*4);
-                    __m128i v_fx = _mm_setr_epi32(fx, fx + fdx, fx + fdx + fdx, fx + fdx + fdx + fdx);
-                    for (; i < fastLen; i += 4) {
-                        int offset = _mm_extract_epi16(v_fx, 1);
-                        sbuf1[i * 2 + 0] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 1] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 0] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 1] = ((const uint*)s2)[offset + 1];
-                        offset = _mm_extract_epi16(v_fx, 3);
-                        sbuf1[i * 2 + 2] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 3] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 2] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 3] = ((const uint*)s2)[offset + 1];
-                        offset = _mm_extract_epi16(v_fx, 5);
-                        sbuf1[i * 2 + 4] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 5] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 4] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 5] = ((const uint*)s2)[offset + 1];
-                        offset = _mm_extract_epi16(v_fx, 7);
-                        sbuf1[i * 2 + 6] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 7] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 6] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 7] = ((const uint*)s2)[offset + 1];
-                        v_fx = _mm_add_epi32(v_fx, v_fdx);
-                    }
-                    fx = _mm_cvtsi128_si32(v_fx);
-                }
 #endif
-                for (; i < len; ++i) {
-                    int x1 = (fx >> 16);
-                    int x2;
-                    fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
+                fetcher(sbuf1, sbuf2, len, data->texture, fx, fy, fdx, fdy);
 
-                    if (layout->bpp == QPixelLayout::BPP32) {
-                        sbuf1[i * 2 + 0] = ((const uint*)s1)[x1];
-                        sbuf1[i * 2 + 1] = ((const uint*)s1)[x2];
-                        sbuf2[i * 2 + 0] = ((const uint*)s2)[x1];
-                        sbuf2[i * 2 + 1] = ((const uint*)s2)[x2];
-
-                    } else {
-                        sbuf1[i * 2 + 0] = fetch(s1, x1);
-                        sbuf1[i * 2 + 1] = fetch(s1, x2);
-                        sbuf2[i * 2 + 0] = fetch(s2, x1);
-                        sbuf2[i * 2 + 1] = fetch(s2, x2);
-                    }
-
-                    fx += fdx;
-                }
                 layout->convertToARGB64PM((QRgba64 *)buf1, sbuf1, len * 2, clut, 0);
                 if (disty)
                     layout->convertToARGB64PM((QRgba64 *)buf2, sbuf2, len * 2, clut, 0);
 
                 for (int i = 0; i < len; ++i) {
-                    int distx = (fracX & 0x0000ffff);
+                    int distx = (fx & 0x0000ffff);
 #if defined(__SSE2__)
                     __m128i vt = _mm_loadu_si128((const __m128i*)(buf1 + i*2));
                     if (disty) {
@@ -3107,13 +3146,12 @@ static const QRgba64 *QT_FASTCALL fetchTransformedBilinear64(QRgba64 *buffer, co
 #else
                     b[i] = interpolate_4_pixels_rgb64((QRgba64 *)buf1 + i*2, (QRgba64 *)buf2 + i*2, distx, disty);
 #endif
-                    fracX += fdx;
+                    fx += fdx;
                 }
                 length -= len;
                 b += len;
             }
         } else { //rotation
-            FetchPixelFunc fetch = qFetchPixel[layout->bpp];
             uint sbuf1[buffer_size];
             uint sbuf2[buffer_size];
             quint64 buf1[buffer_size];
@@ -3123,117 +3161,18 @@ static const QRgba64 *QT_FASTCALL fetchTransformedBilinear64(QRgba64 *buffer, co
 
             while (b < end) {
                 int len = qMin(length, buffer_size / 2);
-                int fracX = fx;
-                int fracY = fy;
-                int i = 0;
-#if defined(__SSE2__)
-                if (blendType != BlendTransformedBilinearTiled && layout->bpp == QPixelLayout::BPP32) {
-                    for (; i < len; ++i) {
-                        int x1 = (fx >> 16);
-                        int x2;
-                        int y1 = (fy >> 16);
-                        int y2;
-                        fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
-                        fetchTransformedBilinear_pixelBounds<blendType>(image_height, image_y1, image_y2, y1, y2);
-                        if (x1 != x2 && y1 != y2)
-                            break;
-                        const uchar *s1 = data->texture.scanLine(y1);
-                        const uchar *s2 = data->texture.scanLine(y2);
-                        sbuf1[i * 2 + 0] = ((const uint*)s1)[x1];
-                        sbuf1[i * 2 + 1] = ((const uint*)s1)[x2];
-                        sbuf2[i * 2 + 0] = ((const uint*)s2)[x1];
-                        sbuf2[i * 2 + 1] = ((const uint*)s2)[x2];
-                        fx += fdx;
-                        fy += fdy;
-                    }
-                    int fastLen = len;
-                    if (fdx > 0)
-                        fastLen = qMin(fastLen, int((qint64(image_x2) * fixed_scale - fx) / fdx));
-                    else if (fdx < 0)
-                        fastLen = qMin(fastLen, int((qint64(image_x1) * fixed_scale - fx) / fdx));
-                    if (fdy > 0)
-                        fastLen = qMin(fastLen, int((qint64(image_y2) * fixed_scale - fy) / fdy));
-                    else if (fdy < 0)
-                        fastLen = qMin(fastLen, int((qint64(image_y1) * fixed_scale - fy) / fdy));
-                    fastLen -= 3;
 
-                    const __m128i v_fdx = _mm_set1_epi32(fdx*4);
-                    const __m128i v_fdy = _mm_set1_epi32(fdy*4);
-                    __m128i v_fx = _mm_setr_epi32(fx, fx + fdx, fx + fdx + fdx, fx + fdx + fdx + fdx);
-                    __m128i v_fy = _mm_setr_epi32(fy, fy + fdy, fy + fdy + fdy, fy + fdy + fdy + fdy);
-                    const int bytesPerLine = data->texture.bytesPerLine;
-                    const uchar *s1 = data->texture.imageData;
-                    const uchar *s2 = s1 + bytesPerLine;
-                    const __m128i vbpl = _mm_shufflelo_epi16(_mm_cvtsi32_si128(bytesPerLine/4), _MM_SHUFFLE(0, 0, 0, 0));
-                    for (; i < fastLen; i += 4) {
-                        const __m128i vy = _mm_packs_epi32(_mm_srai_epi32(v_fy, 16), _mm_setzero_si128());
-                        __m128i voffset = _mm_unpacklo_epi16(_mm_mullo_epi16(vy, vbpl), _mm_mulhi_epu16(vy, vbpl));
-                        voffset = _mm_add_epi32(voffset, _mm_srli_epi32(v_fx, 16));
+                fetcher(sbuf1, sbuf2, len, data->texture, fx, fy, fdx, fdy);
 
-                        int offset = _mm_cvtsi128_si32(voffset); voffset = _mm_srli_si128(voffset, 4);
-                        sbuf1[i * 2 + 0] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 1] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 0] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 1] = ((const uint*)s2)[offset + 1];
-                        offset = _mm_cvtsi128_si32(voffset); voffset = _mm_srli_si128(voffset, 4);
-                        sbuf1[i * 2 + 2] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 3] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 2] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 3] = ((const uint*)s2)[offset + 1];
-                        offset = _mm_cvtsi128_si32(voffset); voffset = _mm_srli_si128(voffset, 4);
-                        sbuf1[i * 2 + 4] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 5] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 4] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 5] = ((const uint*)s2)[offset + 1];
-                        offset = _mm_cvtsi128_si32(voffset);
-                        sbuf1[i * 2 + 6] = ((const uint*)s1)[offset];
-                        sbuf1[i * 2 + 7] = ((const uint*)s1)[offset + 1];
-                        sbuf2[i * 2 + 6] = ((const uint*)s2)[offset];
-                        sbuf2[i * 2 + 7] = ((const uint*)s2)[offset + 1];
-
-                        v_fx = _mm_add_epi32(v_fx, v_fdx);
-                        v_fy = _mm_add_epi32(v_fy, v_fdy);
-                    }
-                    fx = _mm_cvtsi128_si32(v_fx);
-                    fy = _mm_cvtsi128_si32(v_fy);
-                }
-#endif
-                for (; i < len; ++i) {
-                    int x1 = (fx >> 16);
-                    int x2;
-                    int y1 = (fy >> 16);
-                    int y2;
-                    fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
-                    fetchTransformedBilinear_pixelBounds<blendType>(image_height, image_y1, image_y2, y1, y2);
-
-                    const uchar *s1 = data->texture.scanLine(y1);
-                    const uchar *s2 = data->texture.scanLine(y2);
-
-                    if (layout->bpp == QPixelLayout::BPP32) {
-                        sbuf1[i * 2 + 0] = ((const uint*)s1)[x1];
-                        sbuf1[i * 2 + 1] = ((const uint*)s1)[x2];
-                        sbuf2[i * 2 + 0] = ((const uint*)s2)[x1];
-                        sbuf2[i * 2 + 1] = ((const uint*)s2)[x2];
-
-                    } else {
-                        sbuf1[i * 2 + 0] = fetch(s1, x1);
-                        sbuf1[i * 2 + 1] = fetch(s1, x2);
-                        sbuf2[i * 2 + 0] = fetch(s2, x1);
-                        sbuf2[i * 2 + 1] = fetch(s2, x2);
-                    }
-
-                    fx += fdx;
-                    fy += fdy;
-                }
                 layout->convertToARGB64PM((QRgba64 *)buf1, sbuf1, len * 2, clut, 0);
                 layout->convertToARGB64PM((QRgba64 *)buf2, sbuf2, len * 2, clut, 0);
 
                 for (int i = 0; i < len; ++i) {
-                    int distx = (fracX & 0x0000ffff);
-                    int disty = (fracY & 0x0000ffff);
+                    int distx = (fx & 0x0000ffff);
+                    int disty = (fy & 0x0000ffff);
                     b[i] = interpolate_4_pixels_rgb64((QRgba64 *)buf1 + i*2, (QRgba64 *)buf2 + i*2, distx, disty);
-                    fracX += fdx;
-                    fracY += fdy;
+                    fx += fdx;
+                    fy += fdy;
                 }
 
                 length -= len;
@@ -3241,6 +3180,12 @@ static const QRgba64 *QT_FASTCALL fetchTransformedBilinear64(QRgba64 *buffer, co
             }
         }
     } else {
+        const QTextureData &image = data->texture;
+
+        const qreal fdx = data->m11;
+        const qreal fdy = data->m12;
+        const qreal fdw = data->m13;
+
         qreal fx = data->m21 * cy + data->m11 * cx + data->dx;
         qreal fy = data->m22 * cy + data->m12 * cx + data->dy;
         qreal fw = data->m23 * cy + data->m13 * cx + data->m33;
@@ -3270,8 +3215,8 @@ static const QRgba64 *QT_FASTCALL fetchTransformedBilinear64(QRgba64 *buffer, co
                 distxs[i] = int((px - x1) * (1<<16));
                 distys[i] = int((py - y1) * (1<<16));
 
-                fetchTransformedBilinear_pixelBounds<blendType>(image_width, image_x1, image_x2, x1, x2);
-                fetchTransformedBilinear_pixelBounds<blendType>(image_height, image_y1, image_y2, y1, y2);
+                fetchTransformedBilinear_pixelBounds<blendType>(image.width, image.x1, image.x2 - 1, x1, x2);
+                fetchTransformedBilinear_pixelBounds<blendType>(image.height, image.y1, image.y2 - 1, y1, y2);
 
                 const uchar *s1 = data->texture.scanLine(y1);
                 const uchar *s2 = data->texture.scanLine(y2);
@@ -3842,7 +3787,7 @@ void blend_color_generic_rgb64(int count, const QSpan *spans, void *userData)
     QSpanData *data = reinterpret_cast<QSpanData *>(userData);
     Operator op = getOperator(data, spans, count);
     if (!op.funcSolid64) {
-        qDebug("unsupported 64bit blend attempted");
+        qCDebug(lcQtGuiDrawHelper, "blend_color_generic_rgb64: unsupported 64bit blend attempted, falling back to 32-bit");
         return blend_color_generic(count, spans, userData);
     }
 
@@ -4080,7 +4025,7 @@ static void blend_src_generic_rgb64(int count, const QSpan *spans, void *userDat
     if (blend64.isSupported())
         handleSpans(count, spans, data, blend64);
     else {
-        qDebug("blend_src_generic_rgb64: unsupported 64-bit blend attempted");
+        qCDebug(lcQtGuiDrawHelper, "blend_src_generic_rgb64: unsupported 64-bit blend attempted, falling back to 32-bit");
         BlendSrcGeneric blend32(data, op);
         handleSpans(count, spans, data, blend32);
     }
@@ -4137,7 +4082,7 @@ static void blend_untransformed_generic_rgb64(int count, const QSpan *spans, voi
 
     Operator op = getOperator(data, spans, count);
     if (!op.func64) {
-        qWarning("Unsupported blend");
+        qCDebug(lcQtGuiDrawHelper, "blend_untransformed_generic_rgb64: unsupported 64-bit blend attempted, falling back to 32-bit");
         return blend_untransformed_generic(count, spans, userData);
     }
     quint64 buffer[buffer_size];
@@ -4378,7 +4323,7 @@ static void blend_tiled_generic_rgb64(int count, const QSpan *spans, void *userD
 
     Operator op = getOperator(data, spans, count);
     if (!op.func64) {
-        qDebug("unsupported rgb64 blend");
+        qCDebug(lcQtGuiDrawHelper, "blend_tiled_generic_rgb64: unsupported 64-bit blend attempted, falling back to 32-bit");
         return blend_tiled_generic(count, spans, userData);
     }
     quint64 buffer[buffer_size];
@@ -4774,6 +4719,7 @@ static void blend_transformed_argb(int count, const QSpan *spans, void *userData
 
     CompositionFunction func = functionForMode[data->rasterBuffer->compositionMode];
     uint buffer[buffer_size];
+    quint32 mask = (data->texture.format == QImage::Format_RGB32) ? 0xff000000 : 0;
 
     const int image_x1 = data->texture.x1;
     const int image_y1 = data->texture.y1;
@@ -4807,7 +4753,7 @@ static void blend_transformed_argb(int count, const QSpan *spans, void *userData
                 while (b < end) {
                     int px = qBound(image_x1, x >> 16, image_x2);
                     int py = qBound(image_y1, y >> 16, image_y2);
-                    *b = reinterpret_cast<const uint *>(data->texture.scanLine(py))[px];
+                    *b = reinterpret_cast<const uint *>(data->texture.scanLine(py))[px] | mask;
 
                     x += fdx;
                     y += fdy;
@@ -4848,7 +4794,7 @@ static void blend_transformed_argb(int count, const QSpan *spans, void *userData
                     const int px = qBound(image_x1, int(tx) - (tx < 0), image_x2);
                     const int py = qBound(image_y1, int(ty) - (ty < 0), image_y2);
 
-                    *b = reinterpret_cast<const uint *>(data->texture.scanLine(py))[px];
+                    *b = reinterpret_cast<const uint *>(data->texture.scanLine(py))[px] | mask;
                     x += fdx;
                     y += fdy;
                     w += fdw;
@@ -5014,7 +4960,7 @@ static void blend_transformed_tiled_argb(int count, const QSpan *spans, void *us
 
     int image_width = data->texture.width;
     int image_height = data->texture.height;
-    const int scanline_offset = data->texture.bytesPerLine / 4;
+    const qsizetype scanline_offset = data->texture.bytesPerLine / 4;
 
     if (data->fast_matrix) {
         // The increment pr x in the scanline
@@ -5354,7 +5300,7 @@ inline void qt_bitmapblit_template(QRasterBuffer *rasterBuffer,
                                    int mapWidth, int mapHeight, int mapStride)
 {
     DST *dest = reinterpret_cast<DST *>(rasterBuffer->scanLine(y)) + x;
-    const int destStride = rasterBuffer->bytesPerLine() / sizeof(DST);
+    const int destStride = rasterBuffer->stride<DST>();
 
     if (mapWidth > 8) {
         while (mapHeight--) {
@@ -5670,7 +5616,7 @@ void qt_alphamapblit_quint16(QRasterBuffer *rasterBuffer,
 
     if (!clip) {
         quint16 *dest = reinterpret_cast<quint16*>(rasterBuffer->scanLine(y)) + x;
-        const int destStride = rasterBuffer->bytesPerLine() / sizeof(quint16);
+        const int destStride = rasterBuffer->stride<quint16>();
         while (mapHeight--) {
             for (int i = 0; i < mapWidth; ++i)
                 alphamapblend_quint16(map[i], dest, i, c);
@@ -5745,7 +5691,7 @@ static void qt_alphamapblit_argb32(QRasterBuffer *rasterBuffer,
                                    const QClipData *clip, bool useGammaCorrection)
 {
     const quint32 c = color.toArgb32();
-    const int destStride = rasterBuffer->bytesPerLine() / sizeof(quint32);
+    const int destStride = rasterBuffer->stride<quint32>();
 
     if (color.isTransparent())
         return;
@@ -5943,7 +5889,7 @@ static void qt_alphargbblit_argb32(QRasterBuffer *rasterBuffer,
 
     if (!clip) {
         quint32 *dst = reinterpret_cast<quint32*>(rasterBuffer->scanLine(y)) + x;
-        const int destStride = rasterBuffer->bytesPerLine() / sizeof(quint32);
+        const int destStride = rasterBuffer->stride<quint32>();
         while (mapHeight--) {
             for (int i = 0; i < mapWidth; ++i) {
                 const uint coverage = src[i];

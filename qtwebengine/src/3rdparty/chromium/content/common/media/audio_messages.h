@@ -16,18 +16,13 @@
 #include "media/audio/audio_input_ipc.h"
 #include "media/audio/audio_output_ipc.h"
 #include "media/base/ipc/media_param_traits.h"
+#include "media/base/ipc/media_param_traits_macros.h"
 #include "media/gpu/ipc/common/media_param_traits.h"
 #include "url/origin.h"
 
 #undef IPC_MESSAGE_EXPORT
 #define IPC_MESSAGE_EXPORT CONTENT_EXPORT
 #define IPC_MESSAGE_START AudioMsgStart
-
-IPC_ENUM_TRAITS_MAX_VALUE(media::AudioInputIPCDelegateState,
-                          media::AUDIO_INPUT_IPC_DELEGATE_STATE_LAST)
-
-IPC_ENUM_TRAITS_MAX_VALUE(media::OutputDeviceStatus,
-                          media::OUTPUT_DEVICE_STATUS_MAX)
 
 IPC_STRUCT_BEGIN(AudioInputHostMsg_CreateStream_Config)
   IPC_STRUCT_MEMBER(media::AudioParameters, params)
@@ -59,28 +54,29 @@ IPC_MESSAGE_CONTROL4(
     uint32_t /* length */)
 
 // Tell the renderer process that an audio input stream has been created.
-// The renderer process would be given a SyncSocket that it should read
-// from from then on. It is also given number of segments in shared memory.
-IPC_MESSAGE_CONTROL5(
-    AudioInputMsg_NotifyStreamCreated,
-    int /* stream id */,
-    base::SharedMemoryHandle /* handle */,
-    base::SyncSocket::TransitDescriptor /* socket descriptor */,
-    uint32_t /* length */,
-    uint32_t /* segment count */)
+// The renderer process would be given a SyncSocket that it should read from
+// from then on. It is also given number of segments in shared memory and
+// whether the stream initially is muted.
+IPC_MESSAGE_CONTROL(AudioInputMsg_NotifyStreamCreated,
+                    int /* stream id */,
+                    base::SharedMemoryHandle /* handle */,
+                    base::SyncSocket::TransitDescriptor /* socket descriptor */,
+                    uint32_t /* length */,
+                    uint32_t /* segment count */,
+                    bool /* initially muted */)
 
 // Notification message sent from AudioRendererHost to renderer for state
 // update on error.
 IPC_MESSAGE_CONTROL1(AudioMsg_NotifyStreamError, int /* stream id */)
 
 // Notification message sent from browser to renderer for state update.
-IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyStreamStateChanged,
-                     int /* stream id */,
-                     media::AudioInputIPCDelegateState /* new state */)
+IPC_MESSAGE_CONTROL1(AudioInputMsg_NotifyStreamError, int /* stream id */)
 
-IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyStreamVolume,
+// Notification message sent from browser to renderer when stream mutes or
+// unmutes.
+IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyStreamMuted,
                      int /* stream id */,
-                     double /* volume */)
+                     bool /* is muted? */)
 
 // Messages sent from the renderer to the browser.
 

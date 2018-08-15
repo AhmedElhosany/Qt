@@ -42,6 +42,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "content/public/browser/content_browser_client.h"
+#include "ppapi/features/features.h"
 
 #include <QtGlobal>
 
@@ -53,7 +54,7 @@ namespace content {
 class BrowserContext;
 class BrowserMainParts;
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
 class BrowserPpapiHost;
 #endif
 
@@ -65,14 +66,11 @@ class ResourceContext;
 class WebContentsViewPort;
 class WebContents;
 struct MainFunctionParams;
+struct Referrer;
 }
 
 namespace gl {
 class GLShareGroup;
-}
-
-namespace service_manager {
-class InterfaceRegistry;
 }
 
 namespace QtWebEngineCore {
@@ -93,6 +91,9 @@ public:
     gl::GLShareGroup* GetInProcessGpuShareGroup() override;
     content::MediaObserver* GetMediaObserver() override;
     content::QuotaPermissionContext *CreateQuotaPermissionContext() override;
+    void GetQuotaSettings(content::BrowserContext *context,
+                        content::StoragePartition *partition,
+                        storage::OptionalQuotaSettingsCallback callback) override;
     void OverrideWebkitPrefs(content::RenderViewHost *, content::WebPreferences *) override;
     void AllowCertificateError(content::WebContents* web_contents,
                                        int cert_error,
@@ -105,6 +106,7 @@ public:
                                        const base::Callback<void(content::CertificateRequestResultType)>& callback) override;
     void SelectClientCertificate(content::WebContents* web_contents,
                                          net::SSLCertRequestInfo* cert_request_info,
+                                         net::ClientCertIdentityList client_certs,
                                          std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
     content::DevToolsManagerDelegate *GetDevToolsManagerDelegate() override;
 
@@ -113,20 +115,43 @@ public:
     void AppendExtraCommandLineSwitches(base::CommandLine* command_line, int child_process_id) override;
     void GetAdditionalWebUISchemes(std::vector<std::string>* additional_schemes) override;
 
-    void RegisterRenderFrameMojoInterfaces(service_manager::InterfaceRegistry* registry, content::RenderFrameHost* render_frame_host) override;
+    void BindInterfaceRequestFromFrame(content::RenderFrameHost* render_frame_host,
+                                       const std::string& interface_name,
+                                       mojo::ScopedMessagePipeHandle interface_pipe) override;
+    void ExposeInterfacesToRenderer(service_manager::BinderRegistry *registry,
+                                    content::AssociatedInterfaceRegistry *associated_registry,
+                                    content::RenderProcessHost *render_process_host) override;
+
+    bool CanCreateWindow(
+        content::RenderFrameHost* opener,
+        const GURL& opener_url,
+        const GURL& opener_top_level_frame_url,
+        const GURL& source_origin,
+        content::mojom::WindowContainerType container_type,
+        const GURL& target_url,
+        const content::Referrer& referrer,
+        const std::string& frame_name,
+        WindowOpenDisposition disposition,
+        const blink::mojom::WindowFeatures& features,
+        bool user_gesture,
+        bool opener_suppressed,
+        bool* no_javascript_access) override;
 
 #if defined(Q_OS_LINUX)
     void GetAdditionalMappedFilesForChildProcess(const base::CommandLine& command_line, int child_process_id, content::FileDescriptorInfo* mappings) override;
 #endif
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
     void DidCreatePpapiPlugin(content::BrowserPpapiHost* browser_host) override;
 #endif
 
 private:
+    void InitFrameInterfaces();
     BrowserMainPartsQt* m_browserMainParts;
     std::unique_ptr<ResourceDispatcherHostDelegateQt> m_resourceDispatcherHostDelegate;
     scoped_refptr<ShareGroupQtQuick> m_shareGroupQtQuick;
+    std::unique_ptr<service_manager::BinderRegistry> m_frameInterfaces;
+    std::unique_ptr<service_manager::BinderRegistryWithArgs<content::RenderFrameHost*>> m_frameInterfacesParameterized;
 };
 
 } // namespace QtWebEngineCore

@@ -23,6 +23,10 @@ bool TestSafeBrowsingDatabaseManager::CanCheckResourceType(
   return false;
 }
 
+bool TestSafeBrowsingDatabaseManager::CanCheckSubresourceFilter() const {
+  return false;
+}
+
 bool TestSafeBrowsingDatabaseManager::CanCheckUrl(const GURL& url) const {
   NOTIMPLEMENTED();
   return false;
@@ -33,8 +37,10 @@ bool TestSafeBrowsingDatabaseManager::ChecksAreAlwaysAsync() const {
   return false;
 }
 
-bool TestSafeBrowsingDatabaseManager::CheckBrowseUrl(const GURL& url,
-                                                     Client* client) {
+bool TestSafeBrowsingDatabaseManager::CheckBrowseUrl(
+    const GURL& url,
+    const SBThreatTypeSet& threat_types,
+    Client* client) {
   NOTIMPLEMENTED();
   return true;
 }
@@ -57,6 +63,20 @@ bool TestSafeBrowsingDatabaseManager::CheckResourceUrl(const GURL& url,
                                                        Client* client) {
   NOTIMPLEMENTED();
   return true;
+}
+
+bool TestSafeBrowsingDatabaseManager::CheckUrlForSubresourceFilter(
+    const GURL& url,
+    Client* client) {
+  NOTIMPLEMENTED();
+  return true;
+}
+
+AsyncMatch TestSafeBrowsingDatabaseManager::CheckCsdWhitelistUrl(
+    const GURL& url,
+    Client* client) {
+  NOTIMPLEMENTED();
+  return AsyncMatch::MATCH;
 }
 
 bool TestSafeBrowsingDatabaseManager::MatchCsdWhitelistUrl(const GURL& url) {
@@ -112,6 +132,18 @@ bool TestSafeBrowsingDatabaseManager::IsMalwareKillSwitchOn() {
 bool TestSafeBrowsingDatabaseManager::IsSupported() const {
   NOTIMPLEMENTED();
   return false;
+}
+
+void TestSafeBrowsingDatabaseManager::StartOnIOThread(
+    net::URLRequestContextGetter* request_context_getter,
+    const V4ProtocolConfig& config) {
+  SafeBrowsingDatabaseManager::StartOnIOThread(request_context_getter, config);
+  enabled_ = true;
+}
+
+void TestSafeBrowsingDatabaseManager::StopOnIOThread(bool shutdown) {
+  enabled_ = false;
+  SafeBrowsingDatabaseManager::StopOnIOThread(shutdown);
 }
 
 }  // namespace safe_browsing

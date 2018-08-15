@@ -15,14 +15,11 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "mojo/public/cpp/bindings/connection_error_callback.h"
 #include "mojo/public/cpp/bindings/interface_ptr_info.h"
 #include "mojo/public/cpp/bindings/lib/interface_ptr_state.h"
 
 namespace mojo {
-
-class AssociatedGroup;
 
 // A pointer to a local proxy of a remote Interface implementation. Uses a
 // message pipe to communicate with the remote implementation, and automatically
@@ -31,15 +28,18 @@ class AssociatedGroup;
 //
 // This class is thread hostile, as is the local proxy it manages, while bound
 // to a message pipe. All calls to this class or the proxy should be from the
-// same thread that bound it. If you need to move the proxy to a different
-// thread, extract the InterfacePtrInfo (containing just the message pipe and
-// any version information) using PassInterface(), pass it to a different
-// thread, and create and bind a new InterfacePtr from that thread. If an
-// InterfacePtr is not bound to a message pipe, it may be bound or destroyed on
-// any thread.
+// same sequence that bound it. If you need to move the proxy to a different
+// sequence, extract the InterfacePtrInfo (containing just the message pipe and
+// any version information) using PassInterface() on the original sequence, pass
+// it to a different sequence, and create and bind a new InterfacePtr from that
+// sequence. If an InterfacePtr is not bound to a message pipe, it may be bound
+// or destroyed on any sequence.
 template <typename Interface>
 class InterfacePtr {
  public:
+  using InterfaceType = Interface;
+  using PtrInfoType = InterfacePtrInfo<Interface>;
+
   // Constructs an unbound InterfacePtr.
   InterfacePtr() {}
   InterfacePtr(decltype(nullptr)) {}
@@ -78,8 +78,7 @@ class InterfacePtr {
   // multiple task runners to a single thread for the purposes of task
   // scheduling.
   void Bind(InterfacePtrInfo<Interface> info,
-            scoped_refptr<base::SingleThreadTaskRunner> runner =
-                base::ThreadTaskRunnerHandle::Get()) {
+            scoped_refptr<base::SingleThreadTaskRunner> runner = nullptr) {
     reset();
     if (info.is_valid())
       internal_state_.Bind(std::move(info), std::move(runner));
@@ -133,7 +132,7 @@ class InterfacePtr {
   // Similar to the method above, but also specifies a disconnect reason.
   void ResetWithReason(uint32_t custom_reason, const std::string& description) {
     if (internal_state_.is_bound())
-      internal_state_.SendDisconnectReason(custom_reason, description);
+      internal_state_.CloseWithReason(custom_reason, description);
     reset();
   }
 
@@ -148,22 +147,23 @@ class InterfacePtr {
   bool encountered_error() const { return internal_state_.encountered_error(); }
 
   // Registers a handler to receive error notifications. The handler will be
-  // called from the thread that owns this InterfacePtr.
+  // called from the sequence that owns this InterfacePtr.
   //
   // This method may only be called after the InterfacePtr has been bound to a
   // message pipe.
-  void set_connection_error_handler(const base::Closure& error_handler) {
-    internal_state_.set_connection_error_handler(error_handler);
+  void set_connection_error_handler(base::OnceClosure error_handler) {
+    internal_state_.set_connection_error_handler(std::move(error_handler));
   }
 
   void set_connection_error_with_reason_handler(
-      const ConnectionErrorWithReasonCallback& error_handler) {
-    internal_state_.set_connection_error_with_reason_handler(error_handler);
+      ConnectionErrorWithReasonCallback error_handler) {
+    internal_state_.set_connection_error_with_reason_handler(
+        std::move(error_handler));
   }
 
   // Unbinds the InterfacePtr and returns the information which could be used
   // to setup an InterfacePtr again. This method may be used to move the proxy
-  // to a different thread (see class comments for details).
+  // to a different sequence (see class comments for details).
   //
   // It is an error to call PassInterface() while:
   //   - there are pending responses; or
@@ -183,14 +183,6 @@ class InterfacePtr {
     return state.PassInterface();
   }
 
-  // Returns the associated group that this object belongs to. Returns null if:
-  //   - this object is not bound; or
-  //   - the interface doesn't have methods to pass associated interface
-  //     pointers or requests.
-  AssociatedGroup* associated_group() {
-    return internal_state_.associated_group();
-  }
-
   bool Equals(const InterfacePtr& other) const {
     if (this == &other)
       return true;
@@ -201,31 +193,15 @@ class InterfacePtr {
   }
 
   // DO NOT USE. Exposed only for internal use and for testing.
-  internal::InterfacePtrState<Interface, true>* internal_state() {
+  internal::InterfacePtrState<Interface>* internal_state() {
     return &internal_state_;
   }
 
-  // Allow InterfacePtr<> to be used in boolean expressions, but not
-  // implicitly convertible to a real bool (which is dangerous).
- private:
-  // TODO(dcheng): Use an explicit conversion operator.
-  typedef internal::InterfacePtrState<Interface, true> InterfacePtr::*Testable;
-
- public:
-  operator Testable() const {
-    return internal_state_.is_bound() ? &InterfacePtr::internal_state_
-                                      : nullptr;
-  }
+  // Allow InterfacePtr<> to be used in boolean expressions.
+  explicit operator bool() const { return internal_state_.is_bound(); }
 
  private:
-  // Forbid the == and != operators explicitly, otherwise InterfacePtr will be
-  // converted to Testable to do == or != comparison.
-  template <typename T>
-  bool operator==(const InterfacePtr<T>& other) const = delete;
-  template <typename T>
-  bool operator!=(const InterfacePtr<T>& other) const = delete;
-
-  typedef internal::InterfacePtrState<Interface, true> State;
+  typedef internal::InterfacePtrState<Interface> State;
   mutable State internal_state_;
 
   DISALLOW_COPY_AND_ASSIGN(InterfacePtr);
@@ -236,8 +212,7 @@ class InterfacePtr {
 template <typename Interface>
 InterfacePtr<Interface> MakeProxy(
     InterfacePtrInfo<Interface> info,
-    scoped_refptr<base::SingleThreadTaskRunner> runner =
-        base::ThreadTaskRunnerHandle::Get()) {
+    scoped_refptr<base::SingleThreadTaskRunner> runner = nullptr) {
   InterfacePtr<Interface> ptr;
   if (info.is_valid())
     ptr.Bind(std::move(info), std::move(runner));

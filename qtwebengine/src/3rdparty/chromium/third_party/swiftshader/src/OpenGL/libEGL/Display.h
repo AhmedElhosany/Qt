@@ -20,6 +20,7 @@
 #define INCLUDE_DISPLAY_H_
 
 #include "Config.h"
+#include "Common/MutexLock.hpp"
 #include "Sync.hpp"
 #include "common/NameSpace.hpp"
 
@@ -34,8 +35,12 @@ namespace egl
 	const EGLDisplay PRIMARY_DISPLAY  = reinterpret_cast<EGLDisplay>((intptr_t)1);
 	const EGLDisplay HEADLESS_DISPLAY = reinterpret_cast<EGLDisplay>((intptr_t)0xFACE1E55);
 
-	class Display
+	class [[clang::lto_visibility_public]] Display
 	{
+	protected:
+		explicit Display(EGLDisplay eglDisplay, void *nativeDisplay);
+		virtual ~Display() = 0;
+
 	public:
 		static Display *get(EGLDisplay dpy);
 
@@ -65,18 +70,17 @@ namespace egl
 		EGLint getMinSwapInterval() const;
 		EGLint getMaxSwapInterval() const;
 
+		EGLDisplay getEGLDisplay() const;
 		void *getNativeDisplay() const;
 
 		EGLImageKHR createSharedImage(Image *image);
 		bool destroySharedImage(EGLImageKHR);
-		virtual Image *getSharedImage(EGLImageKHR name);
+		virtual Image *getSharedImage(EGLImageKHR name) = 0;
 
 	private:
-		explicit Display(void *nativeDisplay);
-		~Display();
-
 		sw::Format getDisplayFormat() const;
 
+		const EGLDisplay eglDisplay;
 		void *const nativeDisplay;
 
 		EGLint mMaxSwapInterval;
@@ -91,6 +95,7 @@ namespace egl
 		ContextSet mContextSet;
 
 		typedef std::set<FenceSync*> SyncSet;
+		sw::MutexLock mSyncSetMutex;
 		SyncSet mSyncSet;
 
 		gl::NameSpace<Image> mSharedImageNameSpace;

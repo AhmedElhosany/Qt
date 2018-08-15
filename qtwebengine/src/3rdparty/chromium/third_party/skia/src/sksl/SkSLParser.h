@@ -4,15 +4,16 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
- 
+
 #ifndef SKSL_PARSER
 #define SKSL_PARSER
 
-#include <string>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include "SkSLErrorReporter.h"
+#include "ir/SkSLLayout.h"
 #include "SkSLToken.h"
 
 struct yy_buffer_state;
@@ -32,16 +33,17 @@ struct ASTExpressionStatement;
 struct ASTForStatement;
 struct ASTIfStatement;
 struct ASTInterfaceBlock;
-struct ASTLayout;
-struct ASTModifiers;
 struct ASTParameter;
 struct ASTPrecision;
 struct ASTReturnStatement;
 struct ASTStatement;
 struct ASTSuffix;
+struct ASTSwitchCase;
+struct ASTSwitchStatement;
 struct ASTType;
 struct ASTWhileStatement;
 struct ASTVarDeclarations;
+struct Modifiers;
 class SymbolTable;
 
 /**
@@ -49,7 +51,7 @@ class SymbolTable;
  */
 class Parser {
 public:
-    Parser(std::string text, SymbolTable& types, ErrorReporter& errors);
+    Parser(String text, SymbolTable& types, ErrorReporter& errors);
 
     ~Parser();
 
@@ -62,7 +64,12 @@ public:
 
 private:
     /**
-     * Return the next token from the parse stream.
+     * Return the next token, including whitespace tokens, from the parse stream.
+     */
+    Token nextRawToken();
+
+    /**
+     * Return the next non-whitespace token from the parse stream.
      */
     Token nextToken();
 
@@ -74,28 +81,36 @@ private:
     void pushback(Token t);
 
     /**
-     * Returns the next token without consuming it from the stream. 
+     * Returns the next non-whitespace token without consuming it from the stream.
      */
     Token peek();
 
     /**
-     * Reads the next token and generates an error if it is not the expected type. The 'expected'
-     * string is part of the error message, which reads:
+     * Checks to see if the next token is of the specified type. If so, stores it in result (if
+     * result is non-null) and returns true. Otherwise, pushes it back and returns false.
+     */
+    bool checkNext(Token::Kind kind, Token* result = nullptr);
+
+    /**
+     * Reads the next non-whitespace token and generates an error if it is not the expected type.
+     * The 'expected' string is part of the error message, which reads:
      *
      * "expected <expected>, but found '<actual text>'"
      *
      * If 'result' is non-null, it is set to point to the token that was read.
      * Returns true if the read token was as expected, false otherwise.
      */
-    bool expect(Token::Kind kind, std::string expected, Token* result = nullptr);
+    bool expect(Token::Kind kind, const char* expected, Token* result = nullptr);
+    bool expect(Token::Kind kind, String expected, Token* result = nullptr);
 
-    void error(Position p, std::string msg);
-    
+    void error(Position p, const char* msg);
+    void error(Position p, String msg);
+
     /**
      * Returns true if the 'name' identifier refers to a type name. For instance, isType("int") will
      * always return true.
      */
-    bool isType(std::string name);
+    bool isType(String name);
 
     // these functions parse individual grammar rules from the current parse position; you probably
     // don't need to call any of these outside of the parser. The function declarations in the .cpp
@@ -105,33 +120,39 @@ private:
 
     std::unique_ptr<ASTDeclaration> directive();
 
+    std::unique_ptr<ASTDeclaration> section();
+
     std::unique_ptr<ASTDeclaration> declaration();
 
     std::unique_ptr<ASTVarDeclarations> varDeclarations();
 
     std::unique_ptr<ASTType> structDeclaration();
 
-    std::unique_ptr<ASTVarDeclarations> structVarDeclaration(ASTModifiers modifiers);
+    std::unique_ptr<ASTVarDeclarations> structVarDeclaration(Modifiers modifiers);
 
-    std::unique_ptr<ASTVarDeclarations> varDeclarationEnd(ASTModifiers modifiers,
-                                                          std::unique_ptr<ASTType> type, 
-                                                          std::string name);
+    std::unique_ptr<ASTVarDeclarations> varDeclarationEnd(Modifiers modifiers,
+                                                          std::unique_ptr<ASTType> type,
+                                                          String name);
 
     std::unique_ptr<ASTParameter> parameter();
 
     int layoutInt();
-    
-    ASTLayout layout();
 
-    ASTModifiers modifiers();
+    String layoutCode();
 
-    ASTModifiers modifiersWithDefaults(int defaultFlags);
+    Layout::Key layoutKey();
+
+    Layout layout();
+
+    Modifiers modifiers();
+
+    Modifiers modifiersWithDefaults(int defaultFlags);
 
     std::unique_ptr<ASTStatement> statement();
 
     std::unique_ptr<ASTType> type();
 
-    std::unique_ptr<ASTDeclaration> interfaceBlock(ASTModifiers mods);
+    std::unique_ptr<ASTDeclaration> interfaceBlock(Modifiers mods);
 
     std::unique_ptr<ASTIfStatement> ifStatement();
 
@@ -140,6 +161,10 @@ private:
     std::unique_ptr<ASTWhileStatement> whileStatement();
 
     std::unique_ptr<ASTForStatement> forStatement();
+
+    std::unique_ptr<ASTSwitchCase> switchCase();
+
+    std::unique_ptr<ASTStatement> switchStatement();
 
     std::unique_ptr<ASTReturnStatement> returnStatement();
 
@@ -155,8 +180,10 @@ private:
 
     std::unique_ptr<ASTExpression> expression();
 
+    std::unique_ptr<ASTExpression> commaExpression();
+
     std::unique_ptr<ASTExpression> assignmentExpression();
-    
+
     std::unique_ptr<ASTExpression> ternaryExpression();
 
     std::unique_ptr<ASTExpression> logicalOrExpression();
@@ -195,9 +222,10 @@ private:
 
     bool boolLiteral(bool* dest);
 
-    bool identifier(std::string* dest);
+    bool identifier(String* dest);
 
     void* fScanner;
+    void* fLayoutScanner;
     YY_BUFFER_STATE fBuffer;
     // current parse depth, used to enforce a recursion limit to try to keep us from overflowing the
     // stack on pathological inputs

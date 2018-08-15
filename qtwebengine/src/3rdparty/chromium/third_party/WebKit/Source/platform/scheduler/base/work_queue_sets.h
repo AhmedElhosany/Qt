@@ -13,10 +13,10 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/trace_event/trace_event_argument.h"
+#include "platform/PlatformExport.h"
 #include "platform/scheduler/base/intrusive_heap.h"
 #include "platform/scheduler/base/task_queue_impl.h"
 #include "platform/scheduler/base/work_queue.h"
-#include "public/platform/WebCommon.h"
 
 namespace blink {
 namespace scheduler {
@@ -28,7 +28,7 @@ namespace internal {
 // TaskQueueSelector chooses to run a task a given priority).  The reason this
 // works is because std::map is a tree based associative container and all the
 // values are kept in sorted order.
-class BLINK_PLATFORM_EXPORT WorkQueueSets {
+class PLATFORM_EXPORT WorkQueueSets {
  public:
   WorkQueueSets(size_t num_sets, const char* name);
   ~WorkQueueSets();
@@ -43,7 +43,7 @@ class BLINK_PLATFORM_EXPORT WorkQueueSets {
   void ChangeSetIndex(WorkQueue* queue, size_t set_index);
 
   // O(log num queues)
-  void OnPushQueue(WorkQueue* work_queue);
+  void OnTaskPushedToEmptyQueue(WorkQueue* work_queue);
 
   // If empty it's O(1) amortized, otherwise it's O(log num queues)
   // Assumes |work_queue| contains the lowest enqueue order in the set.
@@ -56,6 +56,12 @@ class BLINK_PLATFORM_EXPORT WorkQueueSets {
   bool GetOldestQueueInSet(size_t set_index, WorkQueue** out_work_queue) const;
 
   // O(1)
+  bool GetOldestQueueAndEnqueueOrderInSet(
+      size_t set_index,
+      WorkQueue** out_work_queue,
+      EnqueueOrder* out_enqueue_order) const;
+
+  // O(1)
   bool IsSetEmpty(size_t set_index) const;
 
 #if DCHECK_IS_ON() || !defined(NDEBUG)
@@ -64,7 +70,7 @@ class BLINK_PLATFORM_EXPORT WorkQueueSets {
   bool ContainsWorkQueueForTest(const WorkQueue* queue) const;
 #endif
 
-  const char* name() const { return name_; }
+  const char* GetName() const { return name_; }
 
  private:
   struct OldestTaskEnqueueOrder {
@@ -83,7 +89,7 @@ class BLINK_PLATFORM_EXPORT WorkQueueSets {
   // For each set |work_queue_heaps_| has a queue of WorkQueue ordered by the
   // oldest task in each WorkQueue.
   std::vector<IntrusiveHeap<OldestTaskEnqueueOrder>> work_queue_heaps_;
-  const char* name_;
+  const char* const name_;
 
   DISALLOW_COPY_AND_ASSIGN(WorkQueueSets);
 };

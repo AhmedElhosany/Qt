@@ -45,13 +45,33 @@ class MockIndexedDBFactory : public IndexedDBFactory {
     OpenProxy(name, connection.get(), request_context_getter, origin,
               data_directory);
   }
-  MOCK_METHOD5(
+  MOCK_METHOD6(
       DeleteDatabase,
       void(const base::string16& name,
            scoped_refptr<net::URLRequestContextGetter> request_context_getter,
            scoped_refptr<IndexedDBCallbacks> callbacks,
            const url::Origin& origin,
-           const base::FilePath& data_directory));
+           const base::FilePath& data_directory,
+           bool force_close));
+  MOCK_METHOD2(AbortTransactionsAndCompactDatabaseProxy,
+               void(base::OnceCallback<void(leveldb::Status)>* callback,
+                    const url::Origin& origin));
+  virtual void AbortTransactionsAndCompactDatabase(
+      base::OnceCallback<void(leveldb::Status)> callback,
+      const url::Origin& origin) {
+    base::OnceCallback<void(leveldb::Status)>* callback_ref = &callback;
+    AbortTransactionsAndCompactDatabaseProxy(callback_ref, origin);
+  }
+  MOCK_METHOD2(AbortTransactionsForDatabaseProxy,
+               void(base::OnceCallback<void(leveldb::Status)>* callback,
+                    const url::Origin& origin));
+  virtual void AbortTransactionsForDatabase(
+      base::OnceCallback<void(leveldb::Status)> callback,
+      const url::Origin& origin) {
+    base::OnceCallback<void(leveldb::Status)>* callback_ref = &callback;
+    AbortTransactionsForDatabaseProxy(callback_ref, origin);
+  }
+
   MOCK_METHOD1(HandleBackingStoreFailure, void(const url::Origin& origin));
   MOCK_METHOD2(HandleBackingStoreCorruption,
                void(const url::Origin& origin,

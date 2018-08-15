@@ -10,9 +10,9 @@
 
 #include "webrtc/modules/audio_coding/codecs/pcm16b/audio_decoder_pcm16b.h"
 
-#include "webrtc/base/checks.h"
 #include "webrtc/modules/audio_coding/codecs/legacy_encoded_audio_frame.h"
 #include "webrtc/modules/audio_coding/codecs/pcm16b/pcm16b.h"
+#include "webrtc/rtc_base/checks.h"
 
 namespace webrtc {
 
@@ -21,7 +21,7 @@ AudioDecoderPcm16B::AudioDecoderPcm16B(int sample_rate_hz, size_t num_channels)
   RTC_DCHECK(sample_rate_hz == 8000 || sample_rate_hz == 16000 ||
              sample_rate_hz == 32000 || sample_rate_hz == 48000)
       << "Unsupported sample rate " << sample_rate_hz;
-  RTC_DCHECK_GE(num_channels, 1u);
+  RTC_DCHECK_GE(num_channels, 1);
 }
 
 void AudioDecoderPcm16B::Reset() {}

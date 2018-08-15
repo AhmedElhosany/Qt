@@ -2,21 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_CRYPTO_AEAD_BASE_DECRYPTER_H_
-#define NET_QUIC_CRYPTO_AEAD_BASE_DECRYPTER_H_
+#ifndef NET_QUIC_CORE_CRYPTO_AEAD_BASE_DECRYPTER_H_
+#define NET_QUIC_CORE_CRYPTO_AEAD_BASE_DECRYPTER_H_
 
-#include <stddef.h>
+#include <cstddef>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "net/base/net_export.h"
 #include "net/quic/core/crypto/quic_decrypter.h"
 #include "net/quic/core/crypto/scoped_evp_aead_ctx.h"
+#include "net/quic/platform/api/quic_export.h"
+#include "net/quic/platform/api/quic_string_piece.h"
 
 namespace net {
 
 // AeadBaseDecrypter is the base class of AEAD QuicDecrypter subclasses.
-class NET_EXPORT_PRIVATE AeadBaseDecrypter : public QuicDecrypter {
+class QUIC_EXPORT_PRIVATE AeadBaseDecrypter : public QuicDecrypter {
  public:
   AeadBaseDecrypter(const EVP_AEAD* aead_alg,
                     size_t key_size,
@@ -25,19 +26,19 @@ class NET_EXPORT_PRIVATE AeadBaseDecrypter : public QuicDecrypter {
   ~AeadBaseDecrypter() override;
 
   // QuicDecrypter implementation
-  bool SetKey(base::StringPiece key) override;
-  bool SetNoncePrefix(base::StringPiece nonce_prefix) override;
-  bool SetPreliminaryKey(base::StringPiece key) override;
+  bool SetKey(QuicStringPiece key) override;
+  bool SetNoncePrefix(QuicStringPiece nonce_prefix) override;
+  bool SetPreliminaryKey(QuicStringPiece key) override;
   bool SetDiversificationNonce(const DiversificationNonce& nonce) override;
-  bool DecryptPacket(QuicPathId path_id,
+  bool DecryptPacket(QuicVersion version,
                      QuicPacketNumber packet_number,
-                     base::StringPiece associated_data,
-                     base::StringPiece ciphertext,
+                     QuicStringPiece associated_data,
+                     QuicStringPiece ciphertext,
                      char* output,
                      size_t* output_length,
                      size_t max_output_length) override;
-  base::StringPiece GetKey() const override;
-  base::StringPiece GetNoncePrefix() const override;
+  QuicStringPiece GetKey() const override;
+  QuicStringPiece GetNoncePrefix() const override;
 
  protected:
   // Make these constants available to the subclasses so that the subclasses
@@ -65,4 +66,4 @@ class NET_EXPORT_PRIVATE AeadBaseDecrypter : public QuicDecrypter {
 
 }  // namespace net
 
-#endif  // NET_QUIC_CRYPTO_AEAD_BASE_DECRYPTER_H_
+#endif  // NET_QUIC_CORE_CRYPTO_AEAD_BASE_DECRYPTER_H_

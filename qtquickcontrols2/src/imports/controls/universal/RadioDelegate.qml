@@ -34,10 +34,12 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Templates 2.2 as T
-import QtQuick.Controls.Universal 2.2
-import QtQuick.Controls.Universal.impl 2.2
+import QtQuick 2.10
+import QtQuick.Templates 2.3 as T
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Controls.Universal 2.3
+import QtQuick.Controls.Universal.impl 2.3
 
 T.RadioDelegate {
     id: control
@@ -55,23 +57,29 @@ T.RadioDelegate {
     topPadding: padding - 1
     bottomPadding: padding + 1
 
+    icon.width: 20
+    icon.height: 20
+    icon.color: Color.transparent(Universal.foreground, enabled ? 1.0 : 0.2)
+
     indicator: RadioIndicator {
         x: text ? (control.mirrored ? control.leftPadding : control.width - width - control.rightPadding) : control.leftPadding + (control.availableWidth - width) / 2
         y: control.topPadding + (control.availableHeight - height) / 2
         control: control
     }
 
-    contentItem: Text {
+    contentItem: IconLabel {
         leftPadding: !control.mirrored ? 0 : control.indicator.width + control.spacing
         rightPadding: control.mirrored ? 0 : control.indicator.width + control.spacing
 
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+        alignment: control.display === IconLabel.IconOnly || control.display === IconLabel.TextUnderIcon ? Qt.AlignCenter : Qt.AlignLeft
+
+        icon: control.icon
         text: control.text
         font: control.font
-        elide: Text.ElideRight
-        verticalAlignment: Text.AlignVCenter
-
-        opacity: enabled ? 1.0 : 0.2
-        color: control.Universal.foreground
+        color: Color.transparent(control.Universal.foreground, enabled ? 1.0 : 0.2)
     }
 
     background: Rectangle {

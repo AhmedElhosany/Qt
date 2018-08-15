@@ -10,12 +10,12 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/rand_util.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/renderer/media/media_stream_video_source.h"
 #include "content/renderer/media/media_stream_video_track.h"
 #include "media/base/bind_to_current_loop.h"
 #include "media/base/video_util.h"
-#include "media/base/yuv_convert.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/ppb_media_stream_video_track.h"
 #include "ppapi/c/ppb_video_frame.h"
@@ -110,20 +110,17 @@ void ConvertFromMediaVideoFrame(const scoped_refptr<media::VideoFrame>& src,
                          dst_size.width(),
                          dst_size.height());
     } else {
-      media::ScaleYUVToRGB32(src->visible_data(VideoFrame::kYPlane),
-                             src->visible_data(VideoFrame::kUPlane),
-                             src->visible_data(VideoFrame::kVPlane),
-                             dst,
-                             src->visible_rect().width(),
-                             src->visible_rect().height(),
-                             dst_size.width(),
-                             dst_size.height(),
-                             src->stride(VideoFrame::kYPlane),
-                             src->stride(VideoFrame::kUPlane),
-                             dst_size.width() * 4,
-                             media::YV12,
-                             media::ROTATE_0,
-                             media::FILTER_BILINEAR);
+      libyuv::YUVToARGBScaleClip(
+          src->visible_data(VideoFrame::kYPlane),
+          src->stride(VideoFrame::kYPlane),
+          src->visible_data(VideoFrame::kUPlane),
+          src->stride(VideoFrame::kUPlane),
+          src->visible_data(VideoFrame::kVPlane),
+          src->stride(VideoFrame::kVPlane), libyuv::FOURCC_YV12,
+          src->visible_rect().width(), src->visible_rect().height(), dst,
+          dst_size.width() * 4, libyuv::FOURCC_ARGB, dst_size.width(),
+          dst_size.height(), 0, 0, dst_size.width(), dst_size.height(),
+          kFilterMode);
     }
   } else if (dst_format == PP_VIDEOFRAME_FORMAT_YV12 ||
              dst_format == PP_VIDEOFRAME_FORMAT_I420) {
@@ -236,7 +233,7 @@ PepperMediaStreamVideoTrackHost::PepperMediaStreamVideoTrackHost(
       frame_data_size_(0),
       type_(kRead),
       weak_factory_(this) {
-  DCHECK(!track_.isNull());
+  DCHECK(!track_.IsNull());
 }
 
 PepperMediaStreamVideoTrackHost::PepperMediaStreamVideoTrackHost(
@@ -251,7 +248,7 @@ PepperMediaStreamVideoTrackHost::PepperMediaStreamVideoTrackHost(
       type_(kWrite),
       weak_factory_(this) {
   InitBlinkTrack();
-  DCHECK(!track_.isNull());
+  DCHECK(!track_.IsNull());
 }
 
 PepperMediaStreamVideoTrackHost::~PepperMediaStreamVideoTrackHost() {
@@ -417,23 +414,7 @@ class PepperMediaStreamVideoTrackHost::VideoSource final
 
   ~VideoSource() final { StopSourceImpl(); }
 
-  void GetCurrentSupportedFormats(
-      int max_requested_width, int max_requested_height,
-      double max_requested_frame_rate,
-      const VideoCaptureDeviceFormatsCB& callback) final {
-    media::VideoCaptureFormats formats;
-    if (host_) {
-      formats.push_back(media::VideoCaptureFormat(
-          host_->plugin_frame_size_,
-          kDefaultOutputFrameRate,
-          ToPixelFormat(host_->plugin_frame_format_)));
-    }
-    callback.Run(formats);
-  }
-
   void StartSourceImpl(
-      const media::VideoCaptureFormat& format,
-      const blink::WebMediaConstraints& constraints,
       const VideoCaptureDeliverFrameCB& frame_callback) final {
     if (host_) {
       host_->frame_deliverer_ =
@@ -447,13 +428,23 @@ class PepperMediaStreamVideoTrackHost::VideoSource final
   }
 
  private:
+  base::Optional<media::VideoCaptureFormat> GetCurrentFormat() const override {
+    if (host_) {
+      return base::Optional<media::VideoCaptureFormat>(
+          media::VideoCaptureFormat(
+              host_->plugin_frame_size_, kDefaultOutputFrameRate,
+              ToPixelFormat(host_->plugin_frame_format_)));
+    }
+    return base::Optional<media::VideoCaptureFormat>();
+  }
+
   const base::WeakPtr<PepperMediaStreamVideoTrackHost> host_;
 
   DISALLOW_COPY_AND_ASSIGN(VideoSource);
 };
 
 void PepperMediaStreamVideoTrackHost::DidConnectPendingHostToResource() {
-  if (!MediaStreamVideoSink::connected_track().isNull())
+  if (!MediaStreamVideoSink::connected_track().IsNull())
     return;
   MediaStreamVideoSink::ConnectToTrack(
       track_, media::BindToCurrentLoop(
@@ -508,7 +499,7 @@ int32_t PepperMediaStreamVideoTrackHost::OnHostMsgConfigure(
 
   // TODO(ronghuawu): Ask the owner of DOMMediaStreamTrackToResource why
   // source id instead of track id is used there.
-  const std::string id = track_.source().id().utf8();
+  const std::string id = track_.Source().Id().Utf8();
   context->reply_msg = PpapiPluginMsg_MediaStreamVideoTrack_ConfigureReply(id);
   return PP_OK;
 }
@@ -517,23 +508,20 @@ void PepperMediaStreamVideoTrackHost::InitBlinkTrack() {
   std::string source_id;
   base::Base64Encode(base::RandBytesAsString(64), &source_id);
   blink::WebMediaStreamSource webkit_source;
-  webkit_source.initialize(base::UTF8ToUTF16(source_id),
-                           blink::WebMediaStreamSource::TypeVideo,
-                           base::UTF8ToUTF16(kPepperVideoSourceName),
+  webkit_source.Initialize(blink::WebString::FromASCII(source_id),
+                           blink::WebMediaStreamSource::kTypeVideo,
+                           blink::WebString::FromASCII(kPepperVideoSourceName),
                            false /* remote */);
   MediaStreamVideoSource* const source =
       new VideoSource(weak_factory_.GetWeakPtr());
-  webkit_source.setExtraData(source);  // Takes ownership of |source|.
+  webkit_source.SetExtraData(source);  // Takes ownership of |source|.
 
   const bool enabled = true;
-  blink::WebMediaConstraints constraints;
-  constraints.initialize();
   track_ = MediaStreamVideoTrack::CreateVideoTrack(
-       source, constraints,
-       base::Bind(
-           &PepperMediaStreamVideoTrackHost::OnTrackStarted,
-           base::Unretained(this)),
-       enabled);
+      source,
+      base::Bind(&PepperMediaStreamVideoTrackHost::OnTrackStarted,
+                 base::Unretained(this)),
+      enabled);
   // Note: The call to CreateVideoTrack() returned a track that holds a
   // ref-counted reference to |webkit_source| (and, implicitly, |source|).
 }

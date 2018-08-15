@@ -24,7 +24,6 @@
 
 #include "base/callback.h"
 #include "base/single_thread_task_runner.h"
-#include "base/threading/non_thread_safe.h"
 #include "base/time/tick_clock.h"
 #include "base/values.h"
 #include "media/cast/logging/logging_defines.h"
@@ -38,14 +37,9 @@ namespace base {
 class DictionaryValue;
 }  // namespace base
 
-namespace net {
-class NetLog;
-}  // namespace net
-
 namespace media {
 namespace cast {
 
-struct RtpReceiverStatistics;
 struct RtcpTimeData;
 
 // Following the initialization of either audio or video an initialization
@@ -76,7 +70,7 @@ class RtcpObserver {
 };
 
 // The application should only trigger this class from the transport thread.
-class CastTransport : public base::NonThreadSafe {
+class CastTransport {
  public:
   // Interface used for receiving status updates, raw events, and RTP packets
   // from CastTransport.

@@ -62,6 +62,7 @@
 #include <Qt3DRender/private/renderview_p.h>
 #include <Qt3DRender/private/frustumcullingjob_p.h>
 #include <Qt3DRender/private/lightgatherer_p.h>
+#include <Qt3DRender/private/filterproximitydistancejob_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -93,18 +94,26 @@ public:
     SynchronizerJobPtr syncRenderCommandBuildingJob() const;
     SynchronizerJobPtr syncRenderViewCommandBuildersJob() const;
     SynchronizerJobPtr setClearDrawBufferIndexJob() const;
+    SynchronizerJobPtr syncFilterEntityByLayerJob() const;
+    FilterProximityDistanceJobPtr filterProximityJob() const;
 
+    void prepareJobs();
     QVector<Qt3DCore::QAspectJobPtr> buildJobHierachy() const;
 
     Renderer *renderer() const;
     int renderViewIndex() const;
 
+    void setLayerCacheNeedsToBeRebuilt(bool needsToBeRebuilt);
+    bool layerCacheNeedsToBeRebuilt() const;
+
     static int optimalJobCount();
-    static void removeEntitiesNotInSubset(QVector<Entity *> &entities, QVector<Entity *> subset);
+    static QVector<Entity *> entitiesInSubset(const QVector<Entity *> &entities, const QVector<Entity *> &subset);
 
 private:
+    Render::FrameGraphNode *m_leafNode;
     const int m_renderViewIndex;
     Renderer *m_renderer;
+    bool m_layerCacheNeedsToBeRebuilt;
 
     RenderViewInitializerJobPtr m_renderViewJob;
     FilterLayerEntityJobPtr m_filterEntityByLayerJob;
@@ -120,6 +129,8 @@ private:
     SynchronizerJobPtr m_syncRenderCommandBuildingJob;
     SynchronizerJobPtr m_syncRenderViewCommandBuildersJob;
     SynchronizerJobPtr m_setClearDrawBufferIndexJob;
+    SynchronizerJobPtr m_syncFilterEntityByLayerJob;
+    FilterProximityDistanceJobPtr m_filterProximityJob;
 
     static const int m_optimalParallelJobCount;
 };

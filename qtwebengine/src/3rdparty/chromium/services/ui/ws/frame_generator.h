@@ -6,120 +6,75 @@
 #define SERVICES_UI_WS_FRAME_GENERATOR_H_
 
 #include <memory>
-#include <unordered_map>
 
 #include "base/macros.h"
-#include "base/timer/timer.h"
-#include "cc/surfaces/frame_sink_id.h"
-#include "cc/surfaces/local_frame_id.h"
-#include "cc/surfaces/surface_sequence.h"
-#include "cc/surfaces/surface_sequence_generator.h"
-#include "services/ui/public/interfaces/window_tree_constants.mojom.h"
-#include "services/ui/ws/ids.h"
-#include "services/ui/ws/server_window_tracker.h"
+#include "cc/ipc/compositor_frame_sink.mojom.h"
+#include "cc/scheduler/begin_frame_source.h"
+#include "components/viz/common/surfaces/local_surface_id_allocator.h"
+#include "components/viz/common/surfaces/surface_id.h"
+#include "components/viz/common/surfaces/surface_info.h"
+#include "services/ui/ws/compositor_frame_sink_client_binding.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
 
 namespace cc {
-class CompositorFrame;
 class RenderPass;
-class SurfaceId;
-}
-
-namespace gpu {
-class GpuChannelHost;
 }
 
 namespace ui {
-
-class DisplayCompositor;
-
 namespace ws {
-
-namespace test {
-class FrameGeneratorTest;
-}
-
-class FrameGeneratorDelegate;
-class ServerWindow;
 
 // Responsible for redrawing the display in response to the redraw requests by
 // submitting CompositorFrames to the owned CompositorFrameSink.
-class FrameGenerator : public ServerWindowTracker,
-                       public cc::mojom::MojoCompositorFrameSinkClient {
+class FrameGenerator : public cc::mojom::CompositorFrameSinkClient {
  public:
-  FrameGenerator(FrameGeneratorDelegate* delegate, ServerWindow* root_window);
+  FrameGenerator();
   ~FrameGenerator() override;
 
-  void OnGpuChannelEstablished(scoped_refptr<gpu::GpuChannelHost> gpu_channel);
+  void SetDeviceScaleFactor(float device_scale_factor);
+  void SetHighContrastMode(bool enabled);
 
-  // Schedules a redraw for the provided region.
-  void OnAcceleratedWidgetAvailable(gfx::AcceleratedWidget widget);
+  // Updates the WindowManager's SurfaceInfo.
+  void OnSurfaceCreated(const viz::SurfaceInfo& surface_info);
+
+  // Swaps the |window_manager_surface_info_| with that of |other|.
+  void SwapSurfaceWith(FrameGenerator* other);
+
+  void OnWindowDamaged();
+  void OnWindowSizeChanged(const gfx::Size& pixel_size);
+  void Bind(
+      std::unique_ptr<cc::mojom::CompositorFrameSink> compositor_frame_sink);
 
  private:
-  friend class ui::ws::test::FrameGeneratorTest;
-
-  // cc::mojom::MojoCompositorFrameSinkClient implementation:
-  void DidReceiveCompositorFrameAck() override;
-  void OnBeginFrame(const cc::BeginFrameArgs& begin_frame_arags) override;
-  void ReclaimResources(const cc::ReturnedResourceArray& resources) override;
+  // cc::mojom::CompositorFrameSinkClient implementation:
+  void DidReceiveCompositorFrameAck(
+      const std::vector<cc::ReturnedResource>& resources) override;
+  void OnBeginFrame(const cc::BeginFrameArgs& args) override;
+  void OnBeginFramePausedChanged(bool paused) override {}
+  void ReclaimResources(
+      const std::vector<cc::ReturnedResource>& resources) override;
 
   // Generates the CompositorFrame.
-  cc::CompositorFrame GenerateCompositorFrame(const gfx::Rect& output_rect);
+  cc::CompositorFrame GenerateCompositorFrame();
 
-  // DrawWindowTree recursively visits ServerWindows, creating a SurfaceDrawQuad
-  // for each that lacks one.
-  void DrawWindowTree(cc::RenderPass* pass,
-                      ServerWindow* window,
-                      const gfx::Vector2d& parent_to_root_origin_offset,
-                      float opacity);
+  // DrawWindow creates SurfaceDrawQuad for the window manager and appends it to
+  // the provided cc::RenderPass.
+  void DrawWindow(cc::RenderPass* pass);
 
-  // Adds a reference to the current cc::Surface of the provided
-  // |window_compositor_frame_sink|. If an existing reference is held with a
-  // different LocalFrameId then release that reference first. This is called on
-  // each ServerWindowCompositorFrameSink as FrameGenerator walks the window
-  // tree to generate a CompositorFrame. This is done to make sure that the
-  // window surfaces are retained for the entirety of the time between
-  // submission of the top-level frame to drawing the frame to screen.
-  // TODO(fsamuel, kylechar): This will go away once we get surface lifetime
-  // management.
-  void AddOrUpdateSurfaceReference(mojom::CompositorFrameSinkType type,
-                                   ServerWindow* window);
+  void SetNeedsBeginFrame(bool needs_begin_frame);
 
-  // Releases any retained references for the provided FrameSink.
-  // TODO(fsamuel, kylechar): This will go away once we get surface lifetime
-  // management.
-  void ReleaseFrameSinkReference(const cc::FrameSinkId& frame_sink_id);
+  float device_scale_factor_ = 1.f;
+  gfx::Size pixel_size_;
 
-  // Releases all retained references to surfaces.
-  // TODO(fsamuel, kylechar): This will go away once we get surface lifetime
-  // management.
-  void ReleaseAllSurfaceReferences();
+  std::unique_ptr<cc::mojom::CompositorFrameSink> compositor_frame_sink_;
+  cc::BeginFrameArgs last_begin_frame_args_;
+  cc::BeginFrameAck current_begin_frame_ack_;
+  bool high_contrast_mode_enabled_ = false;
+  gfx::Size last_submitted_frame_size_;
+  viz::LocalSurfaceId local_surface_id_;
+  viz::LocalSurfaceIdAllocator id_allocator_;
+  float last_device_scale_factor_ = 0.0f;
 
-  ui::DisplayCompositor* GetDisplayCompositor();
-
-  // ServerWindowObserver implementation.
-  void OnWindowDestroying(ServerWindow* window) override;
-
-  FrameGeneratorDelegate* delegate_;
-  cc::FrameSinkId frame_sink_id_;
-  ServerWindow* const root_window_;
-  cc::SurfaceSequenceGenerator surface_sequence_generator_;
-  scoped_refptr<gpu::GpuChannelHost> gpu_channel_;
-
-  cc::mojom::MojoCompositorFrameSinkPtr compositor_frame_sink_;
-  gfx::AcceleratedWidget widget_ = gfx::kNullAcceleratedWidget;
-
-  struct SurfaceDependency {
-    cc::LocalFrameId local_frame_id;
-    cc::SurfaceSequence sequence;
-  };
-  std::unordered_map<cc::FrameSinkId, SurfaceDependency, cc::FrameSinkIdHash>
-      dependencies_;
-
-  mojo::Binding<cc::mojom::MojoCompositorFrameSinkClient> binding_;
-
-  base::WeakPtrFactory<FrameGenerator> weak_factory_;
+  viz::SurfaceInfo window_manager_surface_info_;
 
   DISALLOW_COPY_AND_ASSIGN(FrameGenerator);
 };

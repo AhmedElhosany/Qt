@@ -42,36 +42,32 @@ class CORE_EXPORT HTMLTableCellElement final : public HTMLTablePartElement {
   unsigned colSpan() const;
   unsigned rowSpan() const;
 
-  void setCellIndex(int);
+  void SetCellIndex(int);
 
-  const AtomicString& abbr() const;
-  const AtomicString& axis() const;
+  const AtomicString& Abbr() const;
+  const AtomicString& Axis() const;
   void setColSpan(unsigned);
-  const AtomicString& headers() const;
+  const AtomicString& Headers() const;
   void setRowSpan(unsigned);
-  const AtomicString& scope() const;
-  void setScope(const AtomicString&);
 
  private:
   HTMLTableCellElement(const QualifiedName&, Document&);
 
-  void parseAttribute(const QualifiedName&,
-                      const AtomicString&,
-                      const AtomicString&) override;
-  bool isPresentationAttribute(const QualifiedName&) const override;
-  void collectStyleForPresentationAttribute(const QualifiedName&,
+  void ParseAttribute(const AttributeModificationParams&) override;
+  bool IsPresentationAttribute(const QualifiedName&) const override;
+  void CollectStyleForPresentationAttribute(const QualifiedName&,
                                             const AtomicString&,
                                             MutableStylePropertySet*) override;
-  const StylePropertySet* additionalPresentationAttributeStyle() override;
+  const StylePropertySet* AdditionalPresentationAttributeStyle() override;
 
-  bool isURLAttribute(const Attribute&) const override;
-  bool hasLegalLinkAttribute(const QualifiedName&) const override;
-  const QualifiedName& subResourceAttributeName() const override;
+  bool IsURLAttribute(const Attribute&) const override;
+  bool HasLegalLinkAttribute(const QualifiedName&) const override;
+  const QualifiedName& SubResourceAttributeName() const override;
 };
 
-inline bool isHTMLTableCellElement(const HTMLElement& element) {
-  return element.hasTagName(HTMLNames::tdTag) ||
-         element.hasTagName(HTMLNames::thTag);
+inline bool IsHTMLTableCellElement(const HTMLElement& element) {
+  return element.HasTagName(HTMLNames::tdTag) ||
+         element.HasTagName(HTMLNames::thTag);
 }
 
 DEFINE_HTMLELEMENT_TYPE_CASTS_WITH_FUNCTION(HTMLTableCellElement);

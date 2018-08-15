@@ -9,37 +9,41 @@
 
 namespace blink {
 
-class WebPresentationConnectionClient;
+class WebPresentationConnection;
+struct WebPresentationInfo;
 class WebString;
-enum class WebPresentationConnectionCloseReason;
-enum class WebPresentationConnectionState;
+
+enum class WebPresentationConnectionCloseReason {
+  kError = 0,
+  kClosed,
+  kWentAway
+};
+
+enum class WebPresentationConnectionState {
+  kConnecting = 0,
+  kConnected,
+  kClosed,
+  kTerminated,
+};
 
 // The delegate Blink provides to WebPresentationClient in order to get updates.
 class BLINK_PLATFORM_EXPORT WebPresentationController {
  public:
   virtual ~WebPresentationController() {}
 
-  // Called when the presentation session is started by the embedder using
-  // the default presentation URL and id.
-  virtual void didStartDefaultSession(WebPresentationConnectionClient*) = 0;
+  // Called when the presentation is started using the default presentation URL
+  // and id.
+  virtual WebPresentationConnection* DidStartDefaultPresentation(
+      const WebPresentationInfo&) = 0;
 
-  // Called when the state of a session changes.
-  virtual void didChangeSessionState(WebPresentationConnectionClient*,
-                                     WebPresentationConnectionState) = 0;
+  // Called when the state of a presentation connection changes.
+  virtual void DidChangeConnectionState(const WebPresentationInfo&,
+                                        WebPresentationConnectionState) = 0;
 
   // Called when a connection closes.
-  virtual void didCloseConnection(WebPresentationConnectionClient*,
+  virtual void DidCloseConnection(const WebPresentationInfo&,
                                   WebPresentationConnectionCloseReason,
                                   const WebString& message) = 0;
-
-  // Called when a text message of a session is received.
-  virtual void didReceiveSessionTextMessage(WebPresentationConnectionClient*,
-                                            const WebString& message) = 0;
-
-  // Called when a binary message of a session is received.
-  virtual void didReceiveSessionBinaryMessage(WebPresentationConnectionClient*,
-                                              const uint8_t* data,
-                                              size_t length) = 0;
 };
 
 }  // namespace blink

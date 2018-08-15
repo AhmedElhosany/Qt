@@ -26,15 +26,15 @@
 #include <string>
 #include <vector>
 
-#include "webrtc/base/constructormagic.h"
 #include "webrtc/p2p/base/candidate.h"
 #include "webrtc/p2p/base/candidatepairinterface.h"
-#include "webrtc/p2p/base/p2ptransport.h"
+#include "webrtc/p2p/base/icetransportinternal.h"
 #include "webrtc/p2p/base/portallocator.h"
 #include "webrtc/p2p/base/portinterface.h"
-#include "webrtc/p2p/base/transportchannelimpl.h"
-#include "webrtc/base/asyncpacketsocket.h"
-#include "webrtc/base/sigslot.h"
+#include "webrtc/rtc_base/asyncpacketsocket.h"
+#include "webrtc/rtc_base/constructormagic.h"
+#include "webrtc/rtc_base/random.h"
+#include "webrtc/rtc_base/sigslot.h"
 
 namespace cricket {
 
@@ -43,6 +43,7 @@ namespace cricket {
 enum class IceRestartState { CONNECTING, CONNECTED, DISCONNECTED, MAX_VALUE };
 
 extern const int WEAK_PING_INTERVAL;
+extern const int STRONG_PING_INTERVAL;
 extern const int WEAK_OR_STABILIZING_WRITABLE_CONNECTION_PING_INTERVAL;
 extern const int STRONG_AND_STABLE_WRITABLE_CONNECTION_PING_INTERVAL;
 static const int MIN_PINGS_AT_WEAK_PING_INTERVAL = 3;
@@ -61,22 +62,20 @@ class RemoteCandidate : public Candidate {
 
 // P2PTransportChannel manages the candidates and connection process to keep
 // two P2P clients connected to each other.
-class P2PTransportChannel : public TransportChannelImpl,
+class P2PTransportChannel : public IceTransportInternal,
                             public rtc::MessageHandler {
  public:
   P2PTransportChannel(const std::string& transport_name,
                       int component,
                       PortAllocator* allocator);
-  // TODO(mikescarlett): Deprecated. Remove when Chromium's
-  // IceTransportChannel does not depend on this.
-  P2PTransportChannel(const std::string& transport_name,
-                      int component,
-                      P2PTransport* transport,
-                      PortAllocator* allocator);
   virtual ~P2PTransportChannel();
 
   // From TransportChannelImpl:
-  TransportChannelState GetState() const override;
+  IceTransportState GetState() const override;
+  const std::string& transport_name() const override { return transport_name_; }
+  int component() const override { return component_; }
+  bool writable() const override { return writable_; }
+  bool receiving() const override { return receiving_; }
   void SetIceRole(IceRole role) override;
   IceRole GetIceRole() const override { return ice_role_; }
   void SetIceTiebreaker(uint64_t tiebreaker) override;
@@ -110,6 +109,7 @@ class P2PTransportChannel : public TransportChannelImpl,
   bool GetOption(rtc::Socket::Option opt, int* value) override;
   int GetError() override { return error_; }
   bool GetStats(std::vector<ConnectionInfo>* stats) override;
+  rtc::Optional<int> GetRttEstimate() override;
 
   // TODO(honghaiz): Remove this method once the reference of it in
   // Chromoting is removed.
@@ -124,57 +124,6 @@ class P2PTransportChannel : public TransportChannelImpl,
   const std::vector<PortInterface*>& pruned_ports() { return pruned_ports_; }
 
   IceMode remote_ice_mode() const { return remote_ice_mode_; }
-
-  // DTLS methods.
-  bool IsDtlsActive() const override { return false; }
-
-  // Default implementation.
-  bool GetSslRole(rtc::SSLRole* role) const override { return false; }
-
-  bool SetSslRole(rtc::SSLRole role) override { return false; }
-
-  // Set up the ciphers to use for DTLS-SRTP.
-  bool SetSrtpCryptoSuites(const std::vector<int>& ciphers) override {
-    return false;
-  }
-
-  // Find out which DTLS-SRTP cipher was negotiated.
-  bool GetSrtpCryptoSuite(int* cipher) override { return false; }
-
-  // Find out which DTLS cipher was negotiated.
-  bool GetSslCipherSuite(int* cipher) override { return false; }
-
-  // Returns null because the channel is not encrypted by default.
-  rtc::scoped_refptr<rtc::RTCCertificate> GetLocalCertificate() const override {
-    return nullptr;
-  }
-
-  std::unique_ptr<rtc::SSLCertificate> GetRemoteSSLCertificate()
-      const override {
-    return nullptr;
-  }
-
-  // Allows key material to be extracted for external encryption.
-  bool ExportKeyingMaterial(const std::string& label,
-                            const uint8_t* context,
-                            size_t context_len,
-                            bool use_context,
-                            uint8_t* result,
-                            size_t result_len) override {
-    return false;
-  }
-
-  bool SetLocalCertificate(
-      const rtc::scoped_refptr<rtc::RTCCertificate>& certificate) override {
-    return false;
-  }
-
-  // Set DTLS Remote fingerprint. Must be after local identity set.
-  bool SetRemoteFingerprint(const std::string& digest_alg,
-                            const uint8_t* digest,
-                            size_t digest_len) override {
-    return false;
-  }
 
   void PruneAllPorts();
   int receiving_timeout() const { return config_.receiving_timeout; }
@@ -200,6 +149,15 @@ class P2PTransportChannel : public TransportChannelImpl,
     return remote_candidates_;
   }
 
+  std::string ToString() const {
+    const char RECEIVING_ABBREV[2] = {'_', 'R'};
+    const char WRITABLE_ABBREV[2] = {'_', 'W'};
+    std::stringstream ss;
+    ss << "Channel[" << transport_name_ << "|" << component_ << "|"
+       << RECEIVING_ABBREV[receiving_] << WRITABLE_ABBREV[writable_] << "]";
+    return ss.str();
+  }
+
  private:
   rtc::Thread* thread() const { return network_thread_; }
   bool IsGettingPorts() { return allocator_session()->IsGettingPorts(); }
@@ -207,6 +165,23 @@ class P2PTransportChannel : public TransportChannelImpl,
   // A transport channel is weak if the current best connection is either
   // not receiving or not writable, or if there is no best connection at all.
   bool weak() const;
+
+  int weak_ping_interval() const {
+    if (config_.ice_check_min_interval &&
+        weak_ping_interval_ < *config_.ice_check_min_interval) {
+      return *config_.ice_check_min_interval;
+    }
+    return weak_ping_interval_;
+  }
+
+  int strong_ping_interval() const {
+    if (config_.ice_check_min_interval &&
+        STRONG_PING_INTERVAL < *config_.ice_check_min_interval) {
+      return *config_.ice_check_min_interval;
+    }
+    return STRONG_PING_INTERVAL;
+  }
+
   // Returns true if it's possible to send packets on |connection|.
   bool ReadyToSend(Connection* connection) const;
   void UpdateConnectionStates();
@@ -246,7 +221,7 @@ class P2PTransportChannel : public TransportChannelImpl,
   void UpdateState();
   void HandleAllTimedOut();
   void MaybeStopPortAllocatorSessions();
-  TransportChannelState ComputeState() const;
+  IceTransportState ComputeState() const;
 
   Connection* GetBestConnectionOnNetwork(rtc::Network* network) const;
   bool CreateConnections(const Candidate& remote_candidate,
@@ -306,6 +281,7 @@ class P2PTransportChannel : public TransportChannelImpl,
   void OnMessage(rtc::Message* pmsg) override;
   void OnCheckAndPing();
   void OnRegatherOnFailedNetworks();
+  void OnRegatherOnAllNetworks();
 
   uint32_t GetNominationAttr(Connection* conn) const;
   bool GetUseCandidateAttr(Connection* conn, NominationMode mode) const;
@@ -354,6 +330,23 @@ class P2PTransportChannel : public TransportChannelImpl,
                : static_cast<uint32_t>(remote_ice_parameters_.size() - 1);
   }
 
+  // Samples a delay from the uniform distribution defined by the
+  // regather_on_all_networks_interval ICE configuration pair.
+  int SampleRegatherAllNetworksInterval();
+
+  // Indicates if the given local port has been pruned.
+  bool IsPortPruned(const Port* port) const;
+
+  // Indicates if the given remote candidate has been pruned.
+  bool IsRemoteCandidatePruned(const Candidate& cand) const;
+
+  // Sets the writable state, signaling if necessary.
+  void set_writable(bool writable);
+  // Sets the receiving state, signaling if necessary.
+  void set_receiving(bool receiving);
+
+  std::string transport_name_;
+  int component_;
   PortAllocator* allocator_;
   rtc::Thread* network_thread_;
   bool incoming_only_;
@@ -391,16 +384,21 @@ class P2PTransportChannel : public TransportChannelImpl,
   uint64_t tiebreaker_;
   IceGatheringState gathering_state_;
 
+  // Used to generate random intervals for regather_all_networks_interval_range.
+  webrtc::Random rand_;
+
   int check_receiving_interval_;
   int64_t last_ping_sent_ms_ = 0;
   int weak_ping_interval_ = WEAK_PING_INTERVAL;
-  TransportChannelState state_ = TransportChannelState::STATE_INIT;
+  IceTransportState state_ = IceTransportState::STATE_INIT;
   IceConfig config_;
   int last_sent_packet_id_ = -1;  // -1 indicates no packet was sent before.
   bool started_pinging_ = false;
   // The value put in the "nomination" attribute for the next nominated
   // connection. A zero-value indicates the connection will not be nominated.
   uint32_t nomination_ = 0;
+  bool receiving_ = false;
+  bool writable_ = false;
 
   webrtc::MetricsObserverInterface* metrics_observer_ = nullptr;
 

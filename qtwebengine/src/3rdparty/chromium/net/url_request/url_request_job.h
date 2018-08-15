@@ -31,7 +31,6 @@ namespace net {
 class AuthChallengeInfo;
 class AuthCredentials;
 class CookieOptions;
-class Filter;
 class HttpRequestHeaders;
 class HttpResponseInfo;
 class IOBuffer;
@@ -181,8 +180,9 @@ class NET_EXPORT URLRequestJob : public base::PowerObserver {
   // Display the error page without asking for credentials again.
   virtual void CancelAuth();
 
-  virtual void ContinueWithCertificate(X509Certificate* client_cert,
-                                       SSLPrivateKey* client_private_key);
+  virtual void ContinueWithCertificate(
+      scoped_refptr<X509Certificate> client_cert,
+      scoped_refptr<SSLPrivateKey> client_private_key);
 
   // Continue processing the request ignoring the last error.
   virtual void ContinueDespiteLastError();
@@ -229,11 +229,11 @@ class NET_EXPORT URLRequestJob : public base::PowerObserver {
   // has failed or the response headers have been received.
   virtual void GetConnectionAttempts(ConnectionAttempts* out) const;
 
-  // Given |policy|, |referrer|, and |redirect_destination|, returns the
+  // Given |policy|, |referrer|, and |destination|, returns the
   // referrer URL mandated by |request|'s referrer policy.
-  static GURL ComputeReferrerForRedirect(URLRequest::ReferrerPolicy policy,
-                                         const GURL& original_referrer,
-                                         const GURL& redirect_destination);
+  static GURL ComputeReferrerForPolicy(URLRequest::ReferrerPolicy policy,
+                                       const GURL& original_referrer,
+                                       const GURL& destination);
 
  protected:
   // Notifies the job that a certificate is requested.
@@ -346,6 +346,10 @@ class NET_EXPORT URLRequestJob : public base::PowerObserver {
                         int buf_size,
                         const CompletionCallback& callback);
 
+  // Returns OK if |new_url| is a valid redirect target and an error code
+  // otherwise.
+  int CanFollowRedirect(const GURL& new_url);
+
   // Called in response to a redirect that was not canceled to follow the
   // redirect. The current job will be replaced with a new job loading the
   // given redirect destination.
@@ -361,15 +365,19 @@ class NET_EXPORT URLRequestJob : public base::PowerObserver {
   // |bytes_read| unfiltered bytes have been read for this job.
   void RecordBytesRead(int bytes_read);
 
-  // NotifyDone marks that request is done. It is really a glorified
+  // OnDone marks that request is done. It is really a glorified
   // set_status, but also does internal state checking and job tracking. It
   // should be called once per request, when the job is finished doing all IO.
-  void NotifyDone(const URLRequestStatus& status);
+  //
+  // If |notify_done| is true, will notify the URLRequest if there was an error
+  // asynchronously.  Otherwise, the caller will need to do this itself,
+  // possibly through a synchronous return value.
+  // TODO(mmenke):  Remove |notify_done|, and make caller handle notification.
+  void OnDone(const URLRequestStatus& status, bool notify_done);
 
-  // Some work performed by NotifyDone must be completed asynchronously so
-  // as to avoid re-entering URLRequest::Delegate. This method performs that
-  // work.
-  void CompleteNotifyDone();
+  // Takes care of the notification initiated by OnDone() to avoid re-entering
+  // the URLRequest::Delegate.
+  void NotifyDone();
 
   // Subclasses may implement this method to record packet arrival times.
   // The default implementation does nothing.  Only invoked when bytes have been
@@ -414,7 +422,8 @@ class NET_EXPORT URLRequestJob : public base::PowerObserver {
   // Expected content size
   int64_t expected_content_size_;
 
-  // Set when a redirect is deferred.
+  // Set when a redirect is deferred. Redirects are deferred after validity
+  // checks are performed, so this field must not be modified.
   RedirectInfo deferred_redirect_info_;
 
   // The network delegate to use with this request, if any.

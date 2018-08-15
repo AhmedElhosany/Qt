@@ -30,7 +30,7 @@ class WebViewAPITest : public AppShellTest {
   void RunTest(const std::string& test_name, const std::string& app_location);
 
   // Starts/Stops the embedded test server.
-  void StartTestServer();
+  void StartTestServer(const std::string& app_location);
   void StopTestServer();
 
   content::WebContents* GetEmbedderWebContents();
@@ -44,7 +44,6 @@ class WebViewAPITest : public AppShellTest {
   void SendMessageToEmbedder(const std::string& message);
 
   // content::BrowserTestBase implementation.
-  void RunTestOnMainThreadLoop() override;
   void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;

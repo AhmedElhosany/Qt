@@ -68,6 +68,7 @@ namespace content {
 namespace QtWebEngineCore {
 
 class WebContentsAdapterClient;
+class WebEngineSettings;
 
 class SavePageInfo
 {
@@ -91,10 +92,13 @@ class WebContentsDelegateQt : public content::WebContentsDelegate
 {
 public:
     WebContentsDelegateQt(content::WebContents*, WebContentsAdapterClient *adapterClient);
-    ~WebContentsDelegateQt() { Q_ASSERT(m_loadingErrorFrameList.isEmpty()); }
+    ~WebContentsDelegateQt();
     QString lastSearchedString() const { return m_lastSearchedString; }
     void setLastSearchedString(const QString &s) { m_lastSearchedString = s; }
     int lastReceivedFindReply() const { return m_lastReceivedFindReply; }
+
+    QUrl url() const { return m_url; }
+    QString title() const { return m_title; }
 
     // WebContentsDelegate overrides
     content::WebContents *OpenURLFromTab(content::WebContents *source, const content::OpenURLParams &params) override;
@@ -104,7 +108,8 @@ public:
     void LoadProgressChanged(content::WebContents* source, double progress) override;
     void HandleKeyboardEvent(content::WebContents *source, const content::NativeWebKeyboardEvent &event) override;
     content::ColorChooser *OpenColorChooser(content::WebContents *source, SkColor color, const std::vector<content::ColorSuggestion> &suggestion) override;
-    void WebContentsCreated(content::WebContents* source_contents, int opener_render_process_id, int opener_render_frame_id, const std::string& frame_name, const GURL& target_url, content::WebContents* new_contents) override;
+    void WebContentsCreated(content::WebContents *source_contents, int opener_render_process_id, int opener_render_frame_id,
+                            const std::string &frame_name, const GURL &target_url, content::WebContents *new_contents) override;
     content::JavaScriptDialogManager *GetJavaScriptDialogManager(content::WebContents *source) override;
     void EnterFullscreenModeForTab(content::WebContents* web_contents, const GURL& origin) override;
     void ExitFullscreenModeForTab(content::WebContents*) override;
@@ -117,7 +122,6 @@ public:
     bool IsPopupOrPanel(const content::WebContents *source) const override;
     void UpdateTargetURL(content::WebContents* source, const GURL& url) override;
     void RequestToLockMouse(content::WebContents *web_contents, bool user_gesture, bool last_unlocked_by_target) override;
-    bool ShouldPreserveAbortedURLs(content::WebContents *source) override;
     void ShowValidationMessage(content::WebContents *web_contents, const gfx::Rect &anchor_in_root_view, const base::string16 &main_text, const base::string16 &sub_text) override;
     void HideValidationMessage(content::WebContents *web_contents) override;
     void MoveValidationMessage(content::WebContents *web_contents, const gfx::Rect &anchor_in_root_view) override;
@@ -126,18 +130,18 @@ public:
 
     // WebContentsObserver overrides
     void RenderFrameDeleted(content::RenderFrameHost *render_frame_host) override;
-    void DidStartProvisionalLoadForFrame(content::RenderFrameHost *render_frame_host, const GURL &validated_url, bool is_error_page, bool is_iframe_srcdoc) override;
-    void DidCommitProvisionalLoadForFrame(content::RenderFrameHost *render_frame_host, const GURL &url, ui::PageTransition transition_type) override;
-    void DidFailProvisionalLoad(content::RenderFrameHost *render_frame_host, const GURL &validated_url,
-                                        int error_code, const base::string16 &error_description, bool was_ignored_by_handler) override;
+    void DidStartNavigation(content::NavigationHandle *navigation_handle) override;
+    void DidFinishNavigation(content::NavigationHandle *navigation_handle) override;
     void DidFailLoad(content::RenderFrameHost *render_frame_host, const GURL &validated_url,
                              int error_code, const base::string16 &error_description, bool was_ignored_by_handler) override;
     void DidFinishLoad(content::RenderFrameHost *render_frame_host, const GURL &validated_url) override;
+    void BeforeUnloadFired(const base::TimeTicks& proceed_time) override;
     void DidUpdateFaviconURL(const std::vector<content::FaviconURL> &candidates) override;
-    void DidNavigateAnyFrame(content::RenderFrameHost *render_frame_host, const content::LoadCommittedDetails &details, const content::FrameNavigateParams &params) override;
     void WasShown() override;
     void DidFirstVisuallyNonEmptyPaint() override;
+    void ActivateContents(content::WebContents* contents) override;
 
+    void didFailLoad(const QUrl &url, int errorCode, const QString &errorDescription);
     void overrideWebPreferences(content::WebContents *, content::WebPreferences*);
     void allowCertificateError(const QSharedPointer<CertificateErrorController> &) ;
     void requestGeolocationPermission(const QUrl &requestingOrigin);
@@ -147,8 +151,12 @@ public:
     void setSavePageInfo(const SavePageInfo &spi) { m_savePageInfo = spi; }
     const SavePageInfo &savePageInfo() { return m_savePageInfo; }
 
+    WebEngineSettings *webEngineSettings() const;
+
 private:
     QWeakPointer<WebContentsAdapter> createWindow(content::WebContents *new_contents, WindowOpenDisposition disposition, const gfx::Rect& initial_pos, bool user_gesture);
+    void EmitLoadStarted(const QUrl &url, bool isErrorPage = false);
+    void EmitLoadFinished(bool success, const QUrl &url, bool isErrorPage = false, int errorCode = 0, const QString &errorDescription = QString());
 
     WebContentsAdapterClient *m_viewClient;
     QString m_lastSearchedString;
@@ -158,6 +166,10 @@ private:
     SavePageInfo m_savePageInfo;
     QSharedPointer<FilePickerController> m_filePickerController;
     QUrl m_initialTargetUrl;
+    int m_lastLoadProgress;
+
+    QUrl m_url;
+    QString m_title;
 };
 
 } // namespace QtWebEngineCore

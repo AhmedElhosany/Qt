@@ -7,6 +7,7 @@
 
 #include "base/bind.h"
 #include "base/macros.h"
+#include "base/single_thread_task_runner.h"
 #include "media/audio/audio_input_controller.h"
 #include "media/base/audio_parameters.h"
 
@@ -60,16 +61,20 @@ class TestAudioInputController : public AudioInputController {
                            const AudioParameters& audio_parameters,
                            EventHandler* event_handler,
                            SyncWriter* sync_writer,
-                           UserInputMonitor* user_input_monitor);
+                           UserInputMonitor* user_input_monitor,
+                           StreamType type);
 
   // Returns the event handler installed on the AudioInputController.
   EventHandler* event_handler() const { return event_handler_; }
+
+  // Returns a pointer to the audio callback for the AudioInputController.
+  SyncWriter* sync_writer() const { return sync_writer_; }
 
   // Notifies the TestAudioControllerOpened() event to the delegate (if any).
   void Record() override;
 
   // Ensure that the closure is run on the audio-manager thread.
-  void Close(const base::Closure& closed_task) override;
+  void Close(base::OnceClosure closed_task) override;
 
   const AudioParameters& audio_parameters() const {
     return audio_parameters_;
@@ -84,7 +89,8 @@ class TestAudioInputController : public AudioInputController {
   // These are not owned by us and expected to be valid for this object's
   // lifetime.
   TestAudioInputControllerFactory* factory_;
-  EventHandler* event_handler_;
+  EventHandler* const event_handler_;
+  SyncWriter* const sync_writer_;
 
   DISALLOW_COPY_AND_ASSIGN(TestAudioInputController);
 };
@@ -100,10 +106,13 @@ class TestAudioInputControllerFactory : public AudioInputController::Factory {
 
   // AudioInputController::Factory methods.
   AudioInputController* Create(
+      scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+      AudioInputController::SyncWriter* sync_writer,
       AudioManager* audio_manager,
       AudioInputController::EventHandler* event_handler,
       AudioParameters params,
-      UserInputMonitor* user_input_monitor) override;
+      UserInputMonitor* user_input_monitor,
+      AudioInputController::StreamType type) override;
 
   void set_delegate(TestAudioInputControllerDelegate* delegate) {
     delegate_ = delegate;

@@ -14,13 +14,11 @@
 #include "base/strings/string16.h"
 #include "ui/message_center/message_center_export.h"
 
-#if defined(TOOLKIT_VIEWS) && !defined(OS_MACOSX)
-namespace views {
-class View;
-}
-#endif
-
 namespace message_center {
+
+class MessageCenterController;
+class MessageView;
+class Notification;
 
 // Delegate for a notification. This class has two roles: to implement callback
 // methods for notification, and to provide an identity of the associated
@@ -51,15 +49,18 @@ class MESSAGE_CENTER_EXPORT NotificationDelegate
                                     const base::string16& reply);
 
   // To be called when the user clicks the settings button in a notification.
-  virtual void SettingsClick();
+  // Returns whether the settings click was handled by the delegate.
+  virtual bool SettingsClick();
 
   // To be called in order to detect if a settings button should be displayed.
   virtual bool ShouldDisplaySettingsButton();
 
 #if defined(TOOLKIT_VIEWS) && !defined(OS_MACOSX)
-  // To be called to construct the contents view of a popup for notifications
-  // whose type is NOTIFICATION_TYPE_CUSTOM.
-  virtual std::unique_ptr<views::View> CreateCustomContent();
+  // To be called to construct the message view for notifications whose type is
+  // NOTIFICATION_TYPE_CUSTOM.
+  virtual std::unique_ptr<MessageView> CreateCustomMessageView(
+      MessageCenterController* controller,
+      const Notification& notification);
 #endif
 
   // Indicates whether this notification should be displayed when there is

@@ -45,7 +45,6 @@
 #include "qquickwindow.h"
 #include "qquicktextnode_p.h"
 #include "qquicktextnodeengine_p.h"
-#include "qquicktextutil_p.h"
 
 #include <QtCore/qmath.h>
 #include <QtGui/qguiapplication.h>
@@ -356,6 +355,36 @@ QString QQuickTextEdit::text() const
 */
 
 /*!
+    \qmlproperty bool QtQuick::TextEdit::font.kerning
+    \since 5.10
+
+    Enables or disables the kerning OpenType feature when shaping the text. This may improve performance
+    when creating or changing the text, at the expense of some cosmetic features. The default value
+    is true.
+
+    \qml
+    TextEdit { text: "OATS FLAVOUR WAY"; kerning: font.false }
+    \endqml
+*/
+
+/*!
+    \qmlproperty bool QtQuick::TextEdit::font.preferShaping
+    \since 5.10
+
+    Sometimes, a font will apply complex rules to a set of characters in order to
+    display them correctly. In some writing systems, such as Brahmic scripts, this is
+    required in order for the text to be legible, but in e.g. Latin script, it is merely
+    a cosmetic feature. Setting the \c preferShaping property to false will disable all
+    such features when they are not required, which will improve performance in most cases.
+
+    The default value is true.
+
+    \qml
+    TextEdit { text: "Some text"; font.preferShaping: false }
+    \endqml
+*/
+
+/*!
     \qmlproperty string QtQuick::TextEdit::text
 
     The text to display.  If the text format is AutoText the text edit will
@@ -482,7 +511,7 @@ void QQuickTextEdit::setTextFormat(TextFormat format)
 
     Supported render types are:
     \list
-    \li Text.QtRendering - the default
+    \li Text.QtRendering
     \li Text.NativeRendering
     \endlist
 
@@ -490,6 +519,8 @@ void QQuickTextEdit::setTextFormat(TextFormat format)
     not require advanced features such as transformation of the text. Using such features in
     combination with the NativeRendering render type will lend poor and sometimes pixelated
     results.
+
+    The default rendering type is determined by \l QQuickWindow::textRenderType().
 */
 QQuickTextEdit::RenderType QQuickTextEdit::renderType() const
 {
@@ -3035,6 +3066,32 @@ void QQuickTextEdit::resetBottomPadding()
 {
     Q_D(QQuickTextEdit);
     d->setBottomPadding(0, true);
+}
+
+/*!
+    \qmlproperty real QtQuick::TextEdit::tabStopDistance
+    \since 5.10
+
+    The default distance, in device units, between tab stops.
+
+    \sa QTextOption::setTabStop()
+*/
+int QQuickTextEdit::tabStopDistance() const
+{
+    Q_D(const QQuickTextEdit);
+    return d->document->defaultTextOption().tabStopDistance();
+}
+
+void QQuickTextEdit::setTabStopDistance(qreal distance)
+{
+    Q_D(QQuickTextEdit);
+    QTextOption textOptions = d->document->defaultTextOption();
+    if (textOptions.tabStopDistance() == distance)
+        return;
+
+    textOptions.setTabStopDistance(distance);
+    d->document->setDefaultTextOption(textOptions);
+    emit tabStopDistanceChanged(distance);
 }
 
 /*!

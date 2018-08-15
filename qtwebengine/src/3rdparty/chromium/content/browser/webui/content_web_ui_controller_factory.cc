@@ -17,8 +17,9 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/common/url_constants.h"
+#include "media/media_features.h"
 
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
 #include "content/browser/webrtc/webrtc_internals_ui.h"
 #endif
 
@@ -37,7 +38,9 @@ WebUI::TypeID ContentWebUIControllerFactory::GetWebUIType(
       url.host_piece() == kChromeUIIndexedDBInternalsHost ||
       url.host_piece() == kChromeUIMediaInternalsHost ||
       url.host_piece() == kChromeUIServiceWorkerInternalsHost ||
+#if !defined(TOOLKIT_QT)
       url.host_piece() == kChromeUIAccessibilityHost ||
+#endif
       url.host_piece() == kChromeUIAppCacheInternalsHost ||
       url.host_piece() == kChromeUINetworkErrorsListingHost) {
     return const_cast<ContentWebUIControllerFactory*>(this);
@@ -81,7 +84,7 @@ WebUIController* ContentWebUIControllerFactory::CreateWebUIControllerForURL(
     return new TracingUI(web_ui);
 #endif
 
-#if defined(ENABLE_WEBRTC)
+#if BUILDFLAG(ENABLE_WEBRTC)
   if (url.host_piece() == kChromeUIWebRTCInternalsHost)
     return new WebRTCInternalsUI(web_ui);
 #endif

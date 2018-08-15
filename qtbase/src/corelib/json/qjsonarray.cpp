@@ -212,6 +212,27 @@ QJsonArray &QJsonArray::operator =(const QJsonArray &other)
     return *this;
 }
 
+/*!
+    \fn QJsonArray::QJsonArray(QJsonArray &&other)
+    \since 5.10
+
+    Move-constructs a QJsonArray from \a other.
+*/
+
+/*!
+    \fn QJsonArray &QJsonArray::operator =(QJsonArray &&other)
+    \since 5.10
+
+    Move-assigns \a other to this array.
+*/
+
+/*!
+    \fn void QJsonArray::swap(QJsonArray &other)
+    \since 5.10
+
+    Swaps the array \a other with this. This operation is very fast and never fails.
+*/
+
 /*! \fn QJsonArray &QJsonArray::operator+=(const QJsonValue &value)
 
     Appends \a value to the array, and returns a reference to the array itself.
@@ -297,8 +318,7 @@ QJsonArray QJsonArray::fromVariantList(const QVariantList &list)
     array.a->tableOffset = currentOffset;
     if (!array.detach2(sizeof(QJsonPrivate::offset)*values.size()))
         return QJsonArray();
-    memcpy(static_cast<void *>(array.a->table()),
-           static_cast<const void *>(values.constData()), values.size()*sizeof(uint));
+    memcpy(array.a->table(), values.constData(), values.size()*sizeof(uint));
     array.a->length = values.size();
     array.a->size = currentOffset + sizeof(QJsonPrivate::offset)*values.size();
 

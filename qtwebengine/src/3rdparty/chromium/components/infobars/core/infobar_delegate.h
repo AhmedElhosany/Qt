@@ -23,7 +23,6 @@ class ThreeDAPIInfoBarDelegate;
 
 #if defined(OS_ANDROID)
 class MediaStreamInfoBarDelegateAndroid;
-class MediaThrottleInfoBarDelegate;
 
 namespace offline_pages {
 class OfflinePageInfoBarDelegate;
@@ -34,11 +33,9 @@ namespace translate {
 class TranslateInfoBarDelegate;
 }
 
-class SearchGeolocationDisclosureInfoBarDelegate;
-
 namespace gfx {
 class Image;
-enum class VectorIconId;
+struct VectorIcon;
 }
 
 namespace infobars {
@@ -121,13 +118,13 @@ class InfoBarDelegate {
     GOOGLE_API_KEYS_INFOBAR_DELEGATE = 45,
     OBSOLETE_SYSTEM_INFOBAR_DELEGATE = 46,
     SESSION_CRASHED_INFOBAR_DELEGATE = 47,
-    WEBSITE_SETTINGS_INFOBAR_DELEGATE = 48,
+    PAGE_INFO_INFOBAR_DELEGATE = 48,
     AUTOFILL_CC_INFOBAR_DELEGATE = 49,
     TRANSLATE_INFOBAR_DELEGATE = 50,
     IOS_CHROME_SAVE_PASSWORD_INFOBAR_DELEGATE = 51,
-    NATIVE_APP_INSTALLER_INFOBAR_DELEGATE = 52,
-    NATIVE_APP_LAUNCHER_INFOBAR_DELEGATE = 53,
-    NATIVE_APP_OPEN_POLICY_INFOBAR_DELEGATE = 54,
+    // Removed: NATIVE_APP_INSTALLER_INFOBAR_DELEGATE = 52,
+    // Removed: NATIVE_APP_LAUNCHER_INFOBAR_DELEGATE = 53,
+    // Removed: NATIVE_APP_OPEN_POLICY_INFOBAR_DELEGATE = 54,
     RE_SIGN_IN_INFOBAR_DELEGATE = 55,
     SHOW_PASSKIT_INFOBAR_ERROR_DELEGATE = 56,
     READER_MODE_INFOBAR_DELEGATE_IOS = 57,
@@ -139,13 +136,17 @@ class InfoBarDelegate {
     UPDATE_PASSWORD_INFOBAR_DELEGATE = 63,
     DATA_REDUCTION_PROMO_INFOBAR_DELEGATE_ANDROID = 64,
     AUTOFILL_CREDIT_CARD_FILLING_INFOBAR_DELEGATE_ANDROID = 65,
-    SUBRESOURCE_FILTER_INFOBAR_DELEGATE_ANDROID = 66,
+    ADS_BLOCKED_INFOBAR_DELEGATE_ANDROID = 66,
     INSTANT_APPS_INFOBAR_DELEGATE_ANDROID = 67,
     DATA_REDUCTION_PROXY_PREVIEW_INFOBAR_DELEGATE = 68,
     SCREEN_CAPTURE_INFOBAR_DELEGATE_ANDROID = 69,
     GROUPED_PERMISSION_INFOBAR_DELEGATE_ANDROID = 70,
     OFFLINE_PAGE_INFOBAR_DELEGATE = 71,
     SEARCH_GEOLOCATION_DISCLOSURE_INFOBAR_DELEGATE = 72,
+    AUTOMATION_INFOBAR_DELEGATE = 73,
+    VR_SERVICES_UPGRADE_ANDROID = 74,
+    READER_MODE_INFOBAR_ANDROID = 75,
+    VR_FEEDBACK_INFOBAR_ANDROID = 76,
   };
 
   // Describes navigation events, used to decide whether infobars should be
@@ -186,7 +187,7 @@ class InfoBarDelegate {
   // Returns the vector icon identifier to be shown for this InfoBar. This will
   // take precedence over GetIconId() (although typically only one of the two
   // should be defined for any given infobar).
-  virtual gfx::VectorIconId GetVectorIconId() const;
+  virtual const gfx::VectorIcon& GetVectorIcon() const;
 
   // Returns the icon to be shown for this InfoBar. If the returned Image is
   // empty, no icon is shown.
@@ -229,7 +230,6 @@ class InfoBarDelegate {
 #if defined(OS_ANDROID)
   virtual MediaStreamInfoBarDelegateAndroid*
   AsMediaStreamInfoBarDelegateAndroid();
-  virtual MediaThrottleInfoBarDelegate* AsMediaThrottleInfoBarDelegate();
   virtual offline_pages::OfflinePageInfoBarDelegate*
   AsOfflinePageInfoBarDelegate();
 #endif

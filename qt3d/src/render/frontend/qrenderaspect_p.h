@@ -83,6 +83,8 @@ public:
 
     Q_DECLARE_PUBLIC(QRenderAspect)
 
+    static QRenderAspectPrivate* findPrivate(Qt3DCore::QAspectEngine *engine);
+
     void registerBackendTypes();
     void unregisterBackendTypes();
     void loadSceneParsers();

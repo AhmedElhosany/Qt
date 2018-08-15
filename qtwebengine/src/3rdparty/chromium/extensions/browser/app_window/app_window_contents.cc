@@ -13,7 +13,6 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
-#include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/renderer_preferences.h"
@@ -82,20 +81,11 @@ void AppWindowContentsImpl::NativeWindowClosed() {
   rvh->Send(new ExtensionMsg_AppWindowClosed(rvh->GetRoutingID()));
 }
 
-void AppWindowContentsImpl::DispatchWindowShownForTests() const {
-  base::ListValue args;
-  content::RenderFrameHost* rfh = web_contents_->GetMainFrame();
-  rfh->Send(new ExtensionMsg_MessageInvoke(rfh->GetRoutingID(),
-                                           host_->extension_id(), "app.window",
-                                           "appWindowShownForTests", args));
-}
-
 void AppWindowContentsImpl::OnWindowReady() {
   is_window_ready_ = true;
   if (is_blocking_requests_) {
     is_blocking_requests_ = false;
-    content::ResourceDispatcherHost::ResumeBlockedRequestsForFrameFromUI(
-        web_contents_->GetMainFrame());
+    web_contents_->GetMainFrame()->ResumeBlockedRequestsForFrame();
   }
 }
 
@@ -107,9 +97,11 @@ WindowController* AppWindowContentsImpl::GetWindowController() const {
   return nullptr;
 }
 
-bool AppWindowContentsImpl::OnMessageReceived(const IPC::Message& message) {
+bool AppWindowContentsImpl::OnMessageReceived(
+    const IPC::Message& message,
+    content::RenderFrameHost* sender) {
   bool handled = true;
-  IPC_BEGIN_MESSAGE_MAP(AppWindowContentsImpl, message)
+  IPC_BEGIN_MESSAGE_MAP_WITH_PARAM(AppWindowContentsImpl, message, sender)
     IPC_MESSAGE_HANDLER(ExtensionHostMsg_UpdateDraggableRegions,
                         UpdateDraggableRegions)
     IPC_MESSAGE_UNHANDLED(handled = false)
@@ -124,8 +116,10 @@ void AppWindowContentsImpl::ReadyToCommitNavigation(
 }
 
 void AppWindowContentsImpl::UpdateDraggableRegions(
+    content::RenderFrameHost* sender,
     const std::vector<DraggableRegion>& regions) {
-  host_->UpdateDraggableRegions(regions);
+  if (!sender->GetParent())  // Only process events from the main frame.
+    host_->UpdateDraggableRegions(regions);
 }
 
 void AppWindowContentsImpl::SuspendRenderFrameHost(
@@ -135,7 +129,7 @@ void AppWindowContentsImpl::SuspendRenderFrameHost(
   if (is_window_ready_)
     return;
   is_blocking_requests_ = true;
-  content::ResourceDispatcherHost::BlockRequestsForFrameFromUI(rfh);
+  rfh->BlockRequestsForFrame();
 }
 
 }  // namespace extensions

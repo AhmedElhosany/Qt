@@ -4,6 +4,8 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+#ifndef SkPictureCommon_DEFINED
+#define SkPictureCommon_DEFINED
 
 // Some shared code used by both SkBigPicture and SkMiniPicture.
 //   SkTextHunter   -- SkRecord visitor that returns true when the op draws text.
@@ -12,6 +14,7 @@
 
 #include "SkPathEffect.h"
 #include "SkRecords.h"
+#include "SkShader.h"
 #include "SkTLogic.h"
 
 // N.B. This name is slightly historical: hunting season is now open for SkImages too.
@@ -78,7 +81,6 @@ struct SkPathCounter {
     void operator()(const SkRecords::DrawPicture& op) {
         fNumSlowPathsAndDashEffects += op.picture->numSlowPaths();
     }
-    void operator()(const SkRecords::DrawDrawable&) { /* TODO */ }
 
     void checkPaint(const SkPaint* paint) {
         if (paint && paint->getPathEffect()) {
@@ -119,7 +121,7 @@ struct SkPathCounter {
 
     void operator()(const SkRecords::ClipPath& op) {
         // TODO: does the SkRegion op matter?
-        if (op.opAA.aa && !op.path.isConvex()) {
+        if (op.opAA.aa() && !op.path.isConvex()) {
             fNumSlowPathsAndDashEffects++;
         }
     }
@@ -129,12 +131,14 @@ struct SkPathCounter {
     }
 
     template <typename T>
-    SK_WHEN(T::kTags & SkRecords::kDraw_Tag, void) operator()(const T& op) {
+    SK_WHEN(T::kTags & SkRecords::kHasPaint_Tag, void) operator()(const T& op) {
         this->checkPaint(AsPtr(op.paint));
     }
 
     template <typename T>
-    SK_WHEN(!(T::kTags & SkRecords::kDraw_Tag), void) operator()(const T& op) { /* do nothing */ }
+    SK_WHEN(!(T::kTags & SkRecords::kHasPaint_Tag), void)
+      operator()(const T& op) { /* do nothing */ }
 
     int fNumSlowPathsAndDashEffects;
 };
+#endif  // SkPictureCommon_DEFINED

@@ -56,7 +56,6 @@
 #include <Qt3DRender/private/handle_types_p.h>
 #include <Qt3DRender/private/qboundingvolumeprovider_p.h>
 #include <Qt3DRender/private/qcollisionqueryresult_p.h>
-#include <Qt3DRender/private/pickboundingvolumeutils_p.h>
 #include <Qt3DRender/qpickevent.h>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -76,13 +75,17 @@ class Renderer;
 class NodeManagers;
 class RenderSettings;
 
+namespace PickingUtils {
+typedef QVector<RayCasting::QCollisionQueryResult::Hit> HitList;
+}
+
 class Q_AUTOTEST_EXPORT PickBoundingVolumeJob : public Qt3DCore::QAspectJob
 {
 public:
     PickBoundingVolumeJob();
 
     void setRoot(Entity *root);
-    void setMouseEvents(const QList<QPair<QObject*, QMouseEvent>> &pendingEvents);
+    void setMouseEvents(const QList<QMouseEvent> &pendingEvents);
     void setKeyEvents(const QList<QKeyEvent> &pendingEvents);
     void setFrameGraphRoot(FrameGraphNode *frameGraphRoot);
     void setRenderSettings(RenderSettings *settings);
@@ -102,11 +105,11 @@ public:
 
 protected:
     void run() Q_DECL_FINAL;
-    void dispatchPickEvents(const QMouseEvent &event, const PickingUtils::CollisionVisitor::HitList &sphereHits,
+    void dispatchPickEvents(const QMouseEvent &event,
+                            const PickingUtils::HitList &sphereHits,
                             QPickEvent::Buttons eventButton,
                             int eventButtons,
                             int eventModifiers,
-                            bool trianglePickingRequested,
                             bool allHitsRequested);
 
 private:
@@ -114,20 +117,18 @@ private:
     Entity *m_node;
     FrameGraphNode *m_frameGraphRoot;
     RenderSettings *m_renderSettings;
-    QList<QPair<QObject*, QMouseEvent>> m_pendingMouseEvents;
+    QList<QMouseEvent> m_pendingMouseEvents;
     bool m_pickersDirty;
     bool m_oneEnabledAtLeast;
     bool m_oneHoverAtLeast;
 
     QList<QKeyEvent> m_pendingKeyEvents;
 
-    void viewMatrixForCamera(Qt3DCore::QNodeId cameraId,
-                             QMatrix4x4 &viewMatrix,
-                             QMatrix4x4 &projectionMatrix) const;
     QRect windowViewport(const QSize &area, const QRectF &relativeViewport) const;
-    RayCasting::QRay3D rayForViewportAndCamera(const PickingUtils::ViewportCameraAreaDetails &vca,
-                                               QObject *eventSource,
-                                               const QMouseEvent &event) const;
+    RayCasting::QRay3D rayForViewportAndCamera(const QSize &area,
+                                               const QPoint &pos,
+                                               const QRectF &relativeViewport,
+                                               const Qt3DCore::QNodeId cameraId) const;
     void clearPreviouslyHoveredPickers();
     HObjectPicker m_currentPicker;
     QVector<HObjectPicker> m_hoveredPickers;

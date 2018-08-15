@@ -46,16 +46,12 @@ void VerifyStateChangedMessage(int expected_handle_id,
 
 class TestingServiceWorkerDispatcherHost : public ServiceWorkerDispatcherHost {
  public:
-  TestingServiceWorkerDispatcherHost(
-      int process_id,
-      ServiceWorkerContextWrapper* context_wrapper,
-      ResourceContext* resource_context,
-      EmbeddedWorkerTestHelper* helper)
-      : ServiceWorkerDispatcherHost(process_id, nullptr, resource_context),
+  TestingServiceWorkerDispatcherHost(int process_id,
+                                     ResourceContext* resource_context,
+                                     EmbeddedWorkerTestHelper* helper)
+      : ServiceWorkerDispatcherHost(process_id, resource_context),
         bad_message_received_count_(0),
-        helper_(helper) {
-    Init(context_wrapper);
-  }
+        helper_(helper) {}
 
   bool Send(IPC::Message* message) override { return helper_->Send(message); }
 
@@ -77,14 +73,15 @@ class ServiceWorkerHandleTest : public testing::Test {
     helper_.reset(new EmbeddedWorkerTestHelper(base::FilePath()));
 
     dispatcher_host_ = new TestingServiceWorkerDispatcherHost(
-        helper_->mock_render_process_id(), helper_->context_wrapper(),
-        &resource_context_, helper_.get());
+        helper_->mock_render_process_id(), &resource_context_, helper_.get());
+    helper_->RegisterDispatcherHost(helper_->mock_render_process_id(),
+                                    dispatcher_host_);
+    dispatcher_host_->Init(helper_->context_wrapper());
 
     const GURL pattern("http://www.example.com/");
-    registration_ = new ServiceWorkerRegistration(
-        pattern,
-        1L,
-        helper_->context()->AsWeakPtr());
+    registration_ =
+        new ServiceWorkerRegistration(ServiceWorkerRegistrationOptions(pattern),
+                                      1L, helper_->context()->AsWeakPtr());
     version_ = new ServiceWorkerVersion(
         registration_.get(),
         GURL("http://www.example.com/service_worker.js"),
@@ -94,6 +91,7 @@ class ServiceWorkerHandleTest : public testing::Test {
     records.push_back(
         ServiceWorkerDatabase::ResourceRecord(10, version_->script_url(), 100));
     version_->script_cache_map()->SetResources(records);
+    version_->SetMainScriptHttpResponseInfo(net::HttpResponseInfo());
     version_->set_fetch_handler_existence(
         ServiceWorkerVersion::FetchHandlerExistence::EXISTS);
     version_->SetStatus(ServiceWorkerVersion::INSTALLING);
@@ -109,12 +107,10 @@ class ServiceWorkerHandleTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
     ASSERT_EQ(SERVICE_WORKER_OK, status);
 
-    provider_host_.reset(new ServiceWorkerProviderHost(
-        helper_->mock_render_process_id(), kRenderFrameId, 1,
-        SERVICE_WORKER_PROVIDER_FOR_WINDOW,
-        ServiceWorkerProviderHost::FrameSecurityLevel::SECURE,
-        helper_->context()->AsWeakPtr(), dispatcher_host_.get()));
-
+    provider_host_ = CreateProviderHostWithDispatcherHost(
+        helper_->mock_render_process_id(), 1 /* provider_id */,
+        helper_->context()->AsWeakPtr(), kRenderFrameId, dispatcher_host_.get(),
+        &remote_endpoint_);
     helper_->SimulateAddProcessToPattern(pattern,
                                          helper_->mock_render_process_id());
   }
@@ -137,15 +133,13 @@ class ServiceWorkerHandleTest : public testing::Test {
   scoped_refptr<ServiceWorkerRegistration> registration_;
   scoped_refptr<ServiceWorkerVersion> version_;
   scoped_refptr<TestingServiceWorkerDispatcherHost> dispatcher_host_;
+  ServiceWorkerRemoteProviderEndpoint remote_endpoint_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ServiceWorkerHandleTest);
 };
 
-class ServiceWorkerHandleTestP
-    : public MojoServiceWorkerTestP<ServiceWorkerHandleTest> {};
-
-TEST_P(ServiceWorkerHandleTestP, OnVersionStateChanged) {
+TEST_F(ServiceWorkerHandleTest, OnVersionStateChanged) {
   std::unique_ptr<ServiceWorkerHandle> handle =
       ServiceWorkerHandle::Create(helper_->context()->AsWeakPtr(),
                                   provider_host_->AsWeakPtr(), version_.get());
@@ -163,24 +157,13 @@ TEST_P(ServiceWorkerHandleTestP, OnVersionStateChanged) {
   ASSERT_EQ(0L, dispatcher_host_->bad_message_received_count_);
 
   const IPC::Message* message = nullptr;
-  if (is_mojo_enabled()) {
-    // StartWorker shouldn't be recorded here.
-    ASSERT_EQ(1UL, ipc_sink()->message_count());
-    message = ipc_sink()->GetMessageAt(0);
-  } else {
-    ASSERT_EQ(2UL, ipc_sink()->message_count());
-    // We should be sending 1. StartWorker,
-    EXPECT_EQ(EmbeddedWorkerMsg_StartWorker::ID,
-              ipc_sink()->GetMessageAt(0)->type());
-    message = ipc_sink()->GetMessageAt(1);
-  }
+  // StartWorker shouldn't be recorded here.
+  ASSERT_EQ(1UL, ipc_sink()->message_count());
+  message = ipc_sink()->GetMessageAt(0);
+
   // StateChanged (state == Installed).
   VerifyStateChangedMessage(handle->handle_id(),
-                            blink::WebServiceWorkerStateInstalled, message);
+                            blink::kWebServiceWorkerStateInstalled, message);
 }
-
-INSTANTIATE_TEST_CASE_P(ServiceWorkerHandleTest,
-                        ServiceWorkerHandleTestP,
-                        ::testing::Values(false, true));
 
 }  // namespace content

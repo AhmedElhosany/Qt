@@ -58,6 +58,7 @@ class PreviewModeClient : public PDFEngine::Client {
   std::string ShowFileSelectionDialog() override;
   pp::URLLoader CreateURLLoader() override;
   void ScheduleCallback(int id, int delay_in_ms) override;
+  void ScheduleTouchTimerCallback(int id, int delay_in_ms) override;
   void SearchString(const base::char16* string,
                     const base::char16* term,
                     bool case_sensitive,
@@ -71,7 +72,6 @@ class PreviewModeClient : public PDFEngine::Client {
   void DocumentLoadProgress(uint32_t available, uint32_t doc_size) override;
   void FormTextFieldFocusChange(bool in_focus) override;
   bool IsPrintPreview() override;
-  void CancelBrowserDownload() override;
   uint32_t GetBackgroundColor() override;
 
  private:

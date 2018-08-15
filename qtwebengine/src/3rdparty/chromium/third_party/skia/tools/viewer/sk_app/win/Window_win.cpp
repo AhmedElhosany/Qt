@@ -12,12 +12,18 @@
 #include <windowsx.h>
 
 #include "SkUtils.h"
+#include "../WindowContext.h"
 #include "WindowContextFactory_win.h"
 #ifdef SK_VULKAN
 #include "../VulkanWindowContext.h"
 #endif
 
 namespace sk_app {
+
+static int gWindowX = CW_USEDEFAULT;
+static int gWindowY = 0;
+static int gWindowWidth = CW_USEDEFAULT;
+static int gWindowHeight = 0;
 
 Window* Window::CreateNativeWindow(void* platformData) {
     HINSTANCE hInstance = (HINSTANCE)platformData;
@@ -29,6 +35,21 @@ Window* Window::CreateNativeWindow(void* platformData) {
     }
 
     return window;
+}
+
+void Window_win::closeWindow() {
+    RECT r;
+    if (GetWindowRect(fHWnd, &r)) {
+        gWindowX = r.left;
+        gWindowY = r.top;
+        gWindowWidth = r.right - r.left;
+        gWindowHeight = r.bottom - r.top;
+    }
+    DestroyWindow(fHWnd);
+}
+
+Window_win::~Window_win() {
+    this->closeWindow();
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -85,13 +106,15 @@ bool Window_win::init(HINSTANCE hInstance) {
  //   gIsFullscreen = fullscreen;
 
     fHWnd = CreateWindow(gSZWindowClass, nullptr, WS_OVERLAPPEDWINDOW,
-                         CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, fHInstance, nullptr);
+                         gWindowX, gWindowY, gWindowWidth, gWindowHeight,
+                         nullptr, nullptr, fHInstance, nullptr);
     if (!fHWnd)
     {
         return false;
     }
 
     SetWindowLongPtr(fHWnd, GWLP_USERDATA, (LONG_PTR)this);
+    RegisterTouchWindow(fHWnd, 0);
 
     return true;
 }
@@ -107,7 +130,23 @@ static Window::Key get_key(WPARAM vk) {
         { VK_UP, Window::Key::kUp },
         { VK_DOWN, Window::Key::kDown },
         { VK_LEFT, Window::Key::kLeft },
-        { VK_RIGHT, Window::Key::kRight }
+        { VK_RIGHT, Window::Key::kRight },
+        { VK_TAB, Window::Key::kTab },
+        { VK_PRIOR, Window::Key::kPageUp },
+        { VK_NEXT, Window::Key::kPageDown },
+        { VK_HOME, Window::Key::kHome },
+        { VK_END, Window::Key::kEnd },
+        { VK_DELETE, Window::Key::kDelete },
+        { VK_ESCAPE, Window::Key::kEscape },
+        { VK_SHIFT, Window::Key::kShift },
+        { VK_CONTROL, Window::Key::kCtrl },
+        { VK_MENU, Window::Key::kOption },
+        { 'A', Window::Key::kA },
+        { 'C', Window::Key::kC },
+        { 'V', Window::Key::kV },
+        { 'X', Window::Key::kX },
+        { 'Y', Window::Key::kY },
+        { 'Z', Window::Key::kZ },
     };
     for (size_t i = 0; i < SK_ARRAY_COUNT(gPair); i++) {
         if (gPair[i].fVK == vk) {
@@ -151,12 +190,14 @@ static uint32_t get_modifiers(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP:
         case WM_MOUSEMOVE:
+        case WM_MOUSEWHEEL:
             if (wParam & MK_CONTROL) {
                 modifiers |= Window::kControl_ModifierKey;
             }
             if (wParam & MK_SHIFT) {
                 modifiers |= Window::kShift_ModifierKey;
             }
+            break;
     }
 
     return modifiers;
@@ -236,24 +277,54 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                                             get_modifiers(message, wParam, lParam));
         } break;
 
-        case WM_MOUSEMOVE: 
-            // only track if left button is down
-            if ((wParam & MK_LBUTTON) != 0) {
-                int xPos = GET_X_LPARAM(lParam);
-                int yPos = GET_Y_LPARAM(lParam);
+        case WM_MOUSEMOVE: {
+            int xPos = GET_X_LPARAM(lParam);
+            int yPos = GET_Y_LPARAM(lParam);
 
-                //if (!gIsFullscreen)
-                //{
-                //    RECT rc = { 0, 0, 640, 480 };
-                //    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-                //    xPos -= rc.left;
-                //    yPos -= rc.top;
-                //}
+            //if (!gIsFullscreen)
+            //{
+            //    RECT rc = { 0, 0, 640, 480 };
+            //    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+            //    xPos -= rc.left;
+            //    yPos -= rc.top;
+            //}
 
-                eventHandled = window->onMouse(xPos, yPos, Window::kMove_InputState,
-                                               get_modifiers(message, wParam, lParam));
-            }
+            eventHandled = window->onMouse(xPos, yPos, Window::kMove_InputState,
+                                           get_modifiers(message, wParam, lParam));
+        } break;
+
+        case WM_MOUSEWHEEL:
+            eventHandled = window->onMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? +1.0f : -1.0f,
+                                                get_modifiers(message, wParam, lParam));
             break;
+
+        case WM_TOUCH: {
+            uint16_t numInputs = LOWORD(wParam);
+            std::unique_ptr<TOUCHINPUT[]> inputs(new TOUCHINPUT[numInputs]);
+            if (GetTouchInputInfo((HTOUCHINPUT)lParam, numInputs, inputs.get(),
+                                  sizeof(TOUCHINPUT))) {
+                RECT rect;
+                GetClientRect(hWnd, &rect);
+                for (uint16_t i = 0; i < numInputs; ++i) {
+                    TOUCHINPUT ti = inputs[i];
+                    Window::InputState state;
+                    if (ti.dwFlags & TOUCHEVENTF_DOWN) {
+                        state = Window::kDown_InputState;
+                    } else if (ti.dwFlags & TOUCHEVENTF_MOVE) {
+                        state = Window::kMove_InputState;
+                    } else if (ti.dwFlags & TOUCHEVENTF_UP) {
+                        state = Window::kUp_InputState;
+                    } else {
+                        continue;
+                    }
+                    // TOUCHINPUT coordinates are in 100ths of pixels
+                    // Adjust for that, and make them window relative
+                    LONG tx = (ti.x / 100) - rect.left;
+                    LONG ty = (ti.y / 100) - rect.top;
+                    eventHandled = window->onTouch(ti.dwID, state, tx, ty) || eventHandled;
+                }
+            }
+        } break;
 
         default:
             return DefWindowProc(hWnd, message, wParam, lParam);
@@ -271,26 +342,47 @@ void Window_win::show() {
 }
 
 
-bool Window_win::attach(BackendType attachType, const DisplayParams& params) {
+bool Window_win::attach(BackendType attachType) {
+    fBackend = attachType;
+
     switch (attachType) {
         case kNativeGL_BackendType:
-            fWindowContext = window_context_factory::NewGLForWin(fHWnd, params);
+            fWindowContext = window_context_factory::NewGLForWin(fHWnd, fRequestedDisplayParams);
             break;
         case kRaster_BackendType:
-            fWindowContext = window_context_factory::NewRasterForWin(fHWnd, params);
+            fWindowContext = window_context_factory::NewRasterForWin(fHWnd,
+                                                                     fRequestedDisplayParams);
             break;
 #ifdef SK_VULKAN
         case kVulkan_BackendType:
-            fWindowContext = window_context_factory::NewVulkanForWin(fHWnd, params);
+            fWindowContext = window_context_factory::NewVulkanForWin(fHWnd,
+                                                                     fRequestedDisplayParams);
             break;
 #endif
     }
+    this->onBackendCreated();
 
     return (SkToBool(fWindowContext));
 }
 
 void Window_win::onInval() {
     InvalidateRect(fHWnd, nullptr, false);
+}
+
+void Window_win::setRequestedDisplayParams(const DisplayParams& params, bool allowReattach) {
+    // GL on Windows doesn't let us change MSAA after the window is created
+    if (params.fMSAASampleCount != this->getRequestedDisplayParams().fMSAASampleCount
+            && allowReattach) {
+        // Need to change these early, so attach() creates the window context correctly
+        fRequestedDisplayParams = params;
+
+        delete fWindowContext;
+        this->closeWindow();
+        this->init(fHInstance);
+        this->attach(fBackend);
+    }
+
+    INHERITED::setRequestedDisplayParams(params, allowReattach);
 }
 
 }   // namespace sk_app

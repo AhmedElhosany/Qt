@@ -735,6 +735,20 @@ TestCase {
         compare(horizontal.contentItem.width, 0.2 * horizontal.availableWidth)
     }
 
+    function test_orientation() {
+        var control = createTemporaryObject(scrollBar, testCase)
+        verify(control)
+
+        compare(control.orientation, Qt.Vertical)
+        compare(control.horizontal, false)
+        compare(control.vertical, true)
+
+        control.orientation = Qt.Horizontal
+        compare(control.orientation, Qt.Horizontal)
+        compare(control.horizontal, true)
+        compare(control.vertical, false)
+    }
+
     function test_flashing() {
         var control = createTemporaryObject(scrollBar, testCase, {size: 0.2})
         verify(control)

@@ -6,10 +6,13 @@
 
 #include <stddef.h>
 
+#include <utility>
+
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/sequenced_task_runner.h"
@@ -90,10 +93,9 @@ void AttachProperties(const Properties& properties,
   if (properties.empty())
     return;
 
-  base::ListValue* const properties_value = new base::ListValue;
+  auto properties_value = base::MakeUnique<base::ListValue>();
   for (const auto& property : properties) {
-    std::unique_ptr<base::DictionaryValue> property_value(
-        new base::DictionaryValue);
+    auto property_value = base::MakeUnique<base::DictionaryValue>();
     std::string visibility_as_string;
     switch (property.visibility()) {
       case Property::VISIBILITY_PRIVATE:
@@ -108,7 +110,7 @@ void AttachProperties(const Properties& properties,
     property_value->SetString("value", property.value());
     properties_value->Append(std::move(property_value));
   }
-  request_body->Set("properties", properties_value);
+  request_body->Set("properties", std::move(properties_value));
 }
 
 // Creates metadata JSON string for multipart uploading.
@@ -126,9 +128,9 @@ std::string CreateMultipartUploadMetadataJson(
 
   // Fill parent link.
   if (!parent_resource_id.empty()) {
-    std::unique_ptr<base::ListValue> parents(new base::ListValue);
+    auto parents = base::MakeUnique<base::ListValue>();
     parents->Append(google_apis::util::CreateParentValue(parent_resource_id));
-    root.Set("parents", parents.release());
+    root.Set("parents", std::move(parents));
   }
 
   if (!modified_date.is_null()) {
@@ -386,13 +388,13 @@ bool FilesInsertRequest::GetContentData(std::string* upload_content_type,
     root.SetString("modifiedDate", util::FormatTimeAsString(modified_date_));
 
   if (!parents_.empty()) {
-    base::ListValue* parents_value = new base::ListValue;
+    auto parents_value = base::MakeUnique<base::ListValue>();
     for (size_t i = 0; i < parents_.size(); ++i) {
-      std::unique_ptr<base::DictionaryValue> parent(new base::DictionaryValue);
+      auto parent = base::MakeUnique<base::DictionaryValue>();
       parent->SetString("id", parents_[i]);
       parents_value->Append(std::move(parent));
     }
-    root.Set("parents", parents_value);
+    root.Set("parents", std::move(parents_value));
   }
 
   if (!title_.empty())
@@ -464,13 +466,13 @@ bool FilesPatchRequest::GetContentData(std::string* upload_content_type,
   }
 
   if (!parents_.empty()) {
-    base::ListValue* parents_value = new base::ListValue;
+    auto parents_value = base::MakeUnique<base::ListValue>();
     for (size_t i = 0; i < parents_.size(); ++i) {
-      std::unique_ptr<base::DictionaryValue> parent(new base::DictionaryValue);
+      auto parent = base::MakeUnique<base::DictionaryValue>();
       parent->SetString("id", parents_[i]);
       parents_value->Append(std::move(parent));
     }
-    root.Set("parents", parents_value);
+    root.Set("parents", std::move(parents_value));
   }
 
   AttachProperties(properties_, &root);
@@ -518,13 +520,13 @@ bool FilesCopyRequest::GetContentData(std::string* upload_content_type,
     root.SetString("modifiedDate", util::FormatTimeAsString(modified_date_));
 
   if (!parents_.empty()) {
-    base::ListValue* parents_value = new base::ListValue;
+    auto parents_value = base::MakeUnique<base::ListValue>();
     for (size_t i = 0; i < parents_.size(); ++i) {
-      std::unique_ptr<base::DictionaryValue> parent(new base::DictionaryValue);
+      auto parent = base::MakeUnique<base::DictionaryValue>();
       parent->SetString("id", parents_[i]);
       parents_value->Append(std::move(parent));
     }
-    root.Set("parents", parents_value);
+    root.Set("parents", std::move(parents_value));
   }
 
   if (!title_.empty())
@@ -536,22 +538,41 @@ bool FilesCopyRequest::GetContentData(std::string* upload_content_type,
   return true;
 }
 
-//============================= FilesListRequest =============================
+//========================= TeamDriveListRequest =============================
 
-FilesListRequest::FilesListRequest(
+TeamDriveListRequest::TeamDriveListRequest(
     RequestSender* sender,
     const DriveApiUrlGenerator& url_generator,
-    const FileListCallback& callback)
+    const TeamDriveListCallback& callback)
+    : DriveApiDataRequest<TeamDriveList>(sender, callback),
+      url_generator_(url_generator),
+      max_results_(30) {
+  DCHECK(!callback.is_null());
+}
+
+TeamDriveListRequest::~TeamDriveListRequest() {}
+
+GURL TeamDriveListRequest::GetURLInternal() const {
+  return url_generator_.GetTeamDriveListUrl(max_results_, page_token_);
+}
+
+//============================= FilesListRequest =============================
+
+FilesListRequest::FilesListRequest(RequestSender* sender,
+                                   const DriveApiUrlGenerator& url_generator,
+                                   const FileListCallback& callback)
     : DriveApiDataRequest<FileList>(sender, callback),
       url_generator_(url_generator),
-      max_results_(100) {
+      max_results_(100),
+      corpora_(FilesListCorpora::DEFAULT) {
   DCHECK(!callback.is_null());
 }
 
 FilesListRequest::~FilesListRequest() {}
 
 GURL FilesListRequest::GetURLInternal() const {
-  return url_generator_.GetFilesListUrl(max_results_, page_token_, q_);
+  return url_generator_.GetFilesListUrl(max_results_, page_token_, corpora_,
+                                        team_drive_id_, q_);
 }
 
 //======================== FilesListNextPageRequest =========================
@@ -653,8 +674,9 @@ ChangesListRequest::ChangesListRequest(
 ChangesListRequest::~ChangesListRequest() {}
 
 GURL ChangesListRequest::GetURLInternal() const {
-  return url_generator_.GetChangesListUrl(
-      include_deleted_, max_results_, page_token_, start_change_id_);
+  return url_generator_.GetChangesListUrl(include_deleted_, max_results_,
+                                          page_token_, start_change_id_,
+                                          team_drive_id_);
 }
 
 //======================== ChangesListNextPageRequest =========================
@@ -802,9 +824,9 @@ bool InitiateUploadNewFileRequest::GetContentData(
   root.SetString("title", title_);
 
   // Fill parent link.
-  std::unique_ptr<base::ListValue> parents(new base::ListValue);
+  auto parents = base::MakeUnique<base::ListValue>();
   parents->Append(util::CreateParentValue(parent_resource_id_));
-  root.Set("parents", parents.release());
+  root.Set("parents", std::move(parents));
 
   if (!modified_date_.is_null())
     root.SetString("modifiedDate", util::FormatTimeAsString(modified_date_));
@@ -862,9 +884,9 @@ bool InitiateUploadExistingFileRequest::GetContentData(
     std::string* upload_content) {
   base::DictionaryValue root;
   if (!parent_resource_id_.empty()) {
-    std::unique_ptr<base::ListValue> parents(new base::ListValue);
+    auto parents = base::MakeUnique<base::ListValue>();
     parents->Append(util::CreateParentValue(parent_resource_id_));
-    root.Set("parents", parents.release());
+    root.Set("parents", std::move(parents));
   }
 
   if (!title_.empty())
@@ -1126,9 +1148,9 @@ bool PermissionsInsertRequest::GetContentData(std::string* upload_content_type,
     case PERMISSION_ROLE_COMMENTER:
       root.SetString("role", "reader");
       {
-        base::ListValue* list = new base::ListValue;
+        auto list = base::MakeUnique<base::ListValue>();
         list->AppendString("commenter");
-        root.Set("additionalRoles", list);
+        root.Set("additionalRoles", std::move(list));
       }
       break;
   }
@@ -1226,7 +1248,7 @@ void BatchUploadRequest::AddRequest(BatchableDelegate* request) {
   DCHECK(request);
   DCHECK(GetChildEntry(request) == child_requests_.end());
   DCHECK(!committed_);
-  child_requests_.push_back(new BatchUploadChildEntry(request));
+  child_requests_.push_back(base::MakeUnique<BatchUploadChildEntry>(request));
   request->Prepare(base::Bind(&BatchUploadRequest::OnChildRequestPrepared,
                               weak_ptr_factory_.GetWeakPtr(), request));
 }
@@ -1270,8 +1292,8 @@ void BatchUploadRequest::Cancel() {
 
 // Obtains corresponding child entry of |request_id|. Returns NULL if the
 // entry is not found.
-ScopedVector<BatchUploadChildEntry>::iterator BatchUploadRequest::GetChildEntry(
-    RequestID request_id) {
+std::vector<std::unique_ptr<BatchUploadChildEntry>>::iterator
+BatchUploadRequest::GetChildEntry(RequestID request_id) {
   for (auto it = child_requests_.begin(); it != child_requests_.end(); ++it) {
     if ((*it)->request.get() == request_id)
       return it;
@@ -1282,7 +1304,7 @@ ScopedVector<BatchUploadChildEntry>::iterator BatchUploadRequest::GetChildEntry(
 void BatchUploadRequest::MayCompletePrepare() {
   if (!committed_ || prepare_callback_.is_null())
     return;
-  for (auto* child : child_requests_) {
+  for (const auto& child : child_requests_) {
     if (!child->prepared)
       return;
   }
@@ -1290,7 +1312,7 @@ void BatchUploadRequest::MayCompletePrepare() {
   // Build multipart body here.
   int64_t total_size = 0;
   std::vector<ContentTypeAndData> parts;
-  for (auto* child : child_requests_) {
+  for (const auto& child : child_requests_) {
     std::string type;
     std::string data;
     const bool result = child->request->GetContentData(&type, &data);
@@ -1409,7 +1431,7 @@ void BatchUploadRequest::ProcessURLFetchResults(const net::URLFetcher* source) {
 }
 
 void BatchUploadRequest::RunCallbackOnPrematureFailure(DriveApiErrorCode code) {
-  for (auto* child : child_requests_)
+  for (const auto& child : child_requests_)
     child->request->NotifyError(code);
   child_requests_.clear();
 }
@@ -1417,7 +1439,7 @@ void BatchUploadRequest::RunCallbackOnPrematureFailure(DriveApiErrorCode code) {
 void BatchUploadRequest::OnURLFetchUploadProgress(const net::URLFetcher* source,
                                                   int64_t current,
                                                   int64_t total) {
-  for (auto* child : child_requests_) {
+  for (const auto& child : child_requests_) {
     if (child->data_offset <= current &&
         current <= child->data_offset + child->data_size) {
       child->request->NotifyUploadProgress(source, current - child->data_offset,

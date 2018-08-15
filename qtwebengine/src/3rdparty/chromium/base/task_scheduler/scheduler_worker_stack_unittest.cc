@@ -26,9 +26,8 @@ class MockSchedulerWorkerDelegate : public SchedulerWorker::Delegate {
   scoped_refptr<Sequence> GetWork(SchedulerWorker* worker) override {
     return nullptr;
   }
-  void DidRunTaskWithPriority(TaskPriority task_priority,
-                              const TimeDelta& task_latency) override {
-    ADD_FAILURE() << "Unexpected call to DidRunTaskWithPriority()";
+  void DidRunTask() override {
+    ADD_FAILURE() << "Unexpected call to DidRunTask()";
   }
   void ReEnqueueSequence(scoped_refptr<Sequence> sequence) override {
     ADD_FAILURE() << "Unexpected call to ReEnqueueSequence()";
@@ -45,32 +44,23 @@ class MockSchedulerWorkerDelegate : public SchedulerWorker::Delegate {
 class TaskSchedulerWorkerStackTest : public testing::Test {
  protected:
   void SetUp() override {
-    worker_a_ = SchedulerWorker::Create(
-        ThreadPriority::NORMAL,
-        WrapUnique(new MockSchedulerWorkerDelegate), &task_tracker_,
-        SchedulerWorker::InitialState::ALIVE);
+    worker_a_ = make_scoped_refptr(new SchedulerWorker(
+        ThreadPriority::NORMAL, WrapUnique(new MockSchedulerWorkerDelegate),
+        &task_tracker_));
     ASSERT_TRUE(worker_a_);
-    worker_b_ = SchedulerWorker::Create(
-        ThreadPriority::NORMAL,
-        WrapUnique(new MockSchedulerWorkerDelegate), &task_tracker_,
-        SchedulerWorker::InitialState::ALIVE);
+    worker_b_ = make_scoped_refptr(new SchedulerWorker(
+        ThreadPriority::NORMAL, WrapUnique(new MockSchedulerWorkerDelegate),
+        &task_tracker_));
     ASSERT_TRUE(worker_b_);
-    worker_c_ = SchedulerWorker::Create(
-        ThreadPriority::NORMAL,
-        WrapUnique(new MockSchedulerWorkerDelegate), &task_tracker_,
-        SchedulerWorker::InitialState::ALIVE);
+    worker_c_ = make_scoped_refptr(new SchedulerWorker(
+        ThreadPriority::NORMAL, WrapUnique(new MockSchedulerWorkerDelegate),
+        &task_tracker_));
     ASSERT_TRUE(worker_c_);
   }
 
-  void TearDown() override {
-    worker_a_->JoinForTesting();
-    worker_b_->JoinForTesting();
-    worker_c_->JoinForTesting();
-  }
-
-  std::unique_ptr<SchedulerWorker> worker_a_;
-  std::unique_ptr<SchedulerWorker> worker_b_;
-  std::unique_ptr<SchedulerWorker> worker_c_;
+  scoped_refptr<SchedulerWorker> worker_a_;
+  scoped_refptr<SchedulerWorker> worker_b_;
+  scoped_refptr<SchedulerWorker> worker_c_;
 
  private:
   TaskTracker task_tracker_;

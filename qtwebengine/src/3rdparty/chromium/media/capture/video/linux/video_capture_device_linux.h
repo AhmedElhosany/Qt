@@ -40,24 +40,28 @@ class VideoCaptureDeviceLinux : public VideoCaptureDevice {
                         std::unique_ptr<Client> client) override;
   void StopAndDeAllocate() override;
   void TakePhoto(TakePhotoCallback callback) override;
-  void GetPhotoCapabilities(GetPhotoCapabilitiesCallback callback) override;
+  void GetPhotoState(GetPhotoStateCallback callback) override;
   void SetPhotoOptions(mojom::PhotoSettingsPtr settings,
                        SetPhotoOptionsCallback callback) override;
 
  protected:
-  void SetRotation(int rotation);
+  virtual void SetRotation(int rotation);
+
+  const VideoCaptureDeviceDescriptor device_descriptor_;
 
  private:
   static int TranslatePowerLineFrequencyToV4L2(PowerLineFrequency frequency);
 
   // Internal delegate doing the actual capture setting, buffer allocation and
-  // circulation with the V4L2 API. Created and deleted in the thread where
-  // VideoCaptureDeviceLinux lives but otherwise operating on |v4l2_thread_|.
-  scoped_refptr<V4L2CaptureDelegate> capture_impl_;
+  // circulation with the V4L2 API. Created in the thread where
+  // VideoCaptureDeviceLinux lives but otherwise operating and deleted on
+  // |v4l2_thread_|.
+  std::unique_ptr<V4L2CaptureDelegate> capture_impl_;
+
+  // Photo-related requests waiting for |v4l2_thread_| to be active.
+  std::list<base::Closure> photo_requests_queue_;
 
   base::Thread v4l2_thread_;  // Thread used for reading data from the device.
-
-  const VideoCaptureDeviceDescriptor device_descriptor_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(VideoCaptureDeviceLinux);
 };

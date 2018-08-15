@@ -6,6 +6,7 @@
 
 #include "public/fpdf_doc.h"
 
+#include <memory>
 #include <set>
 
 #include "core/fpdfapi/page/cpdf_page.h"
@@ -14,7 +15,9 @@
 #include "core/fpdfdoc/cpdf_bookmark.h"
 #include "core/fpdfdoc/cpdf_bookmarktree.h"
 #include "core/fpdfdoc/cpdf_dest.h"
+#include "core/fpdfdoc/cpdf_pagelabel.h"
 #include "fpdfsdk/fsdk_define.h"
+#include "third_party/base/ptr_util.h"
 #include "third_party/base/stl_util.h"
 
 namespace {
@@ -50,10 +53,10 @@ CPDF_LinkList* GetLinkList(CPDF_Page* page) {
   if (!page)
     return nullptr;
 
-  CPDF_Document* pDoc = page->m_pDocument;
+  CPDF_Document* pDoc = page->m_pDocument.Get();
   std::unique_ptr<CPDF_LinkList>* pHolder = pDoc->LinksContext();
   if (!pHolder->get())
-    pHolder->reset(new CPDF_LinkList);
+    *pHolder = pdfium::MakeUnique<CPDF_LinkList>();
   return pHolder->get();
 }
 
@@ -90,12 +93,7 @@ DLLEXPORT unsigned long STDCALL FPDFBookmark_GetTitle(FPDF_BOOKMARK pDict,
     return 0;
   CPDF_Bookmark bookmark(ToDictionary(static_cast<CPDF_Object*>(pDict)));
   CFX_WideString title = bookmark.GetTitle();
-  CFX_ByteString encodedTitle = title.UTF16LE_Encode();
-  unsigned long len = encodedTitle.GetLength();
-  if (buffer && buflen >= len) {
-    FXSYS_memcpy(buffer, encodedTitle.c_str(), len);
-  }
-  return len;
+  return Utf16EncodeMaybeCopyAndReturnLength(title, buffer, buflen);
 }
 
 DLLEXPORT FPDF_BOOKMARK STDCALL FPDFBookmark_Find(FPDF_DOCUMENT document,
@@ -179,8 +177,8 @@ DLLEXPORT unsigned long STDCALL FPDFAction_GetFilePath(FPDF_ACTION pDict,
   CPDF_Action action(ToDictionary(static_cast<CPDF_Object*>(pDict)));
   CFX_ByteString path = action.GetFilePath().UTF8Encode();
   unsigned long len = path.GetLength() + 1;
-  if (buffer && buflen >= len)
-    FXSYS_memcpy(buffer, path.c_str(), len);
+  if (buffer && len <= buflen)
+    memcpy(buffer, path.c_str(), len);
   return len;
 }
 
@@ -196,8 +194,8 @@ DLLEXPORT unsigned long STDCALL FPDFAction_GetURIPath(FPDF_DOCUMENT document,
   CPDF_Action action(ToDictionary(static_cast<CPDF_Object*>(pDict)));
   CFX_ByteString path = action.GetURI(pDoc);
   unsigned long len = path.GetLength() + 1;
-  if (buffer && buflen >= len)
-    FXSYS_memcpy(buffer, path.c_str(), len);
+  if (buffer && len <= buflen)
+    memcpy(buffer, path.c_str(), len);
   return len;
 }
 
@@ -222,8 +220,7 @@ DLLEXPORT FPDF_BOOL STDCALL FPDFDest_GetLocationInPage(FPDF_DEST pDict,
   if (!pDict)
     return false;
 
-  std::unique_ptr<CPDF_Dest> dest(
-      new CPDF_Dest(static_cast<CPDF_Object*>(pDict)));
+  auto dest = pdfium::MakeUnique<CPDF_Dest>(static_cast<CPDF_Object*>(pDict));
 
   // FPDF_BOOL is an int, GetXYZ expects bools.
   bool bHasX;
@@ -249,7 +246,10 @@ DLLEXPORT FPDF_LINK STDCALL FPDFLink_GetLinkAtPoint(FPDF_PAGE page,
   if (!pLinkList)
     return nullptr;
 
-  return pLinkList->GetLinkAtPoint(pPage, (FX_FLOAT)x, (FX_FLOAT)y, nullptr)
+  return pLinkList
+      ->GetLinkAtPoint(pPage,
+                       CFX_PointF(static_cast<float>(x), static_cast<float>(y)),
+                       nullptr)
       .GetDict();
 }
 
@@ -265,7 +265,9 @@ DLLEXPORT int STDCALL FPDFLink_GetLinkZOrderAtPoint(FPDF_PAGE page,
     return -1;
 
   int z_order = -1;
-  pLinkList->GetLinkAtPoint(pPage, (FX_FLOAT)x, (FX_FLOAT)y, &z_order);
+  pLinkList->GetLinkAtPoint(
+      pPage, CFX_PointF(static_cast<float>(x), static_cast<float>(y)),
+      &z_order);
   return z_order;
 }
 
@@ -353,42 +355,54 @@ DLLEXPORT FPDF_BOOL STDCALL FPDFLink_GetQuadPoints(FPDF_LINK linkAnnot,
   CPDF_Dictionary* pAnnotDict =
       ToDictionary(static_cast<CPDF_Object*>(linkAnnot));
   CPDF_Array* pArray = pAnnotDict->GetArrayFor("QuadPoints");
-  if (pArray) {
-    if (quadIndex < 0 ||
-        static_cast<size_t>(quadIndex) >= pArray->GetCount() / 8 ||
-        (static_cast<size_t>(quadIndex * 8 + 7) >= pArray->GetCount()))
-      return false;
-    quadPoints->x1 = pArray->GetNumberAt(quadIndex * 8);
-    quadPoints->y1 = pArray->GetNumberAt(quadIndex * 8 + 1);
-    quadPoints->x2 = pArray->GetNumberAt(quadIndex * 8 + 2);
-    quadPoints->y2 = pArray->GetNumberAt(quadIndex * 8 + 3);
-    quadPoints->x3 = pArray->GetNumberAt(quadIndex * 8 + 4);
-    quadPoints->y3 = pArray->GetNumberAt(quadIndex * 8 + 5);
-    quadPoints->x4 = pArray->GetNumberAt(quadIndex * 8 + 6);
-    quadPoints->y4 = pArray->GetNumberAt(quadIndex * 8 + 7);
-    return true;
+  if (!pArray)
+    return false;
+
+  if (quadIndex < 0 ||
+      static_cast<size_t>(quadIndex) >= pArray->GetCount() / 8 ||
+      (static_cast<size_t>(quadIndex * 8 + 7) >= pArray->GetCount())) {
+    return false;
   }
-  return false;
+
+  quadPoints->x1 = pArray->GetNumberAt(quadIndex * 8);
+  quadPoints->y1 = pArray->GetNumberAt(quadIndex * 8 + 1);
+  quadPoints->x2 = pArray->GetNumberAt(quadIndex * 8 + 2);
+  quadPoints->y2 = pArray->GetNumberAt(quadIndex * 8 + 3);
+  quadPoints->x3 = pArray->GetNumberAt(quadIndex * 8 + 4);
+  quadPoints->y3 = pArray->GetNumberAt(quadIndex * 8 + 5);
+  quadPoints->x4 = pArray->GetNumberAt(quadIndex * 8 + 6);
+  quadPoints->y4 = pArray->GetNumberAt(quadIndex * 8 + 7);
+  return true;
 }
 
-DLLEXPORT unsigned long STDCALL FPDF_GetMetaText(FPDF_DOCUMENT doc,
+DLLEXPORT unsigned long STDCALL FPDF_GetMetaText(FPDF_DOCUMENT document,
                                                  FPDF_BYTESTRING tag,
                                                  void* buffer,
                                                  unsigned long buflen) {
   if (!tag)
     return 0;
-  CPDF_Document* pDoc = CPDFDocumentFromFPDFDocument(doc);
+  CPDF_Document* pDoc = CPDFDocumentFromFPDFDocument(document);
   if (!pDoc)
     return 0;
+  pDoc->LoadDocumentInfo();
   CPDF_Dictionary* pInfo = pDoc->GetInfo();
   if (!pInfo)
     return 0;
   CFX_WideString text = pInfo->GetUnicodeTextFor(tag);
-  // Use UTF-16LE encoding
-  CFX_ByteString encodedText = text.UTF16LE_Encode();
-  unsigned long len = encodedText.GetLength();
-  if (buffer && buflen >= len) {
-    FXSYS_memcpy(buffer, encodedText.c_str(), len);
-  }
-  return len;
+  return Utf16EncodeMaybeCopyAndReturnLength(text, buffer, buflen);
+}
+
+DLLEXPORT unsigned long STDCALL FPDF_GetPageLabel(FPDF_DOCUMENT document,
+                                                  int page_index,
+                                                  void* buffer,
+                                                  unsigned long buflen) {
+  if (page_index < 0)
+    return 0;
+
+  // CPDF_PageLabel can deal with NULL |document|.
+  CPDF_PageLabel label(CPDFDocumentFromFPDFDocument(document));
+  CFX_WideString str;
+  if (!label.GetLabel(page_index, &str))
+    return 0;
+  return Utf16EncodeMaybeCopyAndReturnLength(str, buffer, buflen);
 }

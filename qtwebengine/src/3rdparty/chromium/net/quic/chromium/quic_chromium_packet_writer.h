@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_QUIC_CHROMIUM_PACKET_WRITER_H_
-#define NET_QUIC_QUIC_CHROMIUM_PACKET_WRITER_H_
+#ifndef NET_QUIC_CHROMIUM_QUIC_CHROMIUM_PACKET_WRITER_H_
+#define NET_QUIC_CHROMIUM_QUIC_CHROMIUM_PACKET_WRITER_H_
 
 #include <stddef.h>
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/io_buffer.h"
-#include "net/base/ip_endpoint.h"
 #include "net/base/net_export.h"
 #include "net/quic/core/quic_connection.h"
 #include "net/quic/core/quic_packet_writer.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/quic/core/quic_types.h"
 #include "net/socket/datagram_client_socket.h"
 
@@ -43,7 +42,7 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketWriter : public QuicPacketWriter {
 
   QuicChromiumPacketWriter();
   // |socket| must outlive writer.
-  explicit QuicChromiumPacketWriter(Socket* socket);
+  explicit QuicChromiumPacketWriter(DatagramClientSocket* socket);
   ~QuicChromiumPacketWriter() override;
 
   // |delegate| must outlive writer.
@@ -57,18 +56,19 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketWriter : public QuicPacketWriter {
   // QuicPacketWriter
   WriteResult WritePacket(const char* buffer,
                           size_t buf_len,
-                          const IPAddress& self_address,
-                          const IPEndPoint& peer_address,
+                          const QuicIpAddress& self_address,
+                          const QuicSocketAddress& peer_address,
                           PerPacketOptions* options) override;
   bool IsWriteBlockedDataBuffered() const override;
   bool IsWriteBlocked() const override;
   void SetWritable() override;
-  QuicByteCount GetMaxPacketSize(const IPEndPoint& peer_address) const override;
+  QuicByteCount GetMaxPacketSize(
+      const QuicSocketAddress& peer_address) const override;
 
   void OnWriteComplete(int rv);
 
  private:
-  Socket* socket_;      // Unowned.
+  DatagramClientSocket* socket_;  // Unowned.
   Delegate* delegate_;  // Unowned.
   // When a write returns asynchronously, |packet_| stores the written
   // packet until OnWriteComplete is called.
@@ -84,4 +84,4 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketWriter : public QuicPacketWriter {
 
 }  // namespace net
 
-#endif  // NET_QUIC_QUIC_CHROMIUM_PACKET_WRITER_H_
+#endif  // NET_QUIC_CHROMIUM_QUIC_CHROMIUM_PACKET_WRITER_H_

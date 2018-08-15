@@ -15,10 +15,12 @@ On all platforms:
 
 On Windows:
 
- * [Visual Studio Community 2015 Update 2](http://www.visualstudio.com/downloads/download-visual-studio-vs)
-     Required to build ANGLE on Windows and for the packaged Windows 8.1 SDK.
+ * [Visual Studio Community 2015 Update 3](https://www.visualstudio.com/en-us/news/releasenotes/vs2015-update3-vs)
+   * Required to build ANGLE on Windows and for the packaged Windows 10 SDK. Note: Chrome is in the process of upgrading to Visual Studio 2017. ANGLE will switch over once Chrome does.
+ * [Windows 10 Standalone SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-10-sdk) (recommended)
+    * Not required to build, but comes with additional features that aid ANGLE development, such as the Debug runtime for D3D11.
  * [Cygwin's Bison, flex, and patch](https://cygwin.com/setup-x86_64.exe) (optional)
-     This is only required if you need to modify GLSL ES grammar files (`glslang.l` and `glslang.y` under `src/compiler/translator`, or `ExpressionParser.y` and `Tokenizer.l` in `src/compiler/preprocessor`).
+    * This is only required if you need to modify GLSL ES grammar files (`glslang.l` and `glslang.y` under `src/compiler/translator`, or `ExpressionParser.y` and `Tokenizer.l` in `src/compiler/preprocessor`).
      Use the latest versions of bison, flex and patch from the 64-bit cygwin distribution.
 
 On Linux:
@@ -38,7 +40,6 @@ Set the following environment variables as needed:
 On Windows:
 
  * `GYP_GENERATORS` to `msvs` (other options include `ninja` and `make`)
- * `GYP_DEFINES` to `windows_sdk_path=YOUR_WIN_SDK_INSTALL_DIR` if you did not install the Windows 8.1 SDK in the default location.
  * `GYP_MSVS_VERSION` to `2015`
 
 On Linux and MacOS:
@@ -71,6 +72,48 @@ Once the build completes, the output directory for your selected configuration (
 ### Building ANGLE on Linux and MacOS
 Run `ninja -C out/Debug` or `ninja -C out/Release`. Ninja is provided by `depot_tools` so make sure you set up your `PATH` correctly.
 Once the build completes, the `out/Debug` or `out/Release` directories will contain the .so or .dylib libraries and test binaries.
+
+### Building ANGLE for Android
+Presently, it is not possible to build standalone ANGLE for Android.
+But, ANGLE for Android can be built within a Chromium checkout.
+The reason for that is a dependency on Chromium for Android toolchain and that it only supports GN.
+Also, it can only be built on Linux, as this is the only platfrom that Chromium for Android supports.
+In theory, once ANGLE supports standalone GN build, it may be possible to put Chromium for Android toolchain in `third_party` or `buildtools` to build standalone ANGLE for Android.
+
+But, for now, the steps in [Checking out and building Chromium for Android](https://chromium.googlesource.com/chromium/src/+/master/docs/android_build_instructions.md) should be followed to check out Chromium for Android and set up build environment.
+Name your output directories `out/Debug` and `out/Release`, because Chromium GPU tests look for browser binaries in these folders. Replacing `out` with other names seems to be OK when working with multiple build configurations.
+It's best to use a build configuration of some Android bot on [GPU.FYI waterfall](https://build.chromium.org/p/chromium.gpu.fyi/waterfall). Look for `generate_build_files` step output of that bot. Remove `goma_dir` flag.
+For example, these are the build flags from Nexus 5X bot:
+```
+build_angle_deqp_tests = true
+dcheck_always_on = true
+ffmpeg_branding = "Chrome"
+is_component_build = false
+is_debug = false
+proprietary_codecs = true
+symbol_level = 1
+target_cpu = "arm64"          # Nexus 5X is 64 bit, remove this on 32 bit devices
+target_os = "android"
+use_goma = true               # Remove this if you don't have goma
+```
+
+These ANGLE targets are supported:
+`ninja -C out/Release translator libEGL libGLESv2 angle_unittests angle_end2end_tests angle_white_box_tests angle_deqp_gles2_tests angle_deqp_gles3_tests angle_deqp_egl_tests`
+In order to run ANGLE tests, prepend `bin/run_` to the test name, for example: `./out/Release/bin/run_angle_unittests`.
+Additional details are in [Android Test Instructions](https://chromium.googlesource.com/chromium/src/+/master/docs/android_test_instructions.md).
+
+Note: Running the tests not using the test runner is tricky, but is necessary in order to get a complete TestResults.qpa from the dEQP tests (since the runner shards the tests, only the results of the last shard will be available when using the test runner). First, use the runner to install the APK, test data and test expectations on the device. After the tests start running, the test runner can be stopped with Ctrl+C. Then, run
+```
+adb shell am start -a android.intent.action.MAIN -n org.chromium.native_test/.NativeUnitTestNativeActivity -e org.chromium.native_test.NativeTest.StdoutFile /sdcard/chromium_tests_root/out.txt
+```
+After the tests finish, get the results with
+```
+adb pull /sdcard/chromium_tests_root/third_party/deqp/src/data/TestResults.qpa .
+```
+
+In order to run GPU telemetry tests, build `chrome_public_apk` target. Then follow [GPU Testing](http://www.chromium.org/developers/testing/gpu-testing#TOC-Running-the-GPU-Tests-Locally) doc, using `--browser=android-chromium` argument. Make sure to set your `CHROMIUM_OUT_DIR` environment variable, so that your browser is found, otherwise the stock one will run.
+
+Also, follow [How to build ANGLE in Chromium for dev](https://chromium.googlesource.com/angle/angle/+/HEAD/doc/BuildingAngleForChromiumDevelopment.md) to work with Top of Tree ANGLE in Chromium.
 
 ## Application Development with ANGLE
 This sections describes how to use ANGLE to build an OpenGL ES application.

@@ -54,6 +54,7 @@
 
 #include <Qt3DRender/qparameter.h>
 #include <Qt3DRender/qclearbuffers.h>
+#include <Qt3DRender/qlayerfilter.h>
 #include <Qt3DRender/private/renderer_p.h>
 #include <Qt3DRender/private/clearbuffers_p.h>
 #include <Qt3DRender/private/cameralens_p.h>
@@ -62,6 +63,8 @@
 #include <Qt3DRender/private/qsortpolicy_p.h>
 #include <Qt3DRender/private/lightsource_p.h>
 #include <Qt3DRender/private/qmemorybarrier_p.h>
+#include <Qt3DRender/private/qrendercapture_p.h>
+#include <Qt3DRender/private/qblitframebuffer_p.h>
 
 #include <Qt3DCore/private/qframeallocator_p.h>
 
@@ -113,6 +116,17 @@ struct Q_AUTOTEST_EXPORT ClearBufferInfo
     QVector4D clearColor;
 };
 
+struct Q_AUTOTEST_EXPORT BlitFramebufferInfo
+{
+    Qt3DCore::QNodeId sourceRenderTargetId;
+    Qt3DCore::QNodeId destinationRenderTargetId;
+    QRect sourceRect;
+    QRect destinationRect;
+    Qt3DRender::QRenderTargetOutput::AttachmentPoint sourceAttachmentPoint;
+    Qt3DRender::QRenderTargetOutput::AttachmentPoint destinationAttachmentPoint;
+    QBlitFramebuffer::InterpolationMethod interpolationMethod;
+};
+
 // This class is kind of analogous to RenderBin but I want to avoid trampling
 // on that until we get this working
 
@@ -151,10 +165,11 @@ public:
     inline void setEyeViewDirection(const QVector3D &dir) Q_DECL_NOTHROW { m_data.m_eyeViewDir = dir; }
     inline QVector3D eyeViewDirection() const Q_DECL_NOTHROW { return m_data.m_eyeViewDir; }
 
-    inline void setHasLayerFilter(bool filter) Q_DECL_NOTHROW { m_data.m_hasLayerFilter = filter; }
-    inline bool hasLayerFilter() const Q_DECL_NOTHROW { return m_data.m_hasLayerFilter; }
-    inline void appendLayerFilter(const Qt3DCore::QNodeIdVector &layerIds) Q_DECL_NOTHROW { m_data.m_layerIds << layerIds; }
-    inline Qt3DCore::QNodeIdVector layerFilter() const Q_DECL_NOTHROW { return m_data.m_layerIds; }
+    inline void appendLayerFilter(const Qt3DCore::QNodeId layerFilterId) Q_DECL_NOTHROW { m_data.m_layerFilterIds.push_back(layerFilterId); }
+    inline Qt3DCore::QNodeIdVector layerFilters() const Q_DECL_NOTHROW { return m_data.m_layerFilterIds; }
+
+    inline void appendProximityFilterId(const Qt3DCore::QNodeId proximityFilterId) { m_data.m_proximityFilterIds.push_back(proximityFilterId); }
+    inline Qt3DCore::QNodeIdVector proximityFilterIds() const { return m_data.m_proximityFilterIds; }
 
     inline void setRenderPassFilter(const RenderPassFilter *rpFilter) Q_DECL_NOTHROW { m_data.m_passFilter = rpFilter; }
     inline const RenderPassFilter *renderPassFilter() const Q_DECL_NOTHROW { return m_data.m_passFilter; }
@@ -224,6 +239,8 @@ public:
 
     inline void setRenderCaptureNodeId(const Qt3DCore::QNodeId nodeId) Q_DECL_NOTHROW { m_renderCaptureNodeId = nodeId; }
     inline const Qt3DCore::QNodeId renderCaptureNodeId() const Q_DECL_NOTHROW { return m_renderCaptureNodeId; }
+    inline void setRenderCaptureRequest(const QRenderCaptureRequest& request) Q_DECL_NOTHROW { m_renderCaptureRequest = request; }
+    inline const QRenderCaptureRequest renderCaptureRequest() const Q_DECL_NOTHROW { return m_renderCaptureRequest; }
 
     void setMemoryBarrier(QMemoryBarrier::Operations barrier) Q_DECL_NOTHROW { m_memoryBarrier = barrier; }
     QMemoryBarrier::Operations memoryBarrier() const Q_DECL_NOTHROW { return m_memoryBarrier; }
@@ -237,7 +254,6 @@ public:
             , m_renderCameraNode(nullptr)
             , m_techniqueFilter(nullptr)
             , m_passFilter(nullptr)
-            , m_hasLayerFilter(false)
         {
         }
         CameraLens *m_renderCameraLens;
@@ -246,24 +262,38 @@ public:
         const RenderPassFilter *m_passFilter;
         QMatrix4x4 m_viewMatrix;
         QMatrix4x4 m_viewProjectionMatrix;
-        bool m_hasLayerFilter;
-        Qt3DCore::QNodeIdVector m_layerIds;
+        Qt3DCore::QNodeIdVector m_layerFilterIds;
         QVector<Qt3DRender::QSortPolicy::SortType> m_sortingTypes;
         QVector3D m_eyePos;
         QVector3D m_eyeViewDir;
+        Qt3DCore::QNodeIdVector m_proximityFilterIds;
     };
 
     bool isDownloadBuffersEnable() const;
     void setIsDownloadBuffersEnable(bool isDownloadBuffersEnable);
 
+    BlitFramebufferInfo blitFrameBufferInfo() const;
+    void setBlitFrameBufferInfo(const BlitFramebufferInfo &blitFrameBufferInfo);
+
+    bool hasBlitFramebufferInfo() const;
+    void setHasBlitFramebufferInfo(bool hasBlitFramebufferInfo);
+
 private:
-    void setShaderAndUniforms(RenderCommand *command, RenderPass *pass, ParameterInfoList &parameters, const QMatrix4x4 &worldTransform,
-                              const QVector<LightSource> &activeLightSources, EnvironmentLight *environmentLight) const;
+    void setShaderAndUniforms(RenderCommand *command,
+                              RenderPass *pass,
+                              ParameterInfoList &parameters,
+                              Entity *entity,
+                              const QVector<LightSource> &activeLightSources,
+                              EnvironmentLight *environmentLight) const;
 
     mutable QThreadStorage<UniformBlockValueBuilder*> m_localData;
 
     Qt3DCore::QNodeId m_renderCaptureNodeId;
+    QRenderCaptureRequest m_renderCaptureRequest;
     bool m_isDownloadBuffersEnable;
+
+    bool m_hasBlitFramebufferInfo;
+    BlitFramebufferInfo m_blitFrameBufferInfo;
 
     Renderer *m_renderer;
     NodeManagers *m_manager;
@@ -316,20 +346,28 @@ private:
         ModelViewNormalMatrix,
         ViewportMatrix,
         InverseViewportMatrix,
+        AspectRatio,
         Time,
         Exposure,
         Gamma,
-        EyePosition
+        EyePosition,
+        SkinningPalette
     };
 
     typedef QHash<int, StandardUniform> StandardUniformsNameToTypeHash;
     static StandardUniformsNameToTypeHash ms_standardUniformSetters;
     static StandardUniformsNameToTypeHash initializeStandardUniformSetters();
 
-    UniformValue standardUniformValue(StandardUniform standardUniformType, const QMatrix4x4 &model) const;
+    UniformValue standardUniformValue(StandardUniform standardUniformType,
+                                      Entity *entity,
+                                      const QMatrix4x4 &model) const;
 
     void setUniformValue(ShaderParameterPack &uniformPack, int nameId, const UniformValue &value) const;
-    void setStandardUniformValue(ShaderParameterPack &uniformPack, int glslNameId, int nameId, const QMatrix4x4 &worldTransform) const;
+    void setStandardUniformValue(ShaderParameterPack &uniformPack,
+                                 int glslNameId,
+                                 int nameId,
+                                 Entity *entity,
+                                 const QMatrix4x4 &worldTransform) const;
     void setUniformBlockValue(ShaderParameterPack &uniformPack,
                               Shader *shader,
                               const ShaderUniformBlock &block,

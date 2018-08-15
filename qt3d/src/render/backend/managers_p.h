@@ -61,6 +61,7 @@
 #include <Qt3DRender/private/levelofdetail_p.h>
 #include <Qt3DRender/private/material_p.h>
 #include <Qt3DRender/private/shader_p.h>
+#include <Qt3DRender/private/shaderbuilder_p.h>
 #include <Qt3DRender/private/texture_p.h>
 #include <Qt3DRender/private/transform_p.h>
 #include <Qt3DRender/private/rendertarget_p.h>
@@ -79,6 +80,9 @@
 #include <Qt3DRender/private/light_p.h>
 #include <Qt3DRender/private/environmentlight_p.h>
 #include <Qt3DRender/private/computecommand_p.h>
+#include <Qt3DRender/private/armature_p.h>
+#include <Qt3DRender/private/skeleton_p.h>
+#include <Qt3DRender/private/joint_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -199,6 +203,15 @@ class ShaderManager : public Qt3DCore::QResourceManager<
 {
 public:
     ShaderManager() {}
+};
+
+class ShaderBuilderManager : public Qt3DCore::QResourceManager<
+        ShaderBuilder,
+        Qt3DCore::QNodeId,
+        Qt3DCore::NonLockingPolicy>
+{
+public:
+    ShaderBuilderManager() {}
 };
 
 class TextureManager : public Qt3DCore::QResourceManager<
@@ -358,6 +371,45 @@ class RenderStateManager : public Qt3DCore::QResourceManager<
 {
 };
 
+class ArmatureManager : public Qt3DCore::QResourceManager<
+        Armature,
+        Qt3DCore::QNodeId,
+        Qt3DCore::NonLockingPolicy>
+{
+};
+
+class SkeletonManager : public Qt3DCore::QResourceManager<
+        Skeleton,
+        Qt3DCore::QNodeId,
+        Qt3DCore::NonLockingPolicy>
+{
+public:
+    enum DirtyFlag {
+        SkeletonDataDirty,
+        SkeletonTransformsDirty
+    };
+
+    void addDirtySkeleton(DirtyFlag dirtyFlag, HSkeleton skeletonHandle);
+    QVector<HSkeleton> dirtySkeletons(DirtyFlag dirtyFlag);
+
+private:
+    QVector<HSkeleton> m_dirtyDataSkeletons;
+    QVector<HSkeleton> m_dirtyTransformSkeletons;
+};
+
+class JointManager : public Qt3DCore::QResourceManager<
+        Joint,
+        Qt3DCore::QNodeId,
+        Qt3DCore::NonLockingPolicy>
+{
+public:
+    void addDirtyJoint(Qt3DCore::QNodeId jointId);
+    QVector<HJoint> dirtyJoints();
+
+private:
+    QVector<HJoint> m_dirtyJoints;
+};
+
 } // namespace Render
 } // namespace Qt3DRender
 
@@ -379,6 +431,9 @@ Q_DECLARE_RESOURCE_INFO(Qt3DRender::Render::ComputeCommand, Q_REQUIRES_CLEANUP)
 Q_DECLARE_RESOURCE_INFO(Qt3DRender::Render::Parameter, Q_REQUIRES_CLEANUP)
 Q_DECLARE_RESOURCE_INFO(Qt3DRender::Render::Transform, Q_REQUIRES_CLEANUP)
 Q_DECLARE_RESOURCE_INFO(Qt3DRender::Render::OpenGLVertexArrayObject, Q_REQUIRES_CLEANUP)
+Q_DECLARE_RESOURCE_INFO(Qt3DRender::Render::Armature, Q_REQUIRES_CLEANUP)
+Q_DECLARE_RESOURCE_INFO(Qt3DRender::Render::Skeleton, Q_REQUIRES_CLEANUP)
+Q_DECLARE_RESOURCE_INFO(Qt3DRender::Render::Joint, Q_REQUIRES_CLEANUP)
 
 QT_END_NAMESPACE
 

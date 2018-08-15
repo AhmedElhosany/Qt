@@ -31,9 +31,9 @@
 #ifndef PerformanceTiming_h
 #define PerformanceTiming_h
 
-#include "bindings/core/v8/ScriptWrappable.h"
 #include "core/CoreExport.h"
-#include "core/frame/DOMWindowProperty.h"
+#include "core/dom/ContextLifecycleObserver.h"
+#include "platform/bindings/ScriptWrappable.h"
 #include "platform/heap/Handle.h"
 
 namespace blink {
@@ -49,15 +49,16 @@ class ResourceLoadTiming;
 class ScriptState;
 class ScriptValue;
 
+// Legacy support for NT1(https://www.w3.org/TR/navigation-timing/).
 class CORE_EXPORT PerformanceTiming final
     : public GarbageCollected<PerformanceTiming>,
       public ScriptWrappable,
-      public DOMWindowProperty {
+      public DOMWindowClient {
   DEFINE_WRAPPERTYPEINFO();
   USING_GARBAGE_COLLECTED_MIXIN(PerformanceTiming);
 
  public:
-  static PerformanceTiming* create(LocalFrame* frame) {
+  static PerformanceTiming* Create(LocalFrame* frame) {
     return new PerformanceTiming(frame);
   }
 
@@ -86,49 +87,47 @@ class CORE_EXPORT PerformanceTiming final
   // The below are non-spec timings, for Page Load UMA metrics.
 
   // The time the first document layout is performed.
-  unsigned long long firstLayout() const;
+  unsigned long long FirstLayout() const;
   // The time the first paint operation was performed.
-  unsigned long long firstPaint() const;
+  unsigned long long FirstPaint() const;
   // The time the first paint operation for visible text was performed.
-  unsigned long long firstTextPaint() const;
+  unsigned long long FirstTextPaint() const;
   // The time the first paint operation for image was performed.
-  unsigned long long firstImagePaint() const;
+  unsigned long long FirstImagePaint() const;
   // The time of the first 'contentful' paint. A contentful paint is a paint
   // that includes content of some kind (for example, text or image content).
-  unsigned long long firstContentfulPaint() const;
+  unsigned long long FirstContentfulPaint() const;
   // The time of the first 'meaningful' paint, A meaningful paint is a paint
   // where the page's primary content is visible.
-  unsigned long long firstMeaningfulPaint() const;
+  unsigned long long FirstMeaningfulPaint() const;
 
-  unsigned long long parseStart() const;
-  unsigned long long parseStop() const;
-  unsigned long long parseBlockedOnScriptLoadDuration() const;
-  unsigned long long parseBlockedOnScriptLoadFromDocumentWriteDuration() const;
-  unsigned long long parseBlockedOnScriptExecutionDuration() const;
-  unsigned long long parseBlockedOnScriptExecutionFromDocumentWriteDuration()
+  unsigned long long ParseStart() const;
+  unsigned long long ParseStop() const;
+  unsigned long long ParseBlockedOnScriptLoadDuration() const;
+  unsigned long long ParseBlockedOnScriptLoadFromDocumentWriteDuration() const;
+  unsigned long long ParseBlockedOnScriptExecutionDuration() const;
+  unsigned long long ParseBlockedOnScriptExecutionFromDocumentWriteDuration()
       const;
-
-  // Microseconds spend parsing author style sheets before the first contentful
-  // paint.
-  unsigned long long authorStyleSheetParseDurationBeforeFCP() const;
+  unsigned long long AuthorStyleSheetParseDurationBeforeFCP() const;
+  unsigned long long UpdateStyleDurationBeforeFCP() const;
 
   ScriptValue toJSONForBinding(ScriptState*) const;
 
   DECLARE_VIRTUAL_TRACE();
 
-  unsigned long long monotonicTimeToIntegerMilliseconds(double) const;
-  double integerMillisecondsToMonotonicTime(unsigned long long) const;
+  unsigned long long MonotonicTimeToIntegerMilliseconds(double) const;
+  double IntegerMillisecondsToMonotonicTime(unsigned long long) const;
 
  private:
   explicit PerformanceTiming(LocalFrame*);
 
-  const DocumentTiming* documentTiming() const;
-  const CSSTiming* cssTiming() const;
-  const DocumentParserTiming* documentParserTiming() const;
-  const PaintTiming* paintTiming() const;
-  DocumentLoader* documentLoader() const;
-  DocumentLoadTiming* documentLoadTiming() const;
-  ResourceLoadTiming* resourceLoadTiming() const;
+  const DocumentTiming* GetDocumentTiming() const;
+  const CSSTiming* CssTiming() const;
+  const DocumentParserTiming* GetDocumentParserTiming() const;
+  const PaintTiming* GetPaintTiming() const;
+  DocumentLoader* GetDocumentLoader() const;
+  DocumentLoadTiming* GetDocumentLoadTiming() const;
+  ResourceLoadTiming* GetResourceLoadTiming() const;
 };
 
 }  // namespace blink

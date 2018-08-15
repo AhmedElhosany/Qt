@@ -4,15 +4,14 @@
 
 #include "chrome/browser/extensions/api/content_settings/content_settings_store.h"
 
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <utility>
-#include <vector>
 
 #include "base/debug/alias.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/api/content_settings/content_settings_api_constants.h"
@@ -20,6 +19,7 @@
 #include "components/content_settings/core/browser/content_settings_origin_identifier_value_map.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -28,7 +28,6 @@ using content_settings::Rule;
 using content_settings::RuleIterator;
 using content_settings::OriginIdentifierValueMap;
 using content_settings::ResourceIdentifier;
-using content_settings::ValueToContentSetting;
 
 namespace extensions {
 
@@ -36,8 +35,10 @@ namespace helpers = content_settings_helpers;
 namespace keys = content_settings_api_constants;
 
 struct ContentSettingsStore::ExtensionEntry {
-  // Extension id
+  // Extension id.
   std::string id;
+  // Installation time.
+  base::Time install_time;
   // Whether extension is enabled in the profile.
   bool enabled;
   // Content settings.
@@ -53,7 +54,6 @@ ContentSettingsStore::ContentSettingsStore() {
 }
 
 ContentSettingsStore::~ContentSettingsStore() {
-  base::STLDeleteValues(&entries_);
 }
 
 std::unique_ptr<RuleIterator> ContentSettingsStore::GetRuleIterator(
@@ -61,16 +61,14 @@ std::unique_ptr<RuleIterator> ContentSettingsStore::GetRuleIterator(
     const content_settings::ResourceIdentifier& identifier,
     bool incognito) const {
   std::vector<std::unique_ptr<RuleIterator>> iterators;
-  // Iterate the extensions based on install time (last installed extensions
-  // first).
-  ExtensionEntryMap::const_reverse_iterator entry_it;
 
   // The individual |RuleIterators| shouldn't lock; pass |lock_| to the
   // |ConcatenationIterator| in a locked state.
   std::unique_ptr<base::AutoLock> auto_lock(new base::AutoLock(lock_));
 
-  for (entry_it = entries_.rbegin(); entry_it != entries_.rend(); ++entry_it) {
-    auto* entry = entry_it->second;
+  // Iterate the extensions based on install time (most-recently installed
+  // items first).
+  for (const auto& entry : entries_) {
     if (!entry->enabled)
       continue;
 
@@ -111,8 +109,9 @@ void ContentSettingsStore::SetExtensionContentSetting(
     if (setting == CONTENT_SETTING_DEFAULT) {
       map->DeleteValue(primary_pattern, secondary_pattern, type, identifier);
     } else {
+      // Do not set a timestamp for extension settings.
       map->SetValue(primary_pattern, secondary_pattern, type, identifier,
-                    new base::FundamentalValue(setting));
+                    base::Time(), new base::Value(setting));
     }
   }
 
@@ -128,13 +127,23 @@ void ContentSettingsStore::RegisterExtension(
     const base::Time& install_time,
     bool is_enabled) {
   base::AutoLock lock(lock_);
-  ExtensionEntryMap::iterator i = FindEntry(ext_id);
-  ExtensionEntry* entry;
+  auto i = FindIterator(ext_id);
+  ExtensionEntry* entry = nullptr;
   if (i != entries_.end()) {
-    entry = i->second;
+    entry = i->get();
   } else {
     entry = new ExtensionEntry;
-    entries_.insert(std::make_pair(install_time, entry));
+    entry->install_time = install_time;
+
+    // Insert in reverse-chronological order to maintain the invariant.
+    auto unique_entry = base::WrapUnique(entry);
+    auto location =
+        std::upper_bound(entries_.begin(), entries_.end(), unique_entry,
+                         [](const std::unique_ptr<ExtensionEntry>& a,
+                            const std::unique_ptr<ExtensionEntry>& b) {
+                           return a->install_time > b->install_time;
+                         });
+    entries_.insert(location, std::move(unique_entry));
   }
 
   entry->id = ext_id;
@@ -147,14 +156,13 @@ void ContentSettingsStore::UnregisterExtension(
   bool notify_incognito = false;
   {
     base::AutoLock lock(lock_);
-    ExtensionEntryMap::iterator i = FindEntry(ext_id);
+    auto i = FindIterator(ext_id);
     if (i == entries_.end())
       return;
-    notify = !i->second->settings.empty();
-    notify_incognito = !i->second->incognito_persistent_settings.empty() ||
-                       !i->second->incognito_session_only_settings.empty();
+    notify = !(*i)->settings.empty();
+    notify_incognito = !(*i)->incognito_persistent_settings.empty() ||
+                       !(*i)->incognito_session_only_settings.empty();
 
-    delete i->second;
     entries_.erase(i);
   }
   if (notify)
@@ -169,14 +177,15 @@ void ContentSettingsStore::SetExtensionState(
   bool notify_incognito = false;
   {
     base::AutoLock lock(lock_);
-    ExtensionEntryMap::const_iterator i = FindEntry(ext_id);
-    if (i == entries_.end())
+    ExtensionEntry* entry = FindEntry(ext_id);
+    if (!entry)
       return;
-    notify = !i->second->settings.empty();
-    notify_incognito = !i->second->incognito_persistent_settings.empty() ||
-                       !i->second->incognito_session_only_settings.empty();
 
-    i->second->enabled = is_enabled;
+    notify = !entry->settings.empty();
+    notify_incognito = !entry->incognito_persistent_settings.empty() ||
+                       !entry->incognito_session_only_settings.empty();
+
+    entry->enabled = is_enabled;
   }
   if (notify)
     NotifyOfContentSettingChanged(ext_id, false);
@@ -187,46 +196,34 @@ void ContentSettingsStore::SetExtensionState(
 OriginIdentifierValueMap* ContentSettingsStore::GetValueMap(
     const std::string& ext_id,
     ExtensionPrefsScope scope) {
-  ExtensionEntryMap::const_iterator i = FindEntry(ext_id);
-  if (i != entries_.end()) {
-    switch (scope) {
-      case kExtensionPrefsScopeRegular:
-        return &(i->second->settings);
-      case kExtensionPrefsScopeRegularOnly:
-        // TODO(bauerb): Implement regular-only content settings.
-        NOTREACHED();
-        return NULL;
-      case kExtensionPrefsScopeIncognitoPersistent:
-        return &(i->second->incognito_persistent_settings);
-      case kExtensionPrefsScopeIncognitoSessionOnly:
-        return &(i->second->incognito_session_only_settings);
-    }
-  }
-  return NULL;
+  const OriginIdentifierValueMap* result =
+      static_cast<const ContentSettingsStore*>(this)->GetValueMap(ext_id,
+                                                                  scope);
+  return const_cast<OriginIdentifierValueMap*>(result);
 }
 
 const OriginIdentifierValueMap* ContentSettingsStore::GetValueMap(
     const std::string& ext_id,
     ExtensionPrefsScope scope) const {
-  ExtensionEntryMap::const_iterator i = FindEntry(ext_id);
-  if (i == entries_.end())
-    return NULL;
+  ExtensionEntry* entry = FindEntry(ext_id);
+  if (!entry)
+    return nullptr;
 
   switch (scope) {
     case kExtensionPrefsScopeRegular:
-      return &(i->second->settings);
+      return &(entry->settings);
     case kExtensionPrefsScopeRegularOnly:
       // TODO(bauerb): Implement regular-only content settings.
       NOTREACHED();
-      return NULL;
+      return nullptr;
     case kExtensionPrefsScopeIncognitoPersistent:
-      return &(i->second->incognito_persistent_settings);
+      return &(entry->incognito_persistent_settings);
     case kExtensionPrefsScopeIncognitoSessionOnly:
-      return &(i->second->incognito_session_only_settings);
+      return &(entry->incognito_session_only_settings);
   }
 
   NOTREACHED();
-  return NULL;
+  return nullptr;
 }
 
 void ContentSettingsStore::ClearContentSettingsForExtension(
@@ -249,7 +246,7 @@ void ContentSettingsStore::ClearContentSettingsForExtension(
   }
 }
 
-base::ListValue* ContentSettingsStore::GetSettingsForExtension(
+std::unique_ptr<base::ListValue> ContentSettingsStore::GetSettingsForExtension(
     const std::string& extension_id,
     ExtensionPrefsScope scope) const {
   base::AutoLock lock(lock_);
@@ -257,7 +254,7 @@ base::ListValue* ContentSettingsStore::GetSettingsForExtension(
   if (!map)
     return nullptr;
 
-  base::ListValue* settings = new base::ListValue();
+  auto settings = base::MakeUnique<base::ListValue>();
   for (const auto& it : *map) {
     const auto& key = it.first;
     std::unique_ptr<RuleIterator> rule_iterator(
@@ -279,7 +276,8 @@ base::ListValue* ContentSettingsStore::GetSettingsForExtension(
           helpers::ContentSettingsTypeToString(key.content_type));
       setting_dict->SetString(keys::kResourceIdentifierKey,
                               key.resource_identifier);
-      ContentSetting content_setting = ValueToContentSetting(rule.value.get());
+      ContentSetting content_setting =
+          content_settings::ValueToContentSetting(rule.value.get());
       DCHECK_NE(CONTENT_SETTING_DEFAULT, content_setting);
 
       std::string setting_string =
@@ -298,8 +296,8 @@ void ContentSettingsStore::SetExtensionContentSettingFromList(
     const base::ListValue* list,
     ExtensionPrefsScope scope) {
   for (const auto& value : *list) {
-    base::DictionaryValue* dict;
-    if (!value->GetAsDictionary(&dict)) {
+    const base::DictionaryValue* dict = nullptr;
+    if (!value.GetAsDictionary(&dict)) {
       NOTREACHED();
       continue;
     }
@@ -375,24 +373,22 @@ bool ContentSettingsStore::OnCorrectThread() {
          BrowserThread::CurrentlyOn(BrowserThread::UI);
 }
 
-ContentSettingsStore::ExtensionEntryMap::iterator
-ContentSettingsStore::FindEntry(const std::string& ext_id) {
-  ExtensionEntryMap::iterator i;
-  for (i = entries_.begin(); i != entries_.end(); ++i) {
-    if (i->second->id == ext_id)
-      return i;
-  }
-  return entries_.end();
+ContentSettingsStore::ExtensionEntry* ContentSettingsStore::FindEntry(
+    const std::string& ext_id) const {
+  auto iter =
+      std::find_if(entries_.begin(), entries_.end(),
+                   [ext_id](const std::unique_ptr<ExtensionEntry>& entry) {
+                     return entry->id == ext_id;
+                   });
+  return iter == entries_.end() ? nullptr : iter->get();
 }
 
-ContentSettingsStore::ExtensionEntryMap::const_iterator
-ContentSettingsStore::FindEntry(const std::string& ext_id) const {
-  ExtensionEntryMap::const_iterator i;
-  for (i = entries_.begin(); i != entries_.end(); ++i) {
-    if (i->second->id == ext_id)
-      return i;
-  }
-  return entries_.end();
+ContentSettingsStore::ExtensionEntries::iterator
+ContentSettingsStore::FindIterator(const std::string& ext_id) {
+  return std::find_if(entries_.begin(), entries_.end(),
+                      [ext_id](const std::unique_ptr<ExtensionEntry>& entry) {
+                        return entry->id == ext_id;
+                      });
 }
 
 }  // namespace extensions

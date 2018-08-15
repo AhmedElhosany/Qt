@@ -2005,6 +2005,8 @@ qint64 QSslSocket::readData(char *data, qint64 maxlen)
         // possibly trigger another transmit() to decrypt more data from the socket
         if (d->plainSocket->bytesAvailable())
             QMetaObject::invokeMethod(this, "_q_flushReadBuffer", Qt::QueuedConnection);
+        else if (d->state != QAbstractSocket::ConnectedState)
+            return maxlen ? qint64(-1) : qint64(0);
     }
 
     return readBytes;
@@ -2025,7 +2027,10 @@ qint64 QSslSocket::writeData(const char *data, qint64 len)
     d->writeBuffer.append(data, len);
 
     // make sure we flush to the plain socket's buffer
-    QMetaObject::invokeMethod(this, "_q_flushWriteBuffer", Qt::QueuedConnection);
+    if (!d->flushTriggered) {
+        d->flushTriggered = true;
+        QMetaObject::invokeMethod(this, "_q_flushWriteBuffer", Qt::QueuedConnection);
+    }
 
     return len;
 }
@@ -2044,6 +2049,7 @@ QSslSocketPrivate::QSslSocketPrivate()
     , allowRootCertOnDemandLoading(true)
     , plainSocket(0)
     , paused(false)
+    , flushTriggered(false)
 {
     QSslConfigurationPrivate::deepCopyDefaultConfiguration(&configuration);
 }
@@ -2066,6 +2072,7 @@ void QSslSocketPrivate::init()
     ignoreAllSslErrors = false;
     shutdown = false;
     pendingClose = false;
+    flushTriggered = false;
 
     // we don't want to clear the ignoreErrorsList, so
     // that it is possible setting it before connecting
@@ -2534,6 +2541,10 @@ void QSslSocketPrivate::_q_readChannelFinishedSlot()
 void QSslSocketPrivate::_q_flushWriteBuffer()
 {
     Q_Q(QSslSocket);
+
+    // need to notice if knock-on effects of this flush (e.g. a readReady() via transmit())
+    // make another necessary, so clear flag before calling:
+    flushTriggered = false;
     if (!writeBuffer.isEmpty())
         q->flush();
 }

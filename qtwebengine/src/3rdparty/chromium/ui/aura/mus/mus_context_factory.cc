@@ -4,102 +4,107 @@
 
 #include "ui/aura/mus/mus_context_factory.h"
 
+#include "base/command_line.h"
 #include "base/memory/ptr_util.h"
-#include "services/ui/public/cpp/context_provider.h"
-#include "ui/aura/mus/gpu_service.h"
+#include "cc/base/switches.h"
+#include "components/viz/common/gpu/context_provider.h"
+#include "services/ui/public/cpp/gpu/gpu.h"
 #include "ui/aura/mus/window_port_mus.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/compositor/reflector.h"
+#include "ui/compositor/compositor_switches.h"
+#include "ui/compositor/compositor_util.h"
+#include "ui/display/display_switches.h"
+#include "ui/gfx/switches.h"
 #include "ui/gl/gl_bindings.h"
 
 namespace aura {
+
 namespace {
-
-class FakeReflector : public ui::Reflector {
- public:
-  FakeReflector() {}
-  ~FakeReflector() override {}
-  void OnMirroringCompositorResized() override {}
-  void AddMirroringLayer(ui::Layer* layer) override {}
-  void RemoveMirroringLayer(ui::Layer* layer) override {}
-};
-
+viz::BufferToTextureTargetMap CreateBufferToTextureTargetMap() {
+  viz::BufferToTextureTargetMap image_targets;
+  for (int usage_idx = 0; usage_idx <= static_cast<int>(gfx::BufferUsage::LAST);
+       ++usage_idx) {
+    gfx::BufferUsage usage = static_cast<gfx::BufferUsage>(usage_idx);
+    for (int format_idx = 0;
+         format_idx <= static_cast<int>(gfx::BufferFormat::LAST);
+         ++format_idx) {
+      gfx::BufferFormat format = static_cast<gfx::BufferFormat>(format_idx);
+      // TODO(sad): http://crbug.com/675431
+      image_targets[std::make_pair(usage, format)] = GL_TEXTURE_2D;
+    }
+  }
+  return image_targets;
+}
 }  // namespace
 
-MusContextFactory::MusContextFactory(GpuService* gpu_service)
-    : next_sink_id_(1u), gpu_service_(gpu_service) {}
+MusContextFactory::MusContextFactory(ui::Gpu* gpu)
+    : gpu_(gpu),
+      renderer_settings_(
+          ui::CreateRendererSettings(CreateBufferToTextureTargetMap())),
+      weak_ptr_factory_(this) {}
 
 MusContextFactory::~MusContextFactory() {}
 
-void MusContextFactory::CreateCompositorFrameSink(
-    base::WeakPtr<ui::Compositor> compositor) {
+void MusContextFactory::OnEstablishedGpuChannel(
+    base::WeakPtr<ui::Compositor> compositor,
+    scoped_refptr<gpu::GpuChannelHost> gpu_channel) {
+  if (!compositor)
+    return;
   WindowTreeHost* host =
       WindowTreeHost::GetForAcceleratedWidget(compositor->widget());
   WindowPortMus* window_port = WindowPortMus::Get(host->window());
   DCHECK(window_port);
-  auto compositor_frame_sink = window_port->RequestCompositorFrameSink(
-      ui::mojom::CompositorFrameSinkType::DEFAULT,
-      make_scoped_refptr(
-          new ui::ContextProvider(gpu_service_->EstablishGpuChannelSync())),
-      gpu_service_->gpu_memory_buffer_manager());
-  compositor->SetCompositorFrameSink(std::move(compositor_frame_sink));
+
+  scoped_refptr<viz::ContextProvider> context_provider =
+      gpu_->CreateContextProvider(std::move(gpu_channel));
+  // If the binding fails, then we need to return early since the compositor
+  // expects a successfully initialized/bound provider.
+  if (!context_provider->BindToCurrentThread())
+    return;
+  std::unique_ptr<cc::LayerTreeFrameSink> layer_tree_frame_sink =
+      window_port->RequestLayerTreeFrameSink(std::move(context_provider),
+                                             gpu_->gpu_memory_buffer_manager());
+  compositor->SetLayerTreeFrameSink(std::move(layer_tree_frame_sink));
 }
 
-std::unique_ptr<ui::Reflector> MusContextFactory::CreateReflector(
-    ui::Compositor* mirroed_compositor,
-    ui::Layer* mirroring_layer) {
-  // NOTIMPLEMENTED();
-  return base::WrapUnique(new FakeReflector);
+void MusContextFactory::CreateLayerTreeFrameSink(
+    base::WeakPtr<ui::Compositor> compositor) {
+  gpu_->EstablishGpuChannel(
+      base::Bind(&MusContextFactory::OnEstablishedGpuChannel,
+                 weak_ptr_factory_.GetWeakPtr(), compositor));
 }
 
-void MusContextFactory::RemoveReflector(ui::Reflector* reflector) {
-  // NOTIMPLEMENTED();
-}
-
-scoped_refptr<cc::ContextProvider>
+scoped_refptr<viz::ContextProvider>
 MusContextFactory::SharedMainThreadContextProvider() {
-  // NOTIMPLEMENTED();
-  return nullptr;
+  if (!shared_main_thread_context_provider_) {
+    scoped_refptr<gpu::GpuChannelHost> gpu_channel =
+        gpu_->EstablishGpuChannelSync();
+    shared_main_thread_context_provider_ =
+        gpu_->CreateContextProvider(std::move(gpu_channel));
+    if (!shared_main_thread_context_provider_->BindToCurrentThread())
+      shared_main_thread_context_provider_ = nullptr;
+  }
+  return shared_main_thread_context_provider_;
 }
 
 void MusContextFactory::RemoveCompositor(ui::Compositor* compositor) {
   // NOTIMPLEMENTED();
 }
 
-bool MusContextFactory::DoesCreateTestContexts() {
-  return false;
-}
-
-uint32_t MusContextFactory::GetImageTextureTarget(gfx::BufferFormat format,
-                                                  gfx::BufferUsage usage) {
-  // No GpuMemoryBuffer support, so just return GL_TEXTURE_2D.
-  return GL_TEXTURE_2D;
+double MusContextFactory::GetRefreshRate() const {
+  return 60.0;
 }
 
 gpu::GpuMemoryBufferManager* MusContextFactory::GetGpuMemoryBufferManager() {
-  return gpu_service_->gpu_memory_buffer_manager();
+  return gpu_->gpu_memory_buffer_manager();
 }
 
 cc::TaskGraphRunner* MusContextFactory::GetTaskGraphRunner() {
   return raster_thread_helper_.task_graph_runner();
 }
 
-cc::FrameSinkId MusContextFactory::AllocateFrameSinkId() {
-  return cc::FrameSinkId(0, next_sink_id_++);
-}
-
-cc::SurfaceManager* MusContextFactory::GetSurfaceManager() {
-  return &surface_manager_;
-}
-
-void MusContextFactory::SetDisplayVisible(ui::Compositor* compositor,
-                                          bool visible) {
-  // TODO(fsamuel): display[compositor]->SetVisible(visible);
-}
-
-void MusContextFactory::ResizeDisplay(ui::Compositor* compositor,
-                                      const gfx::Size& size) {
-  // TODO(fsamuel): display[compositor]->Resize(size);
+const viz::ResourceSettings& MusContextFactory::GetResourceSettings() const {
+  return renderer_settings_.resource_settings;
 }
 
 }  // namespace aura

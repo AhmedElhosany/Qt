@@ -12,7 +12,7 @@
 
 #include <sstream>
 
-#include "webrtc/base/stringencode.h"
+#include "webrtc/rtc_base/stringencode.h"
 
 namespace webrtc {
 
@@ -51,10 +51,8 @@ std::string VectorOfStringsToString(const std::vector<T>& strings) {
 }  // namespace
 
 bool RTCStats::operator==(const RTCStats& other) const {
-  if (type() != other.type() || id() != other.id() ||
-      timestamp_us() != other.timestamp_us()) {
+  if (type() != other.type() || id() != other.id())
     return false;
-  }
   std::vector<const RTCStatsMemberInterface*> members = Members();
   std::vector<const RTCStatsMemberInterface*> other_members = other.Members();
   RTC_DCHECK_EQ(members.size(), other_members.size());

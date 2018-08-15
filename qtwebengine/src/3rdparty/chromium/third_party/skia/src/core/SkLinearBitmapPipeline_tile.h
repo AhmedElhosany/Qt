@@ -15,18 +15,29 @@
 #include <limits>
 
 namespace {
+
+void assertTiled(const Sk4s& vs, SkScalar vMax) {
+    SkASSERT(0 <= vs[0] && vs[0] < vMax);
+    SkASSERT(0 <= vs[1] && vs[1] < vMax);
+    SkASSERT(0 <= vs[2] && vs[2] < vMax);
+    SkASSERT(0 <= vs[3] && vs[3] < vMax);
+}
+
+/*
+ * Clamp in the X direction.
+ * Observations:
+ *   * sample pointer border - if the sample point is <= 0.5 or >= Max - 0.5 then the pixel
+ *     value should be a border color. For this case, create the span using clampToSinglePixel.
+ */
 class XClampStrategy {
 public:
     XClampStrategy(int32_t max)
-        : fXMaxPixel{SkScalar(max - 0.5f)}
+        : fXMaxPixel{SkScalar(max - SK_ScalarHalf)}
         , fXMax{SkScalar(max)} { }
 
     void tileXPoints(Sk4s* xs) {
-        *xs = Sk4s::Min(Sk4s::Max(*xs, 0.0f), fXMaxPixel);
-        SkASSERT(0 <= (*xs)[0] && (*xs)[0] < fXMax);
-        SkASSERT(0 <= (*xs)[1] && (*xs)[1] < fXMax);
-        SkASSERT(0 <= (*xs)[2] && (*xs)[2] < fXMax);
-        SkASSERT(0 <= (*xs)[3] && (*xs)[3] < fXMax);
+        *xs = Sk4s::Min(Sk4s::Max(*xs, SK_ScalarHalf), fXMaxPixel);
+        assertTiled(*xs, fXMax);
     }
 
     template<typename Next>
@@ -76,9 +87,9 @@ public:
         // * Over - for the portion of the span > xMax, take the color at pixel {xMax-1, y} and
         //   use it to fill in the rest of the destination pixels.
         if (dx >= 0) {
-            Span leftClamped = span.breakAt(0.0f, dx);
+            Span leftClamped = span.breakAt(SK_ScalarHalf, dx);
             if (!leftClamped.isEmpty()) {
-                leftClamped.clampToSinglePixel({0.0f, y});
+                leftClamped.clampToSinglePixel({SK_ScalarHalf, y});
                 next->pointSpan(leftClamped);
             }
             Span center = span.breakAt(fXMax, dx);
@@ -86,21 +97,21 @@ public:
                 next->pointSpan(center);
             }
             if (!span.isEmpty()) {
-                span.clampToSinglePixel({fXMax - 1, y});
+                span.clampToSinglePixel({fXMaxPixel, y});
                 next->pointSpan(span);
             }
         } else {
             Span rightClamped = span.breakAt(fXMax, dx);
             if (!rightClamped.isEmpty()) {
-                rightClamped.clampToSinglePixel({fXMax - 1, y});
+                rightClamped.clampToSinglePixel({fXMaxPixel, y});
                 next->pointSpan(rightClamped);
             }
-            Span center = span.breakAt(0.0f, dx);
+            Span center = span.breakAt(SK_ScalarHalf, dx);
             if (!center.isEmpty()) {
                 next->pointSpan(center);
             }
             if (!span.isEmpty()) {
-                span.clampToSinglePixel({0.0f, y});
+                span.clampToSinglePixel({SK_ScalarHalf, y});
                 next->pointSpan(span);
             }
         }
@@ -115,26 +126,27 @@ private:
 class YClampStrategy {
 public:
     YClampStrategy(int32_t max)
-        : fYMax{SkScalar(max) - 0.5f} { }
+        : fYMaxPixel{SkScalar(max) - SK_ScalarHalf} { }
 
     void tileYPoints(Sk4s* ys) {
-        *ys = Sk4s::Min(Sk4s::Max(*ys, 0.0f), fYMax);
-        SkASSERT(0 <= (*ys)[0] && (*ys)[0] <= fYMax);
-        SkASSERT(0 <= (*ys)[1] && (*ys)[1] <= fYMax);
-        SkASSERT(0 <= (*ys)[2] && (*ys)[2] <= fYMax);
-        SkASSERT(0 <= (*ys)[3] && (*ys)[3] <= fYMax);
+        *ys = Sk4s::Min(Sk4s::Max(*ys, SK_ScalarHalf), fYMaxPixel);
+        assertTiled(*ys, fYMaxPixel + SK_ScalarHalf);
     }
 
     SkScalar tileY(SkScalar y) {
-        return std::min(std::max<SkScalar>(0.0f, y), fYMax);
+        Sk4f ys{y};
+        tileYPoints(&ys);
+        return ys[0];
     }
 
 private:
-    const SkScalar fYMax;
+    const SkScalar fYMaxPixel;
 };
 
-SkScalar tile_mod(SkScalar x, SkScalar base) {
-    return x - SkScalarFloorToScalar(x / base) * base;
+SkScalar tile_mod(SkScalar x, SkScalar base, SkScalar cap) {
+    // When x is a negative number *very* close to zero, the difference becomes 0 - (-base) = base
+    // which is an out of bound value. The min() corrects these problematic values.
+    return std::min(x - SkScalarFloorToScalar(x / base) * base, cap);
 }
 
 class XRepeatStrategy {
@@ -148,10 +160,7 @@ public:
         Sk4s divX = *xs * fXInvMax;
         Sk4s modX = *xs - divX.floor() * fXMax;
         *xs = Sk4s::Min(fXCap, modX);
-        SkASSERT(0 <= (*xs)[0] && (*xs)[0] < fXMax);
-        SkASSERT(0 <= (*xs)[1] && (*xs)[1] < fXMax);
-        SkASSERT(0 <= (*xs)[2] && (*xs)[2] < fXMax);
-        SkASSERT(0 <= (*xs)[3] && (*xs)[3] < fXMax);
+        assertTiled(*xs, fXMax);
     }
 
     template<typename Next>
@@ -160,7 +169,7 @@ public:
         SkPoint start; SkScalar length; int count;
         std::tie(start, length, count) = originalSpan;
         // Make x and y in range on the tile.
-        SkScalar x = tile_mod(X(start), fXMax);
+        SkScalar x = tile_mod(X(start), fXMax, fXCap);
         SkScalar y = Y(start);
         SkScalar dx = length / (count - 1);
 
@@ -245,10 +254,7 @@ public:
         Sk4s divX = *xs * fXInvMax;
         Sk4s modX = *xs - divX.floor() * fXMax;
         *xs = Sk4s::Min(fXCap, modX);
-        SkASSERT(0 <= (*xs)[0] && (*xs)[0] < fXMax);
-        SkASSERT(0 <= (*xs)[1] && (*xs)[1] < fXMax);
-        SkASSERT(0 <= (*xs)[2] && (*xs)[2] < fXMax);
-        SkASSERT(0 <= (*xs)[3] && (*xs)[3] < fXMax);
+        assertTiled(*xs, fXMax);
     }
 
     template<typename Next>
@@ -257,7 +263,7 @@ public:
         SkPoint start; SkScalar length; int count;
         std::tie(start, length, count) = originalSpan;
         // Make x and y in range on the tile.
-        SkScalar x = tile_mod(X(start), fXMax);
+        SkScalar x = tile_mod(X(start), fXMax, fXCap);
         SkScalar y = Y(start);
 
         // No need trying to go fast because the steps are larger than a tile or there is one point.
@@ -322,26 +328,25 @@ class YRepeatStrategy {
 public:
     YRepeatStrategy(int32_t max)
         : fYMax{SkScalar(max)}
+        , fYCap{SkScalar(nextafterf(SkScalar(max), 0.0f))}
         , fYsInvMax{1.0f / SkScalar(max)} { }
 
     void tileYPoints(Sk4s* ys) {
         Sk4s divY = *ys * fYsInvMax;
         Sk4s modY = *ys - divY.floor() * fYMax;
-        *ys = modY;
-        SkASSERT(0 <= (*ys)[0] && (*ys)[0] < fYMax);
-        SkASSERT(0 <= (*ys)[1] && (*ys)[1] < fYMax);
-        SkASSERT(0 <= (*ys)[2] && (*ys)[2] < fYMax);
-        SkASSERT(0 <= (*ys)[3] && (*ys)[3] < fYMax);
+        *ys = Sk4s::Min(fYCap, modY);
+        assertTiled(*ys, fYMax);
     }
 
     SkScalar tileY(SkScalar y) {
-        SkScalar answer = tile_mod(y, fYMax);
+        SkScalar answer = tile_mod(y, fYMax, fYCap);
         SkASSERT(0 <= answer && answer < fYMax);
         return answer;
     }
 
 private:
     const SkScalar fYMax;
+    const SkScalar fYCap;
     const SkScalar fYsInvMax;
 };
 // max = 40
@@ -359,10 +364,7 @@ public:
         Sk4f mod    = bias - div.floor() * 2.0f * fXMax;
         Sk4f unbias = mod - fXMax;
         *xs = Sk4f::Min(unbias.abs(), fXCap);
-        SkASSERT(0 <= (*xs)[0] && (*xs)[0] < fXMax);
-        SkASSERT(0 <= (*xs)[1] && (*xs)[1] < fXMax);
-        SkASSERT(0 <= (*xs)[2] && (*xs)[2] < fXMax);
-        SkASSERT(0 <= (*xs)[3] && (*xs)[3] < fXMax);
+        assertTiled(*xs, fXMax);
     }
 
     template <typename Next>
@@ -387,10 +389,7 @@ public:
         Sk4f mod    = bias - div.floor() * 2.0f * fYMax;
         Sk4f unbias = mod - fYMax;
         *ys = Sk4f::Min(unbias.abs(), fYCap);
-        SkASSERT(0 <= (*ys)[0] && (*ys)[0] < fYMax);
-        SkASSERT(0 <= (*ys)[1] && (*ys)[1] < fYMax);
-        SkASSERT(0 <= (*ys)[2] && (*ys)[2] < fYMax);
-        SkASSERT(0 <= (*ys)[3] && (*ys)[3] < fYMax);
+        assertTiled(*ys, fYMax);
     }
 
     SkScalar tileY(SkScalar y) {

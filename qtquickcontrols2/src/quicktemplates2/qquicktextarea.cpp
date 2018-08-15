@@ -139,7 +139,6 @@ QQuickTextAreaPrivate::QQuickTextAreaPrivate()
 #endif
       background(nullptr),
       focusReason(Qt::OtherFocusReason),
-      accessibleAttached(nullptr),
       flickable(nullptr)
 {
 #if QT_CONFIG(accessibility)
@@ -190,19 +189,69 @@ void QQuickTextAreaPrivate::resolveFont()
     inheritFont(QQuickControlPrivate::parentFont(q));
 }
 
-void QQuickTextAreaPrivate::inheritFont(const QFont &f)
+void QQuickTextAreaPrivate::inheritFont(const QFont &font)
 {
-    Q_Q(QQuickTextArea);
-    QFont parentFont = font.resolve(f);
-    parentFont.resolve(font.resolve() | f.resolve());
+    QFont parentFont = extra.isAllocated() ? extra->requestedFont.resolve(font) : font;
+    parentFont.resolve(extra.isAllocated() ? extra->requestedFont.resolve() | font.resolve() : font.resolve());
 
     const QFont defaultFont = QQuickControlPrivate::themeFont(QPlatformTheme::EditorFont);
     const QFont resolvedFont = parentFont.resolve(defaultFont);
 
-    const bool changed = resolvedFont != sourceFont;
-    q->QQuickTextEdit::setFont(resolvedFont);
-    if (changed)
+    setFont_helper(resolvedFont);
+}
+
+/*!
+    \internal
+
+    Assign \a font to this control, and propagate it to all children.
+*/
+void QQuickTextAreaPrivate::updateFont(const QFont &font)
+{
+    Q_Q(QQuickTextArea);
+    QFont oldFont = sourceFont;
+    q->QQuickTextEdit::setFont(font);
+
+    QQuickControlPrivate::updateFontRecur(q, font);
+
+    if (oldFont != font)
         emit q->fontChanged();
+}
+
+/*!
+    \internal
+
+    Determine which palette is implicitly imposed on this control by its ancestors
+    and QGuiApplication::palette, resolve this against its own palette (attributes from
+    the implicit palette are copied over). Then propagate this palette to this
+    control's children.
+*/
+void QQuickTextAreaPrivate::resolvePalette()
+{
+    Q_Q(QQuickTextArea);
+    inheritPalette(QQuickControlPrivate::parentPalette(q));
+}
+
+void QQuickTextAreaPrivate::inheritPalette(const QPalette &palette)
+{
+    QPalette parentPalette = extra.isAllocated() ? extra->requestedPalette.resolve(palette) : palette;
+    parentPalette.resolve(extra.isAllocated() ? extra->requestedPalette.resolve() | palette.resolve() : palette.resolve());
+
+    const QPalette defaultPalette = QQuickControlPrivate::themePalette(QPlatformTheme::TextEditPalette);
+    const QPalette resolvedPalette = parentPalette.resolve(defaultPalette);
+
+    setPalette_helper(resolvedPalette);
+}
+
+void QQuickTextAreaPrivate::updatePalette(const QPalette &palette)
+{
+    Q_Q(QQuickTextArea);
+    QPalette oldPalette = resolvedPalette;
+    resolvedPalette = palette;
+
+    QQuickControlPrivate::updatePaletteRecur(q, palette);
+
+    if (oldPalette != palette)
+        emit q->paletteChanged();
 }
 
 #if QT_CONFIG(quicktemplates2_hover)
@@ -361,7 +410,7 @@ void QQuickTextAreaPrivate::readOnlyChanged(bool isReadOnly)
 {
     Q_UNUSED(isReadOnly);
 #if QT_CONFIG(accessibility)
-    if (accessibleAttached)
+    if (QQuickAccessibleAttached *accessibleAttached = QQuickControlPrivate::accessibleAttached(q_func()))
         accessibleAttached->set_readOnly(isReadOnly);
 #endif
 #if QT_CONFIG(cursor)
@@ -372,18 +421,15 @@ void QQuickTextAreaPrivate::readOnlyChanged(bool isReadOnly)
 #if QT_CONFIG(accessibility)
 void QQuickTextAreaPrivate::accessibilityActiveChanged(bool active)
 {
-    if (accessibleAttached || !active)
+    if (!active)
         return;
 
     Q_Q(QQuickTextArea);
-    accessibleAttached = qobject_cast<QQuickAccessibleAttached *>(qmlAttachedPropertiesObject<QQuickAccessibleAttached>(q, true));
-    if (accessibleAttached) {
-        accessibleAttached->setRole(accessibleRole());
-        accessibleAttached->set_readOnly(q->isReadOnly());
-        accessibleAttached->setDescription(placeholder);
-    } else {
-        qWarning() << "QQuickTextArea: " << q << " QQuickAccessibleAttached object creation failed!";
-    }
+    QQuickAccessibleAttached *accessibleAttached = qobject_cast<QQuickAccessibleAttached *>(qmlAttachedPropertiesObject<QQuickAccessibleAttached>(q, true));
+    Q_ASSERT(accessibleAttached);
+    accessibleAttached->setRole(accessibleRole());
+    accessibleAttached->set_readOnly(q->isReadOnly());
+    accessibleAttached->setDescription(placeholder);
 }
 
 QAccessible::Role QQuickTextAreaPrivate::accessibleRole() const
@@ -447,10 +493,10 @@ QFont QQuickTextArea::font() const
 void QQuickTextArea::setFont(const QFont &font)
 {
     Q_D(QQuickTextArea);
-    if (d->font.resolve() == font.resolve() && d->font == font)
+    if (d->extra.value().requestedFont.resolve() == font.resolve() && d->extra.value().requestedFont == font)
         return;
 
-    d->font = font;
+    d->extra.value().requestedFont = font;
     d->resolveFont();
 }
 
@@ -483,10 +529,7 @@ void QQuickTextArea::setBackground(QQuickItem *background)
     delete d->background;
     d->background = background;
     if (background) {
-        if (d->flickable)
-            background->setParentItem(d->flickable);
-        else
-            background->setParentItem(this);
+        background->setParentItem(this);
         if (qFuzzyIsNull(background->z()))
             background->setZ(-1);
         if (isComponentComplete())
@@ -516,8 +559,8 @@ void QQuickTextArea::setPlaceholderText(const QString &text)
 
     d->placeholder = text;
 #if QT_CONFIG(accessibility)
-    if (d->accessibleAttached)
-        d->accessibleAttached->setDescription(text);
+    if (QQuickAccessibleAttached *accessibleAttached = QQuickControlPrivate::accessibleAttached(this))
+        accessibleAttached->setDescription(text);
 #endif
     emit placeholderTextChanged();
 }
@@ -627,11 +670,44 @@ void QQuickTextArea::resetHoverEnabled()
 #endif
 }
 
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty palette QtQuick.Controls::TextArea::palette
+
+    This property holds the palette currently set for the text area.
+
+    \sa Control::palette
+*/
+QPalette QQuickTextArea::palette() const
+{
+    Q_D(const QQuickTextArea);
+    QPalette palette = d->resolvedPalette;
+    if (!isEnabled())
+        palette.setCurrentColorGroup(QPalette::Disabled);
+    return palette;
+}
+
+void QQuickTextArea::setPalette(const QPalette &palette)
+{
+    Q_D(QQuickTextArea);
+    if (d->extra.value().requestedPalette.resolve() == palette.resolve() && d->extra.value().requestedPalette == palette)
+        return;
+
+    d->extra.value().requestedPalette = palette;
+    d->resolvePalette();
+}
+
+void QQuickTextArea::resetPalette()
+{
+    setPalette(QPalette());
+}
+
 void QQuickTextArea::classBegin()
 {
     Q_D(QQuickTextArea);
     QQuickTextEdit::classBegin();
     d->resolveFont();
+    d->resolvePalette();
 }
 
 void QQuickTextArea::componentComplete()
@@ -639,13 +715,12 @@ void QQuickTextArea::componentComplete()
     Q_D(QQuickTextArea);
     d->executeBackground(true);
     QQuickTextEdit::componentComplete();
-    d->resizeBackground();
 #if QT_CONFIG(quicktemplates2_hover)
     if (!d->explicitHoverEnabled)
         setAcceptHoverEvents(QQuickControlPrivate::calcHoverEnabled(d->parentItem));
 #endif
 #if QT_CONFIG(accessibility)
-    if (!d->accessibleAttached && QAccessible::isActive())
+    if (QAccessible::isActive())
         d->accessibilityActiveChanged(true);
 #endif
 }
@@ -654,20 +729,31 @@ void QQuickTextArea::itemChange(QQuickItem::ItemChange change, const QQuickItem:
 {
     Q_D(QQuickTextArea);
     QQuickTextEdit::itemChange(change, value);
-    if ((change == ItemParentHasChanged && value.item) || (change == ItemSceneChange && value.window)) {
-        d->resolveFont();
+    switch (change) {
+    case ItemEnabledHasChanged:
+        emit paletteChanged();
+        break;
+    case ItemSceneChange:
+    case ItemParentHasChanged:
+        if ((change == ItemParentHasChanged && value.item) || (change == ItemSceneChange && value.window)) {
+            d->resolveFont();
+            d->resolvePalette();
 #if QT_CONFIG(quicktemplates2_hover)
-        if (!d->explicitHoverEnabled)
-            d->updateHoverEnabled(QQuickControlPrivate::calcHoverEnabled(d->parentItem), false); // explicit=false
+            if (!d->explicitHoverEnabled)
+                d->updateHoverEnabled(QQuickControlPrivate::calcHoverEnabled(d->parentItem), false); // explicit=false
 #endif
-        if (change == ItemParentHasChanged) {
-            QQuickFlickable *flickable = qobject_cast<QQuickFlickable *>(value.item->parentItem());
-            if (flickable) {
-                QQuickScrollView *scrollView = qobject_cast<QQuickScrollView *>(flickable->parentItem());
-                if (scrollView)
-                    d->attachFlickable(flickable);
+            if (change == ItemParentHasChanged) {
+                QQuickFlickable *flickable = qobject_cast<QQuickFlickable *>(value.item->parentItem());
+                if (flickable) {
+                    QQuickScrollView *scrollView = qobject_cast<QQuickScrollView *>(flickable->parentItem());
+                    if (scrollView)
+                        d->attachFlickable(flickable);
+                }
             }
         }
+        break;
+    default:
+        break;
     }
 }
 

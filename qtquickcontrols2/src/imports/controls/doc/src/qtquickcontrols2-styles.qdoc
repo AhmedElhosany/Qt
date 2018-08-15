@@ -39,6 +39,19 @@
     The \l {Default Style} is a simple and light-weight all-round style that offers
     the maximum performance for Qt Quick Controls 2.
 
+    \section2 Fusion Style
+
+    \image qtquickcontrols2-fusion-thumbnail.png
+    The \l {Fusion Style} is a platform-agnostic style that offers a desktop-oriented
+    look'n'feel for Qt Quick Controls 2.
+
+    \section2 Imagine Style
+
+    \image qtquickcontrols2-imagine-thumbnail.png
+    The \l {Imagine Style} is based on image assets. The style comes with a default
+    set of images which can easily be changed by providing a directory
+    with images using a predefined naming convention.
+
     \section2 Material Style
 
     \image qtquickcontrols2-material-thumbnail.png
@@ -120,6 +133,8 @@
     \section1 Related Information
     \list
     \li \l {Default Style}
+    \li \l {Fusion Style}
+    \li \l {Imagine Style}
     \li \l {Material Style}
     \li \l {Universal Style}
     \li \l {Customizing Qt Quick Controls 2}

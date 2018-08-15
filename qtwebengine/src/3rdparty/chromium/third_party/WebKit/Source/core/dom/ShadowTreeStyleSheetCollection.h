@@ -35,8 +35,8 @@
 namespace blink {
 
 class ShadowRoot;
-class StyleSheetCollection;
 class StyleEngine;
+class StyleSheetCollection;
 
 class ShadowTreeStyleSheetCollection final
     : public TreeScopeStyleSheetCollection {
@@ -44,24 +44,22 @@ class ShadowTreeStyleSheetCollection final
 
  public:
   explicit ShadowTreeStyleSheetCollection(ShadowRoot&);
-
-  void updateActiveStyleSheets(StyleEngine&, StyleResolverUpdateMode);
-
-  bool isShadowTreeStyleSheetCollection() const final { return true; }
+  void UpdateActiveStyleSheets(StyleEngine& master_engine);
+  bool IsShadowTreeStyleSheetCollection() const final { return true; }
 
   DEFINE_INLINE_VIRTUAL_TRACE() {
-    TreeScopeStyleSheetCollection::trace(visitor);
+    TreeScopeStyleSheetCollection::Trace(visitor);
   }
 
  private:
-  void collectStyleSheets(StyleEngine&, StyleSheetCollection&);
+  void CollectStyleSheets(StyleEngine& master_engine, StyleSheetCollection&);
 };
 
 DEFINE_TYPE_CASTS(ShadowTreeStyleSheetCollection,
                   TreeScopeStyleSheetCollection,
                   value,
-                  value->isShadowTreeStyleSheetCollection(),
-                  value.isShadowTreeStyleSheetCollection());
+                  value->IsShadowTreeStyleSheetCollection(),
+                  value.IsShadowTreeStyleSheetCollection());
 
 }  // namespace blink
 

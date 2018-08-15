@@ -2075,30 +2075,20 @@ void QHeaderViewPrivate::_q_layoutAboutToBeChanged()
     layoutChangePersistentSections.clear();
     layoutChangePersistentSections.reserve(std::min(10, sectionItems.count()));
     // after layoutChanged another section can be last stretched section
-    if (stretchLastSection && lastSectionLogicalIdx >= 0 && lastSectionLogicalIdx < sectionItems.count()) {
+    if (stretchLastSection) {
         const int visual = visualIndex(lastSectionLogicalIdx);
-        if (visual >= 0 && visual < sectionItems.size()) {
-            auto &itemRef = sectionItems[visual];
-            if (itemRef.size != lastSectionSize) {
-                length += lastSectionSize - itemRef.size;
-                itemRef.size = lastSectionSize;
-            }
-        }
+        sectionItems[visual].size = lastSectionSize;
     }
     for (int i = 0; i < sectionItems.size(); ++i) {
-        auto s = sectionItems.at(i);
+        const auto &s = sectionItems.at(i);
         // only add if the section is not default and not visually moved
         if (s.size == defaultSectionSize && !s.isHidden && s.resizeMode == globalResizeMode)
             continue;
 
-        const int logical = logicalIndex(i);
-        if (s.isHidden)
-            s.size = hiddenSectionSize.value(logical);
-
         // ### note that we are using column or row 0
         layoutChangePersistentSections.append({orientation == Qt::Horizontal
-                                                  ? model->index(0, logical, root)
-                                                  : model->index(logical, 0, root),
+                                                  ? model->index(0, logicalIndex(i), root)
+                                                  : model->index(logicalIndex(i), 0, root),
                                               s});
 
         if (layoutChangePersistentSections.size() > 1000)
@@ -2120,30 +2110,6 @@ void QHeaderViewPrivate::_q_layoutChanged()
         clear();
         if (oldCount != 0)
             emit q->sectionCountChanged(oldCount, 0);
-        return;
-    }
-
-    bool hasPersistantIndexes = false;
-    for (const auto &item : oldPersistentSections) {
-        if (item.index.isValid()) {
-            hasPersistantIndexes = true;
-            break;
-        }
-    }
-
-    // Though far from perfect we here try to retain earlier/existing behavior
-    // ### See QHeaderViewPrivate::_q_layoutAboutToBeChanged()
-    // When we don't have valid hasPersistantIndexes it can be due to
-    // - all sections are default sections
-    // - the row/column 0 which is used for persistent indexes is gone
-    // - all non-default sections were removed
-    // case one is trivial, in case two we assume nothing else changed (it's the best
-    // guess we can do - everything else can not be handled correctly for now)
-    // case three can not be handled correctly with layoutChanged - removeSections
-    // should be used instead for this
-    if (!hasPersistantIndexes) {
-        if (oldCount != newCount)
-            q->initializeSections();
         return;
     }
 
@@ -2599,8 +2565,20 @@ void QHeaderView::mouseMoveEvent(QMouseEvent *e)
             if (handle != -1 && (sectionResizeMode(handle) == Interactive)) {
                 if (!hasCursor)
                     setCursor(d->orientation == Qt::Horizontal ? Qt::SplitHCursor : Qt::SplitVCursor);
-            } else if (hasCursor) {
-                unsetCursor();
+            } else {
+                if (hasCursor)
+                    unsetCursor();
+#ifndef QT_NO_STATUSTIP
+                int logical = logicalIndexAt(pos);
+                QString statusTip;
+                if (logical != -1)
+                    statusTip = d->model->headerData(logical, d->orientation, Qt::StatusTipRole).toString();
+                if (d->shouldClearStatusTip || !statusTip.isEmpty()) {
+                    QStatusTipEvent tip(statusTip);
+                    QCoreApplication::sendEvent(d->parent, &tip);
+                    d->shouldClearStatusTip = !statusTip.isEmpty();
+                }
+#endif // !QT_NO_STATUSTIP
             }
 #endif
             return;

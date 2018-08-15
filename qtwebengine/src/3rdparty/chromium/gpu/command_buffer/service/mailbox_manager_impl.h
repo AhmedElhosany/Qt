@@ -19,12 +19,12 @@ namespace gpu {
 namespace gles2 {
 
 class TextureBase;
-class TextureManager;
 
 // Manages resources scoped beyond the context or context group level.
 class GPU_EXPORT MailboxManagerImpl : public MailboxManager {
  public:
   MailboxManagerImpl();
+  ~MailboxManagerImpl() override;
 
   // MailboxManager implementation:
   TextureBase* ConsumeTexture(const Mailbox& mailbox) override;
@@ -34,12 +34,7 @@ class GPU_EXPORT MailboxManagerImpl : public MailboxManager {
   void PullTextureUpdates(const SyncToken& token) override {}
   void TextureDeleted(TextureBase* texture) override;
 
- protected:
-  ~MailboxManagerImpl() override;
-
  private:
-  friend class base::RefCounted<MailboxManager>;
-
   void InsertTexture(const Mailbox& mailbox, TextureBase* texture);
 
   // This is a bidirectional map between mailbox and textures. We can have

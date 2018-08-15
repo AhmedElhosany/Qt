@@ -7,12 +7,26 @@
  * 'settings-site-settings-page' is the settings page containing privacy and
  * security site settings.
  */
+
 Polymer({
   is: 'settings-site-settings-page',
 
-  behaviors: [SiteSettingsBehavior],
+  behaviors: [SiteSettingsBehavior, WebUIListenerBehavior],
 
   properties: {
+    /**
+     * An object to bind default values to (so they are not in the |this|
+     * scope). The keys of this object are the values of the
+     * settings.ContentSettingsTypes enum.
+     * @private
+     */
+    default_: {
+      type: Object,
+      value: function() {
+        return {};
+      },
+    },
+
     /** @private */
     enableSiteSettings_: {
       type: Boolean,
@@ -21,49 +35,135 @@ Polymer({
       },
     },
 
-    /**
-     * The category selected by the user.
-     */
-    categorySelected: {
-      type: String,
-      notify: true,
+    /** @private */
+    isGuest_: {
+      type: Boolean,
+      value: function() {
+        return loadTimeData.getBoolean('isGuest');
+      }
+    },
+
+    /** @private */
+    enableSafeBrowsingSubresourceFilter_: {
+      type: Boolean,
+      value: function() {
+        return loadTimeData.getBoolean('enableSafeBrowsingSubresourceFilter');
+      }
+    },
+
+    /** @type {!Map<string, string>} */
+    focusConfig: {
+      type: Object,
+      observer: 'focusConfigChanged_',
     },
   },
 
+  /**
+   * @param {!Map<string, string>} newConfig
+   * @param {?Map<string, string>} oldConfig
+   * @private
+   */
+  focusConfigChanged_: function(newConfig, oldConfig) {
+    // focusConfig is set only once on the parent, so this observer should only
+    // fire once.
+    assert(!oldConfig);
+
+    // Populate the |focusConfig| map of the parent <settings-animated-pages>
+    // element, with additional entries that correspond to subpage trigger
+    // elements residing in this element's Shadow DOM.
+    var R = settings.routes;
+    [[R.SITE_SETTINGS_COOKIES, 'cookies'],
+     [R.SITE_SETTINGS_LOCATION, 'location'], [R.SITE_SETTINGS_CAMERA, 'camera'],
+     [R.SITE_SETTINGS_MICROPHONE, 'microphone'],
+     [R.SITE_SETTINGS_NOTIFICATIONS, 'notifications'],
+     [R.SITE_SETTINGS_JAVASCRIPT, 'javascript'],
+     [R.SITE_SETTINGS_FLASH, 'flash'], [R.SITE_SETTINGS_IMAGES, 'images'],
+     [R.SITE_SETTINGS_POPUPS, 'popups'],
+     [R.SITE_SETTINGS_BACKGROUND_SYNC, 'background-sync'],
+     [R.SITE_SETTINGS_AUTOMATIC_DOWNLOADS, 'automatic-downloads'],
+     [R.SITE_SETTINGS_UNSANDBOXED_PLUGINS, 'unsandboxed-plugins'],
+     [R.SITE_SETTINGS_HANDLERS, 'protocol-handlers'],
+     [R.SITE_SETTINGS_MIDI_DEVICES, 'midi-devices'],
+     [R.SITE_SETTINGS_ADS, 'ads'], [R.SITE_SETTINGS_ZOOM_LEVELS, 'zoom-levels'],
+     [R.SITE_SETTINGS_USB_DEVICES, 'usb-devices'],
+     [R.SITE_SETTINGS_PDF_DOCUMENTS, 'pdf-documents'],
+     [R.SITE_SETTINGS_PROTECTED_CONTENT, 'protected-content'],
+    ].forEach(function(pair) {
+      var route = pair[0];
+      var id = pair[1];
+      this.focusConfig.set(route.path, '* /deep/ #' + id + ' .subpage-arrow');
+    }.bind(this));
+  },
+
+  /** @override */
   ready: function() {
     this.ContentSettingsTypes = settings.ContentSettingsTypes;
     this.ALL_SITES = settings.ALL_SITES;
 
-    // Look up the default value for each category and show it.
-    this.setDefaultValue_(this.ContentSettingsTypes.AUTOMATIC_DOWNLOADS,
-        '#automaticDownloads');
-    this.setDefaultValue_(this.ContentSettingsTypes.BACKGROUND_SYNC,
-        '#backgroundSync');
-    this.setDefaultValue_(this.ContentSettingsTypes.CAMERA, '#camera');
-    this.setDefaultValue_(this.ContentSettingsTypes.COOKIES, '#cookies');
-    this.setDefaultValue_(this.ContentSettingsTypes.GEOLOCATION,
-        '#geolocation');
-    this.setDefaultValue_(this.ContentSettingsTypes.IMAGES, '#images');
-    this.setDefaultValue_(this.ContentSettingsTypes.JAVASCRIPT,
-        '#javascript');
-    this.setDefaultValue_(this.ContentSettingsTypes.KEYGEN, '#keygen');
-    this.setDefaultValue_(this.ContentSettingsTypes.MIC, '#mic');
-    this.setDefaultValue_(this.ContentSettingsTypes.NOTIFICATIONS,
-        '#notifications');
-    this.setDefaultValue_(this.ContentSettingsTypes.PLUGINS, '#plugins');
-    this.setDefaultValue_(this.ContentSettingsTypes.POPUPS, '#popups');
-    this.setDefaultValue_(this.ContentSettingsTypes.PROTOCOL_HANDLERS,
-        '#handlers');
-    this.setDefaultValue_(this.ContentSettingsTypes.UNSANDBOXED_PLUGINS,
-        '#unsandboxedPlugins');
+    var keys = Object.keys(settings.ContentSettingsTypes);
+    for (var i = 0; i < keys.length; ++i) {
+      var key = settings.ContentSettingsTypes[keys[i]];
+      // Default labels are not applicable to USB and ZOOM.
+      if (key == settings.ContentSettingsTypes.USB_DEVICES ||
+          key == settings.ContentSettingsTypes.ZOOM_LEVELS)
+        continue;
+      // Some values are not available (and will DCHECK) in guest mode.
+      if (this.isGuest_ &&
+          key == settings.ContentSettingsTypes.PROTOCOL_HANDLERS) {
+        continue;
+      }
+      this.updateDefaultValueLabel_(key);
+    }
+
+    this.addWebUIListener(
+        'contentSettingCategoryChanged',
+        this.updateDefaultValueLabel_.bind(this));
+    this.addWebUIListener(
+        'setHandlersEnabled', this.updateHandlersEnabled_.bind(this));
+    this.browserProxy.observeProtocolHandlersEnabledState();
   },
 
-  setDefaultValue_: function(category, id) {
-    this.browserProxy.getDefaultValueForContentType(
-        category).then(function(setting) {
-          var description = this.computeCategoryDesc(category, setting, false);
-          this.$$(id).innerText = description;
+  /**
+   * @param {string} setting Value from settings.ContentSetting.
+   * @param {string} enabled Non-block label ('feature X not allowed').
+   * @param {string} disabled Block label (likely just, 'Blocked').
+   * @param {?string} other Tristate value (maybe, 'session only').
+   * @private
+   */
+  defaultSettingLabel_: function(setting, enabled, disabled, other) {
+    if (setting == settings.ContentSetting.BLOCK)
+      return disabled;
+    if (setting == settings.ContentSetting.ALLOW)
+      return enabled;
+    if (other)
+      return other;
+    return enabled;
+  },
+
+  /**
+   * @param {string} category The category to update.
+   * @private
+   */
+  updateDefaultValueLabel_: function(category) {
+    this.browserProxy.getDefaultValueForContentType(category).then(
+        function(defaultValue) {
+          this.set(
+              'default_.' + Polymer.CaseMap.dashToCamelCase(category),
+              defaultValue.setting);
         }.bind(this));
+  },
+
+  /**
+   * The protocol handlers have a separate enabled/disabled notifier.
+   * @param {boolean} enabled
+   * @private
+   */
+  updateHandlersEnabled_: function(enabled) {
+    var category = settings.ContentSettingsTypes.PROTOCOL_HANDLERS;
+    this.set(
+        'default_.' + Polymer.CaseMap.dashToCamelCase(category),
+        enabled ? settings.ContentSetting.ALLOW :
+                  settings.ContentSetting.BLOCK);
   },
 
   /**
@@ -72,7 +172,7 @@ Polymer({
    * @private
    */
   onTapNavigate_: function(event) {
-    var dataSet = /** @type {{route: string}} */(event.currentTarget.dataset);
-    settings.navigateTo(settings.Route[dataSet.route]);
+    var dataSet = /** @type {{route: string}} */ (event.currentTarget.dataset);
+    settings.navigateTo(settings.routes[dataSet.route]);
   },
 });

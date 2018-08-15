@@ -49,12 +49,7 @@
 #define _USE_MATH_DEFINES
 #endif
 
-
-#include "math.h"
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+#include "qmath.h"
 
 QT_BEGIN_NAMESPACE
 
@@ -343,7 +338,7 @@ void QtGradientWidget::mousePressEvent(QMouseEvent *e)
         if (r1.contains(pF) || r2.contains(pF) || r3.contains(pF)) {
             x = pF.x() / size().width() - d_ptr->m_centralRadial.x();
             y = pF.y() / size().height() - d_ptr->m_centralRadial.y();
-            double clickRadius = sqrt(x * x + y * y);
+            const double clickRadius = hypot(x, y);
             //d_ptr->m_radiusOffset = d_ptr->m_radiusRadial - clickRadius;
             d_ptr->m_radiusFactor = d_ptr->m_radiusRadial / clickRadius;
             if (d_ptr->m_radiusFactor == 0)
@@ -382,7 +377,7 @@ void QtGradientWidget::mousePressEvent(QMouseEvent *e)
             y = current.y() - central.y();
             x /= size().width() / 2;
             y /= size().height() / 2;
-            double angle = atan2(-y, x) * 180 / M_PI;
+            const double angle = qRadiansToDegrees(atan2(-y, x));
 
             d_ptr->m_angleOffset = d_ptr->m_angleConical - angle;
             d_ptr->m_dragAngle = d_ptr->m_angleConical;
@@ -442,7 +437,7 @@ void QtGradientWidget::mouseMoveEvent(QMouseEvent *e)
         } else {
             x = pF.x() / size().width() - d_ptr->m_centralRadial.x();
             y = pF.y() / size().height() - d_ptr->m_centralRadial.y();
-            double moveRadius = sqrt(x * x + y * y);
+            const double moveRadius = hypot(x, y);
             //double newRadius = moveRadius + d_ptr->m_radiusOffset;
             double newRadius = moveRadius * d_ptr->m_radiusFactor;
             if (newRadius > 2)
@@ -472,7 +467,7 @@ void QtGradientWidget::mouseMoveEvent(QMouseEvent *e)
             x /= size().width() / 2;
             y /= size().height() / 2;
 
-            double angle = atan2(-y, x) * 180 / M_PI + d_ptr->m_angleOffset;
+            const double angle = qRadiansToDegrees(atan2(-y, x)) + d_ptr->m_angleOffset;
             d_ptr->setAngleConical(angle);
         }
     }
@@ -619,28 +614,30 @@ void QtGradientWidget::paintEvent(QPaintEvent *e)
         p.setBrush(Qt::NoBrush);
         int pointCount = 2;
         for (int i = 0; i < pointCount; i++) {
-            QPointF ang(cos(M_PI * (i * 180.0 / pointCount + d_ptr->m_angleConical) / 180) * size().width() / 2,
-                    -sin(M_PI * (i * 180.0 / pointCount + d_ptr->m_angleConical) / 180) * size().height() / 2);
-            double mod = sqrt(ang.x() * ang.x() + ang.y() * ang.y());
-            p.drawLine(QPointF(central.x() + ang.x() * (radius - corr) / mod,
-                        central.y() + ang.y() * (radius - corr) / mod),
-                    QPointF(central.x() + ang.x() * (radius + corr) / mod,
-                        central.y() + ang.y() * (radius + corr) / mod));
-            p.drawLine(QPointF(central.x() - ang.x() * (radius - corr) / mod,
-                        central.y() - ang.y() * (radius - corr) / mod),
-                    QPointF(central.x() - ang.x() * (radius + corr) / mod,
-                        central.y() - ang.y() * (radius + corr) / mod));
+            const qreal angle = qDegreesToRadians(i * 180.0 / pointCount + d_ptr->m_angleConical);
+            const QPointF ray(cos(angle) * size().width() / 2,
+                             -sin(angle) * size().height() / 2);
+            const double mod = hypot(ray.x(), ray.y());
+            p.drawLine(QPointF(central.x() + ray.x() * (radius - corr) / mod,
+                        central.y() + ray.y() * (radius - corr) / mod),
+                    QPointF(central.x() + ray.x() * (radius + corr) / mod,
+                        central.y() + ray.y() * (radius + corr) / mod));
+            p.drawLine(QPointF(central.x() - ray.x() * (radius - corr) / mod,
+                        central.y() - ray.y() * (radius - corr) / mod),
+                    QPointF(central.x() - ray.x() * (radius + corr) / mod,
+                        central.y() - ray.y() * (radius + corr) / mod));
         }
         if (d_ptr->m_dragHandle == QtGradientWidgetPrivate::AngleConicalHandle) {
             p.save();
             p.setPen(dragPen);
-            QPointF ang(cos(M_PI * (d_ptr->m_angleConical - d_ptr->m_angleOffset) / 180) * size().width() / 2,
-                    -sin(M_PI * (d_ptr->m_angleConical - d_ptr->m_angleOffset) / 180) * size().height() / 2);
-            double mod = sqrt(ang.x() * ang.x() + ang.y() * ang.y());
-            p.drawLine(QPointF(central.x() + ang.x() * (radius - corr) / mod,
-                        central.y() + ang.y() * (radius - corr) / mod),
-                    QPointF(central.x() + ang.x() * (radius + corr) / mod,
-                        central.y() + ang.y() * (radius + corr) / mod));
+            const qreal angle = qDegreesToRadians(d_ptr->m_angleConical - d_ptr->m_angleOffset);
+            const QPointF ray(cos(angle) * size().width() / 2,
+                             -sin(angle) * size().height() / 2);
+            const double mod = hypot(ray.x(), ray.y());
+            p.drawLine(QPointF(central.x() + ray.x() * (radius - corr) / mod,
+                        central.y() + ray.y() * (radius - corr) / mod),
+                    QPointF(central.x() + ray.x() * (radius + corr) / mod,
+                        central.y() + ray.y() * (radius + corr) / mod));
             p.restore();
         }
 

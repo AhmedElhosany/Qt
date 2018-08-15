@@ -4,7 +4,7 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
- 
+
 #ifndef SKSL_VARDECLARATIONSSTATEMENT
 #define SKSL_VARDECLARATIONSSTATEMENT
 
@@ -18,14 +18,23 @@ namespace SkSL {
  */
 struct VarDeclarationsStatement : public Statement {
     VarDeclarationsStatement(std::unique_ptr<VarDeclarations> decl)
-    : INHERITED(decl->fPosition, kVarDeclarations_Kind) 
+    : INHERITED(decl->fPosition, kVarDeclarations_Kind)
     , fDeclaration(std::move(decl)) {}
 
-    std::string description() const override {
-        return fDeclaration->description();
+    bool isEmpty() const override {
+        for (const auto& s : fDeclaration->fVars) {
+            if (!s->isEmpty()) {
+                return false;
+            }
+        }
+        return true;
     }
 
-    const std::shared_ptr<VarDeclarations> fDeclaration;
+    String description() const override {
+        return fDeclaration->description() + ";";
+    }
+
+    std::shared_ptr<VarDeclarations> fDeclaration;
 
     typedef Statement INHERITED;
 };

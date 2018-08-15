@@ -7,6 +7,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/lazy_instance.h"
+#include "base/memory/ptr_util.h"
 #include "base/values.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -60,8 +61,9 @@ void WebDialogUI::CloseDialog(const base::ListValue* args) {
 // static
 void WebDialogUI::SetDelegate(content::WebContents* web_contents,
                               WebDialogDelegate* delegate) {
-  web_contents->SetUserData(&kWebDialogDelegateUserDataKey,
-                            new WebDialogDelegateUserData(delegate));
+  web_contents->SetUserData(
+      &kWebDialogDelegateUserDataKey,
+      base::MakeUnique<WebDialogDelegateUserData>(delegate));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -96,10 +98,8 @@ void WebDialogUI::RenderFrameCreated(RenderFrameHost* render_frame_host) {
       render_frame_host->GetRenderViewHost();
   if (0 != (web_ui()->GetBindings() & content::BINDINGS_POLICY_WEB_UI))
     render_view_host->SetWebUIProperty("dialogArguments", dialog_args);
-  for (std::vector<WebUIMessageHandler*>::iterator it = handlers.begin();
-       it != handlers.end(); ++it) {
-    web_ui()->AddMessageHandler(*it);
-  }
+  for (WebUIMessageHandler* handler : handlers)
+    web_ui()->AddMessageHandler(base::WrapUnique(handler));
 
   if (delegate)
     delegate->OnDialogShown(web_ui(), render_view_host);

@@ -48,8 +48,8 @@
 // We mean it.
 //
 
-#include "qquickcontrol_p.h"
-#include "qquickdeferredpointer_p_p.h"
+#include <QtQuickTemplates2/private/qquickcontrol_p.h>
+#include <QtQuickTemplates2/private/qquickdeferredpointer_p_p.h>
 
 #include <QtQuick/private/qquickitem_p.h>
 #include <QtQml/private/qlazilyallocated_p.h>
@@ -103,19 +103,32 @@ public:
 #if QT_CONFIG(accessibility)
     void accessibilityActiveChanged(bool active) override;
     QAccessible::Role accessibleRole() const override;
+    static QQuickAccessibleAttached *accessibleAttached(const QObject *object);
 #endif
 
-    void updateFont(const QFont &f);
-    static void updateFontRecur(QQuickItem *item, const QFont &f);
-    inline void setFont_helper(const QFont &f) {
-        if (resolvedFont.resolve() == f.resolve() && resolvedFont == f)
-            return;
-        updateFont(f);
-    }
     virtual void resolveFont();
-    void inheritFont(const QFont &f);
+    void inheritFont(const QFont &font);
+    void updateFont(const QFont &font);
+    static void updateFontRecur(QQuickItem *item, const QFont &font);
+    inline void setFont_helper(const QFont &font) {
+        if (resolvedFont.resolve() == font.resolve() && resolvedFont == font)
+            return;
+        updateFont(font);
+    }
     static QFont parentFont(const QQuickItem *item);
     static QFont themeFont(QPlatformTheme::Font type);
+
+    virtual void resolvePalette();
+    void inheritPalette(const QPalette &palette);
+    void updatePalette(const QPalette &palette);
+    static void updatePaletteRecur(QQuickItem *item, const QPalette &palette);
+    inline void setPalette_helper(const QPalette &palette) {
+        if (resolvedPalette.resolve() == palette.resolve() && resolvedPalette == palette)
+            return;
+        updatePalette(palette);
+    }
+    static QPalette parentPalette(const QQuickItem *item);
+    static QPalette themePalette(QPlatformTheme::Palette type);
 
     void updateLocale(const QLocale &l, bool e);
     static void updateLocaleRecur(QQuickItem *item, const QLocale &l);
@@ -135,11 +148,11 @@ public:
 
     struct ExtraData {
         ExtraData();
-        QFont font;
+        QFont requestedFont;
+        QPalette requestedPalette;
     };
     QLazilyAllocated<ExtraData> extra;
 
-    QFont resolvedFont;
     bool hasTopPadding;
     bool hasLeftPadding;
     bool hasRightPadding;
@@ -158,11 +171,12 @@ public:
     qreal bottomPadding;
     qreal spacing;
     QLocale locale;
+    QFont resolvedFont;
+    QPalette resolvedPalette;
     Qt::FocusPolicy focusPolicy;
     Qt::FocusReason focusReason;
     QQuickDeferredPointer<QQuickItem> background;
     QQuickDeferredPointer<QQuickItem> contentItem;
-    QQuickAccessibleAttached *accessibleAttached;
 };
 
 QT_END_NAMESPACE

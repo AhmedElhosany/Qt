@@ -22,151 +22,144 @@
 #include "core/layout/svg/LayoutSVGResourceMarker.h"
 
 #include "core/layout/svg/SVGLayoutSupport.h"
-#include "wtf/AutoReset.h"
+#include "platform/wtf/AutoReset.h"
 
 namespace blink {
 
 LayoutSVGResourceMarker::LayoutSVGResourceMarker(SVGMarkerElement* node)
-    : LayoutSVGResourceContainer(node) {}
+    : LayoutSVGResourceContainer(node), needs_transform_update_(true) {}
 
 LayoutSVGResourceMarker::~LayoutSVGResourceMarker() {}
 
-void LayoutSVGResourceMarker::layout() {
-  ASSERT(needsLayout());
-  if (m_isInLayout)
+void LayoutSVGResourceMarker::UpdateLayout() {
+  DCHECK(NeedsLayout());
+  if (is_in_layout_)
     return;
 
-  AutoReset<bool> inLayoutChange(&m_isInLayout, true);
+  AutoReset<bool> in_layout_change(&is_in_layout_, true);
 
   // LayoutSVGHiddenContainer overwrites layout(). We need the
   // layouting of LayoutSVGContainer for calculating  local
   // transformations and paint invalidation.
-  LayoutSVGContainer::layout();
+  LayoutSVGContainer::UpdateLayout();
 
-  clearInvalidationMask();
+  ClearInvalidationMask();
 }
 
-void LayoutSVGResourceMarker::removeAllClientsFromCache(
-    bool markForInvalidation) {
-  markAllClientsForInvalidation(markForInvalidation
-                                    ? LayoutAndBoundariesInvalidation
-                                    : ParentOnlyInvalidation);
+void LayoutSVGResourceMarker::RemoveAllClientsFromCache(
+    bool mark_for_invalidation) {
+  MarkAllClientsForInvalidation(mark_for_invalidation
+                                    ? kLayoutAndBoundariesInvalidation
+                                    : kParentOnlyInvalidation);
 }
 
-void LayoutSVGResourceMarker::removeClientFromCache(LayoutObject* client,
-                                                    bool markForInvalidation) {
-  ASSERT(client);
-  markClientForInvalidation(client, markForInvalidation
-                                        ? BoundariesInvalidation
-                                        : ParentOnlyInvalidation);
+void LayoutSVGResourceMarker::RemoveClientFromCache(
+    LayoutObject* client,
+    bool mark_for_invalidation) {
+  DCHECK(client);
+  MarkClientForInvalidation(client, mark_for_invalidation
+                                        ? kBoundariesInvalidation
+                                        : kParentOnlyInvalidation);
 }
 
-FloatRect LayoutSVGResourceMarker::markerBoundaries(
-    const AffineTransform& markerTransformation) const {
-  FloatRect coordinates = LayoutSVGContainer::visualRectInLocalSVGCoordinates();
+FloatRect LayoutSVGResourceMarker::MarkerBoundaries(
+    const AffineTransform& marker_transformation) const {
+  FloatRect coordinates = LayoutSVGContainer::VisualRectInLocalSVGCoordinates();
 
   // Map visual rect into parent coordinate space, in which the marker
   // boundaries have to be evaluated.
-  coordinates = localToSVGParentTransform().mapRect(coordinates);
+  coordinates = LocalToSVGParentTransform().MapRect(coordinates);
 
-  return markerTransformation.mapRect(coordinates);
+  return marker_transformation.MapRect(coordinates);
 }
 
-const AffineTransform& LayoutSVGResourceMarker::localToSVGParentTransform()
-    const {
-  m_localToParentTransform =
-      AffineTransform::translation(m_viewport.x(), m_viewport.y()) *
-      viewportTransform();
-  return m_localToParentTransform;
-  // If this class were ever given a localTransform(), then the above would
-  // read:
-  // return viewportTranslation * localTransform() * viewportTransform();
+FloatPoint LayoutSVGResourceMarker::ReferencePoint() const {
+  SVGMarkerElement* marker = toSVGMarkerElement(GetElement());
+  DCHECK(marker);
+
+  SVGLengthContext length_context(marker);
+  return FloatPoint(marker->refX()->CurrentValue()->Value(length_context),
+                    marker->refY()->CurrentValue()->Value(length_context));
 }
 
-FloatPoint LayoutSVGResourceMarker::referencePoint() const {
-  SVGMarkerElement* marker = toSVGMarkerElement(element());
-  ASSERT(marker);
-
-  SVGLengthContext lengthContext(marker);
-  return FloatPoint(marker->refX()->currentValue()->value(lengthContext),
-                    marker->refY()->currentValue()->value(lengthContext));
+float LayoutSVGResourceMarker::Angle() const {
+  return toSVGMarkerElement(GetElement())
+      ->orientAngle()
+      ->CurrentValue()
+      ->Value();
 }
 
-float LayoutSVGResourceMarker::angle() const {
-  return toSVGMarkerElement(element())->orientAngle()->currentValue()->value();
-}
-
-SVGMarkerUnitsType LayoutSVGResourceMarker::markerUnits() const {
-  return toSVGMarkerElement(element())
+SVGMarkerUnitsType LayoutSVGResourceMarker::MarkerUnits() const {
+  return toSVGMarkerElement(GetElement())
       ->markerUnits()
-      ->currentValue()
-      ->enumValue();
+      ->CurrentValue()
+      ->EnumValue();
 }
 
-SVGMarkerOrientType LayoutSVGResourceMarker::orientType() const {
-  return toSVGMarkerElement(element())
+SVGMarkerOrientType LayoutSVGResourceMarker::OrientType() const {
+  return toSVGMarkerElement(GetElement())
       ->orientType()
-      ->currentValue()
-      ->enumValue();
+      ->CurrentValue()
+      ->EnumValue();
 }
 
-AffineTransform LayoutSVGResourceMarker::markerTransformation(
+AffineTransform LayoutSVGResourceMarker::MarkerTransformation(
     const FloatPoint& origin,
-    float autoAngle,
-    float strokeWidth) const {
+    float auto_angle,
+    float stroke_width) const {
   // Apply scaling according to markerUnits ('strokeWidth' or 'userSpaceOnUse'.)
-  float markerScale =
-      markerUnits() == SVGMarkerUnitsStrokeWidth ? strokeWidth : 1;
+  float marker_scale =
+      MarkerUnits() == kSVGMarkerUnitsStrokeWidth ? stroke_width : 1;
 
   AffineTransform transform;
-  transform.translate(origin.x(), origin.y());
-  transform.rotate(orientType() == SVGMarkerOrientAngle ? angle() : autoAngle);
-  transform.scale(markerScale);
+  transform.Translate(origin.X(), origin.Y());
+  transform.Rotate(OrientType() == kSVGMarkerOrientAngle ? Angle()
+                                                         : auto_angle);
+  transform.Scale(marker_scale);
 
-  // The 'origin' coordinate maps to SVGs refX/refY, given in coordinates
-  // relative to the viewport established by the marker.
-  FloatPoint mappedReferencePoint =
-      viewportTransform().mapPoint(referencePoint());
-  transform.translate(-mappedReferencePoint.x(), -mappedReferencePoint.y());
+  // The reference point (refX, refY) is in the coordinate space of the marker's
+  // contents so we include the value in each marker's transform.
+  FloatPoint mapped_reference_point =
+      LocalToSVGParentTransform().MapPoint(ReferencePoint());
+  transform.Translate(-mapped_reference_point.X(), -mapped_reference_point.Y());
   return transform;
 }
 
-bool LayoutSVGResourceMarker::shouldPaint() const {
+bool LayoutSVGResourceMarker::ShouldPaint() const {
   // An empty viewBox disables rendering.
-  SVGMarkerElement* marker = toSVGMarkerElement(element());
-  ASSERT(marker);
-  return !marker->viewBox()->isSpecified() ||
-         !marker->viewBox()->currentValue()->isValid() ||
-         !marker->viewBox()->currentValue()->value().isEmpty();
+  SVGMarkerElement* marker = toSVGMarkerElement(GetElement());
+  DCHECK(marker);
+  return !marker->viewBox()->IsSpecified() ||
+         !marker->viewBox()->CurrentValue()->IsValid() ||
+         !marker->viewBox()->CurrentValue()->Value().IsEmpty();
 }
 
-AffineTransform LayoutSVGResourceMarker::viewportTransform() const {
-  SVGMarkerElement* marker = toSVGMarkerElement(element());
-  ASSERT(marker);
-
-  return marker->viewBoxToViewTransform(m_viewport.width(),
-                                        m_viewport.height());
+void LayoutSVGResourceMarker::SetNeedsTransformUpdate() {
+  SetMayNeedPaintInvalidationSubtree();
+  // The transform paint property relies on the SVG transform being up-to-date
+  // (see: PaintPropertyTreeBuilder::updateTransformForNonRootSVG).
+  SetNeedsPaintPropertyUpdate();
+  needs_transform_update_ = true;
 }
 
-void LayoutSVGResourceMarker::calcViewport() {
-  if (!selfNeedsLayout())
-    return;
+SVGTransformChange LayoutSVGResourceMarker::CalculateLocalTransform() {
+  if (!needs_transform_update_)
+    return SVGTransformChange::kNone;
 
-  SVGMarkerElement* marker = toSVGMarkerElement(element());
-  ASSERT(marker);
+  SVGMarkerElement* marker = toSVGMarkerElement(GetElement());
+  DCHECK(marker);
 
-  SVGLengthContext lengthContext(marker);
-  float w = marker->markerWidth()->currentValue()->value(lengthContext);
-  float h = marker->markerHeight()->currentValue()->value(lengthContext);
-  m_viewport = FloatRect(0, 0, w, h);
-}
+  SVGLengthContext length_context(marker);
+  float width = marker->markerWidth()->CurrentValue()->Value(length_context);
+  float height = marker->markerHeight()->CurrentValue()->Value(length_context);
+  viewport_size_ = FloatSize(width, height);
 
-SVGTransformChange LayoutSVGResourceMarker::calculateLocalTransform() {
-  // TODO(fs): Temporarily, needing a layout implies that the local transform
-  // has changed. This should be updated to be more precise and factor in the
-  // actual (relevant) changes to the computed user-space transform.
-  return selfNeedsLayout() ? SVGTransformChange::Full
-                           : SVGTransformChange::None;
+  SVGTransformChangeDetector change_detector(local_to_parent_transform_);
+  local_to_parent_transform_ = marker->ViewBoxToViewTransform(
+      viewport_size_.Width(), viewport_size_.Height());
+
+  needs_transform_update_ = false;
+  return change_detector.ComputeChange(local_to_parent_transform_);
 }
 
 }  // namespace blink

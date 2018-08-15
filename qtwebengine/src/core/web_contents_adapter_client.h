@@ -80,7 +80,9 @@ enum class ReferrerPolicy {
     Origin,
     OriginWhenCrossOrigin,
     NoReferrerWhenDowngradeOriginWhenCrossOrigin,
-    Last = NoReferrerWhenDowngradeOriginWhenCrossOrigin,
+    SameOrigin,
+    StrictOrigin,
+    Last = StrictOrigin,
 };
 
 class WebEngineContextMenuSharedData : public QSharedData {
@@ -101,6 +103,7 @@ public:
     uint mediaFlags;
     QPoint pos;
     QUrl linkUrl;
+    QUrl unfilteredLinkUrl;
     QUrl mediaUrl;
     QString linkText;
     QString selectedText;
@@ -168,6 +171,14 @@ public:
 
     QUrl linkUrl() const {
         return d->linkUrl;
+    }
+
+    void setUnfilteredLinkUrl(const QUrl &url) {
+        d->unfilteredLinkUrl = url;
+    }
+
+    QUrl unfilteredLinkUrl() const {
+        return d->unfilteredLinkUrl;
     }
 
     void setLinkText(const QString &text) {
@@ -307,7 +318,7 @@ public:
         IgnoreActionDisposition = 9,
     };
 
-    // Must match the values in javascript_message_type.h.
+    // Must match the values in javascript_dialog_type.h.
     enum JavascriptDialogType {
         AlertDialog,
         ConfirmDialog,
@@ -349,6 +360,8 @@ public:
         MediaNone = 0,
         MediaAudioCapture = 0x01,
         MediaVideoCapture = 0x02,
+        MediaDesktopAudioCapture = 0x04,
+        MediaDesktopVideoCapture = 0x08
     };
     Q_DECLARE_FLAGS(MediaRequestFlags, MediaRequestFlag)
 
@@ -376,7 +389,7 @@ public:
     virtual bool isBeingAdopted() = 0;
     virtual void close() = 0;
     virtual void windowCloseRejected() = 0;
-    virtual bool contextMenuRequested(const WebEngineContextMenuData &) = 0;
+    virtual void contextMenuRequested(const WebEngineContextMenuData &) = 0;
     virtual void navigationRequested(int navigationType, const QUrl &url, int &navigationRequestAction, bool isMainFrame) = 0;
     virtual void requestFullScreenMode(const QUrl &origin, bool fullscreen) = 0;
     virtual bool isFullScreenMode() const = 0;

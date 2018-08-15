@@ -73,7 +73,14 @@ public:
         Hangul,
         Hiragana,
         Katakana,
-        FullwidthLatin
+        FullwidthLatin,
+        Greek,
+        Cyrillic,
+        Arabic,
+        Hebrew,
+        ChineseHandwriting,
+        JapaneseHandwriting,
+        KoreanHandwriting
     };
     enum PatternRecognitionMode {
         PatternRecognitionDisabled,
@@ -138,6 +145,7 @@ private slots:
     void update();
     void shiftChanged();
     void updateSelectionListModels();
+    void updateInputModes();
 
 protected:
     void timerEvent(QTimerEvent *timerEvent);

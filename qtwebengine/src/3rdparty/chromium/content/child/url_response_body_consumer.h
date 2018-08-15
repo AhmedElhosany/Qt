@@ -16,9 +16,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
 #include "content/common/content_export.h"
-#include "content/common/url_loader.mojom.h"
+#include "content/public/common/url_loader.mojom.h"
 #include "mojo/public/cpp/system/data_pipe.h"
-#include "mojo/public/cpp/system/watcher.h"
+#include "mojo/public/cpp/system/simple_watcher.h"
 
 namespace content {
 
@@ -37,9 +37,6 @@ class CONTENT_EXPORT URLResponseBodyConsumer final
       mojo::ScopedDataPipeConsumerHandle handle,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
-  // Starts watching the handle.
-  void Start(base::SingleThreadTaskRunner* task_runner);
-
   // Sets the completion status. The completion status is dispatched to the
   // ResourceDispatcher when the both following conditions hold:
   //  1) This function has been called and the completion status is set, and
@@ -51,6 +48,21 @@ class CONTENT_EXPORT URLResponseBodyConsumer final
   // cancelled or done.
   void Cancel();
 
+  void SetDefersLoading();
+  void UnsetDefersLoading();
+
+  // Reads data and dispatches messages synchronously.
+  void OnReadable(MojoResult unused);
+
+  void ArmOrNotify();
+
+  // The maximal number of bytes consumed in a task. When there are more bytes
+  // in the data pipe, they will be consumed in following tasks. Setting a too
+  // small number will generate ton of tasks but setting a too large number will
+  // lead to thread janks. Also, some clients cannot handle too large chunks
+  // (512k for example).
+  static constexpr uint32_t kMaxNumConsumedBytesInTask = 64 * 1024;
+
  private:
   friend class base::RefCounted<URLResponseBodyConsumer>;
   ~URLResponseBodyConsumer();
@@ -58,18 +70,20 @@ class CONTENT_EXPORT URLResponseBodyConsumer final
   class ReceivedData;
   void Reclaim(uint32_t size);
 
-  void OnReadable(MojoResult unused);
   void NotifyCompletionIfAppropriate();
 
   const int request_id_;
   ResourceDispatcher* resource_dispatcher_;
   mojo::ScopedDataPipeConsumerHandle handle_;
-  mojo::Watcher handle_watcher_;
+  mojo::SimpleWatcher handle_watcher_;
   ResourceRequestCompletionStatus completion_status_;
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   bool has_received_completion_ = false;
   bool has_been_cancelled_ = false;
   bool has_seen_end_of_data_;
+  bool is_deferred_ = false;
+  bool is_in_on_readable_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(URLResponseBodyConsumer);
 };

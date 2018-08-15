@@ -39,12 +39,10 @@ class HTMLBaseElement final : public HTMLElement {
  private:
   explicit HTMLBaseElement(Document&);
 
-  bool isURLAttribute(const Attribute&) const override;
-  void parseAttribute(const QualifiedName&,
-                      const AtomicString&,
-                      const AtomicString&) override;
-  InsertionNotificationRequest insertedInto(ContainerNode*) override;
-  void removedFrom(ContainerNode*) override;
+  bool IsURLAttribute(const Attribute&) const override;
+  void ParseAttribute(const AttributeModificationParams&) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
+  void RemovedFrom(ContainerNode*) override;
 };
 
 }  // namespace blink

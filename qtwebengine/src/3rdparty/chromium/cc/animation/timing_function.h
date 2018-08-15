@@ -8,18 +8,18 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "cc/base/cc_export.h"
+#include "cc/animation/animation_export.h"
 #include "ui/gfx/geometry/cubic_bezier.h"
 
 namespace cc {
 
 // See http://www.w3.org/TR/css3-transitions/.
-class CC_EXPORT TimingFunction {
+class CC_ANIMATION_EXPORT TimingFunction {
  public:
   virtual ~TimingFunction();
 
   // Note that LINEAR is a nullptr TimingFunction (for now).
-  enum class Type { LINEAR, CUBIC_BEZIER, STEPS };
+  enum class Type { LINEAR, CUBIC_BEZIER, STEPS, FRAMES };
 
   virtual Type GetType() const = 0;
   virtual float GetValue(double t) const = 0;
@@ -34,9 +34,9 @@ class CC_EXPORT TimingFunction {
   DISALLOW_ASSIGN(TimingFunction);
 };
 
-class CC_EXPORT CubicBezierTimingFunction : public TimingFunction {
+class CC_ANIMATION_EXPORT CubicBezierTimingFunction : public TimingFunction {
  public:
-  enum class EaseType { EASE, EASE_IN, EASE_OUT, EASE_IN_OUT, EASE_OUT_NATURAL, CUSTOM };
+  enum class EaseType { EASE, EASE_IN, EASE_OUT, EASE_IN_OUT, CUSTOM };
 
   static std::unique_ptr<CubicBezierTimingFunction> CreatePreset(
       EaseType ease_type);
@@ -69,7 +69,7 @@ class CC_EXPORT CubicBezierTimingFunction : public TimingFunction {
   DISALLOW_ASSIGN(CubicBezierTimingFunction);
 };
 
-class CC_EXPORT StepsTimingFunction : public TimingFunction {
+class CC_ANIMATION_EXPORT StepsTimingFunction : public TimingFunction {
  public:
   // Web Animations specification, 3.12.4. Timing in discrete steps.
   enum class StepPosition { START, MIDDLE, END };
@@ -99,6 +99,29 @@ class CC_EXPORT StepsTimingFunction : public TimingFunction {
   StepPosition step_position_;
 
   DISALLOW_ASSIGN(StepsTimingFunction);
+};
+
+class CC_ANIMATION_EXPORT FramesTimingFunction : public TimingFunction {
+ public:
+  static std::unique_ptr<FramesTimingFunction> Create(int frames);
+  ~FramesTimingFunction() override;
+
+  // TimingFunction implementation.
+  Type GetType() const override;
+  float GetValue(double t) const override;
+  std::unique_ptr<TimingFunction> Clone() const override;
+  void Range(float* min, float* max) const override;
+  float Velocity(double time) const override;
+
+  int frames() const { return frames_; }
+  double GetPreciseValue(double t) const;
+
+ private:
+  explicit FramesTimingFunction(int frames);
+
+  int frames_;
+
+  DISALLOW_ASSIGN(FramesTimingFunction);
 };
 
 }  // namespace cc

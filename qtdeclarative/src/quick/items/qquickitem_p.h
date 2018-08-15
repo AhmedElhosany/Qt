@@ -87,6 +87,7 @@ class QQuickItemKeyFilter;
 class QQuickLayoutMirroringAttached;
 class QQuickEnterKeyAttached;
 class QQuickScreenAttached;
+class QQuickPointerHandler;
 
 class QQuickContents : public QQuickItemChangeListener
 {
@@ -94,7 +95,7 @@ public:
     QQuickContents(QQuickItem *item);
     ~QQuickContents();
 
-    QRectF rectF() const { return QRectF(m_x, m_y, m_width, m_height); }
+    QRectF rectF() const { return m_contents; }
 
     inline void calcGeometry(QQuickItem *changed = 0);
     void complete();
@@ -112,10 +113,7 @@ private:
     void updateRect();
 
     QQuickItem *m_item;
-    qreal m_x;
-    qreal m_y;
-    qreal m_width;
-    qreal m_height;
+    QRectF m_contents;
 };
 
 void QQuickContents::calcGeometry(QQuickItem *changed)
@@ -152,6 +150,8 @@ class QQuickItemLayer : public QObject, public QQuickItemChangeListener
     Q_PROPERTY(QByteArray samplerName READ name WRITE setName NOTIFY nameChanged)
     Q_PROPERTY(QQmlComponent *effect READ effect WRITE setEffect NOTIFY effectChanged)
     Q_PROPERTY(QQuickShaderEffectSource::TextureMirroring textureMirroring READ textureMirroring WRITE setTextureMirroring NOTIFY textureMirroringChanged)
+    Q_PROPERTY(int samples READ samples WRITE setSamples NOTIFY samplesChanged)
+
 public:
     QQuickItemLayer(QQuickItem *item);
     ~QQuickItemLayer();
@@ -189,6 +189,9 @@ public:
     QQuickShaderEffectSource::TextureMirroring textureMirroring() const { return m_textureMirroring; }
     void setTextureMirroring(QQuickShaderEffectSource::TextureMirroring mirroring);
 
+    int samples() const { return m_samples; }
+    void setSamples(int count);
+
     QQuickShaderEffectSource *effectSource() const { return m_effectSource; }
 
     void itemGeometryChanged(QQuickItem *, QQuickGeometryChange, const QRectF &) Q_DECL_OVERRIDE;
@@ -213,6 +216,7 @@ Q_SIGNALS:
     void formatChanged(QQuickShaderEffectSource::Format format);
     void sourceRectChanged(const QRectF &sourceRect);
     void textureMirroringChanged(QQuickShaderEffectSource::TextureMirroring mirroring);
+    void samplesChanged(int count);
 
 private:
     friend class QQuickTransformAnimatorJob;
@@ -237,6 +241,7 @@ private:
     QQuickItem *m_effect;
     QQuickShaderEffectSource *m_effectSource;
     QQuickShaderEffectSource::TextureMirroring m_textureMirroring;
+    int m_samples;
 };
 
 #endif
@@ -273,6 +278,8 @@ public:
     QQuickAnchorLine baseline() const;
 
     QQuickItemLayer *layer() const;
+
+    bool hasPointerHandlers() const;
 
     // data property
     static void data_append(QQmlListProperty<QObject> *, QObject *);
@@ -316,7 +323,8 @@ public:
         Children = 0x40,
         Rotation = 0x80,
         ImplicitWidth = 0x100,
-        ImplicitHeight = 0x200
+        ImplicitHeight = 0x200,
+        Enabled = 0x400,
     };
 
     Q_DECLARE_FLAGS(ChangeTypes, ChangeType)
@@ -343,6 +351,7 @@ public:
         QQuickLayoutMirroringAttached* layoutDirectionAttached;
         QQuickEnterKeyAttached *enterKeyAttached;
         QQuickItemKeyFilter *keyHandler;
+        QVector<QQuickPointerHandler *> pointerHandlers;
 #if QT_CONFIG(quick_shadereffect)
         mutable QQuickItemLayer *layer;
 #endif
@@ -351,8 +360,11 @@ public:
 #endif
         QPointF userTransformOriginPoint;
 
+        // these do not include child items
         int effectRefCount;
         int hideRefCount;
+        // updated recursively for child items as well
+        int recursiveEffectRefCount;
 
         QSGOpacityNode *opacityNode;
         QQuickDefaultClipNode *clipNode;
@@ -432,6 +444,7 @@ public:
     // focus chain and prevents tabbing outside.
     bool isTabFence:1;
     bool replayingPressEvent:1;
+    bool touchEnabled:1;
 
     enum DirtyType {
         TransformOrigin         = 0x00000001,
@@ -555,10 +568,13 @@ public:
     virtual void transformChanged();
 
     void deliverKeyEvent(QKeyEvent *);
+    bool filterKeyEvent(QKeyEvent *, bool post);
 #if QT_CONFIG(im)
     void deliverInputMethodEvent(QInputMethodEvent *);
 #endif
     void deliverShortcutOverrideEvent(QKeyEvent *);
+
+    virtual bool handlePointerEvent(QQuickPointerEvent *, bool avoidExclusiveGrabber = false);
 
     virtual void setVisible(bool visible);
 
@@ -594,6 +610,7 @@ public:
     // A reference from an effect item means that this item is used by the effect, so
     // it should insert a root node.
     void refFromEffectItem(bool hide);
+    void recursiveRefFromEffectItem(int refs);
     void derefFromEffectItem(bool unhide);
 
     void itemChange(QQuickItem::ItemChange, const QQuickItem::ItemChangeData &);

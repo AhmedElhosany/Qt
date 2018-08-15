@@ -6,6 +6,7 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 
 #include "Resources.h"
 #include "SkBlurMask.h"
@@ -103,7 +104,7 @@ protected:
             // Create a new Canvas to enable DFT
             GrContext* ctx = inputCanvas->getGrContext();
             SkISize size = onISize();
-            sk_sp<SkColorSpace> colorSpace = sk_ref_sp(inputCanvas->imageInfo().colorSpace());
+            sk_sp<SkColorSpace> colorSpace = inputCanvas->imageInfo().refColorSpace();
             SkImageInfo info = SkImageInfo::MakeN32(size.width(), size.height(),
                                                     kPremul_SkAlphaType, colorSpace);
             SkSurfaceProps props(SkSurfaceProps::kUseDeviceIndependentFonts_Flag,

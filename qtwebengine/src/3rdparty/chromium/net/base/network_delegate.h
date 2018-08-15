@@ -11,7 +11,7 @@
 
 #include "base/callback.h"
 #include "base/strings/string16.h"
-#include "base/threading/non_thread_safe.h"
+#include "base/threading/thread_checker.h"
 #include "net/base/auth.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_export.h"
@@ -22,6 +22,10 @@ class GURL;
 
 namespace base {
 class FilePath;
+}
+
+namespace url {
+class Origin;
 }
 
 namespace net {
@@ -42,7 +46,7 @@ class HttpResponseHeaders;
 class ProxyInfo;
 class URLRequest;
 
-class NET_EXPORT NetworkDelegate : public base::NonThreadSafe {
+class NET_EXPORT NetworkDelegate {
  public:
   // AuthRequiredResponse indicates how a NetworkDelegate handles an
   // OnAuthRequired call. It's placed in this file to prevent url_request.h
@@ -55,7 +59,7 @@ class NET_EXPORT NetworkDelegate : public base::NonThreadSafe {
   };
   typedef base::Callback<void(AuthRequiredResponse)> AuthCallback;
 
-  virtual ~NetworkDelegate() {}
+  virtual ~NetworkDelegate();
 
   // Notification interface called by the network stack. Note that these
   // functions mostly forward to the private virtuals. They also add some sanity
@@ -101,20 +105,27 @@ class NET_EXPORT NetworkDelegate : public base::NonThreadSafe {
                     const std::string& cookie_line,
                     CookieOptions* options);
   bool CanAccessFile(const URLRequest& request,
-                     const base::FilePath& path) const;
+                     const base::FilePath& original_path,
+                     const base::FilePath& absolute_path) const;
   bool CanEnablePrivacyMode(const GURL& url,
                             const GURL& first_party_for_cookies) const;
 
   bool AreExperimentalCookieFeaturesEnabled() const;
 
-  // TODO(jww): Remove this once we ship strict secure cookies:
-  // https://crbug.com/546820
-  bool AreStrictSecureCookiesEnabled() const;
-
   bool CancelURLRequestWithPolicyViolatingReferrerHeader(
       const URLRequest& request,
       const GURL& target_url,
       const GURL& referrer_url) const;
+
+  bool CanQueueReportingReport(const url::Origin& origin) const;
+  bool CanSendReportingReport(const url::Origin& origin) const;
+  bool CanSetReportingClient(const url::Origin& origin,
+                             const GURL& endpoint) const;
+  bool CanUseReportingClient(const url::Origin& origin,
+                             const GURL& endpoint) const;
+
+ protected:
+  THREAD_CHECKER(thread_checker_);
 
  private:
   // This is the interface for subclasses of NetworkDelegate to implement. These
@@ -271,10 +282,13 @@ class NET_EXPORT NetworkDelegate : public base::NonThreadSafe {
                               CookieOptions* options) = 0;
 
   // Called when a file access is attempted to allow the network delegate to
-  // allow or block access to the given file path.  Returns true if access is
-  // allowed.
+  // allow or block access to the given file path, provided in the original
+  // and absolute forms (i.e. symbolic link is resolved). It's up to
+  // subclasses of NetworkDelegate to decide which path to use for
+  // checking. Returns true if access is allowed.
   virtual bool OnCanAccessFile(const URLRequest& request,
-                               const base::FilePath& path) const = 0;
+                               const base::FilePath& original_path,
+                               const base::FilePath& absolute_path) const = 0;
 
   // Returns true if the given |url| has to be requested over connection that
   // is not tracked by the server. Usually is false, unless user privacy
@@ -287,13 +301,6 @@ class NET_EXPORT NetworkDelegate : public base::NonThreadSafe {
   // false otherwise.
   virtual bool OnAreExperimentalCookieFeaturesEnabled() const = 0;
 
-  // Returns true if the embedder has enabled experimental features or
-  // specifically strict secure cookies, and false otherwise.
-  //
-  // TODO(jww): Remove this once we ship strict secure cookies:
-  // https://crbug.com/546820.
-  virtual bool OnAreStrictSecureCookiesEnabled() const = 0;
-
   // Called when the |referrer_url| for requesting |target_url| during handling
   // of the |request| is does not comply with the referrer policy (e.g. a
   // secure referrer for an insecure initial target).
@@ -303,6 +310,16 @@ class NET_EXPORT NetworkDelegate : public base::NonThreadSafe {
       const URLRequest& request,
       const GURL& target_url,
       const GURL& referrer_url) const = 0;
+
+  virtual bool OnCanQueueReportingReport(const url::Origin& origin) const = 0;
+
+  virtual bool OnCanSendReportingReport(const url::Origin& origin) const = 0;
+
+  virtual bool OnCanSetReportingClient(const url::Origin& origin,
+                                       const GURL& endpoint) const = 0;
+
+  virtual bool OnCanUseReportingClient(const url::Origin& origin,
+                                       const GURL& endpoint) const = 0;
 };
 
 }  // namespace net

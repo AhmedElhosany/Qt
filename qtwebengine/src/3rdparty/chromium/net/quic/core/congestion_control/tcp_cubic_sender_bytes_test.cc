@@ -8,18 +8,16 @@
 #include <cstdint>
 #include <memory>
 
-#include "base/logging.h"
 #include "net/quic/core/congestion_control/rtt_stats.h"
 #include "net/quic/core/congestion_control/send_algorithm_interface.h"
 #include "net/quic/core/crypto/crypto_protocol.h"
 #include "net/quic/core/proto/cached_network_parameters.pb.h"
-#include "net/quic/core/quic_flags.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/quic/core/quic_utils.h"
+#include "net/quic/platform/api/quic_logging.h"
+#include "net/quic/platform/api/quic_test.h"
 #include "net/quic/test_tools/mock_clock.h"
 #include "net/quic/test_tools/quic_config_peer.h"
-#include "net/quic/test_tools/quic_test_utils.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
 namespace test {
@@ -53,7 +51,7 @@ class TcpCubicSenderBytesPeer : public TcpCubicSenderBytes {
   QuicConnectionStats stats_;
 };
 
-class TcpCubicSenderBytesTest : public ::testing::Test {
+class TcpCubicSenderBytesTest : public QuicTest {
  protected:
   TcpCubicSenderBytesTest()
       : one_ms_(QuicTime::Delta::FromMilliseconds(1)),
@@ -211,7 +209,7 @@ TEST_F(TcpCubicSenderBytesTest, SlowStartPacketLoss) {
   // Recovery phase. We need to ack every packet in the recovery window before
   // we exit recovery.
   size_t number_of_packets_in_window = expected_send_window / kDefaultTCPMSS;
-  DVLOG(1) << "number_packets: " << number_of_packets_in_window;
+  QUIC_DLOG(INFO) << "number_packets: " << number_of_packets_in_window;
   AckNPackets(packets_in_recovery_window);
   SendAvailableSendWindow();
   EXPECT_EQ(expected_send_window, sender_->GetCongestionWindow());
@@ -273,7 +271,7 @@ TEST_F(TcpCubicSenderBytesTest, SlowStartPacketLossWithLargeReduction) {
   // Recovery phase. We need to ack every packet in the recovery window before
   // we exit recovery.
   size_t number_of_packets_in_window = expected_send_window / kDefaultTCPMSS;
-  DVLOG(1) << "number_packets: " << number_of_packets_in_window;
+  QUIC_DLOG(INFO) << "number_packets: " << number_of_packets_in_window;
   AckNPackets(packets_in_recovery_window);
   SendAvailableSendWindow();
   EXPECT_EQ(expected_send_window, sender_->GetCongestionWindow());
@@ -849,7 +847,6 @@ TEST_F(TcpCubicSenderBytesTest, DefaultMaxCwnd) {
 }
 
 TEST_F(TcpCubicSenderBytesTest, LimitCwndIncreaseInCongestionAvoidance) {
-  FLAGS_quic_limit_cubic_cwnd_increase = true;
   // Enable Cubic.
   sender_.reset(new TcpCubicSenderBytesPeer(&clock_, false));
 

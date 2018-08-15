@@ -4,7 +4,6 @@
 
 #include "content/browser/media/session/audio_focus_delegate_android.h"
 
-#include "base/android/context_utils.h"
 #include "base/android/jni_android.h"
 #include "content/browser/media/session/media_session_impl.h"
 #include "jni/AudioFocusDelegate_jni.h"
@@ -31,9 +30,8 @@ AudioFocusDelegateAndroid::~AudioFocusDelegateAndroid() {
 void AudioFocusDelegateAndroid::Initialize() {
   JNIEnv* env = base::android::AttachCurrentThread();
   DCHECK(env);
-  j_media_session_delegate_.Reset(Java_AudioFocusDelegate_create(
-      env, base::android::GetApplicationContext(),
-      reinterpret_cast<intptr_t>(this)));
+  j_media_session_delegate_.Reset(
+      Java_AudioFocusDelegate_create(env, reinterpret_cast<intptr_t>(this)));
 }
 
 bool AudioFocusDelegateAndroid::RequestAudioFocus(
@@ -53,24 +51,16 @@ void AudioFocusDelegateAndroid::AbandonAudioFocus() {
 }
 
 void AudioFocusDelegateAndroid::OnSuspend(JNIEnv*,
-                                          const JavaParamRef<jobject>&,
-                                          jboolean temporary) {
-  // TODO(mlamouri): this check makes it so that if a MediaSession is paused and
-  // then loses audio focus, it will still stay in the Suspended state.
-  // See https://crbug.com/539998
+                                          const JavaParamRef<jobject>&) {
   if (!media_session_->IsActive())
     return;
 
-  if (temporary) {
-    media_session_->Suspend(MediaSession::SuspendType::SYSTEM);
-  } else {
-    media_session_->Stop(MediaSession::SuspendType::SYSTEM);
-  }
+  media_session_->Suspend(MediaSession::SuspendType::SYSTEM);
 }
 
 void AudioFocusDelegateAndroid::OnResume(JNIEnv*,
                                          const JavaParamRef<jobject>&) {
-  if (!media_session_->IsReallySuspended())
+  if (!media_session_->IsSuspended())
     return;
 
   media_session_->Resume(MediaSession::SuspendType::SYSTEM);

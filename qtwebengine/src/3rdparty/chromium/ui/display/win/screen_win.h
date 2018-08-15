@@ -14,6 +14,7 @@
 #include "ui/display/display_change_notifier.h"
 #include "ui/display/display_export.h"
 #include "ui/display/screen.h"
+#include "ui/display/win/color_profile_reader.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/win/singleton_hwnd_observer.h"
 
@@ -30,7 +31,8 @@ namespace win {
 class DisplayInfo;
 class ScreenWinDisplay;
 
-class DISPLAY_EXPORT ScreenWin : public display::Screen {
+class DISPLAY_EXPORT ScreenWin : public Screen,
+                                 public ColorProfileReader::Client {
  public:
   ScreenWin();
   ~ScreenWin() override;
@@ -102,37 +104,45 @@ class DISPLAY_EXPORT ScreenWin : public display::Screen {
   // Returns |hwnd|'s scale factor.
   static float GetScaleFactorForHWND(HWND hwnd);
 
+  // Returns the system's global scale factor, ignoring the value of
+  // --force-device-scale-factor. Only use this if you are working with Windows
+  // metrics global to the system. Otherwise you should call
+  // GetScaleFactorForHWND() to get the correct scale factor for the monitor
+  // you are targeting.
+  static float GetSystemScaleFactor();
+
   // Returns the HWND associated with the NativeView.
-  virtual HWND GetHWNDFromNativeView(gfx::NativeView window) const;
+  virtual HWND GetHWNDFromNativeView(gfx::NativeView view) const;
 
   // Returns the NativeView associated with the HWND.
   virtual gfx::NativeWindow GetNativeWindowFromHWND(HWND hwnd) const;
 
  protected:
-  // display::Screen:
+  ScreenWin(bool initialize);
+
+  // Screen:
   gfx::Point GetCursorScreenPoint() override;
   bool IsWindowUnderCursor(gfx::NativeWindow window) override;
   gfx::NativeWindow GetWindowAtScreenPoint(const gfx::Point& point) override;
   int GetNumDisplays() const override;
-  std::vector<display::Display> GetAllDisplays() const override;
-  display::Display GetDisplayNearestWindow(
-      gfx::NativeView window) const override;
-  display::Display GetDisplayNearestPoint(
-      const gfx::Point& point) const override;
-  display::Display GetDisplayMatching(
-      const gfx::Rect& match_rect) const override;
-  display::Display GetPrimaryDisplay() const override;
-  void AddObserver(display::DisplayObserver* observer) override;
-  void RemoveObserver(display::DisplayObserver* observer) override;
+  const std::vector<Display>& GetAllDisplays() const override;
+  Display GetDisplayNearestWindow(gfx::NativeWindow window) const override;
+  Display GetDisplayNearestPoint(const gfx::Point& point) const override;
+  Display GetDisplayMatching(const gfx::Rect& match_rect) const override;
+  Display GetPrimaryDisplay() const override;
+  void AddObserver(DisplayObserver* observer) override;
+  void RemoveObserver(DisplayObserver* observer) override;
   gfx::Rect ScreenToDIPRectInWindow(
       gfx::NativeView view, const gfx::Rect& screen_rect) const override;
   gfx::Rect DIPToScreenRectInWindow(
       gfx::NativeView view, const gfx::Rect& dip_rect) const override;
 
+  // ColorProfileReader::Client:
+  void OnColorProfilesChanged() override;
+
   void UpdateFromDisplayInfos(const std::vector<DisplayInfo>& display_infos);
 
   // Virtual to support mocking by unit tests.
-  virtual void Initialize();
   virtual MONITORINFOEX MonitorInfoFromScreenPoint(
       const gfx::Point& screen_point) const;
   virtual MONITORINFOEX MonitorInfoFromScreenRect(const gfx::Rect& screen_rect)
@@ -143,6 +153,7 @@ class DISPLAY_EXPORT ScreenWin : public display::Screen {
   virtual int GetSystemMetrics(int metric) const;
 
  private:
+  void Initialize();
   void OnWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 
   // Returns the ScreenWinDisplay closest to or enclosing |hwnd|.
@@ -184,6 +195,13 @@ class DISPLAY_EXPORT ScreenWin : public display::Screen {
 
   // Current list of ScreenWinDisplays.
   std::vector<ScreenWinDisplay> screen_win_displays_;
+
+  // The Displays corresponding to |screen_win_displays_| for GetAllDisplays().
+  // This must be updated anytime |screen_win_displays_| is updated.
+  std::vector<Display> displays_;
+
+  // A helper to read color profiles from the filesystem.
+  std::unique_ptr<ColorProfileReader> color_profile_reader_;
 
   DISALLOW_COPY_AND_ASSIGN(ScreenWin);
 };

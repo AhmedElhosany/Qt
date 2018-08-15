@@ -4,7 +4,6 @@
 
 #include "content/app/android/library_loader_hooks.h"
 
-#include "base/android/base_jni_registrar.h"
 #include "base/android/command_line_android.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_registrar.h"
@@ -17,9 +16,7 @@
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
 #include "base/tracked_objects.h"
-#include "components/tracing/browser/trace_config_file.h"
-#include "components/tracing/common/trace_to_console.h"
-#include "components/tracing/common/tracing_switches.h"
+#include "components/tracing/common/trace_startup.h"
 #include "content/app/android/app_jni_registrar.h"
 #include "content/browser/android/browser_jni_registrar.h"
 #include "content/common/android/common_jni_registrar.h"
@@ -28,14 +25,14 @@
 #include "content/public/common/result_codes.h"
 #include "device/bluetooth/android/bluetooth_jni_registrar.h"
 #include "device/gamepad/android/gamepad_jni_registrar.h"
-#include "device/generic_sensor/android/sensors_jni_registrar.h"
 #include "device/geolocation/android/geolocation_jni_registrar.h"
-#include "device/time_zone_monitor/android/time_zone_monitor_jni_registrar.h"
+#include "device/sensors/android/device_sensor_jni_registrar.h"
 #include "device/usb/android/usb_jni_registrar.h"
 #include "media/base/android/media_jni_registrar.h"
 #include "media/capture/content/android/screen_capture_jni_registrar.h"
 #include "media/capture/video/android/capture_jni_registrar.h"
 #include "media/midi/midi_jni_registrar.h"
+#include "mojo/android/system/mojo_jni_registrar.h"
 #include "net/android/net_jni_registrar.h"
 #include "ui/android/ui_android_jni_registrar.h"
 #include "ui/base/android/ui_base_jni_registrar.h"
@@ -49,9 +46,6 @@ bool EnsureJniRegistered(JNIEnv* env) {
   static bool g_jni_init_done = false;
 
   if (!g_jni_init_done) {
-    if (!base::android::RegisterJni(env))
-      return false;
-
     if (!gfx::android::RegisterJni(env))
       return false;
 
@@ -82,16 +76,13 @@ bool EnsureJniRegistered(JNIEnv* env) {
     if (!device::android::RegisterBluetoothJni(env))
       return false;
 
+    if (!device::android::RegisterDeviceSensorJni(env))
+      return false;
+
     if (!device::android::RegisterGamepadJni(env))
       return false;
 
     if (!device::android::RegisterGeolocationJni(env))
-      return false;
-
-    if (!device::android::RegisterSensorsJni(env))
-      return false;
-
-    if (!device::android::RegisterTimeZoneMonitorJni(env))
       return false;
 
     if (!device::android::RegisterUsbJni(env))
@@ -109,6 +100,9 @@ bool EnsureJniRegistered(JNIEnv* env) {
     if (!midi::RegisterJni(env))
       return false;
 
+    if (!mojo::android::RegisterSystemJni(env))
+      return false;
+
     if (!ui::RegisterUIAndroidJni(env))
       return false;
 
@@ -119,29 +113,8 @@ bool EnsureJniRegistered(JNIEnv* env) {
 }
 
 bool LibraryLoaded(JNIEnv* env, jclass clazz) {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-
   // Enable startup tracing asap to avoid early TRACE_EVENT calls being ignored.
-  if (command_line->HasSwitch(switches::kTraceStartup)) {
-    base::trace_event::TraceConfig trace_config(
-        command_line->GetSwitchValueASCII(switches::kTraceStartup), "");
-    base::trace_event::TraceLog::GetInstance()->SetEnabled(
-        trace_config, base::trace_event::TraceLog::RECORDING_MODE);
-  } else if (command_line->HasSwitch(switches::kTraceToConsole)) {
-      base::trace_event::TraceConfig trace_config =
-          tracing::GetConfigForTraceToConsole();
-      LOG(ERROR) << "Start " << switches::kTraceToConsole
-                 << " with CategoryFilter '"
-                 << trace_config.ToCategoryFilterString() << "'.";
-      base::trace_event::TraceLog::GetInstance()->SetEnabled(
-          trace_config,
-          base::trace_event::TraceLog::RECORDING_MODE);
-  } else if (tracing::TraceConfigFile::GetInstance()->IsEnabled()) {
-    // This checks kTraceConfigFile switch.
-    base::trace_event::TraceLog::GetInstance()->SetEnabled(
-        tracing::TraceConfigFile::GetInstance()->GetTraceConfig(),
-        base::trace_event::TraceLog::RECORDING_MODE);
-  }
+  tracing::EnableStartupTracingIfNeeded(true /* can_access_file_system */);
 
   // Android's main browser loop is custom so we set the browser
   // name here as early as possible.

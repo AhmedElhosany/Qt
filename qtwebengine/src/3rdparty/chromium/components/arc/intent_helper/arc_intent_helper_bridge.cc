@@ -6,92 +6,171 @@
 
 #include <utility>
 
-#include "ash/common/shell_delegate.h"
-#include "ash/common/wallpaper/wallpaper_controller.h"
-#include "ash/common/wm_shell.h"
-#include "ash/public/interfaces/new_window.mojom.h"
+#include "ash/new_window_controller.h"
 #include "ash/shell.h"
-#include "base/command_line.h"
+#include "ash/shell_delegate.h"
+#include "ash/wallpaper/wallpaper_controller.h"
+#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
 #include "components/arc/arc_bridge_service.h"
-#include "components/arc/intent_helper/activity_icon_loader.h"
+#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "components/arc/arc_service_manager.h"
+#include "components/arc/audio/arc_audio_bridge.h"
 #include "components/arc/intent_helper/link_handler_model_impl.h"
-#include "components/arc/intent_helper/local_activity_resolver.h"
 #include "ui/base/layout.h"
 #include "url/gurl.h"
 
 namespace arc {
+namespace {
+
+// Singleton factory for ArcIntentHelperBridge.
+class ArcIntentHelperBridgeFactory
+    : public internal::ArcBrowserContextKeyedServiceFactoryBase<
+          ArcIntentHelperBridge,
+          ArcIntentHelperBridgeFactory> {
+ public:
+  // Factory name used by ArcBrowserContextKeyedServiceFactoryBase.
+  static constexpr const char* kName = "ArcIntentHelperBridgeFactory";
+
+  static ArcIntentHelperBridgeFactory* GetInstance() {
+    return base::Singleton<ArcIntentHelperBridgeFactory>::get();
+  }
+
+ private:
+  friend struct base::DefaultSingletonTraits<ArcIntentHelperBridgeFactory>;
+
+  ArcIntentHelperBridgeFactory() = default;
+  ~ArcIntentHelperBridgeFactory() override = default;
+};
+
+}  // namespace
 
 // static
 const char ArcIntentHelperBridge::kArcIntentHelperPackageName[] =
     "org.chromium.arc.intent_helper";
 
-ArcIntentHelperBridge::ArcIntentHelperBridge(
-    ArcBridgeService* bridge_service,
-    const scoped_refptr<ActivityIconLoader>& icon_loader,
-    const scoped_refptr<LocalActivityResolver>& activity_resolver)
-    : ArcService(bridge_service),
-      binding_(this),
-      icon_loader_(icon_loader),
-      activity_resolver_(activity_resolver) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  arc_bridge_service()->intent_helper()->AddObserver(this);
+// static
+ArcIntentHelperBridge* ArcIntentHelperBridge::GetForBrowserContext(
+    content::BrowserContext* context) {
+  return ArcIntentHelperBridgeFactory::GetForBrowserContext(context);
+}
+
+// static
+KeyedServiceBaseFactory* ArcIntentHelperBridge::GetFactory() {
+  return ArcIntentHelperBridgeFactory::GetInstance();
+}
+
+ArcIntentHelperBridge::ArcIntentHelperBridge(content::BrowserContext* context,
+                                             ArcBridgeService* bridge_service)
+    : context_(context), arc_bridge_service_(bridge_service), binding_(this) {
+  arc_bridge_service_->intent_helper()->AddObserver(this);
 }
 
 ArcIntentHelperBridge::~ArcIntentHelperBridge() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  arc_bridge_service()->intent_helper()->RemoveObserver(this);
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+
+  // TODO(hidehiko): Currently, the lifetime of ArcBridgeService and
+  // BrowserContextKeyedService is not nested.
+  // If ArcServiceManager::Get() returns nullptr, it is already destructed,
+  // so do not touch it.
+  if (ArcServiceManager::Get())
+    arc_bridge_service_->intent_helper()->RemoveObserver(this);
 }
 
 void ArcIntentHelperBridge::OnInstanceReady() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  ash::Shell::GetInstance()->set_link_handler_model_factory(this);
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  ash::Shell::Get()->set_link_handler_model_factory(this);
   auto* instance =
-      arc_bridge_service()->intent_helper()->GetInstanceForMethod("Init");
+      ARC_GET_INSTANCE_FOR_METHOD(arc_bridge_service_->intent_helper(), Init);
   DCHECK(instance);
-  instance->Init(binding_.CreateInterfacePtrAndBind());
+  mojom::IntentHelperHostPtr host_proxy;
+  binding_.Bind(mojo::MakeRequest(&host_proxy));
+  instance->Init(std::move(host_proxy));
 }
 
 void ArcIntentHelperBridge::OnInstanceClosed() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  ash::Shell::GetInstance()->set_link_handler_model_factory(nullptr);
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  ash::Shell::Get()->set_link_handler_model_factory(nullptr);
 }
 
 void ArcIntentHelperBridge::OnIconInvalidated(const std::string& package_name) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  icon_loader_->InvalidateIcons(package_name);
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  icon_loader_.InvalidateIcons(package_name);
 }
 
 void ArcIntentHelperBridge::OnOpenDownloads() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // TODO(607411): If the FileManager is not yet open this will open to
   // downloads by default, which is what we want.  However if it is open it will
   // simply be brought to the forgeground without forcibly being navigated to
   // downloads, which is probably not ideal.
-  ash::WmShell::Get()->new_window_client()->OpenFileManager();
+  ash::Shell::Get()->new_window_controller()->OpenFileManager();
 }
 
 void ArcIntentHelperBridge::OnOpenUrl(const std::string& url) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  ash::WmShell::Get()->delegate()->OpenUrlFromArc(GURL(url));
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  ash::Shell::Get()->shell_delegate()->OpenUrlFromArc(GURL(url));
 }
 
 void ArcIntentHelperBridge::OpenWallpaperPicker() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  ash::WmShell::Get()->wallpaper_controller()->OpenSetWallpaperPage();
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  ash::Shell::Get()->wallpaper_controller()->OpenSetWallpaperPage();
 }
 
 void ArcIntentHelperBridge::SetWallpaperDeprecated(
     const std::vector<uint8_t>& jpeg_data) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   LOG(ERROR) << "IntentHelper.SetWallpaper is deprecated";
+}
+
+void ArcIntentHelperBridge::OpenVolumeControl() {
+  // TODO(hidehiko): Use browser_context passed to this class's ctor, after
+  // we migrate this into BrowserContextKeyedService.
+  auto* audio = ArcAudioBridge::GetForBrowserContext(
+      ArcServiceManager::Get()->browser_context());
+  DCHECK(audio);
+  audio->ShowVolumeControls();
+}
+
+ArcIntentHelperBridge::GetResult ArcIntentHelperBridge::GetActivityIcons(
+    const std::vector<ActivityName>& activities,
+    const OnIconsReadyCallback& callback) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return icon_loader_.GetActivityIcons(activities, callback);
+}
+
+bool ArcIntentHelperBridge::ShouldChromeHandleUrl(const GURL& url) {
+  if (!url.SchemeIsHTTPOrHTTPS()) {
+    // Chrome will handle everything that is not http and https.
+    return true;
+  }
+
+  for (const IntentFilter& filter : intent_filters_) {
+    if (filter.Match(url))
+      return false;
+  }
+
+  // Didn't find any matches for Android so let Chrome handle it.
+  return true;
+}
+
+void ArcIntentHelperBridge::AddObserver(ArcIntentHelperObserver* observer) {
+  observer_list_.AddObserver(observer);
+}
+
+void ArcIntentHelperBridge::RemoveObserver(ArcIntentHelperObserver* observer) {
+  observer_list_.RemoveObserver(observer);
+}
+
+bool ArcIntentHelperBridge::HasObserver(
+    ArcIntentHelperObserver* observer) const {
+  return observer_list_.HasObserver(observer);
 }
 
 std::unique_ptr<ash::LinkHandlerModel> ArcIntentHelperBridge::CreateModel(
     const GURL& url) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  std::unique_ptr<LinkHandlerModelImpl> impl(
-      new LinkHandlerModelImpl(icon_loader_));
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  auto impl = base::MakeUnique<LinkHandlerModelImpl>(context_);
   if (!impl->Init(url))
     return nullptr;
   return std::move(impl);
@@ -116,55 +195,13 @@ ArcIntentHelperBridge::FilterOutIntentHelper(
   return handlers_filtered;
 }
 
-// static
-mojom::IntentHelperInstance*
-ArcIntentHelperBridge::GetIntentHelperInstanceWithErrorCode(
-    const std::string& method_name_for_logging,
-    uint32_t min_instance_version,
-    GetResult* out_error_code) {
-  ArcBridgeService* bridge_service = ArcBridgeService::Get();
-  if (!bridge_service) {
-    if (!ArcBridgeService::GetEnabled(base::CommandLine::ForCurrentProcess())) {
-      VLOG(2) << "ARC bridge is not supported.";
-      if (out_error_code)
-        *out_error_code = GetResult::FAILED_ARC_NOT_SUPPORTED;
-    } else {
-      VLOG(2) << "ARC bridge is not ready.";
-      if (out_error_code)
-        *out_error_code = GetResult::FAILED_ARC_NOT_READY;
-    }
-    return nullptr;
-  }
-
-  if (!bridge_service->intent_helper()->has_instance()) {
-    VLOG(2) << "ARC intent helper instance is not ready.";
-    if (out_error_code)
-      *out_error_code = GetResult::FAILED_ARC_NOT_READY;
-    return nullptr;
-  }
-
-  auto* instance = bridge_service->intent_helper()->GetInstanceForMethod(
-      method_name_for_logging, min_instance_version);
-  if (!instance) {
-    if (out_error_code)
-      *out_error_code = GetResult::FAILED_ARC_NOT_SUPPORTED;
-    return nullptr;
-  }
-  return instance;
-}
-
-// static
-mojom::IntentHelperInstance* ArcIntentHelperBridge::GetIntentHelperInstance(
-    const std::string& method_name_for_logging,
-    uint32_t min_instance_version) {
-  return GetIntentHelperInstanceWithErrorCode(method_name_for_logging,
-                                              min_instance_version, nullptr);
-}
-
 void ArcIntentHelperBridge::OnIntentFiltersUpdated(
-    std::vector<mojom::IntentFilterPtr> filters) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  activity_resolver_->UpdateIntentFilters(std::move(filters));
+    std::vector<IntentFilter> filters) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  intent_filters_ = std::move(filters);
+
+  for (auto& observer : observer_list_)
+    observer.OnIntentFiltersUpdated();
 }
 
 }  // namespace arc

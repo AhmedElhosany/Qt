@@ -7,6 +7,8 @@
 
 #include "GrGLTexture.h"
 #include "GrGLGpu.h"
+#include "GrSemaphore.h"
+#include "GrShaderCaps.h"
 #include "SkTraceMemoryDump.h"
 
 #define GPUGL static_cast<GrGLGpu*>(this->getGpu())
@@ -15,7 +17,7 @@
 static inline GrSLType sampler_type(const GrGLTexture::IDDesc& idDesc, GrPixelConfig config,
                                     const GrGLGpu* gpu) {
     if (idDesc.fInfo.fTarget == GR_GL_TEXTURE_EXTERNAL) {
-        SkASSERT(gpu->glCaps().glslCaps()->externalTextureSupport());
+        SkASSERT(gpu->caps()->shaderCaps()->externalTextureSupport());
         SkASSERT(!GrPixelConfigIsSint(config));
         return kTextureExternalSampler_GrSLType;
     } else if (idDesc.fInfo.fTarget == GR_GL_TEXTURE_RECTANGLE) {
@@ -30,18 +32,19 @@ static inline GrSLType sampler_type(const GrGLTexture::IDDesc& idDesc, GrPixelCo
     }
 }
 
-static inline GrTextureParams::FilterMode highest_filter_mode(const GrGLTexture::IDDesc& idDesc,
+// This method parallels GrTextureProxy::highestFilterMode
+static inline GrSamplerParams::FilterMode highest_filter_mode(const GrGLTexture::IDDesc& idDesc,
                                                               GrPixelConfig config) {
     if (GrPixelConfigIsSint(config)) {
         // Integer textures in GL can use GL_NEAREST_MIPMAP_NEAREST. This is a mode we don't support
         // and don't currently have a use for.
-        return GrTextureParams::kNone_FilterMode;
+        return GrSamplerParams::kNone_FilterMode;
     }
     if (idDesc.fInfo.fTarget == GR_GL_TEXTURE_RECTANGLE ||
         idDesc.fInfo.fTarget == GR_GL_TEXTURE_EXTERNAL) {
-        return GrTextureParams::kBilerp_FilterMode;
+        return GrSamplerParams::kBilerp_FilterMode;
     }
-    return GrTextureParams::kMipMap_FilterMode;
+    return GrSamplerParams::kMipMap_FilterMode;
 }
 
 // Because this class is virtually derived from GrSurface we must explicitly call its constructor.
@@ -97,12 +100,14 @@ void GrGLTexture::onRelease() {
         }
         fInfo.fID = 0;
     }
+    this->invokeReleaseProc();
     INHERITED::onRelease();
 }
 
 void GrGLTexture::onAbandon() {
     fInfo.fTarget = 0;
     fInfo.fID = 0;
+    this->invokeReleaseProc();
     INHERITED::onAbandon();
 }
 

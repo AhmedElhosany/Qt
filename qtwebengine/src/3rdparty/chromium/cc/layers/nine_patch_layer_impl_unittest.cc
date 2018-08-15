@@ -9,8 +9,8 @@
 #include "cc/quads/texture_draw_quad.h"
 #include "cc/resources/ui_resource_bitmap.h"
 #include "cc/resources/ui_resource_client.h"
-#include "cc/test/fake_compositor_frame_sink.h"
 #include "cc/test/fake_impl_task_runner_provider.h"
+#include "cc/test/fake_layer_tree_frame_sink.h"
 #include "cc/test/fake_ui_resource_layer_tree_host_impl.h"
 #include "cc/test/geometry_test_utils.h"
 #include "cc/test/layer_test_common.h"
@@ -45,12 +45,12 @@ void NinePatchLayerLayoutTest(const gfx::Size& bitmap_size,
 
   FakeImplTaskRunnerProvider task_runner_provider;
   TestTaskGraphRunner task_graph_runner;
-  std::unique_ptr<CompositorFrameSink> compositor_frame_sink =
-      FakeCompositorFrameSink::Create3d();
+  std::unique_ptr<LayerTreeFrameSink> layer_tree_frame_sink =
+      FakeLayerTreeFrameSink::Create3d();
   FakeUIResourceLayerTreeHostImpl host_impl(&task_runner_provider,
                                             &task_graph_runner);
   host_impl.SetVisible(true);
-  host_impl.InitializeRenderer(compositor_frame_sink.get());
+  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
 
   std::unique_ptr<NinePatchLayerImpl> layer =
       NinePatchLayerImpl::Create(host_impl.active_tree(), 1);
@@ -66,8 +66,12 @@ void NinePatchLayerLayoutTest(const gfx::Size& bitmap_size,
   layer->SetUIResourceId(uid);
   layer->SetImageBounds(bitmap_size);
   layer->SetLayout(aperture_rect, border, gfx::Rect(), fill_center, false);
+  host_impl.active_tree()->SetRootLayerForTesting(std::move(layer));
+  host_impl.active_tree()->BuildPropertyTreesForTesting();
+
   AppendQuadsData data;
-  layer->AppendQuads(render_pass.get(), &data);
+  host_impl.active_tree()->root_layer_for_testing()->AppendQuads(
+      render_pass.get(), &data);
 
   // Verify quad rects
   const QuadList& quads = render_pass->quad_list;
@@ -149,12 +153,12 @@ void NinePatchLayerLayoutTestWithOcclusion(const gfx::Size& bitmap_size,
 
   FakeImplTaskRunnerProvider task_runner_provider;
   TestTaskGraphRunner task_graph_runner;
-  std::unique_ptr<CompositorFrameSink> compositor_frame_sink =
-      FakeCompositorFrameSink::Create3d();
+  std::unique_ptr<LayerTreeFrameSink> layer_tree_frame_sink =
+      FakeLayerTreeFrameSink::Create3d();
   FakeUIResourceLayerTreeHostImpl host_impl(&task_runner_provider,
                                             &task_graph_runner);
   host_impl.SetVisible(true);
-  host_impl.InitializeRenderer(compositor_frame_sink.get());
+  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
 
   std::unique_ptr<NinePatchLayerImpl> layer =
       NinePatchLayerImpl::Create(host_impl.active_tree(), 1);
@@ -170,8 +174,12 @@ void NinePatchLayerLayoutTestWithOcclusion(const gfx::Size& bitmap_size,
   layer->SetUIResourceId(uid);
   layer->SetImageBounds(bitmap_size);
   layer->SetLayout(aperture_rect, border, occlusion, false, false);
+  host_impl.active_tree()->SetRootLayerForTesting(std::move(layer));
+  host_impl.active_tree()->BuildPropertyTreesForTesting();
+
   AppendQuadsData data;
-  layer->AppendQuads(render_pass.get(), &data);
+  host_impl.active_tree()->root_layer_for_testing()->AppendQuads(
+      render_pass.get(), &data);
 
   // Verify quad rects
   const QuadList& quads = render_pass->quad_list;
@@ -193,7 +201,7 @@ void NinePatchLayerLayoutTestWithOcclusion(const gfx::Size& bitmap_size,
   // Verify UV rects
   gfx::Rect bitmap_rect(bitmap_size);
   Region tex_remaining(bitmap_rect);
-  for (const auto& quad : quads) {
+  for (auto* quad : quads) {
     const TextureDrawQuad* tex_quad = TextureDrawQuad::MaterialCast(quad);
     gfx::RectF tex_rect =
         gfx::BoundingRect(tex_quad->uv_top_left, tex_quad->uv_bottom_right);

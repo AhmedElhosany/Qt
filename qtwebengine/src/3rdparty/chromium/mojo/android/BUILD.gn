@@ -41,6 +41,8 @@ source_set("libsystem_java") {
     "system/base_run_loop.h",
     "system/core_impl.cc",
     "system/core_impl.h",
+    "system/mojo_jni_registrar.cc",
+    "system/mojo_jni_registrar.h",
     "system/watcher_impl.cc",
     "system/watcher_impl.h",
   ]
@@ -107,6 +109,7 @@ android_library("mojo_javatests") {
     "//mojo/public/interfaces/bindings/tests:test_mojom_import_java",
     "//mojo/public/java:bindings_java",
     "//mojo/public/java:system_java",
+    "//third_party/android_support_test_runner:runner_java",
   ]
 
   data = [
@@ -130,13 +133,15 @@ shared_library("mojo_java_unittests") {
     ":libsystem_java",
     ":system_java_jni_headers",
     "//base",
-    "//base/test/:test_support",
-    "//build/config/sanitizers:deps",
+    "//base/test:test_support",
+    "//build/config:exe_and_shlib_deps",
     "//mojo/edk/system",
     "//mojo/public/cpp/bindings/tests:mojo_public_bindings_test_utils",
     "//mojo/public/cpp/test_support:test_utils",
   ]
   defines = [ "UNIT_TEST" ]
+  configs -= [ "//build/config/android:hide_all_but_jni_onload" ]
+  configs += [ "//build/config/android:hide_all_but_jni" ]
 }
 
 instrumentation_test_apk("mojo_test_apk") {
@@ -146,6 +151,7 @@ instrumentation_test_apk("mojo_test_apk") {
     "//base:base_java",
     "//mojo/public/interfaces/bindings/tests:test_interfaces",
     "//mojo/public/java:bindings_java",
+    "//third_party/android_support_test_runner:runner_java",
   ]
   shared_libraries = [ ":mojo_java_unittests" ]
   apk_name = "MojoTest"

@@ -29,12 +29,19 @@
 import base64
 import time
 
+from webkitpy.common import exit_codes
+from webkitpy.common.system.crash_logs import CrashLogs
+from webkitpy.layout_tests.models import test_run_results
+from webkitpy.layout_tests.models.test_configuration import TestConfiguration
 from webkitpy.layout_tests.port.base import Port, VirtualTestSuite
 from webkitpy.layout_tests.port.driver import DeviceFailure, Driver, DriverOutput
-from webkitpy.layout_tests.models.test_configuration import TestConfiguration
-from webkitpy.layout_tests.models import test_run_results
-from webkitpy.common.system.filesystem_mock import MockFileSystem
-from webkitpy.common.system.crashlogs import CrashLogs
+
+
+# Here we use a non-standard location for the layout tests, to ensure that
+# this works. The path contains a '.' in the name because we've seen bugs
+# related to this before.
+LAYOUT_TEST_DIR = '/test.checkout/LayoutTests'
+PERF_TEST_DIR = '/test.checkout/PerformanceTests'
 
 
 # This sets basic expectations for a test. Each individual expectation
@@ -43,7 +50,7 @@ class TestInstance(object):
 
     def __init__(self, name):
         self.name = name
-        self.base = name[(name.rfind("/") + 1):name.rfind(".")]
+        self.base = name[(name.rfind('/') + 1):name.rfind('.')]
         self.crash = False
         self.web_process_crash = False
         self.exception = False
@@ -104,8 +111,10 @@ class TestList(object):
 # These numbers may need to be updated whenever we add or delete tests. This includes virtual tests.
 #
 TOTAL_TESTS = 106
-TOTAL_SKIPS = 22
+TOTAL_WONTFIX = 3
+TOTAL_SKIPS = 21 + TOTAL_WONTFIX
 TOTAL_CRASHES = 76
+
 UNEXPECTED_PASSES = 1
 UNEXPECTED_FAILURES = 26
 
@@ -117,7 +126,6 @@ def unit_test_list():
     tests.add('failures/expected/device_failure.html', device_failure=True)
     tests.add('failures/expected/timeout.html', timeout=True)
     tests.add('failures/expected/leak.html', leak=True)
-    tests.add('failures/expected/needsrebaseline.html', actual_text='needsrebaseline text')
     tests.add('failures/expected/needsmanualrebaseline.html', actual_text='needsmanualrebaseline text')
     tests.add('failures/expected/image.html',
               actual_image='image_fail-pngtEXtchecksum\x00checksum_fail',
@@ -132,11 +140,11 @@ def unit_test_list():
               actual_checksum=None)
     tests.add('failures/expected/keyboard.html', keyboard=True)
     tests.add('failures/expected/newlines_leading.html',
-              expected_text="\nfoo\n", actual_text="foo\n")
+              expected_text='\nfoo\n', actual_text='foo\n')
     tests.add('failures/expected/newlines_trailing.html',
-              expected_text="foo\n\n", actual_text="foo\n")
+              expected_text='foo\n\n', actual_text='foo\n')
     tests.add('failures/expected/newlines_with_excess_CR.html',
-              expected_text="foo\r\r\r\n", actual_text="foo\n")
+              expected_text='foo\r\r\r\n', actual_text='foo\n')
     tests.add('failures/expected/text.html', actual_text='text_fail-png')
     tests.add('failures/expected/crash_then_text.html')
     tests.add('failures/expected/skip_text.html', actual_text='text diff')
@@ -154,9 +162,9 @@ layer at (0,0) size 800x34
 """, expected_text=None)
     tests.add('failures/unexpected/crash.html', crash=True)
     tests.add('failures/unexpected/crash-with-stderr.html', crash=True,
-              error="mock-std-error-output")
+              error='mock-std-error-output')
     tests.add('failures/unexpected/web-process-crash-with-stderr.html', web_process_crash=True,
-              error="mock-std-error-output")
+              error='mock-std-error-output')
     tests.add('failures/unexpected/pass.html')
     tests.add('failures/unexpected/text-checksum.html',
               actual_text='text-checksum_fail-txt',
@@ -257,15 +265,8 @@ layer at (0,0) size 800x34
     tests.add('passes/test-virtual-passes.html')
     tests.add('passes/virtual_passes/test-virtual-passes.html')
 
+    tests.add('passes_two/test-virtual-passes.html')
     return tests
-
-
-# Here we use a non-standard location for the layout tests, to ensure that
-# this works. The path contains a '.' in the name because we've seen bugs
-# related to this before.
-
-LAYOUT_TEST_DIR = '/test.checkout/LayoutTests'
-PERF_TEST_DIR = '/test.checkout/PerformanceTests'
 
 
 # Here we synthesize an in-memory filesystem from the test list
@@ -273,13 +274,12 @@ PERF_TEST_DIR = '/test.checkout/PerformanceTests'
 # we don't need a real filesystem to run the tests.
 def add_unit_tests_to_mock_filesystem(filesystem):
     # Add the test_expectations file.
-    filesystem.maybe_make_directory('/mock-checkout/LayoutTests')
-    if not filesystem.exists('/mock-checkout/LayoutTests/TestExpectations'):
-        filesystem.write_text_file('/mock-checkout/LayoutTests/TestExpectations', """
+    filesystem.maybe_make_directory(LAYOUT_TEST_DIR)
+    if not filesystem.exists(LAYOUT_TEST_DIR + '/TestExpectations'):
+        filesystem.write_text_file(LAYOUT_TEST_DIR + '/TestExpectations', """
 Bug(test) failures/expected/crash.html [ Crash ]
 Bug(test) failures/expected/crash_then_text.html [ Failure ]
 Bug(test) failures/expected/image.html [ Failure ]
-Bug(test) failures/expected/needsrebaseline.html [ NeedsRebaseline ]
 Bug(test) failures/expected/needsmanualrebaseline.html [ NeedsManualRebaseline ]
 Bug(test) failures/expected/audio.html [ Failure ]
 Bug(test) failures/expected/image_checksum.html [ Failure ]
@@ -297,6 +297,13 @@ Bug(test) failures/expected/leak.html [ Leak ]
 Bug(test) failures/unexpected/pass.html [ Failure ]
 Bug(test) passes/skipped/skip.html [ Skip ]
 Bug(test) passes/text.html [ Pass ]
+""")
+
+    if not filesystem.exists(LAYOUT_TEST_DIR + '/NeverFixTests'):
+        filesystem.write_text_file(LAYOUT_TEST_DIR + '/NeverFixTests', """
+Bug(test) failures/expected/keyboard.html [ WontFix ]
+Bug(test) failures/expected/exception.html [ WontFix ]
+Bug(test) failures/expected/device_failure.html [ WontFix ]
 """)
 
     filesystem.maybe_make_directory(LAYOUT_TEST_DIR + '/reftests/foo')
@@ -357,8 +364,8 @@ class TestPort(Port):
         'win10': ['test-win-win10'],
         'mac10.10': ['test-mac-mac10.10', 'test-mac-mac10.11'],
         'mac10.11': ['test-mac-mac10.11'],
-        'trusty': ['test-linux-trusty', 'test-win-win7'],
-        'precise': ['test-linux-precise', 'test-linux-trusty', 'test-win-win7'],
+        'trusty': ['test-linux-trusty', 'test-win-win10'],
+        'precise': ['test-linux-precise', 'test-linux-trusty', 'test-win-win10'],
     }
 
     @classmethod
@@ -381,7 +388,7 @@ class TestPort(Port):
         # test ports. rebaseline_unittest.py needs to not mix both "real" ports
         # and "test" ports
 
-        self._generic_expectations_path = '/mock-checkout/LayoutTests/TestExpectations'
+        self._generic_expectations_path = LAYOUT_TEST_DIR + '/TestExpectations'
         self._results_directory = None
 
         self._operating_system = 'mac'
@@ -423,9 +430,6 @@ class TestPort(Port):
     def buildbot_archives_baselines(self):
         return self._name != 'test-win-win7'
 
-    def default_pixel_tests(self):
-        return True
-
     def _path_to_driver(self):
         # This routine shouldn't normally be called, but it is called by
         # the mock_drt Driver. We return something, but make sure it's useless.
@@ -435,10 +439,10 @@ class TestPort(Port):
         return 1
 
     def check_build(self, needs_http, printer):
-        return test_run_results.OK_EXIT_STATUS
+        return exit_codes.OK_EXIT_STATUS
 
     def check_sys_deps(self, needs_http):
-        return test_run_results.OK_EXIT_STATUS
+        return exit_codes.OK_EXIT_STATUS
 
     def default_configuration(self):
         return 'Release'
@@ -450,19 +454,16 @@ class TestPort(Port):
         if not actual_contents or not expected_contents:
             return (True, None)
         if diffed:
-            return ("< %s\n---\n> %s\n" % (expected_contents, actual_contents), None)
+            return ('< %s\n---\n> %s\n' % (expected_contents, actual_contents), None)
         return (None, None)
 
     def layout_tests_dir(self):
         return LAYOUT_TEST_DIR
 
-    def perf_tests_dir(self):
+    def _perf_tests_dir(self):
         return PERF_TEST_DIR
 
-    def webkit_base(self):
-        return '/test.checkout'
-
-    def _skipped_tests_for_unsupported_features(self, test_list):
+    def skipped_layout_tests(self, _):
         return set(['failures/expected/skip_text.html',
                     'failures/unexpected/skip_pass.html',
                     'virtual/skipped/failures/expected'])
@@ -472,9 +473,6 @@ class TestPort(Port):
 
     def operating_system(self):
         return self._operating_system
-
-    def _path_to_wdiff(self):
-        return None
 
     def default_results_directory(self):
         return '/tmp/layout-test-results'
@@ -504,7 +502,7 @@ class TestPort(Port):
         pass
 
     def path_to_apache(self):
-        return "/usr/sbin/httpd"
+        return '/usr/sbin/httpd'
 
     def path_to_apache_config_file(self):
         return self._filesystem.join(self.apache_config_directory(), 'httpd.conf')
@@ -531,9 +529,12 @@ class TestPort(Port):
     def virtual_test_suites(self):
         return [
             VirtualTestSuite(prefix='virtual_passes', base='passes', args=['--virtual-arg']),
+            VirtualTestSuite(prefix='virtual_passes', base='passes_two', args=['--virtual-arg']),
             VirtualTestSuite(prefix='skipped', base='failures/expected', args=['--virtual-arg2']),
             VirtualTestSuite(prefix='references_use_default_args', base='passes/reftest.html',
                              args=['--virtual-arg'], references_use_default_args=True),
+            VirtualTestSuite(prefix='virtual_wpt', base='external/wpt', args=['--virtual-arg']),
+            VirtualTestSuite(prefix='virtual_wpt_dom', base='external/wpt/dom', args=['--virtual-arg']),
         ]
 
 

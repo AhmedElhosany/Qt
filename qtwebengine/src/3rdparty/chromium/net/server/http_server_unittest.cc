@@ -42,6 +42,7 @@
 #include "net/socket/tcp_client_socket.h"
 #include "net/socket/tcp_server_socket.h"
 #include "net/test/gtest_util.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_context.h"
@@ -57,26 +58,6 @@ namespace net {
 namespace {
 
 const int kMaxExpectedResponseLength = 2048;
-
-void SetTimedOutAndQuitLoop(const base::WeakPtr<bool> timed_out,
-                            const base::Closure& quit_loop_func) {
-  if (timed_out) {
-    *timed_out = true;
-    quit_loop_func.Run();
-  }
-}
-
-bool RunLoopWithTimeout(base::RunLoop* run_loop) {
-  bool timed_out = false;
-  base::WeakPtrFactory<bool> timed_out_weak_factory(&timed_out);
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE,
-      base::Bind(&SetTimedOutAndQuitLoop, timed_out_weak_factory.GetWeakPtr(),
-                 run_loop->QuitClosure()),
-      base::TimeDelta::FromSeconds(1));
-  run_loop->Run();
-  return !timed_out;
-}
 
 class TestHttpClient {
  public:
@@ -94,8 +75,7 @@ class TestHttpClient {
     if (connect_result_ != OK && connect_result_ != ERR_IO_PENDING)
       return connect_result_;
 
-    if (!RunLoopWithTimeout(&run_loop))
-      return ERR_TIMED_OUT;
+    run_loop.Run();
     return connect_result_;
   }
 
@@ -131,6 +111,17 @@ class TestHttpClient {
       message->append(chunk);
     }
     return true;
+  }
+
+  void ExpectUsedThenDisconnectedWithNoData() {
+    // Check that the socket was opened...
+    ASSERT_TRUE(socket_->WasEverUsed());
+
+    // ...then closed when the server disconnected. Verify that the socket was
+    // closed by checking that a Read() fails.
+    std::string response;
+    ASSERT_FALSE(Read(&response, 1u));
+    ASSERT_TRUE(response.empty());
   }
 
   TCPClientSocket& socket() { return *socket_; }
@@ -191,7 +182,8 @@ class TestHttpClient {
 class HttpServerTest : public testing::Test,
                        public HttpServer::Delegate {
  public:
-  HttpServerTest() : quit_after_request_count_(0) {}
+  HttpServerTest()
+      : quit_after_request_count_(0), quit_on_close_connection_(-1) {}
 
   void SetUp() override {
     std::unique_ptr<ServerSocket> server_socket(
@@ -199,6 +191,12 @@ class HttpServerTest : public testing::Test,
     server_socket->ListenWithAddressAndPort("127.0.0.1", 0, 1);
     server_.reset(new HttpServer(std::move(server_socket), this));
     ASSERT_THAT(server_->GetLocalAddress(&server_address_), IsOk());
+  }
+
+  void TearDown() override {
+    // Run the event loop some to make sure that the memory handed over to
+    // DeleteSoon gets fully freed.
+    base::RunLoop().RunUntilIdle();
   }
 
   void OnConnect(int connection_id) override {
@@ -225,30 +223,47 @@ class HttpServerTest : public testing::Test,
   void OnClose(int connection_id) override {
     DCHECK(connection_map_.find(connection_id) != connection_map_.end());
     connection_map_[connection_id] = false;
+    if (connection_id == quit_on_close_connection_)
+      run_loop_quit_func_.Run();
   }
 
-  bool RunUntilRequestsReceived(size_t count) {
+  void RunUntilRequestsReceived(size_t count) {
     quit_after_request_count_ = count;
     if (requests_.size() == count)
-      return true;
+      return;
 
     base::RunLoop run_loop;
     run_loop_quit_func_ = run_loop.QuitClosure();
-    bool success = RunLoopWithTimeout(&run_loop);
+    run_loop.Run();
     run_loop_quit_func_.Reset();
-    return success;
+  }
+
+  void RunUntilConnectionIdClosed(int connection_id) {
+    quit_on_close_connection_ = connection_id;
+    auto iter = connection_map_.find(connection_id);
+    if (iter != connection_map_.end() && !iter->second) {
+      // Already disconnected.
+      return;
+    }
+
+    base::RunLoop run_loop;
+    run_loop_quit_func_ = run_loop.QuitClosure();
+    run_loop.Run();
+    run_loop_quit_func_.Reset();
   }
 
   HttpServerRequestInfo GetRequest(size_t request_index) {
     return requests_[request_index].first;
   }
 
+  size_t num_requests() const { return requests_.size(); }
+
   int GetConnectionId(size_t request_index) {
     return requests_[request_index].second;
   }
 
   void HandleAcceptResult(std::unique_ptr<StreamSocket> socket) {
-    server_->accepted_socket_.reset(socket.release());
+    server_->accepted_socket_ = std::move(socket);
     server_->HandleAcceptResult(OK);
   }
 
@@ -264,6 +279,7 @@ class HttpServerTest : public testing::Test,
 
  private:
   size_t quit_after_request_count_;
+  int quit_on_close_connection_;
 };
 
 namespace {
@@ -287,13 +303,22 @@ TEST_F(HttpServerTest, Request) {
   TestHttpClient client;
   ASSERT_THAT(client.ConnectAndWait(server_address_), IsOk());
   client.Send("GET /test HTTP/1.1\r\n\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   ASSERT_EQ("GET", GetRequest(0).method);
   ASSERT_EQ("/test", GetRequest(0).path);
   ASSERT_EQ("", GetRequest(0).data);
   ASSERT_EQ(0u, GetRequest(0).headers.size());
   ASSERT_TRUE(base::StartsWith(GetRequest(0).peer.ToString(), "127.0.0.1",
                                base::CompareCase::SENSITIVE));
+}
+
+TEST_F(HttpServerTest, RequestBrokenTermination) {
+  TestHttpClient client;
+  ASSERT_THAT(client.ConnectAndWait(server_address_), IsOk());
+  client.Send("GET /test HTTP/1.1\r\n\r)");
+  RunUntilConnectionIdClosed(1);
+  EXPECT_EQ(0u, num_requests());
+  client.ExpectUsedThenDisconnectedWithNoData();
 }
 
 TEST_F(HttpServerTest, RequestWithHeaders) {
@@ -315,7 +340,7 @@ TEST_F(HttpServerTest, RequestWithHeaders) {
   }
 
   client.Send("GET /test HTTP/1.1\r\n" + headers + "\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   ASSERT_EQ("", GetRequest(0).data);
 
   for (size_t i = 0; i < arraysize(kHeaders); ++i) {
@@ -343,7 +368,7 @@ TEST_F(HttpServerTest, RequestWithDuplicateHeaders) {
   }
 
   client.Send("GET /test HTTP/1.1\r\n" + headers + "\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   ASSERT_EQ("", GetRequest(0).data);
 
   for (size_t i = 0; i < arraysize(kHeaders); ++i) {
@@ -374,7 +399,7 @@ TEST_F(HttpServerTest, HasHeaderValueTest) {
   }
 
   client.Send("GET /test HTTP/1.1\r\n" + headers + "\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   ASSERT_EQ("", GetRequest(0).data);
 
   ASSERT_TRUE(GetRequest(0).HasHeaderValue("header", "abcd"));
@@ -401,7 +426,7 @@ TEST_F(HttpServerTest, RequestWithBody) {
       "Content-Length: %" PRIuS "\r\n\r\n%s",
       body.length(),
       body.c_str()));
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   ASSERT_EQ(2u, GetRequest(0).headers.size());
   ASSERT_EQ(body.length(), GetRequest(0).data.length());
   ASSERT_EQ('a', body[0]);
@@ -418,7 +443,21 @@ TEST_F(WebSocketTest, RequestWebSocket) {
       "Sec-WebSocket-Version: 8\r\n"
       "Sec-WebSocket-Key: key\r\n"
       "\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
+}
+
+TEST_F(WebSocketTest, RequestWebSocketTrailingJunk) {
+  TestHttpClient client;
+  ASSERT_THAT(client.ConnectAndWait(server_address_), IsOk());
+  client.Send(
+      "GET /test HTTP/1.1\r\n"
+      "Upgrade: WebSocket\r\n"
+      "Connection: SomethingElse, Upgrade\r\n"
+      "Sec-WebSocket-Version: 8\r\n"
+      "Sec-WebSocket-Key: key\r\n"
+      "\r\nHello? Anyone");
+  RunUntilConnectionIdClosed(1);
+  client.ExpectUsedThenDisconnectedWithNoData();
 }
 
 TEST_F(HttpServerTest, RequestWithTooLargeBody) {
@@ -442,16 +481,16 @@ TEST_F(HttpServerTest, RequestWithTooLargeBody) {
 
   scoped_refptr<URLRequestContextGetter> request_context_getter(
       new TestURLRequestContextGetter(base::ThreadTaskRunnerHandle::Get()));
-  std::unique_ptr<URLFetcher> fetcher =
-      URLFetcher::Create(GURL(base::StringPrintf("http://127.0.0.1:%d/test",
-                                                 server_address_.port())),
-                         URLFetcher::GET, &delegate);
+  std::unique_ptr<URLFetcher> fetcher = URLFetcher::Create(
+      GURL(base::StringPrintf("http://127.0.0.1:%d/test",
+                              server_address_.port())),
+      URLFetcher::GET, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS);
   fetcher->SetRequestContext(request_context_getter.get());
   fetcher->AddExtraRequestHeader(
       base::StringPrintf("content-length:%d", 1 << 30));
   fetcher->Start();
 
-  ASSERT_TRUE(RunLoopWithTimeout(&run_loop));
+  run_loop.Run();
   ASSERT_EQ(0u, requests_.size());
 }
 
@@ -459,7 +498,7 @@ TEST_F(HttpServerTest, Send200) {
   TestHttpClient client;
   ASSERT_THAT(client.ConnectAndWait(server_address_), IsOk());
   client.Send("GET /test HTTP/1.1\r\n\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   server_->Send200(GetConnectionId(0), "Response!", "text/plain");
 
   std::string response;
@@ -474,7 +513,7 @@ TEST_F(HttpServerTest, SendRaw) {
   TestHttpClient client;
   ASSERT_THAT(client.ConnectAndWait(server_address_), IsOk());
   client.Send("GET /test HTTP/1.1\r\n\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   server_->SendRaw(GetConnectionId(0), "Raw Data ");
   server_->SendRaw(GetConnectionId(0), "More Data");
   server_->SendRaw(GetConnectionId(0), "Third Piece of Data");
@@ -497,20 +536,12 @@ TEST_F(HttpServerTest, WrongProtocolRequest) {
     ASSERT_THAT(client.ConnectAndWait(server_address_), IsOk());
 
     client.Send(kBadProtocolRequests[i]);
-    ASSERT_FALSE(RunUntilRequestsReceived(1));
+    client.ExpectUsedThenDisconnectedWithNoData();
 
     // Assert that the delegate was updated properly.
     ASSERT_EQ(1u, connection_map().size());
     ASSERT_FALSE(connection_map().begin()->second);
-
-    // Assert that the socket was opened...
-    ASSERT_TRUE(client.socket().WasEverUsed());
-
-    // ...then closed when the server disconnected. Verify that the socket was
-    // closed by checking that a Read() fails.
-    std::string response;
-    ASSERT_FALSE(client.Read(&response, 1u));
-    ASSERT_EQ(std::string(), response);
+    EXPECT_EQ(0ul, requests_.size());
 
     // Reset the state of the connection map.
     connection_map().clear();
@@ -548,7 +579,7 @@ class MockStreamSocket : public StreamSocket {
   void SetSubresourceSpeculation() override {}
   void SetOmniboxSpeculation() override {}
   bool WasEverUsed() const override { return true; }
-  bool WasNpnNegotiated() const override { return false; }
+  bool WasAlpnNegotiated() const override { return false; }
   NextProto GetNegotiatedProtocol() const override { return kProtoUnknown; }
   bool GetSSLInfo(SSLInfo* ssl_info) override { return false; }
   void GetConnectionAttempts(ConnectionAttempts* out) const override {
@@ -645,7 +676,7 @@ TEST_F(HttpServerTest, MultipleRequestsOnSameConnection) {
       "Content-Length: %" PRIuS "\r\n\r\n%s",
       body.length(),
       body.c_str()));
-  ASSERT_TRUE(RunUntilRequestsReceived(1));
+  RunUntilRequestsReceived(1);
   ASSERT_EQ(body, GetRequest(0).data);
 
   int client_connection_id = GetConnectionId(0);
@@ -658,7 +689,7 @@ TEST_F(HttpServerTest, MultipleRequestsOnSameConnection) {
                              base::CompareCase::SENSITIVE));
 
   client.Send("GET /test2 HTTP/1.1\r\n\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(2));
+  RunUntilRequestsReceived(2);
   ASSERT_EQ("/test2", GetRequest(1).path);
 
   ASSERT_EQ(client_connection_id, GetConnectionId(1));
@@ -669,7 +700,7 @@ TEST_F(HttpServerTest, MultipleRequestsOnSameConnection) {
                                base::CompareCase::SENSITIVE));
 
   client.Send("GET /test3 HTTP/1.1\r\n\r\n");
-  ASSERT_TRUE(RunUntilRequestsReceived(3));
+  RunUntilRequestsReceived(3);
   ASSERT_EQ("/test3", GetRequest(2).path);
 
   ASSERT_EQ(client_connection_id, GetConnectionId(2));
@@ -698,9 +729,17 @@ TEST_F(CloseOnConnectHttpServerTest, ServerImmediatelyClosesConnection) {
   TestHttpClient client;
   ASSERT_THAT(client.ConnectAndWait(server_address_), IsOk());
   client.Send("GET / HTTP/1.1\r\n\r\n");
-  ASSERT_FALSE(RunUntilRequestsReceived(1));
-  ASSERT_EQ(1ul, connection_ids_.size());
-  ASSERT_EQ(0ul, requests_.size());
+
+  // The server should close the socket without responding.
+  client.ExpectUsedThenDisconnectedWithNoData();
+
+  // Run any tasks the TestServer posted.
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(1ul, connection_ids_.size());
+  // OnHttpRequest() should never have been called, since the connection was
+  // closed without reading from it.
+  EXPECT_EQ(0ul, requests_.size());
 }
 
 }  // namespace

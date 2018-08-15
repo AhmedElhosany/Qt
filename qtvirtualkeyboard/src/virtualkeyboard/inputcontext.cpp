@@ -173,7 +173,6 @@ InputContext::InputContext(PlatformInputContext *parent) :
     if (d->inputContext) {
         d->inputContext->setInputContext(this);
         connect(d->inputContext, SIGNAL(focusObjectChanged()), SLOT(onInputItemChanged()));
-        connect(d->inputContext, SIGNAL(focusObjectChanged()), SIGNAL(inputItemChanged()));
     }
     d->inputEngine = new InputEngine(this);
     d->shiftHandler = new ShiftHandler(this);
@@ -561,7 +560,7 @@ bool InputContext::fileExists(const QUrl &fileUrl)
     } else {
         fileName = fileUrl.toLocalFile();
     }
-    return QFile::exists(fileName);
+    return !fileName.isEmpty() && QFile::exists(fileName);
 #endif
 }
 
@@ -650,6 +649,8 @@ void InputContext::onInputItemChanged()
         d->stateFlags &= ~InputContextPrivate::KeyEventState;
     }
     d->stateFlags &= ~InputContextPrivate::InputMethodClickState;
+
+    emit inputItemChanged();
 }
 
 void InputContext::setFocus(bool enable)

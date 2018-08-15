@@ -58,7 +58,7 @@ QJSValue three = myEngine.evaluate("1 + 2");
 QJSValue fun = myEngine.evaluate("(function(a, b) { return a + b; })");
 QJSValueList args;
 args << 1 << 2;
-QJSValue threeAgain = fun.call(QJSValue(), args);
+QJSValue threeAgain = fun.call(args);
 //! [1]
 
 
@@ -114,23 +114,3 @@ engine.globalObject().setProperty("myObject", myScriptQObject);
 
 qDebug() << engine.evaluate("myObject.dynamicProperty").toInt();
 //! [6]
-
-
-//! [7]
-class MyObject : public QObject
-{
-    Q_OBJECT
-
-public:
-    Q_INVOKABLE MyObject() {}
-};
-//! [7]
-
-//! [8]
-QJSValue jsMetaObject = engine.newQMetaObject(&MyObject::staticMetaObject);
-engine.globalObject().setProperty("MyObject", jsMetaObject);
-//! [8]
-
-//! [9]
-engine.evaluate("var myObject = new MyObject()");
-//! [9]

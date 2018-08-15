@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef COMPONENTS_SECURITY_STATE_SECURITY_STATE_H_
-#define COMPONENTS_SECURITY_STATE_SECURITY_STATE_H_
+#ifndef COMPONENTS_SECURITY_STATE_CORE_SECURITY_STATE_H_
+#define COMPONENTS_SECURITY_STATE_CORE_SECURITY_STATE_H_
 
 #include <stdint.h>
 #include <memory>
 
 #include "base/callback.h"
+#include "base/feature_list.h"
 #include "base/macros.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/sct_status_flags.h"
@@ -23,6 +24,10 @@
 // helper method, which receives platform-specific inputs from its callers in
 // the form of a VisibleSecurityState struct.
 namespace security_state {
+
+// A feature for showing a warning in autofill dropdowns for password
+// and credit cards fields when the top-level page is not HTTPS.
+extern const base::Feature kHttpFormWarningFeature;
 
 // Describes the overall security state of the page.
 //
@@ -63,22 +68,6 @@ enum SecurityLevel {
   DANGEROUS,
 };
 
-// Describes how the SHA1 deprecation policy applies to an HTTPS
-// connection.
-enum SHA1DeprecationStatus {
-  UNKNOWN_SHA1,
-  // No SHA1 deprecation policy applies.
-  NO_DEPRECATED_SHA1,
-  // The connection used a certificate with a SHA1 signature in the
-  // chain, and policy says that the connection should be treated with a
-  // warning.
-  DEPRECATED_SHA1_MINOR,
-  // The connection used a certificate with a SHA1 signature in the
-  // chain, and policy says that the connection should be treated as
-  // broken HTTPS.
-  DEPRECATED_SHA1_MAJOR,
-};
-
 // The ContentStatus enum is used to describe content on the page that
 // has significantly different security properties than the main page
 // load. Content can be passive content that is displayed (such as
@@ -112,7 +101,8 @@ struct SecurityInfo {
   SecurityLevel security_level;
   // Describes the nature of the page's malicious content, if any.
   MaliciousContentStatus malicious_content_status;
-  SHA1DeprecationStatus sha1_deprecation_status;
+  // True if a SHA1 signature was observed anywhere in the certificate chain.
+  bool sha1_in_chain;
   // |mixed_content_status| describes the presence of content that was
   // loaded over a nonsecure (HTTP) connection.
   ContentStatus mixed_content_status;
@@ -120,9 +110,6 @@ struct SecurityInfo {
   // content that was loaded over an HTTPS connection with
   // certificate errors.
   ContentStatus content_with_cert_errors_status;
-  // The verification statuses of the signed certificate timestamps
-  // for the connection.
-  std::vector<net::ct::SCTVerifyStatus> sct_verify_statuses;
   bool scheme_is_cryptographic;
   net::CertStatus cert_status;
   scoped_refptr<net::X509Certificate> certificate;
@@ -143,15 +130,20 @@ struct SecurityInfo {
   // key exchange, or cipher for the connection is considered
   // obsolete. See net::ObsoleteSSLMask for specific mask values.
   int obsolete_ssl_status;
-
   // True if pinning was bypassed due to a local trust anchor.
   bool pkp_bypassed;
-
   // True if the page displayed password field on an HTTP page.
   bool displayed_password_field_on_http;
-
   // True if the page displayed credit card field on an HTTP page.
   bool displayed_credit_card_field_on_http;
+  // True if the secure page contained a form with a nonsecure target.
+  bool contained_mixed_form;
+  // True if the server's certificate does not contain a
+  // subjectAltName extension with a domain name or IP address.
+  bool cert_missing_subject_alt_name;
+  // True if the |security_level| was downgraded to HTTP_SHOW_WARNING because
+  // the page was loaded while Incognito.
+  bool incognito_downgraded_security_level;
 };
 
 // Contains the security state relevant to computing the SecurityInfo
@@ -176,11 +168,10 @@ struct VisibleSecurityState {
   // unknown (older cache entries may not store the value) or not applicable.
   uint16_t key_exchange_group;
   int security_bits;
-  // The verification statuses of the Signed Certificate
-  // Timestamps (if any) that the server provided.
-  std::vector<net::ct::SCTVerifyStatus> sct_verify_statuses;
   // True if the page displayed passive mixed content.
   bool displayed_mixed_content;
+  // True if the secure page contained a form with a nonsecure target.
+  bool contained_mixed_form;
   // True if the page ran active mixed content.
   bool ran_mixed_content;
   // True if the page displayed passive subresources with certificate errors.
@@ -193,10 +184,8 @@ struct VisibleSecurityState {
   bool displayed_password_field_on_http;
   // True if the page was an HTTP page that displayed a credit card field.
   bool displayed_credit_card_field_on_http;
-  // True if Enterprise Policy configured to display as neutral all SHA-1 chains
-  // to a local trust anchor.
-  // TODO(elawrence): remove this in M57, https://crbug.com/676826
-  bool display_sha1_from_local_anchors_as_neutral;
+  // True if the page was displayed in an Incognito context.
+  bool is_incognito;
 };
 
 // These security levels describe the treatment given to pages that
@@ -220,6 +209,15 @@ void GetSecurityInfo(
     IsOriginSecureCallback is_origin_secure_callback,
     SecurityInfo* result);
 
+// Returns true if an experimental form warning UI about HTTP passwords
+// and credit cards is enabled. This warning UI can be enabled with the
+// |kHttpFormWarningFeature| feature.
+bool IsHttpWarningInFormEnabled();
+
+// Returns true if the MarkHttpAs setting indicates that a warning
+// should be shown for HTTP pages loaded while in Incognito mode.
+bool IsHttpWarningForIncognitoEnabled();
+
 }  // namespace security_state
 
-#endif  // COMPONENTS_SECURITY_STATE_SECURITY_STATE_H_
+#endif  // COMPONENTS_SECURITY_STATE_CORE_SECURITY_STATE_H_

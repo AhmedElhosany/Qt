@@ -37,11 +37,12 @@
 **
 ****************************************************************************/
 
-#include <QtCore/QtConfig>
+#include <QtCore/qglobal.h>
 #ifndef QT_NO_ACCESSIBILITY
 
 #include "qwindowsmsaaaccessible.h"
 #include "qwindowsaccessibility.h"
+#include "qwindowscombase.h"
 #include <oleacc.h>
 #include <servprov.h>
 #include <winuser.h>
@@ -71,19 +72,11 @@
 
 QT_BEGIN_NAMESPACE
 
-class QWindowsEnumerate : public IEnumVARIANT
+class QWindowsEnumerate : public QWindowsComBase<IEnumVARIANT>
 {
 public:
-    QWindowsEnumerate(const QVector<int> &a)
-        : ref(0), current(0),array(a)
-    {
-    }
-
+    QWindowsEnumerate(const QVector<int> &a) : QWindowsComBase<IEnumVARIANT>(0), current(0),array(a) {}
     virtual ~QWindowsEnumerate() {}
-
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, LPVOID *);
-    ULONG STDMETHODCALLTYPE AddRef();
-    ULONG STDMETHODCALLTYPE Release();
 
     HRESULT STDMETHODCALLTYPE Clone(IEnumVARIANT **ppEnum);
     HRESULT STDMETHODCALLTYPE Next(unsigned long  celt, VARIANT FAR*  rgVar, unsigned long FAR*  pCeltFetched);
@@ -91,40 +84,9 @@ public:
     HRESULT STDMETHODCALLTYPE Skip(unsigned long celt);
 
 private:
-    ULONG ref;
     ULONG current;
     QVector<int> array;
 };
-
-HRESULT STDMETHODCALLTYPE QWindowsEnumerate::QueryInterface(REFIID id, LPVOID *iface)
-{
-    *iface = 0;
-    if (id == IID_IUnknown)
-        *iface = static_cast<IUnknown *>(this);
-    else if (id == IID_IEnumVARIANT)
-        *iface = static_cast<IEnumVARIANT *>(this);
-
-    if (*iface) {
-        AddRef();
-        return S_OK;
-    }
-
-    return E_NOINTERFACE;
-}
-
-ULONG STDMETHODCALLTYPE QWindowsEnumerate::AddRef()
-{
-    return ++ref;
-}
-
-ULONG STDMETHODCALLTYPE QWindowsEnumerate::Release()
-{
-    if (!--ref) {
-        delete this;
-        return 0;
-    }
-    return ref;
-}
 
 HRESULT STDMETHODCALLTYPE QWindowsEnumerate::Clone(IEnumVARIANT **ppEnum)
 {
@@ -193,29 +155,17 @@ void accessibleDebugClientCalls_helper(const char* funcName, const QAccessibleIn
  **************************************************************/
 HRESULT STDMETHODCALLTYPE QWindowsMsaaAccessible::QueryInterface(REFIID id, LPVOID *iface)
 {
-    *iface = 0;
+    *iface = nullptr;
+    const bool result = qWindowsComQueryUnknownInterfaceMulti<IAccessible2>(this, id, iface)
+        || qWindowsComQueryInterface<IDispatch>(this, id, iface)
+        || qWindowsComQueryInterface<IAccessible>(this, id, iface)
+        || qWindowsComQueryInterface<IOleWindow>(this, id, iface);
 
-    QByteArray strIID = IIDToString(id);
-    if (!strIID.isEmpty()) {
-        qCDebug(lcQpaAccessibility) << "QWindowsIA2Accessible::QI() - IID:"
-                                    << strIID << ", iface:" << accessibleInterface();
+    if (result) {
+        qCDebug(lcQpaAccessibility) << "QWindowsIA2Accessible::QI() - "
+            << QWindowsAccessibleGuid(id) << ", iface:" << accessibleInterface();
     }
-    if (id == IID_IUnknown) {
-        *iface =  static_cast<IUnknown *>(static_cast<IDispatch *>(this));
-    } else if (id == IID_IDispatch) {
-        *iface = static_cast<IDispatch *>(this);
-    } else if (id == IID_IAccessible) {
-        *iface = static_cast<IAccessible *>(this);
-    } else if (id == IID_IOleWindow) {
-        *iface = static_cast<IOleWindow *>(this);
-    }
-
-    if (*iface) {
-        AddRef();
-        return S_OK;
-    }
-
-    return E_NOINTERFACE;
+    return result ? S_OK : E_NOINTERFACE;
 }
 
 ULONG STDMETHODCALLTYPE QWindowsMsaaAccessible::AddRef()
@@ -1209,16 +1159,64 @@ HRESULT STDMETHODCALLTYPE QWindowsMsaaAccessible::ContextSensitiveHelp(BOOL)
     return S_OK;
 }
 
-#define IF_EQUAL_RETURN_IIDSTRING(id, iid) if (id == iid) return QByteArray(#iid)
-QByteArray QWindowsMsaaAccessible::IIDToString(REFIID id)
+const char *QWindowsAccessibleGuid::iidToString(const GUID &id)
 {
-    IF_EQUAL_RETURN_IIDSTRING(id, IID_IUnknown);
-    IF_EQUAL_RETURN_IIDSTRING(id, IID_IDispatch);
-    IF_EQUAL_RETURN_IIDSTRING(id, IID_IAccessible);
-    IF_EQUAL_RETURN_IIDSTRING(id, IID_IOleWindow);
-
-    return QByteArray();
+    const char *result = nullptr;
+    if (id == IID_IUnknown)
+        result = "IID_IUnknown";
+    else if (id == IID_IDispatch)
+        result = "IID_IDispatch";
+    else if (id == IID_IAccessible)
+        result = "IID_IAccessible";
+    else if (id == IID_IOleWindow)
+        result = "IID_IOleWindow";
+    else if (id == IID_IServiceProvider)
+        result = "IID_IServiceProvider";
+    else if (id == IID_IAccessible2)
+        result = "IID_IAccessible2";
+    else if (id == IID_IAccessibleAction)
+        result = "IID_IAccessibleAction";
+    else if (id == IID_IAccessibleApplication)
+        result = "IID_IAccessibleApplication";
+    else if (id == IID_IAccessibleComponent)
+        result = "IID_IAccessibleComponent";
+    else if (id == IID_IAccessibleEditableText)
+        result = "IID_IAccessibleEditableText";
+    else if (id == IID_IAccessibleHyperlink)
+        result = "IID_IAccessibleHyperlink";
+    else if (id == IID_IAccessibleHypertext)
+        result = "IID_IAccessibleHypertext";
+    else if (id == IID_IAccessibleImage)
+        result = "IID_IAccessibleImage";
+    else if (id == IID_IAccessibleRelation)
+        result = "IID_IAccessibleRelation";
+    else if (id == IID_IAccessibleTable)
+        result = "IID_IAccessibleTable";
+    else if (id == IID_IAccessibleTable2)
+        result = "IID_IAccessibleTable2";
+    else if (id == IID_IAccessibleTableCell)
+        result = "IID_IAccessibleTableCell";
+    else if (id == IID_IAccessibleText)
+        result = "IID_IAccessibleText";
+    else if (id == IID_IAccessibleValue)
+        result = "IID_IAccessibleValue";
+    return result;
 }
+
+#ifndef QT_NO_DEBUG_STREAM
+QDebug operator<<(QDebug, const GUID &);
+
+QDebug operator<<(QDebug d, const QWindowsAccessibleGuid &aguid)
+{
+    QDebugStateSaver saver(d);
+    d.nospace();
+    if (const char *ids = QWindowsAccessibleGuid::iidToString(aguid.guid()))
+        d << ids;
+    else
+        d << aguid.guid();
+    return d;
+}
+#endif // !QT_NO_DEBUG_STREAM
 
 QT_END_NAMESPACE
 

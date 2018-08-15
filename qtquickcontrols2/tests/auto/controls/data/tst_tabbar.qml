@@ -506,47 +506,190 @@ TestCase {
     function test_layout(data) {
         var control = createTemporaryObject(tabBar, testCase, {spacing: data.spacing, width: 200})
 
-        // remove the implicit size from the background so that it won't affect
-        // the implicit size of the tabbar, so the implicit sizes tested below
-        // are entirely based on the content size
-        control.background.implicitWidth = 0
+        // remove the background so that it won't affect the implicit size of the tabbar,
+        // so the implicit sizes tested below are entirely based on the content size
+        control.background = null
 
         var tab1 = tabButton.createObject(control, {text: "First"})
         control.addItem(tab1)
         tryCompare(tab1, "width", control.width)
+        compare(tab1.height, control.height)
         compare(control.contentWidth, tab1.implicitWidth)
+        compare(control.contentHeight, tab1.implicitHeight)
         compare(control.implicitWidth, control.contentWidth + control.leftPadding + control.rightPadding)
+        compare(control.implicitHeight, control.contentHeight + control.topPadding + control.bottomPadding)
 
-        var tab2 = tabButton.createObject(control, {text: "Second"})
+        var tab2 = tabButton.createObject(control, {implicitHeight: tab1.implicitHeight + 10, text: "Second"})
         control.addItem(tab2)
         tryCompare(tab1, "width", (control.width - data.spacing) / 2)
+        compare(tab1.height, control.height)
         compare(tab2.width, (control.width - data.spacing) / 2)
+        compare(tab2.height, control.height)
         compare(control.contentWidth, tab1.implicitWidth + tab2.implicitWidth + data.spacing)
+        compare(control.contentHeight, tab2.implicitHeight)
         compare(control.implicitWidth, control.contentWidth + control.leftPadding + control.rightPadding)
+        compare(control.implicitHeight, control.contentHeight + control.topPadding + control.bottomPadding)
 
-        var tab3 = tabButton.createObject(control, {width: 50, text: "Third"})
+        var tab3 = tabButton.createObject(control, {width: 50, height: tab1.implicitHeight - 10, text: "Third"})
         control.addItem(tab3)
         tryCompare(tab1, "width", (control.width - 2 * data.spacing - 50) / 2)
+        compare(tab1.y, 0)
+        compare(tab1.height, control.height)
+        compare(tab2.y, 0)
         compare(tab2.width, (control.width - 2 * data.spacing - 50) / 2)
+        compare(tab2.height, control.height)
+        verify(tab3.y > 0)
+        compare(tab3.y, (control.height - tab3.height) / 2)
         compare(tab3.width, 50)
+        compare(tab3.height, tab1.implicitHeight - 10)
         compare(control.contentWidth, tab1.implicitWidth + tab2.implicitWidth + tab3.width + 2 * data.spacing)
+        compare(control.contentHeight, tab2.implicitHeight)
         compare(control.implicitWidth, control.contentWidth + control.leftPadding + control.rightPadding)
+        compare(control.implicitHeight, control.contentHeight + control.topPadding + control.bottomPadding)
 
         var expectedWidth = tab3.contentItem.implicitWidth + tab3.leftPadding + tab3.rightPadding
         tab3.width = tab3.implicitWidth
+        tab3.height = tab3.implicitHeight
         tryCompare(tab1, "width", (control.width - 2 * data.spacing - expectedWidth) / 2)
-        tryCompare(tab2, "width", (control.width - 2 * data.spacing - expectedWidth) / 2)
+        compare(tab1.height, control.height)
+        compare(tab2.width, (control.width - 2 * data.spacing - expectedWidth) / 2)
+        compare(tab2.height, control.height)
         compare(tab3.width, expectedWidth)
+        compare(tab3.height, tab3.implicitHeight)
         compare(control.contentWidth, tab1.implicitWidth + tab2.implicitWidth + tab3.implicitWidth + 2 * data.spacing)
+        compare(control.contentHeight, tab2.implicitHeight)
         compare(control.implicitWidth, control.contentWidth + control.leftPadding + control.rightPadding)
+        compare(control.implicitHeight, control.contentHeight + control.topPadding + control.bottomPadding)
 
         tab3.width = undefined
+        tab3.height = undefined
         control.width = undefined
 
         control.contentWidth = 300
+        control.contentHeight = 50
         expectedWidth = (control.contentWidth - 2 * data.spacing) / 3
         tryCompare(tab1, "width", expectedWidth)
-        tryCompare(tab2, "width", expectedWidth)
-        tryCompare(tab3, "width", expectedWidth)
+        compare(tab2.width, expectedWidth)
+        compare(tab3.width, expectedWidth)
+        compare(tab1.height, control.contentHeight)
+        compare(tab2.height, control.contentHeight)
+        compare(tab3.height, control.contentHeight)
+    }
+
+    Component {
+        id: attachedButton
+        TabButton {
+            property int index: TabBar.index
+            property TabBar tabBar: TabBar.tabBar
+            property int position: TabBar.position
+        }
+    }
+
+    function test_attached() {
+        var control = createTemporaryObject(tabBar, testCase, {position: TabBar.Footer})
+
+        // append
+        var tab1 = createTemporaryObject(attachedButton, testCase)
+        compare(tab1.index, -1)
+        compare(tab1.tabBar, null)
+        compare(tab1.position, TabBar.Header)
+
+        control.addItem(tab1)
+        compare(tab1.index, 0)
+        compare(tab1.tabBar, control)
+        compare(tab1.position, TabBar.Footer)
+
+        // insert in the beginning
+        var tab2 = createTemporaryObject(attachedButton, testCase)
+        compare(tab2.index, -1)
+        compare(tab2.tabBar, null)
+        compare(tab2.position, TabBar.Header)
+
+        control.insertItem(0, tab2)
+        compare(tab2.index, 0)
+        compare(tab2.tabBar, control)
+        compare(tab2.position, TabBar.Footer)
+
+        compare(tab1.index, 1)
+
+        // insert in the middle
+        var tab3 = createTemporaryObject(attachedButton, testCase)
+        compare(tab3.index, -1)
+        compare(tab3.tabBar, null)
+        compare(tab3.position, TabBar.Header)
+
+        control.insertItem(1, tab3)
+        compare(tab3.index, 1)
+        compare(tab3.tabBar, control)
+        compare(tab3.position, TabBar.Footer)
+
+        compare(tab2.index, 0)
+        compare(tab1.index, 2)
+
+        // insert in the end
+        var tab4 = createTemporaryObject(attachedButton, testCase)
+        compare(tab4.index, -1)
+        compare(tab4.tabBar, null)
+        compare(tab4.position, TabBar.Header)
+
+        control.insertItem(-1, tab4)
+        compare(tab4.index, 3)
+        compare(tab4.tabBar, control)
+        compare(tab4.position, TabBar.Footer)
+
+        compare(tab2.index, 0)
+        compare(tab3.index, 1)
+        compare(tab1.index, 2)
+
+        // move forwards
+        control.moveItem(0, 1)
+        compare(tab3.index, 0)
+        compare(tab2.index, 1)
+        compare(tab1.index, 2)
+        compare(tab4.index, 3)
+
+        control.moveItem(0, 2)
+        compare(tab2.index, 0)
+        compare(tab1.index, 1)
+        compare(tab3.index, 2)
+        compare(tab4.index, 3)
+
+        control.moveItem(1, 3)
+        compare(tab2.index, 0)
+        compare(tab3.index, 1)
+        compare(tab4.index, 2)
+        compare(tab1.index, 3)
+
+        // move backwards
+        control.moveItem(3, 2)
+        compare(tab2.index, 0)
+        compare(tab3.index, 1)
+        compare(tab1.index, 2)
+        compare(tab4.index, 3)
+
+        control.moveItem(3, 1)
+        compare(tab2.index, 0)
+        compare(tab4.index, 1)
+        compare(tab3.index, 2)
+        compare(tab1.index, 3)
+
+        // remove from the beginning
+        control.removeItem(0)
+        compare(tab2.index, -1)
+        compare(tab2.tabBar, null)
+        compare(tab2.position, TabBar.Header)
+
+        compare(tab4.index, 0)
+        compare(tab3.index, 1)
+        compare(tab1.index, 2)
+
+        // remove from the middle
+        control.removeItem(1)
+        compare(tab3.index, -1)
+        compare(tab3.tabBar, null)
+        compare(tab3.position, TabBar.Header)
+
+        compare(tab4.index, 0)
+        compare(tab1.index, 1)
     }
 }

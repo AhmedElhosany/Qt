@@ -5,9 +5,9 @@
 #ifndef DOMTimerCoordinator_h
 #define DOMTimerCoordinator_h
 
-#include "platform/heap/Handle.h"
-#include "wtf/Noncopyable.h"
 #include <memory>
+#include "platform/heap/Handle.h"
+#include "platform/wtf/Noncopyable.h"
 
 namespace blink {
 
@@ -26,46 +26,46 @@ class DOMTimerCoordinator {
   WTF_MAKE_NONCOPYABLE(DOMTimerCoordinator);
 
  public:
-  explicit DOMTimerCoordinator(std::unique_ptr<WebTaskRunner>);
+  explicit DOMTimerCoordinator(RefPtr<WebTaskRunner>);
 
   // Creates and installs a new timer. Returns the assigned ID.
-  int installNewTimeout(ExecutionContext*,
+  int InstallNewTimeout(ExecutionContext*,
                         ScheduledAction*,
                         int timeout,
-                        bool singleShot);
+                        bool single_shot);
 
   // Removes and disposes the timer with the specified ID, if any. This may
   // destroy the timer.
-  DOMTimer* removeTimeoutByID(int id);
+  DOMTimer* RemoveTimeoutByID(int id);
 
-  bool hasInstalledTimeout() const;
+  bool HasInstalledTimeout() const;
 
   // Timers created during the execution of other timers, and
   // repeating timers, are throttled. Timer nesting level tracks the
   // number of linked timers or repetitions of a timer. See
   // https://html.spec.whatwg.org/#timers
-  int timerNestingLevel() { return m_timerNestingLevel; }
+  int TimerNestingLevel() { return timer_nesting_level_; }
 
   // Sets the timer nesting level. Set when a timer executes so that
   // any timers created while the timer is executing will incur a
   // deeper timer nesting level, see DOMTimer::DOMTimer.
-  void setTimerNestingLevel(int level) { m_timerNestingLevel = level; }
+  void SetTimerNestingLevel(int level) { timer_nesting_level_ = level; }
 
-  void setTimerTaskRunner(std::unique_ptr<WebTaskRunner>);
+  void SetTimerTaskRunner(RefPtr<WebTaskRunner>);
 
-  WebTaskRunner* timerTaskRunner() const { return m_timerTaskRunner.get(); }
+  RefPtr<WebTaskRunner> TimerTaskRunner() const { return timer_task_runner_; }
 
   DECLARE_TRACE();  // Oilpan.
 
  private:
-  int nextID();
+  int NextID();
 
   using TimeoutMap = HeapHashMap<int, Member<DOMTimer>>;
-  TimeoutMap m_timers;
+  TimeoutMap timers_;
 
-  int m_circularSequentialID;
-  int m_timerNestingLevel;
-  std::unique_ptr<WebTaskRunner> m_timerTaskRunner;
+  int circular_sequential_id_;
+  int timer_nesting_level_;
+  RefPtr<WebTaskRunner> timer_task_runner_;
 };
 
 }  // namespace blink

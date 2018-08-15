@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "net/quic/core/quic_protocol.h"
+#ifndef NET_QUIC_CHROMIUM_MOCK_QUIC_DATA_H_
+#define NET_QUIC_CHROMIUM_MOCK_QUIC_DATA_H_
+
+#include "net/quic/core/quic_packets.h"
 #include "net/socket/socket_test_util.h"
 
 namespace net {
@@ -35,6 +38,10 @@ class MockQuicData {
   // |packet|.
   void AddWrite(std::unique_ptr<QuicEncryptedPacket> packet);
 
+  // Adds an asynchronous write at the next sequence number which will write
+  // |packet|.
+  void AddAsyncWrite(std::unique_ptr<QuicEncryptedPacket> packet);
+
   // Adds a write at the next sequence number which will return |rv| either
   // synchronously or asynchronously based on |mode|.
   void AddWrite(IoMode mode, int rv);
@@ -62,3 +69,5 @@ class MockQuicData {
 
 }  // namespace test
 }  // namespace net
+
+#endif  // NET_QUIC_CHROMIUM_MOCK_QUIC_DATA_H_

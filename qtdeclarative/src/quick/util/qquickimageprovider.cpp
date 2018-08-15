@@ -183,7 +183,12 @@ QString QQuickImageResponse::errorString() const
 
     It may be reimplemented to cancel a request in the provider side, however, it is not mandatory.
 
-    A cancelled QQuickImageResponse still needs to emit finished().
+    A cancelled QQuickImageResponse still needs to emit finished() so that the
+    engine may clean up the QQuickImageResponse.
+
+    \note finished() should not be emitted until the response is complete,
+    regardless of whether or not cancel() was called. If it is called prematurely,
+    the engine may destroy the response while it is still active, leading to a crash.
 */
 void QQuickImageResponse::cancel()
 {
@@ -192,7 +197,12 @@ void QQuickImageResponse::cancel()
 /*!
     \fn void QQuickImageResponse::finished()
 
-    Signals that the job execution has finished (be it successfully, because an error happened or because it was cancelled).
+    Signals that the job execution has finished (be it successfully, because an
+    error happened or because it was cancelled).
+
+    \note Emission of this signal must be the final action the response performs:
+    once the signal is received, the response will subsequently be destroyed by
+    the engine.
  */
 
 /*!
@@ -673,13 +683,15 @@ QSize QQuickImageProviderWithOptions::loadSize(const QSize &originalSize, const 
         return res;
 
     const bool preserveAspectCropOrFit = options.preserveAspectRatioCrop() || options.preserveAspectRatioFit();
-    const bool force_scale = (format == "svg" || format == "svgz");
+
+    if (!preserveAspectCropOrFit && (format == "svg" || format == "svgz"))
+        return requestedSize;
 
     qreal ratio = 0.0;
-    if (requestedSize.width() && (preserveAspectCropOrFit || force_scale || requestedSize.width() < originalSize.width())) {
+    if (requestedSize.width() && (preserveAspectCropOrFit || requestedSize.width() < originalSize.width())) {
         ratio = qreal(requestedSize.width()) / originalSize.width();
     }
-    if (requestedSize.height() && (preserveAspectCropOrFit || force_scale || requestedSize.height() < originalSize.height())) {
+    if (requestedSize.height() && (preserveAspectCropOrFit || requestedSize.height() < originalSize.height())) {
         qreal hr = qreal(requestedSize.height()) / originalSize.height();
         if (ratio == 0.0)
             ratio = hr;

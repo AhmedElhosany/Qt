@@ -10,6 +10,8 @@
 #include <shobjidl.h>  // Must be before propkey.
 #include <initguid.h>
 #include <inspectable.h>
+#include <mdmregistration.h>
+#include <objbase.h>
 #include <propkey.h>
 #include <propvarutil.h>
 #include <psapi.h>
@@ -32,9 +34,10 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/lazy_instance.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/scoped_native_library.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -66,44 +69,6 @@ bool SetPropVariantValueForPropertyStore(
 void __cdecl ForceCrashOnSigAbort(int) {
   *((volatile int*)0) = 0x1337;
 }
-
-typedef decltype(GetProcessMitigationPolicy)* GetProcessMitigationPolicyType;
-
-class LazyIsUser32AndGdi32Available {
- public:
-  LazyIsUser32AndGdi32Available() : value_(!IsWin32kSyscallsDisabled()) {}
-
-  ~LazyIsUser32AndGdi32Available() {}
-
-  bool value() { return value_; }
-
- private:
-  static bool IsWin32kSyscallsDisabled() {
-    // Can't disable win32k prior to windows 8.
-    if (base::win::GetVersion() < base::win::VERSION_WIN8)
-      return false;
-
-    GetProcessMitigationPolicyType get_process_mitigation_policy_func =
-        reinterpret_cast<GetProcessMitigationPolicyType>(GetProcAddress(
-            GetModuleHandle(L"kernel32.dll"), "GetProcessMitigationPolicy"));
-
-    if (!get_process_mitigation_policy_func)
-      return false;
-
-    PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY policy = {};
-    if (get_process_mitigation_policy_func(GetCurrentProcess(),
-                                           ProcessSystemCallDisablePolicy,
-                                           &policy, sizeof(policy))) {
-      return policy.DisallowWin32kSystemCalls != 0;
-    }
-
-    return false;
-  }
-
-  const bool value_;
-
-  DISALLOW_COPY_AND_ASSIGN(LazyIsUser32AndGdi32Available);
-};
 
 // Returns the current platform role. We use the PowerDeterminePlatformRoleEx
 // API for that.
@@ -165,9 +130,7 @@ bool IsWindows10TabletMode(HWND hwnd) {
   }
 
   base::win::ScopedComPtr<IUIViewSettingsInterop> view_settings_interop;
-  hr = get_factory(view_settings_guid,
-                   __uuidof(IUIViewSettingsInterop),
-                   view_settings_interop.ReceiveVoid());
+  hr = get_factory(view_settings_guid, IID_PPV_ARGS(&view_settings_interop));
   if (FAILED(hr))
     return false;
 
@@ -176,10 +139,7 @@ bool IsWindows10TabletMode(HWND hwnd) {
   // TODO(ananta)
   // Avoid using GetForegroundWindow here and pass in the HWND of the window
   // intiating the request to display the keyboard.
-  hr = view_settings_interop->GetForWindow(
-      hwnd,
-      __uuidof(ABI::Windows::UI::ViewManagement::IUIViewSettings),
-      view_settings.ReceiveVoid());
+  hr = view_settings_interop->GetForWindow(hwnd, IID_PPV_ARGS(&view_settings));
   if (FAILED(hr))
     return false;
 
@@ -492,6 +452,25 @@ bool IsTabletDevice(std::string* reason) {
     }
   }
 
+  // If the device is not supporting rotation, it's unlikely to be a tablet,
+  // a convertible or a detachable.
+  // See
+  // https://msdn.microsoft.com/en-us/library/windows/desktop/dn629263(v=vs.85).aspx
+  typedef decltype(GetAutoRotationState)* GetAutoRotationStateType;
+  GetAutoRotationStateType get_auto_rotation_state_func =
+      reinterpret_cast<GetAutoRotationStateType>(GetProcAddress(
+          GetModuleHandle(L"user32.dll"), "GetAutoRotationState"));
+
+  if (get_auto_rotation_state_func) {
+    AR_STATE rotation_state;
+    ZeroMemory(&rotation_state, sizeof(AR_STATE));
+    if (get_auto_rotation_state_func(&rotation_state)) {
+      if ((rotation_state & AR_NOT_SUPPORTED) || (rotation_state & AR_LAPTOP) ||
+          (rotation_state & AR_NOSENSOR))
+        return false;
+    }
+  }
+
   // PlatformRoleSlate was added in Windows 8+.
   POWER_PLATFORM_ROLE role = GetPlatformRole();
   bool mobile_power_profile = (role == PlatformRoleMobile);
@@ -508,8 +487,8 @@ bool IsTabletDevice(std::string* reason) {
       }
     } else {
       if (reason) {
-        *reason += (role == PlatformRoleMobile) ? "PlatformRoleMobile\n" :
-                                                  "PlatformRoleSlate\n";
+        *reason += (role == PlatformRoleMobile) ? "PlatformRoleMobile\n"
+                                                : "PlatformRoleSlate\n";
       }
     }
   } else {
@@ -535,14 +514,71 @@ bool IsEnrolledToDomain() {
   return g_domain_state == ENROLLED;
 }
 
+bool IsDeviceRegisteredWithManagement() {
+  static bool is_device_registered_with_management = []() {
+    ScopedNativeLibrary library(
+        FilePath(FILE_PATH_LITERAL("MDMRegistration.dll")));
+    if (!library.is_valid())
+      return false;
+
+    using IsDeviceRegisteredWithManagementFunction =
+        decltype(&::IsDeviceRegisteredWithManagement);
+    IsDeviceRegisteredWithManagementFunction
+        is_device_registered_with_management_function =
+            reinterpret_cast<IsDeviceRegisteredWithManagementFunction>(
+                library.GetFunctionPointer("IsDeviceRegisteredWithManagement"));
+    if (!is_device_registered_with_management_function)
+      return false;
+
+    BOOL is_managed = false;
+    HRESULT hr =
+        is_device_registered_with_management_function(&is_managed, 0, nullptr);
+    return SUCCEEDED(hr) && is_managed;
+  }();
+  return is_device_registered_with_management;
+}
+
+bool IsEnterpriseManaged() {
+  // TODO(rogerta): this function should really be:
+  //
+  //    return IsEnrolledToDomain() || IsDeviceRegisteredWithManagement();
+  //
+  // However, for now it is decided to collect some UMA metrics about
+  // IsDeviceRegisteredWithMdm() before changing chrome's behavior.
+  return IsEnrolledToDomain();
+}
+
 void SetDomainStateForTesting(bool state) {
   g_domain_state = state ? ENROLLED : NOT_ENROLLED;
 }
 
 bool IsUser32AndGdi32Available() {
-  static base::LazyInstance<LazyIsUser32AndGdi32Available>::Leaky available =
-      LAZY_INSTANCE_INITIALIZER;
-  return available.Get().value();
+  static auto is_user32_and_gdi32_available = []() {
+    // If win32k syscalls aren't disabled, then user32 and gdi32 are available.
+
+    // Can't disable win32k prior to windows 8.
+    if (base::win::GetVersion() < base::win::VERSION_WIN8)
+      return true;
+
+    typedef decltype(
+        GetProcessMitigationPolicy)* GetProcessMitigationPolicyType;
+    GetProcessMitigationPolicyType get_process_mitigation_policy_func =
+        reinterpret_cast<GetProcessMitigationPolicyType>(GetProcAddress(
+            GetModuleHandle(L"kernel32.dll"), "GetProcessMitigationPolicy"));
+
+    if (!get_process_mitigation_policy_func)
+      return true;
+
+    PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY policy = {};
+    if (get_process_mitigation_policy_func(GetCurrentProcess(),
+                                           ProcessSystemCallDisablePolicy,
+                                           &policy, sizeof(policy))) {
+      return policy.DisallowWin32kSystemCalls == 0;
+    }
+
+    return true;
+  }();
+  return is_user32_and_gdi32_available;
 }
 
 bool GetLoadedModulesSnapshot(HANDLE process, std::vector<HMODULE>* snapshot) {

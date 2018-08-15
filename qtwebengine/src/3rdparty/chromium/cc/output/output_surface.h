@@ -11,12 +11,12 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/threading/thread_checker.h"
-#include "cc/base/cc_export.h"
-#include "cc/output/context_provider.h"
+#include "cc/cc_export.h"
 #include "cc/output/overlay_candidate_validator.h"
 #include "cc/output/software_output_device.h"
 #include "cc/output/vulkan_context_provider.h"
 #include "cc/resources/returned_resource.h"
+#include "components/viz/common/gpu/context_provider.h"
 #include "gpu/command_buffer/common/texture_in_use_response.h"
 #include "ui/gfx/color_space.h"
 
@@ -44,10 +44,14 @@ class CC_EXPORT OutputSurface {
     bool uses_default_gl_framebuffer = true;
     // Whether this OutputSurface is flipped or not.
     bool flipped_output_surface = false;
+    // Whether this OutputSurface supports stencil operations or not.
+    // Note: HasExternalStencilTest() must return false when an output surface
+    // has been configured for stencil usage.
+    bool supports_stencil = false;
   };
 
   // Constructor for GL-based compositing.
-  explicit OutputSurface(scoped_refptr<ContextProvider> context_provider);
+  explicit OutputSurface(scoped_refptr<viz::ContextProvider> context_provider);
   // Constructor for software compositing.
   explicit OutputSurface(std::unique_ptr<SoftwareOutputDevice> software_device);
   // Constructor for Vulkan-based compositing.
@@ -62,7 +66,9 @@ class CC_EXPORT OutputSurface {
   // surface. Either of these may return a null pointer, but not both.
   // In the event of a lost context, the entire output surface should be
   // recreated.
-  ContextProvider* context_provider() const { return context_provider_.get(); }
+  viz::ContextProvider* context_provider() const {
+    return context_provider_.get();
+  }
   VulkanContextProvider* vulkan_context_provider() const {
     return vulkan_context_provider_.get();
   }
@@ -79,6 +85,11 @@ class CC_EXPORT OutputSurface {
   // OutputSurfaces.
   virtual void BindFramebuffer() = 0;
 
+  // Marks that the given rectangle will be drawn to on the default, bound
+  // framebuffer. Only valid for surfaces with dc_layers in the context
+  // capabilities.
+  virtual void SetDrawRectangle(const gfx::Rect& rect) = 0;
+
   // Get the class capable of informing cc of hardware overlay capability.
   virtual OverlayCandidateValidator* GetOverlayCandidateValidator() const = 0;
 
@@ -88,13 +99,17 @@ class CC_EXPORT OutputSurface {
   // Get the texture for the main image's overlay.
   virtual unsigned GetOverlayTextureId() const = 0;
 
+  // Get the format for the main image's overlay.
+  virtual gfx::BufferFormat GetOverlayBufferFormat() const = 0;
+
   // If this returns true, then the surface will not attempt to draw.
   virtual bool SurfaceIsSuspendForRecycle() const = 0;
 
   virtual void Reshape(const gfx::Size& size,
                        float device_scale_factor,
                        const gfx::ColorSpace& color_space,
-                       bool has_alpha) = 0;
+                       bool has_alpha,
+                       bool use_stencil) = 0;
 
   virtual bool HasExternalStencilTest() const = 0;
   virtual void ApplyExternalStencil() = 0;
@@ -110,7 +125,7 @@ class CC_EXPORT OutputSurface {
 
  protected:
   struct OutputSurface::Capabilities capabilities_;
-  scoped_refptr<ContextProvider> context_provider_;
+  scoped_refptr<viz::ContextProvider> context_provider_;
   scoped_refptr<VulkanContextProvider> vulkan_context_provider_;
   std::unique_ptr<SoftwareOutputDevice> software_device_;
 

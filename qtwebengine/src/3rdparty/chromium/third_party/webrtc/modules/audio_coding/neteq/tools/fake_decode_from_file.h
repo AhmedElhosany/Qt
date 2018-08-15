@@ -13,10 +13,10 @@
 
 #include <memory>
 
-#include "webrtc/base/array_view.h"
-#include "webrtc/base/optional.h"
-#include "webrtc/modules/audio_coding/codecs/audio_decoder.h"
+#include "webrtc/api/audio_codecs/audio_decoder.h"
 #include "webrtc/modules/audio_coding/neteq/tools/input_audio_file.h"
+#include "webrtc/rtc_base/array_view.h"
+#include "webrtc/rtc_base/optional.h"
 
 namespace webrtc {
 namespace test {

@@ -4,7 +4,7 @@
 
 #include "components/signin/ios/browser/profile_oauth2_token_service_ios_delegate.h"
 
-#include <Foundation/Foundation.h>
+#import <Foundation/Foundation.h>
 
 #include <memory>
 #include <set>
@@ -26,6 +26,10 @@
 #include "components/signin/ios/browser/profile_oauth2_token_service_ios_provider.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher.h"
 #include "net/url_request/url_request_status.h"
+
+#if !defined(__has_feature) || !__has_feature(objc_arc)
+#error "This file requires ARC support."
+#endif
 
 namespace {
 

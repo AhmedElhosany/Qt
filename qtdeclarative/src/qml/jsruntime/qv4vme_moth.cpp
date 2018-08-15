@@ -338,18 +338,24 @@ Param traceParam(const Param &param)
     return param;
 }
 # define VALUE(param) (*VALUEPTR(param))
-# define VALUEPTR(param) (scopes[traceParam(param).scope] + param.index)
+# define VALUEPTR(param) (scopes[traceParam(param).scope].values + param.index)
 #else
 # define VALUE(param) (*VALUEPTR(param))
-# define VALUEPTR(param) (scopes[param.scope] + param.index)
+# define VALUEPTR(param) (scopes[param.scope].values + param.index)
 #endif
 
+// ### add write barrier here
 #define STOREVALUE(param, value) { \
     QV4::ReturnedValue tmp = (value); \
     if (engine->hasException) \
         goto catchException; \
-    VALUE(param) = tmp; \
-    }
+    if (Q_LIKELY(!engine->writeBarrierActive || !scopes[param.scope].base)) { \
+        VALUE(param) = tmp; \
+    } else { \
+        QV4::WriteBarrier::write(engine, scopes[param.scope].base, VALUEPTR(param), QV4::Value::fromReturnedValue(tmp)); \
+    } \
+}
+
 // qv4scopedvalue_p.h also defines a CHECK_EXCEPTION macro
 #ifdef CHECK_EXCEPTION
 #undef CHECK_EXCEPTION
@@ -396,21 +402,29 @@ QV4::ReturnedValue VME::run(ExecutionEngine *engine, const uchar *code)
         }
     }
 
-    Q_ALLOCA_VAR(QV4::Value*, scopes, sizeof(QV4::Value *)*(2 + 2*scopeDepth));
+    struct Scopes {
+        QV4::Value *values;
+        QV4::Heap::Base *base; // non 0 if a write barrier is required
+    };
+    Q_ALLOCA_VAR(Scopes, scopes, sizeof(Scopes)*(2 + 2*scopeDepth));
     {
-        scopes[0] = const_cast<QV4::Value *>(static_cast<CompiledData::CompilationUnit*>(engine->current->compilationUnit)->constants);
+        scopes[0] = { const_cast<QV4::Value *>(static_cast<CompiledData::CompilationUnit*>(engine->current->compilationUnit)->constants), 0 };
         // stack gets setup in push instruction
-        scopes[1] = 0;
+        scopes[1] = { 0, 0 };
         QV4::Heap::ExecutionContext *scope = engine->current;
         int i = 0;
         while (scope) {
-            if (scope->type >= QV4::Heap::ExecutionContext::Type_SimpleCallContext) {
+            if (scope->type == QV4::Heap::ExecutionContext::Type_SimpleCallContext) {
+                QV4::Heap::SimpleCallContext *cc = static_cast<QV4::Heap::SimpleCallContext *>(scope);
+                scopes[2*i + 2] = { cc->callData->args, 0 };
+                scopes[2*i + 3] = { 0, 0 };
+            } else if (scope->type == QV4::Heap::ExecutionContext::Type_CallContext) {
                 QV4::Heap::CallContext *cc = static_cast<QV4::Heap::CallContext *>(scope);
-                scopes[2*i + 2] = cc->callData->args;
-                scopes[2*i + 3] = cc->locals;
+                scopes[2*i + 2] = { cc->callData->args, cc };
+                scopes[2*i + 3] = { cc->locals.values, cc };
             } else {
-                scopes[2*i + 2] = 0;
-                scopes[2*i + 3] = 0;
+                scopes[2*i + 2] = { 0, 0 };
+                scopes[2*i + 3] = { 0, 0 };
             }
             ++i;
             scope = scope->outer;
@@ -477,7 +491,7 @@ QV4::ReturnedValue VME::run(ExecutionEngine *engine, const uchar *code)
 
     MOTH_BEGIN_INSTR(LoadElementLookup)
         QV4::Lookup *l = engine->current->lookups + instr.lookup;
-        STOREVALUE(instr.result, l->indexedGetter(l, VALUE(instr.base), VALUE(instr.index)));
+        STOREVALUE(instr.result, l->indexedGetter(l, engine, VALUE(instr.base), VALUE(instr.index)));
     MOTH_END_INSTR(LoadElementLookup)
 
     MOTH_BEGIN_INSTR(StoreElement)
@@ -487,7 +501,7 @@ QV4::ReturnedValue VME::run(ExecutionEngine *engine, const uchar *code)
 
     MOTH_BEGIN_INSTR(StoreElementLookup)
         QV4::Lookup *l = engine->current->lookups + instr.lookup;
-        l->indexedSetter(l, VALUE(instr.base), VALUE(instr.index), VALUE(instr.source));
+        l->indexedSetter(l, engine, VALUE(instr.base), VALUE(instr.index), VALUE(instr.source));
         CHECK_EXCEPTION;
     MOTH_END_INSTR(StoreElementLookup)
 
@@ -554,7 +568,7 @@ QV4::ReturnedValue VME::run(ExecutionEngine *engine, const uchar *code)
         TRACE(inline, "stack size: %u", instr.value);
         stackSize = instr.value;
         stack = scope.alloc(stackSize);
-        scopes[1] = stack;
+        scopes[1].values = stack;
     MOTH_END_INSTR(Push)
 
     MOTH_BEGIN_INSTR(CallValue)

@@ -73,18 +73,18 @@ class CONTENT_EXPORT AudioInputMessageFilter : public IPC::MessageFilter {
                        base::FileDescriptor socket_descriptor,
 #endif
                        uint32_t length,
-                       uint32_t total_segments);
-
-  // Notification of volume property of an audio input stream.
-  void OnStreamVolume(int stream_id, double volume);
+                       uint32_t total_segments,
+                       bool initially_muted);
 
   // Received when internal state of browser process' audio input stream has
-  // changed.
-  void OnStreamStateChanged(int stream_id,
-                            media::AudioInputIPCDelegateState state);
+  // encountered an error.
+  void OnStreamError(int stream_id);
+
+  // Received when a stream is muted or unmuted.
+  void OnStreamMuted(int stream_id, bool is_muted);
 
   // A map of stream ids to delegates.
-  IDMap<media::AudioInputIPCDelegate> delegates_;
+  IDMap<media::AudioInputIPCDelegate*> delegates_;
 
   // IPC sender for Send(), must only be accesed on |io_task_runner_|.
   IPC::Sender* sender_;

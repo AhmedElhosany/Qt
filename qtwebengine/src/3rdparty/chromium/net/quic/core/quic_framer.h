@@ -2,23 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_QUIC_QUIC_FRAMER_H_
-#define NET_QUIC_QUIC_FRAMER_H_
+#ifndef NET_QUIC_CORE_QUIC_FRAMER_H_
+#define NET_QUIC_CORE_QUIC_FRAMER_H_
 
-#include <stddef.h>
-#include <stdint.h>
-
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
-#include "base/logging.h"
 #include "base/macros.h"
-#include "base/strings/string_piece.h"
-#include "net/base/net_export.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_iovector.h"
+#include "net/quic/core/quic_packets.h"
+#include "net/quic/platform/api/quic_endian.h"
+#include "net/quic/platform/api/quic_export.h"
+#include "net/quic/platform/api/quic_string_piece.h"
 
 namespace net {
 
@@ -31,6 +28,7 @@ class QuicDataWriter;
 class QuicDecrypter;
 class QuicEncrypter;
 class QuicFramer;
+class QuicStreamFrameDataProducer;
 
 // Number of bytes reserved for the frame type preceding each frame.
 const size_t kQuicFrameTypeSize = 1;
@@ -46,8 +44,6 @@ const size_t kQuicMaxStreamOffsetSize = 8;
 // Number of bytes reserved to store payload length in stream frame.
 const size_t kQuicStreamPayloadLengthSize = 2;
 
-// Size in bytes of the entropy hash sent in ack frames.
-const size_t kQuicEntropyHashSize = 1;
 // Size in bytes reserved for the delta time of the largest observed
 // packet number in ack frames.
 const size_t kQuicDeltaTimeLargestObservedSize = 2;
@@ -64,7 +60,7 @@ const size_t kMaxAckBlocks = (1 << (kNumberOfAckBlocksSize * 8)) - 1;
 
 // This class receives callbacks from the framer when packets
 // are processed.
-class NET_EXPORT_PRIVATE QuicFramerVisitorInterface {
+class QUIC_EXPORT_PRIVATE QuicFramerVisitorInterface {
  public:
   virtual ~QuicFramerVisitorInterface() {}
 
@@ -141,31 +137,13 @@ class NET_EXPORT_PRIVATE QuicFramerVisitorInterface {
   // Called when a BlockedFrame has been parsed.
   virtual bool OnBlockedFrame(const QuicBlockedFrame& frame) = 0;
 
-  // Called when a PathCloseFrame has been parsed.
-  virtual bool OnPathCloseFrame(const QuicPathCloseFrame& frame) = 0;
-
   // Called when a packet has been completely processed.
   virtual void OnPacketComplete() = 0;
 };
 
-// This class calculates the received entropy of the ack packet being
-// framed, should it get truncated.
-class NET_EXPORT_PRIVATE QuicReceivedEntropyHashCalculatorInterface {
- public:
-  virtual ~QuicReceivedEntropyHashCalculatorInterface() {}
-
-  // When an ack frame gets truncated while being framed the received
-  // entropy of the ack frame needs to be calculated since the some of the
-  // missing packets are not added and the largest observed might be lowered.
-  // This should return the received entropy hash of the packets received up to
-  // and including |packet_number|.
-  virtual QuicPacketEntropyHash EntropyHash(
-      QuicPacketNumber packet_number) const = 0;
-};
-
 // Class for parsing and constructing QUIC packets.  It has a
 // QuicFramerVisitorInterface that is called when packets are parsed.
-class NET_EXPORT_PRIVATE QuicFramer {
+class QUIC_EXPORT_PRIVATE QuicFramer {
  public:
   // Constructs a new framer that installs a kNULL QuicEncrypter and
   // QuicDecrypter for level ENCRYPTION_NONE. |supported_versions| specifies the
@@ -198,15 +176,6 @@ class NET_EXPORT_PRIVATE QuicFramer {
   // version to trigger version negotiation.
   void set_version_for_tests(const QuicVersion version) {
     quic_version_ = version;
-  }
-
-  // Set entropy calculator to be called from the framer when it needs the
-  // entropy of a truncated ack frame. An entropy calculator must be set or else
-  // the framer will likely crash. If this is called multiple times, only the
-  // last calculator will be used.
-  void set_received_entropy_calculator(
-      QuicReceivedEntropyHashCalculatorInterface* entropy_calculator) {
-    entropy_calculator_ = entropy_calculator;
   }
 
   QuicErrorCode error() const { return error_; }
@@ -242,8 +211,6 @@ class NET_EXPORT_PRIVATE QuicFramer {
   static size_t GetWindowUpdateFrameSize();
   // Size in bytes of all Blocked frame fields.
   static size_t GetBlockedFrameSize();
-  // Size in bytes of all PathClose frame fields.
-  static size_t GetPathCloseFrameSize();
   // Size in bytes required to serialize the stream id.
   static size_t GetStreamIdSize(QuicStreamId stream_id);
   // Size in bytes required to serialize the stream offset.
@@ -262,12 +229,11 @@ class NET_EXPORT_PRIVATE QuicFramer {
 
   // Returns the associated data from the encrypted packet |encrypted| as a
   // stringpiece.
-  static base::StringPiece GetAssociatedDataFromEncryptedPacket(
+  static QuicStringPiece GetAssociatedDataFromEncryptedPacket(
       QuicVersion version,
       const QuicEncryptedPacket& encrypted,
       QuicConnectionIdLength connection_id_length,
       bool includes_version,
-      bool includes_path_id,
       bool includes_diversification_nonce,
       QuicPacketNumberLength packet_number_length);
 
@@ -298,7 +264,7 @@ class NET_EXPORT_PRIVATE QuicFramer {
                       QuicDataWriter* writer);
   bool AppendStreamFrame(const QuicStreamFrame& frame,
                          bool last_frame_in_packet,
-                         QuicDataWriter* builder);
+                         QuicDataWriter* writer);
 
   // SetDecrypter sets the primary decrypter, replacing any that already exists,
   // and takes ownership. If an alternative decrypter is in place then the
@@ -328,7 +294,6 @@ class NET_EXPORT_PRIVATE QuicFramer {
   // data. |total_len| is the length of the associated data plus plaintext.
   // |buffer_len| is the full length of the allocated buffer.
   size_t EncryptInPlace(EncryptionLevel level,
-                        QuicPathId path_id,
                         QuicPacketNumber packet_number,
                         size_t ad_len,
                         size_t total_len,
@@ -338,7 +303,6 @@ class NET_EXPORT_PRIVATE QuicFramer {
   // Returns the length of the data encrypted into |buffer| if |buffer_len| is
   // long enough, and otherwise 0.
   size_t EncryptPayload(EncryptionLevel level,
-                        QuicPathId path_id,
                         QuicPacketNumber packet_number,
                         const QuicPacket& packet,
                         char* buffer,
@@ -348,10 +312,18 @@ class NET_EXPORT_PRIVATE QuicFramer {
   // to ciphertext no larger than |ciphertext_size|.
   size_t GetMaxPlaintextSize(size_t ciphertext_size);
 
+  // Let data_producer_ save |data_length| data starts at |iov_offset| in |iov|.
+  // TODO(fayang): Remove this method when data is saved before it is consumed.
+  void SaveStreamData(QuicStreamId id,
+                      QuicIOVector iov,
+                      size_t iov_offset,
+                      QuicStreamOffset offset,
+                      QuicByteCount data_length);
+
   const std::string& detailed_error() { return detailed_error_; }
 
   // The minimum packet number length required to represent |packet_number|.
-  static QuicPacketNumberLength GetMinSequenceNumberLength(
+  static QuicPacketNumberLength GetMinPacketNumberLength(
       QuicPacketNumber packet_number);
 
   void SetSupportedVersions(const QuicVersionVector& versions) {
@@ -359,17 +331,21 @@ class NET_EXPORT_PRIVATE QuicFramer {
     quic_version_ = versions[0];
   }
 
+  // Returns true if data_producer_ is not null.
+  bool HasDataProducer() const { return data_producer_ != nullptr; }
+
+  // Returns byte order to read/write integers and floating numbers.
+  Endianness endianness() const;
+
   void set_validate_flags(bool value) { validate_flags_ = value; }
 
   Perspective perspective() const { return perspective_; }
 
-  static QuicPacketEntropyHash GetPacketEntropyHash(
-      const QuicPacketHeader& header);
-
-  // Called when a PATH_CLOSED frame has been sent/received on |path_id|.
-  void OnPathClosed(QuicPathId path_id);
-
   QuicTag last_version_tag() { return last_version_tag_; }
+
+  void set_data_producer(QuicStreamFrameDataProducer* data_producer) {
+    data_producer_ = data_producer;
+  }
 
  private:
   friend class test::QuicFramerPeer;
@@ -380,28 +356,6 @@ class NET_EXPORT_PRIVATE QuicFramer {
     AckFrameInfo();
     AckFrameInfo(const AckFrameInfo& other);
     ~AckFrameInfo();
-
-    // The maximum delta between ranges.
-    QuicPacketNumber max_delta;
-    // Nack ranges starting with start packet numbers and lengths.
-    NackRangeMap nack_ranges;
-  };
-
-  struct AckBlock {
-    AckBlock(uint8_t gap, QuicPacketNumber length);
-    AckBlock(const AckBlock& other);
-    ~AckBlock();
-
-    // Gap to the next ack block.
-    uint8_t gap;
-    // Length of this ack block.
-    QuicPacketNumber length;
-  };
-
-  struct NewAckFrameInfo {
-    NewAckFrameInfo();
-    NewAckFrameInfo(const NewAckFrameInfo& other);
-    ~NewAckFrameInfo();
 
     // The maximum ack block length.
     QuicPacketNumber max_block_length;
@@ -431,16 +385,14 @@ class NET_EXPORT_PRIVATE QuicFramer {
   bool ProcessUnauthenticatedHeader(QuicDataReader* encrypted_reader,
                                     QuicPacketHeader* header);
 
-  // Processes the authenticated portion of the header into |header| from
-  // the current QuicDataReader.  Returns true on success, false on failure.
-  bool ProcessAuthenticatedHeader(QuicDataReader* reader,
-                                  QuicPacketHeader* header);
-
-  bool ProcessPathId(QuicDataReader* reader, QuicPathId* path_id);
-  bool ProcessPacketSequenceNumber(QuicDataReader* reader,
-                                   QuicPacketNumberLength packet_number_length,
-                                   QuicPacketNumber base_packet_number,
-                                   QuicPacketNumber* packet_number);
+  // First processes possibly truncated packet number. Calculates the full
+  // packet number from the truncated one and the last seen packet number, and
+  // stores it to |packet_number|.
+  bool ProcessAndCalculatePacketNumber(
+      QuicDataReader* reader,
+      QuicPacketNumberLength packet_number_length,
+      QuicPacketNumber base_packet_number,
+      QuicPacketNumber* packet_number);
   bool ProcessFrameData(QuicDataReader* reader, const QuicPacketHeader& header);
   bool ProcessStreamFrame(QuicDataReader* reader,
                           uint8_t frame_type,
@@ -448,9 +400,6 @@ class NET_EXPORT_PRIVATE QuicFramer {
   bool ProcessAckFrame(QuicDataReader* reader,
                        uint8_t frame_type,
                        QuicAckFrame* frame);
-  bool ProcessNewAckFrame(QuicDataReader* reader,
-                          uint8_t frame_type,
-                          QuicAckFrame* frame);
   bool ProcessTimestampsInAckFrame(QuicDataReader* reader, QuicAckFrame* frame);
   bool ProcessStopWaitingFrame(QuicDataReader* reader,
                                const QuicPacketHeader& public_header,
@@ -462,7 +411,7 @@ class NET_EXPORT_PRIVATE QuicFramer {
   bool ProcessWindowUpdateFrame(QuicDataReader* reader,
                                 QuicWindowUpdateFrame* frame);
   bool ProcessBlockedFrame(QuicDataReader* reader, QuicBlockedFrame* frame);
-  bool ProcessPathCloseFrame(QuicDataReader* reader, QuicPathCloseFrame* frame);
+  void ProcessPaddingFrame(QuicDataReader* reader, QuicPaddingFrame* frame);
 
   bool DecryptPayload(QuicDataReader* encrypted_reader,
                       const QuicPacketHeader& header,
@@ -470,12 +419,6 @@ class NET_EXPORT_PRIVATE QuicFramer {
                       char* decrypted_buffer,
                       size_t buffer_length,
                       size_t* decrypted_length);
-
-  // Checks if |path_id| is a viable path to receive packets on. Returns true
-  // and sets |base_packet_number| to the packet number to calculate the
-  // incoming packet number from if the path is not closed. Returns false
-  // otherwise.
-  bool IsValidPath(QuicPathId path_id, QuicPacketNumber* base_packet_number);
 
   // Sets last_packet_number_. This can only be called after the packet is
   // successfully decrypted.
@@ -495,22 +438,27 @@ class NET_EXPORT_PRIVATE QuicFramer {
   // Computes the wire size in bytes of time stamps in |ack|.
   size_t GetAckFrameTimeStampSize(const QuicAckFrame& ack);
 
-  // Computes the wire size in bytes of the |ack| frame, assuming no truncation.
+  // Computes the wire size in bytes of the |ack| frame.
   size_t GetAckFrameSize(const QuicAckFrame& ack,
                          QuicPacketNumberLength packet_number_length);
 
   // Computes the wire size in bytes of the |ack| frame.
-  size_t GetNewAckFrameSize(const QuicAckFrame& ack);
+  size_t GetAckFrameSize(const QuicAckFrame& ack);
 
   // Computes the wire size in bytes of the payload of |frame|.
   size_t ComputeFrameLength(const QuicFrame& frame,
                             bool last_frame_in_packet,
                             QuicPacketNumberLength packet_number_length);
 
-  static bool AppendPacketSequenceNumber(
-      QuicPacketNumberLength packet_number_length,
-      QuicPacketNumber packet_number,
-      QuicDataWriter* writer);
+  static bool AppendPacketNumber(QuicPacketNumberLength packet_number_length,
+                                 QuicPacketNumber packet_number,
+                                 QuicDataWriter* writer);
+  static bool AppendStreamId(size_t stream_id_length,
+                             QuicStreamId stream_id,
+                             QuicDataWriter* writer);
+  static bool AppendStreamOffset(size_t offset_length,
+                                 QuicStreamOffset offset,
+                                 QuicDataWriter* writer);
 
   // Appends a single ACK block to |writer| and returns true if the block was
   // successfully appended.
@@ -519,21 +467,16 @@ class NET_EXPORT_PRIVATE QuicFramer {
                              QuicPacketNumber length,
                              QuicDataWriter* writer);
 
-  static uint8_t GetSequenceNumberFlags(
+  static uint8_t GetPacketNumberFlags(
       QuicPacketNumberLength packet_number_length);
 
   static AckFrameInfo GetAckFrameInfo(const QuicAckFrame& frame);
 
-  static NewAckFrameInfo GetNewAckFrameInfo(const QuicAckFrame& frame);
-
   // The Append* methods attempt to write the provided header or frame using the
   // |writer|, and return true if successful.
 
-  bool AppendAckFrameAndTypeByte(const QuicPacketHeader& header,
-                                 const QuicAckFrame& frame,
+  bool AppendAckFrameAndTypeByte(const QuicAckFrame& frame,
                                  QuicDataWriter* builder);
-  bool AppendNewAckFrameAndTypeByte(const QuicAckFrame& frame,
-                                    QuicDataWriter* builder);
   bool AppendTimestampToAckFrame(const QuicAckFrame& frame,
                                  QuicDataWriter* builder);
   bool AppendStopWaitingFrame(const QuicPacketHeader& header,
@@ -548,8 +491,8 @@ class NET_EXPORT_PRIVATE QuicFramer {
                                QuicDataWriter* writer);
   bool AppendBlockedFrame(const QuicBlockedFrame& frame,
                           QuicDataWriter* writer);
-  bool AppendPathCloseFrame(const QuicPathCloseFrame& frame,
-                            QuicDataWriter* writer);
+  bool AppendPaddingFrame(const QuicPaddingFrame& frame,
+                          QuicDataWriter* writer);
 
   bool RaiseError(QuicErrorCode error);
 
@@ -559,22 +502,11 @@ class NET_EXPORT_PRIVATE QuicFramer {
 
   std::string detailed_error_;
   QuicFramerVisitorInterface* visitor_;
-  QuicReceivedEntropyHashCalculatorInterface* entropy_calculator_;
   QuicErrorCode error_;
-  // Set of closed paths. A path is considered as closed if a PATH_CLOSED frame
-  // has been sent/received.
-  // TODO(fayang): this set is never cleaned up. A possible improvement is to
-  // use intervals.
-  std::unordered_set<QuicPathId> closed_paths_;
   // Updated by ProcessPacketHeader when it succeeds.
   QuicPacketNumber last_packet_number_;
-  // Map mapping path id to packet number of largest successfully decrypted
-  // received packet.
-  std::unordered_map<QuicPathId, QuicPacketNumber> largest_packet_numbers_;
   // Updated by ProcessPacketHeader when it succeeds decrypting a larger packet.
   QuicPacketNumber largest_packet_number_;
-  // The path on which last successfully decrypted packet was received.
-  QuicPathId last_path_id_;
   // Updated by WritePacketHeader.
   QuicConnectionId last_serialized_connection_id_;
   // The last QUIC version tag received.
@@ -614,9 +546,13 @@ class NET_EXPORT_PRIVATE QuicFramer {
   // The diversification nonce from the last received packet.
   DiversificationNonce last_nonce_;
 
+  // If not null, framer asks data_producer_ to save and write stream frame
+  // data. Not owned.
+  QuicStreamFrameDataProducer* data_producer_;
+
   DISALLOW_COPY_AND_ASSIGN(QuicFramer);
 };
 
 }  // namespace net
 
-#endif  // NET_QUIC_QUIC_FRAMER_H_
+#endif  // NET_QUIC_CORE_QUIC_FRAMER_H_

@@ -81,6 +81,7 @@ struct SequencePrototype : public QV4::Object
     static int metaTypeForSequence(const Object *object);
     static QVariant toVariant(Object *object);
     static QVariant toVariant(const Value &array, int typeHint, bool *succeeded);
+    static void* getRawContainerPtr(const Object *object, int typeHint);
 };
 
 }

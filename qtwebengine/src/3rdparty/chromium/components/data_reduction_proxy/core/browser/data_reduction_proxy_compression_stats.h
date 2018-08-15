@@ -11,8 +11,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
-#include "base/containers/scoped_ptr_hash_map.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -22,7 +22,6 @@
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_metrics.h"
 #include "components/data_reduction_proxy/core/browser/db_data_owner.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_pref_names.h"
-#include "components/data_reduction_proxy/core/common/data_savings_recorder.h"
 #include "components/prefs/pref_member.h"
 
 class PrefService;
@@ -35,7 +34,6 @@ class Value;
 namespace data_reduction_proxy {
 class DataReductionProxyService;
 class DataUsageBucket;
-class DataUseGroup;
 class PerSiteDataUsage;
 
 // Data reduction proxy delayed pref service reduces the number calls to pref
@@ -45,7 +43,7 @@ class PerSiteDataUsage;
 // prefs must be stored and read on the UI thread.
 class DataReductionProxyCompressionStats {
  public:
-  typedef base::ScopedPtrHashMap<std::string, std::unique_ptr<PerSiteDataUsage>>
+  typedef std::unordered_map<std::string, std::unique_ptr<PerSiteDataUsage>>
       SiteUsageMap;
 
   // Collects and store data usage and compression statistics. Basic data usage
@@ -62,26 +60,32 @@ class DataReductionProxyCompressionStats {
                                      const base::TimeDelta& delay);
   ~DataReductionProxyCompressionStats();
 
-  // Records detailed data usage broken down by connection type and domain.
-  // Assumes that the |data_used| has been recoreded by previous calls to
-  // UpdateContentLengths.
-  void UpdateDataSavings(const std::string& data_usage_host,
-                         int64_t data_used,
-                         int64_t original_size);
+  // Records detailed data usage broken down by |mime_type|. Also records daily
+  // data savings statistics to prefs and reports data savings UMA. |data_used|
+  // and |original_size| are measured in bytes.
+  void RecordDataUseWithMimeType(int64_t compressed_size,
+                                 int64_t original_size,
+                                 bool data_reduction_proxy_enabled,
+                                 DataReductionProxyRequestType request_type,
+                                 const std::string& mime_type);
 
-  // Records detailed data usage broken down by connection type and domain. Also
-  // records daily data savings statistics to prefs and reports data savings
-  // UMA. |compressed_size| and |original_size| are measured in bytes.
-  void UpdateContentLengths(int64_t compressed_size,
-                            int64_t original_size,
-                            bool data_reduction_proxy_enabled,
-                            DataReductionProxyRequestType request_type,
-                            const scoped_refptr<DataUseGroup>& data_use_group,
-                            const std::string& mime_type);
+  // Record data usage and original size of request broken down by host.
+  // |original_request_size| and |data_used| are in bytes. |time| is the time at
+  // which the data usage occurred. This method should be called in real time,
+  // so |time| is expected to be |Time::Now()|.
+  void RecordDataUseByHost(const std::string& data_usage_host,
+                           int64_t original_request_size,
+                           int64_t data_used,
+                           const base::Time time);
 
-  // Creates a |Value| summary of the persistent state of the network session.
+  // Creates a |Value| summary of the persistent state of the network
+  // statistics.
   // Must be called on the UI thread.
   std::unique_ptr<base::Value> HistoricNetworkStatsInfoToValue();
+
+  // Creates a |Value| summary of the the session network statistics.
+  // Must be called on the UI thread.
+  std::unique_ptr<base::Value> SessionNetworkStatsInfoToValue() const;
 
   // Returns the time in milliseconds since epoch that the last update was made
   // to the daily original and received content lengths.
@@ -128,6 +132,11 @@ class DataReductionProxyCompressionStats {
   // for the last stored interval.
   void OnCurrentDataUsageLoaded(std::unique_ptr<DataUsageBucket> data_usage);
 
+  // Sets the value of |prefs::kDataUsageReportingEnabled| to |enabled|.
+  // Initializes data usage statistics in memory when pref is enabled and
+  // persists data usage to memory when pref is disabled.
+  void SetDataUsageReportingEnabled(bool enabled);
+
  private:
   // Enum to track the state of loading data usage from storage.
   enum CurrentDataUsageLoadStatus { NOT_LOADED = 0, LOADING = 1, LOADED = 2 };
@@ -135,7 +144,7 @@ class DataReductionProxyCompressionStats {
   friend class DataReductionProxyCompressionStatsTest;
 
   typedef std::map<const char*, int64_t> DataReductionProxyPrefMap;
-  typedef base::ScopedPtrHashMap<const char*, std::unique_ptr<base::ListValue>>
+  typedef std::unordered_map<const char*, std::unique_ptr<base::ListValue>>
       DataReductionProxyListPrefMap;
 
   class DailyContentLengthUpdate;
@@ -201,19 +210,6 @@ class DataReductionProxyCompressionStats {
                               const char* original_size_via_proxy_pref,
                               const char* received_size_via_proxy_pref);
 
-  // Record UMA with data savings bytes and percent over the past
-  // |DataReductionProxy::kNumDaysInHistorySummary| days. These numbers
-  // are displayed to users as their data savings.
-  void RecordUserVisibleDataSavings();
-
-  // Record data usage and original size of request broken down by host. |time|
-  // is the time at which the data usage occurred. This method should be called
-  // in real time, so |time| is expected to be |Time::Now()|.
-  void RecordDataUsage(const std::string& data_usage_host,
-                       int64_t original_request_size,
-                       int64_t data_used,
-                       const base::Time& time);
-
   // Persists the in memory data usage information to storage and clears all
   // in-memory data usage. Do not call this method unless |data_usage_loaded_|
   // is |LOADED|.
@@ -239,16 +235,6 @@ class DataReductionProxyCompressionStats {
   // Example: "http://www.finance.google.com" -> "www.finance.google.com"
   static std::string NormalizeHostname(const std::string& host);
 
-  // Records detailed data usage broken down by |host|. Also records daily data
-  // savings statistics to prefs and reports data savings UMA. |data_used| and
-  // |original_size| are measured in bytes.
-  void RecordData(int64_t data_used,
-                  int64_t original_size,
-                  bool data_saver_enabled,
-                  DataReductionProxyRequestType request_type,
-                  const std::string& data_use_host,
-                  const std::string& mime_type);
-
   DataReductionProxyService* service_;
   PrefService* pref_service_;
   const base::TimeDelta delay_;
@@ -268,6 +254,12 @@ class DataReductionProxyCompressionStats {
   // Tracks whether |data_usage_map_| has changes that have not yet been
   // persisted to storage.
   bool data_usage_map_is_dirty_;
+
+  // Total size of all content that has been received over the network.
+  int64_t session_total_received_;
+
+  // Total original size of all content before it was proxied.
+  int64_t session_total_original_;
 
   // Tracks state of loading data usage from storage.
   CurrentDataUsageLoadStatus current_data_usage_load_status_;

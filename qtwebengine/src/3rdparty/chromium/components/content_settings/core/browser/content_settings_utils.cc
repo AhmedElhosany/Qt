@@ -6,15 +6,14 @@
 
 #include <stddef.h>
 
-#include <memory>
 #include <vector>
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
 
 namespace {
 
@@ -36,6 +35,25 @@ static_assert(arraysize(kContentSettingsStringMapping) ==
                   CONTENT_SETTING_NUM_SETTINGS,
               "kContentSettingsToFromString should have "
               "CONTENT_SETTING_NUM_SETTINGS elements");
+
+// Content settings sorted from most to least permissive. The order is chosen
+// to check if a permission grants more rights than another. This is intuitive
+// for ALLOW, ASK and BLOCK. SESSION_ONLY and DETECT_IMPORTANT_CONTENT are never
+// used in the same setting so their respective order is not important but both
+// belong between ALLOW and ASK. DEFAULT should never be used and is therefore
+// not part of this array.
+const ContentSetting kContentSettingOrder[] = {
+    CONTENT_SETTING_ALLOW,
+    CONTENT_SETTING_SESSION_ONLY,
+    CONTENT_SETTING_DETECT_IMPORTANT_CONTENT,
+    CONTENT_SETTING_ASK,
+    CONTENT_SETTING_BLOCK
+};
+
+static_assert(arraysize(kContentSettingOrder) ==
+              CONTENT_SETTING_NUM_SETTINGS - 1,
+              "kContentSettingOrder should have CONTENT_SETTING_NUM_SETTINGS-1"
+              "entries");
 
 }  // namespace
 
@@ -96,39 +114,9 @@ PatternPair ParsePatternString(const std::string& pattern_str) {
   }
 
   PatternPair pattern_pair;
-  pattern_pair.first =
-      ContentSettingsPattern::FromString(pattern_str_list[0]);
-  pattern_pair.second =
-      ContentSettingsPattern::FromString(pattern_str_list[1]);
+  pattern_pair.first = ContentSettingsPattern::FromString(pattern_str_list[0]);
+  pattern_pair.second = ContentSettingsPattern::FromString(pattern_str_list[1]);
   return pattern_pair;
-}
-
-ContentSetting ValueToContentSetting(const base::Value* value) {
-  ContentSetting setting = CONTENT_SETTING_DEFAULT;
-  bool valid = ParseContentSettingValue(value, &setting);
-  DCHECK(valid);
-  return setting;
-}
-
-bool ParseContentSettingValue(const base::Value* value,
-                              ContentSetting* setting) {
-  if (!value) {
-    *setting = CONTENT_SETTING_DEFAULT;
-    return true;
-  }
-  int int_value = -1;
-  if (!value->GetAsInteger(&int_value))
-    return false;
-  *setting = IntToContentSetting(int_value);
-  return *setting != CONTENT_SETTING_DEFAULT;
-}
-
-std::unique_ptr<base::Value> ContentSettingToValue(ContentSetting setting) {
-  if (setting <= CONTENT_SETTING_DEFAULT ||
-      setting >= CONTENT_SETTING_NUM_SETTINGS) {
-    return nullptr;
-  }
-  return base::MakeUnique<base::FundamentalValue>(setting);
 }
 
 void GetRendererContentSettingRules(const HostContentSettingsMap* map,
@@ -141,12 +129,10 @@ void GetRendererContentSettingRules(const HostContentSettingsMap* map,
 #else
   // Android doesn't use image content settings, so ALLOW rule is added for
   // all origins.
-  rules->image_rules.push_back(
-      ContentSettingPatternSource(ContentSettingsPattern::Wildcard(),
-                                  ContentSettingsPattern::Wildcard(),
-                                  CONTENT_SETTING_ALLOW,
-                                  std::string(),
-                                  map->is_incognito()));
+  rules->image_rules.push_back(ContentSettingPatternSource(
+      ContentSettingsPattern::Wildcard(), ContentSettingsPattern::Wildcard(),
+      ContentSettingToValue(CONTENT_SETTING_ALLOW), std::string(),
+      map->is_incognito()));
 #endif
   map->GetSettingsForOneType(
       CONTENT_SETTINGS_TYPE_JAVASCRIPT,
@@ -156,6 +142,19 @@ void GetRendererContentSettingRules(const HostContentSettingsMap* map,
       CONTENT_SETTINGS_TYPE_AUTOPLAY,
       ResourceIdentifier(),
       &(rules->autoplay_rules));
+}
+
+bool IsMorePermissive(ContentSetting a, ContentSetting b) {
+  // Check whether |a| or |b| is reached first in kContentSettingOrder.
+  // If |a| is first, it means that |a| is more permissive than |b|.
+  for (ContentSetting setting : kContentSettingOrder) {
+    if (setting == b)
+      return false;
+    if (setting == a)
+      return true;
+  }
+  NOTREACHED();
+  return true;
 }
 
 }  // namespace content_settings

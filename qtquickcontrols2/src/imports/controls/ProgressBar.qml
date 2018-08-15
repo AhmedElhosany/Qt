@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Templates 2.2 as T
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
+import QtQuick 2.10
+import QtQuick.Templates 2.3 as T
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
 
 T.ProgressBar {
     id: control
@@ -53,16 +53,15 @@ T.ProgressBar {
         scale: control.mirrored ? -1 : 1
         progress: control.position
         indeterminate: control.visible && control.indeterminate
+        color: control.palette.dark
     }
 
     background: Rectangle {
         implicitWidth: 200
         implicitHeight: 6
-        x: control.leftPadding
-        y: control.topPadding + (control.availableHeight - height) / 2
-        width: control.availableWidth
+        y: (control.height - height) / 2
         height: 6
 
-        color: Default.progressBarColor
+        color: control.palette.midlight
     }
 }

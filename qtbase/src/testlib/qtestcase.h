@@ -147,6 +147,8 @@ do {\
         } \
     }
 
+// Ideally we'd use qWaitFor instead of QTRY_LOOP_IMPL, but due
+// to a compiler bug on MSVC < 2017 we can't (see QTBUG-59096)
 #define QTRY_IMPL(expr, timeout)\
     const int qt_test_step = 50; \
     const int qt_test_timeoutValue = timeout; \
@@ -259,11 +261,21 @@ namespace QTest
         return Internal::toString(t);
     }
 
+    template <typename T1, typename T2>
+    inline char *toString(const QPair<T1, T2> &pair);
+
+    template <typename T1, typename T2>
+    inline char *toString(const std::pair<T1, T2> &pair);
+
     Q_TESTLIB_EXPORT char *toHexRepresentation(const char *ba, int length);
     Q_TESTLIB_EXPORT char *toPrettyCString(const char *unicode, int length);
-    Q_TESTLIB_EXPORT char *toPrettyUnicode(const ushort *unicode, int length);
+    Q_TESTLIB_EXPORT char *toPrettyUnicode(QStringView string);
     Q_TESTLIB_EXPORT char *toString(const char *);
     Q_TESTLIB_EXPORT char *toString(const void *);
+
+    Q_TESTLIB_EXPORT void qInit(QObject *testObject, int argc = 0, char **argv = Q_NULLPTR);
+    Q_TESTLIB_EXPORT int qRun();
+    Q_TESTLIB_EXPORT void qCleanup();
 
     Q_TESTLIB_EXPORT int qExec(QObject *testObject, int argc = 0, char **argv = Q_NULLPTR);
     Q_TESTLIB_EXPORT int qExec(QObject *testObject, const QStringList &arguments);
@@ -319,6 +331,8 @@ namespace QTest
     Q_TESTLIB_EXPORT QTestData &newRow(const char *dataTag);
     Q_TESTLIB_EXPORT QTestData &addRow(const char *format, ...) Q_ATTRIBUTE_FORMAT_PRINTF(1, 2);
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    // kept after adding implementation of <T1, T2> out of paranoia:
     template <typename T>
     inline bool qCompare(T const &t1, T const &t2, const char *actual, const char *expected,
                         const char *file, int line)
@@ -326,6 +340,7 @@ namespace QTest
         return compare_helper(t1 == t2, "Compared values are not the same",
                               toString(t1), toString(t2), actual, expected, file, line);
     }
+#endif
 
     Q_TESTLIB_EXPORT bool qCompare(float const &t1, float const &t2,
                     const char *actual, const char *expected, const char *file, int line);
@@ -376,7 +391,12 @@ namespace QTest
 #endif
 
     template <typename T1, typename T2>
-    bool qCompare(T1 const &, T2 const &, const char *, const char *, const char *, int);
+    inline bool qCompare(const T1 &t1, const T2 &t2, const char *actual, const char *expected,
+                         const char *file, int line)
+    {
+        return compare_helper(t1 == t2, "Compared values are not the same",
+                              toString(t1), toString(t2), actual, expected, file, line);
+    }
 
     inline bool qCompare(double const &t1, float const &t2, const char *actual,
                                  const char *expected, const char *file, int line)

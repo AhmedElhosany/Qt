@@ -1,6 +1,6 @@
 ----------------------------------------------------------------------------
 --
--- Copyright (C) 2017 The Qt Company Ltd.
+-- Copyright (C) 2018 The Qt Company Ltd.
 -- Contact: http://www.qt.io/licensing/
 --
 -- This file is part of the FOO module of the Qt Toolkit.
@@ -62,7 +62,7 @@
 
 /./****************************************************************************
 **
-** Copyright (C) 2017 The Qt Company Ltd.
+** Copyright (C) 2018 The Qt Company Ltd.
 ** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the QtScript module of the Qt Toolkit.

@@ -35,11 +35,21 @@ enum TokenBindingParam {
   TB_PARAM_ECDSAP256 = 2,
 };
 
+enum TLS13Variant {
+  kTLS13VariantDraft,
+  kTLS13VariantExperiment,
+  kTLS13VariantRecordTypeExperiment,
+  kTLS13VariantNoSessionIDExperiment,
+};
+
 // Default minimum protocol version.
 NET_EXPORT extern const uint16_t kDefaultSSLVersionMin;
 
 // Default maximum protocol version.
 NET_EXPORT extern const uint16_t kDefaultSSLVersionMax;
+
+// Default TLS 1.3 variant.
+NET_EXPORT extern const TLS13Variant kDefaultTLS13Variant;
 
 // A collection of SSL-related configuration settings.
 struct NET_EXPORT SSLConfig {
@@ -78,12 +88,22 @@ struct NET_EXPORT SSLConfig {
   // local (non-public) trust anchor should be allowed.
   bool sha1_local_anchors_enabled;
 
+  // common_name_fallback_local_anchors_enabled is true if certificates which
+  // only have a commonName in the Subject (i.e. lacking a subjectAltName)
+  // should be checked if the name matches. Only those issued by a local
+  // (non-public) trust anchor will be allowed to match.
+  bool common_name_fallback_local_anchors_enabled;
+
   // The minimum and maximum protocol versions that are enabled.
   // (Use the SSL_PROTOCOL_VERSION_xxx enumerators defined above.)
   // SSL 2.0 and SSL 3.0 are not supported. If version_max < version_min, it
   // means no protocol versions are enabled.
   uint16_t version_min;
   uint16_t version_max;
+
+  // The TLS 1.3 variant that is enabled. This only takes affect if TLS 1.3 is
+  // also enabled via version_min and version_max.
+  TLS13Variant tls13_variant;
 
   // Presorted list of cipher suites which should be explicitly prevented from
   // being used in addition to those disabled by the net built-in policy.
@@ -95,18 +115,11 @@ struct NET_EXPORT SSLConfig {
   // disable TLS_ECDH_ECDSA_WITH_RC4_128_SHA, specify 0xC002.
   std::vector<uint16_t> disabled_cipher_suites;
 
-  // Enables deprecated cipher suites. These cipher suites are selected under a
-  // fallback to distinguish servers which require them from servers which
-  // merely prefer them.
-  //
-  // NOTE: because they are under a fallback, connections are still vulnerable
-  // to them as far as downgrades are concerned, so this should only be used for
-  // measurement of ciphers not to be carried long-term. It is no fix for
-  // servers with bad configurations without full removal.
-  bool deprecated_cipher_suites_enabled;
-
-  // Enables DHE cipher suites.
-  bool dhe_enabled;
+  // Enables the version interference probing mode. While TLS 1.3 has avoided
+  // most endpoint intolerance, middlebox interference with TLS 1.3 is
+  // rampant. This causes the connection to be discarded on success with
+  // ERR_SSL_VERSION_INTERFERENCE.
+  bool version_interference_probe;
 
   bool channel_id_enabled;   // True if TLS channel ID extension is enabled.
 

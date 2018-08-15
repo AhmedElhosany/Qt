@@ -14,6 +14,7 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/variations/client_filterable_state.h"
 #include "components/variations/processed_study.h"
 #include "components/variations/study_filtering.h"
 #include "components/variations/variations_associated_data.h"
@@ -86,6 +87,9 @@ void ForceExperimentState(
   RegisterExperimentParams(study, experiment);
   RegisterVariationIds(experiment, study.name());
   if (study.activation_type() == Study_ActivationType_ACTIVATION_AUTO) {
+    // This call must happen after all params have been registered for the
+    // trial. Otherwise, since we look up params by trial and group name, the
+    // params won't be registered under the correct key.
     trial->group();
     // UI Strings can only be overridden from ACTIVATION_AUTO experiments.
     ApplyUIStringOverrides(experiment, override_callback);
@@ -98,9 +102,11 @@ void RegisterFeatureOverrides(const ProcessedStudy& processed_study,
                               base::FeatureList* feature_list) {
   const std::string& group_name = trial->GetGroupNameWithoutActivation();
   int experiment_index = processed_study.GetExperimentIndexByName(group_name);
-  // The field trial was defined from |study|, so the active experiment's name
-  // must be in the |study|.
-  DCHECK_NE(-1, experiment_index);
+  // If the chosen experiment was not found in the study, simply return.
+  // Although not normally expected, but could happen in exception cases, see
+  // tests: ExpiredStudy_NoDefaultGroup, ExistingFieldTrial_ExpiredByConfig
+  if (experiment_index == -1)
+    return;
 
   const Study& study = *processed_study.study();
   const Study_Experiment& experiment = study.experiment(experiment_index);
@@ -170,26 +176,17 @@ VariationsSeedProcessor::~VariationsSeedProcessor() {
 
 void VariationsSeedProcessor::CreateTrialsFromSeed(
     const VariationsSeed& seed,
-    const std::string& locale,
-    const base::Time& reference_date,
-    const base::Version& version,
-    Study_Channel channel,
-    Study_FormFactor form_factor,
-    const std::string& hardware_class,
-    const std::string& session_consistency_country,
-    const std::string& permanent_consistency_country,
+    const ClientFilterableState& client_state,
     const UIStringOverrideCallback& override_callback,
     const base::FieldTrial::EntropyProvider* low_entropy_provider,
     base::FeatureList* feature_list) {
   std::vector<ProcessedStudy> filtered_studies;
-  FilterAndValidateStudies(seed, locale, reference_date, version, channel,
-                           form_factor, hardware_class,
-                           session_consistency_country,
-                           permanent_consistency_country, &filtered_studies);
+  FilterAndValidateStudies(seed, client_state, &filtered_studies);
 
-  for (size_t i = 0; i < filtered_studies.size(); ++i)
-    CreateTrialFromStudy(filtered_studies[i], override_callback,
-                         low_entropy_provider, feature_list);
+  for (const ProcessedStudy& study : filtered_studies) {
+    CreateTrialFromStudy(study, override_callback, low_entropy_provider,
+                         feature_list);
+  }
 }
 
 // static
@@ -271,7 +268,7 @@ void VariationsSeedProcessor::CreateTrialFromStudy(
   scoped_refptr<base::FieldTrial> trial(
       base::FieldTrialList::FactoryGetFieldTrialWithRandomizationSeed(
           study.name(), processed_study.total_probability(),
-          study.default_experiment_name(),
+          processed_study.GetDefaultExperimentName(),
           base::FieldTrialList::kNoExpirationYear, 1, 1, randomization_type,
           randomization_seed, NULL,
           ShouldStudyUseLowEntropy(study) ? low_entropy_provider : NULL));
@@ -310,6 +307,9 @@ void VariationsSeedProcessor::CreateTrialFromStudy(
     RegisterFeatureOverrides(processed_study, trial.get(), feature_list);
 
   if (study.activation_type() == Study_ActivationType_ACTIVATION_AUTO) {
+    // This call must happen after all params have been registered for the
+    // trial. Otherwise, since we look up params by trial and group name, the
+    // params won't be registered under the correct key.
     const std::string& group_name = trial->group_name();
 
     // Don't try to apply overrides if none of the experiments in this study had
@@ -319,13 +319,13 @@ void VariationsSeedProcessor::CreateTrialFromStudy(
 
     // UI Strings can only be overridden from ACTIVATION_AUTO experiments.
     int experiment_index = processed_study.GetExperimentIndexByName(group_name);
-
-    // The field trial was defined from |study|, so the active experiment's name
-    // must be in the |study|.
-    DCHECK_NE(-1, experiment_index);
-
-    ApplyUIStringOverrides(study.experiment(experiment_index),
-                           override_callback);
+    // If the chosen experiment was not found in the study, simply return.
+    // Although not normally expected, but could happen in exception cases, see
+    // tests: ExpiredStudy_NoDefaultGroup, ExistingFieldTrial_ExpiredByConfig
+    if (experiment_index != -1) {
+      ApplyUIStringOverrides(study.experiment(experiment_index),
+                             override_callback);
+    }
   }
 }
 

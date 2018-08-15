@@ -29,8 +29,13 @@ void SetResourcePath(const char* resource) {
 bool GetResourceAsBitmap(const char* resource, SkBitmap* dst) {
     SkString resourcePath = GetResourcePath(resource);
     sk_sp<SkData> resourceData(SkData::MakeFromFileName(resourcePath.c_str()));
-    std::unique_ptr<SkImageGenerator> gen(SkImageGenerator::NewFromEncoded(resourceData.get()));
-    return gen && gen->tryGenerateBitmap(dst);
+    std::unique_ptr<SkImageGenerator> gen(SkImageGenerator::MakeFromEncoded(resourceData));
+    if (!gen) {
+        return false;
+    }
+    return dst->tryAllocPixels(gen->getInfo()) &&
+        gen->getPixels(gen->getInfo().makeColorSpace(nullptr), dst->getPixels(), dst->rowBytes(),
+                       nullptr);
 }
 
 sk_sp<SkImage> GetResourceAsImage(const char* resource) {
@@ -47,6 +52,11 @@ SkStreamAsset* GetResourceAsStream(const char* resource) {
         return nullptr;
     }
     return stream.release();
+}
+
+sk_sp<SkData> GetResourceAsData(const char* resource) {
+    SkString resourcePath = GetResourcePath(resource);
+    return SkData::MakeFromFileName(resourcePath.c_str());
 }
 
 sk_sp<SkTypeface> MakeResourceAsTypeface(const char* resource) {

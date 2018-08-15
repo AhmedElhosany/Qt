@@ -8,9 +8,7 @@ assert(is_mac)
 
 translated_xibs = [
   "AppMenu.xib",
-  "AvatarMenuItem.xib",
   "BookmarkAllTabs.xib",
-  "BookmarkBar.xib",
   "BookmarkBubble.xib",
   "BookmarkEditor.xib",
   "BookmarkNameFolder.xib",
@@ -21,11 +19,9 @@ translated_xibs = [
   "ContentBlockedMIDISysEx.xib",
   "ContentBlockedMedia.xib",
   "ContentBlockedMixedScript.xib",
-  "ContentBlockedPlugins.xib",
   "ContentBlockedPopups.xib",
   "ContentBlockedSimple.xib",
   "ContentProtocolHandlers.xib",
-  "ContentSubresourceFilter.xib",
   "CookieDetailsView.xib",
   "DownloadItem.xib",
   "DownloadShelf.xib",
@@ -34,10 +30,8 @@ translated_xibs = [
   "ExtensionInstallPromptWebstoreData.xib",
   "ExtensionInstalledBubble.xib",
   "FirstRunBubble.xib",
-  "FirstRunDialog.xib",
   "HttpAuthLoginSheet.xib",
   "HungRendererDialog.xib",
-  "ImportProgressDialog.xib",
   "MainMenu.xib",
   "OneClickSigninBubble.xib",
   "OneClickSigninDialog.xib",
@@ -48,11 +42,9 @@ translated_xibs = [
 
 untranslated_xibs = [
   "BookmarkBarFolderWindow.xib",
-  "DevicePermissionsPrompt.xib",
   "FindBar.xib",
   "GlobalErrorBubble.xib",
   "InfoBar.xib",
-  "Panel.xib",
 ]
 
 mac_xib_bundle_data("chrome_xibs") {

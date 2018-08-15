@@ -17,11 +17,15 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "mojo/public/cpp/bindings/bindings_export.h"
-#include "mojo/public/cpp/bindings/lib/message_buffer.h"
+#include "mojo/public/cpp/bindings/lib/buffer.h"
 #include "mojo/public/cpp/bindings/lib/message_internal.h"
+#include "mojo/public/cpp/bindings/lib/unserialized_message_context.h"
+#include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "mojo/public/cpp/system/message.h"
 
 namespace mojo {
+
+class AssociatedGroupController;
 
 using ReportBadMessageCallback = base::Callback<void(const std::string& error)>;
 
@@ -35,11 +39,41 @@ class MOJO_CPP_BINDINGS_EXPORT Message {
   static const uint32_t kFlagIsResponse = 1 << 1;
   static const uint32_t kFlagIsSync = 1 << 2;
 
+  // Constructs an uninitialized Message object.
   Message();
+
+  // See the move-assignment operator below.
   Message(Message&& other);
+
+  // Constructs a new message with an unserialized context attached. This
+  // message may be serialized later if necessary.
+  explicit Message(
+      std::unique_ptr<internal::UnserializedMessageContext> context);
+
+  // Constructs a new serialized Message object with optional handles attached.
+  // This message is fully functional and may be exchanged for a
+  // ScopedMessageHandle for transit over a message pipe. See TakeMojoMessage().
+  //
+  // If |handles| is non-null, any handles in |*handles| are attached to the
+  // newly constructed message.
+  Message(uint32_t name,
+          uint32_t flags,
+          size_t payload_size,
+          size_t payload_interface_id_count,
+          std::vector<ScopedHandle>* handles = nullptr);
+
+  // Constructs a new serialized Message object from an existing
+  // ScopedMessageHandle; e.g., one read from a message pipe.
+  //
+  // If the message had any handles attached, they will be extracted and
+  // retrievable via |handles()|. Such messages may NOT be sent back over
+  // another message pipe, but are otherwise safe to inspect and pass around.
+  Message(ScopedMessageHandle handle);
 
   ~Message();
 
+  // Moves |other| into a new Message object. The moved-from Message becomes
+  // invalid and is effectively in a default-constructed state after this call.
   Message& operator=(Message&& other);
 
   // Resets the Message to an uninitialized state. Upon reset, the Message
@@ -48,36 +82,44 @@ class MOJO_CPP_BINDINGS_EXPORT Message {
   void Reset();
 
   // Indicates whether this Message is uninitialized.
-  bool IsNull() const { return !buffer_; }
+  bool IsNull() const { return !handle_.is_valid(); }
 
-  // Initializes a Message with enough space for |capacity| bytes.
-  void Initialize(size_t capacity, bool zero_initialized);
+  // Indicates whether this Message is serialized.
+  bool is_serialized() const { return serialized_; }
 
-  // Initializes a Message from an existing Mojo MessageHandle.
-  void InitializeFromMojoMessage(ScopedMessageHandle message,
-                                 uint32_t num_bytes,
-                                 std::vector<Handle>* handles);
-
-  uint32_t data_num_bytes() const {
-    return static_cast<uint32_t>(buffer_->size());
-  }
+  uint32_t data_num_bytes() const { return static_cast<uint32_t>(data_size_); }
 
   // Access the raw bytes of the message.
-  const uint8_t* data() const {
-    return static_cast<const uint8_t*>(buffer_->data());
-  }
-
-  uint8_t* mutable_data() { return static_cast<uint8_t*>(buffer_->data()); }
+  const uint8_t* data() const { return static_cast<const uint8_t*>(data_); }
+  uint8_t* mutable_data() { return static_cast<uint8_t*>(data_); }
 
   // Access the header.
   const internal::MessageHeader* header() const {
-    return static_cast<const internal::MessageHeader*>(buffer_->data());
+    return static_cast<const internal::MessageHeader*>(data_);
+  }
+  internal::MessageHeader* header() {
+    return static_cast<internal::MessageHeader*>(data_);
   }
 
-  internal::MessageHeader* header() {
-    return const_cast<internal::MessageHeader*>(
-        static_cast<const Message*>(this)->header());
+  const internal::MessageHeaderV1* header_v1() const {
+    DCHECK_GE(version(), 1u);
+    return static_cast<const internal::MessageHeaderV1*>(data_);
   }
+  internal::MessageHeaderV1* header_v1() {
+    DCHECK_GE(version(), 1u);
+    return static_cast<internal::MessageHeaderV1*>(data_);
+  }
+
+  const internal::MessageHeaderV2* header_v2() const {
+    DCHECK_GE(version(), 2u);
+    return static_cast<const internal::MessageHeaderV2*>(data_);
+  }
+  internal::MessageHeaderV2* header_v2() {
+    DCHECK_GE(version(), 2u);
+    return static_cast<internal::MessageHeaderV2*>(data_);
+  }
+
+  uint32_t version() const { return header()->version; }
 
   uint32_t interface_id() const { return header()->interface_id; }
   void set_interface_id(uint32_t id) { header()->interface_id = id; }
@@ -86,34 +128,34 @@ class MOJO_CPP_BINDINGS_EXPORT Message {
   bool has_flag(uint32_t flag) const { return !!(header()->flags & flag); }
 
   // Access the request_id field (if present).
-  bool has_request_id() const { return header()->version >= 1; }
-  uint64_t request_id() const {
-    DCHECK(has_request_id());
-    return static_cast<const internal::MessageHeaderWithRequestID*>(
-               header())->request_id;
-  }
+  uint64_t request_id() const { return header_v1()->request_id; }
   void set_request_id(uint64_t request_id) {
-    DCHECK(has_request_id());
-    static_cast<internal::MessageHeaderWithRequestID*>(header())
-        ->request_id = request_id;
+    header_v1()->request_id = request_id;
   }
 
   // Access the payload.
-  const uint8_t* payload() const { return data() + header()->num_bytes; }
+  const uint8_t* payload() const;
   uint8_t* mutable_payload() { return const_cast<uint8_t*>(payload()); }
-  uint32_t payload_num_bytes() const {
-    DCHECK(data_num_bytes() >= header()->num_bytes);
-    size_t num_bytes = data_num_bytes() - header()->num_bytes;
-    DCHECK(num_bytes <= std::numeric_limits<uint32_t>::max());
-    return static_cast<uint32_t>(num_bytes);
+  uint32_t payload_num_bytes() const;
+
+  uint32_t payload_num_interface_ids() const;
+  const uint32_t* payload_interface_ids() const;
+
+  internal::Buffer* payload_buffer() { return &payload_buffer_; }
+
+  // Access the handles of a received message. Note that these are unused on
+  // outgoing messages.
+  const std::vector<ScopedHandle>* handles() const { return &handles_; }
+  std::vector<ScopedHandle>* mutable_handles() { return &handles_; }
+
+  const std::vector<ScopedInterfaceEndpointHandle>*
+  associated_endpoint_handles() const {
+    return &associated_endpoint_handles_;
   }
-
-  // Access the handles.
-  const std::vector<Handle>* handles() const { return &handles_; }
-  std::vector<Handle>* mutable_handles() { return &handles_; }
-
-  // Access the underlying Buffer interface.
-  internal::Buffer* buffer() { return buffer_.get(); }
+  std::vector<ScopedInterfaceEndpointHandle>*
+  mutable_associated_endpoint_handles() {
+    return &associated_endpoint_handles_;
+  }
 
   // Takes a scoped MessageHandle which may be passed to |WriteMessageNew()| for
   // transmission. Note that this invalidates this Message object, taking
@@ -124,18 +166,67 @@ class MOJO_CPP_BINDINGS_EXPORT Message {
   // rejected by bindings validation code.
   void NotifyBadMessage(const std::string& error);
 
- private:
-  void CloseHandles();
+  // Serializes |associated_endpoint_handles_| into the payload_interface_ids
+  // field.
+  void SerializeAssociatedEndpointHandles(
+      AssociatedGroupController* group_controller);
 
-  std::unique_ptr<internal::MessageBuffer> buffer_;
-  std::vector<Handle> handles_;
+  // Deserializes |associated_endpoint_handles_| from the payload_interface_ids
+  // field.
+  bool DeserializeAssociatedEndpointHandles(
+      AssociatedGroupController* group_controller);
+
+  // If this Message has an unserialized message context attached, force it to
+  // be serialized immediately. Otherwise this does nothing.
+  void SerializeIfNecessary();
+
+  // Takes the unserialized message context from this Message if its tag matches
+  // |tag|.
+  std::unique_ptr<internal::UnserializedMessageContext> TakeUnserializedContext(
+      const internal::UnserializedMessageContext::Tag* tag);
+
+  template <typename MessageType>
+  std::unique_ptr<MessageType> TakeUnserializedContext() {
+    auto generic_context = TakeUnserializedContext(&MessageType::kMessageTag);
+    if (!generic_context)
+      return nullptr;
+    return base::WrapUnique(
+        generic_context.release()->template SafeCast<MessageType>());
+  }
+
+ private:
+  ScopedMessageHandle handle_;
+
+  // Pointer to raw serialized message data, including header. This is only
+  // valid when |handle_| is a valid handle to a serialized message object.
+  void* data_ = nullptr;
+  size_t data_size_ = 0;
+
+  std::vector<ScopedHandle> handles_;
+  std::vector<ScopedInterfaceEndpointHandle> associated_endpoint_handles_;
+
+  // Indicates whether this Message object is transferable, i.e. can be sent
+  // elsewhere. In general this is true unless |handle_| is invalid or
+  // serialized handles have been extracted from the serialized message object
+  // identified by |handle_|.
+  bool transferable_ = false;
+
+  // Indicates whether this Message object is serialized.
+  bool serialized_ = false;
+
+  // A Buffer which may be used to allocated blocks of data within the message
+  // payload. May be invalid if there is no capacity remaining in the payload.
+  internal::Buffer payload_buffer_;
 
   DISALLOW_COPY_AND_ASSIGN(Message);
 };
 
-class MessageReceiver {
+class MOJO_CPP_BINDINGS_EXPORT MessageReceiver {
  public:
   virtual ~MessageReceiver() {}
+
+  // Indicates whether the receiver prefers to receive serialized messages.
+  virtual bool PrefersSerializedMessages();
 
   // The receiver may mutate the given message.  Returns true if the message
   // was accepted and false otherwise, indicating that the message was invalid
@@ -151,14 +242,8 @@ class MessageReceiverWithResponder : public MessageReceiver {
   // responder) to handle the response message generated from the given
   // message. The responder's Accept method may be called during
   // AcceptWithResponder or some time after its return.
-  //
-  // NOTE: Upon returning true, AcceptWithResponder assumes ownership of
-  // |responder| and will delete it after calling |responder->Accept| or upon
-  // its own destruction.
-  //
-  // TODO(yzshen): consider changing |responder| to
-  // std::unique_ptr<MessageReceiver>.
-  virtual bool AcceptWithResponder(Message* message, MessageReceiver* responder)
+  virtual bool AcceptWithResponder(Message* message,
+                                   std::unique_ptr<MessageReceiver> responder)
       WARN_UNUSED_RESULT = 0;
 };
 
@@ -190,16 +275,9 @@ class MessageReceiverWithResponderStatus : public MessageReceiver {
   // the responder) to handle the response message generated from the given
   // message. Any of the responder's methods (Accept or IsValid) may be called
   // during  AcceptWithResponder or some time after its return.
-  //
-  // NOTE: Upon returning true, AcceptWithResponder assumes ownership of
-  // |responder| and will delete it after calling |responder->Accept| or upon
-  // its own destruction.
-  //
-  // TODO(yzshen): consider changing |responder| to
-  // std::unique_ptr<MessageReceiver>.
   virtual bool AcceptWithResponder(Message* message,
-                                   MessageReceiverWithStatus* responder)
-      WARN_UNUSED_RESULT = 0;
+                                   std::unique_ptr<MessageReceiverWithStatus>
+                                       responder) WARN_UNUSED_RESULT = 0;
 };
 
 class MOJO_CPP_BINDINGS_EXPORT PassThroughFilter

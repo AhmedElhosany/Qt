@@ -6,29 +6,23 @@
 #define CONTENT_PUBLIC_COMMON_CONTENT_DESCRIPTORS_H_
 
 #include "build/build_config.h"
-#include "ipc/ipc_descriptors.h"
 
 // This is a list of global descriptor keys to be used with the
 // base::GlobalDescriptors object (see base/posix/global_descriptors.h)
 enum {
-  kCrashDumpSignal = kIPCDescriptorMax,
+  kCrashDumpSignal = 0,
   kSandboxIPCChannel,  // https://chromium.googlesource.com/chromium/src/+/master/docs/linux_sandbox_ipc.md
   kMojoIPCChannel,
-
-#if defined(V8_USE_EXTERNAL_STARTUP_DATA)
-  kV8NativesDataDescriptor,
-#if defined(OS_ANDROID)
-  kV8SnapshotDataDescriptor32,
-  kV8SnapshotDataDescriptor64,
-#else
-  kV8SnapshotDataDescriptor,
-#endif
-#endif
+  kFieldTrialDescriptor,
 
 #if defined(OS_ANDROID)
   kAndroidPropertyDescriptor,
   kAndroidICUDataDescriptor,
 #endif
+
+  // Reserves 100 to 199 for dynamically generated IDs.
+  kContentDynamicDescriptorStart = 100,
+  kContentDynamicDescriptorMax = 199,
 
   // The first key that embedders can use to register descriptors (see
   // base/posix/global_descriptors.h).

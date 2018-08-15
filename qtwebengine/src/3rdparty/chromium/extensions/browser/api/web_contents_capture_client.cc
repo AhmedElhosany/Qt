@@ -12,11 +12,8 @@
 #include "extensions/browser/extension_function.h"
 #include "extensions/common/constants.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/display/display.h"
-#include "ui/display/screen.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/codec/png_codec.h"
-#include "ui/gfx/geometry/size_conversions.h"
 
 using content::RenderWidgetHost;
 using content::RenderWidgetHostView;
@@ -53,30 +50,17 @@ bool WebContentsCaptureClient::CaptureAsync(
 
   // TODO(miu): Account for fullscreen render widget?  http://crbug.com/419878
   RenderWidgetHostView* const view = web_contents->GetRenderWidgetHostView();
-  RenderWidgetHost* const host = view ? view->GetRenderWidgetHost() : nullptr;
-  if (!view || !host) {
+  if (!view) {
     OnCaptureFailure(FAILURE_REASON_VIEW_INVISIBLE);
     return false;
   }
-
-  // By default, the requested bitmap size is the view size in screen
-  // coordinates.  However, if there's more pixel detail available on the
-  // current system, increase the requested bitmap size to capture it all.
-  const gfx::Size view_size = view->GetViewBounds().size();
-  gfx::Size bitmap_size = view_size;
-  const gfx::NativeView native_view = view->GetNativeView();
-  display::Screen* const screen = display::Screen::GetScreen();
-  const float scale =
-      screen->GetDisplayNearestWindow(native_view).device_scale_factor();
-  if (scale > 1.0f)
-    bitmap_size = gfx::ScaleToCeiledSize(view_size, scale);
-
-  host->CopyFromBackingStore(gfx::Rect(view_size), bitmap_size, callback,
-                             kN32_SkColorType);
+  view->CopyFromSurface(gfx::Rect(),  // Copy entire surface area.
+                        gfx::Size(),  // Result contains device-level detail.
+                        callback, kN32_SkColorType);
   return true;
 }
 
-void WebContentsCaptureClient::CopyFromBackingStoreComplete(
+void WebContentsCaptureClient::CopyFromSurfaceComplete(
     const SkBitmap& bitmap,
     content::ReadbackResponse response) {
   if (response == content::READBACK_SUCCESS) {
@@ -107,16 +91,12 @@ bool WebContentsCaptureClient::EncodeBitmap(const SkBitmap& bitmap,
                                             std::string* base64_result) {
   DCHECK(base64_result);
   std::vector<unsigned char> data;
-  SkAutoLockPixels screen_capture_lock(bitmap);
   const bool should_discard_alpha = !ClientAllowsTransparency();
   bool encoded = false;
   std::string mime_type;
   switch (image_format_) {
     case api::extension_types::IMAGE_FORMAT_JPEG:
-      encoded = gfx::JPEGCodec::Encode(
-          reinterpret_cast<unsigned char*>(bitmap.getAddr32(0, 0)),
-          gfx::JPEGCodec::FORMAT_SkBitmap, bitmap.width(), bitmap.height(),
-          static_cast<int>(bitmap.rowBytes()), image_quality_, &data);
+      encoded = gfx::JPEGCodec::Encode(bitmap, image_quality_, &data);
       mime_type = kMimeTypeJpeg;
       break;
     case api::extension_types::IMAGE_FORMAT_PNG:

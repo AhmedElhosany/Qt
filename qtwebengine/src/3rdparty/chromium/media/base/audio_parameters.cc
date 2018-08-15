@@ -97,12 +97,19 @@ bool AudioParameters::Equals(const AudioParameters& other) const {
          effects_ == other.effects() && mic_positions_ == other.mic_positions_;
 }
 
+bool AudioParameters::IsBitstreamFormat() const {
+  return format_ == AUDIO_BITSTREAM_AC3 || format_ == AUDIO_BITSTREAM_EAC3;
+}
+
 // static
 AudioParameters AudioParameters::UnavailableDeviceParams() {
+  // Using 10 ms buffer since WebAudioMediaStreamSource::DeliverRebufferedAudio
+  // deals incorrectly with reference time calculation if output buffer size
+  // significantly differs from 10 ms used there, see http://crbug/701000.
   return media::AudioParameters(
       media::AudioParameters::AUDIO_FAKE, media::CHANNEL_LAYOUT_STEREO,
       media::AudioParameters::kAudioCDSampleRate, 16,
-      media::AudioParameters::kAudioCDSampleRate / 10);
+      media::AudioParameters::kAudioCDSampleRate / 100);
 }
 
 }  // namespace media

@@ -28,7 +28,8 @@ void X11DesktopWindowMoveClient::OnMouseMovement(const gfx::Point& screen_point,
                                                  int flags,
                                                  base::TimeTicks event_time) {
   gfx::Point system_loc = screen_point - window_offset_;
-  host_->SetBounds(gfx::Rect(system_loc, host_->GetBounds().size()));
+  host_->SetBoundsInPixels(
+      gfx::Rect(system_loc, host_->GetBoundsInPixels().size()));
 }
 
 void X11DesktopWindowMoveClient::OnMouseReleased() {
@@ -40,18 +41,18 @@ void X11DesktopWindowMoveClient::OnMoveLoopEnded() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// DesktopWindowTreeHostLinux, aura::client::WindowMoveClient implementation:
+// DesktopWindowTreeHostLinux, wm::WindowMoveClient implementation:
 
-aura::client::WindowMoveResult X11DesktopWindowMoveClient::RunMoveLoop(
+wm::WindowMoveResult X11DesktopWindowMoveClient::RunMoveLoop(
     aura::Window* source,
     const gfx::Vector2d& drag_offset,
-    aura::client::WindowMoveSource move_source) {
+    wm::WindowMoveSource move_source) {
   window_offset_ = drag_offset;
   host_ = source->GetHost();
 
   source->SetCapture();
   bool success = move_loop_.RunMoveLoop(source, host_->last_cursor());
-  return success ? aura::client::MOVE_SUCCESSFUL : aura::client::MOVE_CANCELED;
+  return success ? wm::MOVE_SUCCESSFUL : wm::MOVE_CANCELED;
 }
 
 void X11DesktopWindowMoveClient::EndMoveLoop() {

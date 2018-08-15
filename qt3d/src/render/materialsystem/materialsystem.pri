@@ -19,10 +19,13 @@ HEADERS += \
     $$PWD/qshaderdata_p.h \
     $$PWD/qshaderprogram.h \
     $$PWD/qshaderprogram_p.h \
+    $$PWD/qshaderprogrambuilder.h \
+    $$PWD/qshaderprogrambuilder_p.h \
     $$PWD/qtechnique.h \
     $$PWD/qtechnique_p.h \
     $$PWD/renderpass_p.h \
     $$PWD/shader_p.h \
+    $$PWD/shaderbuilder_p.h \
     $$PWD/shaderdata_p.h \
     $$PWD/technique_p.h \
     $$PWD/qgraphicsapifilter.h \
@@ -42,11 +45,16 @@ SOURCES += \
     $$PWD/qrenderpass.cpp \
     $$PWD/qshaderdata.cpp \
     $$PWD/qshaderprogram.cpp \
+    $$PWD/qshaderprogrambuilder.cpp \
     $$PWD/qtechnique.cpp \
     $$PWD/renderpass.cpp \
     $$PWD/shader.cpp \
+    $$PWD/shaderbuilder.cpp \
     $$PWD/shaderdata.cpp \
     $$PWD/technique.cpp \
     $$PWD/qgraphicsapifilter.cpp \
     $$PWD/shadercache.cpp \
     $$PWD/techniquemanager.cpp
+
+RESOURCES += \
+    $$PWD/materialsystem.qrc

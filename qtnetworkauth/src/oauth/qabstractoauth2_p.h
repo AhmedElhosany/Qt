@@ -65,17 +65,16 @@ class QAbstractOAuth2Private : public QAbstractOAuthPrivate
 public:
     QAbstractOAuth2Private(const QPair<QString, QString> &clientCredentials,
                            const QUrl &authorizationUrl, QNetworkAccessManager *manager = nullptr);
-    QAbstractOAuth2Private(QNetworkAccessManager *manager = nullptr);
     ~QAbstractOAuth2Private();
 
     static QString generateRandomState();
     QNetworkRequest createRequest(QUrl url, const QVariantMap *parameters = nullptr);
 
-    QPair<QString, QString> clientCredentials;
-    QString token;
+    QString clientIdentifierSharedKey;
     QString scope;
     QString state = generateRandomState();
     QString userAgent = QStringLiteral("QtOAuth/1.0 (+https://www.qt.io)");
+    QString responseType;
     const QString bearerFormat = QStringLiteral("Bearer %1"); // Case sensitive
     QDateTime expiresAt;
     QString refreshToken;

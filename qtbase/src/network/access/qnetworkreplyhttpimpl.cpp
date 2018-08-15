@@ -60,6 +60,8 @@
 
 #include "qnetworkcookiejar.h"
 
+#ifndef QT_NO_HTTP
+
 #include <string.h>             // for strchr
 
 QT_BEGIN_NAMESPACE
@@ -189,7 +191,8 @@ QNetworkReplyHttpImpl::QNetworkReplyHttpImpl(QNetworkAccessManager* const manage
     d->outgoingData = outgoingData;
     d->url = request.url();
 #ifndef QT_NO_SSL
-    d->sslConfiguration = request.sslConfiguration();
+    if (request.url().scheme() == QLatin1String("https"))
+        d->sslConfiguration.reset(new QSslConfiguration(request.sslConfiguration()));
 #endif
 
     // FIXME Later maybe set to Unbuffered, especially if it is zerocopy or from cache?
@@ -428,7 +431,10 @@ void QNetworkReplyHttpImpl::setSslConfigurationImplementation(const QSslConfigur
 void QNetworkReplyHttpImpl::sslConfigurationImplementation(QSslConfiguration &configuration) const
 {
     Q_D(const QNetworkReplyHttpImpl);
-    configuration = d->sslConfiguration;
+    if (d->sslConfiguration.data())
+        configuration = *d->sslConfiguration;
+    else
+        configuration = request().sslConfiguration();
 }
 #endif
 
@@ -778,6 +784,10 @@ void QNetworkReplyHttpImplPrivate::postRequest(const QNetworkRequest &newHttpReq
 
     // Create the HTTP thread delegate
     QHttpThreadDelegate *delegate = new QHttpThreadDelegate;
+    // Propagate Http/2 settings if any
+    const QVariant blob(manager->property(Http2::http2ParametersPropertyName));
+    if (blob.isValid() && blob.canConvert<Http2::ProtocolParameters>())
+        delegate->http2Parameters = blob.value<Http2::ProtocolParameters>();
 #ifndef QT_NO_BEARERMANAGEMENT
     delegate->networkSession = managerPrivate->getNetworkSession();
 #endif
@@ -795,7 +805,7 @@ void QNetworkReplyHttpImplPrivate::postRequest(const QNetworkRequest &newHttpReq
     delegate->ssl = ssl;
 #ifndef QT_NO_SSL
     if (ssl)
-        delegate->incomingSslConfiguration = newHttpRequest.sslConfiguration();
+        delegate->incomingSslConfiguration.reset(new QSslConfiguration(newHttpRequest.sslConfiguration()));
 #endif
 
     // Do we use synchronous HTTP?
@@ -1454,10 +1464,13 @@ void QNetworkReplyHttpImplPrivate::replySslErrors(
         *toBeIgnored = pendingIgnoreSslErrorsList;
 }
 
-void QNetworkReplyHttpImplPrivate::replySslConfigurationChanged(const QSslConfiguration &sslConfiguration)
+void QNetworkReplyHttpImplPrivate::replySslConfigurationChanged(const QSslConfiguration &newSslConfiguration)
 {
     // Receiving the used SSL configuration from the HTTP thread
-    this->sslConfiguration = sslConfiguration;
+    if (sslConfiguration.data())
+        *sslConfiguration = newSslConfiguration;
+    else
+        sslConfiguration.reset(new QSslConfiguration(newSslConfiguration));
 }
 
 void QNetworkReplyHttpImplPrivate::replyPreSharedKeyAuthenticationRequiredSlot(QSslPreSharedKeyAuthenticator *authenticator)
@@ -2362,3 +2375,5 @@ void QNetworkReplyHttpImplPrivate::completeCacheSave()
 }
 
 QT_END_NAMESPACE
+
+#endif // QT_NO_HTTP

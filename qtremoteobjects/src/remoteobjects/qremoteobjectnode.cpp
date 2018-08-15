@@ -309,8 +309,9 @@ bool QRemoteObjectNodePrivate::initConnection(const QUrl &address)
     qROPrivDebug() << "Replica Connection isValid" << connection->isOpen();
     QObject::connect(connection, SIGNAL(shouldReconnect(ClientIoDevice*)), q, SLOT(onShouldReconnect(ClientIoDevice*)));
     connection->connectToServer();
-    QObject::connect(connection, SIGNAL(readyRead()), &clientRead, SLOT(map()));
-    clientRead.setMapping(connection, connection);
+    QObject::connect(connection, &ClientIoDevice::readyRead, q, [this, connection]() {
+        onClientRead(connection);
+    });
     return true;
 }
 
@@ -459,11 +460,27 @@ void QRemoteObjectNodePrivate::onClientRead(QObject *obj)
     Q_ASSERT(connection);
 
     do {
-
         if (!connection->read(packetType, rxName))
             return;
 
+        if (packetType != Handshake && !m_handshakeReceived) {
+            qROPrivWarning() << "Expected Handshake, got " << packetType;
+            setLastError(QRemoteObjectNode::ProtocolMismatch);
+            connection->close();
+            break;
+        }
+
         switch (packetType) {
+        case Handshake:
+            if (rxName != QtRemoteObjects::protocolVersion) {
+                qROPrivWarning() << "Protocol Mismatch, closing connection. Got" << rxObjects << "expected" << QtRemoteObjects::protocolVersion;
+                setLastError(QRemoteObjectNode::ProtocolMismatch);
+                connection->close();
+            } else {
+                m_handshakeReceived = true;
+            }
+            break;
+
         case ObjectList:
         {
             deserializeObjectListPacket(connection->stream(), rxObjects);
@@ -706,6 +723,7 @@ void QRemoteObjectNodePrivate::onClientRead(QObject *obj)
     \value SourceNotRegistered The given QRemoteObjectSource is not registered on this node.
     \value MissingObjectName The given QObject does not have objectName() set.
     \value HostUrlInvalid The given url has an invalid or unrecognized scheme.
+    \value ProtocolMismatch The client and the server have different protocol versions.
 */
 
 /*!
@@ -720,12 +738,10 @@ void QRemoteObjectNodePrivate::onClientRead(QObject *obj)
 
 void QRemoteObjectNodePrivate::initialize()
 {
-    Q_Q(QRemoteObjectNode);
     qRegisterMetaType<QRemoteObjectNode *>();
     qRegisterMetaType<QRemoteObjectNode::ErrorCode>();
     qRegisterMetaType<QAbstractSocket::SocketError>(); //For queued qnx error()
     qRegisterMetaTypeStreamOperators<QVector<int> >();
-    QObject::connect(&clientRead, SIGNAL(mapped(QObject*)), q, SLOT(onClientRead(QObject*)));
 }
 
 bool QRemoteObjectNodePrivate::checkSignatures(const QByteArray &a, const QByteArray &b)

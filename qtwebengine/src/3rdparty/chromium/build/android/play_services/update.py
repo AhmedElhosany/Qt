@@ -47,7 +47,7 @@ CONFIG_DEFAULT_PATH = os.path.join(host_paths.DIR_SOURCE_ROOT, 'build',
 
 LICENSE_FILE_NAME = 'LICENSE'
 ZIP_FILE_NAME = 'google_play_services_library.zip'
-GMS_PACKAGE_ID = 'extra-google-m2repository'  # used by sdk manager
+GMS_PACKAGE_ID = 'extras;google;m2repository'  # used by sdk manager
 
 LICENSE_PATTERN = re.compile(r'^Pkg\.License=(?P<text>.*)$', re.MULTILINE)
 
@@ -84,9 +84,6 @@ def main(raw_args):
       description=Upload.__doc__,
       formatter_class=utils.DefaultsRawHelpFormatter)
 
-  parser_upload.add_argument('--skip-git',
-                             action='store_true',
-                             help="don't commit the changes at the end")
   parser_upload.set_defaults(func=Upload)
   AddBasicArguments(parser_upload)
   AddBucketArguments(parser_upload)
@@ -259,9 +256,8 @@ def UpdateSdk(args):
     with open(paths.source_prop, 'w') as prop_file:
       prop_file.write('Pkg.Revision=0.0.0\n')
 
-  sdk_manager = os.path.join(args.sdk_root, 'tools', 'android')
-  cmd = [sdk_manager, 'update', 'sdk', '--no-ui', '--filter', GMS_PACKAGE_ID]
-  cmd_helper.Call(cmd)
+  sdk_manager = os.path.join(args.sdk_root, 'tools', 'bin', 'sdkmanager')
+  cmd_helper.Call([sdk_manager, GMS_PACKAGE_ID])
   # If no update is needed, it still returns successfully so we just do nothing
 
   return 0
@@ -286,11 +282,6 @@ def Upload(args):
                             config.clients)
   logging.debug('-- Loaded paths --\n%s\n------------------', paths)
 
-  if not args.skip_git and utils.IsRepoDirty(host_paths.DIR_SOURCE_ROOT):
-    logging.error('The repo is dirty. Please commit or stash your changes.')
-    return -1
-
-
   tmp_root = tempfile.mkdtemp()
   try:
     new_lib_zip = os.path.join(tmp_root, ZIP_FILE_NAME)
@@ -314,13 +305,7 @@ def Upload(args):
   finally:
     shutil.rmtree(tmp_root)
 
-  if not args.skip_git:
-    commit_message = ('Update the Google Play services dependency to %s\n'
-                      '\n') % config.version_number
-    utils.MakeLocalCommit(host_paths.DIR_SOURCE_ROOT,
-                          [new_lib_zip_sha1, new_license_sha1, config.path],
-                          commit_message)
-
+  logging.info('Update to version %s complete', config.version_number)
   return 0
 
 

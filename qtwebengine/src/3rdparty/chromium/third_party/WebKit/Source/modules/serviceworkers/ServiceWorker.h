@@ -31,26 +31,29 @@
 #ifndef ServiceWorker_h
 #define ServiceWorker_h
 
-#include "bindings/core/v8/ActiveScriptWrappable.h"
+#include <memory>
 #include "bindings/core/v8/ScriptPromise.h"
-#include "bindings/core/v8/SerializedScriptValue.h"
+#include "bindings/core/v8/serialization/SerializedScriptValue.h"
 #include "core/workers/AbstractWorker.h"
 #include "modules/ModulesExport.h"
+#include "platform/bindings/ActiveScriptWrappable.h"
+#include "platform/wtf/PassRefPtr.h"
 #include "public/platform/modules/serviceworker/WebServiceWorker.h"
 #include "public/platform/modules/serviceworker/WebServiceWorkerProxy.h"
-#include "wtf/PassRefPtr.h"
-#include <memory>
 
 namespace blink {
 
-class MODULES_EXPORT ServiceWorker final : public AbstractWorker,
-                                           public ActiveScriptWrappable,
-                                           public WebServiceWorkerProxy {
+class ScriptState;
+
+class MODULES_EXPORT ServiceWorker final
+    : public AbstractWorker,
+      public ActiveScriptWrappable<ServiceWorker>,
+      NON_EXPORTED_BASE(public WebServiceWorkerProxy) {
   DEFINE_WRAPPERTYPEINFO();
   USING_GARBAGE_COLLECTED_MIXIN(ServiceWorker);
 
  public:
-  static ServiceWorker* from(ExecutionContext*,
+  static ServiceWorker* From(ExecutionContext*,
                              std::unique_ptr<WebServiceWorker::Handle>);
 
   ~ServiceWorker() override;
@@ -59,38 +62,40 @@ class MODULES_EXPORT ServiceWorker final : public AbstractWorker,
   // Eager finalization needed to promptly release owned WebServiceWorker.
   EAGERLY_FINALIZE();
 
-  void postMessage(ExecutionContext*,
+  void postMessage(ScriptState*,
                    PassRefPtr<SerializedScriptValue> message,
                    const MessagePortArray&,
                    ExceptionState&);
-  static bool canTransferArrayBuffer() { return false; }
+  static bool CanTransferArrayBuffersAndImageBitmaps() { return false; }
 
   String scriptURL() const;
   String state() const;
   DEFINE_ATTRIBUTE_EVENT_LISTENER(statechange);
 
+  ServiceWorker* ToServiceWorker() override { return this; }
+
   // ScriptWrappable overrides.
-  bool hasPendingActivity() const final;
+  bool HasPendingActivity() const final;
 
   // WebServiceWorkerProxy overrides.
-  void dispatchStateChangeEvent() override;
+  void DispatchStateChangeEvent() override;
 
   // AbstractWorker overrides.
-  const AtomicString& interfaceName() const override;
+  const AtomicString& InterfaceName() const override;
 
-  void internalsTerminate();
+  void InternalsTerminate();
 
  private:
-  static ServiceWorker* getOrCreate(ExecutionContext*,
+  static ServiceWorker* GetOrCreate(ExecutionContext*,
                                     std::unique_ptr<WebServiceWorker::Handle>);
   ServiceWorker(ExecutionContext*, std::unique_ptr<WebServiceWorker::Handle>);
 
-  // ActiveDOMObject overrides.
-  void contextDestroyed() override;
+  // SuspendableObject overrides.
+  void ContextDestroyed(ExecutionContext*) override;
 
   // A handle to the service worker representation in the embedder.
-  std::unique_ptr<WebServiceWorker::Handle> m_handle;
-  bool m_wasStopped;
+  std::unique_ptr<WebServiceWorker::Handle> handle_;
+  bool was_stopped_;
 };
 
 }  // namespace blink

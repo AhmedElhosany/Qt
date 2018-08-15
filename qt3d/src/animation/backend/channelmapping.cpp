@@ -36,8 +36,12 @@
 
 #include "channelmapping_p.h"
 #include <Qt3DAnimation/qchannelmapping.h>
+#include <Qt3DAnimation/private/qcallbackmapping_p.h>
 #include <Qt3DAnimation/private/qchannelmapping_p.h>
+#include <Qt3DAnimation/private/qskeletonmapping_p.h>
 #include <Qt3DAnimation/private/animationlogging_p.h>
+#include <Qt3DAnimation/private/qchannelmappingcreatedchange_p.h>
+#include <Qt3DAnimation/private/managers_p.h>
 #include <Qt3DCore/qpropertyupdatedchange.h>
 
 QT_BEGIN_NAMESPACE
@@ -52,18 +56,48 @@ ChannelMapping::ChannelMapping()
     , m_property()
     , m_type(static_cast<int>(QVariant::Invalid))
     , m_propertyName(nullptr)
+    , m_callback(nullptr)
+    , m_callbackFlags(0)
+    , m_skeletonId()
+    , m_mappingType(MappingType::ChannelMappingType)
 {
 }
 
 void ChannelMapping::initializeFromPeer(const Qt3DCore::QNodeCreatedChangeBasePtr &change)
 {
-    const auto typedChange = qSharedPointerCast<Qt3DCore::QNodeCreatedChange<QChannelMappingData>>(change);
-    const auto &data = typedChange->data;
-    m_channelName = data.channelName;
-    m_targetId = data.targetId;
-    m_property = data.property;
-    m_type = data.type;
-    m_propertyName = data.propertyName;
+    const auto createdChange = qSharedPointerCast<QChannelMappingCreatedChangeBase>(change);
+    switch (createdChange->type()) {
+    case QChannelMappingCreatedChangeBase::ChannelMapping: {
+        const auto typedChange = qSharedPointerCast<QChannelMappingCreatedChange<QChannelMappingData>>(change);
+        const auto &data = typedChange->data;
+        m_channelName = data.channelName;
+        m_targetId = data.targetId;
+        m_property = data.property;
+        m_type = data.type;
+        m_propertyName = data.propertyName;
+        m_mappingType = ChannelMappingType;
+        break;
+    }
+
+    case QChannelMappingCreatedChangeBase::SkeletonMapping: {
+        const auto typedChange = qSharedPointerCast<QChannelMappingCreatedChange<QSkeletonMappingData>>(change);
+        const auto &data = typedChange->data;
+        m_skeletonId = data.skeletonId;
+        m_mappingType = SkeletonMappingType;
+        break;
+    }
+
+    case QChannelMappingCreatedChangeBase::CallbackMapping: {
+        const auto typedChange = qSharedPointerCast<QChannelMappingCreatedChange<QCallbackMappingData>>(change);
+        const auto &data = typedChange->data;
+        m_channelName = data.channelName;
+        m_type = data.type;
+        m_callback = data.callback;
+        m_callbackFlags = data.callbackFlags;
+        m_mappingType = ChannelMappingType;
+        break;
+    }
+    }
 }
 
 void ChannelMapping::cleanup()
@@ -74,6 +108,9 @@ void ChannelMapping::cleanup()
     m_property.clear();
     m_type = static_cast<int>(QVariant::Invalid);
     m_propertyName = nullptr;
+    m_callback = nullptr;
+    m_callbackFlags = 0;
+    m_skeletonId = Qt3DCore::QNodeId();
 }
 
 void ChannelMapping::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
@@ -91,6 +128,12 @@ void ChannelMapping::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
             m_type = change->value().toInt();
         else if (change->propertyName() == QByteArrayLiteral("propertyName"))
             m_propertyName = static_cast<const char *>(const_cast<const void *>(change->value().value<void *>()));
+        else if (change->propertyName() == QByteArrayLiteral("callback"))
+            m_callback = static_cast<QAnimationCallback *>(change->value().value<void *>());
+        else if (change->propertyName() == QByteArrayLiteral("callbackFlags"))
+            m_callbackFlags = QAnimationCallback::Flags(change->value().toInt());
+        else if (change->propertyName() == QByteArrayLiteral("skeleton"))
+            m_skeletonId = change->value().value<Qt3DCore::QNodeId>();
         break;
     }
 
@@ -98,6 +141,11 @@ void ChannelMapping::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
         break;
     }
     QBackendNode::sceneChangeEvent(e);
+}
+
+Skeleton *ChannelMapping::skeleton() const
+{
+    return m_handler->skeletonManager()->lookupResource(m_skeletonId);
 }
 
 } // namespace Animation

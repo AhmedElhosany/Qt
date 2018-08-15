@@ -70,19 +70,23 @@ function Install($1, $2, $3, $4) {
 }
 
 function SdkUpdate ($1, $2) {
-    Write-Host "Running Android SDK update for $1..."
+    echo "Running Android SDK update for $1..."
     cmd /c "echo y |$1\tools\android update sdk --no-ui --all --filter $2"
 }
 
-Write-Host "Installing Android ndk $nkdVersion"
+echo "Installing Android ndk $nkdVersion"
 Install $ndkCachedUrl $ndkZip $ndkChecksum $ndkOfficialUrl
-Set-EnvironmentVariable "ANDROID_NDK_HOME" $ndkFolder
-Set-EnvironmentVariable "ANDROID_NDK_ROOT" $ndkFolder
+echo "Set environment variable ANDROID_NDK_HOME=$ndkFolder"
+[Environment]::SetEnvironmentVariable("ANDROID_NDK_HOME", $ndkFolder, "Machine")
+echo "Set environment variable ANDROID_NDK_ROOT=$ndkFolder"
+[Environment]::SetEnvironmentVariable("ANDROID_NDK_ROOT", $ndkFolder, "Machine")
 
-#Write-Host "Installing Android sdk $sdkVersion"
+#echo "Installing Android sdk $sdkVersion"
 Install $sdkCachedUrl $sdkZip $sdkChecksum $sdkOfficialUrl
-Set-EnvironmentVariable "ANDROID_SDK_HOME" $sdkFolder
-Set-EnvironmentVariable "ANDROID_API_VERSION" $sdkApiLevel
+echo "Set environment variable ANDROID_SDK_HOME=$sdkFolder"
+[Environment]::SetEnvironmentVariable("ANDROID_SDK_HOME", $sdkFolder, "Machine")
+echo "Set environment variable ANDROID_API_VERSION $sdkApiLevel"
+[Environment]::SetEnvironmentVariable("ANDROID_API_VERSION", $sdkApiLevel, "Machine")
 
 # SDK update
 SdkUpdate $sdkFolder $sdkApiLevel
@@ -90,11 +94,5 @@ SdkUpdate $sdkFolder tools
 SdkUpdate $sdkFolder platform-tools
 SdkUpdate $sdkFolder build-tools-$sdkBuildToolsVersion
 
-# kill adb. This process prevents provisioning to continue
-$p = Get-Process -Name "adb.exe" -ErrorAction:SilentlyContinue
-if ($p -ne $null) {
-    Write-Host "Stopping adb.exe"
-    Stop-Process -Force $p
-} else {
-    Write-Host "adb.exe not running"
-}
+# kill adb. This process prevent's provisioning to continue
+taskkill /im adb.exe /f

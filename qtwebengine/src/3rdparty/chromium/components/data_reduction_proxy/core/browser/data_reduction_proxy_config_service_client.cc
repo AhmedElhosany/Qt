@@ -24,6 +24,7 @@
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_request_options.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_event_creator.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_server.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_util.h"
 #include "components/data_reduction_proxy/proto/client_config.pb.h"
 #include "components/data_use_measurement/core/data_use_user_data.h"
@@ -37,6 +38,7 @@
 #include "net/http/http_status_code.h"
 #include "net/log/net_log_source_type.h"
 #include "net/proxy/proxy_server.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request_status.h"
 
@@ -80,14 +82,16 @@ const net::BackoffEntry::Policy kDefaultBackoffPolicy = {
 };
 
 // Extracts the list of Data Reduction Proxy servers to use for HTTP requests.
-std::vector<net::ProxyServer> GetProxiesForHTTP(
+std::vector<DataReductionProxyServer> GetProxiesForHTTP(
     const data_reduction_proxy::ProxyConfig& proxy_config) {
-  std::vector<net::ProxyServer> proxies;
+  std::vector<DataReductionProxyServer> proxies;
   for (const auto& server : proxy_config.http_proxy_servers()) {
     if (server.scheme() != ProxyServer_ProxyScheme_UNSPECIFIED) {
-      proxies.push_back(net::ProxyServer(
-          protobuf_parser::SchemeFromProxyScheme(server.scheme()),
-          net::HostPortPair(server.host(), server.port())));
+      proxies.push_back(DataReductionProxyServer(
+          net::ProxyServer(
+              protobuf_parser::SchemeFromProxyScheme(server.scheme()),
+              net::HostPortPair(server.host(), server.port())),
+          server.type()));
     }
   }
 
@@ -151,7 +155,8 @@ DataReductionProxyConfigServiceClient::DataReductionProxyConfigServiceClient(
       foreground_fetch_pending_(false),
 #endif
       previous_request_failed_authentication_(false),
-      failed_attempts_before_success_(0) {
+      failed_attempts_before_success_(0),
+      fetch_in_progress_(false) {
   DCHECK(request_options);
   DCHECK(config_values);
   DCHECK(config);
@@ -287,6 +292,15 @@ bool DataReductionProxyConfigServiceClient::ShouldRetryDueToAuthFailure(
       RecordAuthExpiredHistogram(true);
       previous_request_failed_authentication_ = true;
       InvalidateConfig();
+      DCHECK(!config_->IsDataReductionProxy(proxy_server, nullptr));
+
+      if (fetch_in_progress_) {
+        // If a client config fetch is already in progress, then do not start
+        // another fetch since starting a new fetch will cause extra data
+        // usage, and also cancel the ongoing fetch.
+        return true;
+      }
+
       RetrieveConfig();
 
       if (!load_timing_info.send_start.is_null() &&
@@ -341,6 +355,7 @@ void DataReductionProxyConfigServiceClient::OnURLFetchComplete(
     const net::URLFetcher* source) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(source == fetcher_.get());
+  fetch_in_progress_ = false;
   net::URLRequestStatus status = source->GetStatus();
   std::string response;
   source->GetResponseAsString(&response);
@@ -374,6 +389,7 @@ void DataReductionProxyConfigServiceClient::RetrieveRemoteConfig() {
   }
 
   fetcher_ = std::move(fetcher);
+  fetch_in_progress_ = true;
   fetcher_->Start();
 }
 
@@ -392,17 +408,42 @@ DataReductionProxyConfigServiceClient::GetURLFetcherForConfig(
     const GURL& secure_proxy_check_url,
     const std::string& request_body) {
   DCHECK(thread_checker_.CalledOnValidThread());
+  net::NetworkTrafficAnnotationTag traffic_annotation =
+      net::DefineNetworkTrafficAnnotation("data_reduction_proxy_config", R"(
+        semantics {
+          sender: "Data Reduction Proxy"
+          description:
+            "Requests a configuration that specifies how to connect to the "
+            "data reduction proxy."
+          trigger:
+            "Requested when Data Saver is enabled and the browser does not "
+            "have a configuration that is not older than a threshold set by "
+            "the server."
+          data: "None."
+          destination: GOOGLE_OWNED_SERVICE
+        }
+        policy {
+          cookies_allowed: false
+          setting:
+            "Users can control Data Saver on Android via 'Data Saver' setting. "
+            "Data Saver is not available on iOS, and on desktop it is enabled "
+            "by insalling the Data Saver extension."
+          policy_exception_justification: "Not implemented."
+        })");
   std::unique_ptr<net::URLFetcher> fetcher(net::URLFetcher::Create(
-      secure_proxy_check_url, net::URLFetcher::POST, this));
+      secure_proxy_check_url, net::URLFetcher::POST, this, traffic_annotation));
   data_use_measurement::DataUseUserData::AttachToFetcher(
       fetcher.get(),
       data_use_measurement::DataUseUserData::DATA_REDUCTION_PROXY);
-  fetcher->SetLoadFlags(net::LOAD_BYPASS_PROXY);
+  fetcher->SetLoadFlags(net::LOAD_BYPASS_PROXY | net::LOAD_DO_NOT_SEND_COOKIES |
+                        net::LOAD_DO_NOT_SAVE_COOKIES);
   fetcher->SetUploadData("application/x-protobuf", request_body);
   DCHECK(url_request_context_getter_);
   fetcher->SetRequestContext(url_request_context_getter_);
   // |fetcher| should not retry on 5xx errors since the server may already be
   // overloaded. Spurious 5xx errors are still retried on exponential backoff.
+  // |fetcher| should retry on network changes since the network stack may
+  // receive the connection change event later than |this|.
   static const int kMaxRetries = 5;
   fetcher->SetAutomaticallyRetryOnNetworkChanges(kMaxRetries);
   return fetcher;
@@ -429,7 +470,7 @@ void DataReductionProxyConfigServiceClient::HandleResponse(
 
   // These are proxies listed in the config. The proxies that client eventually
   // ends up using depend on the field trials.
-  std::vector<net::ProxyServer> proxies;
+  std::vector<DataReductionProxyServer> proxies;
   base::TimeDelta refresh_duration;
   if (succeeded) {
     proxies = GetProxiesForHTTP(config.proxy_config());
@@ -457,10 +498,11 @@ void DataReductionProxyConfigServiceClient::HandleResponse(
       succeeded, refresh_duration, GetBackoffEntry()->GetTimeUntilRelease());
 
   SetConfigRefreshTimer(next_config_refresh_time);
-  event_creator_->EndConfigRequest(net_log_with_source_, status.error(),
-                                   response_code,
-                                   GetBackoffEntry()->failure_count(), proxies,
-                                   refresh_duration, next_config_refresh_time);
+  event_creator_->EndConfigRequest(
+      net_log_with_source_, status.error(), response_code,
+      GetBackoffEntry()->failure_count(),
+      DataReductionProxyServer::ConvertToNetProxyServers(proxies),
+      refresh_duration, next_config_refresh_time);
 }
 
 bool DataReductionProxyConfigServiceClient::ParseAndApplyProxyConfig(
@@ -478,7 +520,7 @@ bool DataReductionProxyConfigServiceClient::ParseAndApplyProxyConfig(
   if (!config.has_proxy_config())
     return false;
 
-  std::vector<net::ProxyServer> proxies =
+  std::vector<DataReductionProxyServer> proxies =
       GetProxiesForHTTP(config.proxy_config());
 
   if (proxies.empty())

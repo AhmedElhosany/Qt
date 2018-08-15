@@ -17,7 +17,6 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/path.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/resources/grit/views_resources.h"
@@ -207,12 +206,27 @@ void CustomFrameView::SizeConstraintsChanged() {
   LayoutWindowControls();
 }
 
+void CustomFrameView::ActivationChanged(bool active) {
+  if (active_ == active)
+    return;
+  active_ = active;
+  SchedulePaint();
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // CustomFrameView, View overrides:
 
 void CustomFrameView::OnPaint(gfx::Canvas* canvas) {
   if (!ShouldShowTitleBarAndBorder())
     return;
+
+  frame_background_->set_frame_color(GetFrameColor());
+  frame_background_->set_use_custom_frame(true);
+  frame_background_->set_is_active(ShouldPaintAsActive());
+  frame_background_->set_incognito(false);
+  const gfx::ImageSkia frame_image = GetFrameImage();
+  frame_background_->set_theme_image(frame_image);
+  frame_background_->set_top_area_height(frame_image.height());
 
   if (frame_->IsMaximized())
     PaintMaximizedFrameBorder(canvas);
@@ -232,7 +246,7 @@ void CustomFrameView::Layout() {
   LayoutClientView();
 }
 
-gfx::Size CustomFrameView::GetPreferredSize() const {
+gfx::Size CustomFrameView::CalculatePreferredSize() const {
   return frame_->non_client_view()->GetWindowBoundsForClientBounds(
       gfx::Rect(frame_->client_view()->GetPreferredSize())).size();
 }
@@ -352,11 +366,6 @@ bool CustomFrameView::ShouldShowClientEdge() const {
 }
 
 void CustomFrameView::PaintRestoredFrameBorder(gfx::Canvas* canvas) {
-  frame_background_->set_frame_color(GetFrameColor());
-  const gfx::ImageSkia frame_image = GetFrameImage();
-  frame_background_->set_theme_image(frame_image);
-  frame_background_->set_top_area_height(frame_image.height());
-
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
   frame_background_->SetCornerImages(
@@ -374,9 +383,6 @@ void CustomFrameView::PaintRestoredFrameBorder(gfx::Canvas* canvas) {
 }
 
 void CustomFrameView::PaintMaximizedFrameBorder(gfx::Canvas* canvas) {
-  const gfx::ImageSkia frame_image = GetFrameImage();
-  frame_background_->set_theme_image(frame_image);
-  frame_background_->set_top_area_height(frame_image.height());
   frame_background_->PaintMaximized(canvas, this);
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();

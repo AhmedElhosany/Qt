@@ -13,8 +13,8 @@
 
 #include <map>
 
-#include "webrtc/base/basictypes.h"
-#include "webrtc/base/constructormagic.h"
+#include "webrtc/rtc_base/basictypes.h"
+#include "webrtc/rtc_base/constructormagic.h"
 
 namespace webrtc {
 
@@ -24,16 +24,16 @@ enum class ConfigOptionID {
   kMyExperimentForTest,
   kAlgo1CostFunctionForTest,
   kTemporalLayersFactory,  // Deprecated
-  kNetEqCapacityConfig,  // Deprecated
-  kNetEqFastAccelerate,  // Deprecated
-  kVoicePacing,  // Deprecated
+  kNetEqCapacityConfig,    // Deprecated
+  kNetEqFastAccelerate,    // Deprecated
+  kVoicePacing,            // Deprecated
   kExtendedFilter,
   kDelayAgnostic,
   kExperimentalAgc,
   kExperimentalNs,
   kBeamforming,
   kIntelligibility,
-  kEchoCanceller3,
+  kEchoCanceller3,  // Deprecated
   kAecRefinedAdaptiveFilter,
   kLevelControl
 };

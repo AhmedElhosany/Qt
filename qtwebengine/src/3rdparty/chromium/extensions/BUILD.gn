@@ -35,7 +35,7 @@ grit("extensions_browser_resources") {
   ]
   grit_flags = [
     "-E",
-    "mojom_root=" + rebase_path(root_gen_dir),
+    "mojom_root=" + rebase_path(root_gen_dir, root_build_dir),
   ]
 }
 
@@ -47,23 +47,21 @@ grit("extensions_renderer_resources") {
   ]
   grit_flags = [
     "-E",
-    "mojom_root=" + rebase_path(root_gen_dir),
+    "mojom_root=" + rebase_path(root_gen_dir, root_build_dir),
   ]
 
   deps = [
-    "//chrome/browser/media/router:mojo_bindings__generator",
-    "//device/serial:serial_mojo__generator",
-    "//extensions/common:mojo__generator",
-    "//extensions/common/api:mojom__generator",
-    "//mojo/common:common_custom_types__generator",
+    "//device/serial:serial_mojo_js",
+    "//extensions/common:mojo_js",
+    "//extensions/common/api:mojom_js",
   ]
 }
 
 static_library("test_support") {
   testonly = true
   sources = [
-    "browser/api/cast_channel/cast_test_util.cc",
-    "browser/api/cast_channel/cast_test_util.h",
+    "browser/api/declarative/test_rules_registry.cc",
+    "browser/api/declarative/test_rules_registry.h",
     "browser/api/dns/mock_host_resolver_creator.cc",
     "browser/api/dns/mock_host_resolver_creator.h",
     "browser/api/storage/settings_test_util.cc",
@@ -82,6 +80,8 @@ static_library("test_support") {
     "browser/guest_view/mime_handler_view/test_mime_handler_view_guest.h",
     "browser/mock_extension_system.cc",
     "browser/mock_extension_system.h",
+    "browser/mock_external_provider.cc",
+    "browser/mock_external_provider.h",
     "browser/scoped_ignore_content_verifier_for_test.cc",
     "browser/scoped_ignore_content_verifier_for_test.h",
     "browser/test_extension_registry_observer.cc",
@@ -98,6 +98,8 @@ static_library("test_support") {
     "common/extension_builder.h",
     "common/manifest_test.cc",
     "common/manifest_test.h",
+    "common/permissions/mock_manifest_permission.cc",
+    "common/permissions/mock_manifest_permission.h",
     "common/permissions/permission_message_test_util.cc",
     "common/permissions/permission_message_test_util.h",
     "common/test_util.cc",
@@ -112,6 +114,8 @@ static_library("test_support") {
     "test/extension_test_notification_observer.h",
     "test/result_catcher.cc",
     "test/result_catcher.h",
+    "test/test_content_browser_client.cc",
+    "test/test_content_browser_client.h",
     "test/test_content_utility_client.cc",
     "test/test_content_utility_client.h",
     "test/test_extensions_client.cc",
@@ -127,9 +131,10 @@ static_library("test_support") {
     ":extensions_resources",
     "//base",
     "//components/cast_certificate:test_support",
+    "//components/cast_channel:test_support",
     "//components/guest_view/browser:test_support",
-    "//components/pref_registry:test_support",
     "//components/prefs:test_support",
+    "//components/sync_preferences:test_support",
     "//content/public/common",
     "//content/test:test_support",
     "//extensions/browser",
@@ -145,16 +150,15 @@ static_library("test_support") {
 
   public_deps = [
     "//content/public/browser",
-    "//extensions/common/api/cast_channel:cast_channel_proto",
   ]
 }
 
 repack("shell_and_test_pak") {
   sources = [
-    "$root_gen_dir/blink/devtools_resources.pak",
     "$root_gen_dir/blink/public/resources/blink_image_resources_100_percent.pak",
     "$root_gen_dir/blink/public/resources/blink_resources.pak",
     "$root_gen_dir/content/app/strings/content_strings_en-US.pak",
+    "$root_gen_dir/content/browser/devtools/devtools_resources.pak",
     "$root_gen_dir/content/content_resources.pak",
     "$root_gen_dir/content/shell/shell_resources.pak",
     "$root_gen_dir/extensions/extensions_browser_resources_100_percent.pak",
@@ -210,7 +214,6 @@ test("extensions_unittests") {
     "//extensions/renderer:unit_tests",
     "//extensions/shell:unit_tests",
     "//extensions/utility:unit_tests",
-    "//mojo/edk/test:test_support",
     "//ui/gl:test_support",
   ]
 
@@ -270,7 +273,6 @@ source_set("chrome_extensions_browsertests") {
     "//base:i18n",
     "//base/test:test_support",
     "//chrome/browser",
-    "//chrome/browser/resources:extension_resource_demo",
     "//chrome/common/extensions/api",
     "//chrome/renderer",
     "//components/autofill/content/browser:risk_proto",
@@ -305,8 +307,8 @@ source_set("chrome_extensions_browsertests") {
     "//third_party/icu",
     "//third_party/leveldatabase",
     "//third_party/libaddressinput",
-    "//third_party/libjingle",
     "//third_party/webrtc/modules/desktop_capture",
+    "//third_party/webrtc_overrides",
     "//third_party/widevine/cdm:headers",
     "//ui/accessibility:test_support",
     "//ui/base:test_support",

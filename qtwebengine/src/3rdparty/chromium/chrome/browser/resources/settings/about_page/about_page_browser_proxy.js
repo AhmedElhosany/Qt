@@ -7,7 +7,7 @@
  * the browser.
  */
 
-<if expr="chromeos">
+// <if expr="chromeos">
 /**
  * @typedef {{
  *   text: string,
@@ -15,6 +15,15 @@
  * }}
  */
 var RegulatoryInfo;
+
+/**
+ * @typedef {{
+ *   currentChannel: string,
+ *   targetChannel: string,
+ *   canChangeChannel: boolean,
+ * }}
+ */
+var ChannelInfo;
 
 /**
  * @typedef {{
@@ -26,6 +35,14 @@ var RegulatoryInfo;
 var VersionInfo;
 
 /**
+ * @typedef {{
+ *   version: (string|undefined),
+ *   size: (string|undefined),
+ * }}
+ */
+var AboutPageUpdateInfo;
+
+/**
  * Enumeration of all possible browser channels.
  * @enum {string}
  */
@@ -34,7 +51,7 @@ var BrowserChannel = {
   DEV: 'dev-channel',
   STABLE: 'stable-channel',
 };
-</if>
+// </if>
 
 /**
  * Enumeration of all possible update statuses. The string literals must match
@@ -49,13 +66,29 @@ var UpdateStatus = {
   FAILED: 'failed',
   DISABLED: 'disabled',
   DISABLED_BY_ADMIN: 'disabled_by_admin',
+  NEED_PERMISSION_TO_UPDATE: 'need_permission_to_update',
 };
+
+// <if expr="_google_chrome and is_macosx">
+/**
+ * @typedef {{
+ *   hidden: boolean,
+ *   disabled: boolean,
+ *   actionable: boolean,
+ *   text: (string|undefined)
+ * }}
+ */
+var PromoteUpdaterStatus;
+// </if>
 
 /**
  * @typedef {{
  *   status: !UpdateStatus,
  *   progress: (number|undefined),
  *   message: (string|undefined),
+ *   connectionTypes: (string|undefined),
+ *   version: (string|undefined),
+ *   size: (string|undefined),
  * }}
  */
 var UpdateStatusChangedEvent;
@@ -67,9 +100,12 @@ cr.define('settings', function() {
    */
   function browserChannelToI18nId(channel) {
     switch (channel) {
-      case BrowserChannel.BETA: return 'aboutChannelBeta';
-      case BrowserChannel.DEV: return 'aboutChannelDev';
-      case BrowserChannel.STABLE: return 'aboutChannelStable';
+      case BrowserChannel.BETA:
+        return 'aboutChannelBeta';
+      case BrowserChannel.DEV:
+        return 'aboutChannelDev';
+      case BrowserChannel.STABLE:
+        return 'aboutChannelStable';
     }
 
     assertNotReached();
@@ -94,118 +130,141 @@ cr.define('settings', function() {
   }
 
   /** @interface */
-  function AboutPageBrowserProxy() {}
-
-  AboutPageBrowserProxy.prototype = {
+  class AboutPageBrowserProxy {
     /**
      * Indicates to the browser that the page is ready.
      */
-    pageReady: function() {},
+    pageReady() {}
 
     /**
      * Request update status from the browser. It results in one or more
      * 'update-status-changed' WebUI events.
      */
-    refreshUpdateStatus: function() {},
+    refreshUpdateStatus() {}
 
     /** Opens the help page. */
-    openHelpPage: function() {},
+    openHelpPage() {}
 
-<if expr="_google_chrome">
+    // <if expr="_google_chrome">
     /**
      * Opens the feedback dialog.
      */
-    openFeedbackDialog: function() {},
-</if>
+    openFeedbackDialog() {}
 
-<if expr="chromeos">
+    // </if>
+
+    // <if expr="chromeos">
     /**
      * Checks for available update and applies if it exists.
      */
-    requestUpdate: function() {},
+    requestUpdate() {}
+
+    /**
+     * Checks for the update with specified version and size and applies over
+     * cellular. The target version and size are the same as were received from
+     * 'update-status-changed' WebUI event. We send this back all the way to
+     * update engine for it to double check with update server in case there's a
+     * new update available. This prevents downloading the new update that user
+     * didn't agree to.
+     * @param {string} target_version
+     * @param {string} target_size
+     */
+    requestUpdateOverCellular(target_version, target_size) {}
 
     /**
      * @param {!BrowserChannel} channel
      * @param {boolean} isPowerwashAllowed
      */
-    setChannel: function(channel, isPowerwashAllowed) {},
+    setChannel(channel, isPowerwashAllowed) {}
 
-    /** @return {!Promise<!BrowserChannel>} */
-    getCurrentChannel: function() {},
-
-    /** @return {!Promise<!BrowserChannel>} */
-    getTargetChannel: function() {},
+    /** @return {!Promise<!ChannelInfo>} */
+    getChannelInfo() {}
 
     /** @return {!Promise<!VersionInfo>} */
-    getVersionInfo: function() {},
+    getVersionInfo() {}
 
     /** @return {!Promise<?RegulatoryInfo>} */
-    getRegulatoryInfo: function() {},
-</if>
-  };
+    getRegulatoryInfo() {}
+
+    // </if>
+
+    // <if expr="_google_chrome and is_macosx">
+    /**
+     * Triggers setting up auto-updates for all users.
+     */
+    promoteUpdater() {}
+    // </if>
+  }
 
   /**
    * @implements {settings.AboutPageBrowserProxy}
-   * @constructor
    */
-  function AboutPageBrowserProxyImpl() {}
-  cr.addSingletonGetter(AboutPageBrowserProxyImpl);
-
-  AboutPageBrowserProxyImpl.prototype = {
+  class AboutPageBrowserProxyImpl {
     /** @override */
-    pageReady: function() {
+    pageReady() {
       chrome.send('aboutPageReady');
-    },
+    }
 
     /** @override */
-    refreshUpdateStatus: function() {
+    refreshUpdateStatus() {
       chrome.send('refreshUpdateStatus');
-    },
+    }
+
+    // <if expr="_google_chrome and is_macosx">
+    /** @override */
+    promoteUpdater() {
+      chrome.send('promoteUpdater');
+    }
+
+    // </if>
 
     /** @override */
-    openHelpPage: function() {
+    openHelpPage() {
       chrome.send('openHelpPage');
-    },
+    }
 
-<if expr="_google_chrome">
+    // <if expr="_google_chrome">
     /** @override */
-    openFeedbackDialog: function() {
+    openFeedbackDialog() {
       chrome.send('openFeedbackDialog');
-    },
-</if>
+    }
 
-<if expr="chromeos">
+    // </if>
+
+    // <if expr="chromeos">
     /** @override */
-    requestUpdate: function() {
+    requestUpdate() {
       chrome.send('requestUpdate');
-    },
+    }
 
     /** @override */
-    setChannel: function(channel, isPowerwashAllowed) {
+    requestUpdateOverCellular(target_version, target_size) {
+      chrome.send('requestUpdateOverCellular', [target_version, target_size]);
+    }
+
+    /** @override */
+    setChannel(channel, isPowerwashAllowed) {
       chrome.send('setChannel', [channel, isPowerwashAllowed]);
-    },
+    }
 
     /** @override */
-    getCurrentChannel: function() {
-      return cr.sendWithPromise('getCurrentChannel');
-    },
+    getChannelInfo() {
+      return cr.sendWithPromise('getChannelInfo');
+    }
 
     /** @override */
-    getTargetChannel: function() {
-      return cr.sendWithPromise('getTargetChannel');
-    },
-
-    /** @override */
-    getVersionInfo: function() {
+    getVersionInfo() {
       return cr.sendWithPromise('getVersionInfo');
-    },
+    }
 
     /** @override */
-    getRegulatoryInfo: function() {
+    getRegulatoryInfo() {
       return cr.sendWithPromise('getRegulatoryInfo');
     }
-</if>
-  };
+    // </if>
+  }
+
+  cr.addSingletonGetter(AboutPageBrowserProxyImpl);
 
   return {
     AboutPageBrowserProxy: AboutPageBrowserProxy,

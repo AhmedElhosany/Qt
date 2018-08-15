@@ -26,28 +26,24 @@
 
 namespace blink {
 
-const char* UserMediaController::supplementName() {
+const char* UserMediaController::SupplementName() {
   return "UserMediaController";
 }
 
 UserMediaController::UserMediaController(
+    LocalFrame& frame,
     std::unique_ptr<UserMediaClient> client)
-    : m_client(std::move(client)) {}
+    : Supplement<LocalFrame>(frame), client_(std::move(client)) {}
 
 DEFINE_TRACE(UserMediaController) {
-  Supplement<LocalFrame>::trace(visitor);
+  Supplement<LocalFrame>::Trace(visitor);
 }
 
-UserMediaController* UserMediaController::create(
-    std::unique_ptr<UserMediaClient> client) {
-  return new UserMediaController(std::move(client));
-}
-
-void provideUserMediaTo(LocalFrame& frame,
+void ProvideUserMediaTo(LocalFrame& frame,
                         std::unique_ptr<UserMediaClient> client) {
-  UserMediaController::provideTo(
-      frame, UserMediaController::supplementName(),
-      UserMediaController::create(std::move(client)));
+  UserMediaController::ProvideTo(
+      frame, UserMediaController::SupplementName(),
+      new UserMediaController(frame, std::move(client)));
 }
 
 }  // namespace blink

@@ -7,23 +7,26 @@
 
 #if defined _SKIA_SUPPORT_ || defined _SKIA_SUPPORT_PATHS_
 
+#include <memory>
+#include <vector>
+
 #include "core/fxge/cfx_pathdata.h"
 #include "core/fxge/ifx_renderdevicedriver.h"
 
+class FXTEXT_CHARPOS;
 class SkCanvas;
 class SkMatrix;
 class SkPaint;
 class SkPath;
 class SkPictureRecorder;
 class SkiaState;
-struct FXTEXT_CHARPOS;
 struct SkIRect;
 
 class CFX_SkiaDeviceDriver : public IFX_RenderDeviceDriver {
  public:
-  CFX_SkiaDeviceDriver(CFX_DIBitmap* pBitmap,
+  CFX_SkiaDeviceDriver(const CFX_RetainPtr<CFX_DIBitmap>& pBitmap,
                        bool bRgbByteOrder,
-                       CFX_DIBitmap* pOriDevice,
+                       const CFX_RetainPtr<CFX_DIBitmap>& pOriDevice,
                        bool bGroupKnockout);
 #ifdef _SKIA_SUPPORT_
   explicit CFX_SkiaDeviceDriver(SkPictureRecorder* recorder);
@@ -66,38 +69,42 @@ class CFX_SkiaDeviceDriver : public IFX_RenderDeviceDriver {
                          int blend_type) override;
 
   /** Draw a single pixel (device dependant) line */
-  bool DrawCosmeticLine(FX_FLOAT x1,
-                        FX_FLOAT y1,
-                        FX_FLOAT x2,
-                        FX_FLOAT y2,
+  bool DrawCosmeticLine(float x1,
+                        float y1,
+                        float x2,
+                        float y2,
                         uint32_t color,
                         int blend_type) override;
 
   bool GetClipBox(FX_RECT* pRect) override;
 
   /** Load device buffer into a DIB */
-  bool GetDIBits(CFX_DIBitmap* pBitmap, int left, int top) override;
+  bool GetDIBits(const CFX_RetainPtr<CFX_DIBitmap>& pBitmap,
+                 int left,
+                 int top) override;
 
-  CFX_DIBitmap* GetBackDrop() override;
+  CFX_RetainPtr<CFX_DIBitmap> GetBackDrop() override;
 
-  bool SetDIBits(const CFX_DIBSource* pBitmap,
+  bool SetDIBits(const CFX_RetainPtr<CFX_DIBSource>& pBitmap,
                  uint32_t color,
                  const FX_RECT* pSrcRect,
                  int dest_left,
                  int dest_top,
                  int blend_type) override;
 #ifdef _SKIA_SUPPORT_
-  bool SetBitsWithMask(const CFX_DIBSource* pBitmap,
-                       const CFX_DIBSource* pMask,
+  bool SetBitsWithMask(const CFX_RetainPtr<CFX_DIBSource>& pBitmap,
+                       const CFX_RetainPtr<CFX_DIBSource>& pMask,
                        int dest_left,
                        int dest_top,
                        int bitmap_alpha,
                        int blend_type) override;
-#else
+#endif
+
+#ifdef _SKIA_SUPPORT_PATHS_
   void SetClipMask(const FX_RECT& clipBox, const SkPath& skClipPath);
 #endif
 
-  bool StretchDIBits(const CFX_DIBSource* pBitmap,
+  bool StretchDIBits(const CFX_RetainPtr<CFX_DIBSource>& pBitmap,
                      uint32_t color,
                      int dest_left,
                      int dest_top,
@@ -107,20 +114,18 @@ class CFX_SkiaDeviceDriver : public IFX_RenderDeviceDriver {
                      uint32_t flags,
                      int blend_type) override;
 
-  bool StartDIBits(const CFX_DIBSource* pBitmap,
+  bool StartDIBits(const CFX_RetainPtr<CFX_DIBSource>& pBitmap,
                    int bitmap_alpha,
                    uint32_t color,
                    const CFX_Matrix* pMatrix,
                    uint32_t flags,
-                   void*& handle,
+                   std::unique_ptr<CFX_ImageRenderer>* handle,
                    int blend_type) override;
 
-  bool ContinueDIBits(void* handle, IFX_Pause* pPause) override;
+  bool ContinueDIBits(CFX_ImageRenderer* handle, IFX_Pause* pPause) override;
 
-  void CancelDIBits(void* handle) override {}
-
-  bool DrawBitsWithMask(const CFX_DIBSource* pBitmap,
-                        const CFX_DIBSource* pMask,
+  bool DrawBitsWithMask(const CFX_RetainPtr<CFX_DIBSource>& pBitmap,
+                        const CFX_RetainPtr<CFX_DIBSource>& pMask,
                         int bitmap_alpha,
                         const CFX_Matrix* pMatrix,
                         int blend_type);
@@ -129,16 +134,14 @@ class CFX_SkiaDeviceDriver : public IFX_RenderDeviceDriver {
                       const FXTEXT_CHARPOS* pCharPos,
                       CFX_Font* pFont,
                       const CFX_Matrix* pObject2Device,
-                      FX_FLOAT font_size,
+                      float font_size,
                       uint32_t color) override;
 
-#ifdef _SKIA_SUPPORT_
   bool DrawShading(const CPDF_ShadingPattern* pPattern,
                    const CFX_Matrix* pMatrix,
                    const FX_RECT& clip_rect,
                    int alpha,
                    bool bAlphaMode) override;
-#endif
 
   virtual uint8_t* GetBuffer() const;
 
@@ -146,9 +149,10 @@ class CFX_SkiaDeviceDriver : public IFX_RenderDeviceDriver {
                    const CFX_GraphStateData* pGraphState,
                    const SkMatrix& matrix);
   void Clear(uint32_t color);
-  void Flush();
+  void Flush() override;
   SkPictureRecorder* GetRecorder() const { return m_pRecorder; }
-  static void PreMultiply(CFX_DIBitmap* pDIBitmap);
+  void PreMultiply() { m_pBitmap->PreMultiply(); }
+  static void PreMultiply(const CFX_RetainPtr<CFX_DIBitmap>& pDIBitmap);
   SkCanvas* SkiaCanvas() { return m_pCanvas; }
   void DebugVerifyBitmapIsPreMultiplied() const;
   void Dump() const;
@@ -156,12 +160,12 @@ class CFX_SkiaDeviceDriver : public IFX_RenderDeviceDriver {
  private:
   friend class SkiaState;
 
-  CFX_DIBitmap* m_pBitmap;
-  CFX_DIBitmap* m_pOriDevice;
+  CFX_RetainPtr<CFX_DIBitmap> m_pBitmap;
+  CFX_RetainPtr<CFX_DIBitmap> m_pOriDevice;
   SkCanvas* m_pCanvas;
   SkPictureRecorder* const m_pRecorder;
   std::unique_ptr<SkiaState> m_pCache;
-#ifndef _SKIA_SUPPORT_
+#ifdef _SKIA_SUPPORT_PATHS_
   std::unique_ptr<CFX_ClipRgn> m_pClipRgn;
   std::vector<std::unique_ptr<CFX_ClipRgn>> m_StateStack;
   int m_FillFlags;
@@ -169,6 +173,6 @@ class CFX_SkiaDeviceDriver : public IFX_RenderDeviceDriver {
 #endif
   bool m_bGroupKnockout;
 };
-#endif  // defined(_SKIA_SUPPORT_)
+#endif  // defined _SKIA_SUPPORT_ || defined _SKIA_SUPPORT_PATHS_
 
 #endif  // CORE_FXGE_SKIA_FX_SKIA_DEVICE_H_

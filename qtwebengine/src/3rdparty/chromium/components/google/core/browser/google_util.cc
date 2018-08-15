@@ -17,6 +17,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/google/core/browser/google_switches.h"
+#include "components/google/core/browser/google_tld_list.h"
 #include "components/google/core/browser/google_url_tracker.h"
 #include "components/url_formatter/url_fixer.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
@@ -44,15 +45,24 @@ bool IsPathHomePageBase(base::StringPiece path) {
   return (path == "/") || (path == "/webhp");
 }
 
+// Removes a single trailing dot if present in |host|.
+void StripTrailingDot(base::StringPiece* host) {
+  if (host->ends_with("."))
+    host->remove_suffix(1);
+}
+
 // True if the given canonical |host| is "[www.]<domain_in_lower_case>.<TLD>"
 // with a valid TLD. If |subdomain_permission| is ALLOW_SUBDOMAIN, we check
-// against host "*.<domain_in_lower_case>.<TLD>" instead.
+// against host "*.<domain_in_lower_case>.<TLD>" instead. Will return the TLD
+// string in |tld|, if specified and the |host| can be parsed.
 bool IsValidHostName(base::StringPiece host,
                      base::StringPiece domain_in_lower_case,
-                     SubdomainPermission subdomain_permission) {
+                     SubdomainPermission subdomain_permission,
+                     base::StringPiece* tld) {
   // Fast path to avoid searching the registry set.
   if (host.find(domain_in_lower_case) == base::StringPiece::npos)
     return false;
+
   size_t tld_length =
       net::registry_controlled_domains::GetCanonicalHostRegistryLength(
           host, net::registry_controlled_domains::EXCLUDE_UNKNOWN_REGISTRIES,
@@ -63,6 +73,10 @@ bool IsValidHostName(base::StringPiece host,
   // Removes the tld and the preceding dot.
   base::StringPiece host_minus_tld =
       host.substr(0, host.length() - tld_length - 1);
+
+  if (tld)
+    *tld = host.substr(host.length() - tld_length);
+
   if (base::LowerCaseEqualsASCII(host_minus_tld, domain_in_lower_case))
     return true;
 
@@ -92,7 +106,33 @@ bool IsCanonicalHostGoogleHostname(base::StringPiece canonical_host,
   if (base_url.is_valid() && (canonical_host == base_url.host_piece()))
     return true;
 
-  return IsValidHostName(canonical_host, "google", subdomain_permission);
+  base::StringPiece tld;
+  if (!IsValidHostName(canonical_host, "google", subdomain_permission, &tld))
+    return false;
+
+  // Remove the trailing dot from tld if present, as for google domain it's the
+  // same page.
+  StripTrailingDot(&tld);
+
+  CR_DEFINE_STATIC_LOCAL(std::set<std::string>, google_tlds,
+                         ({GOOGLE_TLD_LIST}));
+  return base::ContainsKey(google_tlds, tld.as_string());
+}
+
+// True if |url| is a valid URL with a host that is in the static list of
+// Google subdomains for google search, and an HTTP or HTTPS scheme. Requires
+// |url| to use the standard port for its scheme (80 for HTTP, 443 for HTTPS).
+bool IsGoogleSearchSubdomainUrl(const GURL& url) {
+  if (!IsValidURL(url, PortPermission::DISALLOW_NON_STANDARD_PORTS))
+    return false;
+
+  base::StringPiece host(url.host_piece());
+  StripTrailingDot(&host);
+
+  CR_DEFINE_STATIC_LOCAL(std::set<std::string>, google_subdomains,
+                         ({"ipv4.google.com", "ipv6.google.com"}));
+
+  return base::ContainsKey(google_subdomains, host.as_string());
 }
 
 }  // namespace
@@ -134,10 +174,10 @@ GURL AppendGoogleLocaleParam(const GURL& url,
 
 std::string GetGoogleCountryCode(const GURL& google_homepage_url) {
   base::StringPiece google_hostname = google_homepage_url.host_piece();
+  // TODO(igorcov): This needs a fix for case when the host has a trailing dot,
+  // like "google.com./". https://crbug.com/720295.
   const size_t last_dot = google_hostname.find_last_of('.');
-  if (last_dot == std::string::npos) {
-    NOTREACHED();
-  }
+  DCHECK_NE(std::string::npos, last_dot);
   base::StringPiece country_code = google_hostname.substr(last_dot + 1);
   // Assume the com TLD implies the US.
   if (country_code == "com")
@@ -203,8 +243,11 @@ bool IsGoogleDomainUrl(const GURL& url,
 
 bool IsGoogleHomePageUrl(const GURL& url) {
   // First check to see if this has a Google domain.
-  if (!IsGoogleDomainUrl(url, DISALLOW_SUBDOMAIN, DISALLOW_NON_STANDARD_PORTS))
+  if (!IsGoogleDomainUrl(url, DISALLOW_SUBDOMAIN,
+                         DISALLOW_NON_STANDARD_PORTS) &&
+      !IsGoogleSearchSubdomainUrl(url)) {
     return false;
+  }
 
   // Make sure the path is a known home page path.
   base::StringPiece path(url.path_piece());
@@ -214,8 +257,11 @@ bool IsGoogleHomePageUrl(const GURL& url) {
 
 bool IsGoogleSearchUrl(const GURL& url) {
   // First check to see if this has a Google domain.
-  if (!IsGoogleDomainUrl(url, DISALLOW_SUBDOMAIN, DISALLOW_NON_STANDARD_PORTS))
+  if (!IsGoogleDomainUrl(url, DISALLOW_SUBDOMAIN,
+                         DISALLOW_NON_STANDARD_PORTS) &&
+      !IsGoogleSearchSubdomainUrl(url)) {
     return false;
+  }
 
   // Make sure the path is a known search path.
   base::StringPiece path(url.path_piece());
@@ -233,7 +279,34 @@ bool IsYoutubeDomainUrl(const GURL& url,
                         SubdomainPermission subdomain_permission,
                         PortPermission port_permission) {
   return IsValidURL(url, port_permission) &&
-      IsValidHostName(url.host_piece(), "youtube", subdomain_permission);
+      IsValidHostName(url.host_piece(), "youtube", subdomain_permission,
+                      nullptr);
+}
+
+const std::vector<std::string>& GetGoogleRegistrableDomains() {
+  CR_DEFINE_STATIC_LOCAL(std::vector<std::string>, kGoogleRegisterableDomains,
+                         ());
+
+  // Initialize the list.
+  if (kGoogleRegisterableDomains.empty()) {
+    std::vector<std::string> tlds{GOOGLE_TLD_LIST};
+    for (const std::string& tld : tlds) {
+      std::string domain = "google." + tld;
+
+      // The Google TLD list might contain domains that are not considered
+      // to be registrable domains by net::registry_controlled_domains.
+      if (GetDomainAndRegistry(
+              domain,
+              net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES) !=
+          domain) {
+        continue;
+      }
+
+      kGoogleRegisterableDomains.push_back(domain);
+    }
+  }
+
+  return kGoogleRegisterableDomains;
 }
 
 }  // namespace google_util

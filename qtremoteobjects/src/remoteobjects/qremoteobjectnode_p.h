@@ -118,7 +118,6 @@ public:
     QMap<QString, SourceInfo> connectedSources;
     QSet<ClientIoDevice*> pendingReconnect;
     QSet<QUrl> requestedUrls;
-    QSignalMapper clientRead;
     QRemoteObjectRegistry *registry;
     int retryInterval;
     QBasicTimer reconnectTimer;
@@ -129,6 +128,7 @@ public:
     QVariant rxValue;
     QRemoteObjectPersistedStore *persistedStore;
     QRemoteObjectNode::StorageOwnership persistedStoreOwnership;
+    bool m_handshakeReceived = false;
     Q_DECLARE_PUBLIC(QRemoteObjectNode)
 };
 

@@ -23,6 +23,7 @@
 #include <openssl/cpu.h>
 
 #include "internal.h"
+#include "../internal.h"
 
 
 #if defined(OPENSSL_WINDOWS) || !defined(OPENSSL_X86_64)
@@ -30,11 +31,13 @@
 /* We can assume little-endian. */
 static uint32_t U8TO32_LE(const uint8_t *m) {
   uint32_t r;
-  memcpy(&r, m, sizeof(r));
+  OPENSSL_memcpy(&r, m, sizeof(r));
   return r;
 }
 
-static void U32TO8_LE(uint8_t *m, uint32_t v) { memcpy(m, &v, sizeof(v)); }
+static void U32TO8_LE(uint8_t *m, uint32_t v) {
+  OPENSSL_memcpy(m, &v, sizeof(v));
+}
 
 static uint64_t mul32x32_64(uint32_t a, uint32_t b) { return (uint64_t)a * b; }
 
@@ -153,7 +156,7 @@ void CRYPTO_poly1305_init(poly1305_state *statep, const uint8_t key[32]) {
   struct poly1305_state_st *state = poly1305_aligned_state(statep);
   uint32_t t0, t1, t2, t3;
 
-#if defined(OPENSSL_ARM) && !defined(OPENSSL_NO_ASM)
+#if defined(OPENSSL_POLY1305_NEON)
   if (CRYPTO_is_NEON_capable()) {
     CRYPTO_poly1305_init_neon(statep, key);
     return;
@@ -192,7 +195,7 @@ void CRYPTO_poly1305_init(poly1305_state *statep, const uint8_t key[32]) {
   state->h4 = 0;
 
   state->buf_used = 0;
-  memcpy(state->key, key + 16, sizeof(state->key));
+  OPENSSL_memcpy(state->key, key + 16, sizeof(state->key));
 }
 
 void CRYPTO_poly1305_update(poly1305_state *statep, const uint8_t *in,
@@ -200,7 +203,7 @@ void CRYPTO_poly1305_update(poly1305_state *statep, const uint8_t *in,
   unsigned int i;
   struct poly1305_state_st *state = poly1305_aligned_state(statep);
 
-#if defined(OPENSSL_ARM) && !defined(OPENSSL_NO_ASM)
+#if defined(OPENSSL_POLY1305_NEON)
   if (CRYPTO_is_NEON_capable()) {
     CRYPTO_poly1305_update_neon(statep, in, in_len);
     return;
@@ -246,7 +249,7 @@ void CRYPTO_poly1305_finish(poly1305_state *statep, uint8_t mac[16]) {
   uint32_t g0, g1, g2, g3, g4;
   uint32_t b, nb;
 
-#if defined(OPENSSL_ARM) && !defined(OPENSSL_NO_ASM)
+#if defined(OPENSSL_POLY1305_NEON)
   if (CRYPTO_is_NEON_capable()) {
     CRYPTO_poly1305_finish_neon(statep, mac);
     return;

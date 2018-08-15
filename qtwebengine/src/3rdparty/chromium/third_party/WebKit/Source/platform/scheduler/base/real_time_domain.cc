@@ -12,16 +12,7 @@
 namespace blink {
 namespace scheduler {
 
-RealTimeDomain::RealTimeDomain(const char* tracing_category)
-    : TimeDomain(nullptr),
-      tracing_category_(tracing_category),
-      task_queue_manager_(nullptr) {}
-
-RealTimeDomain::RealTimeDomain(TimeDomain::Observer* observer,
-                               const char* tracing_category)
-    : TimeDomain(observer),
-      tracing_category_(tracing_category),
-      task_queue_manager_(nullptr) {}
+RealTimeDomain::RealTimeDomain() : task_queue_manager_(nullptr) {}
 
 RealTimeDomain::~RealTimeDomain() {}
 
@@ -36,33 +27,38 @@ LazyNow RealTimeDomain::CreateLazyNow() const {
 }
 
 base::TimeTicks RealTimeDomain::Now() const {
-  return task_queue_manager_->delegate()->NowTicks();
+  return task_queue_manager_->Delegate()->NowTicks();
 }
 
-void RealTimeDomain::RequestWakeup(base::TimeTicks now, base::TimeDelta delay) {
+void RealTimeDomain::RequestWakeUpAt(base::TimeTicks now,
+                                     base::TimeTicks run_time) {
   // NOTE this is only called if the scheduled runtime is sooner than any
   // previously scheduled runtime, or there is no (outstanding) previously
   // scheduled runtime.
-  task_queue_manager_->MaybeScheduleDelayedWork(FROM_HERE, now, delay);
+  task_queue_manager_->MaybeScheduleDelayedWork(FROM_HERE, this, now, run_time);
 }
 
-bool RealTimeDomain::MaybeAdvanceTime() {
+void RealTimeDomain::CancelWakeUpAt(base::TimeTicks run_time) {
+  task_queue_manager_->CancelDelayedWork(this, run_time);
+}
+
+base::Optional<base::TimeDelta> RealTimeDomain::DelayTillNextTask(
+    LazyNow* lazy_now) {
   base::TimeTicks next_run_time;
   if (!NextScheduledRunTime(&next_run_time))
-    return false;
+    return base::nullopt;
 
-  base::TimeTicks now = Now();
+  base::TimeTicks now = lazy_now->Now();
   if (now >= next_run_time)
-    return true;  // Causes DoWork to post a continuation.
+    return base::TimeDelta();  // Makes DoWork post an immediate continuation.
 
   base::TimeDelta delay = next_run_time - now;
-  TRACE_EVENT1(tracing_category_, "RealTimeDomain::MaybeAdvanceTime",
+  TRACE_EVENT1("renderer.scheduler", "RealTimeDomain::DelayTillNextTask",
                "delay_ms", delay.InMillisecondsF());
 
-  // The next task is sometime in the future, make sure we schedule a DoWork to
-  // run it.
-  task_queue_manager_->MaybeScheduleDelayedWork(FROM_HERE, now, delay);
-  return false;
+  // The next task is sometime in the future. DoWork will make sure it gets
+  // run at the right time.
+  return delay;
 }
 
 void RealTimeDomain::AsValueIntoInternal(

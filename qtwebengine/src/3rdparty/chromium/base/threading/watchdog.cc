@@ -5,7 +5,6 @@
 #include "base/threading/watchdog.h"
 
 #include "base/compiler_specific.h"
-#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/threading/platform_thread.h"
 
@@ -31,7 +30,10 @@ struct StaticData {
   TimeDelta last_debugged_alarm_delay;
 };
 
-LazyInstance<StaticData>::Leaky g_static_data = LAZY_INSTANCE_INITIALIZER;
+StaticData* GetStaticData() {
+  static auto* static_data = new StaticData();
+  return static_data;
+}
 
 }  // namespace
 
@@ -119,7 +121,7 @@ void Watchdog::Alarm() {
 void Watchdog::ThreadDelegate::ThreadMain() {
   SetThreadName();
   TimeDelta remaining_duration;
-  StaticData* static_data = g_static_data.Pointer();
+  StaticData* static_data = GetStaticData();
   while (1) {
     AutoLock lock(watchdog_->lock_);
     while (DISARMED == watchdog_->state_)
@@ -175,9 +177,10 @@ void Watchdog::ThreadDelegate::SetThreadName() const {
 
 // static
 void Watchdog::ResetStaticData() {
-  StaticData* static_data = g_static_data.Pointer();
+  StaticData* static_data = GetStaticData();
   AutoLock lock(static_data->lock);
-  static_data->last_debugged_alarm_time = TimeTicks();
+  // See https://crbug.com/734232 for why this cannot be zero-initialized.
+  static_data->last_debugged_alarm_time = TimeTicks::Min();
   static_data->last_debugged_alarm_delay = TimeDelta();
 }
 

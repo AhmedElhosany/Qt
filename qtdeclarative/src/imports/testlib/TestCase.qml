@@ -38,7 +38,8 @@
 ****************************************************************************/
 
 import QtQuick 2.0
-import QtTest 1.1
+import QtQuick.Window 2.0 // used for qtest_verifyItem
+import QtTest 1.2
 import "testlogger.js" as TestLogger
 import Qt.test.qtestroot 1.0
 
@@ -56,7 +57,7 @@ import Qt.test.qtestroot 1.0
 
     \code
     import QtQuick 2.0
-    import QtTest 1.0
+    import QtTest 1.2
 
     TestCase {
         name: "MathTests"
@@ -107,7 +108,7 @@ import Qt.test.qtestroot 1.0
 
     \code
     import QtQuick 2.0
-    import QtTest 1.1
+    import QtTest 1.2
 
     TestCase {
         name: "DataTests"
@@ -443,6 +444,9 @@ Item {
         or \c{QVERIFY2(condition, message)} in C++.
     */
     function verify(cond, msg) {
+        if (arguments.length > 2)
+            qtest_fail("More than two arguments given to verify(). Did you mean tryVerify() or tryCompare()?", 1)
+
         if (msg === undefined)
             msg = "";
         if (!qtest_results.verify(cond, msg, util.callerFile(), util.callerLine()))
@@ -837,7 +841,14 @@ Item {
 
         Returns a snapshot image object of the given \a item.
 
-        The returned image object has the following methods:
+        The returned image object has the following properties:
+        \list
+        \li width Returns the width of the underlying image (since 5.10)
+        \li height Returns the height of the underlying image (since 5.10)
+        \li size Returns the size of the underlying image (since 5.10)
+        \endlist
+
+        Additionally, the returned image object has the following methods:
         \list
         \li red(x, y) Returns the red channel value of the pixel at \a x, \a y position
         \li green(x, y) Returns the green channel value of the pixel at \a x, \a y position
@@ -857,6 +868,21 @@ Item {
         rect.width += 10;
         var newImage = grabImage(rect);
         verify(!newImage.equals(image));
+        \endcode
+        \li save(path) Saves the image to the given \a path. If the image cannot
+        be saved, an exception will be thrown. (since 5.10)
+
+        This can be useful to perform postmortem analysis on failing tests, for
+        example:
+
+        \code
+        var image = grabImage(rect);
+        try {
+            compare(image.width, 100);
+        } catch (ex) {
+            image.save("debug.png");
+            throw ex;
+        }
         \endcode
 
         \endlist
@@ -1089,8 +1115,8 @@ Item {
     function waitForRendering(item, timeout) {
         if (timeout === undefined)
             timeout = 5000
-        if (!item)
-            qtest_fail("No item given to waitForRendering", 1)
+        if (!qtest_verifyItem(item, "waitForRendering"))
+            return
         return qtest_results.waitForRendering(item, timeout)
     }
 
@@ -1186,6 +1212,26 @@ Item {
     }
 
     /*!
+        \since 5.10
+        \qmlmethod TestCase::keySequence(keySequence)
+
+        Simulates typing of \a keySequence. The key sequence can be set
+        to one of the \l{QKeySequence::StandardKey}{standard keyboard shortcuts}, or
+        it can be described with a string containing a sequence of up to four key
+        presses.
+
+        Each event shall be sent to the TestCase window or, in case of multiple windows,
+        to the current active window. See \l QGuiApplication::focusWindow() for more details.
+
+        \sa keyPress(), keyRelease(), {GNU Emacs Style Key Sequences},
+        {QtQuick::Shortcut::sequence}{Shortcut.sequence}
+    */
+    function keySequence(keySequence) {
+        if (!qtest_events.keySequence(keySequence))
+            qtest_fail("window not shown", 2)
+    }
+
+    /*!
         \qmlmethod TestCase::mousePress(item, x = item.width / 2, y = item.height / 2, button = Qt.LeftButton, modifiers = Qt.NoModifier, delay = -1)
 
         Simulates pressing a mouse \a button with an optional \a modifier
@@ -1202,8 +1248,8 @@ Item {
         \sa mouseRelease(), mouseClick(), mouseDoubleClick(), mouseDoubleClickSequence(), mouseMove(), mouseDrag(), mouseWheel()
     */
     function mousePress(item, x, y, button, modifiers, delay) {
-        if (!item)
-            qtest_fail("No item given to mousePress", 1)
+        if (!qtest_verifyItem(item, "mousePress"))
+            return
 
         if (button === undefined)
             button = Qt.LeftButton
@@ -1236,8 +1282,8 @@ Item {
         \sa mousePress(), mouseClick(), mouseDoubleClick(), mouseDoubleClickSequence(), mouseMove(), mouseDrag(), mouseWheel()
     */
     function mouseRelease(item, x, y, button, modifiers, delay) {
-        if (!item)
-            qtest_fail("No item given to mouseRelease", 1)
+        if (!qtest_verifyItem(item, "mouseRelease"))
+            return
 
         if (button === undefined)
             button = Qt.LeftButton
@@ -1272,8 +1318,8 @@ Item {
         \sa mousePress(), mouseClick(), mouseDoubleClick(), mouseDoubleClickSequence(), mouseMove(), mouseRelease(), mouseWheel()
     */
     function mouseDrag(item, x, y, dx, dy, button, modifiers, delay) {
-        if (!item)
-            qtest_fail("No item given to mouseDrag", 1)
+        if (!qtest_verifyItem(item, "mouseDrag"))
+            return
 
         if (item.x === undefined || item.y === undefined)
             return
@@ -1323,8 +1369,8 @@ Item {
         \sa mousePress(), mouseRelease(), mouseDoubleClick(), mouseDoubleClickSequence(), mouseMove(), mouseDrag(), mouseWheel()
     */
     function mouseClick(item, x, y, button, modifiers, delay) {
-        if (!item)
-            qtest_fail("No item given to mouseClick", 1)
+        if (!qtest_verifyItem(item, "mouseClick"))
+            return
 
         if (button === undefined)
             button = Qt.LeftButton
@@ -1357,8 +1403,8 @@ Item {
         \sa mouseDoubleClickSequence(), mousePress(), mouseRelease(), mouseClick(), mouseMove(), mouseDrag(), mouseWheel()
     */
     function mouseDoubleClick(item, x, y, button, modifiers, delay) {
-        if (!item)
-            qtest_fail("No item given to mouseDoubleClick", 1)
+        if (!qtest_verifyItem(item, "mouseDoubleClick"))
+            return
 
         if (button === undefined)
             button = Qt.LeftButton
@@ -1398,8 +1444,8 @@ Item {
         \sa mouseDoubleClick(), mousePress(), mouseRelease(), mouseClick(), mouseMove(), mouseDrag(), mouseWheel()
     */
     function mouseDoubleClickSequence(item, x, y, button, modifiers, delay) {
-        if (!item)
-            qtest_fail("No item given to mouseDoubleClickSequence", 1)
+        if (!qtest_verifyItem(item, "mouseDoubleClickSequence"))
+            return
 
         if (button === undefined)
             button = Qt.LeftButton
@@ -1430,8 +1476,8 @@ Item {
         \sa mousePress(), mouseRelease(), mouseClick(), mouseDoubleClick(), mouseDoubleClickSequence(), mouseDrag(), mouseWheel()
     */
     function mouseMove(item, x, y, delay, buttons) {
-        if (!item)
-            qtest_fail("No item given to mouseMove", 1)
+        if (!qtest_verifyItem(item, "mouseMove"))
+            return
 
         if (delay == undefined)
             delay = -1
@@ -1458,8 +1504,8 @@ Item {
         \sa mousePress(), mouseClick(), mouseDoubleClick(), mouseDoubleClickSequence(), mouseMove(), mouseRelease(), mouseDrag(), QWheelEvent::angleDelta()
     */
     function mouseWheel(item, x, y, xDelta, yDelta, buttons, modifiers, delay) {
-        if (!item)
-            qtest_fail("No item given to mouseWheel", 1)
+        if (!qtest_verifyItem(item, "mouseWheel"))
+            return
 
         if (delay == undefined)
             delay = -1
@@ -1519,8 +1565,8 @@ Item {
     */
 
     function touchEvent(item) {
-        if (!item)
-            qtest_fail("No item given to touchEvent", 1)
+        if (!qtest_verifyItem(item, "touchEvent"))
+            return
 
         return {
             _defaultItem: item,
@@ -1629,6 +1675,23 @@ Item {
     function cleanup() {}
 
     /*! \internal */
+    function qtest_verifyItem(item, method) {
+        try {
+            if (!(item instanceof Item) &&
+                !(item instanceof Window)) {
+                // it's a QObject, but not a type
+                qtest_fail("TypeError: %1 requires an Item or Window type".arg(method), 2);
+                return false;
+            }
+        } catch (e) { // it's not a QObject
+            qtest_fail("TypeError: %1 requires an Item or Window type".arg(method), 3);
+            return false;
+        }
+
+        return true;
+    }
+
+    /*! \internal */
     function qtest_runInternal(prop, arg) {
         try {
             qtest_testCaseResult = testCase[prop](arg)
@@ -1696,11 +1759,6 @@ Item {
 
     /*! \internal */
     function qtest_run() {
-        if (util.printAvailableFunctions) {
-            completed = true
-            return
-        }
-
         if (TestLogger.log_start_test()) {
             qtest_results.reset()
             qtest_results.testCaseName = name
@@ -1851,29 +1909,9 @@ Item {
         }
     }
 
-
     Component.onCompleted: {
         QTestRootObject.hasTestCase = true;
         qtest_componentCompleted = true;
-
-        if (util.printAvailableFunctions) {
-            var testList = []
-            for (var prop in testCase) {
-                if (prop.indexOf("test_") != 0 && prop.indexOf("benchmark_") != 0)
-                    continue
-                var tail = prop.lastIndexOf("_data");
-                if (tail != -1 && tail == (prop.length - 5))
-                    continue
-                // Note: cannot run functions in TestCase elements
-                // that lack a name.
-                if (name.length > 0)
-                    testList.push(name + "::" + prop + "()")
-            }
-            testList.sort()
-            for (var index in testList)
-                console.log(testList[index])
-            return
-        }
         qtest_testId = TestLogger.log_register_test(name)
         if (optional)
             TestLogger.log_optional_test(qtest_testId)

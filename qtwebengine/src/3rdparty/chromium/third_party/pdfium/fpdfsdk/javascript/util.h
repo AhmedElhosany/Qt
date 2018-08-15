@@ -12,39 +12,49 @@
 
 #include "fpdfsdk/javascript/JS_Define.h"
 
+// Return values for ParseDataType() below.
+#define UTIL_INT 0
+#define UTIL_DOUBLE 1
+#define UTIL_STRING 2
+
 class util : public CJS_EmbedObj {
  public:
-  util(CJS_Object* pJSObject);
+  explicit util(CJS_Object* pJSObject);
   ~util() override;
 
-  bool printd(IJS_Context* cc,
+  bool printd(CJS_Runtime* pRuntime,
               const std::vector<CJS_Value>& params,
               CJS_Value& vRet,
               CFX_WideString& sError);
-  bool printf(IJS_Context* cc,
+  bool printf(CJS_Runtime* pRuntime,
               const std::vector<CJS_Value>& params,
               CJS_Value& vRet,
               CFX_WideString& sError);
-  bool printx(IJS_Context* cc,
+  bool printx(CJS_Runtime* pRuntime,
               const std::vector<CJS_Value>& params,
               CJS_Value& vRet,
               CFX_WideString& sError);
-  bool scand(IJS_Context* cc,
+  bool scand(CJS_Runtime* pRuntime,
              const std::vector<CJS_Value>& params,
              CJS_Value& vRet,
              CFX_WideString& sError);
-  bool byteToChar(IJS_Context* cc,
+  bool byteToChar(CJS_Runtime* pRuntime,
                   const std::vector<CJS_Value>& params,
                   CJS_Value& vRet,
                   CFX_WideString& sError);
 
   static CFX_WideString printx(const CFX_WideString& cFormat,
                                const CFX_WideString& cSource);
+
+ private:
+  friend class CJS_Util_ParseDataType_Test;
+
+  static int ParseDataType(std::wstring* sFormat);
 };
 
 class CJS_Util : public CJS_Object {
  public:
-  CJS_Util(v8::Local<v8::Object> pObject) : CJS_Object(pObject) {}
+  explicit CJS_Util(v8::Local<v8::Object> pObject) : CJS_Object(pObject) {}
   ~CJS_Util() override {}
 
   DECLARE_JS_CLASS();

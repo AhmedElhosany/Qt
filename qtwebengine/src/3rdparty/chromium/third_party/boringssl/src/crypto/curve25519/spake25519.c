@@ -274,7 +274,7 @@ SPAKE2_CTX *SPAKE2_CTX_new(enum spake2_role_t my_role,
     return NULL;
   }
 
-  memset(ctx, 0, sizeof(SPAKE2_CTX));
+  OPENSSL_memset(ctx, 0, sizeof(SPAKE2_CTX));
   ctx->my_role = my_role;
 
   CBS my_name_cbs, their_name_cbs;
@@ -325,10 +325,10 @@ static const scalar kOrder = {{0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10}};
 
 // scalar_cmov copies |src| to |dest| if |mask| is all ones.
-static void scalar_cmov(scalar *dest, const scalar *src, size_t mask) {
+static void scalar_cmov(scalar *dest, const scalar *src, crypto_word_t mask) {
   for (size_t i = 0; i < 8; i++) {
     dest->words[i] =
-        constant_time_select_s(mask, src->words[i], dest->words[i]);
+        constant_time_select_w(mask, src->words[i], dest->words[i]);
   }
 }
 
@@ -371,7 +371,7 @@ int SPAKE2_generate_msg(SPAKE2_CTX *ctx, uint8_t *out, size_t *out_len,
   /* Multiply by the cofactor (eight) so that we'll clear it when operating on
    * the peer's point later in the protocol. */
   left_shift_3(private_tmp);
-  memcpy(ctx->private_key, private_tmp, sizeof(ctx->private_key));
+  OPENSSL_memcpy(ctx->private_key, private_tmp, sizeof(ctx->private_key));
 
   ge_p3 P;
   x25519_ge_scalarmult_base(&P, ctx->private_key);
@@ -379,7 +379,7 @@ int SPAKE2_generate_msg(SPAKE2_CTX *ctx, uint8_t *out, size_t *out_len,
   /* mask = h(password) * <N or M>. */
   uint8_t password_tmp[SHA512_DIGEST_LENGTH];
   SHA512(password, password_len, password_tmp);
-  memcpy(ctx->password_hash, password_tmp, sizeof(ctx->password_hash));
+  OPENSSL_memcpy(ctx->password_hash, password_tmp, sizeof(ctx->password_hash));
   x25519_sc_reduce(password_tmp);
 
   // Due to a copy-paste error, the call to |left_shift_3| was omitted after
@@ -397,7 +397,7 @@ int SPAKE2_generate_msg(SPAKE2_CTX *ctx, uint8_t *out, size_t *out_len,
   // bit and so one for all the bottom three bits.
 
   scalar password_scalar;
-  memcpy(&password_scalar, password_tmp, sizeof(password_scalar));
+  OPENSSL_memcpy(&password_scalar, password_tmp, sizeof(password_scalar));
 
   // |password_scalar| is the result of |x25519_sc_reduce| and thus is, at
   // most, $l-1$ (where $l$ is |kOrder|, the order of the prime-order subgroup
@@ -408,27 +408,28 @@ int SPAKE2_generate_msg(SPAKE2_CTX *ctx, uint8_t *out, size_t *out_len,
     scalar order = kOrder;
     scalar tmp;
 
-    memset(&tmp, 0, sizeof(tmp));
+    OPENSSL_memset(&tmp, 0, sizeof(tmp));
     scalar_cmov(&tmp, &order,
-                constant_time_eq_s(password_scalar.bytes[0] & 1, 1));
+                constant_time_eq_w(password_scalar.bytes[0] & 1, 1));
     scalar_add(&password_scalar, &tmp);
 
     scalar_double(&order);
-    memset(&tmp, 0, sizeof(tmp));
+    OPENSSL_memset(&tmp, 0, sizeof(tmp));
     scalar_cmov(&tmp, &order,
-                constant_time_eq_s(password_scalar.bytes[0] & 2, 2));
+                constant_time_eq_w(password_scalar.bytes[0] & 2, 2));
     scalar_add(&password_scalar, &tmp);
 
     scalar_double(&order);
-    memset(&tmp, 0, sizeof(tmp));
+    OPENSSL_memset(&tmp, 0, sizeof(tmp));
     scalar_cmov(&tmp, &order,
-                constant_time_eq_s(password_scalar.bytes[0] & 4, 4));
+                constant_time_eq_w(password_scalar.bytes[0] & 4, 4));
     scalar_add(&password_scalar, &tmp);
 
     assert((password_scalar.bytes[0] & 7) == 0);
   }
 
-  memcpy(ctx->password_scalar, password_scalar.bytes, sizeof(ctx->password_scalar));
+  OPENSSL_memcpy(ctx->password_scalar, password_scalar.bytes,
+                 sizeof(ctx->password_scalar));
 
   ge_p3 mask;
   x25519_ge_scalarmult_small_precomp(&mask, ctx->password_scalar,
@@ -447,7 +448,7 @@ int SPAKE2_generate_msg(SPAKE2_CTX *ctx, uint8_t *out, size_t *out_len,
   x25519_ge_p1p1_to_p2(&Pstar_proj, &Pstar);
   x25519_ge_tobytes(ctx->my_msg, &Pstar_proj);
 
-  memcpy(out, ctx->my_msg, sizeof(ctx->my_msg));
+  OPENSSL_memcpy(out, ctx->my_msg, sizeof(ctx->my_msg));
   *out_len = sizeof(ctx->my_msg);
   ctx->state = spake2_state_msg_generated;
 
@@ -528,7 +529,7 @@ int SPAKE2_process_msg(SPAKE2_CTX *ctx, uint8_t *out_key, size_t *out_key_len,
   if (to_copy > sizeof(key)) {
     to_copy = sizeof(key);
   }
-  memcpy(out_key, key, to_copy);
+  OPENSSL_memcpy(out_key, key, to_copy);
   *out_key_len = to_copy;
   ctx->state = spake2_state_key_generated;
 

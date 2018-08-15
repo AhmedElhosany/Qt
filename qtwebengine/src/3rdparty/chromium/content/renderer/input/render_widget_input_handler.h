@@ -11,7 +11,8 @@
 #include "base/time/time.h"
 #include "content/common/input/input_event_ack.h"
 #include "content/common/input/input_event_dispatch_type.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "content/renderer/input/main_thread_event_queue.h"
+#include "third_party/WebKit/public/platform/WebCoalescedInputEvent.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/events/blink/did_overscroll_params.h"
 
@@ -38,9 +39,10 @@ class CONTENT_EXPORT RenderWidgetInputHandler {
   virtual ~RenderWidgetInputHandler();
 
   // Handle input events from the input event provider.
-  virtual void HandleInputEvent(const blink::WebInputEvent& input_event,
-                                const ui::LatencyInfo& latency_info,
-                                InputEventDispatchType dispatch_type);
+  virtual void HandleInputEvent(
+      const blink::WebCoalescedInputEvent& coalesced_event,
+      const ui::LatencyInfo& latency_info,
+      HandledEventCallback callback);
 
   // Handle overscroll from Blink.
   void DidOverscrollFromBlink(
@@ -58,11 +60,11 @@ class CONTENT_EXPORT RenderWidgetInputHandler {
     return handling_event_type_;
   }
 
-  ui::MenuSourceType context_menu_source_type() const {
-    return context_menu_source_type_;
+  bool ime_composition_replacement() const {
+      return ime_composition_replacement_;
   }
-  void set_context_menu_source_type(ui::MenuSourceType source_type) {
-    context_menu_source_type_ = source_type;
+  void set_ime_composition_replacement(bool ime_composition_replacement) {
+      ime_composition_replacement_ = ime_composition_replacement;
   }
 
  private:
@@ -82,10 +84,12 @@ class CONTENT_EXPORT RenderWidgetInputHandler {
   // Type of the input event we are currently handling.
   blink::WebInputEvent::Type handling_event_type_;
 
-  ui::MenuSourceType context_menu_source_type_;
-
   // Indicates if the next sequence of Char events should be suppressed or not.
   bool suppress_next_char_events_;
+
+  // Used to suppress notification about text selection changes triggered by
+  // IME composition when it replaces text.
+  bool ime_composition_replacement_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetInputHandler);
 };

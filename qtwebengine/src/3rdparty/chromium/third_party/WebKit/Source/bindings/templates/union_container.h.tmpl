@@ -45,7 +45,7 @@ class {{exported}}{{cpp_class}} final {
   {{member.cpp_type}} m_{{member.cpp_name}};
   {% endfor %}
 
-  friend {{exported}}v8::Local<v8::Value> toV8(const {{cpp_class}}&, v8::Local<v8::Object>, v8::Isolate*);
+  friend {{exported}}v8::Local<v8::Value> ToV8(const {{cpp_class}}&, v8::Local<v8::Object>, v8::Isolate*);
 };
 
 class {{v8_class}} final {
@@ -53,16 +53,26 @@ class {{v8_class}} final {
   {{exported}}static void toImpl(v8::Isolate*, v8::Local<v8::Value>, {{cpp_class}}&, UnionTypeConversionMode, ExceptionState&);
 };
 
-{{exported}}v8::Local<v8::Value> toV8(const {{cpp_class}}&, v8::Local<v8::Object>, v8::Isolate*);
+{{exported}}v8::Local<v8::Value> ToV8(const {{cpp_class}}&, v8::Local<v8::Object>, v8::Isolate*);
 
 template <class CallbackInfo>
-inline void v8SetReturnValue(const CallbackInfo& callbackInfo, {{cpp_class}}& impl) {
-  v8SetReturnValue(callbackInfo, toV8(impl, callbackInfo.Holder(), callbackInfo.GetIsolate()));
+inline void V8SetReturnValue(const CallbackInfo& callbackInfo, {{cpp_class}}& impl) {
+  V8SetReturnValue(callbackInfo, ToV8(impl, callbackInfo.Holder(), callbackInfo.GetIsolate()));
+}
+
+template <class CallbackInfo>
+inline void V8SetReturnValue(const CallbackInfo& callbackInfo, {{cpp_class}}& impl, v8::Local<v8::Object> creationContext) {
+  V8SetReturnValue(callbackInfo, ToV8(impl, creationContext, callbackInfo.GetIsolate()));
 }
 
 template <>
-struct NativeValueTraits<{{cpp_class}}> {
-  {{exported}}static {{cpp_class}} nativeValue(v8::Isolate*, v8::Local<v8::Value>, ExceptionState&);
+struct NativeValueTraits<{{cpp_class}}> : public NativeValueTraitsBase<{{cpp_class}}> {
+  {{exported}}static {{cpp_class}} NativeValue(v8::Isolate*, v8::Local<v8::Value>, ExceptionState&);
+};
+
+template <>
+struct V8TypeOf<{{cpp_class}}> {
+  typedef {{v8_class}} Type;
 };
 
 }  // namespace blink

@@ -66,6 +66,7 @@ namespace Animation {
 
 class AnimationClip;
 class AnimationClipLoaderManager;
+class ClockManager;
 class ClipAnimator;
 class ClipAnimatorManager;
 class BlendedClipAnimator;
@@ -75,6 +76,7 @@ class ChannelMappingManager;
 class ChannelMapper;
 class ChannelMapperManager;
 class ClipBlendNodeManager;
+class SkeletonManager;
 
 class FindRunningClipAnimatorsJob;
 class LoadAnimationClipJob;
@@ -109,11 +111,13 @@ public:
     QVector<HBlendedClipAnimator> runningBlenndedClipAnimators() const { return m_runningBlendedClipAnimators; }
 
     AnimationClipLoaderManager *animationClipLoaderManager() const Q_DECL_NOTHROW { return m_animationClipLoaderManager.data(); }
+    ClockManager *clockManager() const Q_DECL_NOTHROW { return m_clockManager.data(); }
     ClipAnimatorManager *clipAnimatorManager() const Q_DECL_NOTHROW { return m_clipAnimatorManager.data(); }
     BlendedClipAnimatorManager *blendedClipAnimatorManager() const Q_DECL_NOTHROW { return m_blendedClipAnimatorManager.data(); }
     ChannelMappingManager *channelMappingManager() const Q_DECL_NOTHROW { return m_channelMappingManager.data(); }
     ChannelMapperManager *channelMapperManager() const Q_DECL_NOTHROW { return m_channelMapperManager.data(); }
     ClipBlendNodeManager *clipBlendNodeManager() const Q_DECL_NOTHROW { return m_clipBlendNodeManager.data(); }
+    SkeletonManager *skeletonManager() const Q_DECL_NOTHROW { return m_skeletonManager.data(); }
 
     QVector<Qt3DCore::QAspectJobPtr> jobsToExecute(qint64 time);
 
@@ -124,11 +128,13 @@ public:
 private:
     QMutex m_mutex;
     QScopedPointer<AnimationClipLoaderManager> m_animationClipLoaderManager;
+    QScopedPointer<ClockManager> m_clockManager;
     QScopedPointer<ClipAnimatorManager> m_clipAnimatorManager;
     QScopedPointer<BlendedClipAnimatorManager> m_blendedClipAnimatorManager;
     QScopedPointer<ChannelMappingManager> m_channelMappingManager;
     QScopedPointer<ChannelMapperManager> m_channelMapperManager;
     QScopedPointer<ClipBlendNodeManager> m_clipBlendNodeManager;
+    QScopedPointer<SkeletonManager> m_skeletonManager;
 
     QVector<HAnimationClip> m_dirtyAnimationClips;
     QVector<HChannelMapper> m_dirtyChannelMappers;

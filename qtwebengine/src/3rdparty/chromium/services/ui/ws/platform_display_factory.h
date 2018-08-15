@@ -7,16 +7,23 @@
 
 #include <memory>
 
+namespace display {
+struct ViewportMetrics;
+}
+
 namespace ui {
 namespace ws {
 
 class PlatformDisplay;
+class ServerWindow;
 
 // Abstract factory for PlatformDisplays. Used by tests to construct test
 // PlatformDisplays.
 class PlatformDisplayFactory {
  public:
-  virtual std::unique_ptr<PlatformDisplay> CreatePlatformDisplay() = 0;
+  virtual std::unique_ptr<PlatformDisplay> CreatePlatformDisplay(
+      ServerWindow* root_window,
+      const display::ViewportMetrics& metrics) = 0;
 };
 
 }  // namespace ws

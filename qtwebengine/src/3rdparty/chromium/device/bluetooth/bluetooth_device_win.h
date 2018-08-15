@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceWin : public BluetoothDevice {
   bool ExpectingPasskey() const override;
   bool ExpectingConfirmation() const override;
   void GetConnectionInfo(const ConnectionInfoCallback& callback) override;
+  void SetConnectionLatency(ConnectionLatency connection_latency,
+                            const base::Closure& callback,
+                            const ErrorCallback& error_callback) override;
   void Connect(PairingDelegate* pairing_delegate,
                const base::Closure& callback,
                const ConnectErrorCallback& error_callback) override;
@@ -104,8 +108,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceWin : public BluetoothDevice {
  private:
   friend class BluetoothAdapterWin;
 
-  typedef ScopedVector<BluetoothServiceRecordWin> ServiceRecordList;
-
   // Used by BluetoothAdapterWin to update the visible state during
   // discovery.
   void SetVisible(bool visible);
@@ -120,13 +122,14 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceWin : public BluetoothDevice {
   // Checks if |service| still exist on device according to newly discovered
   // |service_state|.
   bool DoesGattServiceExist(
-      const ScopedVector<BluetoothTaskManagerWin::ServiceRecordState>&
-          service_state,
+      const std::vector<std::unique_ptr<
+          BluetoothTaskManagerWin::ServiceRecordState>>& service_state,
       BluetoothRemoteGattService* service);
 
   // Updates the GATT services with the services stored in |service_state|.
   void UpdateGattServices(
-      const ScopedVector<BluetoothTaskManagerWin::ServiceRecordState>&
+      const std::vector<
+          std::unique_ptr<BluetoothTaskManagerWin::ServiceRecordState>>&
           service_state);
 
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
@@ -157,7 +160,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceWin : public BluetoothDevice {
   UUIDSet uuids_;
 
   // The service records retrieved from SDP.
-  ServiceRecordList service_record_list_;
+  std::vector<std::unique_ptr<BluetoothServiceRecordWin>> service_record_list_;
 
   DISALLOW_COPY_AND_ASSIGN(BluetoothDeviceWin);
 };

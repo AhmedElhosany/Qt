@@ -4,35 +4,35 @@
 
 function toggleHelpBox() {
   var helpBoxOuter = document.getElementById('details');
-  helpBoxOuter.classList.toggle('hidden');
+  helpBoxOuter.classList.toggle(HIDDEN_CLASS);
   var detailsButton = document.getElementById('details-button');
-  if (helpBoxOuter.classList.contains('hidden'))
+  if (helpBoxOuter.classList.contains(HIDDEN_CLASS))
     detailsButton.innerText = detailsButton.detailsText;
   else
     detailsButton.innerText = detailsButton.hideDetailsText;
 
   // Details appears over the main content on small screens.
   if (mobileNav) {
-    document.getElementById('main-content').classList.toggle('hidden');
+    document.getElementById('main-content').classList.toggle(HIDDEN_CLASS);
     var runnerContainer = document.querySelector('.runner-container');
     if (runnerContainer) {
-      runnerContainer.classList.toggle('hidden');
+      runnerContainer.classList.toggle(HIDDEN_CLASS);
     }
   }
 }
 
 function diagnoseErrors() {
-<if expr="not chromeos">
+// <if expr="not chromeos">
     if (window.errorPageController)
       errorPageController.diagnoseErrorsButtonClick();
-</if>
-<if expr="chromeos">
+// </if>
+// <if expr="chromeos">
   var extensionId = 'idddmepepmjcgiedknnmlbadcokidhoa';
   var diagnoseFrame = document.getElementById('diagnose-frame');
   diagnoseFrame.innerHTML =
       '<iframe src="chrome-extension://' + extensionId +
       '/index.html"></iframe>';
-</if>
+// </if>
 }
 
 // Subframes use a different layout but the same html file.  This is to make it
@@ -150,9 +150,9 @@ function setUpCachedButton(buttonStrings) {
 }
 
 var primaryControlOnLeft = true;
-<if expr="is_macosx or is_ios or is_linux or is_android">
+// <if expr="is_macosx or is_ios or is_linux or is_android">
 primaryControlOnLeft = false;
-</if>
+// </if>
 
 function onDocumentLoad() {
   var controlButtonDiv = document.getElementById('control-buttons');

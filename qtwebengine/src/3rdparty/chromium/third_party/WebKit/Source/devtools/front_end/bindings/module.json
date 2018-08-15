@@ -3,10 +3,12 @@
         "sdk",
         "platform",
         "services",
-        "workspace"
+        "workspace",
+        "console_model"
     ],
     "scripts": [
         "LiveLocation.js",
+        "ResourceMapping.js",
         "CompilerScriptMapping.js",
         "ResourceScriptMapping.js",
         "SASSSourceMapping.js",
@@ -16,7 +18,6 @@
         "BreakpointManager.js",
         "ContentProviderBasedProject.js",
         "DefaultScriptMapping.js",
-        "FileSystemWorkspaceBinding.js",
         "FileUtils.js",
         "BlackboxManager.js",
         "NetworkProject.js",

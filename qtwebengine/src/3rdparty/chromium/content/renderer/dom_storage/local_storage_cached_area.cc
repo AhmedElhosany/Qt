@@ -5,6 +5,7 @@
 #include "content/renderer/dom_storage/local_storage_cached_area.h"
 
 #include "base/bind.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/strings/string16.h"
@@ -15,24 +16,38 @@
 #include "content/common/storage_partition_service.mojom.h"
 #include "content/renderer/dom_storage/local_storage_area.h"
 #include "content/renderer/dom_storage/local_storage_cached_areas.h"
+#include "mojo/public/cpp/bindings/strong_associated_binding.h"
 #include "third_party/WebKit/public/platform/WebURL.h"
 #include "third_party/WebKit/public/web/WebStorageEventDispatcher.h"
 
+namespace content {
+
 namespace {
 
-base::string16 Uint8VectorToString16(const std::vector<uint8_t>& input) {
-  return base::string16(reinterpret_cast<const base::char16*>(input.data()),
-                        input.size() / sizeof(base::char16));
-}
+// Don't change or reorder any of the values in this enum, as these values
+// are serialized on disk.
+enum class StorageFormat : uint8_t { UTF16 = 0, Latin1 = 1 };
 
-std::vector<uint8_t> String16ToUint8Vector(const base::string16& input) {
-  const uint8_t* data = reinterpret_cast<const uint8_t*>(input.data());
-  return std::vector<uint8_t>(data, data + input.size() * sizeof(base::char16));
-}
+class GetAllCallback : public mojom::LevelDBWrapperGetAllCallback {
+ public:
+  static mojom::LevelDBWrapperGetAllCallbackAssociatedPtrInfo CreateAndBind(
+      const base::Callback<void(bool)>& callback) {
+    mojom::LevelDBWrapperGetAllCallbackAssociatedPtrInfo ptr_info;
+    auto request = mojo::MakeRequest(&ptr_info);
+    mojo::MakeStrongAssociatedBinding(
+        base::WrapUnique(new GetAllCallback(callback)), std::move(request));
+    return ptr_info;
+  }
+
+ private:
+  explicit GetAllCallback(const base::Callback<void(bool)>& callback)
+      : m_callback(callback) {}
+  void Complete(bool success) override { m_callback.Run(success); }
+
+  base::Callback<void(bool)> m_callback;
+};
 
 }  // namespace
-
-namespace content {
 
 // These methods are used to pack and unpack the page_url/storage_area_id into
 // source strings to/from the browser.
@@ -57,8 +72,11 @@ LocalStorageCachedArea::LocalStorageCachedArea(
     LocalStorageCachedAreas* cached_areas)
     : origin_(origin), binding_(this),
       cached_areas_(cached_areas), weak_factory_(this) {
-  storage_partition_service->OpenLocalStorage(
-      origin_, binding_.CreateInterfacePtrAndBind(), mojo::GetProxy(&leveldb_));
+  storage_partition_service->OpenLocalStorage(origin_,
+                                              mojo::MakeRequest(&leveldb_));
+  mojom::LevelDBObserverAssociatedPtrInfo ptr_info;
+  binding_.Bind(mojo::MakeRequest(&ptr_info));
+  leveldb_->AddObserver(std::move(ptr_info));
 }
 
 LocalStorageCachedArea::~LocalStorageCachedArea() {
@@ -87,7 +105,8 @@ bool LocalStorageCachedArea::SetItem(const base::string16& key,
                                      const std::string& storage_area_id) {
   // A quick check to reject obviously overbudget items to avoid priming the
   // cache.
-  if (key.length() + value.length() > kPerStorageAreaQuota)
+  if ((key.length() + value.length()) * sizeof(base::char16) >
+      kPerStorageAreaQuota)
     return false;
 
   EnsureLoaded();
@@ -123,7 +142,6 @@ void LocalStorageCachedArea::RemoveItem(const base::string16& key,
 void LocalStorageCachedArea::Clear(const GURL& page_url,
                                    const std::string& storage_area_id) {
   // No need to prime the cache in this case.
-
   Reset();
   map_ = new DOMStorageMap(kPerStorageAreaQuota);
   ignore_all_mutations_ = true;
@@ -138,6 +156,64 @@ void LocalStorageCachedArea::AreaCreated(LocalStorageArea* area) {
 
 void LocalStorageCachedArea::AreaDestroyed(LocalStorageArea* area) {
   areas_.erase(area->id());
+}
+
+// static
+base::string16 LocalStorageCachedArea::Uint8VectorToString16(
+    const std::vector<uint8_t>& input) {
+  if (input.empty())
+    return base::string16();
+  StorageFormat format = static_cast<StorageFormat>(input[0]);
+  const size_t payload_size = input.size() - 1;
+  base::string16 result;
+  bool corrupt = false;
+  switch (format) {
+    case StorageFormat::UTF16:
+      if (payload_size % sizeof(base::char16) != 0) {
+        corrupt = true;
+        break;
+      }
+      result.resize(payload_size / sizeof(base::char16));
+      std::memcpy(&result[0], input.data() + 1, payload_size);
+      break;
+    case StorageFormat::Latin1:
+      result.resize(payload_size);
+      std::copy(input.begin() + 1, input.end(), result.begin());
+      break;
+    default:
+      corrupt = true;
+  }
+  if (corrupt) {
+    // TODO(mek): Better error recovery when corrupt (or otherwise invalid) data
+    // is detected.
+    VLOG(1) << "Corrupt data in localstorage";
+    return base::string16();
+  }
+  return result;
+}
+
+// static
+std::vector<uint8_t> LocalStorageCachedArea::String16ToUint8Vector(
+    const base::string16& input) {
+  bool is_8bit = true;
+  for (const auto& c : input) {
+    if (c & 0xff00) {
+      is_8bit = false;
+      break;
+    }
+  }
+  if (is_8bit) {
+    std::vector<uint8_t> result(input.size() + 1);
+    result[0] = static_cast<uint8_t>(StorageFormat::Latin1);
+    std::copy(input.begin(), input.end(), result.begin() + 1);
+    return result;
+  }
+  const uint8_t* data = reinterpret_cast<const uint8_t*>(input.data());
+  std::vector<uint8_t> result;
+  result.reserve(input.size() * sizeof(base::char16) + 1);
+  result.push_back(static_cast<uint8_t>(StorageFormat::UTF16));
+  result.insert(result.end(), data, data + input.size() * sizeof(base::char16));
+  return result;
 }
 
 void LocalStorageCachedArea::KeyAdded(const std::vector<uint8_t>& key,
@@ -173,15 +249,16 @@ void LocalStorageCachedArea::KeyDeleted(const std::vector<uint8_t>& key,
     // remove it from our cache if we haven't already changed it and are waiting
     // for the confirmation callback. In the latter case, we won't do anything
     // because ignore_key_mutations_ won't be updated until the callback runs.
-    if (ignore_key_mutations_.find(key_string) != ignore_key_mutations_.end()) {
+    if (ignore_key_mutations_.find(key_string) == ignore_key_mutations_.end()) {
       base::string16 unused;
       map_->RemoveItem(key_string, &unused);
     }
   }
 
-  blink::WebStorageEventDispatcher::dispatchLocalStorageEvent(
-      key_string, Uint8VectorToString16(old_value), base::NullableString16(),
-      origin_.GetURL(), page_url, originating_area);
+  blink::WebStorageEventDispatcher::DispatchLocalStorageEvent(
+      blink::WebString::FromUTF16(key_string),
+      blink::WebString::FromUTF16(Uint8VectorToString16(old_value)),
+      blink::WebString(), origin_.GetURL(), page_url, originating_area);
 }
 
 void LocalStorageCachedArea::AllDeleted(const std::string& source) {
@@ -210,21 +287,9 @@ void LocalStorageCachedArea::AllDeleted(const std::string& source) {
     }
   }
 
-  blink::WebStorageEventDispatcher::dispatchLocalStorageEvent(
-      base::NullableString16(), base::NullableString16(),
-      base::NullableString16(), origin_.GetURL(), page_url, originating_area);
-}
-
-void LocalStorageCachedArea::GetAllComplete(const std::string& source) {
-  // Since the GetAll method is synchronous, we need this asynchronously
-  // delivered notification to avoid applying changes to the returned array
-  // that we already have.
-  if (source == get_all_request_id_) {
-    DCHECK(ignore_all_mutations_);
-    DCHECK(!get_all_request_id_.empty());
-    ignore_all_mutations_ = false;
-    get_all_request_id_.clear();
-  }
+  blink::WebStorageEventDispatcher::DispatchLocalStorageEvent(
+      blink::WebString(), blink::WebString(), blink::WebString(),
+      origin_.GetURL(), page_url, originating_area);
 }
 
 void LocalStorageCachedArea::KeyAddedOrChanged(
@@ -248,7 +313,7 @@ void LocalStorageCachedArea::KeyAddedOrChanged(
     // apply it to our cache if we haven't already changed it and are waiting
     // for the confirmation callback. In the latter case, we won't do anything
     // because ignore_key_mutations_ won't be updated until the callback runs.
-    if (ignore_key_mutations_.find(key_string) != ignore_key_mutations_.end()) {
+    if (ignore_key_mutations_.find(key_string) == ignore_key_mutations_.end()) {
       // We turn off quota checking here to accomodate the over budget allowance
       // that's provided in the browser process.
       base::NullableString16 unused;
@@ -258,8 +323,10 @@ void LocalStorageCachedArea::KeyAddedOrChanged(
     }
   }
 
-  blink::WebStorageEventDispatcher::dispatchLocalStorageEvent(
-      key_string, old_value, new_value_string, origin_.GetURL(), page_url,
+  blink::WebStorageEventDispatcher::DispatchLocalStorageEvent(
+      blink::WebString::FromUTF16(key_string),
+      blink::WebString::FromUTF16(old_value),
+      blink::WebString::FromUTF16(new_value_string), origin_.GetURL(), page_url,
       originating_area);
 }
 
@@ -269,10 +336,12 @@ void LocalStorageCachedArea::EnsureLoaded() {
 
   base::TimeTicks before = base::TimeTicks::Now();
   ignore_all_mutations_ = true;
-  get_all_request_id_ = base::Uint64ToString(base::RandUint64());
   leveldb::mojom::DatabaseError status = leveldb::mojom::DatabaseError::OK;
   std::vector<content::mojom::KeyValuePtr> data;
-  leveldb_->GetAll(get_all_request_id_, &status, &data);
+  leveldb_->GetAll(GetAllCallback::CreateAndBind(
+                       base::Bind(&LocalStorageCachedArea::OnGetAllComplete,
+                                  weak_factory_.GetWeakPtr())),
+                   &status, &data);
 
   DOMStorageValuesMap values;
   for (size_t i = 0; i < data.size(); ++i) {
@@ -328,6 +397,15 @@ void LocalStorageCachedArea::OnRemoveItemComplete(
 }
 
 void LocalStorageCachedArea::OnClearComplete(bool success) {
+  DCHECK(success);
+  DCHECK(ignore_all_mutations_);
+  ignore_all_mutations_ = false;
+}
+
+void LocalStorageCachedArea::OnGetAllComplete(bool success) {
+  // Since the GetAll method is synchronous, we need this asynchronously
+  // delivered notification to avoid applying changes to the returned array
+  // that we already have.
   DCHECK(success);
   DCHECK(ignore_all_mutations_);
   ignore_all_mutations_ = false;

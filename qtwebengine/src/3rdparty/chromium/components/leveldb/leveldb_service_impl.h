@@ -10,26 +10,44 @@
 #include "components/leveldb/public/interfaces/leveldb.mojom.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
 
+namespace base {
+class SequencedTaskRunner;
+}
+
 namespace leveldb {
 
 // Creates LevelDBDatabases based scoped to a |directory|/|dbname|.
 class LevelDBServiceImpl : public mojom::LevelDBService {
  public:
-  LevelDBServiceImpl(scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+  // The |file_task_runner| is used to run tasks to interact with the
+  // file_service. Specifically this task runner must NOT be the same as the
+  // task runner this implementation runs on, or deadlock might occur.
+  LevelDBServiceImpl(scoped_refptr<base::SequencedTaskRunner> file_task_runner);
   ~LevelDBServiceImpl() override;
 
   // Overridden from LevelDBService:
   void Open(filesystem::mojom::DirectoryPtr directory,
             const std::string& dbname,
-            leveldb::mojom::LevelDBDatabaseRequest database,
-            const OpenCallback& callback) override;
-  void OpenWithOptions(leveldb::mojom::OpenOptionsPtr open_options,
-                       filesystem::mojom::DirectoryPtr directory,
-                       const std::string& dbname,
-                       leveldb::mojom::LevelDBDatabaseRequest database,
-                       const OpenCallback& callback) override;
-  void OpenInMemory(leveldb::mojom::LevelDBDatabaseRequest database,
-                    const OpenInMemoryCallback& callback) override;
+            const base::Optional<base::trace_event::MemoryAllocatorDumpGuid>&
+                memory_dump_id,
+            leveldb::mojom::LevelDBDatabaseAssociatedRequest database,
+            OpenCallback callback) override;
+  void OpenWithOptions(
+      leveldb::mojom::OpenOptionsPtr open_options,
+      filesystem::mojom::DirectoryPtr directory,
+      const std::string& dbname,
+      const base::Optional<base::trace_event::MemoryAllocatorDumpGuid>&
+          memory_dump_id,
+      leveldb::mojom::LevelDBDatabaseAssociatedRequest database,
+      OpenCallback callback) override;
+  void OpenInMemory(
+      const base::Optional<base::trace_event::MemoryAllocatorDumpGuid>&
+          memory_dump_id,
+      leveldb::mojom::LevelDBDatabaseAssociatedRequest database,
+      OpenInMemoryCallback callback) override;
+  void Destroy(filesystem::mojom::DirectoryPtr directory,
+               const std::string& dbname,
+               DestroyCallback callback) override;
 
  private:
   // Thread to own the mojo message pipe. Because leveldb spawns multiple

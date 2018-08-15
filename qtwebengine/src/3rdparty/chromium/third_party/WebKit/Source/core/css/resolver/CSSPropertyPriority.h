@@ -6,7 +6,7 @@
 #define CSSPropertyPriority_h
 
 #include "core/CSSPropertyNames.h"
-#include "wtf/Allocator.h"
+#include "platform/wtf/Allocator.h"
 
 namespace blink {
 
@@ -14,12 +14,14 @@ namespace blink {
 // properties. For example, the value of the high priority property 'font-size'
 // decides the pixel value of low priority properties with 'em' units.
 
+// TODO(sashab): Generate the methods in this file.
+
 enum CSSPropertyPriority {
-  ResolveVariables = 0,
-  AnimationPropertyPriority,
-  HighPropertyPriority,
-  LowPropertyPriority,
-  PropertyPriorityCount,
+  kResolveVariables = 0,
+  kAnimationPropertyPriority,
+  kHighPropertyPriority,
+  kLowPropertyPriority,
+  kPropertyPriorityCount,
 };
 
 template <CSSPropertyPriority priority>
@@ -27,15 +29,15 @@ class CSSPropertyPriorityData {
   STATIC_ONLY(CSSPropertyPriorityData);
 
  public:
-  static inline CSSPropertyID first();
-  static inline CSSPropertyID last();
-  static inline bool propertyHasPriority(CSSPropertyID prop) {
-    return first() <= prop && prop <= last();
+  static inline CSSPropertyID First();
+  static inline CSSPropertyID Last();
+  static inline bool PropertyHasPriority(CSSPropertyID prop) {
+    return First() <= prop && prop <= Last();
   }
 };
 
 template <>
-inline CSSPropertyID CSSPropertyPriorityData<ResolveVariables>::first() {
+inline CSSPropertyID CSSPropertyPriorityData<kResolveVariables>::First() {
   static_assert(
       CSSPropertyVariable == firstCSSProperty - 1,
       "CSSPropertyVariable should be directly before the first CSS property.");
@@ -43,13 +45,13 @@ inline CSSPropertyID CSSPropertyPriorityData<ResolveVariables>::first() {
 }
 
 template <>
-inline CSSPropertyID CSSPropertyPriorityData<ResolveVariables>::last() {
+inline CSSPropertyID CSSPropertyPriorityData<kResolveVariables>::Last() {
   return CSSPropertyVariable;
 }
 
 template <>
 inline CSSPropertyID
-CSSPropertyPriorityData<AnimationPropertyPriority>::first() {
+CSSPropertyPriorityData<kAnimationPropertyPriority>::First() {
   static_assert(CSSPropertyAnimationDelay == firstCSSProperty,
                 "CSSPropertyAnimationDelay should be the first animation "
                 "priority property");
@@ -58,7 +60,7 @@ CSSPropertyPriorityData<AnimationPropertyPriority>::first() {
 
 template <>
 inline CSSPropertyID
-CSSPropertyPriorityData<AnimationPropertyPriority>::last() {
+CSSPropertyPriorityData<kAnimationPropertyPriority>::Last() {
   static_assert(
       CSSPropertyTransitionTimingFunction == CSSPropertyAnimationDelay + 11,
       "CSSPropertyTransitionTimingFunction should be the end of the high "
@@ -71,25 +73,25 @@ CSSPropertyPriorityData<AnimationPropertyPriority>::last() {
 }
 
 template <>
-inline CSSPropertyID CSSPropertyPriorityData<HighPropertyPriority>::first() {
+inline CSSPropertyID CSSPropertyPriorityData<kHighPropertyPriority>::First() {
   static_assert(CSSPropertyColor == CSSPropertyTransitionTimingFunction + 1,
                 "CSSPropertyColor should be the first high priority property");
   return CSSPropertyColor;
 }
 
 template <>
-inline CSSPropertyID CSSPropertyPriorityData<HighPropertyPriority>::last() {
+inline CSSPropertyID CSSPropertyPriorityData<kHighPropertyPriority>::Last() {
   static_assert(
-      CSSPropertyZoom == CSSPropertyColor + 20,
+      CSSPropertyZoom == CSSPropertyColor + 21,
       "CSSPropertyZoom should be the end of the high priority property range");
-  static_assert(
-      CSSPropertyTextRendering == CSSPropertyZoom - 1,
-      "CSSPropertyTextRendering should be immediately before CSSPropertyZoom");
+  static_assert(CSSPropertyWritingMode == CSSPropertyZoom - 1,
+                "CSSPropertyWritingMode should be immediately before "
+                "CSSPropertyZoom");
   return CSSPropertyZoom;
 }
 
 template <>
-inline CSSPropertyID CSSPropertyPriorityData<LowPropertyPriority>::first() {
+inline CSSPropertyID CSSPropertyPriorityData<kLowPropertyPriority>::First() {
   static_assert(
       CSSPropertyAlignContent == CSSPropertyZoom + 1,
       "CSSPropertyAlignContent should be the first low priority property");
@@ -97,26 +99,26 @@ inline CSSPropertyID CSSPropertyPriorityData<LowPropertyPriority>::first() {
 }
 
 template <>
-inline CSSPropertyID CSSPropertyPriorityData<LowPropertyPriority>::last() {
+inline CSSPropertyID CSSPropertyPriorityData<kLowPropertyPriority>::Last() {
   return static_cast<CSSPropertyID>(lastCSSProperty);
 }
 
-inline CSSPropertyPriority priorityForProperty(CSSPropertyID property) {
-  if (CSSPropertyPriorityData<LowPropertyPriority>::propertyHasPriority(
+inline CSSPropertyPriority PriorityForProperty(CSSPropertyID property) {
+  if (CSSPropertyPriorityData<kLowPropertyPriority>::PropertyHasPriority(
           property)) {
-    return LowPropertyPriority;
+    return kLowPropertyPriority;
   }
-  if (CSSPropertyPriorityData<HighPropertyPriority>::propertyHasPriority(
+  if (CSSPropertyPriorityData<kHighPropertyPriority>::PropertyHasPriority(
           property)) {
-    return HighPropertyPriority;
+    return kHighPropertyPriority;
   }
-  if (CSSPropertyPriorityData<AnimationPropertyPriority>::propertyHasPriority(
+  if (CSSPropertyPriorityData<kAnimationPropertyPriority>::PropertyHasPriority(
           property)) {
-    return AnimationPropertyPriority;
+    return kAnimationPropertyPriority;
   }
-  DCHECK(
-      CSSPropertyPriorityData<ResolveVariables>::propertyHasPriority(property));
-  return ResolveVariables;
+  DCHECK(CSSPropertyPriorityData<kResolveVariables>::PropertyHasPriority(
+      property));
+  return kResolveVariables;
 }
 
 }  // namespace blink

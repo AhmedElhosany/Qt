@@ -7,6 +7,10 @@
 Network.NetworkConfigView = class extends UI.VBox {
   constructor() {
     super(true);
+    /** @type {!Element} */
+    this._autoCheckbox;
+    /** @type {!{input: !Element, select: !Element}} */
+    this._customSelectAndInput;
     this.registerRequiredCSS('network/networkConfigView.css');
     this.contentElement.classList.add('network-config');
 
@@ -39,8 +43,7 @@ Network.NetworkConfigView = class extends UI.VBox {
 
     userAgentSelectElement.selectedIndex = 0;
 
-    var otherUserAgentElement = createElement('input');
-    otherUserAgentElement.type = 'text';
+    var otherUserAgentElement = UI.createInput('', 'text');
     otherUserAgentElement.value = userAgentSetting.get();
     otherUserAgentElement.title = userAgentSetting.get();
     otherUserAgentElement.placeholder = Common.UIString('Enter a custom user agent');
@@ -109,13 +112,14 @@ Network.NetworkConfigView = class extends UI.VBox {
 
   _createNetworkThrottlingSection() {
     var section = this._createSection(Common.UIString('Network throttling'), 'network-config-throttling');
-    Components.NetworkConditionsSelector.decorateSelect(
-        /** @type {!HTMLSelectElement} */ (section.createChild('select', 'chrome-select')));
+    this._networkThrottlingSelect =
+        /** @type {!HTMLSelectElement} */ (section.createChild('select', 'chrome-select'));
+    MobileThrottling.throttlingManager().decorateSelectWithNetworkThrottling(this._networkThrottlingSelect);
   }
 
   _createUserAgentSection() {
     var section = this._createSection(Common.UIString('User agent'), 'network-config-ua');
-    var checkboxLabel = createCheckboxLabel(Common.UIString('Select automatically'), true);
+    var checkboxLabel = UI.CheckboxLabel.create(Common.UIString('Select automatically'), true);
     section.appendChild(checkboxLabel);
     this._autoCheckbox = checkboxLabel.checkboxElement;
     this._autoCheckbox.addEventListener('change', this._userAgentTypeChanged.bind(this));

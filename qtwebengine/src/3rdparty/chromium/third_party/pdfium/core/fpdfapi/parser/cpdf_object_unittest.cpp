@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/fpdfapi/parser/cpdf_indirect_object_holder.h"
@@ -53,8 +54,8 @@ class PDFObjectsTest : public testing::Test {
     CPDF_Number* number_int_obj = new CPDF_Number(1245);
     CPDF_Number* number_float_obj = new CPDF_Number(9.00345f);
     // String objects.
-    CPDF_String* str_reg_obj = new CPDF_String(L"A simple test");
-    CPDF_String* str_spec_obj = new CPDF_String(L"\t\n");
+    CPDF_String* str_reg_obj = new CPDF_String(nullptr, L"A simple test");
+    CPDF_String* str_spec_obj = new CPDF_String(nullptr, L"\t\n");
     // Name object.
     CPDF_Name* name_obj = new CPDF_Name(nullptr, "space");
     // Array object.
@@ -63,23 +64,25 @@ class PDFObjectsTest : public testing::Test {
     m_ArrayObj->InsertNewAt<CPDF_Name>(1, "address");
     // Dictionary object.
     m_DictObj = new CPDF_Dictionary();
-    m_DictObj->SetFor("bool", new CPDF_Boolean(false));
-    m_DictObj->SetFor("num", new CPDF_Number(0.23f));
+    m_DictObj->SetNewFor<CPDF_Boolean>("bool", false);
+    m_DictObj->SetNewFor<CPDF_Number>("num", 0.23f);
     // Stream object.
     const char content[] = "abcdefghijklmnopqrstuvwxyz";
     size_t buf_len = FX_ArraySize(content);
-    uint8_t* buf = reinterpret_cast<uint8_t*>(malloc(buf_len));
-    memcpy(buf, content, buf_len);
-    m_StreamDictObj = new CPDF_Dictionary();
-    m_StreamDictObj->SetFor("key1", new CPDF_String(L" test dict"));
-    m_StreamDictObj->SetFor("key2", new CPDF_Number(-1));
-    CPDF_Stream* stream_obj = new CPDF_Stream(buf, buf_len, m_StreamDictObj);
+    std::unique_ptr<uint8_t, FxFreeDeleter> buf(FX_Alloc(uint8_t, buf_len));
+    memcpy(buf.get(), content, buf_len);
+    auto pNewDict = pdfium::MakeUnique<CPDF_Dictionary>();
+    m_StreamDictObj = pNewDict.get();
+    m_StreamDictObj->SetNewFor<CPDF_String>("key1", L" test dict");
+    m_StreamDictObj->SetNewFor<CPDF_Number>("key2", -1);
+    CPDF_Stream* stream_obj =
+        new CPDF_Stream(std::move(buf), buf_len, std::move(pNewDict));
     // Null Object.
     CPDF_Null* null_obj = new CPDF_Null;
     // All direct objects.
     CPDF_Object* objs[] = {boolean_false_obj, boolean_true_obj, number_int_obj,
                            number_float_obj,  str_reg_obj,      str_spec_obj,
-                           name_obj,          m_ArrayObj,       m_DictObj,
+                           name_obj,          m_ArrayObj.Get(), m_DictObj.Get(),
                            stream_obj,        null_obj};
     m_DirectObjTypes = {
         CPDF_Object::BOOLEAN, CPDF_Object::BOOLEAN, CPDF_Object::NUMBER,
@@ -136,7 +139,7 @@ class PDFObjectsTest : public testing::Test {
           return false;
         for (CPDF_Dictionary::const_iterator it = dict1->begin();
              it != dict1->end(); ++it) {
-          if (!Equal(it->second, dict2->GetObjectFor(it->first)))
+          if (!Equal(it->second.get(), dict2->GetObjectFor(it->first)))
             return false;
         }
         return true;
@@ -159,8 +162,8 @@ class PDFObjectsTest : public testing::Test {
         // streams need to be handled.
         if (!stream1->IsMemoryBased() || !stream2->IsMemoryBased())
           return false;
-        return FXSYS_memcmp(stream1->GetRawData(), stream2->GetRawData(),
-                            stream1->GetRawSize()) == 0;
+        return memcmp(stream1->GetRawData(), stream2->GetRawData(),
+                      stream1->GetRawSize()) == 0;
       }
       case CPDF_Object::REFERENCE:
         return obj1->AsReference()->GetRefObjNum() ==
@@ -176,9 +179,9 @@ class PDFObjectsTest : public testing::Test {
   std::vector<std::unique_ptr<CPDF_Object>> m_DirectObjs;
   std::vector<int> m_DirectObjTypes;
   std::vector<std::unique_ptr<CPDF_Object>> m_RefObjs;
-  CPDF_Dictionary* m_DictObj;
-  CPDF_Dictionary* m_StreamDictObj;
-  CPDF_Array* m_ArrayObj;
+  CFX_UnownedPtr<CPDF_Dictionary> m_DictObj;
+  CFX_UnownedPtr<CPDF_Dictionary> m_StreamDictObj;
+  CFX_UnownedPtr<CPDF_Array> m_ArrayObj;
   std::vector<CPDF_Object*> m_IndirectObjs;
 };
 
@@ -215,14 +218,14 @@ TEST_F(PDFObjectsTest, GetUnicodeText) {
 }
 
 TEST_F(PDFObjectsTest, GetNumber) {
-  const FX_FLOAT direct_obj_results[] = {0, 0, 1245, 9.00345f, 0, 0,
-                                         0, 0, 0,    0,        0};
+  const float direct_obj_results[] = {0, 0, 1245, 9.00345f, 0, 0,
+                                      0, 0, 0,    0,        0};
   // Check for direct objects.
   for (size_t i = 0; i < m_DirectObjs.size(); ++i)
     EXPECT_EQ(direct_obj_results[i], m_DirectObjs[i]->GetNumber());
 
   // Check indirect references.
-  const FX_FLOAT indirect_obj_results[] = {0, 1245, 0, 0, 0, 0, 0};
+  const float indirect_obj_results[] = {0, 1245, 0, 0, 0, 0, 0};
   for (size_t i = 0; i < m_RefObjs.size(); ++i)
     EXPECT_EQ(indirect_obj_results[i], m_RefObjs[i]->GetNumber());
 }
@@ -241,23 +244,29 @@ TEST_F(PDFObjectsTest, GetInteger) {
 
 TEST_F(PDFObjectsTest, GetDict) {
   const CPDF_Dictionary* const direct_obj_results[] = {
-      nullptr, nullptr, nullptr,   nullptr,         nullptr, nullptr,
-      nullptr, nullptr, m_DictObj, m_StreamDictObj, nullptr};
+      nullptr, nullptr, nullptr, nullptr,         nullptr,
+      nullptr, nullptr, nullptr, m_DictObj.Get(), m_StreamDictObj.Get(),
+      nullptr};
   // Check for direct objects.
   for (size_t i = 0; i < m_DirectObjs.size(); ++i)
     EXPECT_EQ(direct_obj_results[i], m_DirectObjs[i]->GetDict());
 
   // Check indirect references.
-  const CPDF_Dictionary* const indirect_obj_results[] = {
-      nullptr, nullptr, nullptr, nullptr, nullptr, m_DictObj, m_StreamDictObj};
+  const CPDF_Dictionary* const indirect_obj_results[] = {nullptr,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr,
+                                                         m_DictObj.Get(),
+                                                         m_StreamDictObj.Get()};
   for (size_t i = 0; i < m_RefObjs.size(); ++i)
     EXPECT_TRUE(Equal(indirect_obj_results[i], m_RefObjs[i]->GetDict()));
 }
 
 TEST_F(PDFObjectsTest, GetArray) {
   const CPDF_Array* const direct_obj_results[] = {
-      nullptr, nullptr,    nullptr, nullptr, nullptr, nullptr,
-      nullptr, m_ArrayObj, nullptr, nullptr, nullptr};
+      nullptr, nullptr,          nullptr, nullptr, nullptr, nullptr,
+      nullptr, m_ArrayObj.Get(), nullptr, nullptr, nullptr};
   // Check for direct objects.
   for (size_t i = 0; i < m_DirectObjs.size(); ++i)
     EXPECT_EQ(direct_obj_results[i], m_DirectObjs[i]->AsArray());
@@ -394,12 +403,12 @@ TEST(PDFArrayTest, GetMatrix) {
     for (size_t j = 0; j < 6; ++j)
       arr->AddNew<CPDF_Number>(elems[i][j]);
     CFX_Matrix arr_matrix = arr->GetMatrix();
-    EXPECT_EQ(matrix.GetA(), arr_matrix.GetA());
-    EXPECT_EQ(matrix.GetB(), arr_matrix.GetB());
-    EXPECT_EQ(matrix.GetC(), arr_matrix.GetC());
-    EXPECT_EQ(matrix.GetD(), arr_matrix.GetD());
-    EXPECT_EQ(matrix.GetE(), arr_matrix.GetE());
-    EXPECT_EQ(matrix.GetF(), arr_matrix.GetF());
+    EXPECT_EQ(matrix.a, arr_matrix.a);
+    EXPECT_EQ(matrix.b, arr_matrix.b);
+    EXPECT_EQ(matrix.c, arr_matrix.c);
+    EXPECT_EQ(matrix.d, arr_matrix.d);
+    EXPECT_EQ(matrix.e, arr_matrix.e);
+    EXPECT_EQ(matrix.f, arr_matrix.f);
   }
 }
 
@@ -481,8 +490,8 @@ TEST(PDFArrayTest, GetTypeAt) {
     // String and name array
     const char* const vals[] = {"this", "adsde$%^", "\r\t",           "\"012",
                                 ".",    "EYREW",    "It is a joke :)"};
-    std::unique_ptr<CPDF_Array> string_array(new CPDF_Array);
-    std::unique_ptr<CPDF_Array> name_array(new CPDF_Array);
+    auto string_array = pdfium::MakeUnique<CPDF_Array>();
+    auto name_array = pdfium::MakeUnique<CPDF_Array>();
     for (size_t i = 0; i < FX_ArraySize(vals); ++i) {
       string_array->InsertNewAt<CPDF_String>(i, vals[i], false);
       name_array->InsertNewAt<CPDF_Name>(i, vals[i]);
@@ -555,7 +564,7 @@ TEST(PDFArrayTest, GetTypeAt) {
         char buf[33];
         key.append(FXSYS_itoa(j, buf, 10));
         int value = j + 200;
-        vals[i]->SetFor(key.c_str(), new CPDF_Number(value));
+        vals[i]->SetNewFor<CPDF_Number>(key.c_str(), value);
       }
     }
     for (size_t i = 0; i < 3; ++i) {
@@ -581,13 +590,15 @@ TEST(PDFArrayTest, GetTypeAt) {
         char buf[33];
         key.append(FXSYS_itoa(j, buf, 10));
         int value = j + 200;
-        vals[i]->SetFor(key.c_str(), new CPDF_Number(value));
+        vals[i]->SetNewFor<CPDF_Number>(key.c_str(), value);
       }
       uint8_t content[] = "content: this is a stream";
       size_t data_size = FX_ArraySize(content);
-      uint8_t* data = reinterpret_cast<uint8_t*>(malloc(data_size));
-      memcpy(data, content, data_size);
-      stream_vals[i] = arr->AddNew<CPDF_Stream>(data, data_size, vals[i]);
+      std::unique_ptr<uint8_t, FxFreeDeleter> data(
+          FX_Alloc(uint8_t, data_size));
+      memcpy(data.get(), content, data_size);
+      stream_vals[i] = arr->AddNew<CPDF_Stream>(std::move(data), data_size,
+                                                pdfium::WrapUnique(vals[i]));
     }
     for (size_t i = 0; i < 3; ++i) {
       TestArrayAccessors(arr.get(), i,     // Array and index.
@@ -620,20 +631,20 @@ TEST(PDFArrayTest, GetTypeAt) {
     arr_val->AddNew<CPDF_Number>(2);
 
     CPDF_Dictionary* dict_val = arr->InsertNewAt<CPDF_Dictionary>(12);
-    dict_val->SetFor("key1", new CPDF_String(nullptr, "Linda", false));
-    dict_val->SetFor("key2", new CPDF_String(nullptr, "Zoe", false));
+    dict_val->SetNewFor<CPDF_String>("key1", "Linda", false);
+    dict_val->SetNewFor<CPDF_String>("key2", "Zoe", false);
 
     CPDF_Dictionary* stream_dict = new CPDF_Dictionary();
-    stream_dict->SetFor("key1", new CPDF_String(nullptr, "John", false));
-    stream_dict->SetFor("key2", new CPDF_String(nullptr, "King", false));
+    stream_dict->SetNewFor<CPDF_String>("key1", "John", false);
+    stream_dict->SetNewFor<CPDF_String>("key2", "King", false);
     uint8_t data[] = "A stream for test";
     // The data buffer will be owned by stream object, so it needs to be
     // dynamically allocated.
     size_t buf_size = sizeof(data);
-    uint8_t* buf = reinterpret_cast<uint8_t*>(malloc(buf_size));
-    memcpy(buf, data, buf_size);
-    CPDF_Stream* stream_val =
-        arr->InsertNewAt<CPDF_Stream>(13, buf, buf_size, stream_dict);
+    std::unique_ptr<uint8_t, FxFreeDeleter> buf(FX_Alloc(uint8_t, buf_size));
+    memcpy(buf.get(), data, buf_size);
+    CPDF_Stream* stream_val = arr->InsertNewAt<CPDF_Stream>(
+        13, std::move(buf), buf_size, pdfium::WrapUnique(stream_dict));
     const char* const expected_str[] = {
         "true",          "false", "0",    "-1234", "2345", "0.05", "",
         "It is a test!", "NAME",  "test", "",      "",     "",     ""};
@@ -690,8 +701,8 @@ TEST(PDFArrayTest, AddInteger) {
 TEST(PDFArrayTest, AddStringAndName) {
   const char* vals[] = {"",        "a", "ehjhRIOYTTFdfcdnv",  "122323",
                         "$#%^&**", " ", "This is a test.\r\n"};
-  std::unique_ptr<CPDF_Array> string_array(new CPDF_Array);
-  std::unique_ptr<CPDF_Array> name_array(new CPDF_Array);
+  auto string_array = pdfium::MakeUnique<CPDF_Array>();
+  auto name_array = pdfium::MakeUnique<CPDF_Array>();
   for (size_t i = 0; i < FX_ArraySize(vals); ++i) {
     string_array->AddNew<CPDF_String>(vals[i], false);
     name_array->AddNew<CPDF_Name>(vals[i]);
@@ -705,8 +716,7 @@ TEST(PDFArrayTest, AddStringAndName) {
 }
 
 TEST(PDFArrayTest, AddReferenceAndGetObjectAt) {
-  std::unique_ptr<CPDF_IndirectObjectHolder> holder(
-      new CPDF_IndirectObjectHolder());
+  auto holder = pdfium::MakeUnique<CPDF_IndirectObjectHolder>();
   CPDF_Boolean* boolean_obj = new CPDF_Boolean(true);
   CPDF_Number* int_obj = new CPDF_Number(-1234);
   CPDF_Number* float_obj = new CPDF_Number(2345.089f);
@@ -718,7 +728,7 @@ TEST(PDFArrayTest, AddReferenceAndGetObjectAt) {
                                   str_obj,     name_obj, null_obj};
   unsigned int obj_nums[] = {2, 4, 7, 2345, 799887, 1};
   auto arr = pdfium::MakeUnique<CPDF_Array>();
-  std::unique_ptr<CPDF_Array> arr1(new CPDF_Array);
+  auto arr1 = pdfium::MakeUnique<CPDF_Array>();
   // Create two arrays of references by different AddReference() APIs.
   for (size_t i = 0; i < FX_ArraySize(indirect_objs); ++i) {
     holder->ReplaceIndirectObjectIfHigherGeneration(
@@ -743,7 +753,7 @@ TEST(PDFArrayTest, AddReferenceAndGetObjectAt) {
 
 TEST(PDFArrayTest, CloneDirectObject) {
   CPDF_IndirectObjectHolder objects_holder;
-  std::unique_ptr<CPDF_Array> array(new CPDF_Array);
+  auto array = pdfium::MakeUnique<CPDF_Array>();
   array->AddNew<CPDF_Reference>(&objects_holder, 1234);
   ASSERT_EQ(1U, array->GetCount());
   CPDF_Object* obj = array->GetObjectAt(0);
@@ -756,7 +766,7 @@ TEST(PDFArrayTest, CloneDirectObject) {
 
   std::unique_ptr<CPDF_Array> cloned_array =
       ToArray(std::move(cloned_array_object));
-  ASSERT_EQ(1U, cloned_array->GetCount());
+  ASSERT_EQ(0U, cloned_array->GetCount());
   CPDF_Object* cloned_obj = cloned_array->GetObjectAt(0);
   EXPECT_FALSE(cloned_obj);
 }
@@ -777,8 +787,8 @@ TEST(PDFArrayTest, ConvertIndirect) {
 
 TEST(PDFDictionaryTest, CloneDirectObject) {
   CPDF_IndirectObjectHolder objects_holder;
-  std::unique_ptr<CPDF_Dictionary> dict(new CPDF_Dictionary());
-  dict->SetReferenceFor("foo", &objects_holder, 1234);
+  auto dict = pdfium::MakeUnique<CPDF_Dictionary>();
+  dict->SetNewFor<CPDF_Reference>("foo", &objects_holder, 1234);
   ASSERT_EQ(1U, dict->GetCount());
   CPDF_Object* obj = dict->GetObjectFor("foo");
   ASSERT_TRUE(obj);
@@ -790,17 +800,19 @@ TEST(PDFDictionaryTest, CloneDirectObject) {
 
   std::unique_ptr<CPDF_Dictionary> cloned_dict =
       ToDictionary(std::move(cloned_dict_object));
-  ASSERT_EQ(1U, cloned_dict->GetCount());
+  ASSERT_EQ(0U, cloned_dict->GetCount());
   CPDF_Object* cloned_obj = cloned_dict->GetObjectFor("foo");
   EXPECT_FALSE(cloned_obj);
 }
 
 TEST(PDFObjectTest, CloneCheckLoop) {
   {
-    // Create a dictionary/array pair with a reference loop.
+    // Create a dictionary/array pair with a reference loop. It takes
+    // some work to do this nowadays, in particular we need the
+    // anti-pattern pdfium::WrapUnique(arr.get()).
     auto arr_obj = pdfium::MakeUnique<CPDF_Array>();
     CPDF_Dictionary* dict_obj = arr_obj->InsertNewAt<CPDF_Dictionary>(0);
-    dict_obj->SetFor("arr", arr_obj.get());
+    dict_obj->SetFor("arr", pdfium::WrapUnique(arr_obj.get()));
     // Clone this object to see whether stack overflow will be triggered.
     std::unique_ptr<CPDF_Array> cloned_array = ToArray(arr_obj->Clone());
     // Cloned object should be the same as the original.
@@ -813,12 +825,12 @@ TEST(PDFObjectTest, CloneCheckLoop) {
     EXPECT_EQ(nullptr, cloned_dict->AsDictionary()->GetObjectFor("arr"));
   }
   {
-    // Create a dictionary/stream pair with a reference loop.
-    CPDF_Dictionary* dict_obj = new CPDF_Dictionary();
-    std::unique_ptr<CPDF_Stream> stream_obj(
-        new CPDF_Stream(nullptr, 0, dict_obj));
-    dict_obj->SetFor("stream", stream_obj.get());
-
+    // Create a dictionary/stream pair with a reference loop. It takes
+    // some work to do this nowadays, in particular we need the
+    // anti-pattern pdfium::WrapUnique(dict.get()).
+    auto dict_obj = pdfium::MakeUnique<CPDF_Dictionary>();
+    CPDF_Stream* stream_obj = dict_obj->SetNewFor<CPDF_Stream>(
+        "stream", nullptr, 0, pdfium::WrapUnique(dict_obj.get()));
     // Clone this object to see whether stack overflow will be triggered.
     std::unique_ptr<CPDF_Stream> cloned_stream = ToStream(stream_obj->Clone());
     // Cloned object should be the same as the original.
@@ -837,7 +849,7 @@ TEST(PDFObjectTest, CloneCheckLoop) {
     arr_obj->InsertNewAt<CPDF_Reference>(0, &objects_holder,
                                          dict_obj->GetObjNum());
     CPDF_Object* elem0 = arr_obj->GetObjectAt(0);
-    dict_obj->SetFor("arr", arr_obj.release());
+    dict_obj->SetFor("arr", std::move(arr_obj));
     EXPECT_EQ(1u, dict_obj->GetObjNum());
     ASSERT_TRUE(elem0);
     ASSERT_TRUE(elem0->IsReference());
@@ -852,7 +864,7 @@ TEST(PDFObjectTest, CloneCheckLoop) {
     CPDF_Object* cloned_arr = cloned_dict->GetObjectFor("arr");
     ASSERT_TRUE(cloned_arr);
     ASSERT_TRUE(cloned_arr->IsArray());
-    EXPECT_EQ(1u, cloned_arr->AsArray()->GetCount());
+    EXPECT_EQ(0U, cloned_arr->AsArray()->GetCount());
     // Recursively referenced object is not cloned.
     EXPECT_EQ(nullptr, cloned_arr->AsArray()->GetObjectAt(0));
   }
@@ -860,9 +872,8 @@ TEST(PDFObjectTest, CloneCheckLoop) {
 
 TEST(PDFDictionaryTest, ConvertIndirect) {
   CPDF_IndirectObjectHolder objects_holder;
-  std::unique_ptr<CPDF_Dictionary> dict(new CPDF_Dictionary);
-  CPDF_Object* pObj = new CPDF_Number(42);
-  dict->SetFor("clams", pObj);
+  auto dict = pdfium::MakeUnique<CPDF_Dictionary>();
+  CPDF_Object* pObj = dict->SetNewFor<CPDF_Number>("clams", 42);
   dict->ConvertToIndirectObjectFor("clams", &objects_holder);
   CPDF_Object* pRef = dict->GetObjectFor("clams");
   CPDF_Object* pNum = dict->GetDirectObjectFor("clams");

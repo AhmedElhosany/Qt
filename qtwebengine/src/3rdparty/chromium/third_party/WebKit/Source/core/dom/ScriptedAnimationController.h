@@ -29,10 +29,10 @@
 #include "core/CoreExport.h"
 #include "core/dom/FrameRequestCallbackCollection.h"
 #include "platform/heap/Handle.h"
-#include "wtf/ListHashSet.h"
-#include "wtf/Vector.h"
-#include "wtf/text/AtomicString.h"
-#include "wtf/text/StringImpl.h"
+#include "platform/wtf/ListHashSet.h"
+#include "platform/wtf/Vector.h"
+#include "platform/wtf/text/AtomicString.h"
+#include "platform/wtf/text/StringImpl.h"
 
 namespace blink {
 
@@ -43,52 +43,63 @@ class FrameRequestCallback;
 class MediaQueryListListener;
 
 class CORE_EXPORT ScriptedAnimationController
-    : public GarbageCollected<ScriptedAnimationController> {
+    : public GarbageCollectedFinalized<ScriptedAnimationController> {
  public:
-  static ScriptedAnimationController* create(Document* document) {
+  static ScriptedAnimationController* Create(Document* document) {
     return new ScriptedAnimationController(document);
   }
 
   DECLARE_TRACE();
-  void clearDocumentPointer() { m_document = nullptr; }
+  void ClearDocumentPointer() { document_ = nullptr; }
 
+  // Animation frame callbacks are used for requestAnimationFrame().
   typedef int CallbackId;
+  CallbackId RegisterCallback(FrameRequestCallback*);
+  void CancelCallback(CallbackId);
 
-  int registerCallback(FrameRequestCallback*);
-  void cancelCallback(CallbackId);
-  void serviceScriptedAnimations(double monotonicTimeNow);
+  // Animation frame events are used for resize events, scroll events, etc.
+  void EnqueueEvent(Event*);
+  void EnqueuePerFrameEvent(Event*);
 
-  void enqueueEvent(Event*);
-  void enqueuePerFrameEvent(Event*);
-  void enqueueMediaQueryChangeListeners(
+  // Animation frame tasks are used for Fullscreen.
+  void EnqueueTask(std::unique_ptr<WTF::Closure>);
+
+  // Used for the MediaQueryList change event.
+  void EnqueueMediaQueryChangeListeners(
       HeapVector<Member<MediaQueryListListener>>&);
 
-  void suspend();
-  void resume();
+  // Invokes callbacks, dispatches events, etc. The order is defined by HTML:
+  // https://html.spec.whatwg.org/multipage/webappapis.html#event-loop-processing-model
+  void ServiceScriptedAnimations(double monotonic_time_now);
 
-  void dispatchEventsAndCallbacksForPrinting();
+  void Suspend();
+  void Resume();
+
+  void DispatchEventsAndCallbacksForPrinting();
 
  private:
   explicit ScriptedAnimationController(Document*);
 
-  void scheduleAnimationIfNeeded();
+  void ScheduleAnimationIfNeeded();
 
-  void dispatchEvents(
-      const AtomicString& eventInterfaceFilter = AtomicString());
-  void executeCallbacks(double monotonicTimeNow);
-  void callMediaQueryListListeners();
+  void RunTasks();
+  void DispatchEvents(
+      const AtomicString& event_interface_filter = AtomicString());
+  void ExecuteCallbacks(double monotonic_time_now);
+  void CallMediaQueryListListeners();
 
-  bool hasScheduledItems() const;
+  bool HasScheduledItems() const;
 
-  Member<Document> m_document;
-  FrameRequestCallbackCollection m_callbackCollection;
-  int m_suspendCount;
-  HeapVector<Member<Event>> m_eventQueue;
+  Member<Document> document_;
+  FrameRequestCallbackCollection callback_collection_;
+  int suspend_count_;
+  Vector<std::unique_ptr<WTF::Closure>> task_queue_;
+  HeapVector<Member<Event>> event_queue_;
   HeapListHashSet<std::pair<Member<const EventTarget>, const StringImpl*>>
-      m_perFrameEvents;
+      per_frame_events_;
   using MediaQueryListListeners =
       HeapListHashSet<Member<MediaQueryListListener>>;
-  MediaQueryListListeners m_mediaQueryListListeners;
+  MediaQueryListListeners media_query_list_listeners_;
 };
 
 }  // namespace blink

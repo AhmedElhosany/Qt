@@ -11,7 +11,7 @@
 #ifndef WEBRTC_SYSTEM_WRAPPERS_INCLUDE_ALIGNED_ARRAY_
 #define WEBRTC_SYSTEM_WRAPPERS_INCLUDE_ALIGNED_ARRAY_
 
-#include "webrtc/base/checks.h"
+#include "webrtc/rtc_base/checks.h"
 #include "webrtc/system_wrappers/include/aligned_malloc.h"
 
 namespace webrtc {
@@ -23,7 +23,7 @@ template<typename T> class AlignedArray {
   AlignedArray(size_t rows, size_t cols, size_t alignment)
       : rows_(rows),
         cols_(cols) {
-    RTC_CHECK_GT(alignment, 0u);
+    RTC_CHECK_GT(alignment, 0);
     head_row_ = static_cast<T**>(AlignedMalloc(rows_ * sizeof(*head_row_),
                                                alignment));
     for (size_t i = 0; i < rows_; ++i) {

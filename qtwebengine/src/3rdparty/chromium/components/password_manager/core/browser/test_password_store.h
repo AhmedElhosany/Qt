@@ -46,6 +46,8 @@ class TestPasswordStore : public PasswordStore {
       const autofill::PasswordForm& form) override;
   std::vector<std::unique_ptr<autofill::PasswordForm>> FillMatchingLogins(
       const FormDigest& form) override;
+  std::vector<std::unique_ptr<autofill::PasswordForm>>
+  FillLoginsForSameOrganizationName(const std::string& signon_realm) override;
 
   // Unused portions of PasswordStore interface
   void ReportMetricsImpl(const std::string& sync_username,
@@ -72,7 +74,8 @@ class TestPasswordStore : public PasswordStore {
       std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) override;
   void AddSiteStatsImpl(const InteractionsStats& stats) override;
   void RemoveSiteStatsImpl(const GURL& origin_domain) override;
-  std::vector<std::unique_ptr<InteractionsStats>> GetSiteStatsImpl(
+  std::vector<InteractionsStats> GetAllSiteStatsImpl() override;
+  std::vector<InteractionsStats> GetSiteStatsImpl(
       const GURL& origin_domain) override;
 
  private:

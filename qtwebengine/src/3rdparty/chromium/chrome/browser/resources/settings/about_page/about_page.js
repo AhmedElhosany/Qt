@@ -6,6 +6,7 @@
  * @fileoverview 'settings-about-page' contains version and OS related
  * information.
  */
+
 Polymer({
   is: 'settings-about-page',
 
@@ -18,9 +19,12 @@ Polymer({
       value: {message: '', progress: 0, status: UpdateStatus.DISABLED},
     },
 
-<if expr="chromeos">
+    // <if expr="chromeos">
     /** @private */
-    hasCheckedForUpdates_: Boolean,
+    hasCheckedForUpdates_: {
+      type: Boolean,
+      value: false,
+    },
 
     /** @private {!BrowserChannel} */
     currentChannel_: String,
@@ -30,7 +34,12 @@ Polymer({
 
     /** @private {?RegulatoryInfo} */
     regulatoryInfo_: Object,
-</if>
+    // </if>
+
+    // <if expr="_google_chrome and is_macosx">
+    /** @private {!PromoteUpdaterStatus} */
+    promoteUpdaterStatus_: Object,
+    // </if>
 
     /** @private {!{obsolete: boolean, endOfLine: boolean}} */
     obsoleteSystemInfo_: {
@@ -42,7 +51,75 @@ Polymer({
         };
       },
     },
+
+    /** @private */
+    showUpdateStatus_: Boolean,
+
+    /** @private */
+    showButtonContainer_: Boolean,
+
+    /** @private */
+    showRelaunch_: Boolean,
+
+    // <if expr="chromeos">
+    /** @private */
+    showRelaunchAndPowerwash_: {
+      type: Boolean,
+      computed: 'computeShowRelaunchAndPowerwash_(' +
+          'currentUpdateStatusEvent_, targetChannel_, currentChannel_)',
+    },
+
+    /** @private */
+    showCheckUpdates_: {
+      type: Boolean,
+      computed: 'computeShowCheckUpdates_(' +
+          'currentUpdateStatusEvent_, hasCheckedForUpdates_)',
+    },
+
+    /** @private {!Map<string, string>} */
+    focusConfig_: {
+      type: Object,
+      value: function() {
+        var map = new Map();
+        if (settings.routes.DETAILED_BUILD_INFO) {
+          map.set(
+              settings.routes.DETAILED_BUILD_INFO.path,
+              '#detailed-build-info-trigger');
+        }
+        return map;
+      },
+    },
+
+    /** @private */
+    showUpdateWarningDialog_: {
+      type: Boolean,
+      value: false,
+    },
+
+    /** @private {!AboutPageUpdateInfo|undefined} */
+    updateInfo_: Object,
+    // </if>
   },
+
+  observers: [
+    // <if expr="not chromeos">
+    'updateShowUpdateStatus_(' +
+        'obsoleteSystemInfo_, currentUpdateStatusEvent_)',
+    'updateShowRelaunch_(currentUpdateStatusEvent_)',
+    'updateShowButtonContainer_(showRelaunch_)',
+    // </if>
+
+    // <if expr="chromeos">
+    'updateShowUpdateStatus_(' +
+        'obsoleteSystemInfo_, currentUpdateStatusEvent_,' +
+        'hasCheckedForUpdates_)',
+    'updateShowRelaunch_(currentUpdateStatusEvent_, targetChannel_,' +
+        'currentChannel_)',
+    'updateShowButtonContainer_(' +
+        'showRelaunch_, showRelaunchAndPowerwash_, showCheckUpdates_)',
+    // </if>
+  ],
+
 
   /** @private {?settings.AboutPageBrowserProxy} */
   aboutBrowserProxy_: null,
@@ -58,35 +135,38 @@ Polymer({
     this.lifetimeBrowserProxy_ =
         settings.LifetimeBrowserProxyImpl.getInstance();
 
-<if expr="chromeos">
+    // <if expr="chromeos">
     this.addEventListener('target-channel-changed', function(e) {
       this.targetChannel_ = e.detail;
     }.bind(this));
 
-    Promise.all([
-      this.aboutBrowserProxy_.getCurrentChannel(),
-      this.aboutBrowserProxy_.getTargetChannel(),
-    ]).then(function(channels) {
-      this.currentChannel_ = channels[0];
-      this.targetChannel_ = channels[1];
-
+    this.aboutBrowserProxy_.getChannelInfo().then(function(info) {
+      this.currentChannel_ = info.currentChannel;
+      this.targetChannel_ = info.targetChannel;
       this.startListening_();
     }.bind(this));
 
     this.aboutBrowserProxy_.getRegulatoryInfo().then(function(info) {
       this.regulatoryInfo_ = info;
     }.bind(this));
-</if>
-<if expr="not chromeos">
+    // </if>
+    // <if expr="not chromeos">
     this.startListening_();
-</if>
+    // </if>
+    if (settings.getQueryParameters().get('checkForUpdate') == 'true') {
+      this.onCheckUpdatesTap_();
+    }
   },
 
   /** @private */
   startListening_: function() {
     this.addWebUIListener(
-        'update-status-changed',
-        this.onUpdateStatusChanged_.bind(this));
+        'update-status-changed', this.onUpdateStatusChanged_.bind(this));
+    // <if expr="_google_chrome and is_macosx">
+    this.addWebUIListener(
+        'promotion-state-changed',
+        this.onPromoteUpdaterStatusChanged_.bind(this));
+    // </if>
     this.aboutBrowserProxy_.refreshUpdateStatus();
   },
 
@@ -95,12 +175,48 @@ Polymer({
    * @private
    */
   onUpdateStatusChanged_: function(event) {
-<if expr="chromeos">
-    if (event.status == UpdateStatus.CHECKING)
+    // <if expr="chromeos">
+    if (event.status == UpdateStatus.CHECKING) {
       this.hasCheckedForUpdates_ = true;
-</if>
+    } else if (event.status == UpdateStatus.NEED_PERMISSION_TO_UPDATE) {
+      this.showUpdateWarningDialog_ = true;
+      this.updateInfo_ = {version: event.version, size: event.size};
+    }
+    // </if>
     this.currentUpdateStatusEvent_ = event;
   },
+
+  // <if expr="_google_chrome and is_macosx">
+  /**
+   * @param {!PromoteUpdaterStatus} status
+   * @private
+   */
+  onPromoteUpdaterStatusChanged_: function(status) {
+    this.promoteUpdaterStatus_ = status;
+  },
+
+  /**
+   * If #promoteUpdater isn't disabled, trigger update promotion.
+   * @private
+   */
+  onPromoteUpdaterTap_: function() {
+    // This is necessary because #promoteUpdater is not a button, so by default
+    // disable doesn't do anything.
+    if (this.promoteUpdaterStatus_.disabled)
+      return;
+    this.aboutBrowserProxy_.promoteUpdater();
+  },
+
+  /**
+   * @param {!Event} event
+   * @private
+   */
+  onLearnMoreTap_: function(event) {
+    // Stop the propagation of events, so that clicking on links inside
+    // actionable items won't trigger action.
+    event.stopPropagation();
+  },
+  // </if>
 
   /** @private */
   onHelpTap_: function() {
@@ -112,38 +228,46 @@ Polymer({
     this.lifetimeBrowserProxy_.relaunch();
   },
 
-  /**
-   * @return {boolean}
-   * @private
-   */
-  shouldShowUpdateStatusMessage_: function() {
-    return this.currentUpdateStatusEvent_.status != UpdateStatus.DISABLED &&
+  /** @private */
+  updateShowUpdateStatus_: function() {
+    // <if expr="chromeos">
+    // Do not show the "updated" status if we haven't checked yet or the update
+    // warning dialog is shown to user.
+    if (this.currentUpdateStatusEvent_.status == UpdateStatus.UPDATED &&
+        (!this.hasCheckedForUpdates_ || this.showUpdateWarningDialog_)) {
+      this.showUpdateStatus_ = false;
+      return;
+    }
+    // </if>
+    this.showUpdateStatus_ =
+        this.currentUpdateStatusEvent_.status != UpdateStatus.DISABLED &&
         !this.obsoleteSystemInfo_.endOfLine;
   },
 
   /**
-   * @return {boolean}
+   * Hide the button container if all buttons are hidden, otherwise the
+   * container displays an unwanted border (see separator class).
    * @private
    */
-  shouldShowUpdateStatusIcon_: function() {
-    return this.currentUpdateStatusEvent_.status != UpdateStatus.DISABLED ||
-        this.obsoleteSystemInfo_.endOfLine;
+  updateShowButtonContainer_: function() {
+    // <if expr="not chromeos">
+    this.showButtonContainer_ = this.showRelaunch_;
+    // </if>
+    // <if expr="chromeos">
+    this.showButtonContainer_ = this.showRelaunch_ ||
+        this.showRelaunchAndPowerwash_ || this.showCheckUpdates_;
+    // </if>
   },
 
-  /**
-   * @return {boolean}
-   * @private
-   */
-  shouldShowRelaunch_: function() {
-    var shouldShow = false;
-<if expr="not chromeos">
-    shouldShow = this.checkStatus_(UpdateStatus.NEARLY_UPDATED);
-</if>
-<if expr="chromeos">
-    shouldShow = this.checkStatus_(UpdateStatus.NEARLY_UPDATED) &&
+  /** @private */
+  updateShowRelaunch_: function() {
+    // <if expr="not chromeos">
+    this.showRelaunch_ = this.checkStatus_(UpdateStatus.NEARLY_UPDATED);
+    // </if>
+    // <if expr="chromeos">
+    this.showRelaunch_ = this.checkStatus_(UpdateStatus.NEARLY_UPDATED) &&
         !this.isTargetChannelMoreStable_();
-</if>
-    return shouldShow;
+    // </if>
   },
 
   /**
@@ -153,40 +277,55 @@ Polymer({
   getUpdateStatusMessage_: function() {
     switch (this.currentUpdateStatusEvent_.status) {
       case UpdateStatus.CHECKING:
-        return this.i18n('aboutUpgradeCheckStarted');
+      case UpdateStatus.NEED_PERMISSION_TO_UPDATE:
+        return this.i18nAdvanced('aboutUpgradeCheckStarted');
       case UpdateStatus.NEARLY_UPDATED:
-<if expr="chromeos">
+        // <if expr="chromeos">
         if (this.currentChannel_ != this.targetChannel_)
-          return this.i18n('aboutUpgradeSuccessChannelSwitch');
-</if>
-        return this.i18n('aboutUpgradeRelaunch');
+          return this.i18nAdvanced('aboutUpgradeSuccessChannelSwitch');
+        // </if>
+        return this.i18nAdvanced('aboutUpgradeRelaunch');
       case UpdateStatus.UPDATED:
-        return this.i18n('aboutUpgradeUpToDate');
+        return this.i18nAdvanced('aboutUpgradeUpToDate');
       case UpdateStatus.UPDATING:
         assert(typeof this.currentUpdateStatusEvent_.progress == 'number');
         var progressPercent = this.currentUpdateStatusEvent_.progress + '%';
 
-<if expr="chromeos">
+        // <if expr="chromeos">
         if (this.currentChannel_ != this.targetChannel_) {
-          return this.i18n('aboutUpgradeUpdatingChannelSwitch',
-              this.i18n(settings.browserChannelToI18nId(this.targetChannel_)),
-              progressPercent);
+          return this.i18nAdvanced('aboutUpgradeUpdatingChannelSwitch', {
+            substitutions: [
+              this.i18nAdvanced(
+                  settings.browserChannelToI18nId(this.targetChannel_)),
+              progressPercent
+            ]
+          });
         }
-</if>
+        // </if>
         if (this.currentUpdateStatusEvent_.progress > 0) {
           // NOTE(dbeam): some platforms (i.e. Mac) always send 0% while
           // updating (they don't support incremental upgrade progress). Though
           // it's certainly quite possible to validly end up here with 0% on
           // platforms that support incremental progress, nobody really likes
           // seeing that they're 0% done with something.
-          return this.i18n('aboutUpgradeUpdatingPercent', progressPercent);
+          return this.i18nAdvanced('aboutUpgradeUpdatingPercent', {
+            substitutions: [progressPercent],
+          });
         }
-        return this.i18n('aboutUpgradeUpdating');
+        return this.i18nAdvanced('aboutUpgradeUpdating');
       default:
+        function formatMessage(msg) {
+          return parseHtmlSubset('<b>' + msg + '</b>', ['br', 'pre'])
+              .firstChild.innerHTML;
+        }
+        var result = '';
         var message = this.currentUpdateStatusEvent_.message;
-        return message ?
-            parseHtmlSubset('<b>' + message + '</b>').firstChild.innerHTML :
-            '';
+        if (message)
+          result += formatMessage(message);
+        var connectMessage = this.currentUpdateStatusEvent_.connectionTypes;
+        if (connectMessage)
+          result += '<div>' + formatMessage(connectMessage) + '</div>';
+        return result;
     }
   },
 
@@ -202,14 +341,14 @@ Polymer({
 
     switch (this.currentUpdateStatusEvent_.status) {
       case UpdateStatus.DISABLED_BY_ADMIN:
-        return 'cr:domain';
+        return 'cr20:domain';
       case UpdateStatus.FAILED:
         return 'settings:error';
       case UpdateStatus.UPDATED:
       case UpdateStatus.NEARLY_UPDATED:
-          return 'settings:check-circle';
+        return 'settings:check-circle';
       default:
-          return null;
+        return null;
     }
   },
 
@@ -239,7 +378,7 @@ Polymer({
     return this.currentUpdateStatusEvent_.status == status;
   },
 
-<if expr="chromeos">
+  // <if expr="chromeos">
   /**
    * @return {boolean}
    * @private
@@ -253,7 +392,7 @@ Polymer({
 
   /** @private */
   onDetailedBuildInfoTap_: function() {
-    settings.navigateTo(settings.Route.DETAILED_BUILD_INFO);
+    settings.navigateTo(settings.routes.DETAILED_BUILD_INFO);
   },
 
   /** @private */
@@ -265,7 +404,7 @@ Polymer({
    * @return {boolean}
    * @private
    */
-  shouldShowRelaunchAndPowerwash_: function() {
+  computeShowRelaunchAndPowerwash_: function() {
     return this.checkStatus_(UpdateStatus.NEARLY_UPDATED) &&
         this.isTargetChannelMoreStable_();
   },
@@ -280,9 +419,13 @@ Polymer({
    * @return {boolean}
    * @private
    */
-  shouldShowCheckUpdates_: function() {
-    return !this.hasCheckedForUpdates_ ||
-        this.checkStatus_(UpdateStatus.FAILED);
+  computeShowCheckUpdates_: function() {
+    // Enable the update button if we are in a stale 'updated' status or
+    // update has failed. Disable it otherwise.
+    var staleUpdatedStatus =
+        !this.hasCheckedForUpdates_ && this.checkStatus_(UpdateStatus.UPDATED);
+
+    return staleUpdatedStatus || this.checkStatus_(UpdateStatus.FAILED);
   },
 
   /**
@@ -292,22 +435,32 @@ Polymer({
   shouldShowRegulatoryInfo_: function() {
     return this.regulatoryInfo_ !== null;
   },
-</if>
+
+  /** @private */
+  onUpdateWarningDialogClose_: function() {
+    this.showUpdateWarningDialog_ = false;
+    // Shows 'check for updates' button in case that the user cancels the
+    // dialog and then intends to check for update again.
+    this.hasCheckedForUpdates_ = false;
+  },
+  // </if>
 
   /** @private */
   onProductLogoTap_: function() {
-    this.$['product-logo'].animate({
-      transform: ['none', 'rotate(-10turn)'],
-    }, {
-      duration: 500,
-      easing: 'cubic-bezier(1, 0, 0, 1)',
-    });
+    this.$['product-logo'].animate(
+        {
+          transform: ['none', 'rotate(-10turn)'],
+        },
+        {
+          duration: 500,
+          easing: 'cubic-bezier(1, 0, 0, 1)',
+        });
   },
 
-<if expr="_google_chrome">
+  // <if expr="_google_chrome">
   /** @private */
   onReportIssueTap_: function() {
     this.aboutBrowserProxy_.openFeedbackDialog();
   },
-</if>
+  // </if>
 });

@@ -7,19 +7,28 @@
 
 #include "core/CoreExport.h"
 #include "platform/heap/Handle.h"
+#include "platform/scheduler/base/task_time_observer.h"
+#include "platform/wtf/text/AtomicString.h"
 #include "public/platform/WebThread.h"
-#include "public/platform/scheduler/base/task_time_observer.h"
+#include "v8/include/v8.h"
 
 namespace blink {
 
+namespace probe {
+class CallFunction;
+class ExecuteScript;
+class RecalculateStyle;
+class UpdateLayout;
+class UserCallback;
+class V8Compile;
+}
+
 class DOMWindow;
 class Document;
-class EventListener;
 class ExecutionContext;
 class Frame;
 class LocalFrame;
 class Performance;
-class ScheduledAction;
 class SourceLocation;
 
 // Performance monitor for Web Performance APIs and logging.
@@ -28,7 +37,6 @@ class SourceLocation;
 // (in the local frame tree) in m_webPerformanceObservers.
 class CORE_EXPORT PerformanceMonitor final
     : public GarbageCollectedFinalized<PerformanceMonitor>,
-      public WebThread::TaskObserver,
       public scheduler::TaskTimeObserver {
   WTF_MAKE_NONCOPYABLE(PerformanceMonitor);
 
@@ -38,62 +46,58 @@ class CORE_EXPORT PerformanceMonitor final
     kLongLayout,
     kBlockedEvent,
     kBlockedParser,
+    kDiscouragedAPIUse,
     kHandler,
     kRecurringHandler,
     kAfterLast
   };
 
-  class CORE_EXPORT HandlerCall {
-    STACK_ALLOCATED();
-
-   public:
-    HandlerCall(ExecutionContext*, ScheduledAction*);
-    HandlerCall(ExecutionContext*, EventListener*);
-    ~HandlerCall();
-
-   private:
-    void start();
-
-    Member<ExecutionContext> m_context;
-    Member<PerformanceMonitor> m_performanceMonitor;
-    Member<ScheduledAction> m_scheduledAction;
-    Member<EventListener> m_eventListener;
-    Violation m_violation;
-    double m_startTime = 0;
-  };
-
   class CORE_EXPORT Client : public GarbageCollectedMixin {
    public:
-    virtual void reportLongTask(
-        double startTime,
-        double endTime,
-        const HeapHashSet<Member<Frame>>& contextFrames){};
-    virtual void reportLongLayout(double duration){};
-    virtual void reportGenericViolation(Violation,
+    virtual void ReportLongTask(double start_time,
+                                double end_time,
+                                ExecutionContext* task_context,
+                                bool has_multiple_contexts){};
+    virtual void ReportLongLayout(double duration){};
+    virtual void ReportGenericViolation(Violation,
                                         const String& text,
                                         double time,
                                         SourceLocation*){};
     DEFINE_INLINE_VIRTUAL_TRACE() {}
   };
 
-  // Instrumenting methods.
-  static void willExecuteScript(ExecutionContext*);
-  static void didExecuteScript(ExecutionContext*);
-  static void willUpdateLayout(Document*);
-  static void didUpdateLayout(Document*);
-  static void willRecalculateStyle(Document*);
-  static void didRecalculateStyle(Document*);
-  static void documentWriteFetchScript(Document*);
-  static void reportGenericViolation(ExecutionContext*,
+  static void ReportGenericViolation(ExecutionContext*,
                                      Violation,
                                      const String& text,
                                      double time,
-                                     SourceLocation*);
-  static double threshold(ExecutionContext*, Violation);
+                                     std::unique_ptr<SourceLocation>);
+  static double Threshold(ExecutionContext*, Violation);
+
+  // Instrumenting methods.
+  void Will(const probe::RecalculateStyle&);
+  void Did(const probe::RecalculateStyle&);
+
+  void Will(const probe::UpdateLayout&);
+  void Did(const probe::UpdateLayout&);
+
+  void Will(const probe::ExecuteScript&);
+  void Did(const probe::ExecuteScript&);
+
+  void Will(const probe::CallFunction&);
+  void Did(const probe::CallFunction&);
+
+  void Will(const probe::UserCallback&);
+  void Did(const probe::UserCallback&);
+
+  void Will(const probe::V8Compile&);
+  void Did(const probe::V8Compile&);
+
+  void DocumentWriteFetchScript(Document*);
 
   // Direct API for core.
-  void subscribe(Violation, double threshold, Client*);
-  void unsubscribeAll(Client*);
+  void Subscribe(Violation, double threshold, Client*);
+  void UnsubscribeAll(Client*);
+  void Shutdown();
 
   explicit PerformanceMonitor(LocalFrame*);
   ~PerformanceMonitor();
@@ -104,51 +108,46 @@ class CORE_EXPORT PerformanceMonitor final
   friend class PerformanceMonitorTest;
   friend class PerformanceTest;
 
-  static PerformanceMonitor* monitor(const ExecutionContext*);
-  static PerformanceMonitor* instrumentingMonitor(const ExecutionContext*);
+  static PerformanceMonitor* Monitor(const ExecutionContext*);
+  static PerformanceMonitor* InstrumentingMonitor(const ExecutionContext*);
 
-  void updateInstrumentation();
+  void UpdateInstrumentation();
 
-  void innerWillExecuteScript(ExecutionContext*);
-  void didExecuteScript();
-  void willUpdateLayout();
-  void didUpdateLayout();
-  void willRecalculateStyle();
-  void didRecalculateStyle();
-  void reportGenericViolation(Violation,
-                              const String& text,
-                              double time,
-                              SourceLocation*);
-
-  // WebThread::TaskObserver implementation.
-  void willProcessTask() override;
-  void didProcessTask() override;
+  void InnerReportGenericViolation(ExecutionContext*,
+                                   Violation,
+                                   const String& text,
+                                   double time,
+                                   std::unique_ptr<SourceLocation>);
 
   // scheduler::TaskTimeObserver implementation
-  void ReportTaskTime(scheduler::TaskQueue*,
-                      double startTime,
-                      double endTime) override;
+  void WillProcessTask(double start_time) override;
+  void DidProcessTask(double start_time, double end_time) override;
+  void OnBeginNestedRunLoop() override {}
+  void WillExecuteScript(ExecutionContext*);
+  void DidExecuteScript();
 
-  std::pair<String, DOMWindow*> sanitizedAttribution(
-      const HeapHashSet<Member<Frame>>& frameContexts,
-      Frame* observerFrame);
+  std::pair<String, DOMWindow*> SanitizedAttribution(
+      const HeapHashSet<Member<Frame>>& frame_contexts,
+      Frame* observer_frame);
 
-  bool m_enabled = false;
-  bool m_isExecutingScript = false;
-  double m_layoutStartTime = 0;
-  double m_styleStartTime = 0;
-  double m_perTaskStyleAndLayoutTime = 0;
+  bool enabled_ = false;
+  double per_task_style_and_layout_time_ = 0;
+  unsigned script_depth_ = 0;
+  unsigned layout_depth_ = 0;
+  unsigned user_callback_depth_ = 0;
+  const void* user_callback_;
 
-  double m_thresholds[kAfterLast];
+  double thresholds_[kAfterLast];
 
-  Member<LocalFrame> m_localRoot;
-  HeapHashSet<Member<Frame>> m_frameContexts;
-  using ClientThresholds = HeapHashMap<Member<Client>, double>;
+  Member<LocalFrame> local_root_;
+  Member<ExecutionContext> task_execution_context_;
+  bool task_has_multiple_contexts_ = false;
+  using ClientThresholds = HeapHashMap<WeakMember<Client>, double>;
   HeapHashMap<Violation,
               Member<ClientThresholds>,
               typename DefaultHash<size_t>::Hash,
               WTF::UnsignedWithZeroKeyHashTraits<size_t>>
-      m_subscriptions;
+      subscriptions_;
 };
 
 }  // namespace blink

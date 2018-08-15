@@ -75,7 +75,10 @@ public:
     Q_INVOKABLE void addItem(QQuickItem *item);
     Q_INVOKABLE void insertItem(int index, QQuickItem *item);
     Q_INVOKABLE void moveItem(int from, int to);
-    Q_INVOKABLE void removeItem(int index);
+    Q_INVOKABLE void removeItem(const QVariant &item); // ### Qt 6: remove
+    void removeItem(QQuickItem *item); // ### Qt 6: Q_INVOKABLE
+    // 2.3 (Qt 5.10)
+    Q_REVISION(3) Q_INVOKABLE QQuickItem *takeItem(int index);
 
     QVariant contentModel() const;
     QQmlListProperty<QObject> contentData();
@@ -106,6 +109,7 @@ protected:
 
     virtual bool isContent(QQuickItem *item) const;
     virtual void itemAdded(int index, QQuickItem *item);
+    virtual void itemMoved(int index, QQuickItem *item);
     virtual void itemRemoved(int index, QQuickItem *item);
 
 private:

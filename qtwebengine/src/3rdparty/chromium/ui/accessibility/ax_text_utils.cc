@@ -7,6 +7,9 @@
 #include "base/i18n/break_iterator.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/strings/grit/ui_strings.h"
 
 namespace ui {
 
@@ -110,6 +113,59 @@ size_t FindAccessibleTextBoundary(const base::string16& text,
       result--;
     }
   }
+}
+
+base::string16 ActionVerbToLocalizedString(
+    const AXDefaultActionVerb action_verb) {
+  switch (action_verb) {
+    case AX_DEFAULT_ACTION_VERB_NONE:
+      return base::string16();
+    case AX_DEFAULT_ACTION_VERB_ACTIVATE:
+      return l10n_util::GetStringUTF16(IDS_AX_ACTIVATE_ACTION_VERB);
+    case AX_DEFAULT_ACTION_VERB_CHECK:
+      return l10n_util::GetStringUTF16(IDS_AX_CHECK_ACTION_VERB);
+    case AX_DEFAULT_ACTION_VERB_CLICK:
+      return l10n_util::GetStringUTF16(IDS_AX_CLICK_ACTION_VERB);
+    case AX_DEFAULT_ACTION_VERB_JUMP:
+      return l10n_util::GetStringUTF16(IDS_AX_JUMP_ACTION_VERB);
+    case AX_DEFAULT_ACTION_VERB_OPEN:
+      return l10n_util::GetStringUTF16(IDS_AX_OPEN_ACTION_VERB);
+    case AX_DEFAULT_ACTION_VERB_PRESS:
+      return l10n_util::GetStringUTF16(IDS_AX_PRESS_ACTION_VERB);
+    case AX_DEFAULT_ACTION_VERB_SELECT:
+      return l10n_util::GetStringUTF16(IDS_AX_SELECT_ACTION_VERB);
+    case AX_DEFAULT_ACTION_VERB_UNCHECK:
+      return l10n_util::GetStringUTF16(IDS_AX_UNCHECK_ACTION_VERB);
+  }
+  NOTREACHED();
+  return base::string16();
+}
+
+// Some APIs on Linux and Windows need to return non-localized action names.
+base::string16 ActionVerbToUnlocalizedString(
+    const AXDefaultActionVerb action_verb) {
+  switch (action_verb) {
+    case ui::AX_DEFAULT_ACTION_VERB_NONE:
+      return base::UTF8ToUTF16("none");
+    case ui::AX_DEFAULT_ACTION_VERB_ACTIVATE:
+      return base::UTF8ToUTF16("activate");
+    case ui::AX_DEFAULT_ACTION_VERB_CHECK:
+      return base::UTF8ToUTF16("check");
+    case ui::AX_DEFAULT_ACTION_VERB_CLICK:
+      return base::UTF8ToUTF16("click");
+    case ui::AX_DEFAULT_ACTION_VERB_JUMP:
+      return base::UTF8ToUTF16("jump");
+    case ui::AX_DEFAULT_ACTION_VERB_OPEN:
+      return base::UTF8ToUTF16("open");
+    case ui::AX_DEFAULT_ACTION_VERB_PRESS:
+      return base::UTF8ToUTF16("press");
+    case ui::AX_DEFAULT_ACTION_VERB_SELECT:
+      return base::UTF8ToUTF16("select");
+    case ui::AX_DEFAULT_ACTION_VERB_UNCHECK:
+      return base::UTF8ToUTF16("uncheck");
+  }
+  NOTREACHED();
+  return base::string16();
 }
 
 }  // namespace ui

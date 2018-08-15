@@ -41,6 +41,17 @@ class GFX_EXPORT ShadowValue {
   // are negative because shadow margins are outside a boundary.
   static Insets GetMargin(const ShadowValues& shadows);
 
+  // Gets the area inside a rectangle that would be affected by shadow blur.
+  // This is similar to the margin except it's positive (the blur region is
+  // inside a hypothetical rectangle) and it accounts for the blur both inside
+  // and outside the bounding box. The region inside the "blur region" would be
+  // a uniform color.
+  static Insets GetBlurRegion(const ShadowValues& shadows);
+
+  // Makes ShadowValues that should match MD style shadows for the given
+  // elevation.
+  static ShadowValues MakeMdShadowValues(int elevation);
+
  private:
   gfx::Vector2d offset_;
 
@@ -56,6 +67,11 @@ class GFX_EXPORT ShadowValue {
 
   SkColor color_;
 };
+
+inline bool operator==(const ShadowValue& lhs, const ShadowValue& rhs) {
+  return lhs.offset() == rhs.offset() && lhs.blur() == rhs.blur() &&
+         lhs.color() == rhs.color();
+}
 
 }  // namespace gfx
 

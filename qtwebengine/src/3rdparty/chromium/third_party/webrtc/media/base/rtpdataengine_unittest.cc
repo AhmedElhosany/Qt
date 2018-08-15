@@ -11,14 +11,14 @@
 #include <memory>
 #include <string>
 
-#include "webrtc/base/copyonwritebuffer.h"
-#include "webrtc/base/gunit.h"
-#include "webrtc/base/helpers.h"
-#include "webrtc/base/ssladapter.h"
 #include "webrtc/media/base/fakenetworkinterface.h"
 #include "webrtc/media/base/mediaconstants.h"
 #include "webrtc/media/base/rtpdataengine.h"
 #include "webrtc/media/base/rtputils.h"
+#include "webrtc/rtc_base/copyonwritebuffer.h"
+#include "webrtc/rtc_base/gunit.h"
+#include "webrtc/rtc_base/helpers.h"
+#include "webrtc/rtc_base/ssladapter.h"
 
 class FakeDataReceiver : public sigslot::has_slots<> {
  public:
@@ -70,9 +70,9 @@ class RtpDataMediaChannelTest : public testing::Test {
   }
 
   cricket::RtpDataMediaChannel* CreateChannel(cricket::RtpDataEngine* dme) {
+    cricket::MediaConfig config;
     cricket::RtpDataMediaChannel* channel =
-        static_cast<cricket::RtpDataMediaChannel*>(dme->CreateChannel(
-            cricket::DCT_RTP));
+        static_cast<cricket::RtpDataMediaChannel*>(dme->CreateChannel(config));
     channel->SetInterface(iface_.get());
     channel->SignalDataReceived.connect(
         receiver_.get(), &FakeDataReceiver::OnDataReceived);

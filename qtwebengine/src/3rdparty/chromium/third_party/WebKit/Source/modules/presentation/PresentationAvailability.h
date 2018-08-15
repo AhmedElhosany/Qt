@@ -5,19 +5,21 @@
 #ifndef PresentationAvailability_h
 #define PresentationAvailability_h
 
-#include "bindings/core/v8/ActiveScriptWrappable.h"
-#include "core/dom/ActiveDOMObject.h"
+#include "core/dom/SuspendableObject.h"
 #include "core/events/EventTarget.h"
 #include "core/page/PageVisibilityObserver.h"
 #include "modules/ModulesExport.h"
+#include "modules/presentation/PresentationPromiseProperty.h"
+#include "platform/bindings/ActiveScriptWrappable.h"
 #include "platform/weborigin/KURL.h"
+#include "platform/wtf/Vector.h"
 #include "public/platform/WebURL.h"
+#include "public/platform/WebVector.h"
 #include "public/platform/modules/presentation/WebPresentationAvailabilityObserver.h"
 
 namespace blink {
 
 class ExecutionContext;
-class ScriptPromiseResolver;
 
 // Expose whether there is a presentation display available for |url|. The
 // object will be initialized with a default value passed via ::take() and will
@@ -25,37 +27,37 @@ class ScriptPromiseResolver;
 // change. The object will only listen to changes when required.
 class MODULES_EXPORT PresentationAvailability final
     : public EventTargetWithInlineData,
-      public ActiveScriptWrappable,
-      public ActiveDOMObject,
+      public ActiveScriptWrappable<PresentationAvailability>,
+      public SuspendableObject,
       public PageVisibilityObserver,
       public WebPresentationAvailabilityObserver {
   USING_GARBAGE_COLLECTED_MIXIN(PresentationAvailability);
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static PresentationAvailability* take(ScriptPromiseResolver*,
-                                        const KURL&,
+  static PresentationAvailability* Take(PresentationAvailabilityProperty*,
+                                        const WTF::Vector<KURL>&,
                                         bool);
   ~PresentationAvailability() override;
 
   // EventTarget implementation.
-  const AtomicString& interfaceName() const override;
-  ExecutionContext* getExecutionContext() const override;
+  const AtomicString& InterfaceName() const override;
+  ExecutionContext* GetExecutionContext() const override;
 
   // WebPresentationAvailabilityObserver implementation.
-  void availabilityChanged(bool) override;
-  const WebURL url() const override;
+  void AvailabilityChanged(blink::mojom::ScreenAvailability) override;
+  const WebVector<WebURL>& Urls() const override;
 
   // ScriptWrappable implementation.
-  bool hasPendingActivity() const final;
+  bool HasPendingActivity() const final;
 
-  // ActiveDOMObject implementation.
-  void suspend() override;
-  void resume() override;
-  void contextDestroyed() override;
+  // SuspendableObject implementation.
+  void Suspend() override;
+  void Resume() override;
+  void ContextDestroyed(ExecutionContext*) override;
 
   // PageVisibilityObserver implementation.
-  void pageVisibilityChanged() override;
+  void PageVisibilityChanged() override;
 
   bool value() const;
 
@@ -65,28 +67,28 @@ class MODULES_EXPORT PresentationAvailability final
 
  protected:
   // EventTarget implementation.
-  void addedEventListener(const AtomicString& eventType,
+  void AddedEventListener(const AtomicString& event_type,
                           RegisteredEventListener&) override;
 
  private:
-  // Current state of the ActiveDOMObject. It is Active when created. It
+  // Current state of the SuspendableObject. It is Active when created. It
   // becomes Suspended when suspend() is called and moves back to Active if
   // resume() is called. It becomes Inactive when stop() is called or at
   // destruction time.
   enum class State : char {
-    Active,
-    Suspended,
-    Inactive,
+    kActive,
+    kSuspended,
+    kInactive,
   };
 
-  PresentationAvailability(ExecutionContext*, const KURL&, bool);
+  PresentationAvailability(ExecutionContext*, const WTF::Vector<KURL>&, bool);
 
-  void setState(State);
-  void updateListening();
+  void SetState(State);
+  void UpdateListening();
 
-  const KURL m_url;
-  bool m_value;
-  State m_state;
+  WebVector<WebURL> urls_;
+  bool value_;
+  State state_;
 };
 
 }  // namespace blink

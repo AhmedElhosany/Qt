@@ -43,7 +43,7 @@
 #include <private/attachmentpack_p.h>
 #include <QtOpenGLExtensions/QOpenGLExtensions>
 #include <private/qgraphicsutils_p.h>
-#include <QDebug>
+#include <Qt3DRender/private/renderlogging_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -231,6 +231,47 @@ void GraphicsHelperGL2::vertexAttribDivisor(GLuint index,
     Q_UNUSED(divisor);
 }
 
+void GraphicsHelperGL2::vertexAttributePointer(GLenum shaderDataType,
+                                               GLuint index,
+                                               GLint size,
+                                               GLenum type,
+                                               GLboolean normalized,
+                                               GLsizei stride,
+                                               const GLvoid *pointer)
+{
+    switch (shaderDataType) {
+    case GL_FLOAT:
+    case GL_FLOAT_VEC2:
+    case GL_FLOAT_VEC3:
+    case GL_FLOAT_VEC4:
+    case GL_FLOAT_MAT2:
+    case GL_FLOAT_MAT2x3:
+    case GL_FLOAT_MAT2x4:
+    case GL_FLOAT_MAT3:
+    case GL_FLOAT_MAT3x2:
+    case GL_FLOAT_MAT3x4:
+    case GL_FLOAT_MAT4x2:
+    case GL_FLOAT_MAT4x3:
+    case GL_FLOAT_MAT4:
+        m_funcs->glVertexAttribPointer(index, size, type, normalized, stride, pointer);
+        break;
+
+    default:
+        qCWarning(Render::Rendering) << "vertexAttribPointer: Unhandled type";
+        Q_UNREACHABLE();
+    }
+}
+
+void GraphicsHelperGL2::readBuffer(GLenum mode)
+{
+    m_funcs->glReadBuffer(mode);
+}
+
+void GraphicsHelperGL2::drawBuffer(GLenum mode)
+{
+    m_funcs->glDrawBuffer(mode);
+}
+
 void GraphicsHelperGL2::blendEquation(GLenum mode)
 {
     m_funcs->glBlendEquation(mode);
@@ -316,6 +357,12 @@ bool GraphicsHelperGL2::checkFrameBufferComplete()
     return false;
 }
 
+bool GraphicsHelperGL2::frameBufferNeedsRenderBuffer(const Attachment &attachment)
+{
+    Q_UNUSED(attachment);
+    return false;
+}
+
 void GraphicsHelperGL2::bindFrameBufferAttachment(QOpenGLTexture *texture, const Attachment &attachment)
 {
     if (m_fboFuncs != nullptr) {
@@ -350,6 +397,13 @@ void GraphicsHelperGL2::bindFrameBufferAttachment(QOpenGLTexture *texture, const
             qCritical() << "Texture format not supported for Attachment on OpenGL 2.0";
         texture->release();
     }
+}
+
+void GraphicsHelperGL2::bindFrameBufferAttachment(RenderBuffer *renderBuffer, const Attachment &attachment)
+{
+    Q_UNUSED(renderBuffer);
+    Q_UNUSED(attachment);
+    Q_UNREACHABLE();
 }
 
 bool GraphicsHelperGL2::supportsFeature(GraphicsHelperInterface::Feature feature) const
@@ -568,6 +622,11 @@ void GraphicsHelperGL2::enablePrimitiveRestart(int)
 {
 }
 
+void GraphicsHelperGL2::enableVertexAttributeArray(int location)
+{
+    m_funcs->glEnableVertexAttribArray(location);
+}
+
 void GraphicsHelperGL2::disablePrimitiveRestart()
 {
 }
@@ -636,8 +695,9 @@ void GraphicsHelperGL2::dispatchCompute(GLuint wx, GLuint wy, GLuint wz)
     qWarning() << "Compute Shaders are not supported by OpenGL 2.0 (since OpenGL 4.3)";
 }
 
-char *GraphicsHelperGL2::mapBuffer(GLenum target)
+char *GraphicsHelperGL2::mapBuffer(GLenum target, GLsizeiptr size)
 {
+    Q_UNUSED(size);
     return static_cast<char*>(m_funcs->glMapBuffer(target, GL_READ_WRITE));
 }
 

@@ -20,12 +20,10 @@
 
 // https://html.spec.whatwg.org/#the-embed-element
 
-// TODO(foolip): HTMLEmbedElement should not have [Custom=LegacyCallAsFunction].
-// https://crbug.com/663662
 // TODO(yukishiino): HTMLEmbedElement should not have [OverrideBuiltins].
 [
-    Custom=LegacyCallAsFunction,
     OverrideBuiltins,
+    ActiveScriptWrappable
 ] interface HTMLEmbedElement : HTMLElement {
     [CEReactions, Reflect, URL] attribute DOMString src;
     [CEReactions, Reflect] attribute DOMString type;

@@ -12,25 +12,22 @@
 namespace blink {
 
 class LocalFrame;
-class ThreadedWorkletGlobalScopeProxy;
-class WorkletGlobalScopeProxy;
 
 class MODULES_EXPORT AudioWorklet final : public Worklet {
   WTF_MAKE_NONCOPYABLE(AudioWorklet);
 
  public:
-  static AudioWorklet* create(LocalFrame*);
+  static AudioWorklet* Create(LocalFrame*);
   ~AudioWorklet() override;
-
-  WorkletGlobalScopeProxy* workletGlobalScopeProxy() const final;
 
   DECLARE_VIRTUAL_TRACE();
 
  private:
   explicit AudioWorklet(LocalFrame*);
 
-  // TODO(ikilpatrick): this will change to a raw ptr once we have a thread.
-  std::unique_ptr<ThreadedWorkletGlobalScopeProxy> m_workletGlobalScopeProxy;
+  // Implements Worklet.
+  bool NeedsToCreateGlobalScope() final;
+  WorkletGlobalScopeProxy* CreateGlobalScope() final;
 };
 
 }  // namespace blink

@@ -24,11 +24,13 @@
 class GURL;
 
 namespace net {
+class HttpResponseHeaders;
 class URLRequest;
 }
 
 namespace data_use_measurement {
 
+class DataUseAscriber;
 class URLRequestClassifier;
 
 // Records the data use of user traffic and various services in UMA histograms.
@@ -41,7 +43,8 @@ class DataUseMeasurement {
  public:
   DataUseMeasurement(
       std::unique_ptr<URLRequestClassifier> url_request_classifier,
-      const metrics::UpdateUsagePrefCallbackType& metrics_data_use_forwarder);
+      const metrics::UpdateUsagePrefCallbackType& metrics_data_use_forwarder,
+      DataUseAscriber* ascriber);
   ~DataUseMeasurement();
 
   // Called before a request is sent.
@@ -50,6 +53,10 @@ class DataUseMeasurement {
   // Called right after a redirect response code was received for |request|.
   void OnBeforeRedirect(const net::URLRequest& request,
                         const GURL& new_location);
+
+  // Called when response headers are received for |request|.
+  void OnHeadersReceived(net::URLRequest* request,
+                         const net::HttpResponseHeaders* response_headers);
 
   // Called when data is received or sent on the network, respectively.
   void OnNetworkBytesReceived(const net::URLRequest& request,
@@ -115,9 +122,9 @@ class DataUseMeasurement {
   // Reports the message size of the service requests.
   void ReportServicesMessageSizeUMA(const net::URLRequest& request);
 
-  // A helper function used to record data use of services. It gets the size of
-  // exchanged message, its direction (which is upstream or downstream) and
-  // reports to two histogram groups. DataUse.MessageSize.ServiceName and
+  // Records data use histograms of services. It gets the size of exchanged
+  // message, its direction (which is upstream or downstream) and reports to two
+  // histogram groups. DataUse.MessageSize.ServiceName and
   // DataUse.Services.{Dimensions}. In the second one, services are buckets.
   // |app_state| indicates the app state which can be foreground, background, or
   // unknown.
@@ -128,6 +135,25 @@ class DataUseMeasurement {
       bool is_connection_cellular,
       int64_t message_size) const;
 
+  // Records data use histograms split on TrafficDirection, AppState and
+  // TabState.
+  void RecordTabStateHistogram(TrafficDirection dir,
+                               DataUseUserData::AppState app_state,
+                               bool is_tab_visible,
+                               int64_t bytes) const;
+
+  // Records data use histograms split on page tranition.
+  void RecordPageTransitionUMA(const net::URLRequest& request) const;
+
+  // Records data use histograms of user traffic and services traffic split on
+  // content type, AppState and TabState.
+  void RecordContentTypeHistogram(
+      DataUseUserData::DataUseContentType content_type,
+      bool is_user_traffic,
+      DataUseUserData::AppState app_state,
+      bool is_tab_visible,
+      int64_t bytes);
+
   // Classifier for identifying if an URL request is user initiated.
   std::unique_ptr<URLRequestClassifier> url_request_classifier_;
 
@@ -136,6 +162,9 @@ class DataUseMeasurement {
   // other than metrics, then the better approach would be to refactor this
   // class to support registering arbitrary observers. crbug.com/601185
   metrics::UpdateUsagePrefCallbackType metrics_data_use_forwarder_;
+
+  // DataUseAscriber used to get the attributes of data use.
+  DataUseAscriber* ascriber_;
 
 #if defined(OS_ANDROID)
   // Application listener store the last known state of the application in this
@@ -164,6 +193,10 @@ class DataUseMeasurement {
   // True if app is in background and first network read has not yet happened.
   bool no_reads_since_background_;
 #endif
+
+  // User traffic data use by content type is logged in 1KB increments. The
+  // remaining bytes are saved in this array until logged next time.
+  int16_t user_traffic_content_type_bytes_[DataUseUserData::TYPE_MAX];
 
   DISALLOW_COPY_AND_ASSIGN(DataUseMeasurement);
 };

@@ -71,8 +71,17 @@ public:
     Layer();
     ~Layer();
     void cleanup();
+
+    // QBackendNode interface
+    bool recursive() const;
+    void setRecursive(bool recursive);
+
 protected:
     void sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e) override;
+
+private:
+    void initializeFromPeer(const Qt3DCore::QNodeCreatedChangeBasePtr &change) override;
+    bool m_recursive;
 };
 
 } // namespace Render

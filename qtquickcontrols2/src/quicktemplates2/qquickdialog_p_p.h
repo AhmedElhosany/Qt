@@ -48,11 +48,14 @@
 // We mean it.
 //
 
+#include <QtQuickTemplates2/private/qquickdialog_p.h>
 #include <QtQuickTemplates2/private/qquickpopup_p_p.h>
 #include <QtQuickTemplates2/private/qquickpagelayout_p_p.h>
+#include <QtGui/qpa/qplatformdialoghelper.h>
 
 QT_BEGIN_NAMESPACE
 
+class QQuickAbstractButton;
 class QQuickDialogButtonBox;
 
 class QQuickDialogPrivate : public QQuickPopupPrivate
@@ -60,13 +63,18 @@ class QQuickDialogPrivate : public QQuickPopupPrivate
     Q_DECLARE_PUBLIC(QQuickDialog)
 
 public:
-    QQuickDialogPrivate() : buttonBox(nullptr) { }
+    QQuickDialogPrivate() : result(0), buttonBox(nullptr) { }
 
     static QQuickDialogPrivate *get(QQuickDialog *dialog)
     {
         return dialog->d_func();
     }
 
+    static QPlatformDialogHelper::ButtonRole buttonRole(QQuickAbstractButton *button);
+
+    void handleClick(QQuickAbstractButton *button);
+
+    int result;
     QString title;
     QQuickDialogButtonBox *buttonBox;
     QScopedPointer<QQuickPageLayout> layout;

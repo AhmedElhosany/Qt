@@ -43,6 +43,7 @@
 #include "base/compiler_specific.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/public/renderer/render_frame_observer_tracker.h"
+#include "ppapi/features/features.h"
 
 
 namespace content {
@@ -59,10 +60,10 @@ public:
     explicit RenderFrameObserverQt(content::RenderFrame* render_frame);
     ~RenderFrameObserverQt();
 
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
     void DidCreatePepperPlugin(content::RendererPpapiHost* host) override;
 #endif
-    void OnDestruct() override { }
+    void OnDestruct() override;
     void FrameDetached() override;
 
     bool isFrameDetached() const;

@@ -13,6 +13,8 @@
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 #include "ui/views/border.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -20,6 +22,11 @@
 
 #if defined(OS_MACOSX)
 #import "components/constrained_window/native_web_contents_modal_dialog_manager_views_mac.h"
+#endif
+
+#if defined(USE_AURA)
+#include "ui/aura/window.h"
+#include "ui/compositor/dip_util.h"
 #endif
 
 using web_modal::ModalDialogHost;
@@ -108,10 +115,35 @@ void UpdateModalDialogPosition(views::Widget* widget,
     position.set_y(position.y() - border->GetInsets().top());
   }
 
-  if (widget->is_top_level())
+  if (widget->is_top_level()) {
     position += host_widget->GetClientAreaBoundsInScreen().OffsetFromOrigin();
+    // If the dialog extends partially off any display, clamp its position to
+    // be fully visible within that display. If the dialog doesn't intersect
+    // with any display clamp its position to be fully on the nearest display.
+    gfx::Rect display_rect = gfx::Rect(position, size);
+    const display::Display display =
+        display::Screen::GetScreen()->GetDisplayNearestView(
+            dialog_host->GetHostView());
+    const gfx::Rect work_area = display.work_area();
+    if (!work_area.Contains(display_rect))
+      display_rect.AdjustToFit(work_area);
+    position = display_rect.origin();
+  }
 
   widget->SetBounds(gfx::Rect(position, size));
+
+#if defined(USE_AURA)
+  if (!widget->is_top_level()) {
+    // Toplevel windows are automatiacally snapped, but CHILD windows
+    // may not. If it's not toplevel, snap the widget's layer to pixel
+    // based on the parent toplevel window, which should be snapped.
+    gfx::NativeView window = widget->GetNativeView();
+    views::Widget* toplevel =
+        views::Widget::GetTopLevelWidgetForNativeView(window->parent());
+    ui::SnapLayerToPhysicalPixelBoundary(toplevel->GetLayer(),
+                                         widget->GetLayer());
+  }
+#endif
 }
 
 }  // namespace

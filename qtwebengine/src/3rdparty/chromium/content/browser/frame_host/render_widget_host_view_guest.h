@@ -69,6 +69,8 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   gfx::Size GetPhysicalBackingSize() const override;
   base::string16 GetSelectedText() override;
   void SetNeedsBeginFrames(bool needs_begin_frames) override;
+  TouchSelectionControllerClientManager*
+  GetTouchSelectionControllerClientManager() override;
 
   // RenderWidgetHostViewBase implementation.
   void InitAsPopup(RenderWidgetHostView* parent_host_view,
@@ -89,10 +91,11 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   void SetTooltipText(const base::string16& tooltip_text) override;
   void SelectionChanged(const base::string16& text,
                         size_t offset,
-                        const gfx::Range& range) override;
+                        const gfx::Range& range,
+                        bool user_initiated) override;
   void SelectionBoundsChanged(
       const ViewHostMsg_SelectionBounds_Params& params) override;
-  void OnSwapCompositorFrame(uint32_t compositor_frame_sink_id,
+  void SubmitCompositorFrame(const viz::LocalSurfaceId& local_surface_id,
                              cc::CompositorFrame frame) override;
 #if defined(USE_AURA)
   void ProcessAckedTouchEvent(const TouchEventWithLatencyInfo& touch,
@@ -105,6 +108,9 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
 
   bool LockMouse() override;
   void UnlockMouse() override;
+  void DidCreateNewRendererCompositorFrameSink(
+      cc::mojom::CompositorFrameSinkClient* renderer_compositor_frame_sink)
+      override;
 
 #if defined(OS_MACOSX)
   // RenderWidgetHostView implementation.
@@ -116,22 +122,25 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   void StopSpeaking() override;
 #endif  // defined(OS_MACOSX)
 
-  void LockCompositingSurface() override;
-  void UnlockCompositingSurface() override;
-
   void WheelEventAck(const blink::WebMouseWheelEvent& event,
                      InputEventAckState ack_result) override;
 
   void GestureEventAck(const blink::WebGestureEvent& event,
                        InputEventAckState ack_result) override;
 
+  InputEventAckState FilterInputEvent(
+      const blink::WebInputEvent& input_event) override;
+
   bool IsRenderWidgetHostViewGuest() override;
   RenderWidgetHostViewBase* GetOwnerRenderWidgetHostView() const;
 
- protected:
+ private:
   friend class RenderWidgetHostView;
 
- private:
+  void SendSurfaceInfoToEmbedderImpl(
+      const viz::SurfaceInfo& surface_info,
+      const viz::SurfaceSequence& sequence) override;
+
   RenderWidgetHostViewGuest(
       RenderWidgetHost* widget,
       BrowserPluginGuest* guest,
@@ -151,6 +160,8 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
                           int browser_plugin_instance_id,
                           const blink::WebInputEvent* event);
 
+  bool HasEmbedderChanged() override;
+
   // BrowserPluginGuest and RenderWidgetHostViewGuest's lifetimes are not tied
   // to one another, therefore we access |guest_| through WeakPtr.
   base::WeakPtr<BrowserPluginGuest> guest_;
@@ -159,6 +170,12 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   // RenderWidgetHostViewGuest mostly only cares about stuff related to
   // compositing, the rest are directly forwarded to this |platform_view_|.
   base::WeakPtr<RenderWidgetHostViewBase> platform_view_;
+
+  // When true the guest will forward its selection updates to the owner RWHV.
+  // The guest may forward its updates only when there is an ongoing IME
+  // session.
+  bool should_forward_text_selection_;
+
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewGuest);
 };
 

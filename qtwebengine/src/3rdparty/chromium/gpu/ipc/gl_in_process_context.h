@@ -10,6 +10,7 @@
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/single_thread_task_runner.h"
 #include "gl_in_process_context_export.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/ipc/in_process_command_buffer.h"
@@ -17,17 +18,8 @@
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gpu_preference.h"
 
-namespace gfx {
-class Size;
-}
-
-#if defined(OS_ANDROID)
-namespace gl {
-class SurfaceTexture;
-}
-#endif
-
 namespace gpu {
+class InProcessCommandBuffer;
 struct SharedMemoryLimits;
 
 namespace gles2 {
@@ -50,7 +42,7 @@ class GL_IN_PROCESS_CONTEXT_EXPORT GLInProcessContext {
       scoped_refptr<gpu::InProcessCommandBuffer::Service> service,
       scoped_refptr<gl::GLSurface> surface,
       bool is_offscreen,
-      gfx::AcceleratedWidget window,
+      SurfaceHandle window,
       GLInProcessContext* share_context,
       const gpu::gles2::ContextCreationAttribHelper& attribs,
       const SharedMemoryLimits& memory_limits,
@@ -58,11 +50,21 @@ class GL_IN_PROCESS_CONTEXT_EXPORT GLInProcessContext {
       ImageFactory* image_factory,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
+  virtual gpu::Capabilities GetCapabilities() = 0;
+
   // Allows direct access to the GLES2 implementation so a GLInProcessContext
   // can be used without making it current.
   virtual gles2::GLES2Implementation* GetImplementation() = 0;
 
   virtual void SetLock(base::Lock* lock) = 0;
+
+  virtual void SetSwapBuffersCompletionCallback(
+      const gpu::InProcessCommandBuffer::SwapBuffersCompletionCallback&
+          callback) = 0;
+
+  virtual void SetUpdateVSyncParametersCallback(
+      const gpu::InProcessCommandBuffer::UpdateVSyncParametersCallback&
+          callback) = 0;
 };
 
 }  // namespace gpu

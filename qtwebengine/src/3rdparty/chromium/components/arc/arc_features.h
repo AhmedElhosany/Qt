@@ -4,17 +4,16 @@
 
 // This file defines the public base::FeatureList features for ARC.
 
-#ifndef CHROMEOS_COMPONENTS_ARC_ARC_FEATURES_H_
-#define CHROMEOS_COMPONENTS_ARC_ARC_FEATURES_H_
+#ifndef COMPONENTS_ARC_ARC_FEATURES_H_
+#define COMPONENTS_ARC_ARC_FEATURES_H_
 
 #include "base/feature_list.h"
 
 namespace arc {
 
 // Please keep alphabetized.
-extern const base::Feature kArcUseAuthEndpointFeature;
 extern const base::Feature kBootCompletedBroadcastFeature;
 
 }  // namespace arc
 
-#endif  // CHROMEOS_COMPONENTS_ARC_ARC_FEATURES_H_
+#endif  // COMPONENTS_ARC_ARC_FEATURES_H_

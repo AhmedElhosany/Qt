@@ -34,8 +34,8 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Templates 2.3 as T
 
 T.DialogButtonBox {
     id: control
@@ -69,5 +69,6 @@ T.DialogButtonBox {
         x: 1; y: 1
         width: parent.width - 2
         height: parent.height - 2
+        color: control.palette.window
     }
 }

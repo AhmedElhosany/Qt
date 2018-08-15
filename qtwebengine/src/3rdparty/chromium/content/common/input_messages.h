@@ -8,6 +8,7 @@
 
 #include "base/strings/string16.h"
 #include "build/build_config.h"
+#include "cc/input/touch_action.h"
 #include "content/common/content_export.h"
 #include "content/common/content_param_traits.h"
 #include "content/common/edit_command.h"
@@ -20,21 +21,22 @@
 #include "content/common/input/synthetic_gesture_packet.h"
 #include "content/common/input/synthetic_gesture_params.h"
 #include "content/common/input/synthetic_pinch_gesture_params.h"
+#include "content/common/input/synthetic_pointer_action_list_params.h"
 #include "content/common/input/synthetic_pointer_action_params.h"
 #include "content/common/input/synthetic_smooth_drag_gesture_params.h"
 #include "content/common/input/synthetic_smooth_scroll_gesture_params.h"
 #include "content/common/input/synthetic_tap_gesture_params.h"
-#include "content/common/input/touch_action.h"
 #include "ipc/ipc_message_macros.h"
 #include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/WebKit/public/platform/WebPointerProperties.h"
 #include "ui/events/blink/did_overscroll_params.h"
-#include "ui/events/ipc/latency_info_param_traits.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/gfx/ipc/gfx_param_traits.h"
 #include "ui/gfx/ipc/skia/gfx_skia_param_traits.h"
 #include "ui/gfx/range/range.h"
+#include "ui/latency/ipc/latency_info_param_traits.h"
 
 #undef IPC_MESSAGE_EXPORT
 #define IPC_MESSAGE_EXPORT CONTENT_EXPORT
@@ -57,9 +59,28 @@ IPC_ENUM_TRAITS_MAX_VALUE(
     content::SyntheticPointerActionParams::PointerActionType,
     content::SyntheticPointerActionParams::PointerActionType::
         POINTER_ACTION_TYPE_MAX)
+IPC_ENUM_TRAITS_MAX_VALUE(
+    content::SyntheticPointerActionParams::Button,
+    content::SyntheticPointerActionParams::Button::BUTTON_MAX)
 IPC_ENUM_TRAITS_MAX_VALUE(content::InputEventDispatchType,
                           content::InputEventDispatchType::DISPATCH_TYPE_MAX)
-IPC_ENUM_TRAITS_MAX_VALUE(content::TouchAction, content::TOUCH_ACTION_MAX)
+IPC_ENUM_TRAITS_MAX_VALUE(cc::TouchAction, cc::kTouchActionMax)
+IPC_ENUM_TRAITS_MIN_MAX_VALUE(blink::WebPointerProperties::Button,
+                              blink::WebPointerProperties::Button::kNoButton,
+                              blink::WebPointerProperties::Button::kLastEntry)
+IPC_ENUM_TRAITS_MAX_VALUE(blink::WebPointerProperties::PointerType,
+                          blink::WebPointerProperties::PointerType::kLastEntry)
+IPC_ENUM_TRAITS_MAX_VALUE(blink::WebGestureDevice,
+                          (blink::WebGestureDevice::kWebGestureDeviceCount - 1))
+IPC_ENUM_TRAITS_MAX_VALUE(blink::WebInputEvent::DispatchType,
+                          blink::WebInputEvent::DispatchType::kLastDispatchType)
+IPC_ENUM_TRAITS_MAX_VALUE(blink::WebGestureEvent::ScrollUnits,
+                          blink::WebGestureEvent::ScrollUnits::kLastScrollUnit)
+IPC_ENUM_TRAITS_MAX_VALUE(
+    blink::WebGestureEvent::InertialPhaseState,
+    blink::WebGestureEvent::InertialPhaseState::kLastPhase)
+IPC_ENUM_TRAITS_MAX_VALUE(blink::WebTouchPoint::State,
+                          blink::WebTouchPoint::State::kStateMax)
 
 IPC_STRUCT_TRAITS_BEGIN(ui::DidOverscrollParams)
   IPC_STRUCT_TRAITS_MEMBER(accumulated_overscroll)
@@ -111,10 +132,15 @@ IPC_STRUCT_TRAITS_BEGIN(content::SyntheticTapGestureParams)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::SyntheticPointerActionParams)
-  IPC_STRUCT_TRAITS_PARENT(content::SyntheticGestureParams)
   IPC_STRUCT_TRAITS_MEMBER(pointer_action_type_)
   IPC_STRUCT_TRAITS_MEMBER(index_)
   IPC_STRUCT_TRAITS_MEMBER(position_)
+  IPC_STRUCT_TRAITS_MEMBER(button_)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(content::SyntheticPointerActionListParams)
+  IPC_STRUCT_TRAITS_PARENT(content::SyntheticGestureParams)
+  IPC_STRUCT_TRAITS_MEMBER(params)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(content::InputEventAck)
@@ -126,11 +152,15 @@ IPC_STRUCT_TRAITS_BEGIN(content::InputEventAck)
   IPC_STRUCT_TRAITS_MEMBER(unique_touch_event_id)
 IPC_STRUCT_TRAITS_END()
 
-// Sends an input event to the render widget.
-IPC_MESSAGE_ROUTED3(InputMsg_HandleInputEvent,
-                    IPC::WebInputEventPointer /* event */,
-                    ui::LatencyInfo /* latency_info */,
-                    content::InputEventDispatchType)
+// Sends an input event to the render widget. The input event in general
+// contains a list of coalesced events and one event that is representative of
+// all those events (https://w3c.github.io/pointerevents/extension.html).
+IPC_MESSAGE_ROUTED4(
+    InputMsg_HandleInputEvent,
+    IPC::WebInputEventPointer /* event */,
+    std::vector<IPC::WebInputEventPointer> /* coalesced events */,
+    ui::LatencyInfo /* latency_info */,
+    content::InputEventDispatchType)
 
 // Sends the cursor visibility state to the render widget.
 IPC_MESSAGE_ROUTED1(InputMsg_CursorVisibilityChange,
@@ -150,8 +180,17 @@ IPC_MESSAGE_ROUTED2(InputMsg_ExtendSelectionAndDelete,
                     int /* after */)
 
 // Deletes text before and after the current cursor position, excluding the
-// selection.
+// selection. The lengths are supplied in Java chars (UTF-16 Code Unit), not in
+// code points or in glyphs.
 IPC_MESSAGE_ROUTED2(InputMsg_DeleteSurroundingText,
+                    int /* before */,
+                    int /* after */)
+
+// Deletes text before and after the current cursor position, excluding the
+// selection. The lengths are supplied in code points, not in Java chars (UTF-16
+// Code Unit) or in glyphs. Does nothing if there are one or more invalid
+// surrogate pairs in the requested range
+IPC_MESSAGE_ROUTED2(InputMsg_DeleteSurroundingTextInCodePoints,
                     int /* before */,
                     int /* after */)
 
@@ -172,10 +211,12 @@ IPC_MESSAGE_ROUTED5(
 
 // This message deletes the current composition, inserts specified text, and
 // moves the cursor.
-IPC_MESSAGE_ROUTED3(InputMsg_ImeCommitText,
-                    base::string16 /* text */,
-                    gfx::Range /* replacement_range */,
-                    int /* relative_cursor_pos */)
+IPC_MESSAGE_ROUTED4(
+    InputMsg_ImeCommitText,
+    base::string16 /* text */,
+    std::vector<blink::WebCompositionUnderline>, /* underlines */
+    gfx::Range /* replacement_range */,
+    int /* relative_cursor_pos */)
 
 // This message inserts the ongoing composition.
 IPC_MESSAGE_ROUTED1(InputMsg_ImeFinishComposingText, bool /* keep_selection */)
@@ -234,7 +275,7 @@ IPC_MESSAGE_ROUTED1(InputMsg_ReplaceMisspelling,
 IPC_MESSAGE_ROUTED0(InputMsg_Delete)
 IPC_MESSAGE_ROUTED0(InputMsg_SelectAll)
 
-IPC_MESSAGE_ROUTED0(InputMsg_Unselect)
+IPC_MESSAGE_ROUTED0(InputMsg_CollapseSelection)
 
 // Requests the renderer to select the region between two points.
 // Expects a SelectRange_ACK message when finished.
@@ -261,19 +302,19 @@ IPC_MESSAGE_ROUTED1(InputMsg_MoveCaret,
                     gfx::Point /* location */)
 
 #if defined(OS_ANDROID)
-// Sent by the browser as ACK to ViewHostMsg_TextInputState when necessary.
-// NOTE: ImeEventAck and other Ime* messages should be of the same type,
-// otherwise a race condition can happen.
-IPC_MESSAGE_ROUTED0(InputMsg_ImeEventAck)
-
 // Request from browser to update text input state.
 IPC_MESSAGE_ROUTED0(InputMsg_RequestTextInputStateUpdate)
 #endif
 
-// Request from browser to update the cursor and composition information.
-IPC_MESSAGE_ROUTED2(InputMsg_RequestCompositionUpdate,
-                    bool /* immediate request */,
-                    bool /* monitor request */)
+// Request from browser to update the cursor and composition information which
+// will be sent through InputHostMsg_ImeCompositionRangeChanged. Setting
+// |immediate_request| to true  will lead to an immediate update. If
+// |monitor_updates| is set to true then changes to text selection or regular
+// updates in each compositor frame (when there is a change in composition info)
+// will lead to updates being sent to the browser.
+IPC_MESSAGE_ROUTED2(InputMsg_RequestCompositionUpdates,
+                    bool /* immediate_request */,
+                    bool /* monitor_updates */)
 
 IPC_MESSAGE_ROUTED0(InputMsg_SyntheticGestureCompleted)
 
@@ -289,7 +330,11 @@ IPC_MESSAGE_ROUTED1(InputHostMsg_QueueSyntheticGesture,
 
 // Notifies the allowed touch actions for a new touch point.
 IPC_MESSAGE_ROUTED1(InputHostMsg_SetTouchAction,
-                    content::TouchAction /* touch_action */)
+                    cc::TouchAction /* touch_action */)
+
+// The whitelisted touch action for a new touch point sent by the compositor.
+IPC_MESSAGE_ROUTED1(InputHostMsg_SetWhiteListedTouchAction,
+                    cc::TouchAction /* white_listed_touch_action */)
 
 // Sent by the compositor when input scroll events are dropped due to bounds
 // restrictions on the root scroll offset.

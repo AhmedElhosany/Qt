@@ -11,6 +11,8 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/sys_info.h"
+#include "base/trace_event/memory_usage_estimator.h"
+#include "base/trace_event/process_memory_dump.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/cache_util.h"
 #include "net/disk_cache/memory/mem_entry_impl.h"
@@ -36,19 +38,6 @@ bool CheckLRUListOrder(const base::LinkedList<MemEntryImpl>& lru_list) {
   return true;
 }
 
-// Returns the next entry after |node| in |lru_list| that's not a child
-// of |node|.  This is useful when dooming, since dooming a parent entry
-// will also doom its children.
-base::LinkNode<MemEntryImpl>* NextSkippingChildren(
-    const base::LinkedList<MemEntryImpl>& lru_list,
-    base::LinkNode<MemEntryImpl>* node) {
-  MemEntryImpl* cur = node->value();
-  do {
-    node = node->next();
-  } while (node != lru_list.end() && node->value()->parent() == cur);
-  return node;
-}
-
 }  // namespace
 
 MemBackendImpl::MemBackendImpl(net::NetLog* net_log)
@@ -59,7 +48,7 @@ MemBackendImpl::~MemBackendImpl() {
   DCHECK(CheckLRUListOrder(lru_list_));
   while (!entries_.empty())
     entries_.begin()->second->Doom();
-  DCHECK(!current_size_);
+  DCHECK_EQ(0, current_size_);
 }
 
 // static
@@ -139,6 +128,10 @@ void MemBackendImpl::ModifyStorageSize(int32_t delta) {
     EvictIfNeeded();
 }
 
+bool MemBackendImpl::HasExceededStorageSize() const {
+  return current_size_ > max_size_;
+}
+
 net::CacheType MemBackendImpl::GetCacheType() const {
   return net::MEMORY_CACHE;
 }
@@ -194,7 +187,6 @@ int MemBackendImpl::DoomEntriesBetween(Time initial_time,
                                        const CompletionCallback& callback) {
   if (end_time.is_null())
     end_time = Time::Max();
-
   DCHECK_GE(end_time, initial_time);
 
   base::LinkNode<MemEntryImpl>* node = lru_list_.head();
@@ -202,7 +194,7 @@ int MemBackendImpl::DoomEntriesBetween(Time initial_time,
     node = node->next();
   while (node != lru_list_.end() && node->value()->GetLastUsed() < end_time) {
     MemEntryImpl* to_doom = node->value();
-    node = NextSkippingChildren(lru_list_, node);
+    node = node->next();
     to_doom->Doom();
   }
 
@@ -217,6 +209,26 @@ int MemBackendImpl::DoomEntriesSince(Time initial_time,
 int MemBackendImpl::CalculateSizeOfAllEntries(
     const CompletionCallback& callback) {
   return current_size_;
+}
+
+int MemBackendImpl::CalculateSizeOfEntriesBetween(
+    base::Time initial_time,
+    base::Time end_time,
+    const CompletionCallback& callback) {
+  if (end_time.is_null())
+    end_time = Time::Max();
+  DCHECK_GE(end_time, initial_time);
+
+  int size = 0;
+  base::LinkNode<MemEntryImpl>* node = lru_list_.head();
+  while (node != lru_list_.end() && node->value()->GetLastUsed() < initial_time)
+    node = node->next();
+  while (node != lru_list_.end() && node->value()->GetLastUsed() < end_time) {
+    MemEntryImpl* entry = node->value();
+    size += entry->GetStorageSize();
+    node = node->next();
+  }
+  return size;
 }
 
 class MemBackendImpl::MemIterator final : public Backend::Iterator {
@@ -277,6 +289,27 @@ void MemBackendImpl::OnExternalCacheHit(const std::string& key) {
     it->second->UpdateStateOnUse(MemEntryImpl::ENTRY_WAS_NOT_MODIFIED);
 }
 
+size_t MemBackendImpl::DumpMemoryStats(
+    base::trace_event::ProcessMemoryDump* pmd,
+    const std::string& parent_absolute_name) const {
+  base::trace_event::MemoryAllocatorDump* dump =
+      pmd->CreateAllocatorDump(parent_absolute_name + "/memory_backend");
+
+  // Entries in lru_list_ will be counted by EMU but not in entries_ since
+  // they're pointers.
+  size_t size = base::trace_event::EstimateMemoryUsage(lru_list_) +
+                base::trace_event::EstimateMemoryUsage(entries_);
+  dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
+                  base::trace_event::MemoryAllocatorDump::kUnitsBytes, size);
+  dump->AddScalar("mem_backend_size",
+                  base::trace_event::MemoryAllocatorDump::kUnitsBytes,
+                  current_size_);
+  dump->AddScalar("mem_backend_max_size",
+                  base::trace_event::MemoryAllocatorDump::kUnitsBytes,
+                  max_size_);
+  return size;
+}
+
 void MemBackendImpl::EvictIfNeeded() {
   if (current_size_ <= max_size_)
     return;
@@ -286,8 +319,7 @@ void MemBackendImpl::EvictIfNeeded() {
   base::LinkNode<MemEntryImpl>* entry = lru_list_.head();
   while (current_size_ > target_size && entry != lru_list_.end()) {
     MemEntryImpl* to_doom = entry->value();
-    entry = NextSkippingChildren(lru_list_, entry);
-
+    entry = entry->next();
     if (!to_doom->InUse())
       to_doom->Doom();
   }

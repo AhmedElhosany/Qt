@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <memory>
 
-#include "webrtc/base/checks.h"
+#include "webrtc/rtc_base/checks.h"
 #include "webrtc/typedefs.h"
 
 namespace webrtc {
@@ -282,14 +282,6 @@ size_t AudioVector::Size() const {
 // Returns true if this AudioVector is empty.
 bool AudioVector::Empty() const {
   return begin_index_ == end_index_;
-}
-
-const int16_t& AudioVector::operator[](size_t index) const {
-  return array_[(begin_index_ + index) % capacity_];
-}
-
-int16_t& AudioVector::operator[](size_t index) {
-  return array_[(begin_index_ + index) % capacity_];
 }
 
 void AudioVector::Reserve(size_t n) {

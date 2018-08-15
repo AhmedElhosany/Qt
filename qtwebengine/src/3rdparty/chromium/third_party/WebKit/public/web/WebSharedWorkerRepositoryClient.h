@@ -31,14 +31,15 @@
 #ifndef WebSharedWorkerRepositoryClient_h
 #define WebSharedWorkerRepositoryClient_h
 
-#include "WebSharedWorkerConnector.h"
 #include "WebSharedWorkerCreationContextType.h"
 #include "WebSharedWorkerCreationErrors.h"
 #include "public/platform/WebAddressSpace.h"
+#include <memory>
 
 namespace blink {
 
-enum WebContentSecurityPolicyType;
+class WebMessagePortChannel;
+class WebSharedWorkerConnectListener;
 class WebString;
 class WebURL;
 
@@ -46,24 +47,24 @@ class WebSharedWorkerRepositoryClient {
  public:
   // Unique identifier for the parent document of a worker (unique within a
   // given process).
-  typedef unsigned long long DocumentID;
+  using DocumentID = unsigned long long;
 
-  // Creates a new shared worker connector. This may return null.
-  virtual WebSharedWorkerConnector* createSharedWorkerConnector(
-      const WebURL& url,
-      const WebString& name,
-      DocumentID id,
-      const WebString& contentSecurityPolicy,
-      WebContentSecurityPolicyType,
-      WebAddressSpace,
-      WebSharedWorkerCreationContextType,
-      WebWorkerCreationError* error) {
-    return 0;
+  // Connects to a shared worker.
+  virtual void Connect(const WebURL& url,
+                       const WebString& name,
+                       DocumentID id,
+                       const WebString& content_security_policy,
+                       WebContentSecurityPolicyType,
+                       WebAddressSpace,
+                       WebSharedWorkerCreationContextType,
+                       bool data_saver_enabled,
+                       std::unique_ptr<WebMessagePortChannel>,
+                       std::unique_ptr<blink::WebSharedWorkerConnectListener>) {
   }
 
   // Invoked when a document has been detached. DocumentID can be re-used after
   // documentDetached() is invoked.
-  virtual void documentDetached(DocumentID) {}
+  virtual void DocumentDetached(DocumentID) {}
 };
 
 }  // namespace blink

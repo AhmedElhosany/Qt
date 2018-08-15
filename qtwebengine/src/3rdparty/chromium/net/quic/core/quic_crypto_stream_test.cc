@@ -12,11 +12,11 @@
 #include "base/macros.h"
 #include "net/quic/core/crypto/crypto_handshake.h"
 #include "net/quic/core/crypto/crypto_protocol.h"
+#include "net/quic/platform/api/quic_socket_address.h"
+#include "net/quic/platform/api/quic_test.h"
 #include "net/quic/test_tools/crypto_test_utils.h"
 #include "net/quic/test_tools/quic_stream_peer.h"
 #include "net/quic/test_tools/quic_test_utils.h"
-#include "testing/gmock/include/gmock/gmock.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 using std::string;
 
@@ -24,10 +24,13 @@ namespace net {
 namespace test {
 namespace {
 
-class MockQuicCryptoStream : public QuicCryptoStream {
+class MockQuicCryptoStream : public QuicCryptoStream,
+                             public QuicCryptoHandshaker {
  public:
   explicit MockQuicCryptoStream(QuicSession* session)
-      : QuicCryptoStream(session) {}
+      : QuicCryptoStream(session),
+        QuicCryptoHandshaker(this, session),
+        params_(new QuicCryptoNegotiatedParameters) {}
 
   void OnHandshakeMessage(const CryptoHandshakeMessage& message) override {
     messages_.push_back(message);
@@ -35,13 +38,25 @@ class MockQuicCryptoStream : public QuicCryptoStream {
 
   std::vector<CryptoHandshakeMessage>* messages() { return &messages_; }
 
+  bool encryption_established() const override { return false; }
+  bool handshake_confirmed() const override { return false; }
+
+  const QuicCryptoNegotiatedParameters& crypto_negotiated_params()
+      const override {
+    return *params_;
+  }
+  CryptoMessageParser* crypto_message_parser() override {
+    return QuicCryptoHandshaker::crypto_message_parser();
+  }
+
  private:
+  QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters> params_;
   std::vector<CryptoHandshakeMessage> messages_;
 
   DISALLOW_COPY_AND_ASSIGN(MockQuicCryptoStream);
 };
 
-class QuicCryptoStreamTest : public ::testing::Test {
+class QuicCryptoStreamTest : public QuicTest {
  public:
   QuicCryptoStreamTest()
       : connection_(new MockQuicConnection(&helper_,
@@ -52,12 +67,13 @@ class QuicCryptoStreamTest : public ::testing::Test {
     message_.set_tag(kSHLO);
     message_.SetStringPiece(1, "abc");
     message_.SetStringPiece(2, "def");
-    ConstructHandshakeMessage();
+    ConstructHandshakeMessage(Perspective::IS_SERVER);
   }
 
-  void ConstructHandshakeMessage() {
+  void ConstructHandshakeMessage(Perspective perspective) {
     CryptoFramer framer;
-    message_data_.reset(framer.ConstructHandshakeMessage(message_));
+    message_data_.reset(
+        framer.ConstructHandshakeMessage(message_, perspective));
   }
 
  protected:
@@ -86,8 +102,8 @@ TEST_F(QuicCryptoStreamTest, ProcessRawData) {
   const CryptoHandshakeMessage& message = (*stream_.messages())[0];
   EXPECT_EQ(kSHLO, message.tag());
   EXPECT_EQ(2u, message.tag_value_map().size());
-  EXPECT_EQ("abc", CryptoTestUtils::GetValueForTag(message, 1));
-  EXPECT_EQ("def", CryptoTestUtils::GetValueForTag(message, 2));
+  EXPECT_EQ("abc", crypto_test_utils::GetValueForTag(message, 1));
+  EXPECT_EQ("def", crypto_test_utils::GetValueForTag(message, 2));
 }
 
 TEST_F(QuicCryptoStreamTest, ProcessBadData) {

@@ -9,11 +9,13 @@
 #include <algorithm>
 
 #include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/socket/socket.h"
 #include "net/socket/stream_socket.h"
 #include "net/ssl/openssl_ssl_util.h"
 #include "third_party/boringssl/src/include/openssl/bio.h"
@@ -53,6 +55,16 @@ bool SocketBIOAdapter::HasPendingReadData() {
   return read_result_ > 0;
 }
 
+size_t SocketBIOAdapter::GetAllocationSize() const {
+  size_t buffer_size = 0;
+  if (read_buffer_)
+    buffer_size += read_buffer_capacity_;
+
+  if (write_buffer_)
+    buffer_size += write_buffer_capacity_;
+  return buffer_size;
+}
+
 int SocketBIOAdapter::BIORead(char* out, int len) {
   if (len <= 0)
     return len;
@@ -77,8 +89,19 @@ int SocketBIOAdapter::BIORead(char* out, int len) {
     DCHECK(!read_buffer_);
     DCHECK_EQ(0, read_offset_);
     read_buffer_ = new IOBuffer(read_buffer_capacity_);
-    int result = socket_->Read(read_buffer_.get(), read_buffer_capacity_,
-                               read_callback_);
+    int result = ERR_READ_IF_READY_NOT_IMPLEMENTED;
+    if (base::FeatureList::IsEnabled(Socket::kReadIfReadyExperiment)) {
+      result = socket_->ReadIfReady(
+          read_buffer_.get(), read_buffer_capacity_,
+          base::Bind(&SocketBIOAdapter::OnSocketReadIfReadyComplete,
+                     weak_factory_.GetWeakPtr()));
+      if (result == ERR_IO_PENDING)
+        read_buffer_ = nullptr;
+    }
+    if (result == ERR_READ_IF_READY_NOT_IMPLEMENTED) {
+      result = socket_->Read(read_buffer_.get(), read_buffer_capacity_,
+                             read_callback_);
+    }
     if (result == ERR_IO_PENDING) {
       read_result_ = ERR_IO_PENDING;
     } else {
@@ -133,6 +156,16 @@ void SocketBIOAdapter::OnSocketReadComplete(int result) {
   DCHECK_EQ(ERR_IO_PENDING, read_result_);
 
   HandleSocketReadResult(result);
+  delegate_->OnReadReady();
+}
+
+void SocketBIOAdapter::OnSocketReadIfReadyComplete(int result) {
+  DCHECK_EQ(ERR_IO_PENDING, read_result_);
+  DCHECK_GE(OK, result);
+
+  // Do not use HandleSocketReadResult() because result == OK doesn't mean EOF.
+  read_result_ = result;
+
   delegate_->OnReadReady();
 }
 

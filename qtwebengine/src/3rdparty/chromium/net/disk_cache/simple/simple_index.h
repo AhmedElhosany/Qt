@@ -51,6 +51,10 @@ class NET_EXPORT_PRIVATE EntryMetadata {
   base::Time GetLastUsedTime() const;
   void SetLastUsedTime(const base::Time& last_used_time);
 
+  uint32_t RawTimeForSorting() const {
+    return last_used_time_seconds_since_epoch_;
+  }
+
   uint32_t GetEntrySize() const;
   void SetEntrySize(base::StrictNumeric<uint32_t> entry_size);
 
@@ -64,6 +68,8 @@ class NET_EXPORT_PRIVATE EntryMetadata {
   static base::TimeDelta GetUpperEpsilonForTimeComparisons() {
     return base::TimeDelta();
   }
+
+  static const int kOnDiskSizeBytes = 16;
 
  private:
   friend class SimpleIndexFileTest;
@@ -135,6 +141,11 @@ class NET_EXPORT_PRIVATE SimpleIndex
                                const EntryMetadata& entry_metadata,
                                EntrySet* entry_set);
 
+  // For use in tests only. Updates cache_size_, but will not start evictions
+  // or adjust index writing time. Requires entry to not already be in the set.
+  void InsertEntryForTesting(uint64_t entry_hash,
+                             const EntryMetadata& entry_metadata);
+
   // Executes the |callback| when the index is ready. Allows multiple callbacks.
   int ExecuteWhenReady(const net::CompletionCallback& callback);
 
@@ -155,10 +166,19 @@ class NET_EXPORT_PRIVATE SimpleIndex
   // index has been initialized.
   uint64_t GetCacheSize() const;
 
+  // Returns the size of the cache entries accessed between |initial_time| and
+  // |end_time| in bytes. Can only be called after the index has been
+  // initialized.
+  uint64_t GetCacheSizeBetween(const base::Time initial_time,
+                               const base::Time end_time) const;
+
   // Returns whether the index has been initialized yet.
   bool initialized() const { return initialized_; }
 
   IndexInitMethod init_method() const { return init_method_; }
+
+  // Returns the estimate of dynamically allocated memory in bytes.
+  size_t EstimateMemoryUsage() const;
 
  private:
   friend class SimpleIndexTest;

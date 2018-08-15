@@ -13,14 +13,13 @@
 #include "base/macros.h"
 #include "net/quic/core/quic_client_session_base.h"
 #include "net/quic/core/quic_crypto_client_stream.h"
-#include "net/quic/core/quic_protocol.h"
+#include "net/quic/core/quic_packets.h"
 #include "net/tools/quic/quic_spdy_client_stream.h"
 
 namespace net {
 
 class QuicConnection;
 class QuicServerId;
-class QuicStream;
 
 class QuicClientSession : public QuicClientSessionBase {
  public:
@@ -38,7 +37,10 @@ class QuicClientSession : public QuicClientSessionBase {
   // QuicSession methods:
   QuicSpdyClientStream* CreateOutgoingDynamicStream(
       SpdyPriority priority) override;
-  QuicCryptoClientStreamBase* GetCryptoStream() override;
+  QuicSpdyClientStream* MaybeCreateOutgoingDynamicStream(
+      SpdyPriority priority) override;
+  QuicCryptoClientStreamBase* GetMutableCryptoStream() override;
+  const QuicCryptoClientStreamBase* GetCryptoStream() const override;
 
   bool IsAuthorized(const std::string& authority) override;
 
@@ -48,7 +50,7 @@ class QuicClientSession : public QuicClientSessionBase {
       const ProofVerifyDetails& verify_details) override;
 
   // Performs a crypto handshake with the server.
-  void CryptoConnect();
+  virtual void CryptoConnect();
 
   // Returns the number of client hello messages that have been sent on the
   // crypto stream. If the handshake has completed then this is one greater
@@ -56,10 +58,6 @@ class QuicClientSession : public QuicClientSessionBase {
   int GetNumSentClientHellos() const;
 
   int GetNumReceivedServerConfigUpdates() const;
-
-  void set_respect_goaway(bool respect_goaway) {
-    respect_goaway_ = respect_goaway;
-  }
 
  protected:
   // QuicSession methods:
@@ -69,10 +67,14 @@ class QuicClientSession : public QuicClientSessionBase {
 
   // If an incoming stream can be created, return true.
   bool ShouldCreateIncomingDynamicStream(QuicStreamId id) override;
+  QuicSpdyStream* MaybeCreateIncomingDynamicStream(QuicStreamId id) override;
+  std::unique_ptr<QuicStream> CreateStream(QuicStreamId id) override;
 
   // Create the crypto stream. Called by Initialize().
   virtual std::unique_ptr<QuicCryptoClientStreamBase> CreateQuicCryptoStream();
 
+  // TODO(ckrasic) remove when
+  // quic_reloadable_flag_quic_refactor_stream_creation is deprecated.
   // Unlike CreateOutgoingDynamicStream, which applies a bunch of sanity checks,
   // this simply returns a new QuicSpdyClientStream. This may be used by
   // subclasses which want to use a subclass of QuicSpdyClientStream for streams
@@ -86,10 +88,6 @@ class QuicClientSession : public QuicClientSessionBase {
   std::unique_ptr<QuicCryptoClientStreamBase> crypto_stream_;
   QuicServerId server_id_;
   QuicCryptoClientConfig* crypto_config_;
-
-  // If this is set to false, the client will ignore server GOAWAYs and allow
-  // the creation of streams regardless of the high chance they will fail.
-  bool respect_goaway_;
 
   DISALLOW_COPY_AND_ASSIGN(QuicClientSession);
 };

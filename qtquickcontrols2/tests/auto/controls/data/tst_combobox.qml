@@ -705,9 +705,6 @@ TestCase {
         var activatedSpy = signalSpy.createObject(control, {target: control, signalName: "activated"})
         verify(activatedSpy.valid)
 
-        var highlightedSpy = signalSpy.createObject(control, {target: control, signalName: "highlighted"})
-        verify(highlightedSpy.valid)
-
         mouseClick(control)
         compare(control.popup.visible, true)
 
@@ -717,25 +714,19 @@ TestCase {
         // press - move - release outside - not activated - not closed
         mousePress(content)
         compare(activatedSpy.count, 0)
-        compare(highlightedSpy.count, 0)
         mouseMove(content, content.width * 2)
         compare(activatedSpy.count, 0)
-        compare(highlightedSpy.count, 0)
         mouseRelease(content, content.width * 2)
         compare(activatedSpy.count, 0)
-        compare(highlightedSpy.count, 0)
         compare(control.popup.visible, true)
 
         // press - move - release inside - activated - closed
         mousePress(content)
         compare(activatedSpy.count, 0)
-        compare(highlightedSpy.count, 0)
         mouseMove(content, content.width / 2 + 1, content.height / 2 + 1)
         compare(activatedSpy.count, 0)
-        compare(highlightedSpy.count, 0)
         mouseRelease(content)
         compare(activatedSpy.count, 1)
-        compare(highlightedSpy.count, 1)
         tryCompare(control.popup, "visible", false)
     }
 
@@ -1176,6 +1167,58 @@ TestCase {
         closedSpy.target = null
     }
 
+    function test_mouseHighlight() {
+        if ((Qt.platform.pluginName === "offscreen")
+            || (Qt.platform.pluginName === "minimal"))
+            skip("Mouse highlight not functional on offscreen/minimal platforms")
+        var control = createTemporaryObject(comboBox, testCase, {model: 20})
+        verify(control)
+
+        compare(control.highlightedIndex, -1)
+
+        var openedSpy = signalSpy.createObject(control, {target: control.popup, signalName: "opened"})
+        verify(openedSpy.valid)
+
+        control.popup.open()
+        compare(control.highlightedIndex, 0)
+        tryCompare(openedSpy, "count", 1)
+
+        var listview = control.popup.contentItem
+        verify(listview)
+        waitForRendering(listview)
+
+        // hover-highlight through all visible list items one by one
+        var hoverIndex = -1
+        var prevHoverItem = null
+        for (var y = 0; y < listview.height; ++y) {
+            var hoverItem = listview.itemAt(0, listview.contentY + y)
+            if (!hoverItem || !hoverItem.visible || hoverItem === prevHoverItem)
+                continue
+            mouseMove(hoverItem, 0, 0)
+            tryCompare(control, "highlightedIndex", ++hoverIndex)
+            prevHoverItem = hoverItem
+        }
+
+        mouseMove(listview, listview.width / 2, listview.height / 2)
+
+        // wheel-highlight the rest of the items
+        var delta = 120
+        var prevWheelItem = null
+        while (!listview.atYEnd) {
+            var prevContentY = listview.contentY
+            mouseWheel(listview, listview.width / 2, listview.height / 2, -delta, -delta)
+            tryCompare(listview, "moving", false)
+            verify(listview.contentY > prevContentY)
+
+            var wheelItem = listview.itemAt(listview.width / 2, listview.contentY + listview.height / 2)
+            if (!wheelItem || !wheelItem.visible || wheelItem === prevWheelItem)
+                continue
+
+            tryCompare(control, "highlightedIndex", parseInt(wheelItem.text))
+            prevWheelItem = wheelItem
+        }
+    }
+
     RegExpValidator {
         id: regExpValidator
         regExp: /(red|blue|green)?/
@@ -1417,7 +1460,6 @@ TestCase {
 
         keyPress(Qt.Key_B)
         verify(control.activeFocus)
-        expectFail("", "An editable ComboBox does not yet support the Keys attached property.")
         verify(control.gotit)
         compare(control.editText, "a")
 
@@ -1481,6 +1523,6 @@ TestCase {
         control.model = 0
         control.popup.open()
         tryCompare(control.popup, "visible", true)
-        compare(control.popup.height, 0)
+        compare(control.popup.height, control.popup.topPadding + control.popup.bottomPadding)
     }
 }

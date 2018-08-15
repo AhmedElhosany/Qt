@@ -29,7 +29,7 @@ namespace base {
 class WaitableEvent;
 }
 
-namespace ui {
+namespace display {
 class DisplayConfigurator;
 }
 
@@ -139,11 +139,9 @@ class RenderingHelper {
   // Get the GL context.
   gl::GLContext* GetGLContext();
 
-  // Get rendered thumbnails as RGB.
-  // Sets alpha_solid to true if the alpha channel is entirely 0xff.
-  void GetThumbnailsAsRGB(std::vector<unsigned char>* rgb,
-                          bool* alpha_solid,
-                          base::WaitableEvent* done);
+  // Get rendered thumbnails as RGBA.
+  void GetThumbnailsAsRGBA(std::vector<unsigned char>* rgba,
+                           base::WaitableEvent* done);
 
  private:
   struct RenderedVideo {
@@ -197,7 +195,7 @@ class RenderingHelper {
   std::unique_ptr<StubOzoneDelegate> platform_window_delegate_;
 
 #if defined(OS_CHROMEOS)
-  std::unique_ptr<ui::DisplayConfigurator> display_configurator_;
+  std::unique_ptr<display::DisplayConfigurator> display_configurator_;
 #endif
 #endif
 
@@ -215,6 +213,7 @@ class RenderingHelper {
   GLuint thumbnails_texture_id_;
   gfx::Size thumbnails_fbo_size_;
   gfx::Size thumbnail_size_;
+  GLuint vertex_buffer_;
   GLuint program_;
   base::TimeDelta frame_duration_;
   base::TimeTicks scheduled_render_time_;

@@ -13,22 +13,22 @@
 #include "base/mac/mac_util.h"
 #import "base/mac/sdk_forward_declarations.h"
 #include "base/memory/ptr_util.h"
+#include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
 #import "ui/base/cocoa/constrained_window/constrained_window_animation.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/input_method_factory.h"
-#include "ui/display/display.h"
-#include "ui/display/screen.h"
+#include "ui/base/layout.h"
 #include "ui/gfx/geometry/dip_util.h"
 #import "ui/gfx/mac/coordinate_conversion.h"
 #import "ui/gfx/mac/nswindow_frame_controls.h"
 #import "ui/native_theme/native_theme_mac.h"
 #import "ui/views/cocoa/bridged_content_view.h"
-#import "ui/views/cocoa/drag_drop_client_mac.h"
 #import "ui/views/cocoa/cocoa_mouse_capture.h"
 #import "ui/views/cocoa/cocoa_window_move_loop.h"
+#import "ui/views/cocoa/drag_drop_client_mac.h"
 #include "ui/views/cocoa/tooltip_manager_mac.h"
 #import "ui/views/cocoa/views_nswindow_delegate.h"
 #import "ui/views/cocoa/widget_owner_nswindow_adapter.h"
@@ -111,10 +111,7 @@ const int kResizeAreaCornerSize = 12;
 int kWindowPropertiesKey;
 
 float GetDeviceScaleFactorFromView(NSView* view) {
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(view);
-  DCHECK(display.is_valid());
-  return display.device_scale_factor();
+  return ui::GetScaleFactorForNativeView(view);
 }
 
 // Returns true if bounds passed to window in SetBounds should be treated as
@@ -122,7 +119,8 @@ float GetDeviceScaleFactorFromView(NSView* view) {
 bool PositionWindowInScreenCoordinates(views::Widget* widget,
                                        views::Widget::InitParams::Type type) {
   // Replicate the logic in desktop_aura/desktop_screen_position_client.cc.
-  if (views::GetAuraWindowTypeForWidgetType(type) == ui::wm::WINDOW_TYPE_POPUP)
+  if (views::GetAuraWindowTypeForWidgetType(type) ==
+      aura::client::WINDOW_TYPE_POPUP)
     return true;
 
   return widget && widget->is_top_level();
@@ -349,8 +347,7 @@ gfx::Size BridgedNativeWidget::GetWindowSizeForClientSize(
 // TODO(karandeepb): Remove usage of drag event monitor once we stop supporting
 // Mac OS 10.10.
 bool BridgedNativeWidget::ShouldUseDragEventMonitor() {
-  return ![NSWindow
-      instancesRespondToSelector:@selector(performWindowDragWithEvent:)];
+  return base::mac::IsAtMostOS10_10();
 }
 
 BridgedNativeWidget::BridgedNativeWidget(NativeWidgetMac* parent)
@@ -428,6 +425,11 @@ void BridgedNativeWidget::Init(base::scoped_nsobject<NSWindow> window,
     } else {
       parent_ = new WidgetOwnerNSWindowAdapter(this, params.parent);
     }
+    // crbug.com/697829: Widget::ShowInactive() could result in a Space switch
+    // when the widget has a parent, and we're calling -orderWindow:relativeTo:.
+    // Use Transient collection behaviour to prevent that.
+    [window_ setCollectionBehavior:[window_ collectionBehavior] |
+                                   NSWindowCollectionBehaviorTransient];
   }
 
   // OSX likes to put shadows on most things. However, frameless windows (with
@@ -558,6 +560,13 @@ void BridgedNativeWidget::SetVisibilityState(WindowVisibilityState new_state) {
   wants_to_be_visible_ = new_state != HIDE_WINDOW;
 
   if (new_state == HIDE_WINDOW) {
+    // Calling -orderOut: on a window with an attached sheet encounters broken
+    // AppKit behavior. The sheet effectively becomes "lost".
+    // See http://crbug.com/667602. Alternatives: call -setAlphaValue:0 and
+    // -setIgnoresMouseEvents:YES on the NSWindow, or dismiss the sheet before
+    // hiding.
+    DCHECK(![window_ attachedSheet]);
+
     [window_ orderOut:nil];
     DCHECK(!window_visible_);
     return;
@@ -827,7 +836,9 @@ void BridgedNativeWidget::OnVisibilityChanged() {
   if (window_visible_) {
     wants_to_be_visible_ = true;
 
-    if (parent_)
+    // Sheets don't need a parentWindow set, and setting one causes graphical
+    // glitches (http://crbug.com/605098).
+    if (parent_ && ![window_ isSheet])
       [parent_->GetNSWindow() addChildWindow:window_ ordered:NSWindowAbove];
   } else {
     ReleaseCapture();  // Capture on hidden windows is not permitted.
@@ -869,7 +880,7 @@ void BridgedNativeWidget::OnVisibilityChanged() {
 }
 
 void BridgedNativeWidget::OnSystemControlTintChanged() {
-  ui::NativeThemeMac::instance()->NotifyObservers();
+  ui::NativeTheme::GetInstanceForNativeUi()->NotifyObservers();
 }
 
 void BridgedNativeWidget::OnBackingPropertiesChanged() {
@@ -1037,6 +1048,11 @@ void BridgedNativeWidget::ClearAssociationForView(const views::View* view) {
 }
 
 void BridgedNativeWidget::ReorderChildViews() {
+  // Ignore layer manipulation during a Close(). This can be reached during the
+  // orderOut: in Close(), which notifies visibility changes to Views.
+  if (!bridged_view_)
+    return;
+
   RankMap rank;
   Widget* widget = native_widget_mac_->GetWidget();
   RankNSViews(widget->GetRootView(), associated_views_, &rank);
@@ -1250,12 +1266,16 @@ void BridgedNativeWidget::CreateCompositor() {
   ui::ContextFactory* context_factory =
       ViewsDelegate::GetInstance()->GetContextFactory();
   DCHECK(context_factory);
+  ui::ContextFactoryPrivate* context_factory_private =
+      ViewsDelegate::GetInstance()->GetContextFactoryPrivate();
 
   AddCompositorSuperview();
 
   compositor_widget_.reset(new ui::AcceleratedWidgetMac());
-  compositor_.reset(
-      new ui::Compositor(context_factory, GetCompositorTaskRunner()));
+  compositor_.reset(new ui::Compositor(
+      context_factory_private->AllocateFrameSinkId(), context_factory,
+      context_factory_private, GetCompositorTaskRunner(),
+      false /* enable_surface_synchronization */));
   compositor_->SetAcceleratedWidget(compositor_widget_->accelerated_widget());
   compositor_widget_->SetNSView(this);
 }

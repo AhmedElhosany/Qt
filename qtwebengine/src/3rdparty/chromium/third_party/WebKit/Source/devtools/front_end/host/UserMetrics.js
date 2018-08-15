@@ -79,7 +79,18 @@ Host.UserMetrics.Action = {
   StyleRuleEdited: 14,
   CommandEvaluatedInConsolePanel: 15,
   DOMPropertiesExpanded: 16,
-  ResizedViewInResponsiveMode: 17
+  ResizedViewInResponsiveMode: 17,
+  TimelinePageReloadStarted: 18,
+  ConnectToNodeJSFromFrontend: 19,
+  ConnectToNodeJSDirectly: 20,
+  CpuThrottlingEnabled: 21,
+  CpuProfileNodeFocused: 22,
+  CpuProfileNodeExcluded: 23,
+  SelectFileFromFilePicker: 24,
+  SelectCommandFromCommandMenu: 25,
+  ChangeInspectedNodeInElementsPanel: 26,
+  StyleRuleCopied: 27,
+  CoverageStarted: 28,
 };
 
 Host.UserMetrics._PanelCodes = {
@@ -88,7 +99,7 @@ Host.UserMetrics._PanelCodes = {
   network: 3,
   sources: 4,
   timeline: 5,
-  profiles: 6,
+  heap_profiler: 6,
   audits: 7,
   console: 8,
   layers: 9,
@@ -98,7 +109,9 @@ Host.UserMetrics._PanelCodes = {
   'drawer-rendering': 13,
   'drawer-sensors': 14,
   'drawer-sources.search': 15,
-  security: 16
+  security: 16,
+  js_profiler: 17,
+  audits2: 18,
 };
 
 /** @type {!Host.UserMetrics} */

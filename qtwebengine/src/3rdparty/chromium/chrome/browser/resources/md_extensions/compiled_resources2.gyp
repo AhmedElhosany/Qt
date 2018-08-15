@@ -30,7 +30,7 @@
         '<(EXTERNS_GYP):developer_private',
         'animation_helper',
         'item',
-        'item_source',
+        'item_util',
       ],
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
@@ -49,6 +49,7 @@
       'dependencies': [
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
         '<(DEPTH)/third_party/polymer/v1_0/components-chromium/neon-animation/compiled_resources2.gyp:neon-animatable-behavior-extracted',
+        '<(DEPTH)/third_party/polymer/v1_0/components-chromium/paper-menu/compiled_resources2.gyp:paper-menu-extracted',
         '<(EXTERNS_GYP):developer_private',
         'animation_helper',
         'code_section',
@@ -72,7 +73,7 @@
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:i18n_behavior',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:load_time_data',
         '<(EXTERNS_GYP):developer_private',
-        'item_source',
+        'item_util',
       ],
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
@@ -91,7 +92,7 @@
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
     {
-      'target_name': 'item_source',
+      'target_name': 'item_util',
       'dependencies': [
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
@@ -112,8 +113,18 @@
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
     {
+      'target_name': 'load_error',
+      'dependencies': [
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
+        '<(EXTERNS_GYP):developer_private',
+      ],
+      'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
+    },
+    {
       'target_name': 'manager',
       'dependencies': [
+        '<(DEPTH)/ui/webui/resources/cr_elements/cr_drawer/compiled_resources2.gyp:cr_drawer',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:i18n_behavior',
@@ -122,8 +133,19 @@
         'detail_view',
         'item',
         'item_list',
+        'load_error',
         'keyboard_shortcuts',
+        'navigation_helper',
         'sidebar',
+        'toolbar',
+      ],
+      'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
+    },
+    {
+      'target_name': 'navigation_helper',
+      'dependencies': [
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
       ],
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
@@ -153,9 +175,11 @@
         '<(EXTERNS_GYP):management',
         'error_page',
         'item',
+        'load_error',
         'manager',
+        'navigation_helper',
         'pack_dialog',
-        'sidebar',
+        'toolbar',
       ],
       'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
     },
@@ -172,6 +196,15 @@
     },
     {
       'target_name': 'sidebar',
+      'dependencies': [
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',
+        '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:i18n_behavior',
+      ],
+      'includes': ['../../../../third_party/closure_compiler/compile_js2.gypi'],
+    },
+    {
+      'target_name': 'toolbar',
       'dependencies': [
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:assert',
         '<(DEPTH)/ui/webui/resources/js/compiled_resources2.gyp:cr',

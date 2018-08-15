@@ -50,7 +50,7 @@
         \li Automatic capitalization and space insertion.
         \li Scalability to different resolutions.
         \li Support for different character sets (Latin, Simplified/Traditional Chinese,
-            Hindi, Japanese, Arabic, Korean, and others).
+            Hindi, Japanese, Arabic, Hebrew, Korean, and others).
         \li Support for most common input \l {Supported Languages}{languages},
             with possibility to easily extend the language support.
         \li Left-to-right and right-to-left input.
@@ -66,12 +66,20 @@
 
     \list
         \li Arabic
+        \li Bulgarian
+        \li Croatian
+        \li Czech
         \li Danish
+        \li Dutch
         \li English
+        \li Estonian
         \li Finnish
         \li French
         \li German
+        \li Greek
+        \li Hebrew
         \li Hindi
+        \li Hungarian
         \li Italian
         \li Japanese
         \li Korean
@@ -81,6 +89,7 @@
         \li Portugese
         \li Romanian
         \li Russian
+        \li Serbian
         \li Simplified Chinese
         \li Traditional Chinese
         \li Spanish
@@ -124,7 +133,7 @@
 */
 
 /*!
-\qmlmodule QtQuick.VirtualKeyboard 2.2
+\qmlmodule QtQuick.VirtualKeyboard 2.3
 \title Qt Virtual Keyboard QML Types
 \ingroup qmlmodules
 \brief Provides QML types for an input framework and a reference keyboard front
@@ -134,7 +143,7 @@ end.
     import statements in your .qml file:
 
     \code
-    import QtQuick.VirtualKeyboard 2.2
+    import QtQuick.VirtualKeyboard 2.3
     import QtQuick.VirtualKeyboard.Styles 2.2
     import QtQuick.VirtualKeyboard.Settings 2.2
     \endcode

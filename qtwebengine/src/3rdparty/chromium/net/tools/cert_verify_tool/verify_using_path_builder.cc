@@ -7,27 +7,26 @@
 #include <iostream>
 
 #include "base/memory/ptr_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/threading/thread.h"
 #include "crypto/sha2.h"
-#include "net/base/test_completion_callback.h"
+#include "net/cert/cert_net_fetcher.h"
 #include "net/cert/internal/cert_issuer_source_aia.h"
 #include "net/cert/internal/cert_issuer_source_static.h"
 #include "net/cert/internal/parse_name.h"
 #include "net/cert/internal/parsed_certificate.h"
 #include "net/cert/internal/path_builder.h"
 #include "net/cert/internal/signature_policy.h"
-#include "net/cert/internal/trust_store_collection.h"
-#include "net/cert/internal/trust_store_in_memory.h"
+#include "net/cert/internal/system_trust_store.h"
+#include "net/cert/x509_util.h"
 #include "net/cert_net/cert_net_fetcher_impl.h"
 #include "net/tools/cert_verify_tool/cert_verify_tool_util.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_builder.h"
-
-#if defined(USE_NSS_CERTS)
-#include "base/threading/thread_task_runner_handle.h"
-#include "net/cert/internal/trust_store_nss.h"
-#endif
+#include "net/url_request/url_request_context_getter.h"
 
 #if defined(OS_LINUX)
 #include "net/proxy/proxy_config.h"
@@ -76,12 +75,6 @@ bool DumpParsedCertificateChain(const base::FilePath& file_path,
       return false;
   }
 
-  if (chain.trust_anchor && chain.trust_anchor->cert()) {
-    if (!AddPemEncodedCert(chain.trust_anchor->cert().get(),
-                           &pem_encoded_chain))
-      return false;
-  }
-
   return WriteToFile(file_path, base::JoinString(pem_encoded_chain, ""));
 }
 
@@ -106,25 +99,12 @@ std::string SubjectFromParsedCertificate(const net::ParsedCertificate* cert) {
   return SubjectToString(parsed_subject);
 }
 
-// Returns a textual representation of the Subject of |trust_anchor|.
-std::string SubjectFromTrustAnchor(const net::TrustAnchor* trust_anchor) {
-  // If the cert is present, display the original subject from that rather than
-  // the normalized subject.
-  if (trust_anchor->cert())
-    return SubjectFromParsedCertificate(trust_anchor->cert().get());
-
-  net::RDNSequence parsed_subject;
-  if (!net::ParseNameValue(trust_anchor->normalized_subject(), &parsed_subject))
-    return std::string();
-  return SubjectToString(parsed_subject);
-}
-
 // Dumps a ResultPath to std::cout.
 void PrintResultPath(const net::CertPathBuilder::ResultPath* result_path,
                      size_t index,
                      bool is_best) {
   std::cout << "path " << index << " "
-            << (result_path->valid ? "valid" : "invalid")
+            << (result_path->IsValid() ? "valid" : "invalid")
             << (is_best ? " (best)" : "") << "\n";
 
   // Print the certificate chain.
@@ -133,29 +113,19 @@ void PrintResultPath(const net::CertPathBuilder::ResultPath* result_path,
               << SubjectFromParsedCertificate(cert.get()) << "\n";
   }
 
-  // Print the trust anchor (if there was one).
-  const auto& trust_anchor = result_path->path.trust_anchor;
-  if (trust_anchor) {
-    std::string trust_anchor_cert_fingerprint = "<no cert>";
-    if (trust_anchor->cert()) {
-      trust_anchor_cert_fingerprint =
-          FingerPrintParsedCertificate(trust_anchor->cert().get());
-    }
-    std::cout << " " << trust_anchor_cert_fingerprint << " "
-              << SubjectFromTrustAnchor(trust_anchor.get()) << "\n";
-  }
-
-  // Print the errors.
-  if (!result_path->errors.empty()) {
+  // Print the errors/warnings if there were any.
+  std::string errors_str =
+      result_path->errors.ToDebugString(result_path->path.certs);
+  if (!errors_str.empty()) {
     std::cout << "Errors:\n";
-    std::cout << result_path->errors.ToDebugString() << "\n";
+    std::cout << errors_str << "\n";
   }
 }
 
 scoped_refptr<net::ParsedCertificate> ParseCertificate(const CertInput& input) {
   net::CertErrors errors;
-  scoped_refptr<net::ParsedCertificate> cert =
-      net::ParsedCertificate::Create(input.der_cert, {}, &errors);
+  scoped_refptr<net::ParsedCertificate> cert = net::ParsedCertificate::Create(
+      net::x509_util::CreateCryptoBuffer(input.der_cert), {}, &errors);
   if (!cert) {
     PrintCertError("ERROR: ParsedCertificate failed:", input);
     std::cout << errors.ToDebugString() << "\n";
@@ -165,6 +135,35 @@ scoped_refptr<net::ParsedCertificate> ParseCertificate(const CertInput& input) {
   //                         warnings).
 
   return cert;
+}
+
+void SetUpOnNetworkThread(std::unique_ptr<net::URLRequestContext>* context,
+                          scoped_refptr<net::CertNetFetcher>* fetcher,
+                          base::WaitableEvent* initialization_complete_event) {
+  // TODO(mattm): add command line flags to configure using
+  // CertIssuerSourceAia
+  // (similar to VERIFY_CERT_IO_ENABLED flag for CertVerifyProc).
+  net::URLRequestContextBuilder url_request_context_builder;
+  url_request_context_builder.set_user_agent(GetUserAgent());
+#if defined(OS_LINUX)
+  // On Linux, use a fixed ProxyConfigService, since the default one
+  // depends on glib.
+  //
+  // TODO(akalin): Remove this once http://crbug.com/146421 is fixed.
+  url_request_context_builder.set_proxy_config_service(
+      base::MakeUnique<net::ProxyConfigServiceFixed>(net::ProxyConfig()));
+#endif
+  *context = url_request_context_builder.Build();
+
+  *fetcher = net::CreateCertNetFetcher(context->get());
+  initialization_complete_event->Signal();
+}
+
+void ShutdownOnNetworkThread(
+    std::unique_ptr<net::URLRequestContext>* context,
+    const scoped_refptr<net::CertNetFetcher>& cert_net_fetcher) {
+  cert_net_fetcher->Shutdown();
+  context->reset();
 }
 
 }  // namespace
@@ -180,29 +179,20 @@ bool VerifyUsingPathBuilder(
   at_time.UTCExplode(&exploded_time);
   net::der::GeneralizedTime time = ConvertExplodedTime(exploded_time);
 
-  net::TrustStoreCollection trust_store;
+  std::unique_ptr<net::SystemTrustStore> ssl_trust_store =
+      net::CreateSslSystemTrustStore();
 
-  net::TrustStoreInMemory trust_store_in_memory;
-  trust_store.AddTrustStoreSynchronousOnly(&trust_store_in_memory);
   for (const auto& der_cert : root_der_certs) {
     scoped_refptr<net::ParsedCertificate> cert = ParseCertificate(der_cert);
     if (cert) {
-      trust_store_in_memory.AddTrustAnchor(
-          net::TrustAnchor::CreateFromCertificateNoConstraints(cert));
+      ssl_trust_store->AddTrustAnchor(cert);
     }
   }
 
-#if defined(USE_NSS_CERTS)
-  net::TrustStoreNSS trust_store_nss(trustSSL,
-                                     base::ThreadTaskRunnerHandle::Get());
-  trust_store.SetPrimaryTrustStore(&trust_store_nss);
-#else
-  if (root_der_certs.empty()) {
+  if (!ssl_trust_store->UsesSystemTrustStore() && root_der_certs.empty()) {
     std::cerr << "NOTE: CertPathBuilder does not currently use OS trust "
                  "settings (--roots must be specified).\n";
   }
-#endif
-
   net::CertIssuerSourceStatic intermediate_cert_issuer_source;
   for (const auto& der_cert : intermediate_der_certs) {
     scoped_refptr<net::ParsedCertificate> cert = ParseCertificate(der_cert);
@@ -218,36 +208,44 @@ bool VerifyUsingPathBuilder(
   // Verify the chain.
   net::SimpleSignaturePolicy signature_policy(2048);
   net::CertPathBuilder::Result result;
-  net::CertPathBuilder path_builder(target_cert, &trust_store,
-                                    &signature_policy, time, &result);
+  net::CertPathBuilder path_builder(
+      target_cert, ssl_trust_store->GetTrustStore(), &signature_policy, time,
+      net::KeyPurpose::SERVER_AUTH, net::InitialExplicitPolicy::kFalse,
+      {net::AnyPolicy()}, net::InitialPolicyMappingInhibit::kFalse,
+      net::InitialAnyPolicyInhibit::kFalse, &result);
   path_builder.AddCertIssuerSource(&intermediate_cert_issuer_source);
 
-  // TODO(mattm): add command line flags to configure using CertIssuerSourceAia
-  // (similar to VERIFY_CERT_IO_ENABLED flag for CertVerifyProc).
-  net::URLRequestContextBuilder url_request_context_builder;
-  url_request_context_builder.set_user_agent(GetUserAgent());
-#if defined(OS_LINUX)
-  // On Linux, use a fixed ProxyConfigService, since the default one
-  // depends on glib.
-  //
-  // TODO(akalin): Remove this once http://crbug.com/146421 is fixed.
-  url_request_context_builder.set_proxy_config_service(
-      base::MakeUnique<net::ProxyConfigServiceFixed>(net::ProxyConfig()));
-#endif
-  std::unique_ptr<net::URLRequestContext> url_request_context =
-      url_request_context_builder.Build();
-  net::CertNetFetcherImpl cert_net_fetcher(url_request_context.get());
-  net::CertIssuerSourceAia aia_cert_issuer_source(&cert_net_fetcher);
+  // Create a network thread to be used for AIA fetches, and wait for a
+  // CertNetFetcher to be constructed on that thread.
+  base::Thread::Options options(base::MessageLoop::TYPE_IO, 0);
+  base::Thread thread("network_thread");
+  CHECK(thread.StartWithOptions(options));
+  // Owned by this thread, but initialized, used, and shutdown on the network
+  // thread.
+  std::unique_ptr<net::URLRequestContext> context;
+  scoped_refptr<net::CertNetFetcher> cert_net_fetcher;
+  base::WaitableEvent initialization_complete_event(
+      base::WaitableEvent::ResetPolicy::MANUAL,
+      base::WaitableEvent::InitialState::NOT_SIGNALED);
+  thread.task_runner()->PostTask(
+      FROM_HERE, base::Bind(&SetUpOnNetworkThread, &context, &cert_net_fetcher,
+                            &initialization_complete_event));
+  initialization_complete_event.Wait();
+
+  // Now that the CertNetFetcher has been created on the network thread,
+  // use it to create a CertIssuerSourceAia.
+  net::CertIssuerSourceAia aia_cert_issuer_source(cert_net_fetcher.get());
   path_builder.AddCertIssuerSource(&aia_cert_issuer_source);
 
-  net::TestClosure callback;
-  net::CompletionStatus rv = path_builder.Run(callback.closure());
+  // Run the path builder.
+  path_builder.Run();
 
-  if (rv == net::CompletionStatus::ASYNC) {
-    DVLOG(1) << "waiting for async completion...";
-    callback.WaitForResult();
-    DVLOG(1) << "async completed.";
-  }
+  // Clean up on the network thread and stop it (which waits for the clean up
+  // task to run).
+  thread.task_runner()->PostTask(
+      FROM_HERE,
+      base::Bind(&ShutdownOnNetworkThread, &context, cert_net_fetcher));
+  thread.Stop();
 
   // TODO(crbug.com/634443): Display any errors/warnings associated with path
   //                         building that were not part of a particular

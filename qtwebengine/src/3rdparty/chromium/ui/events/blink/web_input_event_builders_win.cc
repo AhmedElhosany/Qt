@@ -23,55 +23,55 @@ WebKeyboardEvent WebKeyboardEventBuilder::Build(HWND hwnd,
                                                 WPARAM wparam,
                                                 LPARAM lparam,
                                                 double time_stamp) {
-  WebKeyboardEvent result;
-
-  result.timeStampSeconds = time_stamp;
-
-  result.windowsKeyCode = static_cast<int>(wparam);
-  // Record the scan code (along with other context bits) for this key event.
-  result.nativeKeyCode = static_cast<int>(lparam);
-
+  WebInputEvent::Type type = WebInputEvent::kUndefined;
+  bool is_system_key = false;
   switch (message) {
     case WM_SYSKEYDOWN:
-      result.isSystemKey = true;
+      is_system_key = true;
     // fallthrough
     case WM_KEYDOWN:
-      result.type = WebInputEvent::RawKeyDown;
+      type = WebInputEvent::kRawKeyDown;
       break;
     case WM_SYSKEYUP:
-      result.isSystemKey = true;
+      is_system_key = true;
     // fallthrough
     case WM_KEYUP:
-      result.type = WebInputEvent::KeyUp;
+      type = WebInputEvent::kKeyUp;
       break;
     case WM_IME_CHAR:
-      result.type = WebInputEvent::Char;
+      type = WebInputEvent::kChar;
       break;
     case WM_SYSCHAR:
-      result.isSystemKey = true;
+      is_system_key = true;
     // fallthrough
     case WM_CHAR:
-      result.type = WebInputEvent::Char;
+      type = WebInputEvent::kChar;
       break;
     default:
       NOTREACHED();
   }
 
-  if (result.type == WebInputEvent::Char ||
-      result.type == WebInputEvent::RawKeyDown) {
-    result.text[0] = result.windowsKeyCode;
-    result.unmodifiedText[0] = result.windowsKeyCode;
+  WebKeyboardEvent result(
+      type, ui::EventFlagsToWebEventModifiers(ui::GetModifiersFromKeyState()),
+      time_stamp);
+  result.is_system_key = is_system_key;
+  result.windows_key_code = static_cast<int>(wparam);
+  // Record the scan code (along with other context bits) for this key event.
+  result.native_key_code = static_cast<int>(lparam);
+
+  if (result.GetType() == WebInputEvent::kChar ||
+      result.GetType() == WebInputEvent::kRawKeyDown) {
+    result.text[0] = result.windows_key_code;
+    result.unmodified_text[0] = result.windows_key_code;
   }
-  result.modifiers =
-      ui::EventFlagsToWebEventModifiers(ui::GetModifiersFromKeyState());
   // NOTE: There doesn't seem to be a way to query the mouse button state in
   // this case.
 
   // Bit 30 of lParam represents the "previous key state". If set, the key was
   // already down, therefore this is an auto-repeat. Only apply this to key
   // down events, to match DOM semantics.
-  if ((result.type == WebInputEvent::RawKeyDown) && (lparam & 0x40000000))
-    result.modifiers |= WebInputEvent::IsAutoRepeat;
+  if ((result.GetType() == WebInputEvent::kRawKeyDown) && (lparam & 0x40000000))
+    result.SetModifiers(result.GetModifiers() | WebInputEvent::kIsAutoRepeat);
 
   return result;
 }
@@ -95,80 +95,92 @@ WebMouseEvent WebMouseEventBuilder::Build(
     LPARAM lparam,
     double time_stamp,
     blink::WebPointerProperties::PointerType pointer_type) {
-  WebMouseEvent result;
-
+  WebInputEvent::Type type = WebInputEvent::Type::kUndefined;
+  WebMouseEvent::Button button = WebMouseEvent::Button::kNoButton;
   switch (message) {
     case WM_MOUSEMOVE:
-      result.type = WebInputEvent::MouseMove;
+      type = WebInputEvent::kMouseMove;
       if (wparam & MK_LBUTTON)
-        result.button = WebMouseEvent::Button::Left;
+        button = WebMouseEvent::Button::kLeft;
       else if (wparam & MK_MBUTTON)
-        result.button = WebMouseEvent::Button::Middle;
+        button = WebMouseEvent::Button::kMiddle;
       else if (wparam & MK_RBUTTON)
-        result.button = WebMouseEvent::Button::Right;
+        button = WebMouseEvent::Button::kRight;
       else
-        result.button = WebMouseEvent::Button::NoButton;
+        button = WebMouseEvent::Button::kNoButton;
       break;
     case WM_MOUSELEAVE:
     case WM_NCMOUSELEAVE:
       // TODO(rbyers): This should be MouseLeave but is disabled temporarily.
       // See http://crbug.com/450631
-      result.type = WebInputEvent::MouseMove;
-      result.button = WebMouseEvent::Button::NoButton;
+      type = WebInputEvent::kMouseMove;
+      button = WebMouseEvent::Button::kNoButton;
       // set the current mouse position (relative to the client area of the
       // current window) since none is specified for this event
       lparam = GetRelativeCursorPos(hwnd);
       break;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
-      result.type = WebInputEvent::MouseDown;
-      result.button = WebMouseEvent::Button::Left;
+      type = WebInputEvent::kMouseDown;
+      button = WebMouseEvent::Button::kLeft;
       break;
     case WM_MBUTTONDOWN:
     case WM_MBUTTONDBLCLK:
-      result.type = WebInputEvent::MouseDown;
-      result.button = WebMouseEvent::Button::Middle;
+      type = WebInputEvent::kMouseDown;
+      button = WebMouseEvent::Button::kMiddle;
       break;
     case WM_RBUTTONDOWN:
     case WM_RBUTTONDBLCLK:
-      result.type = WebInputEvent::MouseDown;
-      result.button = WebMouseEvent::Button::Right;
+      type = WebInputEvent::kMouseDown;
+      button = WebMouseEvent::Button::kRight;
       break;
     case WM_LBUTTONUP:
-      result.type = WebInputEvent::MouseUp;
-      result.button = WebMouseEvent::Button::Left;
+      type = WebInputEvent::kMouseUp;
+      button = WebMouseEvent::Button::kLeft;
       break;
     case WM_MBUTTONUP:
-      result.type = WebInputEvent::MouseUp;
-      result.button = WebMouseEvent::Button::Middle;
+      type = WebInputEvent::kMouseUp;
+      button = WebMouseEvent::Button::kMiddle;
       break;
     case WM_RBUTTONUP:
-      result.type = WebInputEvent::MouseUp;
-      result.button = WebMouseEvent::Button::Right;
+      type = WebInputEvent::kMouseUp;
+      button = WebMouseEvent::Button::kRight;
       break;
     default:
       NOTREACHED();
   }
 
-  result.timeStampSeconds = time_stamp;
-  result.pointerType = pointer_type;
+  // set modifiers:
+  int modifiers =
+      ui::EventFlagsToWebEventModifiers(ui::GetModifiersFromKeyState());
+  if (wparam & MK_CONTROL)
+    modifiers |= WebInputEvent::kControlKey;
+  if (wparam & MK_SHIFT)
+    modifiers |= WebInputEvent::kShiftKey;
+  if (wparam & MK_LBUTTON)
+    modifiers |= WebInputEvent::kLeftButtonDown;
+  if (wparam & MK_MBUTTON)
+    modifiers |= WebInputEvent::kMiddleButtonDown;
+  if (wparam & MK_RBUTTON)
+    modifiers |= WebInputEvent::kRightButtonDown;
+
+  WebMouseEvent result(type, modifiers, time_stamp);
+  result.pointer_type = pointer_type;
+  result.button = button;
 
   // set position fields:
+  result.SetPositionInWidget(static_cast<short>(LOWORD(lparam)),
+                             static_cast<short>(HIWORD(lparam)));
 
-  result.x = static_cast<short>(LOWORD(lparam));
-  result.y = static_cast<short>(HIWORD(lparam));
-  result.windowX = result.x;
-  result.windowY = result.y;
-
-  POINT global_point = {result.x, result.y};
+  POINT global_point = {result.PositionInWidget().x,
+                        result.PositionInWidget().y};
   ClientToScreen(hwnd, &global_point);
 
   // We need to convert the global point back to DIP before using it.
   gfx::Point dip_global_point = display::win::ScreenWin::ScreenToDIPPoint(
       gfx::Point(global_point.x, global_point.y));
 
-  result.globalX = dip_global_point.x();
-  result.globalY = dip_global_point.y();
+  result.SetPositionInScreen(dip_global_point.x(), dip_global_point.y());
 
   // calculate number of clicks:
 
@@ -176,28 +188,28 @@ WebMouseEvent WebMouseEventBuilder::Build(
   // where their original code looks buggy.
   static int last_click_position_x;
   static int last_click_position_y;
-  static WebMouseEvent::Button last_click_button = WebMouseEvent::Button::Left;
+  static WebMouseEvent::Button last_click_button = WebMouseEvent::Button::kLeft;
 
-  double current_time = result.timeStampSeconds;
+  double current_time = result.TimeStampSeconds();
   bool cancel_previous_click =
-      (abs(last_click_position_x - result.x) >
+      (abs(last_click_position_x - result.PositionInWidget().x) >
        (::GetSystemMetrics(SM_CXDOUBLECLK) / 2)) ||
-      (abs(last_click_position_y - result.y) >
+      (abs(last_click_position_y - result.PositionInWidget().y) >
        (::GetSystemMetrics(SM_CYDOUBLECLK) / 2)) ||
       ((current_time - g_last_click_time) * 1000.0 > ::GetDoubleClickTime());
 
-  if (result.type == WebInputEvent::MouseDown) {
+  if (result.GetType() == WebInputEvent::kMouseDown) {
     if (!cancel_previous_click && (result.button == last_click_button)) {
       ++g_last_click_count;
     } else {
       g_last_click_count = 1;
-      last_click_position_x = result.x;
-      last_click_position_y = result.y;
+      last_click_position_x = result.PositionInWidget().x;
+      last_click_position_y = result.PositionInWidget().y;
     }
     g_last_click_time = current_time;
     last_click_button = result.button;
-  } else if (result.type == WebInputEvent::MouseMove ||
-             result.type == WebInputEvent::MouseLeave) {
+  } else if (result.GetType() == WebInputEvent::kMouseMove ||
+             result.GetType() == WebInputEvent::kMouseLeave) {
     if (cancel_previous_click) {
       g_last_click_count = 0;
       last_click_position_x = 0;
@@ -205,21 +217,7 @@ WebMouseEvent WebMouseEventBuilder::Build(
       g_last_click_time = 0;
     }
   }
-  result.clickCount = g_last_click_count;
-
-  // set modifiers:
-  result.modifiers =
-      ui::EventFlagsToWebEventModifiers(ui::GetModifiersFromKeyState());
-  if (wparam & MK_CONTROL)
-    result.modifiers |= WebInputEvent::ControlKey;
-  if (wparam & MK_SHIFT)
-    result.modifiers |= WebInputEvent::ShiftKey;
-  if (wparam & MK_LBUTTON)
-    result.modifiers |= WebInputEvent::LeftButtonDown;
-  if (wparam & MK_MBUTTON)
-    result.modifiers |= WebInputEvent::MiddleButtonDown;
-  if (wparam & MK_RBUTTON)
-    result.modifiers |= WebInputEvent::RightButtonDown;
+  result.click_count = g_last_click_count;
 
   return result;
 }
@@ -233,15 +231,13 @@ WebMouseWheelEvent WebMouseWheelEventBuilder::Build(
     LPARAM lparam,
     double time_stamp,
     blink::WebPointerProperties::PointerType pointer_type) {
-  WebMouseWheelEvent result;
+  WebMouseWheelEvent result(
+      WebInputEvent::kMouseWheel,
+      ui::EventFlagsToWebEventModifiers(ui::GetModifiersFromKeyState()),
+      time_stamp);
 
-  result.type = WebInputEvent::MouseWheel;
-
-  result.timeStampSeconds = time_stamp;
-
-  result.button = WebMouseEvent::Button::NoButton;
-
-  result.pointerType = pointer_type;
+  result.button = WebMouseEvent::Button::kNoButton;
+  result.pointer_type = pointer_type;
 
   // Get key state, coordinates, and wheel delta from event.
   UINT key_state;
@@ -261,8 +257,7 @@ WebMouseWheelEvent WebMouseWheelEventBuilder::Build(
 
     POINT cursor_position = {0};
     GetCursorPos(&cursor_position);
-    result.globalX = cursor_position.x;
-    result.globalY = cursor_position.y;
+    result.SetPositionInScreen(cursor_position.x, cursor_position.y);
 
     switch (LOWORD(wparam)) {
       case SB_LINEUP:  // == SB_LINELEFT
@@ -273,11 +268,11 @@ WebMouseWheelEvent WebMouseWheelEventBuilder::Build(
         break;
       case SB_PAGEUP:
         wheel_delta = 1;
-        result.scrollByPage = true;
+        result.scroll_by_page = true;
         break;
       case SB_PAGEDOWN:
         wheel_delta = -1;
-        result.scrollByPage = true;
+        result.scroll_by_page = true;
         break;
       default:  // We don't supoprt SB_THUMBPOSITION or SB_THUMBTRACK here.
         wheel_delta = 0;
@@ -290,8 +285,8 @@ WebMouseWheelEvent WebMouseWheelEventBuilder::Build(
     // Non-synthesized event; we can just read data off the event.
     key_state = GET_KEYSTATE_WPARAM(wparam);
 
-    result.globalX = static_cast<short>(LOWORD(lparam));
-    result.globalY = static_cast<short>(HIWORD(lparam));
+    result.SetPositionInScreen(static_cast<short>(LOWORD(lparam)),
+                               static_cast<short>(HIWORD(lparam)));
 
     // Currently we leave hasPreciseScrollingDeltas false, even for trackpad
     // scrolls that generate WM_MOUSEWHEEL, since we don't have a good way to
@@ -305,26 +300,24 @@ WebMouseWheelEvent WebMouseWheelEventBuilder::Build(
   }
 
   // Set modifiers based on key state.
-  result.modifiers =
-      ui::EventFlagsToWebEventModifiers(ui::GetModifiersFromKeyState());
+  int modifiers = result.GetModifiers();
   if (key_state & MK_SHIFT)
-    result.modifiers |= WebInputEvent::ShiftKey;
+    modifiers |= WebInputEvent::kShiftKey;
   if (key_state & MK_CONTROL)
-    result.modifiers |= WebInputEvent::ControlKey;
+    modifiers |= WebInputEvent::kControlKey;
   if (key_state & MK_LBUTTON)
-    result.modifiers |= WebInputEvent::LeftButtonDown;
+    modifiers |= WebInputEvent::kLeftButtonDown;
   if (key_state & MK_MBUTTON)
-    result.modifiers |= WebInputEvent::MiddleButtonDown;
+    modifiers |= WebInputEvent::kMiddleButtonDown;
   if (key_state & MK_RBUTTON)
-    result.modifiers |= WebInputEvent::RightButtonDown;
+    modifiers |= WebInputEvent::kRightButtonDown;
+  result.SetModifiers(modifiers);
 
   // Set coordinates by translating event coordinates from screen to client.
-  POINT client_point = {result.globalX, result.globalY};
+  POINT client_point = {result.PositionInScreen().x,
+                        result.PositionInScreen().y};
   MapWindowPoints(0, hwnd, &client_point, 1);
-  result.x = client_point.x;
-  result.y = client_point.y;
-  result.windowX = result.x;
-  result.windowY = result.y;
+  result.SetPositionInWidget(client_point.x, client_point.y);
 
   // Convert wheel delta amount to a number of pixels to scroll.
   //
@@ -351,8 +344,8 @@ WebMouseWheelEvent WebMouseWheelEventBuilder::Build(
     unsigned long scroll_lines = kDefaultScrollLinesPerWheelDelta;
     SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &scroll_lines, 0);
     if (scroll_lines == WHEEL_PAGESCROLL)
-      result.scrollByPage = true;
-    if (!result.scrollByPage) {
+      result.scroll_by_page = true;
+    if (!result.scroll_by_page) {
       scroll_delta *=
           static_cast<float>(scroll_lines) * kScrollbarPixelsPerLine;
     }
@@ -361,11 +354,11 @@ WebMouseWheelEvent WebMouseWheelEventBuilder::Build(
   // Set scroll amount based on above calculations.  WebKit expects positive
   // deltaY to mean "scroll up" and positive deltaX to mean "scroll left".
   if (horizontal_scroll) {
-    result.deltaX = scroll_delta;
-    result.wheelTicksX = wheel_delta;
+    result.delta_x = scroll_delta;
+    result.wheel_ticks_x = wheel_delta;
   } else {
-    result.deltaY = scroll_delta;
-    result.wheelTicksY = wheel_delta;
+    result.delta_y = scroll_delta;
+    result.wheel_ticks_y = wheel_delta;
   }
 
   return result;

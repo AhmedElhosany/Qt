@@ -53,6 +53,7 @@
 #include <Qt3DExtras/qforwardrenderer.h>
 #include <Qt3DExtras/qgoochmaterial.h>
 #include <Qt3DExtras/qmetalroughmaterial.h>
+#include <Qt3DExtras/qdiffusespecularmaterial.h>
 #include <Qt3DExtras/qmorphphongmaterial.h>
 #include <Qt3DExtras/qnormaldiffusemapalphamaterial.h>
 #include <Qt3DExtras/qnormaldiffusemapmaterial.h>
@@ -66,13 +67,16 @@
 #include <Qt3DExtras/qskyboxentity.h>
 #include <Qt3DExtras/qspheregeometry.h>
 #include <Qt3DExtras/qspheremesh.h>
+#include <Qt3DExtras/qspritegrid.h>
+#include <Qt3DExtras/qspritesheetitem.h>
 #include <Qt3DExtras/qtext2dentity.h>
-#include <Qt3DExtras/qtexturedmetalroughmaterial.h>
 #include <Qt3DExtras/qtexturematerial.h>
+#include <Qt3DExtras/qtexturedmetalroughmaterial.h>
 #include <Qt3DExtras/qtorusgeometry.h>
 #include <Qt3DExtras/qtorusmesh.h>
 
 #include <Qt3DQuickExtras/private/quick3dlevelofdetailloader_p.h>
+#include <Qt3DQuickExtras/private/quick3dspritesheet_p.h>
 
 #include <QtQml/qqml.h>
 
@@ -104,9 +108,16 @@ void Qt3DQuick3DExtrasPlugin::registerTypes(const char *uri)
     qmlRegisterType<Qt3DExtras::QPerVertexColorMaterial>(uri, 2, 0, "PerVertexColorMaterial");
     qmlRegisterType<Qt3DExtras::QGoochMaterial>(uri, 2, 0, "GoochMaterial");
     qmlRegisterType<Qt3DExtras::QTextureMaterial>(uri, 2, 0, "TextureMaterial");
+    qmlRegisterRevision<Qt3DExtras::QTextureMaterial, 10>(uri, 2, 10);
+    qmlRegisterType<Qt3DExtras::QDiffuseSpecularMaterial>(uri, 2, 10, "DiffuseSpecularMaterial");
     qmlRegisterType<Qt3DExtras::QMetalRoughMaterial>(uri, 2, 9, "MetalRoughMaterial");
+    qmlRegisterRevision<Qt3DExtras::QMetalRoughMaterial, 10>(uri, 2, 10);
     qmlRegisterType<Qt3DExtras::QTexturedMetalRoughMaterial>(uri, 2, 9, "TexturedMetalRoughMaterial");
     qmlRegisterType<Qt3DExtras::QMorphPhongMaterial>(uri, 2, 9, "MorphPhongMaterial");
+
+    qmlRegisterType<Qt3DExtras::QSpriteGrid>(uri, 2, 10, "SpriteGrid");
+    qmlRegisterType<Qt3DExtras::QSpriteSheetItem>(uri, 2, 10, "SpriteItem");
+    Qt3DExtras::Quick::registerExtendedType<Qt3DExtras::QSpriteSheet, Qt3DExtras::Extras::Quick::Quick3DSpriteSheet>("QSpriteSheet", "Qt3D.Extras/SpriteSheet", uri, 2, 10, "SpriteSheet");
 
     // Meshes
     qmlRegisterType<Qt3DExtras::QConeMesh>(uri, 2, 0, "ConeMesh");

@@ -33,7 +33,6 @@ namespace net {
 class DhcpProxyScriptFetcher;
 class NetLog;
 class NetLogCaptureMode;
-class NetLogParameter;
 class ProxyResolver;
 class ProxyScriptFetcher;
 
@@ -81,6 +80,10 @@ class NET_EXPORT_PRIVATE ProxyScriptDecider {
             const base::TimeDelta wait_delay,
             bool fetch_pac_bytes,
             const CompletionCallback& callback);
+
+  // Shuts down any in-progress DNS requests, and cancels any ScriptFetcher
+  // requests.  Does not call OnShutdown on the [Dhcp]ProxyScriptFetcher.
+  void OnShutdown();
 
   const ProxyConfig& effective_config() const;
 
@@ -204,7 +207,6 @@ class NET_EXPORT_PRIVATE ProxyScriptDecider {
 
   AddressList wpad_addresses_;
   base::OneShotTimer quick_check_timer_;
-  HostResolver* host_resolver_;
   std::unique_ptr<HostResolver::Request> request_;
   base::Time quick_check_start_time_;
 

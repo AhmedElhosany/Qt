@@ -24,8 +24,7 @@ examples:
   # without considering the time spent compiling JS code, entry trampoline
   # samples and other non-Ignition samples.
   #
-  $ tools/run-perf.sh out/x64.release/d8 \\
-        --ignition --noturbo --nocrankshaft run.js
+  $ tools/run-perf.sh out/x64.release/d8 --noopt run.js
   $ tools/ignition/linux_perf_report.py --flamegraph -o out.collapsed
   $ flamegraph.pl --colors js out.collapsed > out.svg
 
@@ -44,8 +43,7 @@ examples:
 
   # See the hottest bytecodes on Octane benchmark, by number of samples.
   #
-  $ tools/run-perf.sh out/x64.release/d8 \\
-        --ignition --noturbo --nocrankshaft octane/run.js
+  $ tools/run-perf.sh out/x64.release/d8 --noopt octane/run.js
   $ tools/ignition/linux_perf_report.py
 """
 
@@ -54,6 +52,8 @@ COMPILER_SYMBOLS_RE = re.compile(
   r"v8::internal::(?:\(anonymous namespace\)::)?Compile|v8::internal::Parser")
 JIT_CODE_SYMBOLS_RE = re.compile(
   r"(LazyCompile|Compile|Eval|Script):(\*|~)")
+GC_SYMBOLS_RE = re.compile(
+  r"v8::internal::Heap::CollectGarbage")
 
 
 def strip_function_parameters(symbol):
@@ -74,7 +74,7 @@ def strip_function_parameters(symbol):
 
 def collapsed_callchains_generator(perf_stream, hide_other=False,
                                    hide_compiler=False, hide_jit=False,
-                                   show_full_signatures=False):
+                                   hide_gc=False, show_full_signatures=False):
   current_chain = []
   skip_until_end_of_chain = False
   compiler_symbol_in_chain = False
@@ -120,6 +120,11 @@ def collapsed_callchains_generator(perf_stream, hide_other=False,
     elif JIT_CODE_SYMBOLS_RE.match(symbol):
       if not hide_jit:
         current_chain.append("[jit]")
+        yield current_chain
+        skip_until_end_of_chain = True
+    elif GC_SYMBOLS_RE.match(symbol):
+      if not hide_gc:
+        current_chain.append("[gc]")
         yield current_chain
         skip_until_end_of_chain = True
     elif symbol == "Stub:CEntryStub" and compiler_symbol_in_chain:
@@ -212,6 +217,11 @@ def parse_command_line():
     action="store_true"
   )
   command_line_parser.add_argument(
+    "--hide-gc",
+    help="Hide samples from garbage collection",
+    action="store_true"
+  )
+  command_line_parser.add_argument(
     "--show-full-signatures", "-s",
     help="show full signatures instead of function names",
     action="store_true"
@@ -237,7 +247,8 @@ def main():
 
   callchains = collapsed_callchains_generator(
     perf.stdout, program_options.hide_other, program_options.hide_compiler,
-    program_options.hide_jit, program_options.show_full_signatures)
+    program_options.hide_jit, program_options.hide_gc,
+    program_options.show_full_signatures)
 
   if program_options.output_flamegraph:
     write_flamegraph_input_file(program_options.output_stream, callchains)

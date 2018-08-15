@@ -1,9 +1,9 @@
+<link rel="import" href="chrome://resources/cr_elements/shared_vars_css.html">
 <style is="custom-style">
   :root {
     --cr-policy-indicator: {
-      display: block;
-      height: 20px;
-      width: 20px;
+      @apply(--cr-icon-height-width);
+      display: flex;  /* Position independently from the line-height. */
     };
 
     --cr-policy-tooltip: {

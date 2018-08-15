@@ -32,8 +32,11 @@
 #include <QHostInfo>
 
 #include <QtNetworkAuth/qoauth1.h>
+#include <QtNetworkAuth/qoauth1signature.h>
 
 #include <private/qoauth1_p.h>
+
+#include "webserver.h"
 
 Q_DECLARE_METATYPE(QNetworkAccessManager::Operation)
 Q_DECLARE_METATYPE(QAbstractOAuth::Error)
@@ -118,6 +121,23 @@ public:
         }
     };
 
+    QVariantMap parseAuthorizationString(const QString &string)
+    {
+        const QString prefix = QStringLiteral("OAuth ");
+        QVariantMap ret;
+        Q_ASSERT(string.startsWith(prefix));
+        QRegularExpression rx("(?<key>.[^=]*)=\"(?<value>.[^\"]*)\",?");
+        auto globalMatch = rx.globalMatch(string, prefix.size());
+        while (globalMatch.hasNext()) {
+            const auto match = globalMatch.next();
+            auto key = match.captured("key");
+            QString value = match.captured("value");
+            value = QString::fromUtf8(QByteArray::fromPercentEncoding(value.toUtf8()));
+            ret.insert(key, value);
+        }
+        return ret;
+    }
+
 public Q_SLOTS:
     void finished();
     void gotError();
@@ -125,6 +145,7 @@ public Q_SLOTS:
 private Q_SLOTS:
     void clientIdentifierSignal();
     void clientSharedSecretSignal();
+    void tokenSignal();
     void tokenSecretSignal();
     void temporaryCredentialsUrlSignal();
     void temporaryTokenCredentialsUrlSignal();
@@ -232,7 +253,7 @@ void tst_OAuth1::clientSharedSecretSignal()
     PropertyTester::run(&QOAuth1::clientSharedSecretChanged, setters);
 }
 
-void tst_OAuth1::tokenSecretSignal()
+void tst_OAuth1::tokenSignal()
 {
     using PropertyTester = PropertyTester<QString>;
     PropertyTester::SetterFunctions setters {
@@ -246,6 +267,22 @@ void tst_OAuth1::tokenSecretSignal()
         }
     };
     PropertyTester::run(&QOAuth1::tokenChanged, setters);
+}
+
+void tst_OAuth1::tokenSecretSignal()
+{
+    using PropertyTester = PropertyTester<QString>;
+    PropertyTester::SetterFunctions setters {
+        [](QString *expectedValue, QOAuth1 *object) {
+            *expectedValue = "setTokenSecret";
+            object->setTokenSecret(*expectedValue);
+        },
+        [](QString *expectedValue, QOAuth1 *object) {
+            *expectedValue = "setTokenCredentials";
+            object->setTokenCredentials(qMakePair(QString(), *expectedValue));
+        }
+    };
+    PropertyTester::run(&QOAuth1::tokenSecretChanged, setters);
 }
 
 void tst_OAuth1::temporaryCredentialsUrlSignal()
@@ -302,83 +339,65 @@ void tst_OAuth1::getToken_data()
     QTest::addColumn<StringPair>("clientCredentials");
     QTest::addColumn<StringPair>("token");
     QTest::addColumn<StringPair>("expectedToken");
-    QTest::addColumn<QUrl>("url");
+    QTest::addColumn<QOAuth1::SignatureMethod>("signatureMethod");
     QTest::addColumn<QNetworkAccessManager::Operation>("requestType");
 
-    // term.ie
-
     const StringPair emptyCredentials;
-    if (hostReachable(QLatin1String("term.ie"))) {
-        QTest::newRow("term.ie_request_get") << qMakePair(QStringLiteral("key"),
-                                                        QStringLiteral("secret"))
-                                            << emptyCredentials
-                                            << qMakePair(QStringLiteral("requestkey"),
-                                                        QStringLiteral("requestsecret"))
-                                            << QUrl("http://term.ie/oauth/example/request_token.php")
-                                            << QNetworkAccessManager::GetOperation;
+    QTest::newRow("temporary_get_plainText")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << emptyCredentials
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << QOAuth1::SignatureMethod::PlainText
+            << QNetworkAccessManager::GetOperation;
 
-        QTest::newRow("term.ie_request_post") << qMakePair(QStringLiteral("key"),
-                                                        QStringLiteral("secret"))
-                                            << emptyCredentials
-                                            << qMakePair(QStringLiteral("requestkey"),
-                                                        QStringLiteral("requestsecret"))
-                                            << QUrl("http://term.ie/oauth/example/request_token.php")
-                                            << QNetworkAccessManager::PostOperation;
+    QTest::newRow("temporary_get_hmacSha1")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << emptyCredentials
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << QOAuth1::SignatureMethod::Hmac_Sha1
+            << QNetworkAccessManager::GetOperation;
 
-        QTest::newRow("term.ie_access_get") << qMakePair(QStringLiteral("key"),
-                                                        QStringLiteral("secret"))
-                                            << qMakePair(QStringLiteral("requestkey"),
-                                                        QStringLiteral("requestsecret"))
-                                            << qMakePair(QStringLiteral("accesskey"),
-                                                        QStringLiteral("accesssecret"))
-                                            << QUrl("http://term.ie/oauth/example/access_token.php")
-                                            << QNetworkAccessManager::GetOperation;
+    QTest::newRow("temporary_post_plainText")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << emptyCredentials
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << QOAuth1::SignatureMethod::PlainText
+            << QNetworkAccessManager::PostOperation;
 
-        QTest::newRow("term.ie_access_post") << qMakePair(QStringLiteral("key"),
-                                                        QStringLiteral("secret"))
-                                            << qMakePair(QStringLiteral("requestkey"),
-                                                        QStringLiteral("requestsecret"))
-                                            << qMakePair(QStringLiteral("accesskey"),
-                                                        QStringLiteral("accesssecret"))
-                                            << QUrl("http://term.ie/oauth/example/access_token.php")
-                                            << QNetworkAccessManager::PostOperation;
-    }
-    // oauthbin.com
-    if (hostReachable(QLatin1String("oauthbin.com"))) {
-        QTest::newRow("oauthbin.com_request_get") << qMakePair(QStringLiteral("key"),
-                                                            QStringLiteral("secret"))
-                                                << emptyCredentials
-                                                << qMakePair(QStringLiteral("requestkey"),
-                                                            QStringLiteral("requestsecret"))
-                                                << QUrl("http://oauthbin.com/v1/request-token")
-                                                << QNetworkAccessManager::GetOperation;
+    QTest::newRow("temporary_post_hmacSha1")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << emptyCredentials
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << QOAuth1::SignatureMethod::Hmac_Sha1
+            << QNetworkAccessManager::PostOperation;
 
-        QTest::newRow("oauthbin.com_request_post") << qMakePair(QStringLiteral("key"),
-                                                                QStringLiteral("secret"))
-                                                << emptyCredentials
-                                                << qMakePair(QStringLiteral("requestkey"),
-                                                                QStringLiteral("requestsecret"))
-                                                << QUrl("http://oauthbin.com/v1/request-token")
-                                                << QNetworkAccessManager::PostOperation;
+    QTest::newRow("token_get_plainText")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << qMakePair(QStringLiteral("accesskey"), QStringLiteral("accesssecret"))
+            << QOAuth1::SignatureMethod::PlainText
+            << QNetworkAccessManager::GetOperation;
 
-        QTest::newRow("oauthbin.com_access_get") << qMakePair(QStringLiteral("key"),
-                                                            QStringLiteral("secret"))
-                                                << qMakePair(QStringLiteral("requestkey"),
-                                                            QStringLiteral("requestsecret"))
-                                                << qMakePair(QStringLiteral("accesskey"),
-                                                            QStringLiteral("accesssecret"))
-                                                << QUrl("http://oauthbin.com/v1/access-token")
-                                                << QNetworkAccessManager::GetOperation;
+    QTest::newRow("token_get_hmacSha1")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << qMakePair(QStringLiteral("accesskey"), QStringLiteral("accesssecret"))
+            << QOAuth1::SignatureMethod::Hmac_Sha1
+            << QNetworkAccessManager::GetOperation;
 
-        QTest::newRow("oauthbin.com_access_post") << qMakePair(QStringLiteral("key"),
-                                                            QStringLiteral("secret"))
-                                                << qMakePair(QStringLiteral("requestkey"),
-                                                            QStringLiteral("requestsecret"))
-                                                << qMakePair(QStringLiteral("accesskey"),
-                                                            QStringLiteral("accesssecret"))
-                                                << QUrl("http://oauthbin.com/v1/access-token")
-                                                << QNetworkAccessManager::PostOperation;
-    }
+    QTest::newRow("token_post_plainText")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << qMakePair(QStringLiteral("accesskey"), QStringLiteral("accesssecret"))
+            << QOAuth1::SignatureMethod::PlainText
+            << QNetworkAccessManager::PostOperation;
+
+    QTest::newRow("token_post_hmacSha1")
+            << qMakePair(QStringLiteral("key"), QStringLiteral("secret"))
+            << qMakePair(QStringLiteral("requestkey"), QStringLiteral("requestsecret"))
+            << qMakePair(QStringLiteral("accesskey"), QStringLiteral("accesssecret"))
+            << QOAuth1::SignatureMethod::Hmac_Sha1
+            << QNetworkAccessManager::PostOperation;
 }
 
 void tst_OAuth1::getToken()
@@ -386,19 +405,35 @@ void tst_OAuth1::getToken()
     QFETCH(StringPair, clientCredentials);
     QFETCH(StringPair, token);
     QFETCH(StringPair, expectedToken);
-    QFETCH(QUrl, url);
+    QFETCH(QOAuth1::SignatureMethod, signatureMethod);
     QFETCH(QNetworkAccessManager::Operation, requestType);
 
     StringPair tokenReceived;
     QNetworkAccessManager networkAccessManager;
     QNetworkReplyPtr reply;
+    QVariantMap oauthHeaders;
+
+    WebServer webServer([&](const WebServer::HttpRequest &request, QTcpSocket *socket) {
+        oauthHeaders = parseAuthorizationString(request.headers["Authorization"]);
+        const QString format = "oauth_token=%1&oauth_token_secret=%2";
+        const QByteArray text = format.arg(expectedToken.first, expectedToken.second).toUtf8();
+        const QByteArray replyMessage {
+            "HTTP/1.0 200 OK\r\n"
+            "Content-Type: application/x-www-form-urlencoded; charset=\"utf-8\"\r\n"
+            "Content-Length: " + QByteArray::number(text.size()) + "\r\n\r\n"
+            + text
+        };
+        socket->write(replyMessage);
+    });
 
     struct OAuth1 : QOAuth1
     {
         OAuth1(QNetworkAccessManager *manager) : QOAuth1(manager) {}
         using QOAuth1::requestTokenCredentials;
     } o1(&networkAccessManager);
+    const auto url = webServer.url(QStringLiteral("token"));
 
+    o1.setSignatureMethod(signatureMethod);
     o1.setClientCredentials(clientCredentials.first, clientCredentials.second);
     o1.setTokenCredentials(token);
     o1.setTemporaryCredentialsUrl(url);
@@ -412,7 +447,32 @@ void tst_OAuth1::getToken()
         tokenReceived.second = tokenSecret;
     });
     QVERIFY(waitForFinish(reply) == Success);
-    QVERIFY(!tokenReceived.first.isEmpty() && !tokenReceived.second.isEmpty());
+    QCOMPARE(tokenReceived, expectedToken);
+    QCOMPARE(oauthHeaders["oauth_callback"], "oob");
+    QCOMPARE(oauthHeaders["oauth_consumer_key"], clientCredentials.first);
+    QCOMPARE(oauthHeaders["oauth_version"], "1.0");
+    QString expectedSignature;
+    {
+        QVariantMap modifiedHeaders = oauthHeaders.unite(parameters);
+        modifiedHeaders.remove("oauth_signature");
+        QOAuth1Signature signature(url,
+                                   clientCredentials.second,
+                                   token.second,
+                                   static_cast<QOAuth1Signature::HttpRequestMethod>(requestType),
+                                   modifiedHeaders);
+        switch (signatureMethod) {
+        case QOAuth1::SignatureMethod::PlainText:
+            expectedSignature = signature.plainText();
+            break;
+        case QOAuth1::SignatureMethod::Hmac_Sha1:
+            expectedSignature = signature.hmacSha1().toBase64();
+            break;
+        case QOAuth1::SignatureMethod::Rsa_Sha1:
+            expectedSignature = signature.rsaSha1();
+            break;
+        }
+    }
+    QCOMPARE(oauthHeaders["oauth_signature"], expectedSignature);
 }
 
 void tst_OAuth1::grant_data()

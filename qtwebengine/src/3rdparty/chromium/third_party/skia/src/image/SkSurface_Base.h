@@ -43,7 +43,7 @@ public:
      *  must faithfully represent the current contents, even if the surface
      *  is changed after this called (e.g. it is drawn to via its canvas).
      */
-    virtual sk_sp<SkImage> onNewImageSnapshot(SkBudgeted, SkCopyPixelsMode) = 0;
+    virtual sk_sp<SkImage> onNewImageSnapshot() = 0;
 
     /**
      *  Default implementation:
@@ -77,11 +77,24 @@ public:
 
     /**
      * Issue any pending surface IO to the current backend 3D API and resolve any surface MSAA.
+     * Inserts the requested number of semaphores for the gpu to signal when work is complete on the
+     * gpu and inits the array of GrBackendSemaphores with the signaled semaphores.
      */
-    virtual void onPrepareForExternalIO() {}
+    virtual bool onFlush(int numSemaphores, GrBackendSemaphore* signalSemaphores) {
+        return false;
+    }
+
+    /**
+     * Caused the current backend 3D API to wait on the passed in semaphores before executing new
+     * commands on the gpu. Any previously submitting commands will not be blocked by these
+     * semaphores.
+     */
+    virtual bool onWait(int numSemaphores, const GrBackendSemaphore* waitSemaphores) {
+        return false;
+    }
 
     inline SkCanvas* getCachedCanvas();
-    inline sk_sp<SkImage> refCachedImage(SkBudgeted, ForceUnique);
+    inline sk_sp<SkImage> refCachedImage();
 
     bool hasCachedImage() const { return fCachedImage != nullptr; }
 
@@ -90,7 +103,7 @@ public:
 
 private:
     std::unique_ptr<SkCanvas>   fCachedCanvas;
-    SkImage*                    fCachedImage;
+    sk_sp<SkImage>              fCachedImage;
 
     void aboutToDraw(ContentChangeMode mode);
 
@@ -114,23 +127,15 @@ SkCanvas* SkSurface_Base::getCachedCanvas() {
     return fCachedCanvas.get();
 }
 
-sk_sp<SkImage> SkSurface_Base::refCachedImage(SkBudgeted budgeted, ForceUnique unique) {
-    SkImage* snap = fCachedImage;
-    if (kYes_ForceUnique == unique && snap && !snap->unique()) {
-        snap = nullptr;
+sk_sp<SkImage> SkSurface_Base::refCachedImage() {
+    if (fCachedImage) {
+        return fCachedImage;
     }
-    if (snap) {
-        return sk_ref_sp(snap);
-    }
-    SkCopyPixelsMode cpm = (kYes_ForceUnique == unique) ? kAlways_SkCopyPixelsMode :
-                                                          kIfMutable_SkCopyPixelsMode;
-    snap = this->onNewImageSnapshot(budgeted, cpm).release();
-    if (kNo_ForceUnique == unique) {
-        SkASSERT(!fCachedImage);
-        fCachedImage = SkSafeRef(snap);
-    }
+
+    fCachedImage = this->onNewImageSnapshot();
+
     SkASSERT(!fCachedCanvas || fCachedCanvas->getSurfaceBase() == this);
-    return sk_sp<SkImage>(snap);
+    return fCachedImage;
 }
 
 #endif

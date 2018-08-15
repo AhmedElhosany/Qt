@@ -71,10 +71,11 @@ class MEDIA_EXPORT AudioOutputController
   // following methods are called on the audio manager thread.
   class MEDIA_EXPORT EventHandler {
    public:
-    virtual void OnCreated() = 0;
-    virtual void OnPlaying() = 0;
-    virtual void OnPaused() = 0;
-    virtual void OnError() = 0;
+    virtual void OnControllerCreated() = 0;
+    virtual void OnControllerPlaying() = 0;
+    virtual void OnControllerPaused() = 0;
+    virtual void OnControllerError() = 0;
+    virtual void OnLog(const std::string& message) = 0;
 
    protected:
     virtual ~EventHandler() {}
@@ -88,14 +89,14 @@ class MEDIA_EXPORT AudioOutputController
    public:
     virtual ~SyncReader() {}
 
-    // Notify the synchronous reader the number of bytes in the
-    // AudioOutputController not yet played. This is used by SyncReader to
-    // prepare more data and perform synchronization. Also inform about if any
-    // frames has been skipped by the renderer (typically the OS). The renderer
-    // source can handle this appropriately depending on the type of source. An
-    // ordinary file playout would ignore this.
-    virtual void UpdatePendingBytes(uint32_t bytes,
-                                    uint32_t frames_skipped) = 0;
+    // This is used by SyncReader to prepare more data and perform
+    // synchronization. Also inform about output delay at a certain moment and
+    // if any frames have been skipped by the renderer (typically the OS). The
+    // renderer source can handle this appropriately depending on the type of
+    // source. An ordinary file playout would ignore this.
+    virtual void RequestMoreData(base::TimeDelta delay,
+                                 base::TimeTicks delay_timestamp,
+                                 int prior_frames_skipped) = 0;
 
     // Attempts to completely fill |dest|, zeroing |dest| if the request can not
     // be fulfilled (due to timeout).
@@ -108,8 +109,8 @@ class MEDIA_EXPORT AudioOutputController
   // Factory method for creating an AudioOutputController.
   // This also creates and opens an AudioOutputStream on the audio manager
   // thread, and if this is successful, the |event_handler| will receive an
-  // OnCreated() call from the same audio manager thread.  |audio_manager| must
-  // outlive AudioOutputController.
+  // OnControllerCreated() call from the same audio manager thread.
+  // |audio_manager| must outlive AudioOutputController.
   // The |output_device_id| can be either empty (default device) or specify a
   // specific hardware device for audio output.
   static scoped_refptr<AudioOutputController> Create(
@@ -136,40 +137,24 @@ class MEDIA_EXPORT AudioOutputController
   void Pause();
 
   // Closes the audio output stream. The state is changed and the resources
-  // are freed on the audio manager thread. closed_task is executed after that.
-  // Callbacks (EventHandler and SyncReader) must exist until closed_task is
-  // called.
+  // are freed on the audio manager thread. |closed_task| is executed after
+  // that, on the thread on which Close was called. Callbacks (EventHandler and
+  // SyncReader) must exist until closed_task is called, but they are safe
+  // to delete after that.
   //
   // It is safe to call this method more than once. Calls after the first one
   // will have no effect.
-  void Close(const base::Closure& closed_task);
+  void Close(base::OnceClosure closed_task);
 
   // Sets the volume of the audio output stream.
   void SetVolume(double volume);
-
-  // Calls |callback| (on the caller's thread) with the current output
-  // device ID.
-  void GetOutputDeviceId(
-      base::Callback<void(const std::string&)> callback) const;
-
-  // Changes which output device to use. If desired, you can provide a
-  // callback that will be notified (on the thread you called from)
-  // when the function has completed execution.
-  //
-  // Changing the output device causes the controller to go through
-  // the same state transition back to the current state as a call to
-  // OnDeviceChange (unless it is currently diverting, see
-  // Start/StopDiverting below, in which case the state transition
-  // will happen when StopDiverting is called).
-  void SwitchOutputDevice(const std::string& output_device_id,
-                          const base::Closure& callback);
 
   // AudioSourceCallback implementation.
   int OnMoreData(base::TimeDelta delay,
                  base::TimeTicks delay_timestamp,
                  int prior_frames_skipped,
                  AudioBus* dest) override;
-  void OnError(AudioOutputStream* stream) override;
+  void OnError() override;
 
   // AudioDeviceListener implementation.  When called AudioOutputController will
   // shutdown the existing |stream_|, transition to the kRecreating state,
@@ -218,8 +203,6 @@ class MEDIA_EXPORT AudioOutputController
   void DoPause();
   void DoClose();
   void DoSetVolume(double volume);
-  std::string DoGetOutputDeviceId() const;
-  void DoSwitchOutputDevice(const std::string& output_device_id);
   void DoReportError();
   void DoStartDiverting(AudioOutputStream* to_stream);
   void DoStopDiverting();
@@ -239,6 +222,9 @@ class MEDIA_EXPORT AudioOutputController
   void BroadcastDataToDuplicationTargets(std::unique_ptr<AudioBus> audio_bus,
                                          base::TimeTicks reference_time);
 
+  // Log the current average power level measured by power_monitor_.
+  void LogAudioPowerLevel(const std::string& call_name);
+
   AudioManager* const audio_manager_;
   const AudioParameters params_;
   EventHandler* const handler_;
@@ -252,9 +238,11 @@ class MEDIA_EXPORT AudioOutputController
   // When non-NULL, audio is being diverted to this stream.
   AudioOutputStream* diverting_to_stream_;
 
-  // The targets for audio stream to be copied to.
+  // The targets for audio stream to be copied to. |should_duplicate_| is set to
+  // 1 when the OnMoreData() call should proxy the data to
+  // BroadcastDataToDuplicationTargets().
   std::set<AudioPushSink*> duplication_targets_;
-  base::Lock duplication_targets_lock_;
+  base::AtomicRefCount should_duplicate_;
 
   // The current volume of the audio stream.
   double volume_;
@@ -270,6 +258,9 @@ class MEDIA_EXPORT AudioOutputController
 
   // Scans audio samples from OnMoreData() as input to compute power levels.
   AudioPowerMonitor power_monitor_;
+
+  // Updated each time a power measurement is logged.
+  base::TimeTicks last_audio_level_log_time_;
 
   // Flags when we've asked for a stream to start but it never did.
   base::AtomicRefCount on_more_io_data_called_;

@@ -64,7 +64,7 @@ class FakeSocket : public net::StreamSocket {
   void SetSubresourceSpeculation() override;
   void SetOmniboxSpeculation() override;
   bool WasEverUsed() const override;
-  bool WasNpnNegotiated() const override;
+  bool WasAlpnNegotiated() const override;
   net::NextProto GetNegotiatedProtocol() const override;
   bool GetSSLInfo(net::SSLInfo* ssl_info) override;
   void GetConnectionAttempts(net::ConnectionAttempts* out) const override;
@@ -121,6 +121,17 @@ MATCHER_P(MatchIncomingSocketMessage, address, "") {
   P2PMsg_OnIncomingTcpConnection::Read(
       arg, &params);
   return std::get<1>(params) == address;
+}
+
+MATCHER_P2(MatchSendPacketMetrics, rtc_packet_id, test_start_time, "") {
+  if (arg->type() != P2PMsg_OnSendComplete::ID)
+    return false;
+
+  P2PMsg_OnSendComplete::Param params;
+  P2PMsg_OnSendComplete::Read(arg, &params);
+  return std::get<1>(params).rtc_packet_id == rtc_packet_id &&
+         std::get<1>(params).send_time >= test_start_time &&
+         std::get<1>(params).send_time <= base::TimeTicks::Now();
 }
 
 #endif  // CONTENT_BROWSER_RENDERER_HOST_P2P_SOCKET_HOST_TEST_UTILS_H_

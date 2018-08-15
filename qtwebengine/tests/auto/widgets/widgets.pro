@@ -1,3 +1,5 @@
+QT_FOR_CONFIG += webengine
+
 TEMPLATE = subdirs
 
 SUBDIRS += \
@@ -6,19 +8,19 @@ SUBDIRS += \
     qwebenginefaviconmanager \
     qwebenginepage \
     qwebenginehistory \
-    qwebenginehistoryinterface \
     qwebengineinspector \
     qwebengineprofile \
     qwebenginescript \
     qwebenginesettings \
+    qwebengineshutdown \
     qwebengineview
 
 qtConfig(accessibility) {
     SUBDIRS += qwebengineaccessibility
 }
 
-contains(WEBENGINE_CONFIG, use_spellchecker):!cross_compile {
-    !contains(WEBENGINE_CONFIG, use_native_spellchecker) {
+qtConfig(webengine-spellchecker):!cross_compile {
+    !qtConfig(webengine-native-spellchecker) {
         SUBDIRS += qwebenginespellcheck
     } else {
         message("Spellcheck test will not be built because it depends on usage of Hunspell dictionaries.")

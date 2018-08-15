@@ -30,11 +30,10 @@
 ## $QT_END_LICENSE$
 ##
 #############################################################################
-. "$PSScriptRoot\helpers.ps1"
 
 # This script prevents Windows from going to sleep
 
-Run-Executable "powercfg.exe" "-change -monitor-timeout-ac 0"
-Run-Executable "powercfg.exe" "-change -standby-timeout-ac 0"
-Run-Executable "powercfg.exe" "-change -disk-timeout-ac 0"
-Run-Executable "powercfg.exe" "-change -hibernate-timeout-ac 0"
+powercfg -change -monitor-timeout-ac 0
+powercfg -change -standby-timeout-ac 0
+powercfg -change -disk-timeout-ac 0
+powercfg -change -hibernate-timeout-ac 0

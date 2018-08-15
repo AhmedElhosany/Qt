@@ -7,12 +7,13 @@
 #ifndef FPDFSDK_JAVASCRIPT_JS_EVENTHANDLER_H_
 #define FPDFSDK_JAVASCRIPT_JS_EVENTHANDLER_H_
 
+#include "core/fxcrt/cfx_unowned_ptr.h"
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
+#include "fpdfsdk/cpdfsdk_formfillenvironment.h"
 
-class CJS_Context;
+class CJS_EventContext;
 class CPDFSDK_Annot;
-class CPDFSDK_FormFillEnvironment;
 class CPDF_Bookmark;
 class CPDF_FormField;
 class Field;
@@ -60,7 +61,7 @@ enum JS_EVENT_T {
 
 class CJS_EventHandler {
  public:
-  CJS_EventHandler(CJS_Context* pContext);
+  explicit CJS_EventHandler(CJS_EventContext* pContext);
   virtual ~CJS_EventHandler();
 
   void OnApp_Init();
@@ -150,8 +151,8 @@ class CJS_EventHandler {
   bool FieldFull();
   bool KeyDown();
   bool Modifier();
-  const FX_WCHAR* Name();
-  const FX_WCHAR* Type();
+  const wchar_t* Name();
+  const wchar_t* Type();
   bool& Rc();
   int& SelEnd();
   int& SelStart();
@@ -165,13 +166,13 @@ class CJS_EventHandler {
   JS_EVENT_T EventType() { return m_eEventType; }
 
  public:
-  CJS_Context* m_pJSContext;
+  CFX_UnownedPtr<CJS_EventContext> const m_pJSEventContext;
   JS_EVENT_T m_eEventType;
   bool m_bValid;
 
   CFX_WideString m_strTargetName;
   CFX_WideString m_strSourceName;
-  CFX_WideString* m_pWideStrChange;
+  CFX_UnownedPtr<CFX_WideString> m_pWideStrChange;
   CFX_WideString m_WideStrChangeDu;
   CFX_WideString m_WideStrChangeEx;
   int m_nCommitKey;
@@ -183,14 +184,14 @@ class CJS_EventHandler {
   int* m_pISelStart;
   int m_nSelStartDu;
   bool m_bWillCommit;
-  CFX_WideString* m_pValue;
+  CFX_UnownedPtr<CFX_WideString> m_pValue;
   bool m_bFieldFull;
   bool* m_pbRc;
   bool m_bRcDu;
 
-  CPDF_Bookmark* m_pTargetBookMark;
-  CPDFSDK_FormFillEnvironment* m_pTargetFormFillEnv;
-  CPDFSDK_Annot* m_pTargetAnnot;
+  CFX_UnownedPtr<CPDF_Bookmark> m_pTargetBookMark;
+  CPDFSDK_FormFillEnvironment::ObservedPtr m_pTargetFormFillEnv;
+  CPDFSDK_Annot::ObservedPtr m_pTargetAnnot;
 };
 
 #endif  // FPDFSDK_JAVASCRIPT_JS_EVENTHANDLER_H_

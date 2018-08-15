@@ -37,6 +37,7 @@
 #include "qquickdialog_p.h"
 #include "qquickdialog_p_p.h"
 #include "qquickdialogbuttonbox_p.h"
+#include "qquickabstractbutton_p.h"
 #include "qquickpopupitem_p_p.h"
 
 QT_BEGIN_NAMESPACE
@@ -115,6 +116,69 @@ QT_BEGIN_NAMESPACE
     \sa accepted()
 */
 
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlsignal QtQuick.Controls::Dialog::applied()
+
+    This signal is emitted when the \c Dialog.Apply standard button is clicked.
+
+    \sa discarded(), reset()
+*/
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlsignal QtQuick.Controls::Dialog::reset()
+
+    This signal is emitted when the \c Dialog.Reset standard button is clicked.
+
+    \sa discarded(), applied()
+*/
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlsignal QtQuick.Controls::Dialog::discarded()
+
+    This signal is emitted when the \c Dialog.Discard standard button is clicked.
+
+    \sa reset(), applied()
+*/
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlsignal QtQuick.Controls::Dialog::helpRequested()
+
+    This signal is emitted when the \c Dialog.Help standard button is clicked.
+
+    \sa accepted(), rejected()
+*/
+
+QPlatformDialogHelper::ButtonRole QQuickDialogPrivate::buttonRole(QQuickAbstractButton *button)
+{
+    const QQuickDialogButtonBoxAttached *attached = qobject_cast<QQuickDialogButtonBoxAttached *>(qmlAttachedPropertiesObject<QQuickDialogButtonBox>(button, false));
+    return attached ? attached->buttonRole() : QPlatformDialogHelper::InvalidRole;
+}
+
+void QQuickDialogPrivate::handleClick(QQuickAbstractButton *button)
+{
+    Q_Q(QQuickDialog);
+    switch (buttonRole(button)) {
+    case QPlatformDialogHelper::ApplyRole:
+        emit q->applied();
+        break;
+    case QPlatformDialogHelper::ResetRole:
+        emit q->reset();
+        break;
+    case QPlatformDialogHelper::DestructiveRole:
+        emit q->discarded();
+        break;
+    case QPlatformDialogHelper::HelpRole:
+        emit q->helpRequested();
+        break;
+    default:
+        break;
+    }
+}
+
 QQuickDialog::QQuickDialog(QObject *parent)
     : QQuickPopup(*(new QQuickDialogPrivate), parent)
 {
@@ -188,12 +252,14 @@ void QQuickDialog::setHeader(QQuickItem *header)
     if (QQuickDialogButtonBox *buttonBox = qobject_cast<QQuickDialogButtonBox *>(oldHeader)) {
         disconnect(buttonBox, &QQuickDialogButtonBox::accepted, this, &QQuickDialog::accept);
         disconnect(buttonBox, &QQuickDialogButtonBox::rejected, this, &QQuickDialog::reject);
+        QObjectPrivate::disconnect(buttonBox, &QQuickDialogButtonBox::clicked, d, &QQuickDialogPrivate::handleClick);
         if (d->buttonBox == buttonBox)
             d->buttonBox = nullptr;
     }
     if (QQuickDialogButtonBox *buttonBox = qobject_cast<QQuickDialogButtonBox *>(header)) {
         connect(buttonBox, &QQuickDialogButtonBox::accepted, this, &QQuickDialog::accept);
         connect(buttonBox, &QQuickDialogButtonBox::rejected, this, &QQuickDialog::reject);
+        QObjectPrivate::connect(buttonBox, &QQuickDialogButtonBox::clicked, d, &QQuickDialogPrivate::handleClick);
         d->buttonBox = buttonBox;
         buttonBox->setStandardButtons(d->standardButtons);
     }
@@ -235,12 +301,14 @@ void QQuickDialog::setFooter(QQuickItem *footer)
     if (QQuickDialogButtonBox *buttonBox = qobject_cast<QQuickDialogButtonBox *>(oldFooter)) {
         disconnect(buttonBox, &QQuickDialogButtonBox::accepted, this, &QQuickDialog::accept);
         disconnect(buttonBox, &QQuickDialogButtonBox::rejected, this, &QQuickDialog::reject);
+        QObjectPrivate::disconnect(buttonBox, &QQuickDialogButtonBox::clicked, d, &QQuickDialogPrivate::handleClick);
         if (d->buttonBox == buttonBox)
             d->buttonBox = nullptr;
     }
     if (QQuickDialogButtonBox *buttonBox = qobject_cast<QQuickDialogButtonBox *>(footer)) {
         connect(buttonBox, &QQuickDialogButtonBox::accepted, this, &QQuickDialog::accept);
         connect(buttonBox, &QQuickDialogButtonBox::rejected, this, &QQuickDialog::reject);
+        QObjectPrivate::connect(buttonBox, &QQuickDialogButtonBox::clicked, d, &QQuickDialogPrivate::handleClick);
         d->buttonBox = buttonBox;
         buttonBox->setStandardButtons(d->standardButtons);
     }
@@ -301,16 +369,59 @@ void QQuickDialog::setStandardButtons(QPlatformDialogHelper::StandardButtons but
 }
 
 /*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlmethod AbstractButton QtQuick.Controls::Dialog::standardButton(StandardButton button)
+
+    Returns the specified standard \a button, or \c null if it does not exist.
+
+    \sa standardButtons
+*/
+QQuickAbstractButton *QQuickDialog::standardButton(QPlatformDialogHelper::StandardButton button) const
+{
+    Q_D(const QQuickDialog);
+    if (!d->buttonBox)
+        return nullptr;
+    return d->buttonBox->standardButton(button);
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlproperty int QtQuick.Controls::Dialog::result
+
+    This property holds the result code.
+
+    Standard result codes:
+    \value Dialog.Accepted The dialog was accepted.
+    \value Dialog.Rejected The dialog was rejected.
+
+    \sa accept(), reject(), done()
+*/
+int QQuickDialog::result() const
+{
+    Q_D(const QQuickDialog);
+    return d->result;
+}
+
+void QQuickDialog::setResult(int result)
+{
+    Q_D(QQuickDialog);
+    if (d->result == result)
+        return;
+
+    d->result = result;
+    emit resultChanged();
+}
+
+/*!
     \qmlmethod void QtQuick.Controls::Dialog::accept()
 
     Closes the dialog and emits the \l accepted() signal.
 
-    \sa reject()
+    \sa reject(), done()
 */
 void QQuickDialog::accept()
 {
-    close();
-    emit accepted();
+    done(Accepted);
 }
 
 /*!
@@ -318,12 +429,32 @@ void QQuickDialog::accept()
 
     Closes the dialog and emits the \l rejected() signal.
 
-    \sa accept()
+    \sa accept(), done()
 */
 void QQuickDialog::reject()
 {
+    done(Rejected);
+}
+
+/*!
+    \since QtQuick.Controls 2.3 (Qt 5.10)
+    \qmlmethod void QtQuick.Controls::Dialog::done(int result)
+
+    Closes the dialog, sets the \a result, and emits \l accepted() or
+    \l rejected() depending on whether the result is \c Dialog.Accepted
+    or \c Dialog.Rejected, respectively.
+
+    \sa accept(), reject(), result
+*/
+void QQuickDialog::done(int result)
+{
     close();
-    emit rejected();
+    setResult(result);
+
+    if (result == Accepted)
+        emit accepted();
+    else if (result == Rejected)
+        emit rejected();
 }
 
 void QQuickDialog::geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry)

@@ -21,6 +21,7 @@
 #include "base/win/scoped_gdi_object.h"
 #include "base/win/win_util.h"
 #include "ui/accessibility/ax_enums.h"
+#include "ui/base/ime/input_method_observer.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/win/window_event_target.h"
 #include "ui/events/event.h"
@@ -38,6 +39,9 @@ class DirectManipulationHelper;
 }  // namespace gfx
 
 namespace ui  {
+class AXSystemCaretWin;
+class InputMethod;
+class TextInputClient;
 class ViewProp;
 }
 
@@ -117,9 +121,9 @@ const int WM_WINDOWSIZINGFINISHED = WM_USER;
 // used by both a views::NativeWidget and an aura::WindowTreeHost
 // implementation.
 // TODO(beng): This object should eventually *become* the WindowImpl.
-class VIEWS_EXPORT HWNDMessageHandler :
-    public gfx::WindowImpl,
-    public ui::WindowEventTarget {
+class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
+                                        public ui::InputMethodObserver,
+                                        public ui::WindowEventTarget {
  public:
   explicit HWNDMessageHandler(HWNDMessageHandlerDelegate* delegate);
   ~HWNDMessageHandler() override;
@@ -213,6 +217,11 @@ class VIEWS_EXPORT HWNDMessageHandler :
   // to this window.
   bool HasChildRenderingWindow();
 
+  void set_is_translucent(bool is_translucent) {
+    is_translucent_ = is_translucent;
+  }
+  bool is_translucent() const { return is_translucent_; }
+
  private:
   typedef std::set<DWORD> TouchIDs;
   enum class DwmFrameState { OFF, ON };
@@ -221,6 +230,14 @@ class VIEWS_EXPORT HWNDMessageHandler :
   HICON GetDefaultWindowIcon() const override;
   HICON GetSmallWindowIcon() const override;
   LRESULT OnWndProc(UINT message, WPARAM w_param, LPARAM l_param) override;
+
+  // Overridden from InputMethodObserver
+  void OnFocus() override;
+  void OnBlur() override;
+  void OnCaretBoundsChanged(const ui::TextInputClient* client) override;
+  void OnTextInputStateChanged(const ui::TextInputClient* client) override;
+  void OnInputMethodDestroyed(const ui::InputMethod* input_method) override;
+  void OnShowImeIfNeeded() override;
 
   // Overridden from WindowEventTarget
   LRESULT HandleMouseMessage(unsigned int message,
@@ -235,7 +252,10 @@ class VIEWS_EXPORT HWNDMessageHandler :
                              WPARAM w_param,
                              LPARAM l_param,
                              bool* handled) override;
-
+  LRESULT HandlePointerMessage(unsigned int message,
+                               WPARAM w_param,
+                               LPARAM l_param,
+                               bool* handled) override;
   LRESULT HandleScrollMessage(unsigned int message,
                               WPARAM w_param,
                               LPARAM l_param,
@@ -358,6 +378,11 @@ class VIEWS_EXPORT HWNDMessageHandler :
 
     // Pointer events.
     CR_MESSAGE_HANDLER_EX(WM_POINTERACTIVATE, OnPointerActivate)
+    CR_MESSAGE_HANDLER_EX(WM_POINTERDOWN, OnPointerEvent)
+    CR_MESSAGE_HANDLER_EX(WM_POINTERUP, OnPointerEvent)
+    CR_MESSAGE_HANDLER_EX(WM_POINTERUPDATE, OnPointerEvent)
+    CR_MESSAGE_HANDLER_EX(WM_POINTERENTER, OnPointerEvent)
+    CR_MESSAGE_HANDLER_EX(WM_POINTERLEAVE, OnPointerEvent)
 
     // Key events.
     CR_MESSAGE_HANDLER_EX(WM_KEYDOWN, OnKeyEvent)
@@ -411,6 +436,7 @@ class VIEWS_EXPORT HWNDMessageHandler :
     CR_MSG_WM_MOVE(OnMove)
     CR_MSG_WM_MOVING(OnMoving)
     CR_MSG_WM_NCCALCSIZE(OnNCCalcSize)
+    CR_MSG_WM_NCCREATE(OnNCCreate)
     CR_MSG_WM_NCHITTEST(OnNCHitTest)
     CR_MSG_WM_NCPAINT(OnNCPaint)
     CR_MSG_WM_NOTIFY(OnNotify)
@@ -422,6 +448,7 @@ class VIEWS_EXPORT HWNDMessageHandler :
     CR_MSG_WM_SIZE(OnSize)
     CR_MSG_WM_SYSCOMMAND(OnSysCommand)
     CR_MSG_WM_THEMECHANGED(OnThemeChanged)
+    CR_MSG_WM_TIMECHANGE(OnTimeChange)
     CR_MSG_WM_WINDOWPOSCHANGED(OnWindowPosChanged)
     CR_MSG_WM_WINDOWPOSCHANGING(OnWindowPosChanging)
   CR_END_MSG_MAP()
@@ -458,10 +485,12 @@ class VIEWS_EXPORT HWNDMessageHandler :
   LRESULT OnMouseActivate(UINT message, WPARAM w_param, LPARAM l_param);
   LRESULT OnMouseRange(UINT message, WPARAM w_param, LPARAM l_param);
   LRESULT OnPointerActivate(UINT message, WPARAM w_param, LPARAM l_param);
+  LRESULT OnPointerEvent(UINT message, WPARAM w_param, LPARAM l_param);
   void OnMove(const gfx::Point& point);
   void OnMoving(UINT param, const RECT* new_bounds);
   LRESULT OnNCActivate(UINT message, WPARAM w_param, LPARAM l_param);
   LRESULT OnNCCalcSize(BOOL mode, LPARAM l_param);
+  LRESULT OnNCCreate(LPCREATESTRUCT lpCreateStruct);
   LRESULT OnNCHitTest(const gfx::Point& point);
   void OnNCPaint(HRGN rgn);
   LRESULT OnNCUAHDrawCaption(UINT message, WPARAM w_param, LPARAM l_param);
@@ -478,6 +507,7 @@ class VIEWS_EXPORT HWNDMessageHandler :
   void OnSize(UINT param, const gfx::Size& size);
   void OnSysCommand(UINT notification_code, const gfx::Point& point);
   void OnThemeChanged();
+  void OnTimeChange();
   LRESULT OnTouchEvent(UINT message, WPARAM w_param, LPARAM l_param);
   void OnWindowPosChanging(WINDOWPOS* window_pos);
   void OnWindowPosChanged(WINDOWPOS* window_pos);
@@ -504,6 +534,14 @@ class VIEWS_EXPORT HWNDMessageHandler :
                                    WPARAM w_param,
                                    LPARAM l_param,
                                    bool track_mouse);
+
+  LRESULT HandlePointerEventTypeTouch(UINT message,
+                                      WPARAM w_param,
+                                      LPARAM l_param);
+
+  LRESULT HandlePointerEventTypePen(UINT message,
+                                    WPARAM w_param,
+                                    LPARAM l_param);
 
   // Returns true if the mouse message passed in is an OS synthesized mouse
   // message.
@@ -548,6 +586,11 @@ class VIEWS_EXPORT HWNDMessageHandler :
   // px on activation loss to a window on the same monitor.
   void OnBackgroundFullscreen();
 
+  // Deletes the system caret used for accessibility. This will result in any
+  // clients that are still holding onto its |IAccessible| to get a failure code
+  // if they request its location.
+  void DestroyAXSystemCaret();
+
   HWNDMessageHandlerDelegate* delegate_;
 
   std::unique_ptr<FullscreenHandler> fullscreen_handler_;
@@ -576,6 +619,13 @@ class VIEWS_EXPORT HWNDMessageHandler :
 
   // The current DPI.
   int dpi_;
+
+  // Whether EnableNonClientDpiScaling was called successfully with this window.
+  // This flag exists because EnableNonClientDpiScaling must be called during
+  // WM_NCCREATE and EnableChildWindowDpiMessage is called after window
+  // creation. We don't want to call both, so this helps us determine if a call
+  // to EnableChildWindowDpiMessage is necessary.
+  bool called_enable_non_client_dpi_scaling_;
 
   // Event handling ------------------------------------------------------------
 
@@ -665,6 +715,9 @@ class VIEWS_EXPORT HWNDMessageHandler :
   std::unique_ptr<WindowsSessionChangeObserver>
       windows_session_change_observer_;
 
+  // Some assistive software need to track the location of the caret.
+  std::unique_ptr<ui::AXSystemCaretWin> ax_system_caret_;
+
   // This class provides functionality to register the legacy window as a
   // Direct Manipulation consumer. This allows us to support smooth scroll
   // in Chrome on Windows 10.
@@ -686,11 +739,16 @@ class VIEWS_EXPORT HWNDMessageHandler :
   // fullscreen window which lost activation. Defaults to false.
   bool background_fullscreen_hack_;
 
+  // True if the window should have no border and its contents should be
+  // partially or fully transparent.
+  bool is_translucent_ = false;
+
   // This is a map of the HMONITOR to full screeen window instance. It is safe
   // to keep a raw pointer to the HWNDMessageHandler instance as we track the
   // window destruction and ensure that the map is cleaned up.
   using FullscreenWindowMonitorMap = std::map<HMONITOR, HWNDMessageHandler*>;
-  static base::LazyInstance<FullscreenWindowMonitorMap> fullscreen_monitor_map_;
+  static base::LazyInstance<FullscreenWindowMonitorMap>::DestructorAtExit
+      fullscreen_monitor_map_;
 
   // The WeakPtrFactories below must occur last in the class definition so they
   // get destroyed last.

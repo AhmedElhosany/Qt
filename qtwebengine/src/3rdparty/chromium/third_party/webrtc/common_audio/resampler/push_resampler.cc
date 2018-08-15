@@ -12,10 +12,10 @@
 
 #include <string.h>
 
-#include "webrtc/base/checks.h"
 #include "webrtc/common_audio/include/audio_util.h"
 #include "webrtc/common_audio/resampler/include/resampler.h"
 #include "webrtc/common_audio/resampler/push_sinc_resampler.h"
+#include "webrtc/rtc_base/checks.h"
 
 namespace webrtc {
 namespace {
@@ -32,8 +32,8 @@ void CheckValidInitParams(int src_sample_rate_hz, int dst_sample_rate_hz,
 #if !defined(WEBRTC_WIN) && defined(__clang__)
   RTC_DCHECK_GT(src_sample_rate_hz, 0);
   RTC_DCHECK_GT(dst_sample_rate_hz, 0);
-  RTC_DCHECK_GT(num_channels, 0u);
-  RTC_DCHECK_LE(num_channels, 2u);
+  RTC_DCHECK_GT(num_channels, 0);
+  RTC_DCHECK_LE(num_channels, 2);
 #endif
 }
 
@@ -53,7 +53,7 @@ void CheckExpectedBufferSizes(size_t src_length,
   RTC_DCHECK_GE(dst_capacity, dst_size_10ms);
 #endif
 }
-}
+}  // namespace
 
 template <typename T>
 PushResampler<T>::PushResampler()

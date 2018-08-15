@@ -11,13 +11,16 @@ static_library("core") {
   sources = [
     "security_state.cc",
     "security_state.h",
+    "security_state_ui.cc",
+    "security_state_ui.h",
     "switches.cc",
     "switches.h",
   ]
 
-  deps = [
+  public_deps = [
     "//base",
     "//net",
+    "//url",
   ]
 }
 

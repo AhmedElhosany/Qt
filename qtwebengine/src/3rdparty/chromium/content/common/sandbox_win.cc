@@ -10,7 +10,9 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/debug/activity_tracker.h"
 #include "base/debug/profiler.h"
+#include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/hash.h"
 #include "base/logging.h"
@@ -23,6 +25,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/sys_info.h"
 #include "base/trace_event/trace_event.h"
 #include "base/win/iat_patch_function.h"
 #include "base/win/scoped_handle.h"
@@ -249,11 +252,10 @@ base::string16 PrependWindowsSessionPath(const base::char16* object) {
   return base::StringPrintf(L"\\Sessions\\%lu%ls", s_session_id, object);
 }
 
-// Checks if the sandbox should be let to run without a job object assigned.
+// Checks if the sandbox can be let to run without a job object assigned.
+// Returns true if the job object has to be applied to the sandbox and false
+// otherwise.
 bool ShouldSetJobLevel(const base::CommandLine& cmd_line) {
-  if (!cmd_line.HasSwitch(switches::kAllowNoSandboxJob))
-    return true;
-
   // Windows 8 allows nested jobs so we don't need to check if we are in other
   // job.
   if (base::win::GetVersion() >= base::win::VERSION_WIN8)
@@ -277,6 +279,25 @@ bool ShouldSetJobLevel(const base::CommandLine& cmd_line) {
   if (job_info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_BREAKAWAY_OK)
     return true;
 
+  // Lastly in place of the flag which was supposed to be used only for running
+  // Chrome in remote sessions we do this check explicitly here.
+  // According to MS this flag can be false for a remote session only on Windows
+  // Server 2012 and newer so if we do the check last we should be on the safe
+  // side. See: https://msdn.microsoft.com/en-us/library/aa380798.aspx.
+  if (!::GetSystemMetrics(SM_REMOTESESSION)) {
+    // Measure how often we would have decided to apply the sandbox but the
+    // user actually wanted to avoid it.
+    // TODO(pastarmovj): Remove this check and the flag altogether once we are
+    // convinced that the automatic logic is good enough.
+    bool set_job = !cmd_line.HasSwitch(switches::kAllowNoSandboxJob);
+    UMA_HISTOGRAM_BOOLEAN("Process.Sandbox.FlagOverrodeRemoteSessionCheck",
+                          !set_job);
+    return set_job;
+  }
+
+  // Allow running without the sandbox in this case. This slightly reduces the
+  // ability of the sandbox to protect its children from spawning new processes
+  // or preventing them from shutting down Windows or accessing the clipboard.
   return false;
 }
 
@@ -383,27 +404,15 @@ sandbox::ResultCode AddPolicyForSandboxedProcess(
   sandbox::ResultCode result = sandbox::SBOX_ALL_OK;
 
   // Win8+ adds a device DeviceApi that we don't need.
-  if (base::win::GetVersion() > base::win::VERSION_WIN7)
+  if (base::win::GetVersion() >= base::win::VERSION_WIN8)
     result = policy->AddKernelObjectToClose(L"File", L"\\Device\\DeviceApi");
   if (result != sandbox::SBOX_ALL_OK)
     return result;
 
-  // Close the proxy settings on XP.
-  if (base::win::GetVersion() <= base::win::VERSION_SERVER_2003)
-    result = policy->AddKernelObjectToClose(L"Key",
-                 L"HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\" \
-                     L"CurrentVersion\\Internet Settings");
-  if (result != sandbox::SBOX_ALL_OK)
-    return result;
-
-  sandbox::TokenLevel initial_token = sandbox::USER_UNPROTECTED;
-  if (base::win::GetVersion() > base::win::VERSION_XP) {
-    // On 2003/Vista the initial token has to be restricted if the main
-    // token is restricted.
-    initial_token = sandbox::USER_RESTRICTED_SAME_ACCESS;
-  }
-
-  result = policy->SetTokenLevel(initial_token, sandbox::USER_LOCKDOWN);
+  // On 2003/Vista+ the initial token has to be restricted if the main
+  // token is restricted.
+  result = policy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
+                                 sandbox::USER_LOCKDOWN);
   if (result != sandbox::SBOX_ALL_OK)
     return result;
   // Prevents the renderers from manipulating low-integrity processes.
@@ -564,6 +573,33 @@ bool IsAppContainerEnabled() {
                           base::CompareCase::INSENSITIVE_ASCII);
 }
 
+sandbox::ResultCode SetJobMemoryLimit(const base::CommandLine& cmd_line,
+                                      sandbox::TargetPolicy* policy) {
+  DCHECK_NE(policy->GetJobLevel(), sandbox::JOB_NONE);
+
+#ifdef _WIN64
+  int64_t GB = 1024 * 1024 * 1024;
+  size_t memory_limit = 4 * GB;
+
+  // Note that this command line flag hasn't been fetched by all
+  // callers of SetJobLevel, only those in this file.
+  if (cmd_line.GetSwitchValueASCII(switches::kProcessType) ==
+      switches::kGpuProcess) {
+    // Allow the GPU process's sandbox to access more physical memory if
+    // it's available on the system.
+    int64_t physical_memory = base::SysInfo::AmountOfPhysicalMemory();
+    if (physical_memory > 16 * GB) {
+      memory_limit = 16 * GB;
+    } else if (physical_memory > 8 * GB) {
+      memory_limit = 8 * GB;
+    }
+  }
+  return policy->SetJobMemoryLimit(memory_limit);
+#else
+  return sandbox::SBOX_ALL_OK;
+#endif
+}
+
 }  // namespace
 
 sandbox::ResultCode SetJobLevel(const base::CommandLine& cmd_line,
@@ -573,18 +609,31 @@ sandbox::ResultCode SetJobLevel(const base::CommandLine& cmd_line,
   if (!ShouldSetJobLevel(cmd_line))
     return policy->SetJobLevel(sandbox::JOB_NONE, 0);
 
-#ifdef _WIN64
-  sandbox::ResultCode ret =
-      policy->SetJobMemoryLimit(4ULL * 1024 * 1024 * 1024);
+  sandbox::ResultCode ret = policy->SetJobLevel(job_level, ui_exceptions);
   if (ret != sandbox::SBOX_ALL_OK)
     return ret;
-#endif
-  return policy->SetJobLevel(job_level, ui_exceptions);
+
+  return SetJobMemoryLimit(cmd_line, policy);
 }
+
+// This is for finch. See also crbug.com/464430 for details.
+const base::Feature kEnableCsrssLockdownFeature{
+    "EnableCsrssLockdown", base::FEATURE_DISABLED_BY_DEFAULT};
 
 // TODO(jschuh): Need get these restrictions applied to NaCl and Pepper.
 // Just have to figure out what needs to be warmed up first.
 sandbox::ResultCode AddBaseHandleClosePolicy(sandbox::TargetPolicy* policy) {
+  if (base::win::GetVersion() >= base::win::VERSION_WIN10) {
+    if (base::FeatureList::IsEnabled(kEnableCsrssLockdownFeature)) {
+      // Close all ALPC ports.
+      sandbox::ResultCode ret =
+          policy->AddKernelObjectToClose(L"ALPC Port", NULL);
+      if (ret != sandbox::SBOX_ALL_OK) {
+        return ret;
+      }
+    }
+  }
+
   // TODO(cpu): Add back the BaseNamedObjects policy.
   base::string16 object_path = PrependWindowsSessionPath(
       L"\\BaseNamedObjects\\windows_shell_global_counters");
@@ -708,7 +757,8 @@ sandbox::ResultCode StartSandboxedProcess(
     return sandbox::SBOX_ALL_OK;
   }
 
-  sandbox::TargetPolicy* policy = g_broker_services->CreatePolicy();
+  scoped_refptr<sandbox::TargetPolicy> policy =
+      g_broker_services->CreatePolicy();
 
   // Add any handles to be inherited to the policy.
   for (HANDLE handle : handles_to_inherit)
@@ -736,7 +786,7 @@ sandbox::ResultCode StartSandboxedProcess(
 
 #if !defined(NACL_WIN64)
   if (type_str == switches::kRendererProcess && IsWin32kLockdownEnabled()) {
-    result = AddWin32kLockdownPolicy(policy, false);
+    result = AddWin32kLockdownPolicy(policy.get(), false);
     if (result != sandbox::SBOX_ALL_OK)
       return result;
   }
@@ -750,12 +800,12 @@ sandbox::ResultCode StartSandboxedProcess(
   if (result != sandbox::SBOX_ALL_OK)
     return result;
 
-  result = SetJobLevel(*cmd_line, sandbox::JOB_LOCKDOWN, 0, policy);
+  result = SetJobLevel(*cmd_line, sandbox::JOB_LOCKDOWN, 0, policy.get());
   if (result != sandbox::SBOX_ALL_OK)
     return result;
 
   if (!delegate->DisableDefaultPolicy()) {
-    result = AddPolicyForSandboxedProcess(policy);
+    result = AddPolicyForSandboxedProcess(policy.get());
     if (result != sandbox::SBOX_ALL_OK)
       return result;
   }
@@ -764,7 +814,7 @@ sandbox::ResultCode StartSandboxedProcess(
   if (type_str == switches::kRendererProcess ||
       type_str == switches::kPpapiPluginProcess) {
     AddDirectory(base::DIR_WINDOWS_FONTS, NULL, true,
-                 sandbox::TargetPolicy::FILES_ALLOW_READONLY, policy);
+                 sandbox::TargetPolicy::FILES_ALLOW_READONLY, policy.get());
   }
 #endif
 
@@ -775,7 +825,7 @@ sandbox::ResultCode StartSandboxedProcess(
     cmd_line->AppendSwitchASCII("ignored", " --type=renderer ");
   }
 
-  result = AddGenericPolicy(policy);
+  result = AddGenericPolicy(policy.get());
 
   if (result != sandbox::SBOX_ALL_OK) {
     NOTREACHED();
@@ -795,12 +845,14 @@ sandbox::ResultCode StartSandboxedProcess(
     }
   }
 
+#if !defined(OFFICIAL_BUILD)
   // If stdout/stderr point to a Windows console, these calls will
   // have no effect. These calls can fail with SBOX_ERROR_BAD_PARAMS.
   policy->SetStdoutHandle(GetStdHandle(STD_OUTPUT_HANDLE));
   policy->SetStderrHandle(GetStdHandle(STD_ERROR_HANDLE));
+#endif
 
-  if (!delegate->PreSpawnTarget(policy))
+  if (!delegate->PreSpawnTarget(policy.get()))
     return sandbox::SBOX_ERROR_DELEGATE_PRE_SPAWN;
 
   TRACE_EVENT_BEGIN0("startup", "StartProcessWithAccess::LAUNCHPROCESS");
@@ -816,6 +868,13 @@ sandbox::ResultCode StartSandboxedProcess(
   base::win::ScopedProcessInformation target(temp_process_info);
 
   TRACE_EVENT_END0("startup", "StartProcessWithAccess::LAUNCHPROCESS");
+
+  base::debug::GlobalActivityTracker* tracker =
+      base::debug::GlobalActivityTracker::Get();
+  if (tracker) {
+    tracker->RecordProcessLaunch(target.process_id(),
+                                 cmd_line->GetCommandLineString());
+  }
 
   if (sandbox::SBOX_ALL_OK != result) {
     UMA_HISTOGRAM_SPARSE_SLOWLY("Process.Sandbox.Launch.Error", last_error);

@@ -16,6 +16,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/menu_item.h"
+#include "ppapi/features/features.h"
 #include "third_party/WebKit/public/web/WebContextMenuData.h"
 
 using blink::WebContextMenuData;
@@ -68,12 +69,13 @@ bool IsCustomItemCheckedInternal(const std::vector<content::MenuItem>& items,
 const size_t kMaxCustomMenuDepth = 5;
 const size_t kMaxCustomMenuTotalItems = 1000;
 
-void AddCustomItemsToMenu(const std::vector<content::MenuItem>& items,
-                          size_t depth,
-                          size_t* total_items,
-                          ScopedVector<ui::SimpleMenuModel>* submenus,
-                          ui::SimpleMenuModel::Delegate* delegate,
-                          ui::SimpleMenuModel* menu_model) {
+void AddCustomItemsToMenu(
+    const std::vector<content::MenuItem>& items,
+    size_t depth,
+    size_t* total_items,
+    std::vector<std::unique_ptr<ui::SimpleMenuModel>>* submenus,
+    ui::SimpleMenuModel::Delegate* delegate,
+    ui::SimpleMenuModel* menu_model) {
   if (depth > kMaxCustomMenuDepth) {
     LOG(ERROR) << "Custom menu too deeply nested.";
     return;
@@ -112,7 +114,7 @@ void AddCustomItemsToMenu(const std::vector<content::MenuItem>& items,
         break;
       case content::MenuItem::SUBMENU: {
         ui::SimpleMenuModel* submenu = new ui::SimpleMenuModel(delegate);
-        submenus->push_back(submenu);
+        submenus->push_back(base::WrapUnique(submenu));
         AddCustomItemsToMenu(items[i].submenu, depth + 1, total_items, submenus,
                              delegate, submenu);
         menu_model->AddSubMenu(
@@ -309,7 +311,7 @@ void RenderViewContextMenuBase::ExecuteCommand(int id, int event_flags) {
   if (IsContentCustomCommandId(id)) {
     unsigned action = id - content_context_custom_first;
     const content::CustomContextMenuContext& context = params_.custom_context;
-#if defined(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PLUGINS)
     if (context.request_id && !context.is_pepper_menu)
       HandleAuthorizeAllPlugins();
 #endif
@@ -331,10 +333,7 @@ void RenderViewContextMenuBase::MenuWillShow(ui::SimpleMenuModel* source) {
   if (source != &menu_model_)
     return;
 
-  content::RenderWidgetHostView* view =
-      source_web_contents_->GetRenderWidgetHostView();
-  if (view)
-    view->SetShowingContextMenu(true);
+  source_web_contents_->SetShowingContextMenu(true);
 
   NotifyMenuShown();
 }
@@ -344,16 +343,8 @@ void RenderViewContextMenuBase::MenuClosed(ui::SimpleMenuModel* source) {
   if (source != &menu_model_)
     return;
 
-  content::RenderWidgetHostView* view =
-      source_web_contents_->GetRenderWidgetHostView();
-  if (view)
-    view->SetShowingContextMenu(false);
+  source_web_contents_->SetShowingContextMenu(false);
   source_web_contents_->NotifyContextMenuClosed(params_.custom_context);
-
-  if (!command_executed_) {
-    for (auto& observer : observers_)
-      observer.OnMenuCancel();
-  }
 }
 
 RenderFrameHost* RenderViewContextMenuBase::GetRenderFrameHost() {
@@ -391,11 +382,10 @@ void RenderViewContextMenuBase::OpenURLWithExtraHeaders(
   if (!extra_headers.empty())
     open_url_params.extra_headers = extra_headers;
 
-  WebContents* new_contents = source_web_contents_->OpenURL(open_url_params);
-  if (!new_contents)
-    return;
+  open_url_params.source_render_process_id = render_process_id_;
+  open_url_params.source_render_frame_id = render_frame_id_;
 
-  NotifyURLOpened(url, new_contents);
+  source_web_contents_->OpenURL(open_url_params);
 }
 
 bool RenderViewContextMenuBase::IsCustomItemChecked(int id) const {

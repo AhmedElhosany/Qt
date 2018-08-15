@@ -19,11 +19,13 @@ SOURCES += \
     $$PWD/qwindowskeymapper.cpp \
     $$PWD/qwindowsmousehandler.cpp \
     $$PWD/qwindowsole.cpp \
+    $$PWD/qwindowsdropdataobject.cpp \
     $$PWD/qwindowsmime.cpp \
     $$PWD/qwindowsinternalmimedata.cpp \
     $$PWD/qwindowscursor.cpp \
     $$PWD/qwindowsinputcontext.cpp \
     $$PWD/qwindowstheme.cpp \
+    $$PWD/qwindowsmenu.cpp \
     $$PWD/qwindowsdialoghelpers.cpp \
     $$PWD/qwindowsservices.cpp \
     $$PWD/qwindowsnativeinterface.cpp \
@@ -31,6 +33,7 @@ SOURCES += \
     $$PWD/qwin10helpers.cpp
 
 HEADERS += \
+    $$PWD/qwindowscombase.h \
     $$PWD/qwindowswindow.h \
     $$PWD/qwindowsintegration.h \
     $$PWD/qwindowscontext.h \
@@ -39,11 +42,13 @@ HEADERS += \
     $$PWD/qwindowsmousehandler.h \
     $$PWD/qtwindowsglobal.h \
     $$PWD/qwindowsole.h \
+    $$PWD/qwindowsdropdataobject.h \
     $$PWD/qwindowsmime.h \
     $$PWD/qwindowsinternalmimedata.h \
     $$PWD/qwindowscursor.h \
     $$PWD/qwindowsinputcontext.h \
     $$PWD/qwindowstheme.h \
+    $$PWD/qwindowsmenu.h \
     $$PWD/qwindowsdialoghelpers.h \
     $$PWD/qwindowsservices.h \
     $$PWD/qwindowsnativeinterface.h \
@@ -67,6 +72,16 @@ qtConfig(opengles2) {
 qtConfig(dynamicgl) {
     SOURCES += $$PWD/qwindowseglcontext.cpp
     HEADERS += $$PWD/qwindowseglcontext.h
+}
+
+qtConfig(systemtrayicon) {
+    SOURCES += $$PWD/qwindowssystemtrayicon.cpp
+    HEADERS += $$PWD/qwindowssystemtrayicon.h
+}
+
+qtConfig(vulkan) {
+    SOURCES += $$PWD/qwindowsvulkaninstance.cpp
+    HEADERS += $$PWD/qwindowsvulkaninstance.h
 }
 
 qtConfig(clipboard) {

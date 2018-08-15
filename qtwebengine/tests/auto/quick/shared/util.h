@@ -116,7 +116,7 @@ inline bool waitForViewportReady(QQuickWebEngineView *webEngineView, int timeout
     Q_UNUSED(timeout)
     qFatal("Test Support API is disabled. The result is not reliable.\
             Use the following command to build Test Support module and rebuild WebEngineView API:\
-            qmake -r WEBENGINE_CONFIG+=testsupport && make");
+            qmake -r -- --feature-testsupport=yes && make");
     return false;
 #endif
 }
@@ -158,6 +158,28 @@ inline QPoint elementCenter(QQuickWebEngineView *view, const QString &id)
     }
 
     return QPoint(rectList.at(0).toInt(), rectList.at(1).toInt());
+}
+
+inline QString activeElementId(QQuickWebEngineView *webEngineView)
+{
+    qRegisterMetaType<QQuickWebEngineView::JavaScriptConsoleMessageLevel>("JavaScriptConsoleMessageLevel");
+    QSignalSpy consoleMessageSpy(webEngineView, &QQuickWebEngineView::javaScriptConsoleMessage);
+
+    webEngineView->runJavaScript(
+                "if (document.activeElement == null)"
+                "   console.log('');"
+                "else"
+                "   console.log(document.activeElement.id);"
+    );
+
+    if (!consoleMessageSpy.wait())
+        return QString();
+
+    QList<QVariant> arguments = consoleMessageSpy.takeFirst();
+    if (static_cast<QQuickWebEngineView::JavaScriptConsoleMessageLevel>(arguments.at(0).toInt()) != QQuickWebEngineView::InfoMessageLevel)
+        return QString();
+
+    return arguments.at(1).toString();
 }
 
 #endif /* UTIL_H */

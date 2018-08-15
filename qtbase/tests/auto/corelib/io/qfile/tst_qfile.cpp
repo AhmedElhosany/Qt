@@ -1642,15 +1642,6 @@ static bool fOpen(const QByteArray &fileName, const char *mode, FILE **file)
 
 void tst_QFile::largeUncFileSupport()
 {
-    // Currently there is a single network test server that is used by all VMs running tests in
-    // the CI. This test accesses a file shared with Samba on that server. Unfortunately many
-    // clients accessing the file at the same time is a sharing violation. This test already
-    // attempted to deal with the problem with retries, but that has led to the test timing out,
-    // not eventually succeeding. Due to the timeouts blacklisting the test wouldn't help.
-    // See https://bugreports.qt.io/browse/QTQAINFRA-1727 which will be resolved by the new
-    // test server architecture where the server is no longer shared.
-    QSKIP("Multiple instances of running this test at the same time fail due to QTQAINFRA-1727");
-
     qint64 size = Q_INT64_C(8589934592);
     qint64 dataOffset = Q_INT64_C(8589914592);
     QByteArray knownData("LargeFile content at offset 8589914592");
@@ -2147,6 +2138,7 @@ public:
     uint ownerId(FileOwner) const { return 0; }
     QString owner(FileOwner) const { return QString(); }
     QDateTime fileTime(FileTime) const { return QDateTime(); }
+    bool setFileTime(const QDateTime &newDate, FileTime time) { return false; }
 
 private:
     int number;
@@ -3256,22 +3248,39 @@ static qint64 streamExpectedSize(int fd)
     QT_STATBUF sb;
     if (QT_FSTAT(fd, &sb) != -1)
         return sb.st_size;
+    qErrnoWarning("Could not fstat fd %d", fd);
     return 0;
 }
 
 static qint64 streamCurrentPosition(int fd)
 {
-    QT_OFF_T pos = QT_LSEEK(fd, 0, SEEK_CUR);
-    if (pos != -1)
-        return pos;
+    QT_STATBUF sb;
+    if (QT_FSTAT(fd, &sb) != -1) {
+        QT_OFF_T pos = -1;
+        if ((sb.st_mode & QT_STAT_MASK) == QT_STAT_REG)
+            pos = QT_LSEEK(fd, 0, SEEK_CUR);
+        if (pos != -1)
+            return pos;
+        // failure to lseek() is not a problem
+    } else {
+        qErrnoWarning("Could not fstat fd %d", fd);
+    }
     return 0;
 }
 
 static qint64 streamCurrentPosition(FILE *f)
 {
-    QT_OFF_T pos = QT_FTELL(f);
-    if (pos != -1)
-        return pos;
+    QT_STATBUF sb;
+    if (QT_FSTAT(QT_FILENO(f), &sb) != -1) {
+        QT_OFF_T pos = -1;
+        if ((sb.st_mode & QT_STAT_MASK) == QT_STAT_REG)
+            pos = QT_FTELL(f);
+        if (pos != -1)
+            return pos;
+        // failure to ftell() is not a problem
+    } else {
+        qErrnoWarning("Could not fstat fd %d", QT_FILENO(f));
+    }
     return 0;
 }
 

@@ -268,11 +268,23 @@ GLTFImporter::~GLTFImporter()
 
 }
 
+/*!
+    \class Qt3DRender::GLTFImporter
+    \inmodule Qt3DRender
+    \brief Handles importing of gltf files
+*/
+/*!
+    Set the base \a path for importing scenes.
+*/
 void GLTFImporter::setBasePath(const QString& path)
 {
     m_basePath = path;
 }
 
+/*!
+    Set a \a json document as the file used for importing a scene.
+    Returns true if the operation is successful.
+*/
 bool GLTFImporter::setJSON(const QJsonDocument &json )
 {
     if ( !json.isObject() ) {
@@ -286,7 +298,8 @@ bool GLTFImporter::setJSON(const QJsonDocument &json )
 }
 
 /*!
- * Sets the \a path used by the parser to load the scene file.
+ * Sets the path based on parameter \a source. The path is
+ * used by the parser to load the scene file.
  * If the file is valid, parsing is automatically triggered.
  */
 void GLTFImporter::setSource(const QUrl &source)
@@ -314,15 +327,36 @@ void GLTFImporter::setSource(const QUrl &source)
 }
 
 /*!
- * Returns true if the extension of \a path is supported by the
- * GLTF parser.
+ * Sets the \a basePath used by the parser to load the scene file.
+ * If the file derived from \a data is valid, parsing is automatically
+ * triggered.
  */
-bool GLTFImporter::isFileTypeSupported(const QUrl &source) const
+void GLTFImporter::setData(const QByteArray& data, const QString &basePath)
 {
-    const QString path = QUrlHelper::urlToLocalFileOrQrc(source);
-    return GLTFImporter::isGLTFPath(path);
+    QJsonDocument sceneDocument = QJsonDocument::fromBinaryData(data);
+    if (sceneDocument.isNull())
+        sceneDocument = QJsonDocument::fromJson(data);
+
+    if (Q_UNLIKELY(!setJSON(sceneDocument))) {
+        qCWarning(GLTFImporterLog, "not a JSON document");
+        return;
+    }
+
+    setBasePath(basePath);
 }
 
+/*!
+ * Returns true if the \a extensions are supported by the
+ * GLTF parser.
+ */
+bool GLTFImporter::areFileTypesSupported(const QStringList &extensions) const
+{
+    return GLTFImporter::isGLTFSupported(extensions);
+}
+
+/*!
+    Imports the node specified in \a id from the GLTF file.
+*/
 Qt3DCore::QEntity* GLTFImporter::node(const QString &id)
 {
     QJsonObject nodes = m_json.object().value(KEY_NODES).toObject();
@@ -490,6 +524,9 @@ Qt3DCore::QEntity* GLTFImporter::node(const QString &id)
     return result;
 }
 
+/*!
+    Imports the scene specified in parameter \a id.
+*/
 Qt3DCore::QEntity* GLTFImporter::scene(const QString &id)
 {
     parse();
@@ -570,16 +607,14 @@ GLTFImporter::AccessorData::AccessorData(const QJsonObject &json)
         stride = byteStride.toInt();
 }
 
-bool GLTFImporter::isGLTFPath(const QString& path)
+bool GLTFImporter::isGLTFSupported(const QStringList &extensions)
 {
-    QFileInfo finfo(path);
-    if (!finfo.exists())
-        return false;
-
-    // might need to detect other things in the future, but would
-    // prefer to avoid doing a full parse.
-    QString suffix = finfo.suffix().toLower();
-    return suffix == QLatin1String("json") || suffix == QLatin1String("gltf") || suffix == QLatin1String("qgltf");
+    for (auto suffix: qAsConst(extensions)) {
+        suffix = suffix.toLower();
+        if (suffix == QLatin1String("json") || suffix == QLatin1String("gltf") || suffix == QLatin1String("qgltf"))
+            return true;
+    }
+    return false;
 }
 
 void GLTFImporter::renameFromJson(const QJsonObject &json, QObject * const object)
@@ -1072,8 +1107,8 @@ void GLTFImporter::cleanup()
     m_shaderPaths.clear();
     delete_if_without_parent(m_programs);
     m_programs.clear();
-    for (auto it = m_techniqueParameters.begin(); it != m_techniqueParameters.end(); ++it)
-        delete_if_without_parent(it.value());
+    for (const auto &params : qAsConst(m_techniqueParameters))
+        delete_if_without_parent(params);
     m_techniqueParameters.clear();
     delete_if_without_parent(m_techniques);
     m_techniques.clear();
@@ -1546,7 +1581,8 @@ void GLTFImporter::processJSONExtensions(const QString &id, const QJsonObject &j
     // level GLTF item.
     if (id == KEY_COMMON_MAT) {
         const auto lights = jsonObject.value(KEY_LIGHTS).toObject();
-        for (const auto &lightKey : lights.keys()) {
+        const auto keys = lights.keys();
+        for (const auto &lightKey : keys) {
             const auto light = lights.value(lightKey).toObject();
             auto lightType = light.value(KEY_TYPE).toString();
             const auto lightValues = light.value(lightType).toObject();
@@ -1641,6 +1677,9 @@ void GLTFImporter::processJSONRenderPass(const QString &id, const QJsonObject &j
     m_renderPasses[id] = pass;
 }
 
+/*!
+    Loads raw data from the GLTF file into the buffer.
+*/
 void GLTFImporter::loadBufferData()
 {
     for (auto &bufferData : m_bufferDatas) {
@@ -1650,6 +1689,9 @@ void GLTFImporter::loadBufferData()
     }
 }
 
+/*!
+    Removes all data from the buffer.
+*/
 void GLTFImporter::unloadBufferData()
 {
     for (const auto &bufferData : qAsConst(m_bufferDatas)) {

@@ -77,6 +77,7 @@ void Geometry::initializeFromPeer(const Qt3DCore::QNodeCreatedChangeBasePtr &cha
     m_attributes = data.attributeIds;
     m_boundingPositionAttribute = data.boundingVolumePositionAttributeId;
     m_geometryDirty = true;
+    markDirty(AbstractRenderer::GeometryDirty);
 }
 
 void Geometry::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
@@ -112,7 +113,7 @@ void Geometry::sceneChangeEvent(const Qt3DCore::QSceneChangePtr &e)
     default:
         break;
     }
-    markDirty(AbstractRenderer::AllDirty);
+    markDirty(AbstractRenderer::GeometryDirty);
     BackendNode::sceneChangeEvent(e);
 }
 

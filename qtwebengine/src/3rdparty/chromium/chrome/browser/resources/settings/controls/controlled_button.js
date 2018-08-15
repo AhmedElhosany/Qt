@@ -5,23 +5,26 @@
 Polymer({
   is: 'controlled-button',
 
-  behaviors: [CrPolicyPrefBehavior, PrefControlBehavior],
+  behaviors: [
+    CrPolicyPrefBehavior,
+    PrefControlBehavior,
+  ],
 
   properties: {
-    /** @private */
-    controlled_: {
+    endJustified: {
       type: Boolean,
-      computed: 'computeControlled_(pref.*)',
+      value: false,
       reflectToAttribute: true,
     },
-  },
 
-  /**
-   * @return {boolean} Whether the button is disabled.
-   * @private
-   */
-  computeControlled_: function() {
-    return this.pref.enforcement == chrome.settingsPrivate.Enforcement.ENFORCED;
+    label: String,
+
+    /** @private */
+    enforced_: {
+      type: Boolean,
+      computed: 'isPrefEnforced(pref.*)',
+      reflectToAttribute: true,
+    },
   },
 
   /**

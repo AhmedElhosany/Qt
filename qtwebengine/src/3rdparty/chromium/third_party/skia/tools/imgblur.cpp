@@ -9,14 +9,11 @@
 #include "SkCommandLineFlags.h"
 #include "SkCommonFlags.h"
 #include "SkData.h"
-#include "SkForceLinking.h"
 #include "SkImage.h"
 #include "SkStream.h"
 #include "SkTypes.h"
 
 #include "sk_tool_utils.h"
-
-__SK_FORCE_IMAGE_DECODER_LINKING;
 
 DEFINE_string(in, "input.png", "Input image");
 DEFINE_string(out, "blurred.png", "Output image");
@@ -28,8 +25,7 @@ DEFINE_double(sigma, 1, "Sigma to be used for blur (> 0.0f)");
 static const int kSuccess = 0;
 static const int kError = 1;
 
-int tool_main(int argc, char** argv);
-int tool_main(int argc, char** argv) {
+int main(int argc, char** argv) {
     SkCommandLineFlags::SetUsage("Brute force blur of an image.");
     SkCommandLineFlags::Parse(argc, argv);
 
@@ -66,7 +62,7 @@ int tool_main(int argc, char** argv) {
 
     SkBitmap dst = sk_tool_utils::slow_blur(src, (float) FLAGS_sigma);
 
-    if (!SkImageEncoder::EncodeFile(FLAGS_out[0], dst, SkImageEncoder::kPNG_Type, 100)) {
+    if (!sk_tool_utils::EncodeImageToFile(FLAGS_out[0], dst, SkEncodedImageFormat::kPNG, 100)) {
         if (!FLAGS_quiet) {
             SkDebugf("Couldn't write to file: %s\n", FLAGS_out[0]);
         }
@@ -75,9 +71,3 @@ int tool_main(int argc, char** argv) {
 
     return kSuccess;
 }
-
-#if !defined SK_BUILD_FOR_IOS
-int main(int argc, char * const argv[]) {
-    return tool_main(argc, (char**) argv);
-}
-#endif

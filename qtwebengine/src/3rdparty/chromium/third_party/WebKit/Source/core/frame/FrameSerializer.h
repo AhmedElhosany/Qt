@@ -35,9 +35,10 @@
 #include "platform/heap/Handle.h"
 #include "platform/weborigin/KURL.h"
 #include "platform/weborigin/KURLHash.h"
-#include "wtf/Forward.h"
-#include "wtf/HashSet.h"
-#include "wtf/Vector.h"
+#include "platform/wtf/Deque.h"
+#include "platform/wtf/Forward.h"
+#include "platform/wtf/HashSet.h"
+#include "platform/wtf/Vector.h"
 
 namespace blink {
 
@@ -48,9 +49,8 @@ class CSSValue;
 class Document;
 class Element;
 class FontResource;
-class ImageResource;
+class ImageResourceContent;
 class LocalFrame;
-class Resource;
 class SharedBuffer;
 class StylePropertySet;
 
@@ -63,10 +63,22 @@ class CORE_EXPORT FrameSerializer final {
   STACK_ALLOCATED();
 
  public:
+  enum ResourceHasCacheControlNoStoreHeader {
+    kNoCacheControlNoStoreHeader,
+    kHasCacheControlNoStoreHeader
+  };
+
   class Delegate {
    public:
+    virtual ~Delegate() {}
+
+    // Controls whether HTML serialization should skip the given element.
+    virtual bool ShouldIgnoreElement(const Element&) { return false; }
+
     // Controls whether HTML serialization should skip the given attribute.
-    virtual bool shouldIgnoreAttribute(const Attribute&) { return false; }
+    virtual bool ShouldIgnoreAttribute(const Element&, const Attribute&) {
+      return false;
+    }
 
     // Method allowing the Delegate control which URLs are written into the
     // generated html document.
@@ -77,59 +89,85 @@ class CORE_EXPORT FrameSerializer final {
     // (i.e. in place of img.src or iframe.src or object.data).
     //
     // If no link rewriting is desired, this method should return false.
-    virtual bool rewriteLink(const Element&, String& rewrittenLink) {
+    virtual bool RewriteLink(const Element&, String& rewritten_link) {
       return false;
     }
 
     // Tells whether to skip serialization of a subresource or CSSStyleSheet
     // with a given URI. Used to deduplicate resources across multiple frames.
-    virtual bool shouldSkipResourceWithURL(const KURL&) { return false; }
+    virtual bool ShouldSkipResourceWithURL(const KURL&) { return false; }
 
     // Tells whether to skip serialization of a subresource.
-    virtual bool shouldSkipResource(const Resource&) { return false; }
+    virtual bool ShouldSkipResource(ResourceHasCacheControlNoStoreHeader) {
+      return false;
+    }
+
+    // Returns custom attributes that need to add in order to serialize the
+    // element.
+    virtual Vector<Attribute> GetCustomAttributes(const Element&) {
+      return Vector<Attribute>();
+    }
+
+    // Returns an auxiliary DOM tree, i.e. shadow tree, that needs to be
+    // serialized.
+    virtual std::pair<Node*, Element*> GetAuxiliaryDOMTree(
+        const Element&) const {
+      return std::pair<Node*, Element*>();
+    }
+
+    virtual bool ShouldCollectProblemMetric() { return false; }
   };
 
-  // Constructs a serializer that will write output to the given vector of
+  // Constructs a serializer that will write output to the given deque of
   // SerializedResources and uses the Delegate for controlling some
   // serialization aspects.  Callers need to ensure that both arguments stay
   // alive until the FrameSerializer gets destroyed.
-  FrameSerializer(Vector<SerializedResource>&, Delegate&);
+  FrameSerializer(Deque<SerializedResource>&, Delegate&);
 
   // Initiates the serialization of the frame. All serialized content and
-  // retrieved resources are added to the Vector passed to the constructor.
-  // The first resource in that vector is the frame's serialized content.
+  // retrieved resources are added to the Deque passed to the constructor.
+  // The first resource in that deque is the frame's serialized content.
   // Subsequent resources are images, css, etc.
-  void serializeFrame(const LocalFrame&);
+  void SerializeFrame(const LocalFrame&);
 
-  static String markOfTheWebDeclaration(const KURL&);
+  static String MarkOfTheWebDeclaration(const KURL&);
 
  private:
   // Serializes the stylesheet back to text and adds it to the resources if URL
   // is not-empty.  It also adds any resources included in that stylesheet
   // (including any imported stylesheets and their own resources).
-  void serializeCSSStyleSheet(CSSStyleSheet&, const KURL&);
+  void SerializeCSSStyleSheet(CSSStyleSheet&, const KURL&);
 
   // Serializes the css rule (including any imported stylesheets), adding
   // referenced resources.
-  void serializeCSSRule(CSSRule*);
+  void SerializeCSSRule(CSSRule*);
 
-  bool shouldAddURL(const KURL&);
+  bool ShouldAddURL(const KURL&);
 
-  void addToResources(const Resource&,
+  void AddToResources(const String& mime_type,
+                      ResourceHasCacheControlNoStoreHeader,
                       PassRefPtr<const SharedBuffer>,
                       const KURL&);
-  void addImageToResources(ImageResource*, const KURL&);
-  void addFontToResources(FontResource*);
+  void AddImageToResources(ImageResourceContent*, const KURL&);
+  void AddFontToResources(FontResource*);
 
-  void retrieveResourcesForProperties(const StylePropertySet*, Document&);
-  void retrieveResourcesForCSSValue(const CSSValue&, Document&);
+  void RetrieveResourcesForProperties(const StylePropertySet*, Document&);
+  void RetrieveResourcesForCSSValue(const CSSValue&, Document&);
 
-  Vector<SerializedResource>* m_resources;
-  HashSet<KURL> m_resourceURLs;
+  Deque<SerializedResource>* resources_;
+  // This hashset is only used for de-duplicating resources to be serialized.
+  HashSet<KURL> resource_urls_;
 
-  bool m_isSerializingCss;
+  bool is_serializing_css_;
 
-  Delegate& m_delegate;
+  Delegate& delegate_;
+
+  // Variables for problem detection during serialization.
+  int total_image_count_;
+  int loaded_image_count_;
+  int total_css_count_;
+  int loaded_css_count_;
+  bool should_collect_problem_metric_;
 };
 
 }  // namespace blink

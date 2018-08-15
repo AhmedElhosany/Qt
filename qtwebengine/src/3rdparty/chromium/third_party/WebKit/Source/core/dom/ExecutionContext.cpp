@@ -27,253 +27,223 @@
 
 #include "core/dom/ExecutionContext.h"
 
+#include <memory>
 #include "bindings/core/v8/SourceLocation.h"
-#include "core/dom/ExecutionContextTask.h"
+#include "bindings/core/v8/V8BindingForCore.h"
+#include "core/dom/SuspendableObject.h"
+#include "core/dom/TaskRunnerHelper.h"
 #include "core/events/ErrorEvent.h"
 #include "core/events/EventTarget.h"
-#include "core/fetch/MemoryCache.h"
 #include "core/frame/UseCounter.h"
 #include "core/html/PublicURLManager.h"
 #include "core/inspector/ConsoleMessage.h"
-#include "core/inspector/InspectorInstrumentation.h"
+#include "core/probe/CoreProbes.h"
 #include "core/workers/WorkerGlobalScope.h"
 #include "core/workers/WorkerThread.h"
+#include "platform/loader/fetch/MemoryCache.h"
 #include "platform/weborigin/SecurityPolicy.h"
-#include "wtf/PtrUtil.h"
-#include <memory>
+#include "platform/wtf/PtrUtil.h"
 
 namespace blink {
 
 ExecutionContext::ExecutionContext()
-    : m_circularSequentialID(0),
-      m_inDispatchErrorEvent(false),
-      m_activeDOMObjectsAreSuspended(false),
-      m_activeDOMObjectsAreStopped(false),
-      m_windowInteractionTokens(0),
-      m_isRunSuspendableTasksScheduled(false),
-      m_referrerPolicy(ReferrerPolicyDefault) {}
+    : circular_sequential_id_(0),
+      in_dispatch_error_event_(false),
+      is_context_suspended_(false),
+      is_context_destroyed_(false),
+      window_interaction_tokens_(0),
+      referrer_policy_(kReferrerPolicyDefault) {}
 
 ExecutionContext::~ExecutionContext() {}
 
-void ExecutionContext::suspendActiveDOMObjects() {
-  DCHECK(!m_activeDOMObjectsAreSuspended);
-  notifySuspendingActiveDOMObjects();
-  m_activeDOMObjectsAreSuspended = true;
+ExecutionContext* ExecutionContext::From(const ScriptState* script_state) {
+  v8::HandleScope scope(script_state->GetIsolate());
+  return ToExecutionContext(script_state->GetContext());
 }
 
-void ExecutionContext::resumeActiveDOMObjects() {
-  DCHECK(m_activeDOMObjectsAreSuspended);
-  m_activeDOMObjectsAreSuspended = false;
-  notifyResumingActiveDOMObjects();
+void ExecutionContext::SuspendSuspendableObjects() {
+  DCHECK(!is_context_suspended_);
+  NotifySuspendingSuspendableObjects();
+  is_context_suspended_ = true;
 }
 
-void ExecutionContext::postSuspendableTask(
-    std::unique_ptr<SuspendableTask> task) {
-  m_suspendedTasks.append(std::move(task));
-  if (!m_activeDOMObjectsAreSuspended)
-    postTask(BLINK_FROM_HERE,
-             createSameThreadTask(&ExecutionContext::runSuspendableTasks,
-                                  wrapPersistent(this)));
+void ExecutionContext::ResumeSuspendableObjects() {
+  DCHECK(is_context_suspended_);
+  is_context_suspended_ = false;
+  NotifyResumingSuspendableObjects();
 }
 
-void ExecutionContext::notifyContextDestroyed() {
-  m_activeDOMObjectsAreStopped = true;
-
-  Deque<std::unique_ptr<SuspendableTask>> suspendedTasks;
-  suspendedTasks.swap(m_suspendedTasks);
-  for (Deque<std::unique_ptr<SuspendableTask>>::iterator it =
-           suspendedTasks.begin();
-       it != suspendedTasks.end(); ++it)
-    (*it)->contextDestroyed();
-  ContextLifecycleNotifier::notifyContextDestroyed();
+void ExecutionContext::NotifyContextDestroyed() {
+  is_context_destroyed_ = true;
+  ContextLifecycleNotifier::NotifyContextDestroyed();
 }
 
-void ExecutionContext::suspendScheduledTasks() {
-  suspendActiveDOMObjects();
-  tasksWereSuspended();
+void ExecutionContext::SuspendScheduledTasks() {
+  SuspendSuspendableObjects();
+  TasksWereSuspended();
 }
 
-void ExecutionContext::resumeScheduledTasks() {
-  resumeActiveDOMObjects();
-  tasksWereResumed();
-  // We need finish stack unwiding before running next task because it can
-  // suspend this context.
-  if (m_isRunSuspendableTasksScheduled)
-    return;
-  m_isRunSuspendableTasksScheduled = true;
-  postTask(BLINK_FROM_HERE,
-           createSameThreadTask(&ExecutionContext::runSuspendableTasks,
-                                wrapPersistent(this)));
+void ExecutionContext::ResumeScheduledTasks() {
+  ResumeSuspendableObjects();
+  TasksWereResumed();
 }
 
-void ExecutionContext::suspendActiveDOMObjectIfNeeded(ActiveDOMObject* object) {
+void ExecutionContext::SuspendSuspendableObjectIfNeeded(
+    SuspendableObject* object) {
 #if DCHECK_IS_ON()
-  DCHECK(contains(object));
+  DCHECK(Contains(object));
 #endif
-  // Ensure all ActiveDOMObjects are suspended also newly created ones.
-  if (m_activeDOMObjectsAreSuspended)
-    object->suspend();
+  // Ensure all SuspendableObjects are suspended also newly created ones.
+  if (is_context_suspended_)
+    object->Suspend();
 }
 
-bool ExecutionContext::shouldSanitizeScriptError(
-    const String& sourceURL,
-    AccessControlStatus corsStatus) {
-  if (corsStatus == OpaqueResource)
+bool ExecutionContext::ShouldSanitizeScriptError(
+    const String& source_url,
+    AccessControlStatus cors_status) {
+  if (cors_status == kOpaqueResource)
     return true;
-  return !(getSecurityOrigin()->canRequestNoSuborigin(completeURL(sourceURL)) ||
-           corsStatus == SharableCrossOrigin);
+  const KURL& url = CompleteURL(source_url);
+  if (url.ProtocolIsData())
+    return false;
+  return !(GetSecurityOrigin()->CanRequestNoSuborigin(url) ||
+           cors_status == kSharableCrossOrigin);
 }
 
-void ExecutionContext::dispatchErrorEvent(ErrorEvent* errorEvent,
-                                          AccessControlStatus corsStatus) {
-  if (m_inDispatchErrorEvent) {
-    m_pendingExceptions.append(errorEvent);
+void ExecutionContext::DispatchErrorEvent(ErrorEvent* error_event,
+                                          AccessControlStatus cors_status) {
+  if (in_dispatch_error_event_) {
+    pending_exceptions_.push_back(error_event);
     return;
   }
 
   // First report the original exception and only then all the nested ones.
-  if (!dispatchErrorEventInternal(errorEvent, corsStatus))
-    exceptionThrown(errorEvent);
+  if (!DispatchErrorEventInternal(error_event, cors_status))
+    ExceptionThrown(error_event);
 
-  if (m_pendingExceptions.isEmpty())
+  if (pending_exceptions_.IsEmpty())
     return;
-  for (ErrorEvent* e : m_pendingExceptions)
-    exceptionThrown(e);
-  m_pendingExceptions.clear();
+  for (ErrorEvent* e : pending_exceptions_)
+    ExceptionThrown(e);
+  pending_exceptions_.clear();
 }
 
-bool ExecutionContext::dispatchErrorEventInternal(
-    ErrorEvent* errorEvent,
-    AccessControlStatus corsStatus) {
-  EventTarget* target = errorEventTarget();
+bool ExecutionContext::DispatchErrorEventInternal(
+    ErrorEvent* error_event,
+    AccessControlStatus cors_status) {
+  EventTarget* target = ErrorEventTarget();
   if (!target)
     return false;
 
-  if (shouldSanitizeScriptError(errorEvent->filename(), corsStatus))
-    errorEvent = ErrorEvent::createSanitizedError(errorEvent->world());
+  if (ShouldSanitizeScriptError(error_event->filename(), cors_status))
+    error_event = ErrorEvent::CreateSanitizedError(error_event->World());
 
-  DCHECK(!m_inDispatchErrorEvent);
-  m_inDispatchErrorEvent = true;
-  target->dispatchEvent(errorEvent);
-  m_inDispatchErrorEvent = false;
-  return errorEvent->defaultPrevented();
+  DCHECK(!in_dispatch_error_event_);
+  in_dispatch_error_event_ = true;
+  target->DispatchEvent(error_event);
+  in_dispatch_error_event_ = false;
+  return error_event->defaultPrevented();
 }
 
-void ExecutionContext::runSuspendableTasks() {
-  m_isRunSuspendableTasksScheduled = false;
-  while (!m_activeDOMObjectsAreSuspended && m_suspendedTasks.size()) {
-    std::unique_ptr<SuspendableTask> task = m_suspendedTasks.takeFirst();
-    task->run();
-  }
+int ExecutionContext::CircularSequentialID() {
+  ++circular_sequential_id_;
+  if (circular_sequential_id_ > ((1U << 31) - 1U))
+    circular_sequential_id_ = 1;
+
+  return circular_sequential_id_;
 }
 
-int ExecutionContext::circularSequentialID() {
-  ++m_circularSequentialID;
-  if (m_circularSequentialID > ((1U << 31) - 1U))
-    m_circularSequentialID = 1;
-
-  return m_circularSequentialID;
+PublicURLManager& ExecutionContext::GetPublicURLManager() {
+  if (!public_url_manager_)
+    public_url_manager_ = PublicURLManager::Create(this);
+  return *public_url_manager_;
 }
 
-PublicURLManager& ExecutionContext::publicURLManager() {
-  if (!m_publicURLManager)
-    m_publicURLManager = PublicURLManager::create(this);
-  return *m_publicURLManager;
+SecurityOrigin* ExecutionContext::GetSecurityOrigin() {
+  return GetSecurityContext().GetSecurityOrigin();
 }
 
-SecurityOrigin* ExecutionContext::getSecurityOrigin() {
-  return securityContext().getSecurityOrigin();
+ContentSecurityPolicy* ExecutionContext::GetContentSecurityPolicy() {
+  return GetSecurityContext().GetContentSecurityPolicy();
 }
 
-ContentSecurityPolicy* ExecutionContext::contentSecurityPolicy() {
-  return securityContext().contentSecurityPolicy();
+const KURL& ExecutionContext::Url() const {
+  return VirtualURL();
 }
 
-const KURL& ExecutionContext::url() const {
-  return virtualURL();
+KURL ExecutionContext::CompleteURL(const String& url) const {
+  return VirtualCompleteURL(url);
 }
 
-KURL ExecutionContext::completeURL(const String& url) const {
-  return virtualCompleteURL(url);
+void ExecutionContext::AllowWindowInteraction() {
+  ++window_interaction_tokens_;
 }
 
-void ExecutionContext::allowWindowInteraction() {
-  ++m_windowInteractionTokens;
-}
-
-void ExecutionContext::consumeWindowInteraction() {
-  if (m_windowInteractionTokens == 0)
+void ExecutionContext::ConsumeWindowInteraction() {
+  if (window_interaction_tokens_ == 0)
     return;
-  --m_windowInteractionTokens;
+  --window_interaction_tokens_;
 }
 
-bool ExecutionContext::isWindowInteractionAllowed() const {
-  return m_windowInteractionTokens > 0;
+bool ExecutionContext::IsWindowInteractionAllowed() const {
+  return window_interaction_tokens_ > 0;
 }
 
-bool ExecutionContext::isSecureContext(
-    const SecureContextCheck privilegeContextCheck) const {
-  String unusedErrorMessage;
-  return isSecureContext(unusedErrorMessage, privilegeContextCheck);
+bool ExecutionContext::IsSecureContext() const {
+  String unused_error_message;
+  return IsSecureContext(unused_error_message);
 }
 
-String ExecutionContext::outgoingReferrer() const {
-  return url().strippedForUseAsReferrer();
+String ExecutionContext::OutgoingReferrer() const {
+  return Url().StrippedForUseAsReferrer();
 }
 
-void ExecutionContext::parseAndSetReferrerPolicy(const String& policies,
-                                                 bool supportLegacyKeywords) {
-  ReferrerPolicy referrerPolicy = ReferrerPolicyDefault;
+void ExecutionContext::ParseAndSetReferrerPolicy(const String& policies,
+                                                 bool support_legacy_keywords) {
+  ReferrerPolicy referrer_policy;
 
-  Vector<String> tokens;
-  policies.split(',', true, tokens);
-  for (const auto& token : tokens) {
-    ReferrerPolicy currentResult;
-    if ((supportLegacyKeywords
-             ? SecurityPolicy::referrerPolicyFromStringWithLegacyKeywords(
-                   token, &currentResult)
-             : SecurityPolicy::referrerPolicyFromString(token,
-                                                        &currentResult))) {
-      referrerPolicy = currentResult;
-    }
-  }
-
-  if (referrerPolicy == ReferrerPolicyDefault) {
-    addConsoleMessage(ConsoleMessage::create(
-        RenderingMessageSource, ErrorMessageLevel,
+  if (!SecurityPolicy::ReferrerPolicyFromHeaderValue(
+          policies,
+          support_legacy_keywords ? kSupportReferrerPolicyLegacyKeywords
+                                  : kDoNotSupportReferrerPolicyLegacyKeywords,
+          &referrer_policy)) {
+    AddConsoleMessage(ConsoleMessage::Create(
+        kRenderingMessageSource, kErrorMessageLevel,
         "Failed to set referrer policy: The value '" + policies +
             "' is not one of " +
-            (supportLegacyKeywords
+            (support_legacy_keywords
                  ? "'always', 'default', 'never', 'origin-when-crossorigin', "
                  : "") +
             "'no-referrer', 'no-referrer-when-downgrade', 'origin', "
-            "'origin-when-cross-origin', or 'unsafe-url'. The referrer policy "
+            "'origin-when-cross-origin', 'same-origin', 'strict-origin', "
+            "'strict-origin-when-cross-origin', or 'unsafe-url'. The referrer "
+            "policy "
             "has been left unchanged."));
     return;
   }
 
-  setReferrerPolicy(referrerPolicy);
+  SetReferrerPolicy(referrer_policy);
 }
 
-void ExecutionContext::setReferrerPolicy(ReferrerPolicy referrerPolicy) {
+void ExecutionContext::SetReferrerPolicy(ReferrerPolicy referrer_policy) {
   // When a referrer policy has already been set, the latest value takes
   // precedence.
-  UseCounter::count(this, UseCounter::SetReferrerPolicy);
-  if (m_referrerPolicy != ReferrerPolicyDefault)
-    UseCounter::count(this, UseCounter::ResetReferrerPolicy);
+  UseCounter::Count(this, WebFeature::kSetReferrerPolicy);
+  if (referrer_policy_ != kReferrerPolicyDefault)
+    UseCounter::Count(this, WebFeature::kResetReferrerPolicy);
 
-  m_referrerPolicy = referrerPolicy;
+  referrer_policy_ = referrer_policy;
 }
 
-void ExecutionContext::removeURLFromMemoryCache(const KURL& url) {
-  memoryCache()->removeURLFromCache(url);
+void ExecutionContext::RemoveURLFromMemoryCache(const KURL& url) {
+  GetMemoryCache()->RemoveURLFromCache(url);
 }
 
 DEFINE_TRACE(ExecutionContext) {
-  visitor->trace(m_publicURLManager);
-  visitor->trace(m_pendingExceptions);
-  ContextLifecycleNotifier::trace(visitor);
-  Supplementable<ExecutionContext>::trace(visitor);
+  visitor->Trace(public_url_manager_);
+  visitor->Trace(pending_exceptions_);
+  ContextLifecycleNotifier::Trace(visitor);
+  Supplementable<ExecutionContext>::Trace(visitor);
 }
 
 }  // namespace blink

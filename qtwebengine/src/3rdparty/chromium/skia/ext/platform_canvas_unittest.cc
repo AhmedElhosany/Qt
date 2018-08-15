@@ -10,7 +10,6 @@
 
 #include "base/logging.h"
 #include "build/build_config.h"
-#include "skia/ext/platform_device.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -18,21 +17,8 @@
 #include "third_party/skia/include/core/SkColorPriv.h"
 #include "third_party/skia/include/core/SkPixelRef.h"
 
-#if defined(OS_MACOSX)
-#import <ApplicationServices/ApplicationServices.h>
-#endif
-
-#if !defined(OS_WIN)
-#include <unistd.h>
-#endif
-
-#if defined(USE_CAIRO)
-#if defined(OS_OPENBSD)
-#include <cairo.h>
-#else
-#include <cairo/cairo.h>
-#endif  // OS_OPENBSD
-#endif  // USE_CAIRO
+// Native drawing context is only used/supported on Windows.
+#if defined(OS_WIN)
 
 namespace skia {
 
@@ -72,7 +58,6 @@ bool VerifyRect(const SkCanvas& canvas,
                 uint32_t canvas_color, uint32_t rect_color,
                 int x, int y, int w, int h) {
   const SkBitmap bitmap = skia::ReadPixels(const_cast<SkCanvas*>(&canvas));
-  SkAutoLockPixels lock(bitmap);
 
   for (int cur_y = 0; cur_y < bitmap.height(); cur_y++) {
     for (int cur_x = 0; cur_x < bitmap.width(); cur_x++) {
@@ -134,10 +119,8 @@ bool VerifyCanvasColor(const SkCanvas& canvas, uint32_t canvas_color) {
   return VerifyRect(canvas, canvas_color, 0, 0, 0, 0, 0);
 }
 
-#if defined(OS_WIN)
 void DrawNativeRect(SkCanvas& canvas, int x, int y, int w, int h) {
-  skia::ScopedPlatformPaint scoped_platform_paint(&canvas);
-  HDC dc = scoped_platform_paint.GetNativeDrawingContext();
+  HDC dc = skia::GetNativeDrawingContext(&canvas);
 
   RECT inner_rc;
   inner_rc.left = x;
@@ -146,32 +129,6 @@ void DrawNativeRect(SkCanvas& canvas, int x, int y, int w, int h) {
   inner_rc.bottom = y + h;
   FillRect(dc, &inner_rc, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 }
-#elif defined(OS_MACOSX)
-void DrawNativeRect(SkCanvas& canvas, int x, int y, int w, int h) {
-  skia::ScopedPlatformPaint scoped_platform_paint(&canvas);
-  CGContextRef context = scoped_platform_paint.GetNativeDrawingContext();
-
-  CGRect inner_rc = CGRectMake(x, y, w, h);
-  // RGBA opaque black
-  CGColorRef black = CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0);
-  CGContextSetFillColorWithColor(context, black);
-  CGColorRelease(black);
-  CGContextFillRect(context, inner_rc);
-}
-#elif defined(USE_CAIRO)
-void DrawNativeRect(SkCanvas& canvas, int x, int y, int w, int h) {
-  skia::ScopedPlatformPaint scoped_platform_paint(&canvas);
-  cairo_t* context = scoped_platform_paint.GetNativeDrawingContext();
-
-  cairo_rectangle(context, x, y, w, h);
-  cairo_set_source_rgb(context, 0.0, 0.0, 0.0);
-  cairo_fill(context);
-}
-#else
-void DrawNativeRect(SkCanvas& canvas, int x, int y, int w, int h) {
-  NOTIMPLEMENTED();
-}
-#endif
 
 // Clips the contents of the canvas to the given rectangle. This will be
 // intersected with any existing clip.
@@ -233,7 +190,7 @@ const int kInnerH = 3;
 // regular skia primitives.
 TEST(PlatformCanvas, SkLayer) {
   // Create the canvas initialized to opaque white.
-  sk_sp<SkCanvas> canvas(CreatePlatformCanvas(16, 16, true));
+  std::unique_ptr<SkCanvas> canvas = CreatePlatformCanvas(16, 16, true);
   canvas->drawColor(SK_ColorWHITE);
 
   // Make a layer and fill it completely to make sure that the bounds are
@@ -248,7 +205,7 @@ TEST(PlatformCanvas, SkLayer) {
 // Test native clipping.
 TEST(PlatformCanvas, ClipRegion) {
   // Initialize a white canvas
-  sk_sp<SkCanvas> canvas(CreatePlatformCanvas(16, 16, true));
+  std::unique_ptr<SkCanvas> canvas = CreatePlatformCanvas(16, 16, true);
   canvas->drawColor(SK_ColorWHITE);
   EXPECT_TRUE(VerifyCanvasColor(*canvas, SK_ColorWHITE));
 
@@ -273,7 +230,7 @@ TEST(PlatformCanvas, ClipRegion) {
 // Test the layers get filled properly by native rendering.
 TEST(PlatformCanvas, FillLayer) {
   // Create the canvas initialized to opaque white.
-  sk_sp<SkCanvas> canvas(CreatePlatformCanvas(16, 16, true));
+  std::unique_ptr<SkCanvas> canvas(CreatePlatformCanvas(16, 16, true));
 
   // Make a layer and fill it completely to make sure that the bounds are
   // correct.
@@ -322,7 +279,7 @@ TEST(PlatformCanvas, FillLayer) {
 // Test that translation + make layer works properly.
 TEST(PlatformCanvas, TranslateLayer) {
   // Create the canvas initialized to opaque white.
-  sk_sp<SkCanvas> canvas(CreatePlatformCanvas(16, 16, true));
+  std::unique_ptr<SkCanvas> canvas = CreatePlatformCanvas(16, 16, true);
 
   // Make a layer and fill it completely to make sure that the bounds are
   // correct.
@@ -382,7 +339,7 @@ TEST(PlatformCanvas, TranslateLayer) {
 
 // TODO(dglazkov): Figure out why this fails on Mac (antialiased clipping?),
 // modify test and remove this guard.
-#if !defined(OS_MACOSX) && !defined(USE_AURA)
+#if !defined(USE_AURA)
   // Translate both before and after, and have a path clip.
   canvas->drawColor(SK_ColorWHITE);
   canvas->save();
@@ -410,3 +367,5 @@ TEST(PlatformCanvas, TranslateLayer) {
 }
 
 }  // namespace skia
+
+#endif // defined(OS_WIN)

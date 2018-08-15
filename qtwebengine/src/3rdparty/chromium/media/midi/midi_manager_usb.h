@@ -29,6 +29,7 @@
 namespace midi {
 
 class MidiScheduler;
+class MidiService;
 
 // MidiManager for USB-MIDI.
 class USB_MIDI_EXPORT MidiManagerUsb
@@ -36,8 +37,8 @@ class USB_MIDI_EXPORT MidiManagerUsb
       public UsbMidiDeviceDelegate,
       NON_EXPORTED_BASE(public UsbMidiInputStream::Delegate) {
  public:
-  explicit MidiManagerUsb(
-      std::unique_ptr<UsbMidiDevice::Factory> device_factory);
+  MidiManagerUsb(MidiService* service,
+                 std::unique_ptr<UsbMidiDevice::Factory> device_factory);
   ~MidiManagerUsb() override;
 
   // MidiManager implementation.
@@ -63,7 +64,8 @@ class USB_MIDI_EXPORT MidiManagerUsb
                       size_t size,
                       base::TimeTicks time) override;
 
-  const ScopedVector<UsbMidiOutputStream>& output_streams() const {
+  const std::vector<std::unique_ptr<UsbMidiOutputStream>>& output_streams()
+      const {
     return output_streams_;
   }
   const UsbMidiInputStream* input_stream() const { return input_stream_.get(); }
@@ -82,8 +84,8 @@ class USB_MIDI_EXPORT MidiManagerUsb
   bool AddPorts(UsbMidiDevice* device, int device_id);
 
   std::unique_ptr<UsbMidiDevice::Factory> device_factory_;
-  ScopedVector<UsbMidiDevice> devices_;
-  ScopedVector<UsbMidiOutputStream> output_streams_;
+  std::vector<std::unique_ptr<UsbMidiDevice>> devices_;
+  std::vector<std::unique_ptr<UsbMidiOutputStream>> output_streams_;
   std::unique_ptr<UsbMidiInputStream> input_stream_;
 
   base::Callback<void(mojom::Result result)> initialize_callback_;

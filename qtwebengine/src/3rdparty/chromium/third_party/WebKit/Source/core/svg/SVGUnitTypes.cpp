@@ -34,13 +34,13 @@ namespace blink {
 
 template <>
 const SVGEnumerationStringEntries&
-getStaticStringEntries<SVGUnitTypes::SVGUnitType>() {
+GetStaticStringEntries<SVGUnitTypes::SVGUnitType>() {
   DEFINE_STATIC_LOCAL(SVGEnumerationStringEntries, entries, ());
-  if (entries.isEmpty()) {
-    entries.append(std::make_pair(SVGUnitTypes::kSvgUnitTypeUserspaceonuse,
-                                  "userSpaceOnUse"));
-    entries.append(std::make_pair(SVGUnitTypes::kSvgUnitTypeObjectboundingbox,
-                                  "objectBoundingBox"));
+  if (entries.IsEmpty()) {
+    entries.push_back(std::make_pair(SVGUnitTypes::kSvgUnitTypeUserspaceonuse,
+                                     "userSpaceOnUse"));
+    entries.push_back(std::make_pair(
+        SVGUnitTypes::kSvgUnitTypeObjectboundingbox, "objectBoundingBox"));
   }
   return entries;
 }

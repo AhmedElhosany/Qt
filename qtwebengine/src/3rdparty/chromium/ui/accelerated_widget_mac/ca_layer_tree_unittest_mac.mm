@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <AVFoundation/AVFoundation.h>
+#import <AVFoundation/AVFoundation.h>
 #include <memory>
 
 #include "base/mac/sdk_forward_declarations.h"
@@ -10,6 +10,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/gtest_mac.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/accelerated_widget_mac/availability_macros.h"
 #include "ui/accelerated_widget_mac/ca_renderer_layer_tree.h"
 #include "ui/gfx/geometry/dip_util.h"
 #include "ui/gfx/mac/io_surface.h"
@@ -90,11 +91,12 @@ class CALayerTreeTest : public testing::Test {
   void SetUp() override {
     superlayer_.reset([[CALayer alloc] init]);
     fullscreen_low_power_layer_.reset(
-        [[AVSampleBufferDisplayLayer alloc] init]);
+        [[AVSampleBufferDisplayLayer109 alloc] init]);
   }
 
   base::scoped_nsobject<CALayer> superlayer_;
-  base::scoped_nsobject<AVSampleBufferDisplayLayer> fullscreen_low_power_layer_;
+  base::scoped_nsobject<AVSampleBufferDisplayLayer109>
+      fullscreen_low_power_layer_;
 };
 
 // Test updating each layer's properties.

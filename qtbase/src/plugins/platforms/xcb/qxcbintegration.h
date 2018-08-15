@@ -61,6 +61,7 @@ public:
     QXcbIntegration(const QStringList &parameters, int &argc, char **argv);
     ~QXcbIntegration();
 
+    QPlatformPixmap *createPlatformPixmap(QPlatformPixmap::PixelType type) const override;
     QPlatformWindow *createPlatformWindow(QWindow *window) const override;
     QPlatformWindow *createForeignWindow(QWindow *window, WId nativeHandle) const override;
 #ifndef QT_NO_OPENGL
@@ -113,6 +114,12 @@ public:
     void sync() override;
 
     void beep() const override;
+
+    bool nativePaintingEnabled() const;
+
+#if QT_CONFIG(vulkan)
+    QPlatformVulkanInstance *createPlatformVulkanInstance(QVulkanInstance *instance) const override;
+#endif
 
     static QXcbIntegration *instance() { return m_instance; }
 

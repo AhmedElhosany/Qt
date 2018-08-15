@@ -34,10 +34,10 @@
 **
 ****************************************************************************/
 
-import QtQuick 2.9
-import QtQuick.Controls 2.2
-import QtQuick.Controls.impl 2.2
-import QtQuick.Templates 2.2 as T
+import QtQuick 2.10
+import QtQuick.Controls 2.3
+import QtQuick.Controls.impl 2.3
+import QtQuick.Templates 2.3 as T
 
 T.SpinBox {
     id: control
@@ -65,12 +65,11 @@ T.SpinBox {
     contentItem: TextInput {
         z: 2
         text: control.textFromValue(control.value, control.locale)
-        opacity: control.enabled ? 1 : 0.3
 
         font: control.font
-        color: Default.textColor
-        selectionColor: Default.focusColor
-        selectedTextColor: Default.textLightColor
+        color: control.palette.text
+        selectionColor: control.palette.highlight
+        selectedTextColor: control.palette.highlightedText
         horizontalAlignment: Qt.AlignHCenter
         verticalAlignment: Qt.AlignVCenter
 
@@ -85,7 +84,7 @@ T.SpinBox {
             height: control.height
             visible: control.activeFocus
             color: "transparent"
-            border.color: Default.focusColor
+            border.color: control.palette.highlight
             border.width: 2
         }
     }
@@ -95,21 +94,21 @@ T.SpinBox {
         height: parent.height
         implicitWidth: 40
         implicitHeight: 40
-        color: up.pressed ? Default.buttonPressedColor : Default.buttonColor
+        color: up.pressed ? control.palette.mid : control.palette.button
 
         Rectangle {
             x: (parent.width - width) / 2
             y: (parent.height - height) / 2
             width: parent.width / 3
             height: 2
-            color: enabled ? Default.textColor : Default.textDisabledColor
+            color: enabled ? control.palette.buttonText : control.palette.mid
         }
         Rectangle {
             x: (parent.width - width) / 2
             y: (parent.height - height) / 2
             width: 2
             height: parent.width / 3
-            color: enabled ? Default.textColor : Default.textDisabledColor
+            color: enabled ? control.palette.buttonText : control.palette.mid
         }
     }
 
@@ -118,19 +117,20 @@ T.SpinBox {
         height: parent.height
         implicitWidth: 40
         implicitHeight: 40
-        color: down.pressed ? Default.buttonPressedColor : Default.buttonColor
+        color: down.pressed ? control.palette.mid : control.palette.button
 
         Rectangle {
             x: (parent.width - width) / 2
             y: (parent.height - height) / 2
             width: parent.width / 3
             height: 2
-            color: enabled ? Default.textColor : Default.textDisabledColor
+            color: enabled ? control.palette.buttonText : control.palette.mid
         }
     }
 
     background: Rectangle {
         implicitWidth: 140
-        border.color: Default.buttonColor
+        color: enabled ? control.palette.base : control.palette.button
+        border.color: control.palette.button
     }
 }

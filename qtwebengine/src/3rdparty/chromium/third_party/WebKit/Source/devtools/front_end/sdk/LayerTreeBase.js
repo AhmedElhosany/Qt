@@ -17,117 +17,117 @@ SDK.Layer.prototype = {
   /**
    * @return {string}
    */
-  id: function() {},
+  id() {},
 
   /**
    * @return {?string}
    */
-  parentId: function() {},
+  parentId() {},
 
   /**
    * @return {?SDK.Layer}
    */
-  parent: function() {},
+  parent() {},
 
   /**
    * @return {boolean}
    */
-  isRoot: function() {},
+  isRoot() {},
 
   /**
    * @return {!Array.<!SDK.Layer>}
    */
-  children: function() {},
+  children() {},
 
   /**
    * @param {!SDK.Layer} child
    */
-  addChild: function(child) {},
+  addChild(child) {},
 
   /**
    * @return {?SDK.DOMNode}
    */
-  node: function() {},
+  node() {},
 
   /**
    * @return {?SDK.DOMNode}
    */
-  nodeForSelfOrAncestor: function() {},
+  nodeForSelfOrAncestor() {},
 
   /**
    * @return {number}
    */
-  offsetX: function() {},
+  offsetX() {},
 
   /**
    * @return {number}
    */
-  offsetY: function() {},
+  offsetY() {},
 
   /**
    * @return {number}
    */
-  width: function() {},
+  width() {},
 
   /**
    * @return {number}
    */
-  height: function() {},
+  height() {},
 
   /**
    * @return {?Array.<number>}
    */
-  transform: function() {},
+  transform() {},
 
   /**
    * @return {!Array.<number>}
    */
-  quad: function() {},
+  quad() {},
 
   /**
    * @return {!Array.<number>}
    */
-  anchorPoint: function() {},
+  anchorPoint() {},
 
   /**
    * @return {boolean}
    */
-  invisible: function() {},
+  invisible() {},
 
   /**
    * @return {number}
    */
-  paintCount: function() {},
+  paintCount() {},
 
   /**
    * @return {?Protocol.DOM.Rect}
    */
-  lastPaintRect: function() {},
+  lastPaintRect() {},
 
   /**
    * @return {!Array.<!Protocol.LayerTree.ScrollRect>}
    */
-  scrollRects: function() {},
+  scrollRects() {},
 
   /**
    * @return {number}
    */
-  gpuMemoryUsage: function() {},
+  gpuMemoryUsage() {},
 
   /**
-   * @param {function(!Array.<string>)} callback
+   * @return {!Promise<!Array<string>>}
    */
-  requestCompositingReasons: function(callback) {},
+  requestCompositingReasons() {},
 
   /**
    * @return {boolean}
    */
-  drawsContent: function() {},
+  drawsContent() {},
 
   /**
    * @return {!Array<!Promise<?SDK.SnapshotWithRect>>}
    */
-  snapshots: function() {}
+  snapshots() {}
 };
 
 SDK.Layer.ScrollRectType = {
@@ -146,11 +146,11 @@ SDK.LayerTreeBase = class {
    */
   constructor(target) {
     this._target = target;
-    this._domModel = target ? SDK.DOMModel.fromTarget(target) : null;
+    this._domModel = target ? target.model(SDK.DOMModel) : null;
     this._layersById = {};
     this._root = null;
     this._contentRoot = null;
-    /** @type Map<number, ?SDK.DOMNode> */
+    /** @type {!Map<number, ?SDK.DOMNode>} */
     this._backendNodeIdToNode = new Map();
   }
 
@@ -215,27 +215,25 @@ SDK.LayerTreeBase = class {
 
   /**
    * @param {!Set<number>} requestedNodeIds
-   * @param {function()} callback
+   * @return {!Promise}
    */
-  _resolveBackendNodeIds(requestedNodeIds, callback) {
-    if (!requestedNodeIds.size || !this._domModel) {
-      callback();
+  async resolveBackendNodeIds(requestedNodeIds) {
+    if (!requestedNodeIds.size || !this._domModel)
       return;
-    }
-    if (this._domModel)
-      this._domModel.pushNodesByBackendIdsToFrontend(requestedNodeIds, populateBackendNodeMap.bind(this));
 
-    /**
-     * @this {SDK.LayerTreeBase}
-     * @param {?Map<number, ?SDK.DOMNode>} nodesMap
-     */
-    function populateBackendNodeMap(nodesMap) {
-      if (nodesMap) {
-        for (var nodeId of nodesMap.keysArray())
-          this._backendNodeIdToNode.set(nodeId, nodesMap.get(nodeId) || null);
-      }
-      callback();
-    }
+    var nodesMap = await this._domModel.pushNodesByBackendIdsToFrontend(requestedNodeIds);
+
+    if (!nodesMap)
+      return;
+    for (var nodeId of nodesMap.keysArray())
+      this._backendNodeIdToNode.set(nodeId, nodesMap.get(nodeId) || null);
+  }
+
+  /**
+   * @return {!Map<number, ?SDK.DOMNode>}
+   */
+  backendNodeIdToNode() {
+    return this._backendNodeIdToNode;
   }
 
   /**

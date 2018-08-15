@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -15,16 +16,22 @@
 #include "base/metrics/metrics_hashes.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/metrics/user_metrics.h"
+#include "base/stl_util.h"
+#include "base/strings/string16.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/test_simple_task_runner.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "components/metrics/client_info.h"
+#include "components/metrics/environment_recorder.h"
 #include "components/metrics/metrics_log.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/metrics_upload_scheduler.h"
 #include "components/metrics/test_enabled_state_provider.h"
 #include "components/metrics/test_metrics_provider.h"
 #include "components/metrics/test_metrics_service_client.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/variations/metrics_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/zlib/google/compression_utils.h"
 
@@ -48,6 +55,7 @@ class TestMetricsService : public MetricsService {
   ~TestMetricsService() override {}
 
   using MetricsService::log_manager;
+  using MetricsService::log_store;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TestMetricsService);
@@ -74,20 +82,26 @@ class TestMetricsLog : public MetricsLog {
 class MetricsServiceTest : public testing::Test {
  public:
   MetricsServiceTest()
-      : enabled_state_provider_(new TestEnabledStateProvider(false, false)) {
-    base::SetRecordActionTaskRunner(message_loop.task_runner());
+      : task_runner_(new base::TestSimpleTaskRunner),
+        task_runner_handle_(task_runner_),
+        enabled_state_provider_(new TestEnabledStateProvider(false, false)) {
+    base::SetRecordActionTaskRunner(task_runner_);
     MetricsService::RegisterPrefs(testing_local_state_.registry());
-    metrics_state_manager_ = MetricsStateManager::Create(
-        GetLocalState(), enabled_state_provider_.get(),
-        base::Bind(&StoreNoClientInfoBackup), base::Bind(&ReturnNoBackup));
   }
 
   ~MetricsServiceTest() override {
-    MetricsService::SetExecutionPhase(MetricsService::UNINITIALIZED_PHASE,
+    MetricsService::SetExecutionPhase(ExecutionPhase::UNINITIALIZED_PHASE,
                                       GetLocalState());
   }
 
   MetricsStateManager* GetMetricsStateManager() {
+    // Lazy-initialize the metrics_state_manager so that it correctly reads the
+    // stability state from prefs after tests have a chance to initialize it.
+    if (!metrics_state_manager_) {
+      metrics_state_manager_ = MetricsStateManager::Create(
+          GetLocalState(), enabled_state_provider_.get(), base::string16(),
+          base::Bind(&StoreNoClientInfoBackup), base::Bind(&ReturnNoBackup));
+    }
     return metrics_state_manager_.get();
   }
 
@@ -97,29 +111,6 @@ class MetricsServiceTest : public testing::Test {
   void EnableMetricsReporting() {
     enabled_state_provider_->set_consent(true);
     enabled_state_provider_->set_enabled(true);
-  }
-
-  // Waits until base::TimeTicks::Now() no longer equals |value|. This should
-  // take between 1-15ms per the documented resolution of base::TimeTicks.
-  void WaitUntilTimeChanges(const base::TimeTicks& value) {
-    while (base::TimeTicks::Now() == value) {
-      base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(1));
-    }
-  }
-
-  // Returns true if there is a synthetic trial in the given vector that matches
-  // the given trial name and trial group; returns false otherwise.
-  bool HasSyntheticTrial(
-      const std::vector<variations::ActiveGroupId>& synthetic_trials,
-      const std::string& trial_name,
-      const std::string& trial_group) {
-    uint32_t trial_name_hash = HashName(trial_name);
-    uint32_t trial_group_hash = HashName(trial_group);
-    for (const variations::ActiveGroupId& trial : synthetic_trials) {
-      if (trial.name == trial_name_hash && trial.group == trial_group_hash)
-        return true;
-    }
-    return false;
   }
 
   // Finds a histogram with the specified |name_hash| in |histograms|.
@@ -151,12 +142,15 @@ class MetricsServiceTest : public testing::Test {
     }
   }
 
+ protected:
+  scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
+  base::ThreadTaskRunnerHandle task_runner_handle_;
+  base::test::ScopedFeatureList feature_list_;
+
  private:
   std::unique_ptr<TestEnabledStateProvider> enabled_state_provider_;
   TestingPrefServiceSimple testing_local_state_;
   std::unique_ptr<MetricsStateManager> metrics_state_manager_;
-  base::MessageLoop message_loop;
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(MetricsServiceTest);
 };
@@ -178,8 +172,7 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAfterCleanShutDown) {
   service.InitializeMetricsRecordingState();
 
   // No initial stability log should be generated.
-  EXPECT_FALSE(service.log_manager()->has_unsent_logs());
-  EXPECT_FALSE(service.log_manager()->has_staged_log());
+  EXPECT_FALSE(service.has_unsent_logs());
 
   // Ensure that HasInitialStabilityMetrics() is always called on providers,
   // for consistency, even if other conditions already indicate their presence.
@@ -198,15 +191,13 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAtProviderRequest) {
   // saved from a previous session.
   TestMetricsServiceClient client;
   TestMetricsLog log("client", 1, &client, GetLocalState());
-  log.RecordEnvironment(std::vector<MetricsProvider*>(),
-                        std::vector<variations::ActiveGroupId>(), 0, 0);
+  log.RecordEnvironment(std::vector<std::unique_ptr<MetricsProvider>>(), 0, 0);
 
   // Record stability build time and version from previous session, so that
   // stability metrics (including exited cleanly flag) won't be cleared.
-  GetLocalState()->SetInt64(prefs::kStabilityStatsBuildTime,
-                            MetricsLog::GetBuildTime());
-  GetLocalState()->SetString(prefs::kStabilityStatsVersion,
-                             client.GetVersionString());
+  EnvironmentRecorder(GetLocalState())
+      .SetBuildtimeAndVersion(MetricsLog::GetBuildTime(),
+                              client.GetVersionString());
 
   // Set the clean exit flag, as that will otherwise cause a stabilty
   // log to be produced, irrespective provider requests.
@@ -223,9 +214,9 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAtProviderRequest) {
   service.InitializeMetricsRecordingState();
 
   // The initial stability log should be generated and persisted in unsent logs.
-  MetricsLogManager* log_manager = service.log_manager();
-  EXPECT_TRUE(log_manager->has_unsent_logs());
-  EXPECT_FALSE(log_manager->has_staged_log());
+  MetricsLogStore* log_store = service.log_store();
+  EXPECT_TRUE(log_store->has_unsent_logs());
+  EXPECT_FALSE(log_store->has_staged_log());
 
   // Ensure that HasInitialStabilityMetrics() is always called on providers,
   // for consistency, even if other conditions already indicate their presence.
@@ -237,12 +228,12 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAtProviderRequest) {
   EXPECT_TRUE(test_provider->provide_stability_metrics_called());
 
   // Stage the log and retrieve it.
-  log_manager->StageNextLogForUpload();
-  EXPECT_TRUE(log_manager->has_staged_log());
+  log_store->StageNextLog();
+  EXPECT_TRUE(log_store->has_staged_log());
 
   std::string uncompressed_log;
-  EXPECT_TRUE(compression::GzipUncompress(log_manager->staged_log(),
-                                          &uncompressed_log));
+  EXPECT_TRUE(
+      compression::GzipUncompress(log_store->staged_log(), &uncompressed_log));
 
   ChromeUserMetricsExtension uma_log;
   EXPECT_TRUE(uma_log.ParseFromString(uncompressed_log));
@@ -270,15 +261,13 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAfterCrash) {
   // saved from a previous session.
   TestMetricsServiceClient client;
   TestMetricsLog log("client", 1, &client, GetLocalState());
-  log.RecordEnvironment(std::vector<MetricsProvider*>(),
-                        std::vector<variations::ActiveGroupId>(), 0, 0);
+  log.RecordEnvironment(std::vector<std::unique_ptr<MetricsProvider>>(), 0, 0);
 
   // Record stability build time and version from previous session, so that
   // stability metrics (including exited cleanly flag) won't be cleared.
-  GetLocalState()->SetInt64(prefs::kStabilityStatsBuildTime,
-                            MetricsLog::GetBuildTime());
-  GetLocalState()->SetString(prefs::kStabilityStatsVersion,
-                             client.GetVersionString());
+  EnvironmentRecorder(GetLocalState())
+      .SetBuildtimeAndVersion(MetricsLog::GetBuildTime(),
+                              client.GetVersionString());
 
   GetLocalState()->SetBoolean(prefs::kStabilityExitedCleanly, false);
 
@@ -291,9 +280,9 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAfterCrash) {
   service.InitializeMetricsRecordingState();
 
   // The initial stability log should be generated and persisted in unsent logs.
-  MetricsLogManager* log_manager = service.log_manager();
-  EXPECT_TRUE(log_manager->has_unsent_logs());
-  EXPECT_FALSE(log_manager->has_staged_log());
+  MetricsLogStore* log_store = service.log_store();
+  EXPECT_TRUE(log_store->has_unsent_logs());
+  EXPECT_FALSE(log_store->has_staged_log());
 
   // Ensure that HasInitialStabilityMetrics() is always called on providers,
   // for consistency, even if other conditions already indicate their presence.
@@ -305,12 +294,12 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAfterCrash) {
   EXPECT_TRUE(test_provider->provide_stability_metrics_called());
 
   // Stage the log and retrieve it.
-  log_manager->StageNextLogForUpload();
-  EXPECT_TRUE(log_manager->has_staged_log());
+  log_store->StageNextLog();
+  EXPECT_TRUE(log_store->has_staged_log());
 
   std::string uncompressed_log;
-  EXPECT_TRUE(compression::GzipUncompress(log_manager->staged_log(),
-                                          &uncompressed_log));
+  EXPECT_TRUE(
+      compression::GzipUncompress(log_store->staged_log(), &uncompressed_log));
 
   ChromeUserMetricsExtension uma_log;
   EXPECT_TRUE(uma_log.ParseFromString(uncompressed_log));
@@ -325,119 +314,6 @@ TEST_F(MetricsServiceTest, InitialStabilityLogAfterCrash) {
   CheckForNonStabilityHistograms(uma_log);
 
   EXPECT_EQ(1, uma_log.system_profile().stability().crash_count());
-}
-
-TEST_F(MetricsServiceTest, RegisterSyntheticTrial) {
-  TestMetricsServiceClient client;
-  MetricsService service(GetMetricsStateManager(), &client, GetLocalState());
-
-  // Add two synthetic trials and confirm that they show up in the list.
-  variations::SyntheticTrialGroup trial1(HashName("TestTrial1"),
-                                         HashName("Group1"));
-  service.RegisterSyntheticFieldTrial(trial1);
-
-  variations::SyntheticTrialGroup trial2(HashName("TestTrial2"),
-                                         HashName("Group2"));
-  service.RegisterSyntheticFieldTrial(trial2);
-  // Ensure that time has advanced by at least a tick before proceeding.
-  WaitUntilTimeChanges(base::TimeTicks::Now());
-
-  service.log_manager_.BeginLoggingWithLog(std::unique_ptr<MetricsLog>(
-      new MetricsLog("clientID", 1, MetricsLog::INITIAL_STABILITY_LOG, &client,
-                     GetLocalState())));
-  // Save the time when the log was started (it's okay for this to be greater
-  // than the time recorded by the above call since it's used to ensure the
-  // value changes).
-  const base::TimeTicks begin_log_time = base::TimeTicks::Now();
-
-  std::vector<variations::ActiveGroupId> synthetic_trials;
-  service.GetSyntheticFieldTrialsOlderThan(base::TimeTicks::Now(),
-                                           &synthetic_trials);
-  EXPECT_EQ(2U, synthetic_trials.size());
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial1", "Group1"));
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial2", "Group2"));
-
-  // Ensure that time has advanced by at least a tick before proceeding.
-  WaitUntilTimeChanges(begin_log_time);
-
-  // Change the group for the first trial after the log started.
-  variations::SyntheticTrialGroup trial3(HashName("TestTrial1"),
-                                         HashName("Group2"));
-  service.RegisterSyntheticFieldTrial(trial3);
-  service.GetSyntheticFieldTrialsOlderThan(begin_log_time, &synthetic_trials);
-  EXPECT_EQ(1U, synthetic_trials.size());
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial2", "Group2"));
-
-  // Add a new trial after the log started and confirm that it doesn't show up.
-  variations::SyntheticTrialGroup trial4(HashName("TestTrial3"),
-                                         HashName("Group3"));
-  service.RegisterSyntheticFieldTrial(trial4);
-  service.GetSyntheticFieldTrialsOlderThan(begin_log_time, &synthetic_trials);
-  EXPECT_EQ(1U, synthetic_trials.size());
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial2", "Group2"));
-
-  // Ensure that time has advanced by at least a tick before proceeding.
-  WaitUntilTimeChanges(base::TimeTicks::Now());
-
-  // Start a new log and ensure all three trials appear in it.
-  service.log_manager_.FinishCurrentLog();
-  service.log_manager_.BeginLoggingWithLog(
-      std::unique_ptr<MetricsLog>(new MetricsLog(
-          "clientID", 1, MetricsLog::ONGOING_LOG, &client, GetLocalState())));
-  service.GetSyntheticFieldTrialsOlderThan(
-      service.log_manager_.current_log()->creation_time(), &synthetic_trials);
-  EXPECT_EQ(3U, synthetic_trials.size());
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial1", "Group2"));
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial2", "Group2"));
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial3", "Group3"));
-  service.log_manager_.FinishCurrentLog();
-}
-
-TEST_F(MetricsServiceTest, RegisterSyntheticMultiGroupFieldTrial) {
-  TestMetricsServiceClient client;
-  MetricsService service(GetMetricsStateManager(), &client, GetLocalState());
-
-  // Register a synthetic trial TestTrial1 with groups A and B.
-  uint32_t trial_name_hash = HashName("TestTrial1");
-  std::vector<uint32_t> group_name_hashes = {HashName("A"), HashName("B")};
-  service.RegisterSyntheticMultiGroupFieldTrial(trial_name_hash,
-                                                group_name_hashes);
-  // Ensure that time has advanced by at least a tick before proceeding.
-  WaitUntilTimeChanges(base::TimeTicks::Now());
-
-  service.log_manager_.BeginLoggingWithLog(std::unique_ptr<MetricsLog>(
-      new MetricsLog("clientID", 1, MetricsLog::INITIAL_STABILITY_LOG, &client,
-                     GetLocalState())));
-
-  std::vector<variations::ActiveGroupId> synthetic_trials;
-  service.GetSyntheticFieldTrialsOlderThan(base::TimeTicks::Now(),
-                                           &synthetic_trials);
-  EXPECT_EQ(2U, synthetic_trials.size());
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial1", "A"));
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial1", "B"));
-
-  // Change the group for the trial to a single group.
-  group_name_hashes = {HashName("X")};
-  service.RegisterSyntheticMultiGroupFieldTrial(trial_name_hash,
-                                                group_name_hashes);
-  // Ensure that time has advanced by at least a tick before proceeding.
-  WaitUntilTimeChanges(base::TimeTicks::Now());
-
-  service.GetSyntheticFieldTrialsOlderThan(base::TimeTicks::Now(),
-                                           &synthetic_trials);
-  EXPECT_EQ(1U, synthetic_trials.size());
-  EXPECT_TRUE(HasSyntheticTrial(synthetic_trials, "TestTrial1", "X"));
-
-  // Register a trial with no groups, which should effectively remove the trial.
-  group_name_hashes.clear();
-  service.RegisterSyntheticMultiGroupFieldTrial(trial_name_hash,
-                                                group_name_hashes);
-  // Ensure that time has advanced by at least a tick before proceeding.
-  WaitUntilTimeChanges(base::TimeTicks::Now());
-
-  service.GetSyntheticFieldTrialsOlderThan(base::TimeTicks::Now(),
-                                           &synthetic_trials);
-  service.log_manager_.FinishCurrentLog();
 }
 
 TEST_F(MetricsServiceTest,
@@ -468,6 +344,56 @@ TEST_F(MetricsServiceTest, MetricsProvidersInitialized) {
   service.InitializeMetricsRecordingState();
 
   EXPECT_TRUE(test_provider->init_called());
+}
+
+TEST_F(MetricsServiceTest, SplitRotation) {
+  TestMetricsServiceClient client;
+  TestMetricsService service(GetMetricsStateManager(), &client,
+                             GetLocalState());
+  service.InitializeMetricsRecordingState();
+  service.Start();
+  // Rotation loop should create a log and mark state as idle.
+  // Upload loop should start upload or be restarted.
+  // The independent-metrics upload job will be started and always be a task.
+  task_runner_->RunPendingTasks();
+  // Rotation loop should terminated due to being idle.
+  // Upload loop should start uploading if it isn't already.
+  task_runner_->RunPendingTasks();
+  EXPECT_TRUE(client.uploader()->is_uploading());
+  EXPECT_EQ(1U, task_runner_->NumPendingTasks());
+  service.OnApplicationNotIdle();
+  EXPECT_TRUE(client.uploader()->is_uploading());
+  EXPECT_EQ(2U, task_runner_->NumPendingTasks());
+  // Log generation should be suppressed due to unsent log.
+  // Idle state should not be reset.
+  task_runner_->RunPendingTasks();
+  EXPECT_TRUE(client.uploader()->is_uploading());
+  EXPECT_EQ(2U, task_runner_->NumPendingTasks());
+  // Make sure idle state was not reset.
+  task_runner_->RunPendingTasks();
+  EXPECT_TRUE(client.uploader()->is_uploading());
+  EXPECT_EQ(2U, task_runner_->NumPendingTasks());
+  // Upload should not be rescheduled, since there are no other logs.
+  client.uploader()->CompleteUpload(200);
+  EXPECT_FALSE(client.uploader()->is_uploading());
+  EXPECT_EQ(2U, task_runner_->NumPendingTasks());
+  // Running should generate a log, restart upload loop, and mark idle.
+  task_runner_->RunPendingTasks();
+  EXPECT_FALSE(client.uploader()->is_uploading());
+  EXPECT_EQ(3U, task_runner_->NumPendingTasks());
+  // Upload should start, and rotation loop should idle out.
+  task_runner_->RunPendingTasks();
+  EXPECT_TRUE(client.uploader()->is_uploading());
+  EXPECT_EQ(1U, task_runner_->NumPendingTasks());
+  // Uploader should reschedule when there is another log available.
+  service.PushExternalLog("Blah");
+  client.uploader()->CompleteUpload(200);
+  EXPECT_FALSE(client.uploader()->is_uploading());
+  EXPECT_EQ(2U, task_runner_->NumPendingTasks());
+  // Upload should start.
+  task_runner_->RunPendingTasks();
+  EXPECT_TRUE(client.uploader()->is_uploading());
+  EXPECT_EQ(1U, task_runner_->NumPendingTasks());
 }
 
 }  // namespace metrics

@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/gtest_util.h"
@@ -18,35 +19,29 @@ namespace internal {
 
 namespace {
 
-
 class TaskSchedulerSequenceTest : public testing::Test {
  public:
   TaskSchedulerSequenceTest()
-      : task_a_owned_(
-            new Task(FROM_HERE,
-                     Closure(),
-                     TaskTraits().WithPriority(TaskPriority::BACKGROUND),
-                     TimeDelta())),
-        task_b_owned_(
-            new Task(FROM_HERE,
-                     Closure(),
-                     TaskTraits().WithPriority(TaskPriority::USER_VISIBLE),
-                     TimeDelta())),
-        task_c_owned_(
-            new Task(FROM_HERE,
-                     Closure(),
-                     TaskTraits().WithPriority(TaskPriority::USER_BLOCKING),
-                     TimeDelta())),
-        task_d_owned_(
-            new Task(FROM_HERE,
-                     Closure(),
-                     TaskTraits().WithPriority(TaskPriority::USER_BLOCKING),
-                     TimeDelta())),
-        task_e_owned_(
-            new Task(FROM_HERE,
-                     Closure(),
-                     TaskTraits().WithPriority(TaskPriority::BACKGROUND),
-                     TimeDelta())),
+      : task_a_owned_(new Task(FROM_HERE,
+                               BindOnce(&DoNothing),
+                               {TaskPriority::BACKGROUND},
+                               TimeDelta())),
+        task_b_owned_(new Task(FROM_HERE,
+                               BindOnce(&DoNothing),
+                               {TaskPriority::USER_VISIBLE},
+                               TimeDelta())),
+        task_c_owned_(new Task(FROM_HERE,
+                               BindOnce(&DoNothing),
+                               {TaskPriority::USER_BLOCKING},
+                               TimeDelta())),
+        task_d_owned_(new Task(FROM_HERE,
+                               BindOnce(&DoNothing),
+                               {TaskPriority::USER_BLOCKING},
+                               TimeDelta())),
+        task_e_owned_(new Task(FROM_HERE,
+                               BindOnce(&DoNothing),
+                               {TaskPriority::BACKGROUND},
+                               TimeDelta())),
         task_a_(task_a_owned_.get()),
         task_b_(task_b_owned_.get()),
         task_c_(task_c_owned_.get()),
@@ -62,7 +57,7 @@ class TaskSchedulerSequenceTest : public testing::Test {
   std::unique_ptr<Task> task_e_owned_;
 
   // Raw pointers to those same tasks for verification. This is needed because
-  // the scoped_ptrs above no longer point to the tasks once they have been
+  // the unique_ptrs above no longer point to the tasks once they have been
   // moved into a Sequence.
   const Task* task_a_;
   const Task* task_b_;

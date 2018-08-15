@@ -7,8 +7,8 @@
 
 /* migrated from chrome/src/skia/ext/SkFontHost_fontconfig_direct.cpp */
 
+#include "SkAutoMalloc.h"
 #include "SkBuffer.h"
-#include "SkDataTable.h"
 #include "SkFixed.h"
 #include "SkFontConfigInterface_direct.h"
 #include "SkFontStyle.h"
@@ -19,7 +19,6 @@
 #include "SkTDArray.h"
 #include "SkTemplates.h"
 #include "SkTypeface.h"
-#include "SkTypes.h"
 
 #include <fontconfig/fontconfig.h>
 #include <unistd.h>
@@ -260,24 +259,28 @@ FontEquivClass GetFontEquivClass(const char* fontname)
         { PMINCHO, "MS PMincho" },
         { PMINCHO, "\xef\xbc\xad\xef\xbc\xb3 \xef\xbc\xb0"
                    "\xe6\x98\x8e\xe6\x9c\x9d"},
+        { PMINCHO, "Noto Serif CJK JP" },
         { PMINCHO, "IPAPMincho" },
         { PMINCHO, "MotoyaG04Mincho" },
 
         // ＭＳ 明朝
         { MINCHO, "MS Mincho" },
         { MINCHO, "\xef\xbc\xad\xef\xbc\xb3 \xe6\x98\x8e\xe6\x9c\x9d" },
+        { MINCHO, "Noto Serif CJK JP" },
         { MINCHO, "IPAMincho" },
         { MINCHO, "MotoyaG04MinchoMono" },
 
         // 宋体
         { SIMSUN, "Simsun" },
         { SIMSUN, "\xe5\xae\x8b\xe4\xbd\x93" },
+        { SIMSUN, "Noto Serif CJK SC" },
         { SIMSUN, "MSung GB18030" },
         { SIMSUN, "Song ASC" },
 
         // 新宋体
         { NSIMSUN, "NSimsun" },
         { NSIMSUN, "\xe6\x96\xb0\xe5\xae\x8b\xe4\xbd\x93" },
+        { NSIMSUN, "Noto Serif CJK SC" },
         { NSIMSUN, "MSung GB18030" },
         { NSIMSUN, "N Song ASC" },
 
@@ -291,21 +294,25 @@ FontEquivClass GetFontEquivClass(const char* fontname)
         // 新細明體
         { PMINGLIU, "PMingLiU"},
         { PMINGLIU, "\xe6\x96\xb0\xe7\xb4\xb0\xe6\x98\x8e\xe9\xab\x94" },
+        { PMINGLIU, "Noto Serif CJK TC"},
         { PMINGLIU, "MSung B5HK"},
 
         // 細明體
         { MINGLIU, "MingLiU"},
         { MINGLIU, "\xe7\xb4\xb0\xe6\x98\x8e\xe9\xab\x94" },
+        { MINGLIU, "Noto Serif CJK TC"},
         { MINGLIU, "MSung B5HK"},
 
         // 新細明體
         { PMINGLIUHK, "PMingLiU_HKSCS"},
         { PMINGLIUHK, "\xe6\x96\xb0\xe7\xb4\xb0\xe6\x98\x8e\xe9\xab\x94_HKSCS" },
+        { PMINGLIUHK, "Noto Serif CJK TC"},
         { PMINGLIUHK, "MSung B5HK"},
 
         // 細明體
         { MINGLIUHK, "MingLiU_HKSCS"},
         { MINGLIUHK, "\xe7\xb4\xb0\xe6\x98\x8e\xe9\xab\x94_HKSCS" },
+        { MINGLIUHK, "Noto Serif CJK TC"},
         { MINGLIUHK, "MSung B5HK"},
 
         // Cambria
@@ -684,52 +691,4 @@ bool SkFontConfigInterfaceDirect::matchFamilyName(const char familyName[],
 
 SkStreamAsset* SkFontConfigInterfaceDirect::openStream(const FontIdentity& identity) {
     return SkStream::MakeFromFile(identity.fString.c_str()).release();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-static bool find_name(const SkTDArray<const char*>& list, const char* str) {
-    int count = list.count();
-    for (int i = 0; i < count; ++i) {
-        if (!strcmp(list[i], str)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-sk_sp<SkDataTable> SkFontConfigInterfaceDirect::getFamilyNames() {
-    FCLocker lock;
-
-    FcPattern* pat = FcPatternCreate();
-    SkAutoTCallVProc<FcPattern, FcPatternDestroy> autoDestroyPat(pat);
-    if (nullptr == pat) {
-        return nullptr;
-    }
-
-    FcObjectSet* os = FcObjectSetBuild(FC_FAMILY, (char *)0);
-    SkAutoTCallVProc<FcObjectSet, FcObjectSetDestroy> autoDestroyOs(os);
-    if (nullptr == os) {
-        return nullptr;
-    }
-
-    FcFontSet* fs = FcFontList(nullptr, pat, os);
-    SkAutoTCallVProc<FcFontSet, FcFontSetDestroy> autoDestroyFs(fs);
-    if (nullptr == fs) {
-        return nullptr;
-    }
-
-    SkTDArray<const char*> names;
-    SkTDArray<size_t> sizes;
-    for (int i = 0; i < fs->nfont; ++i) {
-        FcPattern* match = fs->fonts[i];
-        const char* famName = get_string(match, FC_FAMILY);
-        if (famName && !find_name(names, famName)) {
-            *names.append() = famName;
-            *sizes.append() = strlen(famName) + 1;
-        }
-    }
-
-    return SkDataTable::MakeCopyArrays((const void*const*)names.begin(),
-                                       sizes.begin(), names.count());
 }

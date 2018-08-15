@@ -1,4 +1,4 @@
-# DEFINES += QSG_SEPARATE_INDEX_BUFFER
+DEFINES += QSG_SEPARATE_INDEX_BUFFER
 # DEFINES += QSG_DISTANCEFIELD_CACHE_DEBUG
 
 # Core API
@@ -45,7 +45,6 @@ HEADERS += \
     $$PWD/util/qsgtexture.h \
     $$PWD/util/qsgtexture_p.h \
     $$PWD/util/qsgtextureprovider.h \
-    $$PWD/util/qsgdistancefieldutil_p.h \
     $$PWD/util/qsgflatcolormaterial.h \
     $$PWD/util/qsgsimplematerial.h \
     $$PWD/util/qsgtexturematerial.h \
@@ -62,7 +61,6 @@ SOURCES += \
     $$PWD/util/qsgsimpletexturenode.cpp \
     $$PWD/util/qsgtexture.cpp \
     $$PWD/util/qsgtextureprovider.cpp \
-    $$PWD/util/qsgdistancefieldutil.cpp \
     $$PWD/util/qsgflatcolormaterial.cpp \
     $$PWD/util/qsgsimplematerial.cpp \
     $$PWD/util/qsgtexturematerial.cpp \
@@ -221,4 +219,19 @@ qtConfig(opengl(es1|es2)?) {
         $$PWD/shaders/vertexcolor_core.vert \
         $$PWD/shaders/visualization.frag \
         $$PWD/shaders/visualization.vert
+}
+
+# Compressed Texture API
+HEADERS += \
+    $$PWD/util/qsgtexturereader_p.h
+
+SOURCES += \
+    $$PWD/util/qsgtexturereader.cpp
+
+qtConfig(opengl(es1|es2)?) {
+    HEADERS += \
+        $$PWD/compressedtexture/qsgpkmhandler_p.h
+
+    SOURCES += \
+        $$PWD/compressedtexture/qsgpkmhandler.cpp
 }

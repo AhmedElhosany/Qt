@@ -13,12 +13,22 @@
 #include "base/strings/stringprintf.h"
 
 namespace gpu {
+
+base::SharedMemoryHandle BufferBacking::shared_memory_handle() const {
+  return base::SharedMemoryHandle();
+}
+
 SharedMemoryBufferBacking::SharedMemoryBufferBacking(
     std::unique_ptr<base::SharedMemory> shared_memory,
     size_t size)
     : shared_memory_(std::move(shared_memory)), size_(size) {}
 
 SharedMemoryBufferBacking::~SharedMemoryBufferBacking() {}
+
+base::SharedMemoryHandle SharedMemoryBufferBacking::shared_memory_handle()
+    const {
+  return shared_memory_->handle();
+}
 
 void* SharedMemoryBufferBacking::GetMemory() const {
   return shared_memory_->memory();

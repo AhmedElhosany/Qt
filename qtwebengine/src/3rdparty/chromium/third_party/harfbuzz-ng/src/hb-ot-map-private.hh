@@ -113,7 +113,7 @@ struct hb_ot_map_t
     assert (stage <= stages[table_index].len);
     unsigned int start = stage ? stages[table_index][stage - 1].last_lookup : 0;
     unsigned int end   = stage < stages[table_index].len ? stages[table_index][stage].last_lookup : lookups[table_index].len;
-    *plookups = &lookups[table_index][start];
+    *plookups = end == start ? NULL : &lookups[table_index][start];
     *lookup_count = end - start;
   }
 
@@ -138,12 +138,6 @@ struct hb_ot_map_t
   bool found_script[2];
 
   private:
-
-  HB_INTERNAL void add_lookups (hb_face_t    *face,
-				unsigned int  table_index,
-				unsigned int  feature_index,
-				hb_mask_t     mask,
-				bool          auto_zwj);
 
   hb_mask_t global_mask;
 
@@ -182,7 +176,9 @@ struct hb_ot_map_builder_t
   inline void add_gpos_pause (hb_ot_map_t::pause_func_t pause_func)
   { add_pause (1, pause_func); }
 
-  HB_INTERNAL void compile (struct hb_ot_map_t &m);
+  HB_INTERNAL void compile (hb_ot_map_t  &m,
+			    const int    *coords,
+			    unsigned int  num_coords);
 
   inline void finish (void) {
     feature_infos.finish ();
@@ -193,6 +189,14 @@ struct hb_ot_map_builder_t
   }
 
   private:
+
+  HB_INTERNAL void add_lookups (hb_ot_map_t  &m,
+				hb_face_t    *face,
+				unsigned int  table_index,
+				unsigned int  feature_index,
+				unsigned int  variations_index,
+				hb_mask_t     mask,
+				bool          auto_zwj);
 
   struct feature_info_t {
     hb_tag_t tag;

@@ -1,5 +1,6 @@
 /****************************************************************************
 **
+** Copyright (C) 2017 Crimson AS <info@crimson.no>
 ** Copyright (C) 2016 The Qt Company Ltd.
 ** Contact: https://www.qt.io/licensing/
 **
@@ -335,12 +336,12 @@ private slots:
     void stringify_qtbug_50592();
     void instanceof_data();
     void instanceof();
+    void constkw_data();
+    void constkw();
+    void redefineGlobalProp();
     void freeze_empty_object();
     void singleBlockLoops();
     void qtbug_60547();
-    void anotherNaN();
-    void callPropertyOnUndefined();
-    void jumpStrictNotEqualUndefined();
 
 private:
 //    static void propertyVarWeakRefCallback(v8::Persistent<v8::Value> object, void* parameter);
@@ -4034,7 +4035,7 @@ void tst_qqmlecmascript::verifyContextLifetime(QQmlContextData *ctxt) {
         QV4::ExecutionEngine *v4 = QV8Engine::getV4(engine);
         QV4::Scope scope(v4);
         QV4::ScopedArrayObject scripts(scope, ctxt->importedScripts.value());
-        QV4::Scoped<QV4::QmlContextWrapper> qml(scope);
+        QV4::Scoped<QV4::QQmlContextWrapper> qml(scope);
         for (quint32 i = 0; i < scripts->getLength(); ++i) {
             QQmlContextData *scriptContext, *newContext;
             qml = scripts->getIndexed(i);
@@ -8176,6 +8177,8 @@ void tst_qqmlecmascript::stringify_qtbug_50592()
     QCOMPARE(obj->property("source").toString(), QString::fromLatin1("http://example.org/some_nonexistant_image.png"));
 }
 
+// Tests for the JS-only instanceof. Tests for the QML extensions for
+// instanceof belong in tst_qqmllanguage!
 void tst_qqmlecmascript::instanceof_data()
 {
     QTest::addColumn<QString>("setupCode");
@@ -8238,6 +8241,108 @@ void tst_qqmlecmascript::instanceof()
     }
 }
 
+void tst_qqmlecmascript::constkw_data()
+{
+    QTest::addColumn<QString>("sourceCode");
+    QTest::addColumn<bool>("exceptionExpected");
+    QTest::addColumn<QVariant>("expectedValue");
+
+    QTest::newRow("simpleconst")
+        << "const v = 5\n"
+           "v\n"
+        << false
+        << QVariant(5);
+    QTest::newRow("twoconst")
+        << "const v = 5, i = 10\n"
+           "v + i\n"
+        << false
+        << QVariant(15);
+    QTest::newRow("constandvar")
+        << "const v = 5\n"
+           "var i = 20\n"
+           "v + i\n"
+        << false
+        << QVariant(25);
+    QTest::newRow("const-multiple-scopes-same-var")
+        << "const v = 3\n"
+           "function f() { const v = 1; return v; }\n"
+           "v + f()\n"
+        << false
+        << QVariant(4);
+
+    // error cases
+    QTest::newRow("const-no-initializer")
+        << "const v\n"
+        << true
+        << QVariant("SyntaxError: Missing initializer in const declaration");
+    QTest::newRow("const-no-initializer-comma")
+        << "const v = 1, i\n"
+        << true
+        << QVariant("SyntaxError: Missing initializer in const declaration");
+    QTest::newRow("const-no-duplicate")
+        << "const v = 1, v = 2\n"
+        << true
+        << QVariant("SyntaxError: Identifier v has already been declared");
+    QTest::newRow("const-no-duplicate-2")
+        << "const v = 1\n"
+           "const v = 2\n"
+        << true
+        << QVariant("SyntaxError: Identifier v has already been declared");
+    QTest::newRow("const-no-duplicate-var")
+        << "const v = 1\n"
+           "var v = 1\n"
+        << true
+        << QVariant("SyntaxError: Identifier v has already been declared");
+    QTest::newRow("var-no-duplicate-const")
+        << "var v = 1\n"
+           "const v = 1\n"
+        << true
+        << QVariant("SyntaxError: Identifier v has already been declared");
+    QTest::newRow("const-no-duplicate-let")
+        << "const v = 1\n"
+           "let v = 1\n"
+        << true
+        << QVariant("SyntaxError: Identifier v has already been declared");
+    QTest::newRow("let-no-duplicate-const")
+        << "let v = 1\n"
+           "const v = 1\n"
+        << true
+        << QVariant("SyntaxError: Identifier v has already been declared");
+}
+
+void tst_qqmlecmascript::constkw()
+{
+    QFETCH(QString, sourceCode);
+    QFETCH(bool, exceptionExpected);
+    QFETCH(QVariant, expectedValue);
+
+    QJSEngine engine;
+    QJSValue ret = engine.evaluate(sourceCode);
+
+    if (!exceptionExpected) {
+        QVERIFY2(!ret.isError(), qPrintable(ret.toString()));
+        QCOMPARE(ret.toVariant(), expectedValue);
+    } else {
+        QVERIFY2(ret.isError(), qPrintable(ret.toString()));
+        QCOMPARE(ret.toString(), expectedValue.toString());
+    }
+}
+
+// Redefine a property found on the global object. It shouldn't throw.
+void tst_qqmlecmascript::redefineGlobalProp()
+{
+    {
+        QJSEngine engine;
+        QJSValue ret = engine.evaluate("\"use strict\"\n var toString = 1;");
+        QVERIFY2(!ret.isError(), qPrintable(ret.toString()));
+    }
+    {
+        QJSEngine engine;
+        QJSValue ret = engine.evaluate("var toString = 1;");
+        QVERIFY2(!ret.isError(), qPrintable(ret.toString()));
+    }
+}
+
 void tst_qqmlecmascript::freeze_empty_object()
 {
     // this shouldn't crash
@@ -8267,52 +8372,6 @@ void tst_qqmlecmascript::qtbug_60547()
     QScopedPointer<QObject> object(component.create());
     QVERIFY2(!object.isNull(), qPrintable(component.errorString()));
     QCOMPARE(object->property("counter"), QVariant(int(1)));
-}
-
-void tst_qqmlecmascript::anotherNaN()
-{
-    QQmlComponent component(&engine, testFileUrl("nans.qml"));
-    QScopedPointer<QObject> object(component.create());
-    QVERIFY2(!object.isNull(), qPrintable(component.errorString()));
-    object->setProperty("prop", std::numeric_limits<double>::quiet_NaN()); // don't crash
-
-    std::uint64_t anotherNaN = 0xFFFFFF01000000F7ul;
-    double d;
-    std::memcpy(&d, &anotherNaN, sizeof(d));
-    QVERIFY(std::isnan(d));
-    object->setProperty("prop", d);  // don't crash
-}
-
-void tst_qqmlecmascript::callPropertyOnUndefined()
-{
-    QJSEngine engine;
-    QJSValue v = engine.evaluate(QString::fromLatin1(
-            "function f() {\n"
-            "    var base;\n"
-            "    base.push(1);"
-            "}\n"
-    ));
-    QVERIFY(!v.isError()); // well, more importantly: this shouldn't fail on an assert.
-}
-
-void tst_qqmlecmascript::jumpStrictNotEqualUndefined()
-{
-    QJSEngine engine;
-    QJSValue v = engine.evaluate(QString::fromLatin1(
-        "var ok = 0\n"
-        "var foo = 0\n"
-        "if (foo !== void 1)\n"
-        "    ++ok;\n"
-        "else\n"
-        "    --ok;\n"
-        "if (foo === void 1)\n"
-        "    --ok;\n"
-        "else\n"
-        "    ++ok;\n"
-        "ok\n"
-    ));
-    QVERIFY(!v.isError());
-    QCOMPARE(v.toInt(), 2);
 }
 
 QTEST_MAIN(tst_qqmlecmascript)

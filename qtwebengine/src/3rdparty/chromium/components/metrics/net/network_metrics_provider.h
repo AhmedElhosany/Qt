@@ -10,11 +10,18 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_base.h"
+#include "base/sequenced_task_runner.h"
+#include "base/threading/thread_checker.h"
 #include "components/metrics/metrics_provider.h"
 #include "components/metrics/net/wifi_access_point_info_provider.h"
 #include "components/metrics/proto/system_profile.pb.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/network_interfaces.h"
+#include "net/nqe/effective_connection_type.h"
+
+namespace net {
+class NetworkQualityEstimator;
+}
 
 namespace metrics {
 
@@ -24,12 +31,40 @@ class NetworkMetricsProvider
     : public MetricsProvider,
       public net::NetworkChangeNotifier::ConnectionTypeObserver {
  public:
-  // Creates a NetworkMetricsProvider, where |io_task_runner| is used to post
-  // network info collection tasks.
-  explicit NetworkMetricsProvider(base::TaskRunner* io_task_runner);
+  // Class that provides |this| with the network quality estimator.
+  class NetworkQualityEstimatorProvider {
+   public:
+    virtual ~NetworkQualityEstimatorProvider() {}
+
+    // Returns the network quality estimator. May be nullptr.
+    virtual net::NetworkQualityEstimator* GetNetworkQualityEstimator() = 0;
+
+    // Returns the task runner on which |this| should be used and destroyed.
+    virtual scoped_refptr<base::SequencedTaskRunner> GetTaskRunner() = 0;
+
+   protected:
+    NetworkQualityEstimatorProvider() {}
+
+   private:
+    DISALLOW_COPY_AND_ASSIGN(NetworkQualityEstimatorProvider);
+  };
+
+  // Creates a NetworkMetricsProvider, where
+  // |network_quality_estimator_provider| should be set if it is useful to
+  // attach the quality of the network to the metrics report.
+  explicit NetworkMetricsProvider(
+      std::unique_ptr<NetworkQualityEstimatorProvider>
+          network_quality_estimator_provider = nullptr);
   ~NetworkMetricsProvider() override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(NetworkMetricsProviderTest, EffectiveConnectionType);
+  FRIEND_TEST_ALL_PREFIXES(NetworkMetricsProviderTest,
+                           ECTAmbiguousOnConnectionTypeChange);
+
+  // Listens to the changes in the effective conection type.
+  class EffectiveConnectionTypeObserver;
+
   // MetricsProvider:
   void ProvideGeneralMetrics(ChromeUserMetricsExtension* uma_proto) override;
   void ProvideSystemProfileMetrics(SystemProfileProto* system_profile) override;
@@ -57,8 +92,9 @@ class NetworkMetricsProvider
   // Logs metrics that are functions of other metrics being uploaded.
   void LogAggregatedMetrics();
 
-  // Task runner used for blocking file I/O.
-  base::TaskRunner* io_task_runner_;
+  // Notifies |this| that the effective connection type of the current network
+  // has changed to |type|.
+  void OnEffectiveConnectionTypeChanged(net::EffectiveConnectionType type);
 
   // True if |connection_type_| changed during the lifetime of the log.
   bool connection_type_is_ambiguous_;
@@ -78,6 +114,29 @@ class NetworkMetricsProvider
   // histogram. They are used to compute deltas at upload time.
   base::HistogramBase::Count total_aborts_;
   base::HistogramBase::Count total_codes_;
+
+  // Provides the network quality estimator. May be null.
+  std::unique_ptr<NetworkQualityEstimatorProvider>
+      network_quality_estimator_provider_;
+
+  // Listens to the changes in the effective connection type. Initialized and
+  // destroyed using |network_quality_task_runner_|. May be null.
+  std::unique_ptr<EffectiveConnectionTypeObserver>
+      effective_connection_type_observer_;
+
+  // Task runner using which |effective_connection_type_observer_| is
+  // initialized and destroyed. May be null.
+  scoped_refptr<base::SequencedTaskRunner> network_quality_task_runner_;
+
+  // Last known effective connection type.
+  net::EffectiveConnectionType effective_connection_type_;
+
+  // Minimum and maximum effective connection type since the metrics were last
+  // provided.
+  net::EffectiveConnectionType min_effective_connection_type_;
+  net::EffectiveConnectionType max_effective_connection_type_;
+
+  base::ThreadChecker thread_checker_;
 
   base::WeakPtrFactory<NetworkMetricsProvider> weak_ptr_factory_;
 
